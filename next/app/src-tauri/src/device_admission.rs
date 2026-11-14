@@ -45,7 +45,7 @@ pub struct OperationDecl {
     pub description: String,
     pub input_schema: Value,
     pub output_schema: Value,
-    /// `read`, `write` or `launch` (`imports::Effect`); absent in a manifest: `write`.
+    /// `read`, `write`, `launch` or `disclose` (`imports::EFFECTS`); absent in a manifest: `write`.
     #[serde(default = "imports::write_effect")]
     pub effect: String,
     /// Input fields that carry a secret, and how: `value` (the host delivers the secret to the
@@ -288,7 +288,14 @@ impl Admitted {
         let operations: Vec<String> = self
             .operations
             .iter()
-            .map(|o| format!("{} ({}, {})", o.id, o.description, o.effect))
+            .map(|o| {
+                format!(
+                    "{} ({}, {})",
+                    o.id,
+                    o.description,
+                    imports::effect_label(&o.effect)
+                )
+            })
             .collect();
         crate::confirmation::Action {
             what: format!(

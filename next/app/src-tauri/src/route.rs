@@ -520,9 +520,9 @@ fn secret_text(target: &str, filled: &[Filled]) -> String {
     format!(" Secrets: {}.", each.join("; "))
 }
 
-/// A read goes ahead, unless secret (a secret's delivery) asks. A write or launch needs the
-/// person's native confirmation of the whole chain and the exact input, and of the secrets filled,
-/// now; a launch the window made directly, with a native gesture, may use a remembered approval
+/// A read goes ahead, unless secret (a secret's delivery) asks. A write, launch or disclose (any
+/// effect but an exact read) needs the person's native confirmation of the whole chain and the
+/// exact input, and of the secrets filled, now; a launch the window made directly, with a native gesture, may use a remembered approval
 /// of exactly that instead, the same secrets' IDs included (a launch's secrets are references,
 /// never values). A call with a tool hop is prepared as an import (a secret's delivery
 /// to a tool through another included): it always asks, and its dialog offers no Remember. A
@@ -539,7 +539,8 @@ fn authorize(
     cancel: &Cancel,
 ) -> Result<bool, CallError> {
     let effect = grant.op.effect.as_str();
-    if effect == "read" && !secret {
+    // Only an exact read goes ahead unasked: write, launch, disclose and anything else ask.
+    if !crate::device::asks_each_call(effect) && !secret {
         return Ok(false);
     }
     let executor = grant.target.package();
@@ -572,7 +573,7 @@ fn authorize(
             grant.target.id(),
             grant.op.id,
             grant.op.description,
-            effect,
+            crate::device::effect_label(effect),
             input,
             secret_text(grant.target.id(), filled)
         ),
@@ -614,7 +615,13 @@ fn authorize(
     } else {
         let mut c = st.confirmations.lock().unwrap();
         let p = c.prepare_main(action).map_err(refuse)?;
-        let gesture = origin.gesture.lock().unwrap().take();
+        // Only a launch's confirmation may be remembered: no other effect looks one up.
+        let gesture = origin
+            .gesture
+            .lock()
+            .unwrap()
+            .take()
+            .filter(|_| crate::device::may_remember(effect));
         let p = match gesture {
             Some(g) => match c.remembered(p, g) {
                 Ok(token) => {

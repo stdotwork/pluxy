@@ -2697,6 +2697,15 @@ pub fn run() {
                 .state::<App>()
                 .programs
                 .set_private(vault as std::sync::Arc<dyn program::Private>);
+            // Tools get the app's home and a data folder of their own, beside the vault.
+            #[cfg(target_os = "linux")]
+            handle
+                .state::<App>()
+                .programs
+                .set_tool_env(program::ToolEnv {
+                    home: app.path().home_dir()?,
+                    tools: app.path().app_data_dir()?.join("tools"),
+                });
             #[cfg(target_os = "linux")]
             if let Some(message) = handle
                 .state::<App>()

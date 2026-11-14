@@ -1954,6 +1954,31 @@ fn imports_exports_and_effects_are_validated() {
     assert!(check("native", Value::Null).is_ok());
 }
 
+#[test]
+fn a_disclose_operation_is_accepted_asks_each_call_and_is_never_remembered() {
+    // Accepted in a manifest, as its own effect.
+    let manifest = serde_json::json!({"manifest_version": 1, "id": "pluxy/reader", "version": "1.0.0",
+        "app": {"version": 0, "tier": "native", "host_versions": [0],
+            "programs": {"linux/amd64": "bin/r"},
+            "operations": [{"id": "detail", "description": "Show a session", "effect": "disclose",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}],
+            "state": {"version": 0, "readable_versions": [0]}}});
+    let m: Manifest = serde_json::from_value(manifest).unwrap();
+    assert!(validate(&m).unwrap().is_some());
+    // Every effect but an exact read asks each call; only a launch may be remembered.
+    for effect in ["disclose", "write", "launch", "Read", "read ", "", "delete"] {
+        assert!(asks_each_call(effect), "{effect:?}");
+    }
+    assert!(!asks_each_call("read"));
+    for effect in ["disclose", "write", "read", "Launch"] {
+        assert!(!may_remember(effect), "{effect:?}");
+    }
+    assert!(may_remember("launch"));
+    // Its dialogs and the Device page call it what it does.
+    assert_eq!(effect_label("disclose"), "shows content");
+    assert_eq!(effect_label("write"), "write");
+}
+
 /// A curated registry with tools that import and export, and web packages that import them;
 /// staged and committed into a catalog.
 fn routing_catalog(root: &Path) -> (Catalog, TestRoots) {
