@@ -15,7 +15,8 @@
 //! window's call of `launch` with that input and a native gesture (`confirmation::Gesture`): the
 //! remembered approval of exactly that launch starts it with no dialog; anything changed (the
 //! executable, the program a terminal runs, the cwd, the execution program's release, the
-//! environment) asks again. One start per launch per second; each shows a host-owned notice of
+//! environment) asks again, and remembering it again revokes the approval it replaces. One start
+//! per launch per second; each shows a host-owned notice of
 //! what started, unless that is turned off. Linux only, as the program host.
 
 use crate::{confirmation, route, spawn, App};
@@ -175,13 +176,16 @@ impl Launcher {
     }
 
     /// Keeps approval for a launch of client with input: the entry with that input gets it (a
-    /// launch remembered again after a change), or a new one. Its ID.
-    fn keep(&mut self, client: &str, input: &Value, approval: &str) -> String {
-        if let Some(e) = self.store.entries.iter_mut().find(|e| e.input == *input) {
-            e.approval = approval.to_string();
-            e.client = client.to_string();
-            e.used = now_ms();
-            return e.id.clone();
+    /// launch remembered again after a change), or a new one. Its ID, and the approval it
+    /// replaced, which the caller revokes.
+    fn keep(&mut self, client: &str, input: &Value, approval: &str) -> (String, Option<String>) {
+        if let Some(e) = self.store.entries.iter().find(|e| e.input == *input) {
+            let id = e.id.clone();
+            let old = self.replace(&id, approval);
+            if let Some(e) = self.store.entries.iter_mut().find(|e| e.id == id) {
+                e.client = client.to_string();
+            }
+            return (id, old);
         }
         if self.store.entries.len() >= MAX_ENTRIES {
             // The least recently used goes.
@@ -199,7 +203,30 @@ impl Launcher {
             input: input.clone(),
             used: now_ms(),
         });
-        id
+        (id, None)
+    }
+
+    /// Binds entry id to approval, a fresh confirmation of it: the approval it replaced, if any
+    /// other, which the caller revokes so that nothing still replays the old one.
+    fn replace(&mut self, id: &str, approval: &str) -> Option<String> {
+        let e = self.store.entries.iter_mut().find(|e| e.id == id)?;
+        e.used = now_ms();
+        if e.approval == approval {
+            return None;
+        }
+        Some(std::mem::replace(&mut e.approval, approval.to_string()))
+    }
+}
+
+/// Revokes approval, which a fresh confirmation of the same launch replaced.
+fn revoke_superseded(app: &AppHandle, approval: Option<String>) {
+    let Some(old) = approval else { return };
+    let st = app.state::<App>();
+    let mut c = st.confirmations.lock().unwrap();
+    if c.has_approval(&old) {
+        if let Err(e) = c.revoke(&old) {
+            eprintln!("pluxy-app: revoking a replaced launch approval: {e}");
+        }
     }
 }
 
@@ -284,7 +311,7 @@ pub fn state(app: &AppHandle) -> Value {
                 "id": e.id, "client": e.client, "executable": i["executable"], "argv": i["argv"],
                 "cwd": i["cwd"], "program": i.get("program"),
                 "lifetime": i.get("lifetime").cloned().unwrap_or(json!("detached")),
-                "remembered": c.has_approval(&e.approval), "used": e.used,
+                "used": e.used,
                 "source": source.clone().unwrap_or(json!({"package": PACKAGE})),
             })
         })
@@ -344,13 +371,14 @@ pub fn launch(app: &AppHandle, req: &Value) -> Result<Value, String> {
     let input = Value::Object(input);
     let (output, approval) = call(app, "launch", input.clone(), None)?;
     let st = app.state::<App>();
-    let entry = {
+    let (entry, old) = {
         let mut l = st.launcher.lock().unwrap();
         l.remember_folder(&client, &cwd);
-        let entry = approval.map(|a| l.keep(&client, &input, &a));
+        let kept = approval.map(|a| l.keep(&client, &input, &a));
         l.save()?;
-        entry
+        kept.map_or((None, None), |(id, old)| (Some(id), old))
     };
+    revoke_superseded(app, old);
     refresh_tray(app);
     Ok(json!({"entry": entry, "output": output}))
 }
@@ -384,22 +412,21 @@ pub fn start(app: &AppHandle, id: &str, gesture: confirmation::Gesture) -> Resul
         i["argv"],
         i["cwd"].as_str().unwrap_or_default()
     );
-    let notice = {
+    let (notice, old) = {
         let mut l = st.launcher.lock().unwrap();
-        if let Ok((_, Some(a))) = &r {
-            if let Some(e) = l.store.entries.iter_mut().find(|e| e.id == id) {
-                e.approval.clone_from(a);
-                e.used = now_ms();
-            }
-        }
+        let old = match &r {
+            Ok((_, Some(a))) => l.replace(id, a),
+            _ => None,
+        };
         if r.is_ok() {
             if let Some(cwd) = i["cwd"].as_str() {
                 l.remember_folder(&entry.client, cwd);
             }
             let _ = l.save();
         }
-        l.store.notice
+        (l.store.notice, old)
     };
+    revoke_superseded(app, old);
     if notice {
         let text = match &r {
             Ok(_) => format!("Started {what}"),
@@ -466,44 +493,51 @@ fn tray_label(e: &Entry) -> String {
 }
 
 /// Fills the tray's Start… menu again: an item per remembered launch, or a disabled "No
-/// remembered launches".
+/// remembered launches". One closure on the main thread reads the launches and rebuilds the menu,
+/// so rebuilds asked from several threads never interleave and the last one shows the latest list.
 pub fn refresh_tray(app: &AppHandle) {
-    let Some(menu) = START.lock().unwrap().clone() else {
-        return;
-    };
-    let st = app.state::<App>();
-    let items: Vec<(String, String)> = {
-        let c = st.confirmations.lock().unwrap();
-        let mut l = st.launcher.lock().unwrap();
-        if l.prune(&c) {
-            let _ = l.save();
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let app = &handle;
+        let Some(menu) = START.lock().unwrap().clone() else {
+            return;
+        };
+        let st = app.state::<App>();
+        let items: Vec<(String, String)> = {
+            let c = st.confirmations.lock().unwrap();
+            let mut l = st.launcher.lock().unwrap();
+            if l.prune(&c) {
+                let _ = l.save();
+            }
+            l.store
+                .entries
+                .iter()
+                .map(|e| (format!("launch:{}", e.id), tray_label(e)))
+                .collect()
+        };
+        while let Ok(Some(_)) = menu.remove_at(0) {}
+        let made: Vec<MenuItem<Wry>> = if items.is_empty() {
+            MenuItem::with_id(
+                app,
+                "launch-none",
+                "No remembered launches",
+                false,
+                None::<&str>,
+            )
+            .into_iter()
+            .collect()
+        } else {
+            items
+                .iter()
+                .filter_map(|(id, label)| {
+                    MenuItem::with_id(app, id, label, true, None::<&str>).ok()
+                })
+                .collect()
+        };
+        for i in &made {
+            let _ = menu.append(i as &dyn IsMenuItem<Wry>);
         }
-        l.store
-            .entries
-            .iter()
-            .map(|e| (format!("launch:{}", e.id), tray_label(e)))
-            .collect()
-    };
-    while let Ok(Some(_)) = menu.remove_at(0) {}
-    let made: Vec<MenuItem<Wry>> = if items.is_empty() {
-        MenuItem::with_id(
-            app,
-            "launch-none",
-            "No remembered launches",
-            false,
-            None::<&str>,
-        )
-        .into_iter()
-        .collect()
-    } else {
-        items
-            .iter()
-            .filter_map(|(id, label)| MenuItem::with_id(app, id, label, true, None::<&str>).ok())
-            .collect()
-    };
-    for i in &made {
-        let _ = menu.append(i as &dyn IsMenuItem<Wry>);
-    }
+    });
 }
 
 /// A click on one of the tray's Start… items (`launch:<id>`): a native gesture, made here.
@@ -560,3 +594,7 @@ pub fn confirm_runtimes(app: &AppHandle, package: &str, verb: &str) -> Result<()
         Err(e) => Err(format!("{e}; {package} and its runtimes stay as they are")),
     }
 }
+
+#[cfg(test)]
+#[path = "launcher_tests.rs"]
+mod tests;

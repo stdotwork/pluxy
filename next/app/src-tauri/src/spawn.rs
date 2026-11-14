@@ -804,11 +804,31 @@ mod scope {
         Refused(String),
     }
 
+    /// f with a cancellable that is cancelled once wait passes: a session bus that accepts but
+    /// never answers holds a launch no longer than that.
+    pub fn within<T>(
+        wait: Duration,
+        f: impl FnOnce(&gtk::gio::Cancellable) -> Result<T, gtk::glib::Error>,
+    ) -> Result<T, gtk::glib::Error> {
+        use gtk::gio::prelude::CancellableExt;
+        let cancel = gtk::gio::Cancellable::new();
+        let (done, rx) = std::sync::mpsc::channel::<()>();
+        let c = cancel.clone();
+        std::thread::spawn(move || {
+            if rx.recv_timeout(wait) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                c.cancel();
+            }
+        });
+        let r = f(&cancel);
+        let _ = done.send(());
+        r
+    }
+
     /// Moves process pid into a new transient scope of its own; the scope's name.
     pub fn enter(pid: u32) -> Result<String, Failed> {
         use gtk::gio;
         use gtk::glib::{ToVariant, Variant, VariantTy};
-        let conn = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
+        let conn = within(WAIT, |c| gio::bus_get_sync(gio::BusType::Session, Some(c)))
             .map_err(|e| Failed::Absent(e.to_string()))?;
         let mut b = [0u8; 8];
         getrandom::fill(&mut b).map_err(|e| Failed::Refused(e.to_string()))?;
@@ -864,7 +884,7 @@ mod scope {
     pub fn available() -> bool {
         use gtk::gio;
         use gtk::glib::ToVariant;
-        gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
+        within(WAIT, |c| gio::bus_get_sync(gio::BusType::Session, Some(c)))
             .and_then(|c| {
                 c.call_sync(
                     Some("org.freedesktop.DBus"),
@@ -1154,7 +1174,7 @@ impl Runtimes {
                 drop(cmd);
                 match child {
                     Ok(mut c) => {
-                        feed(c.stdin.take(), stdin);
+                        let pipe = c.stdin.take();
                         let pid = c.id();
                         let refused = {
                             let mut list = shared.list.lock().unwrap();
@@ -1174,6 +1194,10 @@ impl Runtimes {
                             shared.save(&list);
                             refused
                         };
+                        // Its stdin secret only once it may run; refused, the pipe just closes.
+                        if refused.is_none() {
+                            feed(pipe, stdin);
+                        }
                         let _ = tx.send(refused.map_or(Ok(()), Err));
                         supervise(&shared, &rid, token, c);
                     }

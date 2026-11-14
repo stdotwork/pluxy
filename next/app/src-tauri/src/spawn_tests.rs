@@ -704,3 +704,32 @@ fn a_detached_launch_runs_in_a_scope_of_its_own_under_a_user_manager() {
     clean(&all, &dir);
     ok.unwrap();
 }
+
+#[test]
+fn a_bus_that_never_answers_holds_a_launch_no_longer_than_the_wait() {
+    use gtk::gio;
+    // A socket that accepts connections (its backlog) and never says a word.
+    let dir = std::env::temp_dir().join(format!("pluxy-silent-bus-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("bus");
+    let _ = std::fs::remove_file(&path);
+    let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let address = format!("unix:path={}", path.display());
+    let began = std::time::Instant::now();
+    let r = scope::within(Duration::from_millis(500), |c| {
+        gio::DBusConnection::for_address_sync(
+            &address,
+            gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
+                | gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
+            None,
+            Some(c),
+        )
+    });
+    assert!(r.is_err(), "a silent bus answered");
+    assert!(
+        began.elapsed() < Duration::from_secs(3),
+        "the silent bus held the call {:?}",
+        began.elapsed()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

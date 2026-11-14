@@ -69,21 +69,36 @@
       },
       {
         "id": "runtime",
-        "description": "Look at, list, stop or restart a managed runtime this package started",
+        "description": "Look at or list the managed runtimes this package started",
         "effect": "read",
         "input_schema": {
           "type": "object",
           "properties": {
-            "op": { "enum": ["status", "list", "stop", "restart"] },
+            "op": { "enum": ["status", "list"] },
             "runtime": { "type": "string", "maxLength": 64 }
           },
           "required": ["op"],
           "additionalProperties": false
         },
         "output_schema": { "type": "object" }
+      },
+      {
+        "id": "control",
+        "description": "Stop or restart a managed runtime this package started",
+        "effect": "write",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "op": { "enum": ["stop", "restart"] },
+            "runtime": { "type": "string", "minLength": 1, "maxLength": 64 }
+          },
+          "required": ["op", "runtime"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object" }
       }
     ],
-    "exports": { "contract": 1, "operations": ["launch", "runtime"] },
+    "exports": { "contract": 1, "operations": ["launch"] },
     "state": { "version": 0, "readable_versions": [0] }
   }
 }

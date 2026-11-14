@@ -170,6 +170,23 @@ fn asks(
     )
 }
 
+/// The execution program's control op (stop or restart) of runtime from the window: its native
+/// confirmation, never remembered, confirmed; the command's answer.
+fn control(app: &AppHandle, main: &Webview, op: &str, runtime: &str) -> Result<Value, String> {
+    let slot = start(
+        main,
+        "program_call",
+        json!({"package": EXECUTION, "op": "control", "input": {"op": op, "runtime": runtime}}),
+    )?;
+    let text = dialog_with(app, &[EXECUTION, "control", op, runtime])?;
+    if text.contains("Remember") {
+        press("alt+c")?;
+        return Err(format!("the {op} confirmation offers Remember"));
+    }
+    press("alt+o")?;
+    settle(main, &slot)
+}
+
 fn entries(main: &Webview) -> Result<Vec<Value>, String> {
     let s = ok(main, "launcher_state", json!({}))?;
     Ok(s["entries"].as_array().cloned().unwrap_or_default())
@@ -347,8 +364,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 .cloned()
                 .unwrap_or_default();
             require(
-                e["remembered"] == true
-                    && e["client"] == CLIENT
+                e["client"] == CLIENT
                     && e["executable"] == json!(s(&terminal))
                     && e["argv"] == argv1
                     && e["cwd"] == json!(work)
@@ -536,12 +552,15 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 r["ok"] == true && r["value"].to_string().contains(&bridge),
                 format!("the restarted execution program's runtimes: {r}"),
             )?;
+            // A read call never stops a runtime, whatever its input says.
             let r = call(
                 main,
                 EXECUTION,
                 "runtime",
-                json!({"op": "restart", "runtime": bridge}),
+                json!({"op": "stop", "runtime": bridge}),
             )?;
+            require(r["ok"] == false, format!("a read call's stop: {r}"))?;
+            let r = control(app, main, "restart", &bridge)?;
             require(
                 r["ok"] == true && r["value"]["state"] == "running",
                 format!("restart: {r}"),
@@ -555,12 +574,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 ended(bridge_pid, &s(&rec4), Duration::from_secs(10)),
                 "the bridge's old process runs on after its restart",
             )?;
-            let r = call(
-                main,
-                EXECUTION,
-                "runtime",
-                json!({"op": "stop", "runtime": bridge}),
-            )?;
+            let r = control(app, main, "stop", &bridge)?;
             require(
                 r["ok"] == true && r["value"]["state"] != "running",
                 format!("stop: {r}"),
@@ -583,6 +597,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         "lifetime": "detached", "environment": {"set": {"FIXTURE_TERMINAL_RECORD": trec}},
     });
 
+    // A direct launch of the agent, recording to rec: never remembered.
+    let direct = |rec: &Path| json!({"executable": s(&agent), "argv": [AGENT, rec], "cwd": work, "lifetime": "detached"});
+
     // ---- chain: the same launch through another package asks, even after a native gesture
     step(
         "chain",
@@ -599,13 +616,38 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "another chain's confirmation offers Remember",
             )?;
             press("alt+c")?;
-            match answer(&rx)? {
-                Ok(v) => require(
+            if let Ok(v) = answer(&rx)? {
+                require(
                     v["answer"].get("error").is_some(),
                     format!("the relayed launch went ahead though cancelled: {v}"),
-                ),
-                Err(_) => Ok(()),
+                )?;
             }
+            // Confirmed, the relayed launch runs, once, with nothing remembered.
+            let rec = at("chain-agent");
+            let rx = clicked(
+                app,
+                RELAY,
+                "relay",
+                json!({"package": EXECUTION, "op": "launch", "input": direct(&rec)}),
+            )?;
+            let text = dialog_with(app, &[RELAY, EXECUTION, &s(&agent)])?;
+            require(
+                !text.contains("Remember"),
+                "another chain's confirmation offers Remember",
+            )?;
+            press("alt+o")?;
+            let v = answer(&rx)?.map_err(|e| format!("the confirmed relayed launch: {e:?}"))?;
+            require(
+                v["answer"]["output"]["lifetime"] == "detached",
+                format!("the confirmed relayed launch: {v}"),
+            )?;
+            let r = record(&rec, 0)?;
+            note(&mut known, &r, &rec);
+            save(&known)?;
+            require(
+                r["argv"] == json!([s(&agent), AGENT, rec]),
+                format!("the relayed launch's argv: {}", r["argv"]),
+            )
         })(),
     )?;
 
@@ -622,6 +664,28 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             require(
                 page.reply(&id)?["error"]["code"] == "forbidden",
                 "the cancelled page Start",
+            )?;
+            // Confirmed, the page's launch runs, with nothing remembered.
+            std::thread::sleep(Duration::from_millis(1100));
+            let rec = at("page-agent");
+            let id = page.send(EXECUTION, "launch", direct(&rec))?;
+            let text = dialog_with(app, &[PAGE, EXECUTION, &s(&agent)])?;
+            require(
+                !text.contains("Remember"),
+                "a page's launch confirmation offers Remember",
+            )?;
+            press("alt+o")?;
+            let r = page.reply(&id)?;
+            require(
+                r["result"]["lifetime"] == "detached",
+                format!("the confirmed page Start: {r}"),
+            )?;
+            let r = record(&rec, 0)?;
+            note(&mut known, &r, &rec);
+            save(&known)?;
+            require(
+                r["argv"] == json!([s(&agent), AGENT, rec]),
+                format!("the page's launch's argv: {}", r["argv"]),
             )?;
             // A flood: one confirmation, the rest refused.
             std::thread::sleep(Duration::from_millis(1100));

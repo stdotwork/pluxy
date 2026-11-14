@@ -11,7 +11,6 @@ import { useId, useState } from "preact/hooks";
 import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
 import {
-  Badge,
   Button,
   Card,
   Choices,
@@ -43,7 +42,6 @@ const t = strings("launcher", {
   lastUsed: "Last used",
   start: "Start",
   forget: "Forget",
-  stale: "asks again",
   newLaunch: "New launch",
   kind: "Kind",
   terminal: "In a terminal",
@@ -79,7 +77,6 @@ interface Entry {
   cwd: string;
   program?: string;
   lifetime: string;
-  remembered: boolean;
   used: number;
   source: { package: string; version?: string };
 }
@@ -125,7 +122,7 @@ const launcher = {
     return r.body ? { status: 200, body: r.body.runtimes ?? [] } : { status: r.status, error: r.error };
   },
   runtime: (op: "stop" | "restart", runtime: string) =>
-    reply<unknown>("program_call", { package: PACKAGE, op: "runtime", input: { op, runtime } }),
+    reply<unknown>("program_call", { package: PACKAGE, op: "control", input: { op, runtime } }),
 };
 
 function Text(props: {
@@ -309,7 +306,6 @@ export function LauncherPage() {
                   label: "",
                   value: (e) => (
                     <>
-                      {!e.remembered && <Badge tone="warn">{t("stale")}</Badge>}
                       <Button
                         variant="primary"
                         disabled={action.busy || !s.available}

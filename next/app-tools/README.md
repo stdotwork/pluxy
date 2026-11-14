@@ -153,12 +153,14 @@ its vault at the spawn (`../app/app-host/README.md`, "Launches and managed runti
 | `terminals` | `read` | `search_path`: the launch environment's PATH entries | `terminals`: Automatic first, then each terminal found, with its label and path |
 | `prepare` | `read` | `kind` (`terminal` or `direct`), `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path` | A launch's `executable`, `argv` and `cwd`, and for a terminal the `program` it runs |
 | `launch` | `launch` | What `prepare` gave, with `lifetime`, `environment`, `stdin` and the secret field `key` (a reference only) | The host's answer to its spawn request: `lifetime`, and a managed runtime's `runtime` and `pid` |
-| `runtime` | `read` | `op` (`status`, `list`, `stop`, `restart`), `runtime` | The host's answer |
+| `runtime` | `read` | `op` (`status`, `list`), `runtime` | The host's answer |
+| `control` | `write` | `op` (`stop`, `restart`), `runtime` | The host's answer |
 
-It exports `launch` and `runtime` under export contract 1. Terminals, in Automatic's order (the
-old desktop app's list): `x-terminal-emulator` (System terminal), `gnome-terminal` (`--`),
-`konsole`, `xfce4-terminal` (`-x`), `mate-terminal` (`-x`), `kitty`, `alacritty`, `ghostty` and
-`xterm`, each running the program after `-e` unless noted. A terminal launch runs
-`<terminal> <flag> <program> <args>`; a direct one `<program> <args>`. The program must be an
-executable file, the working folder an existing absolute folder.
+It exports only `launch`, under export contract 1: another package never looks at, stops or restarts
+its runtimes, and the app asks before each `control` call. Terminals, in Automatic's order (the old
+desktop app's list): `x-terminal-emulator` (System terminal), `gnome-terminal` (`--`), `konsole`,
+`xfce4-terminal` (`-x`), `mate-terminal` (`-x`), `kitty`, `alacritty`, `ghostty` and `xterm`, each
+running the program after `-e` unless noted. A terminal launch runs `<terminal> <flag> <program>
+<args>`; a direct one `<program> <args>`. The program must be an executable file, the working folder
+an existing absolute folder.
 

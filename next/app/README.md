@@ -749,10 +749,10 @@ the menu. The list, the recent folders and the notice setting are in `launcher.j
 secret's ID), and a damaged file is moved aside as `launcher.json.corrupt-<time>`.
 
 Detached launches keep running after the app quits, each in a transient systemd scope of its own
-when a systemd user manager runs ([Launches](app-host/README.md#launches-and-managed-runtimes)).
-The page lists the managed runtimes the execution program started, with **Stop** and **Restart**;
-disabling or removing a package with managed runtimes running asks first, and cancelling leaves
-both as they are.
+when a systemd user manager runs ([Launches](app-host/README.md#launches-and-managed-runtimes)). The
+page lists the managed runtimes the execution program started, with **Stop** and **Restart** (each
+confirmed natively, never remembered); disabling or removing a package with managed runtimes running
+asks first, and cancelling leaves both as they are.
 
 ## Build and check
 
