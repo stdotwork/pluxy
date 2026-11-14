@@ -69,7 +69,9 @@ jobs:
       - name: Cache Rust dependencies and build outputs
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: next/app/src-tauri -> target
+          workspaces: |
+            next/app/src-tauri -> target
+            next/app-tools -> target
       # The app builds the UI kit from next/ui, with its copy of preact.
       - name: UI kit install
         working-directory: next/ui
@@ -104,6 +106,13 @@ jobs:
       - name: Artifact signature and test trust controls
         working-directory: next/app/src-tauri
         run: cargo test --locked --features artifact-test-trust --test artifact_trust --test release_config
+      # The app tools (native programs the app runs on demand), a cargo workspace of their own.
+      - name: App tools format, clippy and tests
+        working-directory: next/app-tools
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
       # The real app on Xvfb in each mode: extension page webviews cannot call app commands.
       # It also builds the test AppImage and a release build for the release gate's checks. It
       # took 21 minutes on main after the program host, routing and access suites landed, and 23

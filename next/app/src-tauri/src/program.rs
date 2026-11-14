@@ -6,7 +6,8 @@
 //! file is opened, its SHA-256 checked against the record, and that opened file is what runs: a
 //! file replaced after the check never runs. It runs in its package folder with a cleared
 //! environment holding only the contract's three values, only its three private pipes open,
-//! in a process group of its own, with a parent-death signal. A dedicated supervisor thread
+//! in a process group of its own, with a parent-death signal; with `Host::set_tool_env`, it also
+//! gets `HOME` and its own data folder (`PLUXY_TOOL_DATA_DIR`), made as it starts. A dedicated supervisor thread
 //! starts it and stays until it has exited and been reaped: on Linux the parent-death signal
 //! follows the thread that started the process, and the threads commands run on end when idle.
 //!
@@ -188,6 +189,29 @@ impl From<&crate::device::Admitted> for Spec {
             state_version: a.state().version,
         }
     }
+}
+
+/// What a tool's environment holds beyond the contract's three values.
+#[derive(Clone, Debug)]
+pub struct ToolEnv {
+    /// The app's own home folder: `HOME`.
+    pub home: PathBuf,
+    /// `<app data>/tools`: each tool's data folder is `<publisher>/<name>` in it.
+    pub tools: PathBuf,
+}
+
+/// The extra environment of spec's tool: `HOME` and its data folder, made now
+/// (`vault::tool_data_dir`); none without a `ToolEnv`. A folder that cannot be made fails the start.
+fn tool_env(inner: &Inner, spec: &Spec) -> Result<Vec<(&'static str, PathBuf)>, String> {
+    let Some(env) = inner.env.get() else {
+        return Ok(Vec::new());
+    };
+    let data = crate::vault::tool_data_dir(&env.tools, &spec.id)
+        .map_err(|e| format!("{}: its data folder: {e}", spec.id))?;
+    Ok(vec![
+        ("HOME", env.home.clone()),
+        ("PLUXY_TOOL_DATA_DIR", data),
+    ])
 }
 
 /// Gives the admitted record for a package ID, checked now, or why there is none. Only the
@@ -663,6 +687,8 @@ struct Inner {
     route: OnceLock<Route>,
     private: OnceLock<Arc<dyn Private>>,
     spawner: OnceLock<Spawner>,
+    /// The home folder and the tools' data folders root tools get (`Host::set_tool_env`).
+    env: OnceLock<ToolEnv>,
     /// Every call under way, by number, to cancel them all.
     calls: Mutex<HashMap<u64, Arc<AtomicBool>>>,
     /// The app is quitting: no tool starts and no lease is given.
@@ -785,6 +811,7 @@ impl Host {
             route: OnceLock::new(),
             private: OnceLock::new(),
             spawner: OnceLock::new(),
+            env: OnceLock::new(),
             calls: Mutex::new(HashMap::new()),
             closing: AtomicBool::new(false),
         }))
@@ -805,6 +832,12 @@ impl Host {
     /// it, they are refused.
     pub fn set_spawner(&self, spawner: Spawner) {
         let _ = self.0.spawner.set(spawner);
+    }
+
+    /// Sets what tools get beyond the contract's three values: `HOME` and, made for each tool as
+    /// it starts, `PLUXY_TOOL_DATA_DIR`. Without it, tools get neither.
+    pub fn set_tool_env(&self, env: ToolEnv) {
+        let _ = self.0.env.set(env);
     }
 
     /// A lease on tool id, starting it if it is not running (once, however many ask at once).
@@ -1358,7 +1391,8 @@ impl Host {
         let unavailable = |e: String| fail("extension_unavailable", e);
         compatible(&spec).map_err(unavailable)?;
         let program = open_program(&spec).map_err(unavailable)?;
-        let (run, hello_rx, cmd) = new_run(inner, spec, &program);
+        let env = tool_env(inner, &spec).map_err(unavailable)?;
+        let (run, hello_rx, cmd) = new_run(inner, spec, &program, &env);
         {
             let mut slots = inner.slots();
             if inner.closing.load(Ordering::SeqCst) {
@@ -1597,6 +1631,7 @@ fn new_run(
     inner: &Inner,
     spec: Spec,
     program: &std::fs::File,
+    env: &[(&str, PathBuf)],
 ) -> (Arc<Run>, mpsc::Receiver<Value>, Command) {
     let (hello_tx, hello_rx) = mpsc::channel();
     let gate = Arc::clone(&inner.slots().entry(spec.id.clone()).or_default().gate);
@@ -1622,7 +1657,8 @@ fn new_run(
         describing: Mutex::new(None),
         last_line: Mutex::new(None),
     });
-    let cmd = command(&run.spec, program);
+    let mut cmd = command(&run.spec, program);
+    cmd.envs(env.iter().map(|(k, v)| (k, v)));
     (run, hello_rx, cmd)
 }
 
@@ -1664,7 +1700,8 @@ fn start(
     }
     check(&spec).map_err(StartError::Refused)?;
     let program = open_program(&spec).map_err(failed)?;
-    let (run, hello_rx, cmd) = new_run(inner, spec, &program);
+    let env = tool_env(inner, &spec).map_err(failed)?;
+    let (run, hello_rx, cmd) = new_run(inner, spec, &program, &env);
     {
         let mut slots = inner.slots();
         let slot = slots.entry(id.to_string()).or_default();

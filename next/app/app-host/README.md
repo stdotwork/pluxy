@@ -26,12 +26,12 @@ them. App-only packages omit provider fields; no dummy provider is needed.
 | `config` | Optional settings, using the existing [config format](../../ui/extension-pages/README.md#config), with its own version. App settings belong to this device. |
 | `resources` | Web only: requested broker resources, each with an `id`, `kind` (`file` or `subtree`) and nonempty `operations` list. A declaration grants no access. |
 | `programs` | Native only: platform (`GOOS/GOARCH`) to relative executable path, as for provider programs. At least one entry is required. |
-| `operations` | Native only: declared operations, each with an `id`, plain `description`, `input_schema` and `output_schema` JSON objects, an optional `effect` (`read`, `write` or `launch`; absent means `write`) and optional `secrets`: at most four input fields that carry a secret, each `"value"` (the tool receives the secret) or `"reference"` (it receives only a reference to it; a `launch` operation's are references only); each must be a `string` property of the input schema. See [Secrets, references and the vault](#secrets-references-and-the-vault). At least one operation is required. |
+| `operations` | Native only: declared operations, each with an `id`, plain `description`, `input_schema` and `output_schema` JSON objects, an optional `effect` (`read`, `write`, `launch` or `disclose`; absent means `write`) and optional `secrets`: at most four input fields that carry a secret, each `"value"` (the tool receives the secret) or `"reference"` (it receives only a reference to it; a `launch` operation's are references only); each must be a `string` property of the input schema. See [Secrets, references and the vault](#secrets-references-and-the-vault). At least one operation is required. |
 | `exports` | Native only, optional: `{"contract": <nonnegative integer>, "operations": [<declared IDs>]}`, the operations other packages may import and the version of that export contract. |
 | `imports` | Optional, both tiers: at most 16 entries `{"package": <ID>, "contract": [<accepted export contracts>], "operations": [<IDs>], "required": <bool, default true>, "secrets": [<IDs>]}`, one per package, never the package itself. `secrets` (native tools only) lists the imported operations it may pass secret references to. See [Calls between packages](#calls-between-packages). |
 | `state` | Native only: `version` written by this release and nonempty `readable_versions` list. Check state compatibility before swap or rollback. |
 | `produces` | Native only, optional: at most 8 entries `{"kind": "<package ID>/<stream>", "schema": <nonnegative integer>, "operation": <declared ID>}`, each kind once: the kinds of data it produces as [jobs](#jobs), at which schema version, by which operation, which has no secret fields. |
-| `consumes` | Native only, optional: at most 8 entries `{"kind": "<its own ID>/<stream>", "schema": [<accepted schema versions>], "deliver": <declared ID>}`, each kind once: the kinds it consumes, in its own namespace, and the operation the host delivers their batches to, which no package may export, no `produces` entry may name and which has no secret fields. |
+| `consumes` | Native only, optional: at most 8 entries `{"kind": "<its own ID>/<stream>", "schema": [<accepted schema versions>], "deliver": <declared ID>}`, each kind once: the kinds it consumes, in its own namespace, and the operation the host delivers their batches to, which no package may export, no `produces` entry may name, which has no secret fields and whose effect is `read` or `write` (a delivery asks no confirmation, so `disclose` and `launch` are refused). |
 
 Resource and operation IDs use 1 to 32 lower-case letters, digits and hyphens, starting with a
 letter or digit, and are unique within their respective lists. State and host contract versions
@@ -244,7 +244,15 @@ anything a caller passes. On top of the rules above:
 - It opens the program file, checks its SHA-256 against the record and executes that opened file,
   so a replaced file never runs. A program must therefore be a native executable, not a script:
   an interpreter would open the path again.
-- The tool's environment holds exactly the three variables above. Only stdin, stdout and stderr
+- The tool's environment holds exactly the three variables above and two more: `HOME`, the
+  app's own home folder, and `PLUXY_TOOL_DATA_DIR`, the tool's own data folder,
+  `<app data>/tools/<publisher>/<name>` (on Linux `<app data>` is usually
+  `~/.local/share/<the app's identifier>`). The host makes that folder as the tool starts, from
+  the package ID it verified, never from anything the tool says: each part is opened without
+  following a link, made 0700 when missing, and must be a folder of this user's that no one else
+  may use, or the start fails. It is beside the vault, never in it, and it stays across updates,
+  rollbacks and removal, so a tool keeps its settings; to delete a removed tool's data, delete its
+  folder while the app is not running. Only stdin, stdout and stderr
   are open in it; every other descriptor closes as it executes. It leads a process group of its
   own and gets SIGTERM if the app dies without stopping it. Its command line (`argv[0]`) is its
   program's path; its short process name (`comm`) is the number of the descriptor it was run
@@ -318,7 +326,7 @@ anything a caller passes. On top of the rules above:
   release go in no set order. The package's pages close at the switch. A cancelled confirmation
   or a candidate that fails installs nothing; the old release stays active and serving.
 
-Still to come: Windows and macOS.
+Still to come: deleting a tool's data folder from the Device page; and Windows and macOS.
 
 ## Calls between packages
 
@@ -336,8 +344,11 @@ contract number it raises when it changes them incompatibly. A package lists wha
 Package versions are not compared; only the contract number is.
 
 Each operation has an effect: `read` (runs with no question asked), `write` (asks a native
-confirmation each call) or `launch` (asks a native confirmation of the exact launch). A launch
-operation's input schema must require `executable`, `argv` and `cwd`.
+confirmation each call), `launch` (asks a native confirmation of the exact launch) or `disclose`
+(shows content the tool reads, such as a session's messages: asks a native confirmation each
+call, as `write` does; dialogs and the Device page say it "shows content"). Every effect but an
+exact `read` asks, and only a launch's confirmation can be remembered. A launch operation's input
+schema must require `executable`, `argv` and `cwd`.
 
 ### Enabling a native tool with imports
 
@@ -409,7 +420,8 @@ A call goes ahead only if all of these hold, checked again for each call:
   five hops long, the requester and four tools.
 - The input is at most 64 KiB and matches the operation's input schema, and its secret fields
   are filled as [Secrets, references and the vault](#secrets-references-and-the-vault) says.
-- A `write` call has a fresh native confirmation naming the whole chain and the exact input. A
+- A `write` or `disclose` call has a fresh native confirmation naming the whole chain and the
+  exact input (its effect in parentheses: `(write)`, `(shows content)`). A
   `launch` call has a fresh native confirmation of the exact executable, `argv` and `cwd`. Only
   the window's own direct call, made from a native gesture, may use a remembered approval, and
   only of exactly that launch: a Start in the app's launcher (a launch of the host's own list) or
