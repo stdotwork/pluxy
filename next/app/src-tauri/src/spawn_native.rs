@@ -162,6 +162,17 @@ fn launch(
     Ok((r["value"].clone(), text))
 }
 
+/// Waits out the launcher's crash backoff (doubling with each crash in a row), once its status
+/// says it crashed.
+fn after_backoff(main: &Webview) -> Result<(), String> {
+    let wait = wait_for("the launcher's crash in its status", || {
+        let status = ok(main, "program_status", json!({"package": LAUNCHER})).ok()?;
+        (status["state"] == "crashed").then(|| status["retry_in_ms"].as_u64().unwrap_or(0))
+    })?;
+    std::thread::sleep(Duration::from_millis(wait + 300));
+    Ok(())
+}
+
 /// The launcher's runtime call: the host's answer to its runtime frame.
 fn runtime(main: &Webview, package: &str, op: &str, id: &str) -> Result<Value, String> {
     let r = call(main, package, "runtime", json!({"op": op, "runtime": id}))?;
@@ -417,7 +428,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         })(),
     )?;
     // The launcher's next call waits out the crash backoff.
-    std::thread::sleep(Duration::from_millis(1300));
+    after_backoff(main)?;
 
     // ---- managed: two runtimes
     let (rec_a, rec_b) = (at("managed-a"), at("managed-b"));
@@ -499,7 +510,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 r["ok"] == false,
                 format!("the launcher's crash answered: {r}"),
             )?;
-            std::thread::sleep(Duration::from_millis(1300));
+            // Its second crash in a row: the backoff has doubled.
+            after_backoff(main)?;
             let listed = runtime(main, LAUNCHER, "list", "")?;
             let list = listed["output"]["runtimes"].to_string();
             require(
