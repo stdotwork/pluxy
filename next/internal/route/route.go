@@ -765,7 +765,7 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 	if c.req.Attempt != nil {
 		attempt = c.req.Attempt
 	}
-	req := renamed(c.req.LLM, c.upstream[a.ID])
+	req := Renamed(c.req.LLM, c.upstream[a.ID])
 	req.Caller = caller(a.Extension, c.req.Tenant)
 	s := attempt(c.ctx, a.Extension, call, req)
 	ev = s.Next()
