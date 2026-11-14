@@ -2115,6 +2115,27 @@ fn produced_and_consumed_kinds_are_validated() {
     )
     .is_ok());
     assert!(check("native", serde_json::json!({"produces": [produce]})).is_ok());
+    // A deliver operation may be read or write (the default), never disclose or launch: a
+    // delivery asks no confirmation. A produce operation keeps its effect: a job start asks.
+    let effect_ops = |deliver: &str, scan: &str| {
+        serde_json::json!({"operations": [
+            {"id": "op", "description": "d", "effect": deliver,
+                "input_schema": {"type": "object", "required": ["executable", "argv", "cwd"]},
+                "output_schema": {"type": "object"}},
+            {"id": "scan", "description": "d", "effect": scan,
+                "input_schema": {"type": "object", "required": ["executable", "argv", "cwd"]},
+                "output_schema": {"type": "object"}}],
+            "produces": [{"kind": "pluxy/hub/items", "schema": 1, "operation": "scan"}],
+            "consumes": [consume]})
+    };
+    for ok in ["read", "write"] {
+        assert!(check("native", effect_ops(ok, "disclose")).is_ok(), "{ok}");
+    }
+    assert!(check("native", effect_ops("read", "launch")).is_ok());
+    for bad in ["disclose", "launch"] {
+        let e = check("native", effect_ops(bad, "read")).unwrap_err();
+        assert!(e.contains("deliveries are the host's calls"), "{bad}: {e}");
+    }
     for (tier, bad, says) in [
         ("web", serde_json::json!({"produces": [produce]}), "jobs"),
         ("web", serde_json::json!({"consumes": [consume]}), "jobs"),
