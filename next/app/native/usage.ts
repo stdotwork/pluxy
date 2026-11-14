@@ -4,6 +4,12 @@
 // exporting its `summary`; a curated registry listing the three; the run's test trust profile; and the
 // fixture parser's usage files in a root of their own (not its default, so the check must set it).
 //
+// The Codex parser check (usage-codex, a real package of next/app-tools, packed like the fixture parser
+// but with no import) reads a Codex home written here by hand in Codex's rollout format, in the run's
+// HOME: two rollouts in `sessions`, one of them copied to `archived_sessions` too, and a third, with
+// prompt, reply, working folder and key canaries in the lines the parser must not carry. Its default
+// roots are used, so the check sets none.
+//
 // Each test archive adds one page to its package's manifest: routing.ts's relay page (`page`), which
 // sends the calls the check posts it on its channel. The hub's own page stays as it is; the parser has
 // no page of its own. The parser's test archive also imports the peer's `summary`, so its `relay` has
@@ -34,6 +40,7 @@ import { native, PAGE_SCRIPT, pack as packPackage, summary } from "./routing";
 export const HUB_ID = "pluxy/agent-usage";
 export const PARSER_ID = "pluxy/usage-fixture";
 export const PEER_ID = "pluxy/usage-peer";
+export const CODEX_ID = "pluxy/usage-codex";
 /** What the parser relays to the peer's `summary`, and its answer. */
 const PEER_ITEMS = ["usage", "positive", "control"];
 
@@ -42,6 +49,8 @@ export interface Usage {
   registries: { name: string; url: string }[];
   /** PLUXY_TEST_TRUST_NONCE for the app: the marker's nonce. */
   nonce: string;
+  /** Strings from the Codex home's lines that must not reach any report, the store or the app's output. */
+  canaries: string[];
 }
 
 /** A record line of the fixture format, ts in unix seconds. */
@@ -251,6 +260,208 @@ function expected() {
   };
 }
 
+// ---- The Codex home: rollout files in Codex's format, times UTC (local = UTC + 2 h).
+const C_ONE = "CANARY-PROMPT-ONE-7f3a";
+const C_REPLY = "CANARY-REPLY-ONE-2b91";
+const C_TWO = "CANARY-PROMPT-TWO-c04d";
+const C_THREE = "CANARY-PROMPT-THREE-58e6";
+const C_FOUR = "CANARY-PROMPT-FOUR-a1d7";
+const C_FIVE = "CANARY-PROMPT-FIVE-93bc";
+const C_CWD = "CANARY-CWD-d2e8";
+const C_KEY = "CANARY-KEY-6f10";
+const CODEX_CANARIES = [C_ONE, C_REPLY, C_TWO, C_THREE, C_FOUR, C_FIVE, C_CWD, C_KEY];
+const S1 = "rollout-2026-11-09T21-00-00-0198a000-0000-7000-8000-000000000001.jsonl";
+const S2 = "rollout-2026-11-10T08-00-00-0198a000-0000-7000-8000-000000000002.jsonl";
+const S3 = "rollout-2026-11-10T10-00-00-0198a000-0000-7000-8000-000000000003.jsonl";
+
+function line(timestamp: string, type: string, payload: object): string {
+  return JSON.stringify({ timestamp, type, payload });
+}
+const meta = (at: string, id: string) =>
+  line(at, "session_meta", {
+    id,
+    cwd: `/home/${C_CWD}`,
+    originator: "codex_cli_rs",
+    cli_version: "0.99.0",
+    instructions: `${C_KEY}`,
+  });
+const context = (at: string, model: string) =>
+  line(at, "turn_context", { cwd: `/home/${C_CWD}`, model, effort: "high", summary: "auto" });
+const message = (at: string, role: string, text: string) =>
+  line(at, "response_item", {
+    type: "message",
+    role,
+    content: [{ type: role === "user" ? "input_text" : "output_text", text }],
+  });
+/** A token_count with Codex's cumulative counters (its total is input + output). */
+const count = (at: string, input: number, cached: number, output: number, reasoning: number) => {
+  const usage = {
+    input_tokens: input,
+    cached_input_tokens: cached,
+    output_tokens: output,
+    reasoning_output_tokens: reasoning,
+    total_tokens: input + output,
+  };
+  return line(at, "event_msg", {
+    type: "token_count",
+    info: { total_token_usage: usage, last_token_usage: usage, model_context_window: 272000 },
+    rate_limits: { primary: null, secondary: null },
+  });
+};
+const FIRST_COUNT = line("2026-11-09T21:00:03.000Z", "event_msg", {
+  type: "token_count",
+  info: null,
+  rate_limits: { primary: null, secondary: null },
+});
+
+const CODEX_S1 = [
+  meta("2026-11-09T21:00:00.000Z", "0198a000-0000-7000-8000-000000000001"),
+  context("2026-11-09T21:00:01.000Z", "gpt-5.5-codex"),
+  message("2026-11-09T21:00:02.000Z", "user", C_ONE),
+  FIRST_COUNT,
+  message("2026-11-09T21:09:58.000Z", "assistant", C_REPLY),
+  // 23:10 local Monday 11-09: net input 800, output 300, cache read 200, reasoning 50, total 1,300.
+  count("2026-11-09T21:10:00.000Z", 1000, 200, 300, 50),
+  // The same counters again: nothing new, but a sample.
+  count("2026-11-09T21:10:05.000Z", 1000, 200, 300, 50),
+  context("2026-11-09T22:20:00.000Z", "gpt-5.5-codex"),
+  message("2026-11-09T22:20:01.000Z", "user", C_TWO),
+  // 00:30 local Tuesday 11-10: net input 1,800 - 800 = 1,000, output 300, cache read 500,
+  // reasoning 100, total 3,100 - 1,300 = 1,800.
+  count("2026-11-09T22:30:00.000Z", 2500, 700, 600, 150),
+];
+const CODEX_S2 = [
+  meta("2026-11-10T08:00:00.000Z", "0198a000-0000-7000-8000-000000000002"),
+  context("2026-11-10T08:00:01.000Z", "GPT-5.5"),
+  message("2026-11-10T08:00:02.000Z", "user", C_THREE),
+  // 10:05 local: net input 300, output 50, cache read 100, total 450.
+  count("2026-11-10T08:05:00.000Z", 400, 100, 50, 0),
+  context("2026-11-10T09:00:00.000Z", "gpt-5.5-mini"),
+  // 11:15 local, the new model: input 1,000 - 300 = 700, output 100, cache read 300, reasoning 20,
+  // total 1,550 - 450 = 1,100.
+  count("2026-11-10T09:15:00.000Z", 1400, 400, 150, 20),
+];
+/** Appended to S2 before the third sync: 14:20 local, input 1,400 - 1,000 = 400, output 100, cache
+ * read 100, reasoning 30, total 2,150 - 1,550 = 600. */
+const CODEX_S2_APPEND = [
+  message("2026-11-10T12:19:00.000Z", "user", C_FOUR),
+  count("2026-11-10T12:20:00.000Z", 1900, 500, 250, 50),
+];
+const CODEX_S3 = [
+  meta("2026-11-10T10:00:00.000Z", "0198a000-0000-7000-8000-000000000003"),
+  context("2026-11-10T10:00:01.000Z", "gpt-5.5-codex"),
+  message("2026-11-10T10:00:02.000Z", "user", C_FIVE),
+  // 12:30 local: net input 500, output 80, cache read 100, reasoning 10, total 680.
+  count("2026-11-10T10:30:00.000Z", 600, 100, 80, 10),
+  // 13:10 local, rewound away before the third sync: input 750 - 500 = 250, output 40, cache read 50,
+  // reasoning 10, total 340.
+  count("2026-11-10T11:10:00.000Z", 900, 150, 120, 20),
+];
+/** S3's lines kept by the rewind: everything but its last token_count. */
+const CODEX_S3_KEPT = 4;
+
+/** Makes the Codex home in home/.codex; gives the writes the check does later. */
+function codexHome(home: string) {
+  const sessions = join(home, ".codex", "sessions");
+  const archived = join(home, ".codex", "archived_sessions");
+  mkdirSync(join(sessions, "2026", "11", "09"), { recursive: true });
+  mkdirSync(join(sessions, "2026", "11", "10"), { recursive: true });
+  mkdirSync(archived, { recursive: true });
+  const s1 = join(sessions, "2026", "11", "09", S1);
+  writeFileSync(s1, `${CODEX_S1.join("\n")}\n`);
+  writeFileSync(join(sessions, "2026", "11", "10", S2), `${CODEX_S2.join("\n")}\n`);
+  writeFileSync(join(sessions, "2026", "11", "10", S3), `${CODEX_S3.join("\n")}\n`);
+  // An archived copy of S1: the same session (its file name), counted once.
+  copyFileSync(s1, join(archived, S1));
+  return {
+    append: { path: join(sessions, "2026", "11", "10", S2), lines: CODEX_S2_APPEND },
+    rewind: { path: join(sessions, "2026", "11", "10", S3), keep: CODEX_S3_KEPT },
+  };
+}
+
+/** What `report` must answer for the Codex source alone, by hand, before and after the third sync. */
+function codexExpected() {
+  const sources = (total: number) => [
+    { id: CODEX_ID, label: "Codex", status: "active", total, active_days: 2 },
+    // The fixture parser, disabled by the cancel step: its rows kept.
+    { id: PARSER_ID, label: "Fixture", status: "archived", total: 1547, active_days: 4 },
+  ];
+  const report = (
+    day10: T,
+    totals: T,
+    models: [string, number, number][],
+    total: number,
+    hours: Record<string, number>,
+  ) => ({
+    input: {
+      range: "7d",
+      granularity: "day",
+      sources: [CODEX_ID],
+      offsets: OFFSETS,
+      now: NOW,
+    },
+    output: {
+      range: "7d",
+      granularity: "day",
+      buckets: DAYS,
+      totals: t(totals),
+      previous: t(Z),
+      active_days: 2,
+      series: [t(Z), t(Z), t(Z), t(Z), t(Z), t([800, 300, 200, 0, 50, 1300, 2]), t(day10)],
+      by_source: {
+        keys: [CODEX_ID],
+        values: [[0], [0], [0], [0], [0], [1300], [day10[5]]],
+      },
+      by_model: {
+        keys: models.map((m) => m[0]),
+        values: [
+          ...[0, 0, 0, 0, 0].map(() => models.map(() => 0)),
+          models.map((m) => (m[0] === "gpt-5.5-codex" ? 1300 : 0)),
+          models.map((m) => m[2]),
+        ],
+      },
+      models: models.map((m) => ({ model: m[0], total: m[1] })),
+      sources: sources(total),
+      calendar: {
+        start: "2025-11-10",
+        days: 366,
+        nonzero: { "2026-11-09": 1300, "2026-11-10": day10[5] },
+      },
+      hours,
+    },
+  });
+  return {
+    // S1 (once, though copied), S2 until its first two counts, S3 whole.
+    first: [
+      report(
+        [2750, 570, 1050, 0, 140, 4370, 5],
+        [3550, 870, 1250, 0, 190, 5670, 7],
+        [
+          ["gpt-5.5-codex", 4120, 2820],
+          ["gpt-5.5-mini", 1100, 1100],
+          ["gpt-5.5", 450, 450],
+        ],
+        5670,
+        { "0:23": 1300, "1:0": 1800, "1:10": 450, "1:11": 1100, "1:12": 680, "1:13": 340 },
+      ),
+    ],
+    // S2 appended, S3 rewound.
+    after: [
+      report(
+        [2900, 630, 1100, 0, 160, 4630, 5],
+        [3700, 930, 1300, 0, 210, 5930, 7],
+        [
+          ["gpt-5.5-codex", 3780, 2480],
+          ["gpt-5.5-mini", 1700, 1700],
+          ["gpt-5.5", 450, 450],
+        ],
+        5930,
+        { "0:23": 1300, "1:0": 1800, "1:10": 450, "1:11": 1100, "1:12": 680, "1:14": 600 },
+      ),
+    ],
+  };
+}
+
 /** Packs and signs tool name from tools (next/app-tools) with program, the relay page and any imports
  * added; undefined when the tool was not built. */
 function pack(
@@ -324,9 +535,10 @@ export function buildUsageFixtures(
     { package: PEER_ID, contract: [1], operations: ["summary"], required: true },
   ]);
   const peer = packPeer(root, peerProgram, publicKey, privateKey);
+  const codex = pack(root, tools, "usage-codex", join(target, "usage-codex"), publicKey, privateKey);
   const curated = join(root, "curated.json");
   const packages: Record<string, object> = {};
-  for (const p of [hub, parser, peer]) {
+  for (const p of [hub, parser, peer, codex]) {
     if (p) packages[p.id] = { releases: [{ version: p.version, artifacts: { [platform()]: p.entry } }] };
   }
   writeFileSync(curated, JSON.stringify({ registry_version: 0, packages }));
@@ -334,6 +546,7 @@ export function buildUsageFixtures(
   mkdirSync(join(usageRoot, "a"), { recursive: true });
   writeFileSync(join(usageRoot, "a", "2026-11.jsonl"), `${A.join("\n")}\n`);
   writeFileSync(join(usageRoot, "b.jsonl"), `${B.join("\n")}\n`);
+  const codexWrites = codexHome(home);
   writeFileSync(
     join(root, "expect.json"),
     JSON.stringify({
@@ -346,16 +559,19 @@ export function buildUsageFixtures(
         [HUB_ID]: hub?.version ?? "0.1.0",
         [PARSER_ID]: parser?.version ?? "0.1.0",
         [PEER_ID]: peer?.version ?? "1.0.0",
+        [CODEX_ID]: codex?.version ?? "0.1.0",
       },
       sha256: {
         [HUB_ID]: hub?.sha256 ?? null,
         [PARSER_ID]: parser?.sha256 ?? null,
         [PEER_ID]: peer?.sha256 ?? null,
+        [CODEX_ID]: codex?.sha256 ?? null,
       },
       bin: {
         [HUB_ID]: hub?.bin ?? "bin/agent-usage",
         [PARSER_ID]: parser?.bin ?? "bin/usage-fixture",
         [PEER_ID]: peer?.bin ?? "bin/tool",
+        [CODEX_ID]: codex?.bin ?? "bin/usage-codex",
       },
       root: usageRoot,
       writes: {
@@ -370,8 +586,21 @@ export function buildUsageFixtures(
         append: { listed: 3, changed: 2, read: 2, failed: 0 },
       },
       reports: expected(),
+      // The Codex parser, enabled after the others: its home is in the run's HOME, its roots default.
+      codex: {
+        id: CODEX_ID,
+        writes: codexWrites,
+        canaries: CODEX_CANARIES,
+        // Each sync's counts for the source: listed (S1 twice), changed (to read), read, failed.
+        syncs: {
+          first: { listed: 4, changed: 3, read: 3, failed: 0 },
+          repeat: { listed: 4, changed: 0, read: 0, failed: 0 },
+          after: { listed: 4, changed: 2, read: 2, failed: 0 },
+        },
+        reports: codexExpected(),
+      },
     }),
   );
   const nonce = writeTrustProfile(home, [curated], publicKey);
-  return { registries: [{ name: "curated", url: curated }], nonce };
+  return { registries: [{ name: "curated", url: curated }], nonce, canaries: CODEX_CANARIES };
 }
