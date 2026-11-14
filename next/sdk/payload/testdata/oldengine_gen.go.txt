@@ -2,11 +2,15 @@
 // engine on every case and stores what it returned in the case's "old" field. Kept as text so it
 // is not compiled here. To regenerate (after changing or adding a case in cases.json):
 //
-//   1. copy this file to core/internal/runtime/executor/helps/zz_oldengine_gen_test.go
-//   2. from core/, with CGO_ENABLED=1:
+//   1. make a worktree of a commit that has core/ (once core/ is removed from the repository, the
+//      last commit that has it, named in next/corpus/README.md):
+//        git worktree add <tmp> <commit>
+//   2. copy this file to <tmp>/core/internal/runtime/executor/helps/zz_oldengine_gen_test.go
+//   3. from <tmp>/core, with CGO_ENABLED=1:
 //        PLUXY_GEN_IN=<abs>/next/sdk/payload/testdata/cases.json PLUXY_GEN_OUT=/tmp/cases_out.json \
 //          go test -p 2 -count=1 -run TestZZOldEngineGen ./internal/runtime/executor/helps/
-//   3. replace testdata/cases.json with /tmp/cases_out.json, and delete the copied file from core/
+//   4. replace testdata/cases.json with /tmp/cases_out.json, and remove the worktree
+//      (git worktree remove --force <tmp>)
 //
 // A case whose result depends on the order of a rule's params (a Go map in the old engine) fails
 // the run as not deterministic: change such a case so one rule never creates two new keys at once.

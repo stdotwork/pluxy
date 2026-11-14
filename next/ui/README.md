@@ -7,7 +7,7 @@ pages in the same places.
 
 | Folder | What it holds |
 | --- | --- |
-| `kit/` | What both builds share: the host-services interface (`host.ts`), the management API calls by area (`api/`), the string layer (`strings.ts`), components (`ui.tsx`, `ui.css`), the shell and its layouts (`shell.tsx`, `shell.css`), the stylesheet that puts the kit's CSS in order (`kit.css`), the theme engine (`theme/`) and the pages core offers (`pages/`, listed in `pages/core.ts`) |
+| `kit/` | What both builds share: the host-services interface (`host.ts`), the management API calls by area (`api/`), the string layer (`strings.ts`), privacy mode's masks (`privacy.ts`), components (`ui.tsx`, `ui.css`), the shell and its layouts (`shell.tsx`, `shell.css`), the stylesheet that puts the kit's CSS in order (`kit.css`), the theme engine (`theme/`) and the pages core offers (`pages/`, listed in `pages/core.ts`) |
 | `panel/` | The browser build: its entry page, and `browserHost.ts`, the kit's host in a browser |
 | `themes/` | The theme contract and the built-in themes, as theme files |
 | `extension-pages/` | The extension pages contract, and `pluxy-page.js`, the module an extension's page loads to talk to the panel |
@@ -30,8 +30,17 @@ A build then picks its pages and mounts the shell:
 ```tsx
 const host = browserHost();
 const themes = new ThemeState(host, document, [defaultTheme, terminal, paper]);
-render(<Shell host={host} themes={themes} pages={corePages()} />, document.body);
+const privacy = prefsPrivacy(host);
+render(<Shell host={host} themes={themes} privacy={privacy} pages={corePages()} />, document.body);
 ```
+
+The navigation's **Privacy mode** toggle hides account e-mail addresses and identifiers while the
+person shares their screen (`kit/privacy.ts`). It changes only what pages show: a page passes a
+value through `usePrivacy()`'s masks where it shows it (text, `title`, `aria-label`) and keeps the
+real value for calls, search, filters, copying and downloads. Keys never go through the masks;
+they keep their own handling in both states. The panel keeps the choice in the host's prefs
+(`prefsPrivacy`); the desktop app keeps it natively. Extension pages get it as `privacy` in the
+theme snapshot (`extension-pages/README.md`); the kit cannot hide what a page shows itself.
 
 A page is a `PageDef`: a stable ID (its address is `#/<id>`), a title, a short label for the rail
 navigation, its navigation group, an optional tooltip, and a render function. The navigation shows
@@ -51,8 +60,8 @@ settings form from its schema. The contract for both, and the module pages use, 
 
 ## The panel's pages
 
-The pages core offers, in navigation order, and the page of the old panel
-([`extensions/panel`](../../extensions/panel)) that each one replaces. A page's ID is its address
+The pages core offers, in navigation order, and the page of the old web panel (the React/Vite
+panel that `extensions/panel` held) that each one replaces. A page's ID is its address
 (`#/<id>`) and its theme hook `data-page`. Why the pages have these names, and the other
 decisions behind them, is in [docs/panel.md](../../docs/panel.md).
 

@@ -36,8 +36,9 @@ export const trayWatcher: Service = {
   file: "/usr/libexec/ayatana-indicator-application/ayatana-indicator-application-service",
 };
 
-/** Builds the disposable AppImage the session runs (appimage.ts). */
-const squashfs = { what: "mksquashfs", package: "squashfs-tools" };
+/** Builds the disposable AppImage the session runs (appimage.ts); unsquashfs unpacks the
+ * AppImages the release gate checks. */
+const squashfs = { package: "squashfs-tools" };
 
 export const busNames = {
   desktop: "org.freedesktop.portal.Desktop",
@@ -53,7 +54,11 @@ export function missingPrerequisites(): string[] {
   for (const s of [portalFrontend, documentPortal, gtkBackend, trayWatcher]) {
     if (!existsSync(s.file)) missing.push(`${s.what}: ${s.file} is not there (package ${s.package})`);
   }
-  if (!Bun.which("mksquashfs")) missing.push(`${squashfs.what}: not on PATH (package ${squashfs.package})`);
+  for (const tool of ["mksquashfs", "unsquashfs"]) {
+    if (!Bun.which(tool)) missing.push(`${tool}: not on PATH (package ${squashfs.package})`);
+  }
   if (!Bun.which("xdotool")) missing.push("xdotool: not on PATH (package xdotool)");
+  // Makes the fake release feed's certificate authority (feed.ts).
+  if (!Bun.which("openssl")) missing.push("openssl: not on PATH (package openssl)");
   return missing;
 }

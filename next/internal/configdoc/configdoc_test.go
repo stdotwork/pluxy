@@ -71,7 +71,10 @@ func loads(t *testing.T, b string, isYAML bool) *server.Config {
 
 // secretNodes returns the nodes of the document that hold secrets, and the header text of those
 // that are header values of a provider section.
-func (d *Doc) secretNodes() ([]*yaml.Node, map[*yaml.Node]string) { return found(d.root, false) }
+func (d *Doc) secretNodes() ([]*yaml.Node, map[*yaml.Node]string) {
+	nodes, texts, _ := found(d.root, false)
+	return nodes, texts
+}
 
 // redactChecked redacts src and checks the properties every redaction must have: every secret
 // the document held is gone as a value (checked by re-parsing, so a comment that repeats it
@@ -80,9 +83,9 @@ func (d *Doc) secretNodes() ([]*yaml.Node, map[*yaml.Node]string) { return found
 func redactChecked(t *testing.T, src string, isYAML bool, wantSecrets []string) (red, restored string) {
 	t.Helper()
 	r := NewRedactor()
-	secrets := mustParse(t, src, isYAML).Secrets()
+	secrets := mustParse(t, src, isYAML).TextSecrets()
 	if !slices.Equal(sorted(secrets), sorted(wantSecrets)) {
-		t.Fatalf("Secrets() = %q, want %q", sorted(secrets), sorted(wantSecrets))
+		t.Fatalf("TextSecrets() = %q, want %q", sorted(secrets), sorted(wantSecrets))
 	}
 	out, err := r.Redact([]byte(src), isYAML)
 	if err != nil {
@@ -99,7 +102,7 @@ func redactChecked(t *testing.T, src string, isYAML bool, wantSecrets []string) 
 			t.Errorf("no placeholder for %q in the redacted document:\n%s", n.Value, out)
 		}
 	}
-	for _, s := range mustParse(t, string(out), isYAML).Secrets() {
+	for _, s := range mustParse(t, string(out), isYAML).TextSecrets() {
 		if !placeholderRE.MatchString(s) {
 			t.Errorf("redacted document still holds %q where a secret goes", s)
 		}
@@ -456,26 +459,14 @@ func TestRestoreRefusals(t *testing.T) {
 			t.Errorf("err = %v, want ErrStale", err)
 		}
 	})
-	t.Run("a URL secret may move to another key", func(t *testing.T) {
+	t.Run("a URL secret goes back only where it is", func(t *testing.T) {
 		edited := strings.Replace(string(red), `"name": "private"`, `"name": "`+urlPH+`"`, 1)
 		if edited == string(red) {
 			t.Fatal("test edit did not apply")
 		}
-		out, err := r.Restore([]byte(edited), []byte(restoreJSON), false)
-		if err != nil {
-			t.Fatalf("Restore: %v", err)
-		}
-		var doc struct {
-			Packages struct {
-				Registries []struct{ Name, URL string } `json:"registries"`
-			} `json:"packages"`
-		}
-		if err := json.Unmarshal(out, &doc); err != nil {
-			t.Fatal(err)
-		}
-		reg := doc.Packages.Registries[0]
-		if reg.Name != "https://fakeuser:fakepass@registry.example.com/index.json" || reg.URL != reg.Name {
-			t.Errorf("registry = %+v", reg)
+		_, err := r.Restore([]byte(edited), []byte(restoreJSON), false)
+		if !errors.Is(err, ErrInvalid) || errors.Is(err, ErrStale) {
+			t.Errorf("err = %v, want ErrInvalid only", err)
 		}
 	})
 	t.Run("a document with no placeholders comes back unchanged", func(t *testing.T) {

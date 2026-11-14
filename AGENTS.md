@@ -23,8 +23,9 @@ moves, so later upstream merges stay easy. `core/`'s Go module path stays
 
 A folder's own `AGENTS.md` (`core/AGENTS.md`, `extensions/panel/AGENTS.md`) holds that folder's
 coding rules and applies to work inside it. The app has no `AGENTS.md`; follow nearby code.
-`next/` has no `AGENTS.md` either: follow nearby code, prefer the standard library, and change
-the extension protocol only together with its README (`next/protocol/README.md`).
+`next/` has no `AGENTS.md` either: follow nearby code, prefer the standard library (its only
+other dependencies are `github.com/coder/websocket` and `gopkg.in/yaml.v3`), and change the
+extension protocol only together with its README (`next/protocol/README.md`).
 
 The upstream process rules in those files and in upstream tooling do not apply in pluxy:
 
@@ -62,8 +63,8 @@ before assuming your change caused it.
 
 ### `next/`
 
-Go version comes from `next/go.mod` (currently `go 1.26.10`). The module has no dependencies
-outside the standard library.
+Go version comes from `next/go.mod` (currently `go 1.26.10`). Besides the standard library, the
+module depends on `github.com/coder/websocket` and `gopkg.in/yaml.v3`.
 
 ```bash
 go build ./...
@@ -161,7 +162,7 @@ Workflows live in `.github/workflows/`, one set per folder, each limited to its 
 | `panel-release.yml` | `panel-v*` tags | `bun run build`, publishes `management.html` |
 | `app-ci.yml` | PRs and pushes to `main` touching `extensions/app/` | Front end: `bun run check`, `bun test`, `bun run build`; Rust: `cargo check --locked`, `cargo test --locked` |
 | `next-ci.yml` | PRs and pushes to `main` touching `next/` | UI type check, lint and unit tests; builds the panel; `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test -race ./...`; the panel's browser test in headless Chromium, and the extension pages test in Chromium, Firefox and WebKit |
-| `next-app.yml` | PRs and pushes to `main` touching `next/` | The desktop app in `next/app`: type check, lint, unit tests and build of the window; `cargo fmt --check`, `cargo clippy`, `cargo test --locked` (unit tests and each connection mode against a real core); the native test on Xvfb |
+| `next-app.yml` | PRs and pushes to `main` touching `next/` | The desktop app in `next/app`: type check, lint, unit tests and build of the window; `cargo fmt --check`, `cargo clippy`, `cargo test --locked` (unit tests and each connection mode against a real core); the native test on Xvfb, which also builds and runs the test AppImage and checks the release gate |
 | `next-corpus.yml` | PRs and pushes to `main` touching `next/` or `core/` | Builds `core/` and runs the corpus against both cores live; the report is in the job summary |
 | `next-release.yml` | `next-v*` tags; PRs touching `next/Dockerfile`, `next/.dockerignore`, `next/compose.example.yaml`, `next/cmd/pluxy-pack/` or the workflow | PRs: builds the container image (amd64, and arm64 without running it), starts it with a temporary config, polls `/healthz`, checks the panel and the bundled packages, and packs every extension for the release platforms. Tags: also uploads the archives and `registry.json` to the GitHub release and pushes the image to `ghcr.io` once the checks pass |
 

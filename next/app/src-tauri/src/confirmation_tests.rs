@@ -590,3 +590,22 @@ fn writable_settings_parent_is_tightened_on_open_and_save() {
     assert_eq!(fs::metadata(&dir).unwrap().mode() & 0o777, 0o700);
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn an_app_action_is_reviewed_by_its_description_alone() {
+    let (dir, mut c, a) = fixture();
+    let what = "Rotate the management key of http://127.0.0.1:8400.\nSecond line\u{2028}";
+    let p = c.prepare_app(what.into(), 7).unwrap();
+    assert_eq!(
+        p.review().unwrap(),
+        "Rotate the management key of http://127.0.0.1:8400.\nSecond line\\u2028"
+    );
+    let id = c.queue(p).unwrap();
+    assert!(!c.review(&id).unwrap().1, "an app action offered Remember");
+    let t = c.finish(&id, true, false).unwrap().unwrap();
+    assert!(c.consume(&id, &t).is_ok());
+    // A launch is still reviewed in full.
+    let review = c.prepare(a, Origin::NativeUi).unwrap().review().unwrap();
+    assert!(review.contains("\"digest\"") && review.contains("\"argv\""));
+    fs::remove_dir_all(dir).unwrap();
+}

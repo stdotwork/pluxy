@@ -15,7 +15,9 @@ import (
 const modelsOwner = "openai"
 
 // modelsJSON holds the model list of each ChatGPT plan, copied from the codex-free, codex-team,
-// codex-plus and codex-pro lists of today's core (core/internal/registry/models/models.json).
+// codex-plus and codex-pro lists of today's core (core/internal/registry/models/models.json; to
+// refresh them by hand, take those sections of models.json in https://github.com/router-for-me/models, the file the
+// old core copied).
 // Every list ends with the image models (imageModels), as today's core adds its gpt-image-*
 // models to every list (WithCodexBuiltins in core/internal/registry/model_definitions.go): they
 // serve the Images API.

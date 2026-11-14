@@ -15,7 +15,8 @@ declares. It never receives the management key.
 A page **can**:
 
 - run its own scripts, styles, images and fonts from its package's `ui` folder;
-- ask the panel for the current theme, and get told when it changes;
+- ask the panel for the current theme, and get told when it changes, with whether the person
+  turned on privacy mode;
 - read and change its own extension's settings, when its manifest asks for that permission.
 
 A page **cannot**, whatever its code does:
@@ -244,6 +245,7 @@ four keys, `id` a string of 1 to 64 characters, `params` an object or `null`. Th
 | `theme.get` | `null` | none | The theme snapshot (below). |
 | `config.get` | `null` | `config.read` | `{"values": {...}, "set": [...]}`, as the management API's `GET` gives them. |
 | `config.set` | `{"values": {...}}` | `config.write` | The same, after the change. Fields as for the management API's `PATCH`. |
+| `native.call` | `{"package": "...", "op": "...", "input": {...}}` | the package's declared `imports` and the person's native consent | Desktop app only, for a page of a package on that device: the operation's output. The app answers it natively and never forwards it to its window; see [Calls between packages](../../app/app-host/README.md#calls-between-packages). The panel answers `unknown_method`. |
 
 Error codes: `bad_request` (the message breaks the shape above, or a method's `params` are
 wrong), `too_large`, `unknown_method`, `forbidden` (the extension did not declare the
@@ -254,8 +256,8 @@ a well-formed `id`, once.
 
 ### Events
 
-The panel sends `{"v": 0, "event": "theme", "data": {...}}` when the theme or the person's
-theme choices change.
+The panel sends `{"v": 0, "event": "theme", "data": {...}}` when the theme, the person's
+theme choices or privacy mode change.
 
 ### The theme snapshot
 
@@ -264,7 +266,8 @@ theme choices change.
   "theme_version": 0,
   "appearance": "dark",
   "layout": {"nav": "sidebar", "list": "table", "detail": "side", "width": "wide"},
-  "tokens": {"color.bg": "#111214", "color.text": "#e7e7ea", "...": "..."}
+  "tokens": {"color.bg": "#111214", "color.text": "#e7e7ea", "...": "..."},
+  "privacy": false
 }
 ```
 
@@ -273,6 +276,11 @@ after the theme, the dark values and the person's density. A page sets them as C
 properties on its own root (`color.bg` is `--px-color-bg`, as in the kit), so it follows the
 theme as the panel does. The person's and the theme's custom CSS is not sent: it is written for
 the panel's markup, not the page's.
+
+`privacy` is `true` while the person has privacy mode on, for example while sharing their
+screen: the panel then masks account e-mail addresses and identifiers where it shows them, and
+a page should do the same with those it shows. The panel cannot hide what a page shows itself;
+`privacy` is only this request. A page cannot turn privacy mode on or off.
 
 ## The page library
 
@@ -288,8 +296,8 @@ pluxy.on("theme", (theme) => { /* the library already applied it */ });
 ```
 
 `connect()` sets the theme's tokens as `--px-*` properties on `document.documentElement`,
-sets `data-appearance` and the layout options as `data-*` attributes there, and does it again on
-every `theme` event.
+sets `data-appearance`, the layout options and `data-privacy` (`on` or `off`) as `data-*`
+attributes there, and does it again on every `theme` event.
 
 ## Limits of version 0
 

@@ -37,20 +37,17 @@ pub(crate) fn notice(app: &tauri::AppHandle, text: String) {
 }
 
 pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> {
-    let (review, launch, summary, page) = {
+    let (review, launch, summary, page, own) = {
         let st = app.state::<crate::App>();
         let mut c = st.confirmations.lock().unwrap();
         let review = c.review(&id)?;
         if !c.showing.insert(id.clone()) {
             return Err("confirmation already showing".into());
         }
-        let summary = c.pending.get(&id).unwrap().prepared.notice();
-        (
-            review.0,
-            review.1,
-            summary,
-            c.pending.get(&id).unwrap().page,
-        )
+        let pending = c.pending.get(&id).unwrap();
+        let summary = pending.prepared.notice();
+        let (page, own) = (pending.page, pending.prepared.own);
+        (review.0, review.1, summary, page, own)
     };
     let handle = app.clone();
     app.run_on_main_thread(move || {
@@ -93,7 +90,9 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
             .pack_start(&text_view(&review), true, true, 8);
         let remember =
             gtk::CheckButton::with_mnemonic("_Remember this exact executable, argv and cwd");
-        if launch {
+        // Only a launch from the window, the tray or native UI may offer it: a page or import
+        // chain never uses a remembered approval, so it would save one nothing can use.
+        if launch && !page {
             dialog.content_area().pack_start(&remember, false, false, 8);
         }
         let app = handle.clone();
@@ -108,6 +107,30 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
             if let Some(d) = expires.upgrade() {
                 d.response(gtk::ResponseType::Cancel);
             }
+        });
+        // Withdrawn (its caller's call was cancelled) or otherwise no longer pending: it closes,
+        // as cancelled.
+        let watched = dialog.downgrade();
+        let watching = completed.clone();
+        let (watch_app, watch_id) = (handle.clone(), id.clone());
+        gtk::glib::timeout_add_local(Duration::from_millis(250), move || {
+            if watching.get() {
+                return gtk::glib::ControlFlow::Break;
+            }
+            let gone = !watch_app
+                .state::<crate::App>()
+                .confirmations
+                .lock()
+                .unwrap()
+                .pending
+                .contains_key(&watch_id);
+            if !gone {
+                return gtk::glib::ControlFlow::Continue;
+            }
+            if let Some(d) = watched.upgrade() {
+                d.response(gtk::ResponseType::Cancel);
+            }
+            gtk::glib::ControlFlow::Break
         });
         dialog.connect_response(move |d, response| {
             if completed.replace(true) {
@@ -135,7 +158,10 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
             }
             c.results.insert(id.clone(), result);
             drop(c);
-            notice(&app, text);
+            // The app's own action shows its own outcome (such as the window with a new key).
+            if !own {
+                notice(&app, text);
+            }
             d.hide();
             // No GTK state is queried after destroying this completed dialog.
             unsafe {
@@ -150,6 +176,43 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
         }
     })
     .map_err(|e| e.to_string())
+}
+
+/// Reviews an app action started in the app's window, and waits for the person's answer: true
+/// only after Confirm, with its single-use token spent here. Never call it on the GTK thread,
+/// which shows the dialog.
+pub(crate) fn confirm_app(
+    app: &tauri::AppHandle,
+    what: String,
+    generation: u64,
+) -> Result<bool, String> {
+    let id = {
+        let st = app.state::<crate::App>();
+        let mut c = st.confirmations.lock().unwrap();
+        let prepared = c.prepare_app(what, generation)?;
+        c.queue(prepared)?
+    };
+    request(app, id.clone())?;
+    // The dialog cancels itself when its lifetime ends; this is only a backstop.
+    let deadline = Instant::now() + LIFETIME + Duration::from_secs(10);
+    loop {
+        let st = app.state::<crate::App>();
+        let mut c = st.confirmations.lock().unwrap();
+        match c.take_result(&id) {
+            Some(Ok(Some(token))) => {
+                c.consume(&id, &token)?;
+                return Ok(true);
+            }
+            Some(Ok(None)) => return Ok(false),
+            Some(Err(e)) => return Err(e),
+            None if Instant::now() > deadline => {
+                return Err("the confirmation did not finish".into())
+            }
+            None => {}
+        }
+        drop(c);
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// Native settings keep revocation out of page messages and DOM events.

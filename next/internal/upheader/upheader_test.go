@@ -57,9 +57,9 @@ func TestImport(t *testing.T) {
 }
 
 func TestSecrets(t *testing.T) {
-	got := Secrets(map[string]string{"Authorization": "a", "X-Api-Key": "b", "X-Title": "c", "Cookie": "d"})
-	if want := []string{"a", "d", "b"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("Secrets = %v, want %v (by name: Authorization, Cookie, X-Api-Key)", got, want)
+	got := Secrets(map[string]string{"Authorization": "a", "X-Api-Key": "b", "X-Title": "c", "Cookie": "d", "X-Passphrase": "e"})
+	if want := []string{"a", "d", "b", "e"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Secrets = %v, want %v (by name: Authorization, Cookie, X-Api-Key, X-Passphrase)", got, want)
 	}
 }
 

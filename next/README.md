@@ -1,6 +1,9 @@
 # next: the new pluxy core
 
-A new core for pluxy, built from scratch beside today's `core/`. Core receives client requests and
+A new core for pluxy, built from scratch beside today's core, the Go proxy in `core/`. (In this
+README and in the corpus, "today's core" and "the old core" mean that core, and `core/...` paths
+are files in it. Once `core/` is removed from the repository, they mean `core/` at the last commit
+that still has it; the commit will be named here when that happens.) Core receives client requests and
 hands them to **provider extensions**: separate programs, one per kind of upstream, that core
 starts and talks to over a local socket. Today it serves OpenAI Chat Completions, OpenAI
 Responses, Anthropic Messages and Gemini GenerateContent (streamed and not, over HTTP) through the
@@ -43,7 +46,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `ui/` | The UI kit the panel and the desktop app share, the panel's browser build, and the [theme contract](ui/themes/README.md) ([README](ui/README.md)). |
 | `app/` | The desktop app: the kit's second build in a Tauri window, with a tray icon and three ways to reach core ([README](app/README.md)). |
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
-| `corpus/` | Differential test corpus: cases replayed against this core and today's `core/`, with listed exceptions ([README](corpus/README.md)). |
+| `corpus/` | Differential test corpus: cases replayed against this core and today's core, with listed exceptions ([README](corpus/README.md)). |
 
 Go extensions build each upstream client's transport with `sdk.Upstream(base)`, where `base` is
 their configured `*http.Transport`. This includes login, token refresh and WebSocket handshake
@@ -1051,7 +1054,7 @@ The sign-in is Google's OAuth for installed apps with the Antigravity app's own 
 scopes, as today's core signs in, plus PKCE. Google's token endpoint also takes that client's
 secret. The extension has it built in: it is the installed-app client secret of the OAuth client the
 Antigravity desktop app uses, which ships inside every copy of the app, and today's core carries the
-same value (`ClientSecret` in `core/internal/auth/antigravity/constants.go`). It is not a user's
+same value (`ClientSecret` in the old core's `core/internal/auth/antigravity/constants.go`). It is not a user's
 credential and gives no access to an account without a sign-in. A login asks for no input, the
 credential does not keep the secret, and every renewal sends it, so an account renews whether it
 was logged in or imported. After signing in, the
@@ -1336,11 +1339,13 @@ itself under that name, as an HTTP client leaves out `Authorization` there.
 out is removed), and with `null` or `{}` removes them all.
 
 The value of a header whose name is about authentication (it holds `auth`, `key`, `token`,
-`secret`, `cookie`, `session`, `password` or `signature`, letter case aside) is a secret, by the
+`secret`, `cookie`, `session`, `password`, `passphrase` or `signature`, letter case aside) is a secret, by the
 rule config redaction uses: `GET /config` and `GET /accounts` show the same placeholder in its
 place (that of the header core sends, also for a value of a provider section of a `config.yaml`
-written as a number or with spaces around it), a placeholder sent back keeps the value, and the value is removed from what extensions log
-and send back. Core writes no header value in its own logs or errors. An extension older than
+written as a number or with spaces around it), except for a value written as `true` or `false`,
+which `GET /config` shows as written, as it shows `true` and `false` everywhere, while `GET
+/accounts` shows a placeholder. A placeholder sent back keeps the value, and the value is removed
+from what extensions log and send back. Core writes no header value in its own logs or errors. An extension older than
 protocol 0.12 cannot send headers, so core does not send it the accounts that have them: their
 requests go to other accounts, and the error says why.
 
@@ -1386,10 +1391,13 @@ translated to the upstream's format: a field the extension fills in itself count
 as the Claude extension's `max_tokens` of 32000 for a client that sets none. To replace such a
 value, use `override`, as today's example config does for `max_tokens`.
 
-Rules do not reach Devin, whose upstream body is protobuf, nor turns on an upstream WebSocket
-session (a Codex Responses WebSocket); a client WebSocket turn that goes upstream as an HTTP
-request gets them. An extension older than protocol 0.14 cannot apply rules, so a request that
-rules apply to is not sent to it: it goes to other accounts, and the error says why.
+A turn on an upstream WebSocket (a Codex Responses WebSocket) gets them too: they apply once to
+the `response.create` message the extension sends for the turn, selected for that turn as for any
+request. A message that is no turn, such as the client's interrupt, goes upstream as it is. A
+client WebSocket turn that goes upstream as an HTTP request gets them as an HTTP request does.
+Rules do not reach Devin, whose upstream body is protobuf. An extension older than protocol 0.14
+cannot apply rules (0.15 for a turn on an upstream WebSocket), so a request that rules apply to is
+not sent to it: it goes to other accounts, and the error says why.
 
 ### Account checks
 
@@ -1483,17 +1491,22 @@ uses saved credentials for plan metadata without renewing them. With no enabled,
 account (including a configuration with only other extensions), the reply is 200
 `{"models":[]}`.
 
-To refresh the catalog by hand, from the repository root copy the reviewed catalog and rebuild
-the extension:
+To refresh the catalog by hand, fetch `codex_client_models.json` from the
+[router-for-me/models](https://github.com/router-for-me/models) repository, the source the old
+core refreshes its copy from, and rebuild the extension. From `next/`:
 
 ```bash
-cp core/internal/registry/models/codex_client_models.json next/extensions/codex/client_models.json
-cd next
+tmp=$(mktemp -d) && git -C "$tmp" init -q
+git -C "$tmp" fetch --depth 1 https://github.com/router-for-me/models main
+git -C "$tmp" show FETCH_HEAD:codex_client_models.json > extensions/codex/client_models.json
+rm -rf "$tmp"
 go build -o extensions/codex/codex ./extensions/codex
 ```
 
-Review the source and its changes before copying it, run the Codex catalog corpus and e2e tests,
-and reload core after replacing the extension program. The routing list in
+Review the file and its changes before keeping it, run the tests in `extensions/codex`
+(`TestClientModelTemplates` in `client_models_test.go` expects 12 templates, so a changed count
+needs the test updated too), run the Codex catalog corpus and e2e tests, and reload core after
+replacing the extension program. The routing list in
 `extensions/codex/models.json` remains separate from this client metadata.
 
 ### Account model names
@@ -1695,9 +1708,9 @@ its keys and its indent. `PUT /config` writes the document as sent.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets, header values about authentication (`Authorization`, `X-Api-Key`, cookies), and any URL with a user name, password or query. Everything below a key named like a secret is a secret, however deep, also when given through a YAML alias, as `GET /accounts` shows a login account's settings, except in today's core's provider sections at the top of a `config.yaml` (the v8 `api-keys` mapping and the older lists such as `codex-api-key`), whose entries are read by these rules; `true`, `false`, `null` and the empty string never are, as they carry no secret. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
-| `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything. 200 with `valid: true` and the `notices` a `config.yaml` load logs, or `valid: false` and `error`. |
-| `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document. |
+| `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets (names are compared in lower case whatever joins their words, or none, so `accessToken` and `accesstoken` are `access_token`, with letters folded as core matches a JSON key to a setting, so `client_keyſ` is `client_keys`; `aws_secret_access_key`, `client_secrets` and `passwords` are ones too, and so is a name that ends in a number or a word saying how the value is written, such as `apiKey2`, `api_key_value` or `privateKeyPem`), header values about authentication (`Authorization`, `X-Api-Key`, cookies) or named like a secret in any mapping whose name holds `header` (`extra_headers`, `headers_override`), and any URL with a user name, password or query. Everything below a key named like a secret is a secret, however deep, also when given through a YAML alias (as a value, or as a key's name), as `GET /accounts` shows a login account's settings, except in today's core's provider sections at the top of a `config.yaml` (the sections of the v8 `api-keys` mapping, such as `codex`, and the older lists such as `codex-api-key`), whose entries are read by these rules; any other key of the v8 `api-keys` mapping is read as a secret key. A string secret of 8 bytes or more written again as a whole value anywhere else in the file (a note holding a key) is hidden there too; a shorter copy, or a number, is shown, and so is a copy of a value that is a secret only for being in a mapping below a secret key. `true`, `false`, `null` and the empty string never are secrets, as they carry none. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
+| `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything, placeholders put back as `PUT /config` puts them (below). 200 with `valid: true` and the `notices` a `config.yaml` load logs, or `valid: false` and `error`, such as for a placeholder where its secret is not. |
+| `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. Each placeholder goes back only where its own secret is in the file now: the same account or list item (by its `id` or `name` when it holds that item's secrets, else by its secrets), and the same keys, also where a YAML alias or merge key reads it (below). 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document, such as for a placeholder anywhere else, naming its line; a refused document writes nothing. |
 | `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as today's panel shows them; a key shorter than 8 characters is hidden whole). |
 | `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
@@ -1709,11 +1722,42 @@ its keys and its indent. `PUT /config` writes the document as sent.
 In the document, a placeholder stands for the secret it replaced, so a document read with `GET
 /config`, edited and sent back keeps its secrets: core puts each one back from the file as it is
 now. A secret that is not a string has its type in its placeholder, so the number `1234` and the
-string `"1234"` have different placeholders and each goes back as it was written, wherever it is
-moved. To change a secret, write the new value in its place. A placeholder is accepted only where a
-secret goes, and only while the file still holds that secret and core has not restarted (the
-placeholders are keyed hashes with a key core picks at start); otherwise the call answers 409
-(read the config again) or refuses the document. Messages in replies never show a secret either.
+string `"1234"` have different placeholders and each goes back as it was written; one written
+with an explicit YAML tag (`!!int 0x1F`, `!!binary ...`) goes back with its tag. To change a
+secret, write the new value in its place. A placeholder goes back only where its own secret is
+in the file now: at the same keys (the management key, a client key, a registry's URL), and in a
+list, in the same item. An item of the document stands for an item of the file that holds, at the
+same keys, a secret of each of its placeholders, and that no other item stands for. Among those,
+it stands for the one with its `id` (an account), or else its `name` (a registry, a named
+provider entry of a `config.yaml`), when it can; otherwise, as an item with neither does (an
+entry of an older list such as `codex-api-key`, a key of an entry), for one that holds its
+secrets: an account renamed, or given another account's `id`, is the account whose secrets it
+holds. So items can be reordered and renamed. An item with a placeholder may not have its `id`
+or `name` twice, in any case (core's JSON reader takes the last of them, matching names in any
+case). A plain value in a list, such as a client key, may move within its list. A copy's
+placeholder goes back the same way, where the file holds that copy now, and only while the
+document still holds the secret it copies: a copy whose key was renamed, that moved to another
+item of a list, or whose secret was changed or removed is refused. In a `config.yaml`, a secret
+is wherever core reads it: an alias (`*name`) reads its anchor at the alias's place, and a merge
+key (`<<`) reads the merged mapping's keys in the mapping it is in, as core's loader reads them.
+Each place core would read a placeholder at must be one where the file, read the same way, has
+that secret now: a file that already aliases a secret is taken (it is written out again, as core
+reads it, so its quotes and spacing may change), but an alias or merge key that reads a
+placeholder anywhere else is refused, naming the alias's or the merge key's line, and so is a
+mapping key that is a placeholder or an alias of one, which would make a secret a key's name,
+such as a header's. So a placeholder cannot take one account's key, the management key or a client key into
+another account, another entry, a header or another setting: core refuses the document, naming
+the line, and the value must be written there itself. `POST /config/validate` runs the same
+check and answers `valid: false` with the reason. One limit: an account or a provider entry that
+keeps its secrets' placeholders keeps its secrets when its address or its proxy changes (an
+account's `base_url` or `proxy_url`, here or through `PATCH /accounts/{id}`, an entry's
+`base-url` or `proxy-url`), whether it is known by its `id`, its `name` or its secrets, so a
+client that may change an account or an entry may point its kept secrets at another address. A placeholder is accepted only while the file still holds that secret and core
+has not restarted (the placeholders are keyed hashes with a key core picks at start); otherwise
+the call answers 409 (read the config again). Messages in replies never show a secret either,
+however short, except a number shorter than 8 bytes that is a secret only for being in a
+mapping below a secret key (the `3` of `client_secret: {rotate_after_days: 3}`), which is left
+in text: replacing every `3` in a message would garble it.
 
 A `config.yaml` keeps each setting under the name it already has there: the v8 name, or the
 older spelling when only that is in the file. New client keys go to `access.api-keys`, or to the
@@ -1881,7 +1925,7 @@ credential redaction finds (JSON escapes, percent-encoding and the rest). Replie
 sections come from the extension with the account's own credential, the secrets in its settings,
 its proxy's password and its secret header values already removed; in the upstream sections the
 values of headers and query parameters whose names hold `auth`, `key`, `token`, `secret`,
-`cookie`, `session`, `password` or `signature` are masked too, the URL's user name and password
+`cookie`, `session`, `password`, `passphrase` or `signature` are masked too, the URL's user name and password
 are left out, and the characters a secret could be made of on each side of a body's left-out
 middle are left out with it. Today's core writes the reply's headers unmasked and logs requests
 that fail the client key check.
@@ -2006,7 +2050,8 @@ time.
 Core also reads a `config.yaml` written for today's core (`core/`), so an existing config moves
 over without renaming keys. A config file whose name ends in `.yaml` or `.yml` is read with
 today's key names; any other file is read as the JSON config above. Both layouts today's core
-reads work: the v8 layout of `core/config.example.yaml` (`server.port`, `access.api-keys`,
+reads work: the v8 layout of `internal/legacy/testdata/config.example.yaml` (a byte-identical
+copy of the old core's example config; `server.port`, `access.api-keys`,
 `api-keys.codex`, ...) and the older spellings (`port`, `api-keys` as a list,
 `codex-api-key`, ...). When a file has both spellings of one setting, the v8 one wins, as in
 today's core.

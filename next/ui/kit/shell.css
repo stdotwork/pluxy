@@ -63,6 +63,19 @@
     display: none;
   }
 
+  .privacy {
+    margin-top: auto;
+  }
+
+  /* Accent while masking, as the old app's toggle. */
+  .privacy[aria-pressed="true"] {
+    color: var(--px-color-accent);
+  }
+
+  .privacy + .signout {
+    margin-top: 0;
+  }
+
   .signout {
     margin-top: auto;
   }
@@ -157,9 +170,13 @@
     overflow-x: auto;
   }
 
-  html[data-nav="top"] .signout {
+  html[data-nav="top"] .privacy {
     margin-top: 0;
     margin-inline-start: auto;
+  }
+
+  html[data-nav="top"] .signout {
+    margin-top: 0;
   }
 
   html[data-nav="top"] .nav-group {
@@ -259,9 +276,13 @@
       display: none;
     }
 
-    .signout {
+    .privacy {
       margin-top: 0;
       margin-inline-start: auto;
+    }
+
+    .signout {
+      margin-top: 0;
     }
 
     .content {

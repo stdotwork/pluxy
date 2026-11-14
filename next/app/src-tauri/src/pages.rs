@@ -28,6 +28,37 @@ pub struct Binding {
     pub title: String,
     pub url: Url,
     pub pages_origin: String,
+    /// For a page of a package on this device: its release's folder on the asset scheme
+    /// (`pluxy-app://localhost/<id>/<sha256>/`), the only place the page's frame may load from.
+    /// None for a page core lists, which loads from pages_origin.
+    pub device: Option<String>,
+}
+
+impl Binding {
+    /// Whether url is on the page's own site: its release's folder for a device page, the
+    /// pages site's origin otherwise.
+    pub fn on_site(&self, url: &Url) -> bool {
+        match &self.device {
+            Some(folder) => url.as_str().starts_with(folder.as_str()),
+            None => Url::parse(&self.pages_origin).is_ok_and(|o| o.origin() == url.origin()),
+        }
+    }
+    /// For a page of a package on this device: the package's ID and the digest of the release
+    /// the page was opened from.
+    pub fn device_release(&self) -> Option<(String, String)> {
+        let folder = self.device.as_ref()?.strip_suffix('/')?;
+        let id = self.extension.strip_prefix("device:")?;
+        let (_, digest) = folder.rsplit_once('/')?;
+        Some((id.into(), digest.into()))
+    }
+    /// The frame-src source of the page's wrapper document. A device page's folder is
+    /// enforced by the asset scheme, which serves a page webview only its own folder.
+    fn frame_source(&self) -> String {
+        match &self.device {
+            Some(_) => format!("{}:", crate::device::ASSET_SCHEME),
+            None => format!("{}/", self.pages_origin),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -119,6 +150,20 @@ impl Pages {
     pub fn labels(&self) -> Vec<String> {
         self.open.keys().cloned().collect()
     }
+    /// The labels of the open pages of package id on this device.
+    pub fn device_labels(&self, id: &str) -> Vec<String> {
+        let prefix = format!("{}{id}/", crate::device::asset_base());
+        self.open
+            .iter()
+            .filter(|(_, w)| {
+                w.binding
+                    .device
+                    .as_ref()
+                    .is_some_and(|f| f.starts_with(&prefix))
+            })
+            .map(|(l, _)| l.clone())
+            .collect()
+    }
     pub fn clear(&mut self) {
         self.open.clear();
     }
@@ -182,9 +227,7 @@ impl Pages {
             self.ingress_fixture && url.scheme() == SCHEME && url.path() == "/ingress-test";
         #[cfg(not(feature = "native-test"))]
         let test_frame = false;
-        if !Url::parse(&w.binding.pages_origin).is_ok_and(|origin| origin.origin() == url.origin())
-            && !test_frame
-        {
+        if !w.binding.on_site(url) && !test_frame {
             return;
         }
         if let Some(previous) = &w.document.frame_url {
@@ -272,10 +315,22 @@ impl Pages {
                 }
                 let c: Call =
                     serde_json::from_str(sent.data.get()).map_err(|_| fail(400, "bad_request"))?;
+                // Access (access.rs) answers these natively, for a device page only: a page
+                // core lists has no such methods.
+                let device = w.binding.device.is_some();
                 let params_ok = match c.method.as_str() {
                     "theme.get" | "config.get" => c.params.is_null(),
+                    "resources.status" if device => c.params.is_null(),
+                    "resources.read" | "resources.list" if device => c.params.is_object(),
                     "config.set" => c.params.as_object().is_some_and(|p| {
                         p.len() == 1 && p.get("values").is_some_and(Value::is_object)
+                    }),
+                    // A native operation, which the router answers (`route.rs`).
+                    "native.call" => c.params.as_object().is_some_and(|p| {
+                        p.len() == 3
+                            && p.get("package").is_some_and(Value::is_string)
+                            && p.get("op").is_some_and(Value::is_string)
+                            && p.get("input").is_some_and(Value::is_object)
                     }),
                     _ => return Err(fail(400, "unknown_method")),
                 };
@@ -640,7 +695,7 @@ fn serve_at(
             None,
         );
     };
-    let csp = format!("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src {}/; base-uri 'none'; form-action 'none'", w.binding.pages_origin);
+    let csp = format!("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src {}; base-uri 'none'; form-action 'none'", w.binding.frame_source());
     #[cfg(feature = "native-test")]
     let csp = if pages.ingress_fixture {
         csp.replace("frame-src ", "frame-src pluxy-page: ")
@@ -742,6 +797,7 @@ mod tests {
             title: "Usage".into(),
             url: Url::parse("http://localhost:8401/test/alpha/hash/index.html").unwrap(),
             pages_origin: "http://localhost:8401".into(),
+            device: None,
         }
     }
     fn request(
@@ -1596,6 +1652,119 @@ mod tests {
         p.finish_delivery(&label, &gen, &error, ticket, false);
         assert_eq!(p.take_closed(&label).unwrap().generation, gen);
         assert!(p.take_closed(&label).is_none());
+    }
+    #[test]
+    fn device_pages_stay_in_their_release_folder() {
+        let now = Instant::now();
+        let mut p = Pages::default();
+        let base = crate::device::asset_base();
+        let folder = format!("{base}example/notes/{}/", "a".repeat(64));
+        let url = Url::parse(&format!("{folder}index.html")).unwrap();
+        let b = Binding {
+            extension: "device:example/notes".into(),
+            page: "notes".into(),
+            title: "Notes".into(),
+            url: url.clone(),
+            pages_origin: base.clone(),
+            device: Some(folder.clone()),
+        };
+        assert!(b.on_site(&url));
+        for other in [
+            format!("{base}example/notes/{}/index.html", "b".repeat(64)),
+            format!("{base}example/other/{}/index.html", "a".repeat(64)),
+            "http://localhost:8401/example/notes/index.html".into(),
+        ] {
+            assert!(!b.on_site(&Url::parse(&other).unwrap()), "{other}");
+        }
+        // A core page's binding never matches the asset scheme.
+        assert!(!binding("example/notes").on_site(&url));
+        let label = p.bind(b).unwrap();
+        assert_eq!(p.device_labels("example/notes"), vec![label.clone()]);
+        assert!(p.device_labels("example/other").is_empty());
+        p.begin_document(&label);
+        let (served, _) = serve_at(&mut p, &label, "GET", "/", b"", now);
+        assert!(
+            served.csp.contains("frame-src pluxy-app:;"),
+            "{}",
+            served.csp
+        );
+        p.frame_navigation(&label, &url);
+        hello(&mut p, &label, now);
+        assert!(!p.document_closed(&label));
+        // Another release's file is off site: the webview's navigation check refuses it.
+        let other = Url::parse(&format!(
+            "{base}example/notes/{}/index.html",
+            "b".repeat(64)
+        ))
+        .unwrap();
+        p.frame_navigation(&label, &other);
+        assert!(!p.document_closed(&label));
+        // A second document from its own folder closes the channel.
+        p.frame_navigation(&label, &Url::parse(&format!("{folder}other.html")).unwrap());
+        assert!(p.document_closed(&label));
+    }
+    #[test]
+    fn only_device_pages_have_access_methods() {
+        let now = Instant::now();
+        let mut p = Pages::default();
+        let core = page(&mut p, "example/files", now);
+        for (method, params) in [
+            ("resources.status", Value::Null),
+            ("resources.read", json!({"resource": "config"})),
+            ("resources.list", json!({"resource": "tree"})),
+        ] {
+            refused(
+                request(&mut p, &core, "call", call("core", method, params), now),
+                400,
+                "unknown_method",
+                Some("core"),
+            );
+        }
+        let base = crate::device::asset_base();
+        let digest = "a".repeat(64);
+        let folder = format!("{base}example/files/{digest}/");
+        let b = Binding {
+            extension: "device:example/files".into(),
+            page: "files".into(),
+            title: "Files".into(),
+            url: Url::parse(&format!("{folder}index.html")).unwrap(),
+            pages_origin: base,
+            device: Some(folder),
+        };
+        assert_eq!(
+            b.device_release(),
+            Some(("example/files".into(), digest.clone()))
+        );
+        assert_eq!(binding("example/files").device_release(), None);
+        let label = p.bind(b).unwrap();
+        p.begin_document(&label);
+        hello(&mut p, &label, now);
+        for (id, method, params) in [
+            ("s", "resources.status", Value::Null),
+            ("r", "resources.read", json!({"resource": "config"})),
+            (
+                "l",
+                "resources.list",
+                json!({"resource": "tree", "path": ""}),
+            ),
+        ] {
+            let (served, msg) = request(&mut p, &label, "call", call(id, method, params), now);
+            assert_eq!(served.status, 204);
+            assert_eq!(msg.unwrap().data["method"], method);
+        }
+        // Parameters of the wrong shape never reach the broker.
+        for (method, params) in [
+            ("resources.status", json!({})),
+            ("resources.read", json!("config")),
+            ("resources.list", Value::Null),
+        ] {
+            refused(
+                request(&mut p, &label, "call", call("bad", method, params), now),
+                400,
+                "bad_request",
+                Some("bad"),
+            );
+        }
     }
     #[test]
     fn hello_arrays_are_refused_before_window_forwarding() {

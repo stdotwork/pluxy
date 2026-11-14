@@ -83,6 +83,42 @@ struct OpenTarget {
     identity: Target,
     file: File,
 }
+
+/// The SHA-256 of executable file f, whose metadata m was read before: refused if it changed.
+fn hash_file(f: &mut File, m: &Metadata) -> Result<String, String> {
+    let mut hash = Sha256::new();
+    let mut b = [0u8; 65536];
+    loop {
+        let n = f.read(&mut b).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&b[..n]);
+    }
+    if Metadata::read(f)? != *m {
+        return Err("executable changed while hashing".into());
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+/// A launch's executable, hashed without the confirmations' lock: `Confirmations::warm` keeps it
+/// in the cache `prepare` checks, so preparing it then hashes nothing more under the lock.
+pub struct Hashed(PathBuf, Metadata, String);
+
+impl Hashed {
+    pub fn of(executable: &Path) -> Result<Hashed, String> {
+        let mut e = OpenTarget::open(executable)?;
+        if !e.file.metadata().map_err(|e| e.to_string())?.is_file() {
+            return Err("executable is not a regular file".into());
+        }
+        let m = Metadata::read(&e.file)?;
+        if m.mode & 0o111 == 0 {
+            return Err("file is not executable".into());
+        }
+        let h = hash_file(&mut e.file, &m)?;
+        Ok(Hashed(e.identity.canonical, m, h))
+    }
+}
 impl OpenTarget {
     fn open(path: &Path) -> Result<Self, String> {
         if !path.is_absolute() {
@@ -166,9 +202,10 @@ fn same_launch_recipe(a: &ExactAction, b: &ExactAction) -> bool {
             _ => false,
         }
 }
-/// Set only by native entry points, never deserialized from page data.
+/// Set only by native entry points, never deserialized from page data. Page and Import never use
+/// a remembered approval.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Main/tray launcher handlers are added by the launcher slice.
+#[allow(dead_code)] // Tray and native UI launcher handlers are added by the launcher slice.
 enum Origin {
     Main,
     Tray,
@@ -185,6 +222,9 @@ impl Origin {
 /// Immutable native preparation, including open identities. Never returned to JavaScript.
 pub struct Prepared {
     origin: Origin,
+    /// The app's own action (prepare_app): no package, file or launch to show, so its review is
+    /// its description alone, and no launch notice follows it.
+    own: bool,
     exact: ExactAction,
     files: Vec<OpenTarget>,
     executable: Option<OpenTarget>,
@@ -222,6 +262,15 @@ impl Prepared {
         ))
     }
     pub fn review(&self) -> Result<String, String> {
+        if self.own {
+            return Ok(self
+                .exact
+                .what
+                .split('\n')
+                .map(escape_format_characters)
+                .collect::<Vec<_>>()
+                .join("\n"));
+        }
         // JSON quoting makes argv boundaries, newlines and control characters unambiguous.
         let mut s = review_text(&self.exact)?;
         if self.exact.native_tool {
@@ -235,7 +284,7 @@ impl Prepared {
         Ok(s)
     }
 }
-fn escape_format_characters(text: &str) -> String {
+pub(crate) fn escape_format_characters(text: &str) -> String {
     use gtk::glib::Unichar;
     let mut out = String::new();
     for ch in text.chars() {
@@ -489,11 +538,49 @@ impl Confirmations {
     pub fn prepare_page(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Page)
     }
+    /// A call with a tool hop in its chain that no page started: queued with the page limits, it
+    /// never uses or saves a remembered approval, and its dialog offers no Remember.
     pub fn prepare_import(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Import)
     }
-    /// For the native handler of a window command: the window is the app's own UI, and the
-    /// person reviews the action in the native dialog that follows.
+    /// The app's own action, started in the app's window: no package, file or launch. The
+    /// requester is the app itself; generation ties the review to the state it describes.
+    pub(crate) fn prepare_app(
+        &mut self,
+        what: String,
+        generation: u64,
+    ) -> Result<Prepared, String> {
+        let app = Package {
+            id: "pluxy app".into(),
+            source: "the app's window".into(),
+            digest: String::new(),
+            signer: String::new(),
+            contract: "management API v0".into(),
+            generation,
+        };
+        let mut p = self.prepare(
+            Action {
+                what,
+                chain: vec![app.clone()],
+                executor: app,
+                native_tool: false,
+                files: vec![],
+                launch: None,
+            },
+            Origin::Main,
+        )?;
+        p.own = true;
+        Ok(p)
+    }
+
+    /// For the main window's command handlers only, after their caller check, with an action
+    /// native code built from verified records (enabling a native tool, granting a file or
+    /// folder through Access, installing or rolling back the app's own core from a signed
+    /// release), from a setting or program it checked (changing the release feed, adopting a
+    /// core program whose path, size and SHA-256 it read) and, for the router, the window's own
+    /// direct call of a launch. Never page data, and never a call with a tool hop
+    /// (`prepare_import`). Those actions have no launch, except the router's, which may use a
+    /// remembered approval after a native gesture.
     pub(crate) fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Main)
     }
@@ -525,21 +612,9 @@ impl Confirmations {
             {
                 h.clone()
             } else {
-                // shortcut: the first hash runs under the mutex on the caller's thread;
-                // move preparation off the GTK thread when a real launcher lands.
-                let mut hash = Sha256::new();
-                let mut b = [0u8; 65536];
-                loop {
-                    let n = e.file.read(&mut b).map_err(|e| e.to_string())?;
-                    if n == 0 {
-                        break;
-                    }
-                    hash.update(&b[..n]);
-                }
-                if Metadata::read(&e.file)? != m {
-                    return Err("executable changed while hashing".into());
-                }
-                let h = format!("{:x}", hash.finalize());
+                // shortcut: a hash not warmed first (`Hashed::of`) runs under the mutex on the
+                // caller's thread; move preparation off the GTK thread when a real launcher lands.
+                let h = hash_file(&mut e.file, &m)?;
                 self.cache
                     .insert(e.identity.canonical.clone(), (m.clone(), h.clone()));
                 #[cfg(test)]
@@ -571,6 +646,7 @@ impl Confirmations {
         };
         let p = Prepared {
             origin,
+            own: false,
             exact: ExactAction {
                 what: action.what,
                 chain: action.chain,
@@ -593,6 +669,50 @@ impl Confirmations {
             .retain(|id, _| self.pending.contains_key(id));
         self.issued.retain(|_, t| t.expires > now);
     }
+    /// Whether a confirmation for package could be queued now, from a page (`page`) or a trusted
+    /// origin: the same rate and pending limits `queue` applies, checked before any preparation
+    /// work (such as hashing an executable). `queue` checks them again.
+    pub fn room(&mut self, page: bool, package: &str) -> Result<(), String> {
+        self.prune();
+        if page {
+            if self
+                .last_page
+                .get(package)
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
+            {
+                return Err("one launch confirmation attempt per second".into());
+            }
+            if self
+                .pending
+                .values()
+                .any(|p| p.page && p.prepared.exact.chain[0].id == package)
+            {
+                return Err("a launch confirmation is already pending for this package".into());
+            }
+        }
+        let limit = if page {
+            PAGE_PENDING_LIMIT
+        } else {
+            TRUSTED_PENDING_LIMIT
+        };
+        if self.pending.values().filter(|p| p.page == page).count() >= limit {
+            return Err("too many pending confirmations".into());
+        }
+        Ok(())
+    }
+
+    /// Keeps an executable hashed without the lock, for `prepare` to use while it is unchanged.
+    pub fn warm(&mut self, h: Hashed) {
+        self.cache.insert(h.0, (h.1, h.2));
+    }
+
+    /// Takes back pending confirmation id: its caller no longer waits for it (the call was
+    /// cancelled). Its dialog closes as cancelled, and a Confirm racing with that confirms nothing.
+    pub fn withdraw(&mut self, id: &str) {
+        self.pending.remove(id);
+        self.saving_warnings.remove(id);
+    }
+
     /// Limits follow immutable native origin, never a page-supplied flag.
     pub fn queue(&mut self, prepared: Prepared) -> Result<String, String> {
         self.prune();
@@ -803,7 +923,7 @@ impl Confirmations {
 #[path = "confirmation_ui.rs"]
 mod ui;
 pub use ui::page_start;
-pub(crate) use ui::{notice as ui_notice, request, settings};
+pub(crate) use ui::{confirm_app, notice as ui_notice, request, settings};
 
 #[cfg(test)]
 #[path = "confirmation_tests.rs"]

@@ -11,9 +11,9 @@ import {
   type Connection,
   type ConnectionChange,
   connectionSet,
+  coreAction,
   coreAdopt,
   coreInstall,
-  coreRestart,
   coreRollback,
   coreVersions,
   keyEntry,
@@ -54,6 +54,8 @@ function describe(c: Connection): [string, string][] {
     const process = {
       running: `running, pid ${c.core.pid}`,
       stopped: "stopped",
+      recovering: "recovering",
+      paused: "paused",
       missing: "not installed",
     };
     rows.push(["Process", process[c.core.state]]);
@@ -234,7 +236,7 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
           )}
           {c.mode === "managed" && c.core?.state !== "missing" && (
             <div class="actions">
-              <Button disabled={busy} onClick={() => apply(coreRestart)}>
+              <Button disabled={busy} onClick={() => apply(coreAction(c))}>
                 {c.core?.state === "running" ? "Restart core" : "Start core"}
               </Button>
             </div>

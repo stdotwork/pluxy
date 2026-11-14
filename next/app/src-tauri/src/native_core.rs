@@ -12,7 +12,7 @@
 //! 6. an unknown rollback target is refused; a cancelled rollback changes nothing; a confirmed
 //!    one runs the installed 1.0.0;
 //! 7. a custom core program does not run until adopted; adopting copies it into the app's cores
-//!    and runs the copy; a rollback then runs 1.0.0 again, for the steps after this one.
+//!    and runs the copy; a rollback then runs 1.0.0 again.
 //!
 //! Each step prints `native-test: core_<step> <JSON>`; the runner checks the values.
 

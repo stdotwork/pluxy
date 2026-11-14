@@ -21,10 +21,11 @@ export interface Connection {
   ca_file?: string;
   core_path?: string;
   core_source?: string;
-  /** The core this app runs, in managed mode: missing until a version is installed; version is
-   * the installed version it runs; adopt names a core program waiting to be adopted. */
+  /** The core this app runs, in managed mode: missing until a version is installed, recovering or
+   * paused while the app restarts it after it stopped; version is the installed version it runs;
+   * adopt names a core program waiting to be adopted. */
   core?: {
-    state: "running" | "stopped" | "missing";
+    state: "running" | "stopped" | "recovering" | "paused" | "missing";
     pid?: number;
     version?: string;
     adopt?: string;
@@ -75,6 +76,13 @@ export const coreVersions = () => invoke<Versions>("core_versions");
 export const coreInstall = (version: string) => invoke<void>("core_install", { version });
 export const coreRollback = (version: string) => invoke<void>("core_rollback", { version });
 export const coreAdopt = () => invoke<void>("core_adopt");
+/** Starts the app's own core only if it is not running; a running one is left alone. */
+export const coreStart = () => invoke<Connection>("core_start");
+/** The Connection page's core button: Restart while the core runs, Start otherwise. */
+export const coreAction = (c: Connection) => (c.core?.state === "running" ? coreRestart : coreStart);
+
+/** Core's rotation route. The window never calls it: the native side rotates the key itself. */
+const ROTATE = "/management-key/rotate";
 
 function read(name: string): string | null {
   try {
@@ -96,14 +104,26 @@ function write(name: string, value: string | null) {
 /**
  * The host for one connection; the app makes a new one when the connection changes. changed
  * gets the connection after signing out (also when core refused the key), with any error.
+ * refreshed gets it after a rotation, which can change how the key is kept and the error the
+ * Connection page shows, but not the connection itself.
  */
-export function appHost(conn: Connection, changed: (c: Connection) => void): Host {
+export function appHost(
+  conn: Connection,
+  changed: (c: Connection) => void,
+  refreshed: (c: Connection) => void = () => {},
+): Host {
   let signed = conn.signed_in;
-  const features = new Set<Feature>();
+  const features = new Set<Feature>(["rotateManagementKey"]);
   if (conn.mode === "local" || conn.mode === "remote") features.add("signOut");
   return {
     async call<T>(method: Method, path: string, body?: unknown): Promise<Reply<T>> {
       try {
+        // Native, behind a native confirmation: the reply says how the new key is kept, never the key.
+        if (method === "POST" && path === ROTATE) {
+          const reply = await invoke<Reply<T>>("management_key_rotate");
+          connectionGet().then(refreshed, () => {});
+          return reply;
+        }
         return await invoke<Reply<T>>("core_call", { method, path, body: body ?? null });
       } catch (e) {
         return { status: 0, error: { code: "unavailable", message: String(e) } };
@@ -132,6 +152,10 @@ export function appHost(conn: Connection, changed: (c: Connection) => void): Hos
     address: conn.target?.replace(/\/+$/, "") || undefined,
   };
 }
+
+/** Privacy mode, kept natively (privacy-mode.json), never in the window's storage. */
+export const privacyGet = () => invoke<boolean>("privacy_get");
+export const privacySet = (on: boolean) => invoke<boolean>("privacy_set", { on });
 
 export interface StartupPreferences {
   autostart_enabled: boolean;

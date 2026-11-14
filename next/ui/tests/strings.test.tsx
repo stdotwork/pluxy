@@ -3,6 +3,7 @@ import { renderToString } from "preact-render-to-string";
 import { api } from "../kit/api";
 import type { Host } from "../kit/host";
 import { AccountsPage } from "../kit/pages/accounts";
+import { prefsPrivacy } from "../kit/privacy";
 import { format, rich, setLocale, strings } from "../kit/strings";
 import { DEFAULT_LAYOUT } from "../kit/theme/contract";
 import type { ThemeState } from "../kit/theme/state";
@@ -80,7 +81,14 @@ describe("locales", () => {
       resolved: { layout: DEFAULT_LAYOUT },
       subscribe: () => () => {},
     } as unknown as ThemeState;
-    const kit: Kit = { host, api: api(host), themes, unauthorized: () => {}, extensionsChanged: () => {} };
+    const kit: Kit = {
+      host,
+      api: api(host),
+      themes,
+      privacy: prefsPrivacy(host),
+      unauthorized: () => {},
+      extensionsChanged: () => {},
+    };
     const render = () =>
       renderToString(
         <KitContext.Provider value={kit}>

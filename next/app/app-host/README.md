@@ -1,8 +1,11 @@
 # App package contract
 
 This reference defines the app contribution to a pluxy package and app program contract v0.
-The signature verifier is shared Rust code in `src-tauri/src/artifact.rs`. The desktop installer
-and Rust program host are later implementation work.
+The signature verifier is shared Rust code in `src-tauri/src/artifact.rs`. The desktop app
+installs page-only web packages and curated signed native tools on this device
+([extensions on this device](../README.md#extensions-on-this-device)), grants signed web
+packages files through [Access](#access-for-web-packages), and runs an admitted tool's program
+on demand through the program host (`src-tauri/src/program.rs`, Linux).
 Core recognizes app contributions to refuse app-only packages and use only the provider part of
 a mixed package. Start with the [tutorial](TUTORIAL.md).
 
@@ -23,7 +26,9 @@ them. App-only packages omit provider fields; no dummy provider is needed.
 | `config` | Optional settings, using the existing [config format](../../ui/extension-pages/README.md#config), with its own version. App settings belong to this device. |
 | `resources` | Web only: requested broker resources, each with an `id`, `kind` (`file` or `subtree`) and nonempty `operations` list. A declaration grants no access. |
 | `programs` | Native only: platform (`GOOS/GOARCH`) to relative executable path, as for provider programs. At least one entry is required. |
-| `operations` | Native only: declared operations, each with an `id`, plain `description`, and `input_schema` and `output_schema` JSON objects. At least one is required. |
+| `operations` | Native only: declared operations, each with an `id`, plain `description`, `input_schema` and `output_schema` JSON objects, and an optional `effect` (`read`, `write` or `launch`; absent means `write`). At least one is required. |
+| `exports` | Native only, optional: `{"contract": <nonnegative integer>, "operations": [<declared IDs>]}`, the operations other packages may import and the version of that export contract. |
+| `imports` | Optional, both tiers: at most 16 entries `{"package": <ID>, "contract": [<accepted export contracts>], "operations": [<IDs>], "required": <bool, default true>}`, one per package, never the package itself. See [Calls between packages](#calls-between-packages). |
 | `state` | Native only: `version` written by this release and nonempty `readable_versions` list. Check state compatibility before swap or rollback. |
 
 Resource and operation IDs use 1 to 32 lower-case letters, digits and hyphens, starting with a
@@ -31,8 +36,8 @@ letter or digit, and are unique within their respective lists. State and host co
 are nonnegative integers. Paths must stay inside the
 package. Web packages cannot declare programs, native operations or state; native packages cannot
 request folder grants through `resources`. Resources describe exact files or bounded subtrees
-selected later by the user, never automatic home-directory access. Native import routing, jobs
-and secret references belong to their later host contracts; these fields do not introduce them.
+selected later by the user, never automatic home-directory access. Jobs and secret references
+belong to their later host contracts; these fields do not introduce them.
 
 Package release, manifest, provider protocol, UI, config and app contribution versions are
 separate. App program negotiation is separate too. A mixed package can be compatible with core
@@ -66,6 +71,14 @@ enablement displays **full access to your user account** in the main UI and nati
 Its page still has no Tauri permissions. Process isolation contains crashes; it does not confine
 a native program.
 
+The program host takes a native tool only as `device::Admitted`
+(`src-tauri/src/device_admission.rs`), from `Catalog::admitted`, which checks the confirmation,
+the root, the signature and every installed file again each time it is called. Only the
+catalog builds one; it offers, read-only: ID, version, archive SHA-256 and size, install time,
+source, signature, the root's public key, store folder, program path and the program's SHA-256
+(check the opened file against it before running it), operations, state versions, app
+contribution version and host contract.
+
 ### Signed descriptor bytes
 
 A signed artifact has a UTF-8 JSON descriptor, detached Ed25519 signature and archive:
@@ -80,7 +93,17 @@ signature over those exact bytes against the trusted publisher key, then verify 
 and SHA-256 **before extraction**. Check the extracted manifest ID, version and tier against the
 descriptor, and platform against the selected artifact. Store the exact descriptor bytes and
 signature; never verify a receiver's reserialized JSON. Whitespace and key order are signed too.
-The index pins size, digest, key identity and signature. Detached signature files contain exactly
+The index pins size, digest, key identity and signature: a signed artifact adds `key_id` (1 to
+64 letters, digits, `.`, `_` or `-`), `public_key`, `descriptor` (the exact descriptor bytes as a
+JSON string) and `signature` beside `url`, `sha256` and `size`, all four or none; part of a
+signature is refused. The desktop app verifies one only for a reserved publisher's package from a
+curated registry, one whose index address equals a trust root's `source` exactly: the key is the
+root's for that publisher and `key_id`, and `public_key` must be that key, or the package is
+refused. In a curated registry every listed signature is checked so, whatever the package's
+publisher: a key that is not the root's is refused. A signature a registry no root names lists
+is verified with the `public_key` the index names and kept for
+[Access](#access-for-web-packages); the package is Unverified, is never a native tool and never
+has a reserved ID. Detached signature files contain exactly
 64 raw Ed25519 bytes; JSON/index transport encodes them as 128 lower-case hexadecimal digits.
 Public keys are 32 bytes, encoded as 64 lower-case hexadecimal digits. Verification uses pinned
 `ed25519-dalek` 2.2.0 with `VerifyingKey::verify_strict` and default features disabled. This is
@@ -90,6 +113,12 @@ an approved key from native settings for web resources or curated native admissi
 the same verifier. `PublisherKeys` supplies publisher/source/key lookup separately.
 `VerifiedArchive<R>` retains the rewound checked reader. Later folder-grant, native-admission and core-update code uses `into_archive()`
 instead of reopening a path, prevent concurrent writes, and check manifest identity after extraction.
+
+For such a signature, the desktop app refuses a release whose descriptor does not match the
+index's ID, version, `web` tier, this computer's platform, size and SHA-256, or the archive,
+before unpacking it. Its key comes from the index: a person approves it natively, for that
+source only, before any grant. Whether a signature is curated is derived from the app's current
+roots each time, never from a release carrying one.
 
 Version 2.2.0 is retained over stable 3.0.0 to avoid its curve25519-dalek 5, ed25519/signature 3
 and sha2 0.11 dependency transition. The app already uses sha2 0.10; both Dalek versions expose
@@ -103,10 +132,40 @@ temporary storage; never track private keys. Test public roots require both a de
 build and isolated temporary trust profile. Normal builds with no production roots refuse native
 enablement; they never substitute test roots.
 
+## Access for web packages
+
+A web package's pages read granted files through its page channel (version 0), with three methods
+the desktop app's native code answers for a page of a package on this device. A page core lists
+gets `unknown_method` for each. Grants come only from the person, in native UI (the app README's
+Access section); a page cannot ask for one.
+
+| Method | `params` | `result` |
+| --- | --- | --- |
+| `resources.status` | `null` | `{"resources": [{"id", "kind", "operations", "granted", "session_only"}]}`: each resource this release declares, and whether it is granted to it now |
+| `resources.read` | `{"resource", "path"?, "offset"?}` | `{"data", "size", "offset", "eof"}`: up to 1 MiB of a regular file from `offset` (default 0), as base64 in `data`; `size` is the file's size |
+| `resources.list` | `{"resource", "path"?}` | `{"entries": [{"name", "kind", "size"?}], "truncated"}`: a folder's entries sorted by name, at most 1,000; `kind` is `file` (with `size`), `folder`, `link` or `other`. The app reads no further than 1,000 entries: for a bigger folder, `truncated` is true and the entries are the first 1,000 the folder gave |
+
+A `file` resource is read with no `path`. A `subtree` resource takes `path`, slash-separated parts
+inside the granted folder; for `resources.list`, empty or absent means the folder itself. A
+`file` resource cannot be listed. Unknown parameters are refused. Error codes:
+
+| Code | When |
+| --- | --- |
+| `bad_request` | Parameters of the wrong shape or unknown, an undeclared resource or operation, a `path` with a `file` resource |
+| `not_granted` | No grant for this package, release, source and signer, or the operation is not granted |
+| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, a file or folder on another mount than the granted folder (such as one mounted inside it), or not a regular file |
+| `changed` | The chosen link, where it resolves, or the target (its identity or its mount) changed since it was granted; it stays refused until granted again |
+| `unavailable` | The file is gone, cannot be reached for now (permissions, an I/O error, too many open files), or the document portal no longer offers it; the grant stays, and a later call may read |
+| `revoked` | The grant was revoked while the call was in flight |
+
+The native ingress limits of every page channel call apply to these too. Grants are bound to the
+package's source, release digest and approved signer: a new release asks again.
+
 ## App program contract v0
 
-This is the contract the later Rust host implements. It adds no provider operation and does not
-change provider wire version 0.7. Start a verified absolute executable directly in its immutable
+The Rust program host implements this contract on Linux; [The Linux host](#the-linux-host) says
+what it adds and what is still to come. It adds no provider operation and does not change
+provider wire version 0.7. Start a verified absolute executable directly in its immutable
 package folder, with a cleared environment and only required platform values. Pass selected
 home/config/context explicitly; do not inherit shell credentials.
 The host supplies `PLUXY_APP_CONTRACT_VERSIONS` (comma-separated supported major versions,
@@ -150,6 +209,7 @@ Never automatically retry a mutation whose outcome is unknown.
 | authorized | Native authorization exists for this source and digest. |
 | idle | After idle stop, no lease, program, watcher, scan or thread remains. |
 | starting | Spawn and hello/describe readiness are in progress. |
+| ready | Started and described, with no lease: it stops after the idle delay. |
 | active | Calls or jobs own leases. |
 | draining | Admission stopped; work is finishing or cancelling. |
 | crashed | Unexpected exit failed pending calls. |
@@ -159,7 +219,8 @@ Never automatically retry a mutation whose outcome is unknown.
 
 Installation, enablement and authorization are distinct from process state. Start on demand with
 a ten-second startup limit. Last lease release schedules idle stop, default 30 seconds. On stdin
-EOF/stop, checkpoint and exit. After five seconds, kill/reap only the owned tool group. A dedicated
+EOF/stop, checkpoint, end every process the tool started and exit; do the same on SIGTERM, which
+the tool gets if the app dies without stopping it, when nothing kills its group. After five seconds, kill/reap only the owned tool group. A dedicated
 supervisor thread remains until exit/reap, including on Linux where the parent-death signal follows
 the creating thread. Explicitly launched agents have separate lifetimes outside tool cleanup.
 
@@ -172,6 +233,192 @@ at switch. Rollback rechecks trust and state compatibility. Disable/removal stop
 cancels work, drains/reconciles commits, closes pipes and reaps processes. Preserve private backups
 until explicit removal. Stop a full-access process to end its access; grants cannot revoke its OS
 access while it runs.
+
+### The Linux host
+
+The program host starts a tool from `Catalog::admitted`'s record at that moment, never from
+anything a caller passes. On top of the rules above:
+
+- It opens the program file, checks its SHA-256 against the record and executes that opened file,
+  so a replaced file never runs. A program must therefore be a native executable, not a script:
+  an interpreter would open the path again.
+- The tool's environment holds exactly the three variables above. Only stdin, stdout and stderr
+  are open in it; every other descriptor closes as it executes. It leads a process group of its
+  own and gets SIGTERM if the app dies without stopping it. Its command line (`argv[0]`) is its
+  program's path; its short process name (`comm`) is the number of the descriptor it was run
+  from. Its supervisor thread starts it and stays until it has been reaped. It needs
+  Linux 5.11 or later (`close_range` with `CLOSE_RANGE_CLOEXEC`).
+- Hello must come first and name the record's ID and digest and contract 0. The describe reply's
+  `operations` are objects with an `id`; their IDs must be exactly the manifest's, and
+  `state.version` the manifest's. A tool that does not match stays **incompatible** until its
+  package changes. `describe` is the host's call: a manifest may not declare it.
+- A frame from a tool may be at most 1 MiB; a larger one, an unknown frame type or a reply
+  before hello breaks the pipe and the tool is stopped; a start it breaks fails saying which.
+  A reply to a call that is no longer
+  waiting is dropped. Progress frames are read and not delivered yet.
+- Inputs are at most 64 KiB of JSON. Inputs and outputs are checked against the operation's
+  schemas, which may use only `type`, `properties`, `required`, `additionalProperties`, `items`,
+  `enum`, `const`, `minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems` and
+  the annotations `title`, `description`, `default`, `examples` and `$comment`; a schema using
+  any other keyword makes the tool incompatible rather than half checked. An output its schema
+  refuses fails the call with `extension_protocol`.
+- A call is checked against its operation and input schema before the tool is leased or
+  started. Calls to one tool run one at a time, at most eight at once counting those waiting
+  their turn, and at most eight more wait for it to start or stop. Calls that waited on a start
+  that failed get that start's error rather than starting it again. A cancelled call has five
+  seconds for its terminal reply; after that the tool is stopped. A cancel also ends a call
+  still waiting for its tool to start or stop.
+- Each call holds a lease. Idle stop, a change to the package and app quit close the tool's
+  stdin, kill its whole process group after five seconds (once its leader exits, the rest of
+  the group at once), and the tool itself if it left that group, and reap it. A child that
+  leaves the group is not followed. Closing the window cancels every call, so the tools stop
+  when idle; once the app is quitting, no call or swap starts a tool.
+- Stderr lines are logged prefixed with the tool's ID, at most 8 KiB each (a longer one is left
+  out with a note) and 50 a second (the rest are left out and counted), with control and format
+  characters (such as U+202E) escaped and the values the host knows the tool must not show
+  removed. The last 20 lines, kept whether or not the rate let them into the log, and the count
+  of those left out, say why it stopped. Error messages and hello or describe values a tool
+  sends reach the window and the status escaped the same way.
+- A tool that exits on its own, breaks its pipe or leaves a cancel unanswered has **crashed**.
+  Nothing restarts it on its own: a call after the backoff (one second, doubling with each crash
+  in a row, up to a minute) starts it, and a call during the backoff is refused. Five crashes in a
+  row make it **quarantined**: calls are refused until its package changes (disabled and enabled
+  again, updated, rolled back). A clean stop (when idle, or a stop the host asked for, such as a
+  disable) or a run of ten minutes starts a new count: with the 30-second idle stop, crashes in a
+  row are those with no clean stop between them. A crash of a release that is draining is not
+  counted.
+- A call the tool received and did not answer (it crashed, was stopped, left a cancel unanswered
+  or reached the drain limit) has an **unknown outcome**: its error says so, and it is never sent
+  again. The host keeps it until the package's next start, which carries the list in describe,
+  as `{"type":"call","id":"c-9","op":"describe","contract_version":0,"unknown":[{"id":"c-7","op":"apply","generation":1700000000}]}`
+  (`generation` is the release's install time). A tool that writes must reconcile those calls
+  with its own records before it answers describe. The describe that carries them waits for the
+  package's turn, so no call of the package runs while the tool reconciles; if the turn does not
+  come within the startup limit, that describe carries none. Whichever release starts next gets
+  them, except a swap's candidate, which gets none; once that start serves, the host forgets them.
+  Delivery may repeat (a start that fails after its describe is told again at the next one), so
+  reconciliation must be idempotent. A call refused before it was sent, an `error` frame and a
+  cancel the tool answered all have known outcomes.
+- **Swaps.** Updating or rolling back an enabled native tool stages the release and asks for
+  its own native confirmation. Once confirmed, the host starts the release's tool and runs hello
+  and describe with no call; it fails as any start does. It does not start if the package was
+  disabled, removed or changed while the confirmation was open, and a second update of a package
+  is refused while one is under way. Then the catalog commits it as active,
+  enabled and admitted, only if the release it replaces is still the active, admitted one, and
+  new calls and leases go to the new tool. The old one **drains**: calls holding its leases,
+  including those waiting their turn, finish on it; then its stdin closes as for any stop. After
+  ten minutes (the drain limit) it is stopped and its unanswered calls have unknown outcomes.
+  Calls of one package run one at a time, whichever release they reach: the new release's first
+  call waits for the call running on the old one, and calls still waiting their turn on either
+  release go in no set order. The package's pages close at the switch. A cancelled confirmation
+  or a candidate that fails installs nothing; the old release stays active and serving.
+
+Still to come: jobs, secrets, and Windows and macOS.
+
+## Calls between packages
+
+The Linux host routes every call of a native tool's operation, whoever makes it: the main window
+(`program_call`), a page (its `native.call` method) or another native tool (a `call` frame on its
+pipe). Each call is checked against the catalog as it is at that moment, and the host, never the
+call, says who the caller is: the window, the page's webview and its package release, or the
+calling tool's running release. Programs never talk to each other directly.
+
+### What a package declares
+
+A native tool lists the operations it offers other packages in `exports`, under an export
+contract number it raises when it changes them incompatibly. A package lists what it calls in
+`imports`: the target package, the export contracts it works with and the exact operations.
+Package versions are not compared; only the contract number is.
+
+Each operation has an effect: `read` (runs with no question asked), `write` (asks a native
+confirmation each call) or `launch` (asks a native confirmation of the exact launch). A launch
+operation's input schema must require `executable`, `argv` and `cwd`.
+
+### Enabling a native tool with imports
+
+A native tool is enabled only when each required import's target is an enabled, admitted native
+tool that exports those operations under a contract the import accepts, and when its imports,
+required or optional, do not lead back to it through other enabled tools (no cycles). Its native
+confirmation lists its imports. The same checks apply to an update or rollback of an enabled tool
+(a swap), when it is staged and again when it commits. A missing optional target is not an error
+at enable: a call to it fails as `extension_unavailable`. The host never installs or picks a replacement for a missing
+target. Enabling the tool is the person's consent to its imports.
+
+### Web packages: native consent
+
+Only a curated web package may call native tools; an Unverified one is refused, always. Its
+imports are refused until the person allows them on the Device extensions page, which calls
+`device_imports {id, allowed: true}` (main window only) and opens a native confirmation listing
+the caller's source, digest and signer and each target operation with its effect. The consent
+is bound to the caller's release and to each target's release, export contract and operations.
+Disabling, updating, rolling back or removing the caller clears it, and so does disabling,
+updating, rolling back, swapping or removing any target it names: enabling that target again is a
+new decision, so those calls are refused until the person allows them again. `allowed: false`
+revokes it and cancels the package's page calls still running; their answers are never
+delivered. A page call is registered before it is granted, so a revocation at any point after
+the grant reaches it.
+
+### Frames
+
+A call from the host to a tool carries the call's chain:
+
+```json
+{"type":"call","id":"c-2","op":"summary","input":{"items":["a"]},
+ "chain":[{"kind":"main"},{"kind":"package","id":"pluxy/relay","sha256":"<digest>","generation":1700000000}]}
+```
+
+The chain starts with the original requester, `{"kind":"main"}` or
+`{"kind":"page","id":<package>,"sha256":<release digest>,"page":<page ID>}`, followed by each tool
+that called on, at its release digest and generation (install time). A tool calls an import for
+the host call it is serving, named in `for`:
+
+```json
+{"type":"call","id":"o-1","for":"c-2","package":"pluxy/target","op":"summary","input":{"items":["a"]}}
+```
+
+The host answers on the tool's stdin with `{"type":"result","id":"o-1","output":{...}}` or an
+`error` frame; the tool may send `{"type":"cancel","id":"o-1"}`. Its calls are cancelled when the
+call they serve is cancelled or ends. A frame naming `chain`, `caller`, `requester`, `from`,
+`origin` or `context` is refused with `permission`, as is a `for` the tool is not serving or an
+ID in use; a tool has at most eight calls of its own at once.
+
+A page calls with the page channel method `native.call`, params `{"package", "op", "input"}`. The
+app answers it in the page's own webview and never forwards it to the main window. Error codes
+map to the page channel's: `permission` and `cancelled` to `forbidden`, `invalid_request` to
+`bad_request`, the rest to `unavailable`. A native tool's own page may call only its own
+operations; a web package's page calls only what it imports, with consent. A page call is
+cancelled when its page closes or its consent is revoked, and its answer is delivered only if the
+call is still allowed then.
+
+### How a call is decided
+
+A call goes ahead only if all of these hold, checked again for each call:
+
+- The window may call any declared operation of an admitted tool. A tool may call only an
+  operation it imports and its target exports, under an accepted contract, and only while it
+  runs its current admitted release. A web package's page needs its consent, as above.
+- The target is enabled and admitted. The call is pinned to the target release it was allowed
+  for: if another release would serve it, it fails with `extension_unavailable` and starts
+  nothing.
+- The target is not already in the chain (no call back into the chain), and the chain is at most
+  five hops long, the requester and four tools.
+- The input is at most 64 KiB and matches the operation's input schema.
+- A `write` call has a fresh native confirmation naming the whole chain and the exact input. A
+  `launch` call has a fresh native confirmation of the exact executable, `argv` and `cwd`. Only
+  the window's own direct call, made from a native gesture (a native button press), may use a
+  remembered approval, and only of exactly that launch. A call with a tool hop in its chain is
+  prepared as an import, whoever started it, and never uses or saves a remembered approval; a
+  chain a page started always asks too. Neither dialog offers "remember". The host
+  confirms the launch; the operation receives it as its input, as with any call (the host's own
+  launcher comes later). The confirmation's rate and pending limits are checked before an
+  executable is hashed, and it is hashed without holding the confirmations' lock. A call cancelled
+  while its confirmation is open (its ticket, the window closing, its page closing or its consent
+  revoked) withdraws it, and the dialog closes. Once confirmed, the call is granted again and runs
+  only if the target release and operation are the ones confirmed.
+
+A routed call is then a call like any other: it is registered so a cancel and the window's
+closing reach it, and it goes through the same limits, per-package turn, backoff, quarantine and
+unknown-outcome rules as a call from the window.
 
 ## Shared manifest fixtures
 

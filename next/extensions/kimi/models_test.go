@@ -11,7 +11,8 @@ import (
 )
 
 // The models a Kimi Code login and a Kimi Code API key serve are the models of today's core's Kimi
-// list (core/internal/registry/models/models.json). Checked against today's core with /v1/models.
+// list (core/internal/registry/models/models.json, the old core's copy of models.json in
+// https://github.com/router-for-me/models). Checked against today's core with /v1/models.
 func TestModelsForEachAccountKind(t *testing.T) {
 	want := []string{
 		"kimi-k2", "kimi-k2-thinking", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed",

@@ -1,6 +1,6 @@
 // One native run's session. run.ts starts this inside the run's private session bus and X server:
 //
-//   dbus-run-session -- xvfb-run ... bun native/session.ts <session_probe> <AppImage> <nonce> <app>
+//   dbus-run-session -- xvfb-run ... bun native/session.ts <session_probe> <AppImage> <nonce> <app> [args...]
 //
 // It starts the desktop services the app's later checks need (the portal frontend with its gtk
 // backend, which start the document portal and the permission store, and the tray watcher),
@@ -26,11 +26,12 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { smokeProblem } from "./appimage";
+import { checkRecovery } from "./recovery";
 import { busNames, documentPortal, gtkBackend, portalFrontend, type Service, trayWatcher } from "./services";
 
-const [probe, appImage, nonce, app] = process.argv.slice(2);
+const [probe, appImage, nonce, app, ...appArgs] = process.argv.slice(2);
 if (!probe || !appImage || !nonce || !app) {
-  console.error("usage: bun native/session.ts <session_probe> <AppImage> <nonce> <app>");
+  console.error("usage: bun native/session.ts <session_probe> <AppImage> <nonce> <app> [args...]");
   process.exit(2);
 }
 
@@ -258,13 +259,46 @@ let code = SETUP_FAILED;
 try {
   await setup();
   code = await new Promise<number>((resolve, reject) => {
+    // The startup and window suites launch the app themselves, several times and reading its
+    // output; otherwise the app runs once here, and the tray checks read its output.
     appProc = process.env.PLUXY_APP_TEST_STARTUP_SUITE
       ? spawn(
           process.execPath,
           [join(import.meta.dir, "startup.ts"), app, process.env.PLUXY_APP_TEST_STARTUP_SUITE, probe],
           { stdio: "inherit" },
         )
-      : spawn(app, [], { stdio: "inherit" });
+      : process.env.PLUXY_APP_TEST_WINDOW_BIN
+        ? spawn(app, appArgs, { stdio: "inherit" })
+        : spawn(app, appArgs, { stdio: ["ignore", "pipe", "pipe"] });
+    const lines: string[] = []; // the app's output so far, which the tray checks read
+    for (const stream of [appProc.stdout, appProc.stderr]) {
+      if (!stream) continue;
+      createInterface({ input: stream }).on("line", (line) => {
+        console.log(line);
+        lines.push(line);
+        if (line.startsWith("native-test: closed ")) {
+          void (async () => {
+            await Bun.sleep(3000);
+            const problems: string[] = [];
+            let result: Record<string, unknown>;
+            try {
+              const r = await checkRecovery(
+                probe,
+                setting("PLUXY_APP_TEST_STATE"),
+                lines,
+                setting("PLUXY_APP_TEST_TRAY_HOLD"),
+                problems,
+              );
+              result = { ok: problems.length === 0, problems, ...r };
+            } catch (e) {
+              result = { ok: false, error: String(e), problems };
+            }
+            console.log(`native-test: recovery ${JSON.stringify(result)}`);
+            writeFileSync(setting("PLUXY_APP_TEST_QUIT"), "");
+          })();
+        }
+      });
+    }
     appProc.once("error", reject);
     appProc.once("exit", (c) => resolve(c ?? 1));
   });
