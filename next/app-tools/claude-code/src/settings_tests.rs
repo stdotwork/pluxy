@@ -206,6 +206,10 @@ fn inputs_out_of_range_are_refused() {
         ("opus", json!("")),
         ("sonnet", json!("x\ny")),
         ("haiku", json!("h".repeat(241))),
+        ("opus", json!("[1m]")),
+        ("fable", json!(" [1M] ")),
+        ("startup_model", json!("[1m]")),
+        ("subagent_model", json!("[1m][1m]")),
     ] {
         let mut i = input();
         i[field] = value.clone();

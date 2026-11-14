@@ -18,6 +18,20 @@ pub const MAX_FILE: usize = 256 << 10;
 /// The mode of a file the library creates (config files may hold keys).
 const NEW_FILE_MODE: u32 = 0o600;
 
+/// The permission bits [`Target::replace`] gives the file it writes, from the file's own bits now,
+/// or the `mode` it is given (else 0600) when there is no file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteMode {
+    /// The file's own bits (clear, restore).
+    Keep,
+    /// As `Keep`, with the group's and others' bits taken away (apply: it writes a writer's
+    /// values, a key among them).
+    OwnerOnly,
+    /// The `mode` given, whatever the file's bits now (a rollback: the bits the file had before
+    /// the write it undoes); as `Keep` when none is given.
+    Exact,
+}
+
 /// What the person selected: a config file, or a file inside a selected root folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Selection {
@@ -610,16 +624,17 @@ impl Target {
     /// `from`, with bytes (or removes it, for None): a new file in the same folder, renamed over
     /// it, so a link to it stays a link. The selection's resolution is checked again before the
     /// rename and after it, and the file after the write must be the one written. Returns the
-    /// new file's identity (None once removed). The new file keeps the old one's permission bits
-    /// (setuid, setgid and sticky left out), or gets `mode` (else 0600) when there was none; it is
-    /// written 0600 and given them just before the rename. It is a new file: hard links to the
-    /// old one keep the old bytes, and its owner, ACLs and extended attributes are not copied.
+    /// new file's identity (None once removed). The new file's permission bits (setuid, setgid
+    /// and sticky left out) follow `rule` (see [`WriteMode`]); it is written 0600 and given them
+    /// just before the rename. It is a new file: hard links to the old one keep the old bytes, and
+    /// its owner, ACLs and extended attributes are not copied.
     pub fn replace(
         &self,
         from_id: Option<Option<Id>>,
         from: &Option<String>,
         bytes: Option<&[u8]>,
         mode: Option<u32>,
+        rule: WriteMode,
     ) -> Result<Option<Id>, Failed> {
         let at = &self.pin.target;
         let modified = || {
@@ -658,9 +673,15 @@ impl Target {
                 MAX_FILE >> 10
             ))));
         }
-        let mode = match self.mode_now() {
-            Ok(Some(m)) => m,
+        let mode = match (rule, mode, self.mode_now()) {
+            (WriteMode::Exact, Some(m), _) => m & 0o777,
+            (_, _, Ok(Some(m))) => m,
             _ => mode.unwrap_or(NEW_FILE_MODE) & 0o777,
+        };
+        let mode = if rule == WriteMode::OwnerOnly {
+            mode & !0o077
+        } else {
+            mode
         };
         let tmp = PathBuf::from(format!(
             ".{}.pluxy-{}.tmp",
