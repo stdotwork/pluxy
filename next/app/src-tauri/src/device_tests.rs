@@ -477,6 +477,83 @@ fn registry_pins_reserved_ids_and_paths() {
     done(root);
 }
 
+/// An install without a version, and what `offers` shows first, take the highest version the
+/// index lists for this computer, whatever order the index lists them in.
+#[test]
+fn registry_without_a_version_takes_the_highest_release() {
+    let root = temp();
+    let d = dirs(&root);
+    let reg = root.join("reg");
+    fs::create_dir_all(&reg).unwrap();
+    let old = package("example/notes", "1.0.0");
+    let new = package("example/notes", "2.0.0");
+    let beta = package("example/beta", "1.0.0-beta.2");
+    fs::write(reg.join("old.tar.gz"), &old).unwrap();
+    fs::write(reg.join("new.tar.gz"), &new).unwrap();
+    fs::write(reg.join("beta.tar.gz"), &beta).unwrap();
+    let p = platform();
+    let art = |f: &str, b: &[u8]| serde_json::json!({p.clone(): {"url": f, "sha256": digest(b), "size": b.len()}});
+    let index = serde_json::json!({"registry_version": 0, "packages": {
+        // An older release first, then one that is not a version, a prerelease and the highest.
+        "example/notes": {"releases": [
+            {"version": "1.0.0", "artifacts": art("old.tar.gz", &old)},
+            {"version": "latest", "artifacts": art("old.tar.gz", &old)},
+            {"version": "3.0.0-rc.1", "artifacts": art("old.tar.gz", &old)},
+            {"version": "2.0.0", "artifacts": art("new.tar.gz", &new)}
+        ]},
+        // Prereleases only: the highest of them.
+        "example/beta": {"releases": [
+            {"version": "1.0.0-beta.1", "artifacts": art("old.tar.gz", &old)},
+            {"version": "1.0.0-beta.2", "artifacts": art("beta.tar.gz", &beta)}
+        ]},
+        // Nothing that is a version: only a named install can take it.
+        "example/named": {"releases": [
+            {"version": "latest", "artifacts": art("old.tar.gz", &old)}
+        ]}
+    }});
+    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "fixture", "url": reg.join("index.json")}]}))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let offers = offers(&d, &NoRoots).unwrap();
+    let versions = |id: &str| {
+        offers[0]
+            .packages
+            .iter()
+            .find(|o| o.id == id)
+            .map(|o| o.versions.clone())
+    };
+    assert_eq!(
+        versions("example/notes").unwrap(),
+        ["2.0.0", "1.0.0", "3.0.0-rc.1"]
+    );
+    assert_eq!(
+        versions("example/beta").unwrap(),
+        ["1.0.0-beta.2", "1.0.0-beta.1"]
+    );
+    assert_eq!(versions("example/named"), None);
+
+    // The release `offers` puts first is the one an install without a version stages.
+    let c = stage_from_registry(&d, &NoRoots, "fixture", "example/notes", None).unwrap();
+    assert_eq!(c.release.version, "2.0.0");
+    let c = stage_from_registry(&d, &NoRoots, "fixture", "example/beta", None).unwrap();
+    assert_eq!(c.release.version, "1.0.0-beta.2");
+    // Naming a version still installs it, a prerelease or one that is not a version too.
+    let c = stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("1.0.0")).unwrap();
+    assert_eq!(c.release.version, "1.0.0");
+    let e = stage_from_registry(&d, &NoRoots, "fixture", "example/named", None).unwrap_err();
+    assert!(e.contains("lists no example/named"), "{e}");
+    let e =
+        stage_from_registry(&d, &NoRoots, "fixture", "example/named", Some("latest")).unwrap_err();
+    assert!(!e.contains("lists no"), "{e}");
+    done(root);
+}
+
 /// Removes a test's folder, the store's read-only releases in it too.
 fn done(root: PathBuf) {
     #[cfg(unix)]
