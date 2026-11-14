@@ -106,6 +106,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pluxy-usage"
+version = "0.1.0"
+dependencies = [
+ "pluxy-program",
+ "serde_json",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -247,6 +255,15 @@ name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+
+[[package]]
+name = "usage-fixture"
+version = "0.1.0"
+dependencies = [
+ "pluxy-program",
+ "pluxy-usage",
+ "serde_json",
+]
 
 [[package]]
 name = "vcpkg"
