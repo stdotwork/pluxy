@@ -948,6 +948,33 @@ fn apply_makes_the_file_owner_only_and_clear_keeps_that() {
 
 /// Finding 9: a backup answer without its bytes fails the operation; nothing is written.
 #[test]
+fn a_rolled_back_apply_leaves_the_mode_as_it_was() {
+    // An apply makes the file owner-only; one rolled back, in the call or by recovery after a
+    // crash, puts back the mode the file had as well as its bytes.
+    let t = Tmp::new();
+    let (a, _, mem, data) = two(&t);
+    chmod(&a, 0o644);
+    let tx = Transactions::new(&mem, &data);
+    let sel = [
+        Selection::File(a.clone()),
+        Selection::File(t.at("two/b.json")),
+    ];
+    let p = pins(&tx, "s", &sel);
+    chmod(&t.at("two"), 0o555);
+    let e = tx
+        .apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap_err();
+    chmod(&t.at("two"), 0o755);
+    assert!(e.message.contains("rolled back"), "{e}");
+    assert_eq!((read(&a).unwrap(), mode_of(&a)), ("{}\n".into(), 0o644));
+    let j = crash(&tx, &mem, "s", &sel, 0, json!({"x": 2}));
+    assert_eq!(mode_of(&a), 0o600);
+    let r = tx.reconcile(std::slice::from_ref(&j)).unwrap();
+    assert_eq!(r[0]["restored"], json!([a]));
+    assert_eq!((read(&a).unwrap(), mode_of(&a)), ("{}\n".into(), 0o644));
+}
+
+#[test]
 fn a_backup_without_its_bytes_is_an_error() {
     let t = Tmp::new();
     let (a, _, mem, data) = two(&t);
