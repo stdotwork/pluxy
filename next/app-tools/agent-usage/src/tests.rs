@@ -551,6 +551,210 @@ fn a_file_with_rows_out_of_bounds_fails_and_its_job_goes_on() {
 }
 
 #[test]
+fn a_file_refused_before_its_last_part_fails_once_and_its_job_goes_on() {
+    let (mut s, d) = store("refused-parts");
+    // Old rows of "a" and "big" (an earlier revision): a refused read leaves them.
+    s.replace_file("p/a", "a", 1, 1, &rows(&[(NOV10, "m", tok(9, 0, 9))]))
+        .unwrap();
+    s.replace_file("p/a", "big", 1, 1, &rows(&[(NOV10, "m", tok(8, 0, 8))]))
+        .unwrap();
+    let host = FakeHost::new(&["p/a"]);
+    let mut sync = Sync::new();
+    sync.step(&mut s, &host, true, T0).unwrap();
+    let (job, _) = host.last();
+    list(
+        &mut sync,
+        &mut s,
+        &job,
+        "p/a",
+        &[("a", 5), ("big", 5), ("e", 5), ("b", 5)],
+    );
+    sync.step(&mut s, &host, false, T0 + 1).unwrap();
+    let (read, _) = host.last();
+    let batch = |v: Value| delivery(&read, "p/a", "batch", v);
+    // "a": part 0 has an hour in 1970; its part 1 must be taken and dropped (its row is fine).
+    sync.ingest(
+        &mut s,
+        T0 + 1,
+        &batch(part("a", 5, 0, false, json!([row(0, "m", 5)]))),
+    )
+    .unwrap();
+    // "big": one row more than a file may stage in part 0, then its parts 1 and 2.
+    let many: Vec<Value> = (0..=sync::MAX_STAGED_ROWS as i64)
+        .map(|k| row(NOV10 - k * H, "m", 1))
+        .collect();
+    sync.ingest(
+        &mut s,
+        T0 + 1,
+        &batch(part("big", 5, 0, false, json!(many))),
+    )
+    .unwrap();
+    // "e": refused in part 0, then the parser reports it unreadable.
+    sync.ingest(
+        &mut s,
+        T0 + 1,
+        &batch(part("e", 5, 0, false, json!([row(0, "m", 5)]))),
+    )
+    .unwrap();
+    // The refused files' later parts (interleaved across files) and "e"'s error are taken.
+    for (f, n, last) in [("a", 1, true), ("big", 1, false), ("big", 2, true)] {
+        sync.ingest(
+            &mut s,
+            T0 + 1,
+            &batch(part(f, 5, n, last, json!([row(NOV10, "m", 100)]))),
+        )
+        .unwrap();
+    }
+    sync.ingest(
+        &mut s,
+        T0 + 1,
+        &batch(json!({"file": "e", "error": "unreadable"})),
+    )
+    .unwrap();
+    // "b", read after them in the same job, commits.
+    sync.ingest(
+        &mut s,
+        T0 + 1,
+        &batch(part("b", 5, 0, true, json!([row(NOV10, "m", 2)]))),
+    )
+    .unwrap();
+    // A part of a file already finished is still refused.
+    let e = sync
+        .ingest(
+            &mut s,
+            T0 + 1,
+            &batch(part("a", 5, 2, true, json!([row(NOV10, "m", 1)]))),
+        )
+        .unwrap_err();
+    assert_eq!(e.code, "invalid_request");
+    sync.ingest(&mut s, T0 + 1, &delivery(&read, "p/a", "done", json!({})))
+        .unwrap();
+    let st = sync.step(&mut s, &host, false, T0 + 2).unwrap();
+    let src = &st["sources"][0];
+    assert_eq!(
+        (&src["read"], &src["failed"], &src["staged"]),
+        (&json!(1), &json!(3), &json!(0))
+    );
+    assert_eq!(src["phase"], "done");
+    assert!(
+        src["error"].as_str().unwrap().contains("more than")
+            || src["error"].as_str().unwrap().contains("before 2000"),
+        "{st}"
+    );
+    // The old rows of "a" and "big" stay (9 and 8), and "b" is stored (2): 19 in all, one hour.
+    assert_eq!(stored(&s), vec![("p/a".into(), NOV10, "m".into(), 19, 19)]);
+    assert_eq!(s.revisions("p/a").unwrap()["a"], (1, 1));
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+/// A run with files f1 (committed), f2 (a part staged, not last) and f3 (not reached) in one read
+/// job; returns the job's ID. f2 has old rows of 8 tokens and f1 none.
+fn read_job_midway(sync: &mut Sync, s: &mut Store, host: &FakeHost) -> String {
+    s.replace_file("p/a", "f2", 1, 1, &rows(&[(NOV10, "m", tok(8, 0, 8))]))
+        .unwrap();
+    sync.step(s, host, true, T0).unwrap();
+    let (job, _) = host.last();
+    list(sync, s, &job, "p/a", &[("f1", 5), ("f2", 5), ("f3", 5)]);
+    sync.step(s, host, false, T0 + 1).unwrap();
+    let (read, input) = host.last();
+    assert_eq!(input["files"], json!(["f1", "f2", "f3"]));
+    let batch = |v: Value| delivery(&read, "p/a", "batch", v);
+    sync.ingest(
+        s,
+        T0 + 1,
+        &batch(part("f1", 5, 0, true, json!([row(NOV10, "m", 3)]))),
+    )
+    .unwrap();
+    sync.ingest(
+        s,
+        T0 + 1,
+        &batch(part("f2", 5, 0, false, json!([row(NOV10, "m", 100)]))),
+    )
+    .unwrap();
+    read
+}
+
+#[test]
+fn a_read_job_that_ends_without_all_its_files_counts_the_unread_ones_as_failed() {
+    for end in ["failed", "cancelled", "done"] {
+        let (mut s, d) = store(&format!("unread-{end}"));
+        let host = FakeHost::new(&["p/a"]);
+        let mut sync = Sync::new();
+        let read = read_job_midway(&mut sync, &mut s, &host);
+        sync.ingest(&mut s, T0 + 2, &delivery(&read, "p/a", end, Value::Null))
+            .unwrap();
+        let st = sync.step(&mut s, &host, false, T0 + 3).unwrap();
+        let src = &st["sources"][0];
+        // f1 committed; f2 (parts staged) and f3 (not reached) failed; the reason is shown.
+        assert_eq!(
+            (&src["read"], &src["failed"], &src["phase"], &src["error"]),
+            (
+                &json!(1),
+                &json!(2),
+                &json!("done"),
+                &json!(if end == "done" {
+                    "the parser ended its job without reading 2 of its files".to_string()
+                } else {
+                    format!("the job was {end}")
+                })
+            ),
+            "{end}"
+        );
+        // f1 stored (3), f2's old rows stay (8), nothing of its staged part.
+        assert_eq!(stored(&s), vec![("p/a".into(), NOV10, "m".into(), 11, 11)]);
+        // The next sync reads the two unread files again, and not f1.
+        sync.step(&mut s, &host, true, T0 + 100).unwrap();
+        let (job, _) = host.last();
+        list(
+            &mut sync,
+            &mut s,
+            &job,
+            "p/a",
+            &[("f1", 5), ("f2", 5), ("f3", 5)],
+        );
+        // f2's old revision is (1, 1) and f1's is (5, 7): only f2 and f3 are changed.
+        sync.step(&mut s, &host, false, T0 + 101).unwrap();
+        assert_eq!(host.last().1["files"], json!(["f2", "f3"]), "{end}");
+        std::fs::remove_dir_all(d).unwrap();
+    }
+}
+
+#[test]
+fn a_read_job_cancelled_as_stale_counts_its_unread_files_once_each() {
+    let (mut s, d) = store("unread-stale");
+    let host = FakeHost::new(&["p/a"]);
+    let mut sync = Sync::new();
+    let read = read_job_midway(&mut sync, &mut s, &host);
+    // f3, refused in its first part, is counted when refused and not again when the job goes.
+    sync.ingest(
+        &mut s,
+        T0 + 1,
+        &delivery(
+            &read,
+            "p/a",
+            "batch",
+            part("f3", 5, 0, false, json!([row(0, "m", 1)])),
+        ),
+    )
+    .unwrap();
+    // Quiet from T0 + 1: still waited for at T0 + 60, cancelled at T0 + 61.
+    let st = sync.step(&mut s, &host, false, T0 + 60).unwrap();
+    assert_eq!(st["sources"][0]["failed"], 1);
+    let st = sync.step(&mut s, &host, false, T0 + 61).unwrap();
+    assert_eq!(host.cancelled.borrow().last(), Some(&read));
+    let src = &st["sources"][0];
+    assert_eq!(st["running"], false);
+    // f1 read; f3 refused (1) and f2 unread (1).
+    assert_eq!(
+        (&src["read"], &src["failed"], &src["phase"]),
+        (&json!(1), &json!(2), &json!("done"))
+    );
+    assert!(src["error"].as_str().unwrap().contains("no word"));
+    assert_eq!(stored(&s), vec![("p/a".into(), NOV10, "m".into(), 11, 11)]);
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
 fn read_jobs_fit_the_hosts_input_limit_with_long_roots_and_escaped_ids() {
     let (mut s, d) = store("chunks");
     // 16 KiB of roots, and file IDs whose JSON is six times their length (control characters).
