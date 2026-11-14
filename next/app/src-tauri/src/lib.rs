@@ -45,6 +45,8 @@ mod startup;
 pub mod trust;
 #[cfg(all(target_os = "linux", feature = "native-test"))]
 mod update_native;
+#[cfg(unix)]
+mod updater;
 mod updates;
 pub mod window;
 
@@ -116,6 +118,9 @@ struct App {
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
     rotation_open: AtomicBool,
+    /// The app's own update (`updater.rs`).
+    #[cfg(unix)]
+    updater: updater::State,
 }
 
 /// Every command checks its caller too: the capability already allows only the window.
@@ -2404,7 +2409,23 @@ pub fn run() {
     std::hint::black_box(&PLUXY_BUILD_RECEIPT);
     #[cfg(any(feature = "native-test", feature = "artifact-test-trust"))]
     std::hint::black_box(&PLUXY_TEST_BUILD);
-    let app = tauri::Builder::default()
+    let context = tauri::generate_context!();
+    // The updater plugin exists only when the updater gate passes, before anything else runs: a
+    // build without updater trust never loads it.
+    #[cfg(unix)]
+    let gate = trust::updater_gate(
+        context.config(),
+        std::path::Path::new(&std::env::var_os("HOME").unwrap_or_default()),
+    );
+    let builder = tauri::Builder::default();
+    #[cfg(unix)]
+    let builder = match &gate {
+        Ok(key) => builder.plugin(tauri_plugin_updater::Builder::new().pubkey(key).build()),
+        Err(_) => builder,
+    };
+    #[cfg(unix)]
+    let updater_plugin = gate.map(|_| ());
+    let app = builder
         .invoke_handler(tauri::generate_handler![
             startup_get,
             startup_set,
@@ -2451,11 +2472,15 @@ pub fn run() {
             window_close,
             privacy_get,
             privacy_set,
+            updater::app_update_get,
+            updater::app_update_start,
+            updater::app_update_cancel,
+            updater::app_update_rollback,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
         .register_uri_scheme_protocol(notes::SCHEME, updates::notes_scheme)
         .register_asynchronous_uri_scheme_protocol(device::ASSET_SCHEME, asset_scheme)
-        .setup(|app| {
+        .setup(move |app| {
             // First, before the core, the tray or any webview: one app per profile. A later launch
             // has the first show its window, and ends here, having started nothing.
             let instance =
@@ -2585,6 +2610,8 @@ pub fn run() {
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
                 rotation_open: AtomicBool::new(false),
+                #[cfg(unix)]
+                updater: updater::State::new(updater_plugin.clone()),
             });
             let handle = app.handle().clone();
             // Tools' own calls of other packages' operations go through the router.
@@ -2638,6 +2665,9 @@ pub fn run() {
             if !silent || !usable_tray {
                 open_window(&handle)?;
             }
+            // A version an update installed accepts itself, which the earlier one waits for.
+            #[cfg(unix)]
+            updater::accept(&handle);
             #[cfg(feature = "native-test")]
             native_test::start(handle);
             Ok(())
@@ -2678,7 +2708,7 @@ pub fn run() {
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("building the app");
     app.run(|app, event| match event {
         RunEvent::ExitRequested {
@@ -2698,6 +2728,20 @@ pub fn run() {
             }
             if let Some(i) = app.try_state::<instance::Instance>() {
                 i.release();
+            }
+            // An install finished: start the new version, now that this one has stopped.
+            #[cfg(unix)]
+            if let Some(r) = app
+                .try_state::<App>()
+                .and_then(|st| st.updater.restart.lock().unwrap().take())
+            {
+                for w in app.webview_windows().values() {
+                    let _ = w.hide();
+                }
+                if let Some(i) = app.try_state::<instance::Instance>() {
+                    i.unlock();
+                }
+                updater::supervise(r);
             }
         }
         _ => {}
@@ -2817,7 +2861,11 @@ mod tests {
         let end = start + src[start..].find(']').unwrap();
         let mut handled: Vec<&str> = src[start + "generate_handler![".len()..end]
             .split(',')
-            .map(|s| s.trim().trim_start_matches("updates::"))
+            .map(|s| {
+                s.trim()
+                    .trim_start_matches("updates::")
+                    .trim_start_matches("updater::")
+            })
             .filter(|s| !s.is_empty())
             .collect();
         let mut listed = COMMANDS.to_vec();

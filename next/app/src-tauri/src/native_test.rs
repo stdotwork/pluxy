@@ -105,6 +105,8 @@ const ACTING: &[&str] = &[
     "confirmation_settings",
     "management_key_rotate",
     "device_install_file",
+    "app_update_start",
+    "app_update_cancel",
 ];
 
 #[path = "key_entry_test.rs"]

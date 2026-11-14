@@ -11,6 +11,7 @@ use crate::managed::write_private;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,6 +27,12 @@ pub const MAX_RELEASES: usize = 256;
 pub const MAX_NOTES: usize = 64 << 10;
 pub const MAX_URL: usize = 2048;
 const MAX_VERSION: usize = 64;
+/// The largest update artifact the app downloads.
+pub const MAX_UPDATE: u64 = 1 << 30;
+/// The longest updater signature (base64 of minisign's signature file) a feed may give.
+const MAX_SIGNATURE: usize = 4096;
+/// The longest artifact target name, such as `linux-x86_64-appimage`.
+const MAX_TARGET: usize = 64;
 /// The most of release.json the app reads; it holds an address and a channel.
 const MAX_SETTINGS: u64 = 64 << 10;
 /// The most of the kept feed the app reads: a feed it accepted, written again. Normalising can
@@ -60,6 +67,19 @@ pub struct Release {
     pub notes: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes_url: Option<String>,
+    /// An app release's signed update artifacts, by the updater's target name
+    /// (`linux-x86_64-appimage`). Only the app's own updater reads them (`updater.rs`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub update: BTreeMap<String, UpdateArtifact>,
+}
+
+/// One update artifact: where it is, its updater signature and its exact size in bytes. Fields
+/// a later format adds are not kept.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UpdateArtifact {
+    pub url: String,
+    pub signature: String,
+    pub size: u64,
 }
 
 #[derive(Deserialize)]
@@ -186,6 +206,32 @@ fn check_feed(bytes: &[u8]) -> Result<Feed, String> {
                 Err(e) => return bad(format!("notes_url: {e}")),
             }
         }
+        if !r.update.is_empty() && r.product != Product::App {
+            return bad("only an app release can have update artifacts".into());
+        }
+        for (target, a) in r.update.iter_mut() {
+            if target.is_empty() || target.len() > MAX_TARGET {
+                return bad(format!(
+                    "update target names are 1 to {MAX_TARGET} characters"
+                ));
+            }
+            match https_url(&a.url) {
+                Ok(u) => a.url = u,
+                Err(e) => return bad(format!("update {target}: url: {e}")),
+            }
+            let base64 = |c: char| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=';
+            if a.signature.is_empty()
+                || a.signature.len() > MAX_SIGNATURE
+                || !a.signature.chars().all(base64)
+            {
+                return bad(format!(
+                    "update {target}: the signature must be base64, at most {MAX_SIGNATURE} characters"
+                ));
+            }
+            if a.size == 0 || a.size > MAX_UPDATE {
+                return bad(format!("update {target}: the size must be 1 byte to 1 GiB"));
+            }
+        }
         if releases
             .iter()
             .any(|(w, o)| o.product == r.product && w.cmp_precedence(&v) == Ordering::Equal)
@@ -283,6 +329,70 @@ pub fn fetch(source: &str, roots: &Roots) -> Result<Vec<u8>, Problem> {
         .limit(MAX_FEED + 1)
         .read_to_vec()
         .map_err(body_problem)
+}
+
+/// An update artifact at url, read as the feed is (https only, no redirects, the same roots), of
+/// exactly size bytes. progress hears the bytes read so far; once cancel is set the read stops.
+pub fn download(
+    url: &str,
+    roots: &Roots,
+    size: u64,
+    cancel: &std::sync::atomic::AtomicBool,
+    mut progress: impl FnMut(u64),
+) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    use std::sync::atomic::Ordering as Atomic;
+    use ureq::tls::{RootCerts, TlsConfig};
+    let roots = match roots {
+        Some(c) => RootCerts::Specific(c.clone()),
+        None => RootCerts::WebPki,
+    };
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .proxy(ureq::Proxy::try_from_env())
+        .http_status_as_error(false)
+        .https_only(true)
+        .max_redirects(0)
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .user_agent("pluxy-app")
+        .tls_config(TlsConfig::builder().root_certs(roots).build())
+        .build()
+        .into();
+    let mut resp = agent
+        .get(url)
+        .call()
+        .map_err(|e| format!("Could not reach the update: {e}"))?;
+    let status = resp.status().as_u16();
+    if status != 200 {
+        return Err(format!("The update's address answered {status}."));
+    }
+    let mut reader = resp.body_mut().with_config().limit(size + 1).reader();
+    let mut bytes = Vec::with_capacity(size.min(MAX_UPDATE) as usize);
+    let mut chunk = vec![0; 64 << 10];
+    loop {
+        if cancel.load(Atomic::SeqCst) {
+            return Err("cancelled".into());
+        }
+        let n = reader
+            .read(&mut chunk)
+            .map_err(|e| format!("Could not read the update: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..n]);
+        if bytes.len() as u64 > size {
+            return Err(format!(
+                "The update is larger than the feed says ({size} bytes)."
+            ));
+        }
+        progress(bytes.len() as u64);
+    }
+    if bytes.len() as u64 != size {
+        return Err(format!(
+            "The update has {} bytes, not the {size} the feed says.",
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
 }
 
 /// What a failed read of the feed's body means: too large, or the connection failed.
@@ -668,6 +778,28 @@ mod tests {
     }
 
     #[test]
+    fn an_app_release_keeps_its_update_artifacts() {
+        let f = parse_feed(
+            serde_json::json!({"format": 1, "releases": [{"product": "app", "version": "0.2.0",
+                "channel": "stable", "published": "2026-11-01T12:00:00Z",
+                "update": {"linux-x86_64-appimage": {"url": "https://example.com/a b",
+                    "signature": "c2ln", "size": 7, "later": true}}}]})
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+        let r = f.latest(Product::App, Channel::Stable).unwrap();
+        assert_eq!(
+            r.update["linux-x86_64-appimage"],
+            UpdateArtifact {
+                url: "https://example.com/a%20b".into(),
+                signature: "c2ln".into(),
+                size: 7
+            }
+        );
+    }
+
+    #[test]
     fn a_feed_with_any_bad_release_is_refused() {
         let cases = [
             (serde_json::json!({"format": 2, "releases": []}), "format 2"),
@@ -706,6 +838,26 @@ mod tests {
             (
                 serde_json::json!({"format": 1, "releases": [{"product": "app", "version": "1.0.0", "channel": "stable", "published": "2026-11-01T12:00:00Z", "notes": "x".repeat(MAX_NOTES + 1)}]}),
                 "64 KiB",
+            ),
+            (
+                serde_json::json!({"format": 1, "releases": [{"product": "core", "version": "1.0.0", "channel": "stable", "published": "2026-11-01T12:00:00Z", "update": {"linux-x86_64-appimage": {"url": "https://example.com/a", "signature": "c2ln", "size": 1}}}]}),
+                "only an app release",
+            ),
+            (
+                serde_json::json!({"format": 1, "releases": [{"product": "app", "version": "1.0.0", "channel": "stable", "published": "2026-11-01T12:00:00Z", "update": {"linux-x86_64-appimage": {"url": "http://example.com/a", "signature": "c2ln", "size": 1}}}]}),
+                "https://",
+            ),
+            (
+                serde_json::json!({"format": 1, "releases": [{"product": "app", "version": "1.0.0", "channel": "stable", "published": "2026-11-01T12:00:00Z", "update": {"linux-x86_64-appimage": {"url": "https://example.com/a", "signature": "not base64!", "size": 1}}}]}),
+                "base64",
+            ),
+            (
+                serde_json::json!({"format": 1, "releases": [{"product": "app", "version": "1.0.0", "channel": "stable", "published": "2026-11-01T12:00:00Z", "update": {"linux-x86_64-appimage": {"url": "https://example.com/a", "signature": "c2ln", "size": 0}}}]}),
+                "1 byte to 1 GiB",
+            ),
+            (
+                serde_json::json!({"format": 1, "releases": [{"product": "app", "version": "1.0.0", "channel": "stable", "published": "2026-11-01T12:00:00Z", "update": {"linux-x86_64-appimage": {"url": "https://example.com/a", "signature": "c2ln", "size": MAX_UPDATE + 1}}}]}),
+                "1 byte to 1 GiB",
             ),
         ];
         for (json, why) in cases {

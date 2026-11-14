@@ -92,6 +92,7 @@ fn check(main: &Webview, dir: &Path, variant: &str, latest: &str) -> Result<(), 
         "source",
         &feed()?,
     )?;
+    let before = update_attr(main, "check");
     click(main, "[data-part=release-check]")?;
     wait_attr(
         main,
@@ -106,6 +107,10 @@ fn check(main: &Webview, dir: &Path, variant: &str, latest: &str) -> Result<(), 
             &format!("document.querySelector({}) !== null", json!(UPDATE)),
         )
         .filter(|v| v == true)
+    })?;
+    // What the updater says about this check, not the one before.
+    wait_for("the updater's view of this check", || {
+        (update_attr(main, "check") != before).then_some(())
     })?;
     Ok(())
 }

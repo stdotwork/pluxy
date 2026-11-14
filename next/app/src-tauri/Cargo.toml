@@ -64,6 +64,9 @@ base64 = "=0.23.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# The app's own update (src/updater.rs): signature check and AppImage install only. No default
+# features: no gzip/zip payloads; its HTTP client is never used (the app downloads natively).
+tauri-plugin-updater = { version = "=2.14.1", default-features = false, features = ["rustls-tls"] }
 
 # The same GTK Tauri uses, to lay page webviews over the window (src/place.rs).
 [target.'cfg(target_os = "linux")'.dependencies]

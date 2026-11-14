@@ -3,6 +3,8 @@
 // Preview (latest) channel, and the app release's notes. The notes never render in this webview:
 // the native side opens a webview of their own over the notes area, with no app command granted
 // (src-tauri/src/notes.rs). This page gets only versions, dates and status from the native side.
+// "Update Now" installs the app's newer release through the native updater
+// (src-tauri/src/updater.rs), which says what it is doing and why it cannot update, if it cannot.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -41,6 +43,121 @@ export interface ReleaseView {
 interface Settled {
   changed: boolean;
   error?: string | null;
+}
+
+/** What the native updater says (`app_update_get`, `pluxy-app-update`). */
+interface Pinned {
+  version: string;
+  sha256: string;
+}
+export interface AppUpdateView {
+  available: boolean;
+  reason?: string | null;
+  version?: string | null;
+  task: {
+    phase: "idle" | "downloading" | "verifying" | "installing" | "restarting" | "failed" | "cancelled";
+    version?: string | null;
+    downloaded: number;
+    total?: number | null;
+    error?: string | null;
+  };
+  last?: { result: string; detail: string } | null;
+  rollback: Pinned[];
+}
+
+const PHASES: Record<AppUpdateView["task"]["phase"], string> = {
+  idle: "Waiting",
+  downloading: "Downloading",
+  verifying: "Verifying",
+  installing: "Preparing Update",
+  restarting: "Restarting",
+  failed: "Update Failed",
+  cancelled: "Download Canceled",
+};
+
+function megabytes(n: number): string {
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
+/** Update Now, its progress and Cancel Download, the last outcome, and Roll back. */
+function AppUpdate(props: { update: AppUpdateView; check: number; onError: (e: string) => void }) {
+  const u = props.update;
+  const t = u.task;
+  const call = (command: string, args?: Record<string, unknown>) =>
+    invoke(command, args).catch((e) => props.onError(String(e)));
+  const moving = t.phase === "downloading" || t.phase === "verifying" || t.phase === "installing";
+  return (
+    <div
+      data-part="app-update"
+      data-available={String(u.available)}
+      data-reason={u.reason ?? ""}
+      data-phase={t.phase}
+      data-downloaded={String(t.downloaded)}
+      data-total={t.total == null ? "" : String(t.total)}
+      data-error={t.error ?? ""}
+      data-check={String(props.check)}
+    >
+      <Card title="Application Update">
+        <div class="stack">
+          {u.reason && <Notice tone="warn">{u.reason}</Notice>}
+          {u.available && u.version && (
+            <>
+              <p>
+                Version {u.version} will be downloaded and installed. The app will restart, and a managed core
+                will briefly stop and resume.
+              </p>
+              <div class="actions">
+                <span data-part="app-update-now">
+                  <Button variant="primary" onClick={() => call("app_update_start")}>
+                    Update Now
+                  </Button>
+                </span>
+              </div>
+            </>
+          )}
+          {t.phase !== "idle" && (
+            <p role="status">
+              <strong>{PHASES[t.phase]}</strong>
+              {t.version ? ` · ${t.version}` : ""}
+              {t.phase === "downloading" && t.total
+                ? ` · ${megabytes(t.downloaded)} of ${megabytes(t.total)}`
+                : ""}
+              {t.error ? ` · ${t.error}` : ""}
+            </p>
+          )}
+          {t.phase === "downloading" && (
+            <div class="actions">
+              <span data-part="app-update-cancel">
+                <Button onClick={() => call("app_update_cancel")}>Cancel Download</Button>
+              </span>
+            </div>
+          )}
+          {u.last && (
+            <div data-part="app-update-last" data-result={u.last.result} data-detail={u.last.detail}>
+              <Notice tone={u.last.result === "failed" ? "danger" : "ok"}>{u.last.detail}</Notice>
+            </div>
+          )}
+          {u.rollback.length > 0 && (
+            <>
+              <p>Previously installed here; rolling back asks you to confirm in a native dialog:</p>
+              <div class="actions">
+                {u.rollback.map((p) => (
+                  <span data-part="app-rollback" data-version={p.version} data-sha256={p.sha256}>
+                    <Button
+                      disabled={moving || t.phase === "restarting"}
+                      onClick={() => call("app_update_rollback", { version: p.version, sha256: p.sha256 })}
+                    >
+                      Roll back to {p.version}…
+                    </Button>
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </Card>
+    </div>
+  );
 }
 
 const CHANNELS = [
@@ -285,6 +402,11 @@ export function UpdatesPage() {
   const [error, setError] = useState<string>();
   const [address, setAddress] = useState("");
   const [theme, setTheme] = useState(0);
+  const [update, setUpdate] = useState<AppUpdateView>();
+  // Counts checks whose update state has arrived, so a reader knows it is this check's.
+  const [checks, setChecks] = useState(0);
+  const refreshUpdate = () =>
+    invoke<AppUpdateView>("app_update_get").then(setUpdate, (e) => setError(String(e)));
 
   const run = async (call: () => Promise<ReleaseView | undefined>) => {
     setBusy(true);
@@ -298,10 +420,15 @@ export function UpdatesPage() {
       setBusy(false);
     }
   };
-  const reload = () => run(() => invoke<ReleaseView>("release_get"));
+  const reload = async () => {
+    await run(() => invoke<ReleaseView>("release_get"));
+    await refreshUpdate();
+  };
   const check = async () => {
     setChecking(true);
     await run(() => invoke<ReleaseView>("release_check"));
+    await refreshUpdate();
+    setChecks((n) => n + 1);
     setChecking(false);
   };
 
@@ -312,13 +439,15 @@ export function UpdatesPage() {
       await reload();
       if (e.payload?.error) setError(`The release feed was not changed: ${e.payload.error}`);
     });
+    const offUpdate = listen<AppUpdateView>("pluxy-app-update", (e) => setUpdate(e.payload));
     const unsubscribe = themes.subscribe(() => setTheme((n) => n + 1));
     return () => {
       unsubscribe();
-      off.then(
-        (f) => f(),
-        () => {},
-      );
+      for (const o of [off, offUpdate])
+        o.then(
+          (f) => f(),
+          () => {},
+        );
     };
   }, []);
 
@@ -365,6 +494,7 @@ export function UpdatesPage() {
             checked={checked}
             failed={failed}
           />
+          {update && <AppUpdate update={update} check={checks} onError={setError} />}
           <ProductCard product="core" title="Core" view={v.core} checked={checked} failed={failed} />
           <ReleaseNotes
             product="app"

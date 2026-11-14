@@ -72,7 +72,8 @@ pub enum Start {
 
 /// The first app's hold on its profile, until it is dropped or the process ends.
 pub struct Instance {
-    _lock: File,
+    /// Held until the app ends, or `unlock`.
+    lock: std::sync::Mutex<Option<File>>,
     #[cfg(unix)]
     dir: std::os::fd::OwnedFd,
     /// Names this profile's socket: a digest of its instance folder.
@@ -126,7 +127,7 @@ fn start_by(dir: &Path, deadline: Instant) -> Result<Start, String> {
                 fsx::remove(&d, ADDRESS)
                     .map_err(|e| format!("cannot remove the stale address: {e}"))?;
                 return Ok(Start::First(Instance {
-                    _lock: lock,
+                    lock: std::sync::Mutex::new(Some(lock)),
                     #[cfg(unix)]
                     dir: d,
                     key,
@@ -222,6 +223,15 @@ impl Instance {
         if let Some(l) = self.listening.get() {
             l.stop();
         }
+    }
+}
+
+impl Instance {
+    /// Drops the profile's lock before the app ends, so the next version of the app an update
+    /// starts can take it while this one waits for it (`updater.rs`). After `release`.
+    pub fn unlock(&self) {
+        self.release();
+        drop(self.lock.lock().unwrap_or_else(|e| e.into_inner()).take());
     }
 }
 
