@@ -217,6 +217,11 @@ const refusedBy = (label: string, s: Step | undefined, reason: RegExp, before: n
     call?.ok === false && reason.test(String(call.error)),
     `${label}: app_update_start: ${JSON.stringify(call)}`,
   );
+  const rollback = s.rollback as { ok?: boolean; error?: string } | undefined;
+  check(
+    rollback?.ok === false && reason.test(String(rollback.error)),
+    `${label}: app_update_rollback: ${JSON.stringify(rollback)}`,
+  );
   check(sha256(readFileSync(installed)) === v1Sha, `${label}: the installed AppImage changed`);
   check(artifactRequests() === before, `${label}: the update was downloaded`);
 };

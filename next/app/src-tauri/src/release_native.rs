@@ -253,6 +253,23 @@ pub(crate) fn run(
         "app": attr(main, app_card, "latest"), "core": attr(main, core_card, "latest"),
         "installed_app": attr(main, app_card, "installed"),
     });
+    // The feed offers 0.2.0 but the updater refuses it, on the page and to Update Now's own
+    // command: a build without updater trust is not configured, and the fixture's 0.2.0 has no
+    // signed update for the test package (the runner checks which).
+    let reason = wait_for("the updater's reason", || {
+        Some(attr(main, "[data-part=app-update]", "reason"))
+            .filter(|r| r.as_str().is_some_and(|s| !s.is_empty()))
+    })?;
+    main.eval("window.__updateCall = null; window.__TAURI_INTERNALS__.invoke('app_update_start').then(() => window.__updateCall = {ok: true}, e => window.__updateCall = {ok: false, error: String(e)})")
+        .map_err(|e| e.to_string())?;
+    let call = wait_for("app_update_start to answer", || {
+        eval(main, "window.__updateCall").filter(|v| !v.is_null())
+    })?;
+    evidence["updater"] = json!({
+        "reason": reason,
+        "offered": eval(main, "document.querySelector('[data-part=app-update-now]') !== null"),
+        "call": call,
+    });
     let checked = attr(main, "[data-part=release-checked]", "at");
     if checked.as_str().is_none_or(str::is_empty) {
         return Err("no check time shown".into());

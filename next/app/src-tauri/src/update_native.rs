@@ -151,9 +151,15 @@ fn refused(main: &Webview, dir: &Path, case: &str) -> Result<(), String> {
         "(b => !!b && !b.disabled)(document.querySelector('[data-part=app-update-now] button'))",
     );
     let call = invoke(main, "app_update_start", json!({}))?;
+    // A rollback is refused for the same reason, before it looks at any kept copy.
+    let rollback = invoke(
+        main,
+        "app_update_rollback",
+        json!({"version": "0.0.1", "sha256": "0".repeat(64)}),
+    )?;
     log(
         &format!("update_{}", case.replace('-', "_")),
-        json!({"reason": reason, "offered": offered, "call": call,
+        json!({"reason": reason, "offered": offered, "call": call, "rollback": rollback,
                "installed_sha": file_sha(&installed())}),
     );
     Ok(())

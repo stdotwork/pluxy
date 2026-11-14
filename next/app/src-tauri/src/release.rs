@@ -331,6 +331,10 @@ pub fn fetch(source: &str, roots: &Roots) -> Result<Vec<u8>, Problem> {
         .map_err(body_problem)
 }
 
+/// How long a download may wait for the server: to send the request, for the answer's head,
+/// and for each read of its body. Cancelling reaches a read that waits within this.
+pub const UPDATE_WAIT: Duration = Duration::from_secs(30);
+
 /// An update artifact at url, read as the feed is (https only, no redirects, the same roots), of
 /// exactly size bytes. progress hears the bytes read so far; once cancel is set the read stops.
 pub fn download(
@@ -338,43 +342,87 @@ pub fn download(
     roots: &Roots,
     size: u64,
     cancel: &std::sync::atomic::AtomicBool,
-    mut progress: impl FnMut(u64),
+    progress: impl FnMut(u64),
 ) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-    use std::sync::atomic::Ordering as Atomic;
+    download_with(
+        &update_agent(roots, true, UPDATE_WAIT),
+        url,
+        size,
+        cancel,
+        progress,
+    )
+}
+
+fn update_agent(roots: &Roots, https_only: bool, wait: Duration) -> ureq::Agent {
     use ureq::tls::{RootCerts, TlsConfig};
     let roots = match roots {
         Some(c) => RootCerts::Specific(c.clone()),
         None => RootCerts::WebPki,
     };
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+    ureq::Agent::config_builder()
         .proxy(ureq::Proxy::try_from_env())
         .http_status_as_error(false)
-        .https_only(true)
+        .https_only(https_only)
         .max_redirects(0)
         .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_send_request(Some(wait))
+        .timeout_recv_response(Some(wait))
+        .timeout_per_read(Some(wait))
         .user_agent("pluxy-app")
         .tls_config(TlsConfig::builder().root_certs(roots).build())
         .build()
-        .into();
-    let mut resp = agent
-        .get(url)
-        .call()
-        .map_err(|e| format!("Could not reach the update: {e}"))?;
+        .into()
+}
+
+fn download_with(
+    agent: &ureq::Agent,
+    url: &str,
+    size: u64,
+    cancel: &std::sync::atomic::AtomicBool,
+    mut progress: impl FnMut(u64),
+) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    use std::sync::atomic::Ordering as Atomic;
+    let cancelled = || cancel.load(Atomic::SeqCst);
+    let mut resp = agent.get(url).call().map_err(|e| {
+        if cancelled() {
+            "cancelled".to_string()
+        } else {
+            format!("Could not reach the update: {e}")
+        }
+    })?;
     let status = resp.status().as_u16();
     if status != 200 {
         return Err(format!("The update's address answered {status}."));
     }
+    let announced = resp
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    if let Some(n) = announced.filter(|n| *n != size) {
+        return Err(format!(
+            "The update has {n} bytes, not the {size} the feed says."
+        ));
+    }
     let mut reader = resp.body_mut().with_config().limit(size + 1).reader();
-    let mut bytes = Vec::with_capacity(size.min(MAX_UPDATE) as usize);
+    // Grows as bytes arrive: an announced size reserves nothing.
+    let mut bytes = Vec::new();
     let mut chunk = vec![0; 64 << 10];
     loop {
-        if cancel.load(Atomic::SeqCst) {
+        if cancelled() {
             return Err("cancelled".into());
         }
-        let n = reader
-            .read(&mut chunk)
-            .map_err(|e| format!("Could not read the update: {e}"))?;
+        let n = match reader.read(&mut chunk) {
+            Ok(n) => n,
+            Err(_) if cancelled() => return Err("cancelled".into()),
+            Err(_) if bytes.len() as u64 >= size => {
+                return Err(format!(
+                    "The update is larger than the feed says ({size} bytes)."
+                ))
+            }
+            Err(e) => return Err(format!("Could not read the update: {e}")),
+        };
         if n == 0 {
             break;
         }
@@ -775,6 +823,128 @@ mod tests {
         );
         let only_preview = feed(serde_json::json!([rel("app", "1.0.0-rc.1", "preview")])).unwrap();
         assert!(only_preview.latest(Product::App, Channel::Stable).is_none());
+    }
+
+    /// A server on a free port that answers one request with head, then body, then waits
+    /// stall before closing. Returns its address.
+    fn serve(head: &'static str, body: &'static [u8], stall: Duration) -> String {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut c, _) = l.accept().unwrap();
+            let mut req = [0u8; 4096];
+            let _ = c.read(&mut req);
+            let _ = c.write_all(head.as_bytes());
+            let _ = c.write_all(body);
+            let _ = c.flush();
+            std::thread::sleep(stall);
+        });
+        format!("http://{addr}/update")
+    }
+
+    fn get(
+        url: &str,
+        size: u64,
+        wait: Duration,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<u8>, String> {
+        download_with(&update_agent(&None, false, wait), url, size, cancel, |_| {})
+    }
+
+    #[test]
+    fn an_update_download_takes_exactly_the_announced_bytes() {
+        let no = std::sync::atomic::AtomicBool::new(false);
+        let s = Duration::from_secs(1);
+        let ok = serve(
+            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n",
+            b"hello",
+            Duration::ZERO,
+        );
+        assert_eq!(get(&ok, 5, s, &no).unwrap(), b"hello");
+        // The answer says another size than the feed.
+        let other = serve(
+            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n",
+            b"hello",
+            Duration::ZERO,
+        );
+        assert!(get(&other, 10, s, &no)
+            .unwrap_err()
+            .contains("5 bytes, not the 10"));
+        // No length said: short and long bodies.
+        let short = serve(
+            "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n",
+            b"hello",
+            Duration::ZERO,
+        );
+        assert!(get(&short, 10, s, &no)
+            .unwrap_err()
+            .contains("5 bytes, not the 10"));
+        let long = serve(
+            "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n",
+            b"hello, world",
+            Duration::ZERO,
+        );
+        assert!(get(&long, 5, s, &no)
+            .unwrap_err()
+            .contains("larger than the feed says"));
+    }
+
+    // A server that stops sending: the download ends with the read timeout, and cancelling
+    // reaches the read that waits, within that timeout.
+    #[test]
+    fn a_stalled_update_download_times_out_and_can_be_cancelled() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Instant;
+        let head = "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n";
+        let no = AtomicBool::new(false);
+        let started = Instant::now();
+        let e = get(
+            &serve(head, b"he", Duration::from_secs(10)),
+            10,
+            Duration::from_secs(1),
+            &no,
+        )
+        .unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "waited {:?}",
+            started.elapsed()
+        );
+        assert!(e.contains("Could not read the update"), "{e}");
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let c = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            c.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        let e = get(
+            &serve(head, b"he", Duration::from_secs(10)),
+            10,
+            Duration::from_secs(1),
+            &cancel,
+        )
+        .unwrap_err();
+        assert_eq!(e, "cancelled");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "waited {:?}",
+            started.elapsed()
+        );
+        // A server that never answers at all: the answer's head times out too.
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/update", silent.local_addr().unwrap());
+        let started = Instant::now();
+        assert!(get(&url, 10, Duration::from_secs(1), &no)
+            .unwrap_err()
+            .contains("Could not reach"));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "waited {:?}",
+            started.elapsed()
+        );
+        drop(silent);
     }
 
     #[test]

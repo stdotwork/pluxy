@@ -55,7 +55,15 @@ export interface AppUpdateView {
   reason?: string | null;
   version?: string | null;
   task: {
-    phase: "idle" | "downloading" | "verifying" | "installing" | "restarting" | "failed" | "cancelled";
+    phase:
+      | "idle"
+      | "confirming"
+      | "downloading"
+      | "verifying"
+      | "installing"
+      | "restarting"
+      | "failed"
+      | "cancelled";
     version?: string | null;
     downloaded: number;
     total?: number | null;
@@ -67,6 +75,7 @@ export interface AppUpdateView {
 
 const PHASES: Record<AppUpdateView["task"]["phase"], string> = {
   idle: "Waiting",
+  confirming: "Waiting for Confirmation",
   downloading: "Downloading",
   verifying: "Verifying",
   installing: "Preparing Update",
@@ -85,7 +94,8 @@ function AppUpdate(props: { update: AppUpdateView; check: number; onError: (e: s
   const t = u.task;
   const call = (command: string, args?: Record<string, unknown>) =>
     invoke(command, args).catch((e) => props.onError(String(e)));
-  const moving = t.phase === "downloading" || t.phase === "verifying" || t.phase === "installing";
+  // An update or a rollback runs, or waits for its native confirmation.
+  const busy = t.phase !== "idle" && t.phase !== "failed" && t.phase !== "cancelled";
   return (
     <div
       data-part="app-update"
@@ -100,7 +110,7 @@ function AppUpdate(props: { update: AppUpdateView; check: number; onError: (e: s
       <Card title="Application Update">
         <div class="stack">
           {u.reason && <Notice tone="warn">{u.reason}</Notice>}
-          {u.available && u.version && (
+          {u.available && u.version && !busy && (
             <>
               <p>
                 Version {u.version} will be downloaded and installed. The app will restart, and a managed core
@@ -144,7 +154,7 @@ function AppUpdate(props: { update: AppUpdateView; check: number; onError: (e: s
                 {u.rollback.map((p) => (
                   <span data-part="app-rollback" data-version={p.version} data-sha256={p.sha256}>
                     <Button
-                      disabled={moving || t.phase === "restarting"}
+                      disabled={busy}
                       onClick={() => call("app_update_rollback", { version: p.version, sha256: p.sha256 })}
                     >
                       Roll back to {p.version}…
@@ -439,7 +449,12 @@ export function UpdatesPage() {
       await reload();
       if (e.payload?.error) setError(`The release feed was not changed: ${e.payload.error}`);
     });
-    const offUpdate = listen<AppUpdateView>("pluxy-app-update", (e) => setUpdate(e.payload));
+    // The event carries only the task; when it ends, the rest (last outcome, kept copies) is read again.
+    const offUpdate = listen<{ task: AppUpdateView["task"] }>("pluxy-app-update", (e) => {
+      const task = e.payload.task;
+      setUpdate((u) => (u ? { ...u, task } : u));
+      if (task.phase === "idle" || task.phase === "failed" || task.phase === "cancelled") refreshUpdate();
+    });
     const unsubscribe = themes.subscribe(() => setTheme((n) => n + 1));
     return () => {
       unsubscribe();

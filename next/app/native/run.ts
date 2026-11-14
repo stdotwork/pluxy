@@ -892,7 +892,7 @@ async function runApp(
 
     check(steps.get("confirmations")?.passed === true, "native confirmation checks did not complete");
 
-    checkRelease(steps.get("release"), feed, browserLog, check);
+    checkRelease(steps.get("release"), feed, browserLog, artifact.gate, check);
     console.log(`${mode} release ${JSON.stringify(steps.get("release"))}`);
     const rotationStep = steps.get("rotation");
     const managed = mode === "managed";
@@ -994,6 +994,7 @@ function checkRelease(
   release: Record<string, any> | undefined,
   feed: Feed,
   browserLog: string,
+  gate: Artifact["gate"],
   check: (ok: unknown, what: string) => void,
 ) {
   check(release, "the release feed check did not finish");
@@ -1004,6 +1005,17 @@ function checkRelease(
   const escaped = `${feed.base}/escaped/a%5B1%5D?q=x%7Cy`;
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   check(release.no_default === true, "release settings existed before any feed was confirmed");
+  // With 0.2.0 on the feed, Update Now is refused, on the page and by its command: a build without
+  // updater trust is not configured for it, and the fixture has no signed update for the test package.
+  const u = release.updater ?? {};
+  const why = gate === "passes" ? /no update for this system/ : /not configured/;
+  check(
+    why.test(String(u.reason)) &&
+      u.offered === false &&
+      u.call?.ok === false &&
+      why.test(String(u.call?.error)),
+    `Update Now was offered or started without ${why}: ${JSON.stringify(u)}`,
+  );
   check(release.confirmed === true, "the confirmed feed was not kept in release.json");
   check(
     same(release.stable, { app: "0.2.0", core: "1.4.0", installed_app: appVersion }),

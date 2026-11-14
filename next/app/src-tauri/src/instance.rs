@@ -46,6 +46,10 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const LOCK: &str = "lock";
+/// Names the file descriptor of the profile lock an updating app hands the version it starts
+/// (`updater.rs`), which adopts it instead of taking the lock: the lock is never free between
+/// the two, so no other launch becomes the app meanwhile.
+pub const LOCK_FD_ENV: &str = "PLUXY_APP_INSTANCE_LOCK_FD";
 /// Where the first app says its socket is.
 const ADDRESS: &str = "address";
 /// What a launch sends to raise the first app, and nothing else is acted on.
@@ -110,10 +114,22 @@ pub fn start(dir: &Path, wait: Duration) -> Result<Start, String> {
 /// [`start`], where the holder of a held lock must have answered by `deadline`. After it, the
 /// lock is still tried, but the holder is not asked again.
 fn start_by(dir: &Path, deadline: Instant) -> Result<Start, String> {
+    let inherited = std::env::var(LOCK_FD_ENV).ok().and_then(|s| s.parse().ok());
+    start_with(dir, deadline, inherited)
+}
+
+/// [`start_by`], adopting the inherited descriptor of this profile's lock when it is one.
+fn start_with(dir: &Path, deadline: Instant, inherited: Option<i32>) -> Result<Start, String> {
     let d = fsx::open_dir(dir)
         .map_err(|e| format!("cannot use the instance folder {}: {e}", dir.display()))?;
     let lock = fsx::open_lock(&d)
         .map_err(|e| format!("cannot use the instance lock in {}: {e}", dir.display()))?;
+    #[cfg(unix)]
+    let lock = inherited
+        .and_then(|fd| fsx::adopt(&lock, fd))
+        .unwrap_or(lock);
+    #[cfg(not(unix))]
+    let _ = inherited;
     let key = {
         use sha2::{Digest, Sha256};
         let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
@@ -227,11 +243,15 @@ impl Instance {
 }
 
 impl Instance {
-    /// Drops the profile's lock before the app ends, so the next version of the app an update
-    /// starts can take it while this one waits for it (`updater.rs`). After `release`.
-    pub fn unlock(&self) {
-        self.release();
-        drop(self.lock.lock().unwrap_or_else(|e| e.into_inner()).take());
+    /// The profile lock's file descriptor, to hand to the version an update starts.
+    #[cfg(unix)]
+    pub fn lock_fd(&self) -> Option<std::os::fd::RawFd> {
+        use std::os::fd::AsRawFd;
+        self.lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|f| f.as_raw_fd())
     }
 }
 
@@ -376,6 +396,39 @@ mod fsx {
 
     pub fn open_lock(dir: &OwnedFd) -> io::Result<File> {
         open_in(dir, super::LOCK, libc::O_RDWR | libc::O_CREAT)
+    }
+
+    /// The inherited descriptor fd, owned from now on and closed on exec, when it is open on the
+    /// same file as lock (this profile's lock, opened and checked by name); otherwise None, and
+    /// fd is left alone.
+    pub fn adopt(lock: &File, fd: i32) -> Option<File> {
+        use std::os::fd::FromRawFd;
+        if fd < 3 || fd == lock.as_raw_fd() {
+            return None;
+        }
+        let (mut a, mut b) = (
+            std::mem::MaybeUninit::<libc::stat>::uninit(),
+            std::mem::MaybeUninit::<libc::stat>::uninit(),
+        );
+        // SAFETY: fstat writes a stat into the buffer it is given, or fails.
+        let same = unsafe {
+            libc::fstat(fd, a.as_mut_ptr()) == 0
+                && libc::fstat(lock.as_raw_fd(), b.as_mut_ptr()) == 0
+                && {
+                    let (a, b) = (a.assume_init(), b.assume_init());
+                    a.st_dev == b.st_dev
+                        && a.st_ino == b.st_ino
+                        && a.st_mode & libc::S_IFMT == libc::S_IFREG
+                }
+        };
+        if !same {
+            return None;
+        }
+        // SAFETY: fd is open on this profile's lock file, and only this takes it.
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            Some(File::from_raw_fd(fd))
+        }
     }
 
     /// The socket the first app wrote down: None if it said it has none, an error if it has not
@@ -1034,6 +1087,37 @@ mod tests {
             !dir.join(ADDRESS).exists(),
             "the address goes with its owner"
         );
+        let _again = first(&dir);
+    }
+
+    // An update hands the version it starts the lock's descriptor: adopted, the lock is never
+    // free in between. Any other descriptor is left alone and the lock stays the holder's.
+    #[test]
+    fn a_handed_over_lock_is_adopted_and_nothing_else_is() {
+        use std::os::fd::AsRawFd;
+        let t = temp();
+        let dir = t.0.join("instance");
+        let i = first(&dir);
+        let soon = || Instant::now() + Duration::from_millis(300);
+        let other = fs::File::create(t.0.join("other")).unwrap();
+        assert!(
+            !matches!(
+                start_with(&dir, soon(), Some(other.as_raw_fd())),
+                Ok(Start::First(_))
+            ),
+            "an unrelated descriptor took the profile"
+        );
+        // SAFETY: dup of an open descriptor of this test's.
+        let handed = unsafe { libc::dup(i.lock_fd().unwrap()) };
+        let Ok(Start::First(j)) = start_with(&dir, soon(), Some(handed)) else {
+            panic!("the handed-over lock was not adopted");
+        };
+        drop(i);
+        assert!(
+            !matches!(start_with(&dir, soon(), None), Ok(Start::First(_))),
+            "the lock was free once the first app ended"
+        );
+        drop(j);
         let _again = first(&dir);
     }
 

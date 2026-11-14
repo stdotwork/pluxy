@@ -2567,9 +2567,13 @@ pub fn run() {
             window_close,
             privacy_get,
             privacy_set,
+            #[cfg(unix)]
             updater::app_update_get,
+            #[cfg(unix)]
             updater::app_update_start,
+            #[cfg(unix)]
             updater::app_update_cancel,
+            #[cfg(unix)]
             updater::app_update_rollback,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
@@ -2778,6 +2782,8 @@ pub fn run() {
             // A version an update installed accepts itself, which the earlier one waits for.
             #[cfg(unix)]
             updater::accept(&handle);
+            #[cfg(unix)]
+            updater::record_started_from(&handle);
             #[cfg(feature = "native-test")]
             native_test::start(handle);
             Ok(())
@@ -2838,20 +2844,6 @@ pub fn run() {
             }
             if let Some(i) = app.try_state::<instance::Instance>() {
                 i.release();
-            }
-            // An install finished: start the new version, now that this one has stopped.
-            #[cfg(unix)]
-            if let Some(r) = app
-                .try_state::<App>()
-                .and_then(|st| st.updater.restart.lock().unwrap().take())
-            {
-                for w in app.webview_windows().values() {
-                    let _ = w.hide();
-                }
-                if let Some(i) = app.try_state::<instance::Instance>() {
-                    i.unlock();
-                }
-                updater::supervise(r);
             }
         }
         _ => {}
@@ -2968,12 +2960,15 @@ mod tests {
     fn the_command_list_matches_the_handler() {
         let src = include_str!("lib.rs");
         let start = src.find("generate_handler![").unwrap();
-        let end = start + src[start..].find(']').unwrap();
+        // The list ends at `])`: a `#[cfg(...)]` in it has a `]` of its own.
+        let end = start + src[start..].find("])").unwrap();
         let mut handled: Vec<&str> = src[start + "generate_handler![".len()..end]
             .split(',')
             .map(|s| {
-                s.trim()
-                    .trim_start_matches("updates::")
+                let s = s.trim();
+                // A command built only on some systems: `#[cfg(unix)] module::name`.
+                let s = s.strip_prefix("#[cfg(unix)]").unwrap_or(s).trim();
+                s.trim_start_matches("updates::")
                     .trim_start_matches("updater::")
             })
             .filter(|s| !s.is_empty())

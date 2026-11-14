@@ -35,7 +35,8 @@ const EVENT: &str = "pluxy-app-update";
 /// What the update is doing now.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Task {
-    /// idle, downloading, verifying, installing, restarting, failed or cancelled.
+    /// idle, confirming (a rollback waits for its native confirmation), downloading, verifying,
+    /// installing, restarting, failed or cancelled.
     pub phase: &'static str,
     pub version: Option<String>,
     pub downloaded: u64,
@@ -47,7 +48,7 @@ impl Task {
     fn running(&self) -> bool {
         matches!(
             self.phase,
-            "downloading" | "verifying" | "installing" | "restarting"
+            "confirming" | "downloading" | "verifying" | "installing" | "restarting"
         )
     }
 }
@@ -92,7 +93,7 @@ struct History {
     kept: Vec<Pinned>,
 }
 
-/// The restart a finished install asked for, done once the app has quit (`lib.rs`).
+/// The restart a finished install asked for.
 pub struct Restart {
     dir: PathBuf,
     pending: Pending,
@@ -103,7 +104,9 @@ pub struct State {
     plugin: Result<(), String>,
     task: Mutex<Task>,
     cancel: AtomicBool,
-    pub restart: Mutex<Option<Restart>>,
+    /// The SHA-256 of the AppImage this process started from, hashed once at startup
+    /// (`record_started_from`): only those bytes are kept as this version.
+    started_from: std::sync::OnceLock<Result<String, String>>,
 }
 
 impl State {
@@ -115,7 +118,7 @@ impl State {
                 ..Task::default()
             }),
             cancel: AtomicBool::new(false),
-            restart: Mutex::new(None),
+            started_from: std::sync::OnceLock::new(),
         }
     }
 }
@@ -336,13 +339,66 @@ pub fn view(app: &AppHandle) -> View {
     }
 }
 
-fn emit(app: &AppHandle) {
-    let _ = app.emit_to(EventTarget::webview(MAIN), EVENT, view(app));
+fn idle() -> Task {
+    Task {
+        phase: "idle",
+        ..Task::default()
+    }
+}
+
+/// Sends the task alone: progress and phase changes cost no gate, installation check or history
+/// read. The window asks for the whole view (`app_update_get`) once a task ends.
+fn emit_task(app: &AppHandle) {
+    let task = app.state::<App>().updater.task.lock().unwrap().clone();
+    let _ = app.emit_to(
+        EventTarget::webview(MAIN),
+        EVENT,
+        serde_json::json!({ "task": task }),
+    );
 }
 
 fn set_task(app: &AppHandle, f: impl FnOnce(&mut Task)) {
     f(&mut app.state::<App>().updater.task.lock().unwrap());
-    emit(app);
+    emit_task(app);
+}
+
+/// Takes the task for t, unless an update or a rollback already runs (or waits for its
+/// confirmation).
+fn claim(task: &Mutex<Task>, t: Task) -> Result<(), String> {
+    let mut current = task.lock().unwrap();
+    if current.running() {
+        return Err("An update is already running.".into());
+    }
+    *current = t;
+    Ok(())
+}
+
+/// Hashes, once, the AppImage this process started from. Call after the app state exists.
+pub fn record_started_from(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let digest = match app.env().appimage {
+            Some(p) => fs::read(&p)
+                .map(|b| sha256(&b))
+                .map_err(|e| format!("{}: {e}", Path::new(&p).display())),
+            None => Err("this program is not an AppImage".into()),
+        };
+        let _ = app.state::<App>().updater.started_from.set(digest);
+    });
+}
+
+fn started_from(app: &AppHandle) -> Result<String, String> {
+    let st = app.state::<App>();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        if let Some(d) = st.updater.started_from.get() {
+            return d.clone();
+        }
+        if Instant::now() > deadline {
+            return Err("the AppImage this version started from is not hashed yet".into());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[tauri::command]
@@ -361,22 +417,19 @@ pub fn app_update_start(webview: Webview) -> Result<(), String> {
     let appimage = provenance(&app)?;
     let (release, artifact) =
         offered(&app)?.ok_or("There is no newer version of the app on this channel.")?;
-    {
-        let st = app.state::<App>();
-        let mut t = st.updater.task.lock().unwrap();
-        if t.running() {
-            return Err("An update is already running.".into());
-        }
-        *t = Task {
+    let st = app.state::<App>();
+    claim(
+        &st.updater.task,
+        Task {
             phase: "downloading",
             version: Some(release.version.clone()),
             downloaded: 0,
             total: Some(artifact.size),
             error: None,
-        };
-        st.updater.cancel.store(false, Ordering::SeqCst);
-    }
-    emit(&app);
+        },
+    )?;
+    st.updater.cancel.store(false, Ordering::SeqCst);
+    emit_task(&app);
     std::thread::spawn(
         move || match install(&app, &appimage, &release, &artifact) {
             Ok(restart) => restart_into(&app, restart),
@@ -393,7 +446,8 @@ pub fn app_update_start(webview: Webview) -> Result<(), String> {
     Ok(())
 }
 
-/// "Cancel Download": stops a download; once the update is checked and installing, it finishes.
+/// "Cancel Download": stops a download, within the download's read timeout at most; once the
+/// update is checked and installing, it finishes.
 #[tauri::command]
 pub fn app_update_cancel(webview: Webview) -> Result<(), String> {
     trusted(&webview)?;
@@ -468,23 +522,19 @@ fn install(
     }
     set_task(app, |t| t.phase = "installing");
     let dir = dir(app)?;
-    let from = keep(&dir, appimage, &app.package_info().version.to_string())?;
+    let running = app.package_info().version.to_string();
+    let from = keep(&dir, appimage, &running, &started_from(app)?)?;
     let to = Pinned {
         version: release.version.clone(),
         sha256: sha256(&bytes),
     };
     let pending = pending(&dir, "update", from, to.clone(), appimage)?;
     provenance(app)?;
-    if let Err(e) = update.install(&bytes) {
+    // The app's own replace, in one step, of the bytes the plugin just verified: the AppImage
+    // is the old one or the new one, never missing or cut short.
+    if let Err(e) = replace(appimage, &bytes) {
         let _ = fs::remove_file(dir.join("pending.json"));
         return Err(format!("The update could not be installed: {e}"));
-    }
-    let now = fs::read(appimage).map(|b| sha256(&b)).unwrap_or_default();
-    if now != to.sha256 {
-        restore(&dir, &pending);
-        return Err(
-            "The installed AppImage is not the update; the earlier one was put back.".into(),
-        );
     }
     Ok(Restart { dir, pending })
 }
@@ -510,14 +560,21 @@ fn pending(
     Ok(p)
 }
 
-/// Keeps a copy of the AppImage this version runs from, pinned by its digest, as the version
-/// to go back to; returns that pin.
-fn keep(dir: &Path, appimage: &Path, version: &str) -> Result<Pinned, String> {
+/// Keeps a copy of the AppImage this version started from, pinned by its digest, as the
+/// version to go back to; returns that pin. started is the digest hashed when this version
+/// started: an AppImage replaced since is not this version and is not kept under its name.
+fn keep(dir: &Path, appimage: &Path, version: &str, started: &str) -> Result<Pinned, String> {
     let bytes = fs::read(appimage).map_err(|e| format!("{}: {e}", appimage.display()))?;
     let pin = Pinned {
         version: version.into(),
         sha256: sha256(&bytes),
     };
+    if pin.sha256 != started {
+        return Err(format!(
+            "{} is not the AppImage this version ({version}) started from; restart the app before updating.",
+            appimage.display()
+        ));
+    }
     let path = kept_path(dir, &pin);
     private_dir(&dir.join("kept"))?;
     if fs::read(&path).map(|b| sha256(&b)).ok().as_deref() != Some(pin.sha256.as_str()) {
@@ -534,11 +591,13 @@ fn keep(dir: &Path, appimage: &Path, version: &str) -> Result<Pinned, String> {
     Ok(pin)
 }
 
-/// Replaces the AppImage with bytes in one step, executable by this user only.
+/// Replaces the AppImage with bytes in one step: a new file in the same folder, written and
+/// synced, with the AppImage's permissions, renamed over it, then the folder synced.
 fn replace(appimage: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let parent = appimage.parent().ok_or("The AppImage has no folder.")?;
+    let mode = fs::metadata(appimage).map_or(0o755, |m| m.permissions().mode() & 0o755);
     let mut nonce = [0u8; 8];
     getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
     let tmp = parent.join(format!(".pluxy-update-{}", crate::artifact::hex(&nonce)));
@@ -549,9 +608,11 @@ fn replace(appimage: &Path, bytes: &[u8]) -> Result<(), String> {
         .open(&tmp)
         .and_then(|mut f| {
             f.write_all(bytes)?;
+            f.set_permissions(fs::Permissions::from_mode(mode | 0o700))?;
             f.sync_all()
         })
-        .and_then(|_| fs::rename(&tmp, appimage));
+        .and_then(|_| fs::rename(&tmp, appimage))
+        .and_then(|_| fs::File::open(parent)?.sync_all());
     if let Err(e) = written {
         let _ = fs::remove_file(&tmp);
         return Err(format!("{}: {e}", appimage.display()));
@@ -560,52 +621,122 @@ fn replace(appimage: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// Puts the kept copy of the version an install came from back, if it still has its digest.
-fn restore(dir: &Path, p: &Pending) -> Option<String> {
-    let bytes = fs::read(kept_path(dir, &p.from)).ok();
-    let outcome = match bytes {
-        Some(b) if sha256(&b) == p.from.sha256 => replace(&p.appimage, &b).err(),
-        _ => Some(format!(
-            "the kept copy of {} is missing or changed",
-            p.from.version
-        )),
+/// The pending install is over either way.
+fn restore(dir: &Path, p: &Pending) -> Result<(), String> {
+    let kept = kept_path(dir, &p.from);
+    let outcome = match fs::read(&kept) {
+        Ok(b) if sha256(&b) == p.from.sha256 => replace(&p.appimage, &b),
+        Ok(_) => Err(format!("the kept copy {} changed", kept.display())),
+        Err(e) => Err(format!("the kept copy {}: {e}", kept.display())),
     };
     let _ = fs::remove_file(dir.join("pending.json"));
     outcome
 }
 
-/// After an install: shows it, then quits the app as Quit does; once it has quit, `supervise`
-/// starts the new version.
+/// After an install: the app stops as Quit stops it (its tools and its own core), keeping its
+/// profile lock and its tray; a thread of its own then starts the new version, hands it the
+/// lock, and waits for it to accept itself (`supervise`) before the app exits.
 fn restart_into(app: &AppHandle, restart: Restart) {
     set_task(app, |t| t.phase = "restarting");
-    *app.state::<App>().updater.restart.lock().unwrap() = Some(restart);
-    crate::quit(app);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let st = app.state::<App>();
+        // Tray actions refuse to start now, and closing the window no longer keeps the app.
+        st.quitting.store(true, Ordering::SeqCst);
+        crate::remember_window(&app);
+        #[cfg(target_os = "linux")]
+        st.confirmations.lock().unwrap().invalidate();
+        #[cfg(target_os = "linux")]
+        st.programs.stop_all();
+        st.conn.lock().unwrap().stop_core();
+        // Hidden, not closed: closing the last window would end the app before the wait does.
+        if let Some(w) = app.get_window(crate::WINDOW) {
+            let _ = w.hide();
+        }
+        let lock = app.try_state::<crate::instance::Instance>().and_then(|i| {
+            // No later launch is raised by this app any more; the lock stays held.
+            i.release();
+            i.lock_fd()
+        });
+        supervise(&restart, lock);
+        app.exit(0);
+    });
 }
 
-/// Runs in the quitting app, its tools and core already stopped and its profile lock dropped:
-/// starts the installed AppImage and waits for it to accept itself; if it ends or does not
-/// accept in time, puts the earlier version back and starts that.
-pub fn supervise(r: Restart) {
+/// Starts program with args, in a process group of its own, handing it the profile lock (the
+/// file descriptor stays open across exec, and `instance` adopts it). With after set, it starts
+/// once that process has ended.
+fn spawn_holding(
+    lock: Option<std::os::fd::RawFd>,
+    program: &Path,
+    args: &[OsString],
+    after: Option<i32>,
+) -> std::io::Result<std::process::Child> {
     use std::os::unix::process::CommandExt;
+    let mut c = match after {
+        Some(pid) => {
+            let mut c = std::process::Command::new("/bin/sh");
+            c.arg("-c")
+                .arg(r#"p=$1; a=$2; shift 2; while kill -0 "$p" 2>/dev/null; do sleep 0.2; done; exec "$a" "$@""#)
+                .arg("sh")
+                .arg(pid.to_string())
+                .arg(program)
+                .args(args);
+            c
+        }
+        None => {
+            let mut c = std::process::Command::new(program);
+            c.args(args);
+            c
+        }
+    };
+    c.process_group(0);
+    match lock {
+        Some(fd) => {
+            c.env(crate::instance::LOCK_FD_ENV, fd.to_string());
+            // SAFETY: fcntl is async-signal-safe; it only clears close-on-exec on the lock.
+            unsafe {
+                c.pre_exec(move || {
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+        None => {
+            c.env_remove(crate::instance::LOCK_FD_ENV);
+        }
+    }
+    c.spawn()
+}
+
+/// Starts the installed AppImage, holding the profile lock for it, and waits for it to accept
+/// itself; if it ends or does not accept in time, puts the earlier version back and starts that
+/// (or, if it cannot be put back, starts nothing and says where the kept copy is).
+fn supervise(r: &Restart, lock: Option<std::os::fd::RawFd>) {
     let receipt = r.dir.join("accepted.json");
     let _ = fs::remove_file(&receipt);
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let start = |path: &Path| {
-        std::process::Command::new(path)
-            .args(&args)
-            .process_group(0)
-            .spawn()
+    let p = &r.pending;
+    let accepted = || {
+        read_json::<Accepted>(&receipt)
+            .is_some_and(|a| a.nonce == p.nonce && a.version == p.to.version)
     };
-    let accepted = match start(&r.pending.appimage) {
+    let outcome = match spawn_holding(lock, &p.appimage, &args, None) {
         Ok(mut child) => {
             let deadline = Instant::now() + ACCEPT_WITHIN;
             loop {
-                if read_json::<Accepted>(&receipt).is_some_and(|a| {
-                    a.nonce == r.pending.nonce && a.version == r.pending.to.version
-                }) {
+                if accepted() {
                     break Ok(());
                 }
                 if let Ok(Some(status)) = child.try_wait() {
-                    break Err(format!("it ended ({status}) before accepting the update"));
+                    break if accepted() {
+                        Ok(())
+                    } else {
+                        Err(format!("it ended ({status}) before accepting the update"))
+                    };
                 }
                 if Instant::now() > deadline {
                     // SAFETY: kill has no memory preconditions; the group is the child's own.
@@ -622,19 +753,29 @@ pub fn supervise(r: Restart) {
         Err(e) => Err(format!("it could not be started: {e}")),
     };
     let _ = fs::remove_file(&receipt);
-    let Err(why) = accepted else {
+    let Err(why) = outcome else {
         return;
     };
-    eprintln!("pluxy-app: {} did not start: {why}", r.pending.to.version);
-    let p = &r.pending;
-    let detail = match restore(&r.dir, p) {
-        None => format!(
-            "{} did not start ({why}); {} was put back.",
-            p.to.version, p.from.version
+    eprintln!("pluxy-app: {} did not start: {why}", p.to.version);
+    let (detail, restored) = match restore(&r.dir, p) {
+        Ok(()) => (
+            format!(
+                "{} did not start ({why}); {} was put back.",
+                p.to.version, p.from.version
+            ),
+            true,
         ),
-        Some(e) => format!(
-            "{} did not start ({why}), and {} could not be put back: {e}. Install it again by hand.",
-            p.to.version, p.from.version
+        Err(e) => (
+            format!(
+                "{} did not start ({why}), and {} could not be put back: {e}. Nothing was started: \
+                 copy {} to {} to run {} again.",
+                p.to.version,
+                p.from.version,
+                kept_path(&r.dir, &p.from).display(),
+                p.appimage.display(),
+                p.from.version
+            ),
+            false,
         ),
     };
     let _ = write_json(
@@ -644,6 +785,9 @@ pub fn supervise(r: Restart) {
             detail,
         },
     );
+    if !restored {
+        return;
+    }
     // The earlier version's AppImage has the same contents as this one's: run without FUSE
     // (APPIMAGE_EXTRACT_AND_RUN) it would unpack into the folder this one's runtime, its parent,
     // deletes once this process ends. So it starts once that runtime has ended.
@@ -654,21 +798,13 @@ pub fn supervise(r: Restart) {
                 .map(|n| n.to_string_lossy().starts_with("appimage_extracted_"))
         })
         .unwrap_or(false);
-    let wait_for = if extracted {
+    let after = if extracted {
         // SAFETY: getppid has no preconditions.
         unsafe { libc::getppid() }
     } else {
         std::process::id() as i32
     };
-    let _ = std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(r#"p=$1; a=$2; shift 2; while kill -0 "$p" 2>/dev/null; do sleep 0.2; done; exec "$a" "$@""#)
-        .arg("sh")
-        .arg(wait_for.to_string())
-        .arg(&p.appimage)
-        .args(&args)
-        .process_group(0)
-        .spawn();
+    let _ = spawn_holding(lock, &p.appimage, &args, Some(after));
 }
 
 /// At startup, after the profile lock: the version an install started accepts itself once the
@@ -725,7 +861,8 @@ pub fn accept(app: &AppHandle) {
 }
 
 /// Rolls back to a version that ran here and was kept, by its digest, after a native
-/// confirmation. Returns once the confirmation shows.
+/// confirmation. Returns once the confirmation shows; until it is settled no update or other
+/// rollback can start.
 #[tauri::command]
 pub fn app_update_rollback(
     webview: Webview,
@@ -734,6 +871,7 @@ pub fn app_update_rollback(
 ) -> Result<(), String> {
     trusted(&webview)?;
     let app = webview.app_handle().clone();
+    gate(&app)?;
     let appimage = provenance(&app)?;
     let dir = dir(&app)?;
     let target = Pinned { version, sha256 };
@@ -754,10 +892,20 @@ pub fn app_update_rollback(
             target.version
         ));
     }
-    if app.state::<App>().updater.task.lock().unwrap().running() {
-        return Err("An update is already running.".into());
+    claim(
+        &app.state::<App>().updater.task,
+        Task {
+            phase: "confirming",
+            version: Some(target.version.clone()),
+            ..Task::default()
+        },
+    )?;
+    emit_task(&app);
+    let asked = confirm_rollback(app.clone(), appimage, dir, running, target);
+    if asked.is_err() {
+        set_task(&app, |t| *t = idle());
     }
-    confirm_rollback(app, appimage, dir, running, target)
+    asked
 }
 
 #[cfg(target_os = "linux")]
@@ -821,7 +969,7 @@ fn confirm_rollback(
             _ => false,
         };
         if !authorized {
-            emit(&app);
+            set_task(&app, |t| *t = idle());
             return;
         }
         match roll_back(&app, &appimage, &dir, &running, &target) {
@@ -854,7 +1002,12 @@ fn roll_back(
     running: &str,
     target: &Pinned,
 ) -> Result<Restart, String> {
-    // Checked again now that it was confirmed: the copy and the installed file.
+    // Still this rollback's task, and checked again now that it was confirmed: the trust, the
+    // installation, the kept copy.
+    if app.state::<App>().updater.task.lock().unwrap().phase != "confirming" {
+        return Err("The rollback is no longer waiting for its confirmation.".into());
+    }
+    gate(app)?;
     provenance(app)?;
     let bytes = fs::read(kept_path(dir, target)).map_err(|e| e.to_string())?;
     if sha256(&bytes) != target.sha256 || !is_appimage(&bytes) {
@@ -865,10 +1018,9 @@ fn roll_back(
     }
     set_task(app, |t| {
         t.phase = "installing";
-        t.version = Some(target.version.clone());
         t.error = None;
     });
-    let from = keep(dir, appimage, running)?;
+    let from = keep(dir, appimage, running, &started_from(app)?)?;
     let pending = pending(dir, "rollback", from, target.clone(), appimage)?;
     if let Err(e) = replace(appimage, &bytes) {
         let _ = fs::remove_file(dir.join("pending.json"));
@@ -883,6 +1035,13 @@ fn roll_back(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp(name: &str) -> PathBuf {
+        let tmp = std::env::temp_dir().join(format!("pluxy-updater-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        tmp
+    }
 
     #[test]
     fn only_a_type_2_appimage_header_counts() {
@@ -900,14 +1059,13 @@ mod tests {
 
     #[test]
     fn keeping_pins_the_running_appimage_and_keeps_three() {
-        let tmp = std::env::temp_dir().join(format!("pluxy-updater-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = temp("keep");
         let image = tmp.join("app.AppImage");
         let mut pins = vec![];
         for v in ["0.1.0", "0.2.0", "0.3.0", "0.4.0"] {
-            fs::write(&image, format!("AppImage {v}")).unwrap();
-            pins.push(keep(&tmp.join("updates"), &image, v).unwrap());
+            let b = format!("AppImage {v}");
+            fs::write(&image, &b).unwrap();
+            pins.push(keep(&tmp.join("updates"), &image, v, &sha256(b.as_bytes())).unwrap());
         }
         let h = history(&tmp.join("updates"));
         assert_eq!(h.kept, pins[1..].iter().rev().cloned().collect::<Vec<_>>());
@@ -921,30 +1079,102 @@ mod tests {
         fs::remove_dir_all(&tmp).unwrap();
     }
 
+    // An AppImage replaced after this version started is not kept under this version's name.
+    #[test]
+    fn keeping_refuses_an_appimage_this_version_did_not_start_from() {
+        let tmp = temp("keep-other");
+        let image = tmp.join("app.AppImage");
+        fs::write(&image, b"replaced since").unwrap();
+        let e = keep(
+            &tmp.join("updates"),
+            &image,
+            "0.1.0",
+            &sha256(b"started from"),
+        )
+        .unwrap_err();
+        assert!(e.contains("not the AppImage this version"), "{e}");
+        assert!(history(&tmp.join("updates")).kept.is_empty());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
     #[test]
     fn restore_puts_back_only_a_copy_with_its_pinned_digest() {
-        let tmp =
-            std::env::temp_dir().join(format!("pluxy-updater-restore-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = temp("restore");
         let dir = tmp.join("updates");
         let image = tmp.join("app.AppImage");
         fs::write(&image, b"old").unwrap();
-        let from = keep(&dir, &image, "0.1.0").unwrap();
+        let from = keep(&dir, &image, "0.1.0", &sha256(b"old")).unwrap();
         let to = Pinned {
             version: "0.2.0".into(),
             sha256: sha256(b"new"),
         };
         let p = pending(&dir, "update", from.clone(), to.clone(), &image).unwrap();
         fs::write(&image, b"new").unwrap();
-        assert_eq!(restore(&dir, &p), None);
+        restore(&dir, &p).unwrap();
         assert_eq!(fs::read(&image).unwrap(), b"old");
         assert!(!dir.join("pending.json").exists());
-        // A changed kept copy is not put back.
+        // A changed kept copy is not put back, and the message names it.
         fs::write(&image, b"new").unwrap();
         fs::write(kept_path(&dir, &from), b"changed").unwrap();
-        assert!(restore(&dir, &p).is_some());
+        let e = restore(&dir, &p).unwrap_err();
+        assert!(
+            e.contains(&kept_path(&dir, &from).display().to_string()),
+            "{e}"
+        );
         assert_eq!(fs::read(&image).unwrap(), b"new");
         fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // The replace keeps the AppImage's permissions and leaves no temporary file.
+    #[test]
+    fn replace_is_one_rename_with_the_old_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = temp("replace");
+        let image = tmp.join("app.AppImage");
+        fs::write(&image, b"old").unwrap();
+        fs::set_permissions(&image, fs::Permissions::from_mode(0o750)).unwrap();
+        replace(&image, b"new").unwrap();
+        assert_eq!(fs::read(&image).unwrap(), b"new");
+        assert_eq!(
+            fs::metadata(&image).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        assert_eq!(fs::read_dir(&tmp).unwrap().count(), 1);
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A rollback waiting for its confirmation holds the task: Update Now and another rollback
+    // are refused until it is settled.
+    #[test]
+    fn a_waiting_rollback_holds_the_task() {
+        let task = Mutex::new(idle());
+        claim(
+            &task,
+            Task {
+                phase: "confirming",
+                ..Task::default()
+            },
+        )
+        .unwrap();
+        for phase in ["downloading", "confirming"] {
+            let e = claim(
+                &task,
+                Task {
+                    phase,
+                    ..Task::default()
+                },
+            )
+            .unwrap_err();
+            assert!(e.contains("already running"), "{e}");
+        }
+        *task.lock().unwrap() = idle();
+        claim(
+            &task,
+            Task {
+                phase: "downloading",
+                ..Task::default()
+            },
+        )
+        .unwrap();
     }
 }
