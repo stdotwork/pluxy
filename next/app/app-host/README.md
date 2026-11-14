@@ -531,8 +531,17 @@ program's name) and `cwd`, and may name:
 - `environment`: `{"set": {NAME: value}, "unset": [NAME], "inherit": [NAME], "secrets": {NAME: <secret field>}}`,
   at most 64 names in each: variables set, session values removed, variables of the app's own
   environment passed on by name, and variables that get the secret of one of the launch's secret
-  fields (a reference field the router filled). Names are letters, digits and `_`; `PLUXY_*`,
-  `LD_*`, `APPIMAGE`, `APPDIR`, `ARGV0` and `OWD` can never be set, inherited or given a secret.
+  fields (a reference field the router filled). Names are letters, digits and `_`. Some can never
+  be set, inherited or given a secret: the app's own and its tests' (`PLUXY_*`), the AppImage
+  runtime's (`APPIMAGE`, `APPDIR`, `ARGV0`, `OWD`), and those that make the dynamic loader, the C
+  library, a shell or an interpreter load or run code (`LD_*`, `MALLOC_*`, `GCONV_PATH`,
+  `GLIBC_TUNABLES`, `LOCPATH`, `NLSPATH`, `HOSTALIASES`, `RES_OPTIONS`, `NODE_OPTIONS`, `BASH_ENV`,
+  `ENV`, `SHELLOPTS`, `BASHOPTS`, `PROMPT_COMMAND`, `PS4`, `PYTHONSTARTUP`, `PYTHONINSPECT`,
+  `PERL5OPT`, `PERL5DB`, `PERL5LIB`, `RUBYOPT`, `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`,
+  `JDK_JAVA_OPTIONS`), in any case. A name that looks like a credential (containing `TOKEN`,
+  `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `APIKEY` or `_KEY_`, ending in `_KEY`, or starting
+  `TAURI_SIGNING_`, in any case) cannot be inherited: such a value reaches a launch only as a vault
+  secret, through `secrets`. `SSH_AUTH_SOCK`, a socket path, can be inherited.
 
 The native confirmation shows the lifetime and each variable: its name, a set value, "inherited
 from the app's environment", "removed", or the secret's label and ID; never an inherited value or
@@ -574,9 +583,12 @@ started does not end with it.
   are taken out of `PATH`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. Then come the variables the launch
   inherits by name, those it sets, and its secrets, which the host resolves from the vault at the
   spawn: the tool that asked holds references only. No shell is run to read a login environment.
-- A process given a secret's value has its core file size limits set to zero, soft and hard, so
-  neither it nor any process it starts writes core files. Other launches get the limits the app
-  started with.
+- A process given a secret's value has its core file size limits set to 1, soft and hard, and so
+  does every process it starts: the kernel writes no core file for it and runs no core dump
+  handler. A limit of 0 would not do: with 0 the kernel still runs a `|` handler from
+  `/proc/sys/kernel/core_pattern`, and systemd-coredump records the crashed process's environment,
+  the secret included, in the journal. A kernel that treats 1 differently, or a handler started
+  otherwise, may record the environment again. Other launches get the limits the app started with.
 
 ### Detached and managed
 
@@ -604,11 +616,21 @@ update controls the runtimes its package started. While serving a call, a tool s
 | `restart` | the status once it runs again: stopped as above, then the same confirmed launch started again, unless its executable or cwd changed since it was confirmed (launch it again) or a secret it gets was removed |
 
 Another package's runtime is `not_found`, as one that never was. A package keeps at most eight
-runtimes, running or ended; the oldest ended one makes room. A runtime whose leader exits on its
+runtimes, running or ended (those reported `unknown` do not count); the oldest ended one that is
+not being restarted makes room. A runtime whose leader exits on its
 own has the rest of its group killed as it is reaped. The window's `program_status` lists the
-package's runtimes too. The app's quit stops every managed runtime (and starts none after);
-disabling or removing the package stops its runtimes, since nothing could control them then. A
-tool's idle stop, crash or swap stops none.
+package's runtimes too. The app's quit stops every managed runtime (and starts none after).
+Disabling or removing the package retires its runtimes, since nothing could control them then:
+each is stopped, its confirmed launch is dropped (enabling the package again does not bring it
+back: `restart` is refused, and a new launch needs a new confirmation), no runtime starts for the
+package until it is enabled again (a start or restart under way when it is disabled is stopped as
+it starts and refused), and a removed package's entries go once they have been reaped. A tool's
+idle stop, crash or swap stops none.
+
+A tool's `spawn` and `runtime` requests are refused once the tool is stopping, and unless it still
+runs its package's enabled, admitted release, as its own calls are. A spawn is refused, and starts
+nothing, once the call it serves is cancelled (its page closed, its consent revoked, the window
+closed, the call's ticket cancelled) or the tool cancels the request itself.
 
 If the app itself dies, the runtime's leader gets SIGTERM, but a descendant that ignores it or
 starts a session of its own lives on as an orphan: a process group and a parent-death signal are
@@ -617,16 +639,27 @@ folder holds `runtimes.json` (owner-only), naming the runtimes running; the next
 as `unknown` and never signals it: a process ID alone does not prove the process is still that
 runtime.
 
+### What a detached launch does not leave
+
+`setsid` gives a detached launch a session and process group of its own, but not a cgroup of its
+own: it stays in the app's. Stopping a systemd unit that runs the app with the default cgroup kill
+mode (or `systemd-oomd` acting on that cgroup) still ends it. Running detached launches in a
+transient systemd scope of their own is left to the launcher (P8h). And a process of the same user,
+a native tool among them, can read a launch's environment, its secrets included, in
+`/proc/<pid>/environ`; the runtimes' process IDs are reported to their package. Same-user isolation
+is not claimed (see [Secrets, references and the vault](#secrets-references-and-the-vault)).
+
 ### The app's own core files
 
 At its start the app lowers its own soft core file size limit to zero, keeping the hard limit: it
 holds the vault's secrets, and its tools, which inherit the limit, receive secret values on their
 pipes. A developer can raise it again for a running app (`prlimit --core=unlimited --pid <app>`).
 The app does not mark itself undumpable (`PR_SET_DUMPABLE`): that would also stop same-user
-debugging and crash reports, and a process of the same user is not kept out anyway. The limit
-covers core files the kernel writes; a core dump handler run by the kernel (a `|` pattern in
-`/proc/sys/kernel/core_pattern`) is told the limit and is trusted to keep to it, as
-systemd-coredump does.
+debugging and crash reports, and a process of the same user is not kept out anyway. With a soft
+limit of 0 the kernel writes no core file, but still runs a `|` core dump handler for the app
+(systemd-coredump keeps no core then, and records the app's environment in the journal). Unlike a
+launch given a secret, the app keeps the vault's secrets in its memory, not in its environment, so
+that record holds no secret.
 
 ## Secrets, references and the vault
 

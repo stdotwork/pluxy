@@ -11,14 +11,16 @@
 //!   variables and the key's label, never the key; the launcher asks the host to spawn it with a
 //!   frame naming nothing but the call. The agent runs with exactly the confirmed argv and cwd, in
 //!   a session and process group of its own that is not the app's child, with only /dev/null open
-//!   on 0-2, no core files, and an environment of the selected session values, the variables asked
+//!   on 0-2, core limits of 1 (no core file, no core dump handler), and an environment of the selected session values, the variables asked
 //!   for and the key, and none of the app's other variables (the canaries). The launcher's record of
-//!   what it received holds a reference and never the key;
+//!   what it received holds a reference and never the key; its second spawn for the same call is
+//!   refused;
 //! - crash: the launcher's crash leaves the agent running;
 //! - managed: two managed runtimes, each in a process group of its own (not the launcher's), the
 //!   app's child, with the app's core hard limit and no key or inherited variable;
 //! - restart: after the launcher crashes and starts again, it lists both runtimes and finds the
-//!   first running as it was; pluxy/other cannot stop it; the launcher's restart replaces only that
+//!   first running as it was; a spawn for a call that confirmed no launch is refused; pluxy/other
+//!   cannot stop it (`not_found`); the launcher's restart replaces only that
 //!   runtime's group (leader and member), and its stop ends only that group: the other runtime, the
 //!   agent and the launcher itself run on;
 //! - idle: once the launcher stopped when idle, the agent and the other runtime run on.
@@ -239,7 +241,7 @@ fn check_environment(
 }
 
 /// The agent's process: in a session and group of its own, not the app's child, with only
-/// /dev/null on 0-2 and no core files.
+/// /dev/null on 0-2 and core limits of 1 (no core file, no core dump handler).
 fn check_detached(r: &Value) -> Result<(), String> {
     let pid = r["pid"].as_u64().unwrap_or(0);
     require(
@@ -263,9 +265,9 @@ fn check_detached(r: &Value) -> Result<(), String> {
         ),
     )?;
     require(
-        r["core"] == json!([0, 0]),
+        r["core"] == json!([1, 1]),
         format!(
-            "the agent holding a key may write core files: {}",
+            "the agent holding a key may write core files or run the core dump handler: {}",
             r["core"]
         ),
     )
@@ -338,6 +340,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 json!({
                     "executable": agent_path, "argv": argv, "cwd": work,
                     "lifetime": "detached", "key": secret, "record": at("launcher-record"),
+                    "again": true,
                     "environment": {
                         "set": {"FIXTURE_SET": "set-value"},
                         "inherit": ["FIXTURE_INHERIT"],
@@ -403,6 +406,11 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             require(
                 !v.to_string().contains(&key),
                 "the launch's answer holds the key",
+            )?;
+            // A second spawn for the same call is refused: a confirmation spawns once.
+            require(
+                v["again"]["error"]["code"] == "permission",
+                format!("the second spawn for the same call: {}", v["again"]),
             )?;
             out["detached_confirmation"] = json!(text.contains("detached"));
             Ok(())
@@ -512,6 +520,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             // Its second crash in a row: the backoff has doubled.
             after_backoff(main)?;
+            // A spawn for a call that confirmed no launch (a read) is refused.
+            let r = call(main, LAUNCHER, "runtime", json!({"op": "spawn"}))?;
+            require(
+                r["ok"] == true && r["value"]["answer"]["error"]["code"] == "permission",
+                format!("a spawn for a call that confirmed no launch: {r}"),
+            )?;
             let listed = runtime(main, LAUNCHER, "list", "")?;
             let list = listed["output"]["runtimes"].to_string();
             require(
@@ -531,7 +545,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 json!({"op": "stop", "runtime": ids[0]}),
             )?;
             require(
-                r["ok"] == true && r["value"]["answer"].get("error").is_some(),
+                r["ok"] == true && r["value"]["answer"]["error"]["code"] == "not_found",
                 format!("pluxy/other's stop of the launcher's runtime: {r}"),
             )?;
             std::thread::sleep(Duration::from_millis(500));

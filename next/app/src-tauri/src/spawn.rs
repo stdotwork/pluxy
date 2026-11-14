@@ -8,7 +8,8 @@
 //! tool pipe, vault file or socket). Its environment is the launch environment (`environment`):
 //! selected values of the app's own environment as it started (`Snapshot`), the variables the
 //! confirmed launch set, inherited by name or removed, and the secrets the host resolved for it.
-//! A process given a secret's value cannot write core files, nor can its descendants.
+//! A process given a secret's value has core file size limits of 1, so the kernel neither writes
+//! its core nor runs a core dump handler for it, nor for its descendants.
 //!
 //! A **detached** launch (an agent, a terminal) leaves the app at once: a wrapper process starts
 //! it in a session and process group of its own, with no parent-death signal, and exits, and the
@@ -23,8 +24,9 @@
 //! at any release or generation, through `runtime` frames: status, list, stop and restart. Stop
 //! sends SIGTERM to its group and SIGKILL after five seconds, then reaps it; restart starts the
 //! same confirmed launch again, unless its executable changed since it was confirmed. The app's
-//! quit, and the package's disable or removal, stop its runtimes; a tool's idle stop, crash or
-//! swap does not.
+//! quit stops its runtimes; the package's disable or removal retires them (stopped, their
+//! launches dropped, none started until it is enabled again); a tool's idle stop, crash or swap
+//! does neither.
 //!
 //! If the app itself dies, the runtime's leader gets SIGTERM, but a descendant that ignores it or
 //! started a session of its own lives on as an orphan: a process group and a parent-death signal
@@ -87,8 +89,37 @@ pub const BASE: &[&str] = &[
 ];
 /// Names a launch may never set, inherit or receive a secret in: the app's own and its tests'
 /// (`PLUXY_`), the dynamic loader's (`LD_`) and the AppImage runtime's.
-const NEVER_PREFIX: &[&str] = &["PLUXY_", "LD_"];
-const NEVER: &[&str] = &["APPIMAGE", "APPDIR", "ARGV0", "OWD"];
+const NEVER_PREFIX: &[&str] = &["PLUXY_", "LD_", "MALLOC_"];
+/// And names that make the dynamic loader, the C library or an interpreter load or run code of
+/// their own, like `LD_*`.
+const NEVER: &[&str] = &[
+    "APPIMAGE",
+    "APPDIR",
+    "ARGV0",
+    "OWD",
+    "GCONV_PATH",
+    "GLIBC_TUNABLES",
+    "LOCPATH",
+    "NLSPATH",
+    "HOSTALIASES",
+    "RES_OPTIONS",
+    "NODE_OPTIONS",
+    "BASH_ENV",
+    "ENV",
+    "SHELLOPTS",
+    "BASHOPTS",
+    "PROMPT_COMMAND",
+    "PS4",
+    "PYTHONSTARTUP",
+    "PYTHONINSPECT",
+    "PERL5OPT",
+    "PERL5DB",
+    "PERL5LIB",
+    "RUBYOPT",
+    "JAVA_TOOL_OPTIONS",
+    "_JAVA_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+];
 /// At most this many names in each of set, unset, inherit and secrets.
 const MAX_NAMES: usize = 64;
 const MAX_NAME: usize = 128;
@@ -221,10 +252,31 @@ fn valid_name(n: &str) -> Result<(), String> {
 
 fn allowed_name(n: &str) -> Result<(), String> {
     valid_name(n)?;
-    if NEVER.contains(&n) || NEVER_PREFIX.iter().any(|p| n.starts_with(p)) {
+    let upper = n.to_ascii_uppercase();
+    if NEVER.contains(&upper.as_str()) || NEVER_PREFIX.iter().any(|p| upper.starts_with(p)) {
         return Err(format!("a launch may not set or inherit {n}"));
     }
     Ok(())
+}
+
+/// Whether a variable named n likely holds a credential (case-insensitive: `*TOKEN*`, `*SECRET*`,
+/// `*PASSWORD*`, `*PASSWD*`, `*CREDENTIAL*`, `*_KEY`, `*_KEY_*`, `*APIKEY*`, `TAURI_SIGNING_*`): a
+/// launch gets such a value only as a vault secret (`secrets`), never inherited by name.
+fn credential_like(n: &str) -> bool {
+    let u = n.to_ascii_uppercase();
+    [
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "APIKEY",
+        "_KEY_",
+    ]
+    .iter()
+    .any(|w| u.contains(w))
+        || u.ends_with("_KEY")
+        || u.starts_with("TAURI_SIGNING_")
 }
 
 /// The lifetime and environment request of a launch's input; secret_field says which of its
@@ -307,6 +359,11 @@ pub fn parse(
     }
     for n in r.inherit.iter().chain(r.set.keys()).chain(r.secrets.keys()) {
         allowed_name(n)?;
+    }
+    if let Some(n) = r.inherit.iter().find(|n| credential_like(n)) {
+        return Err(format!(
+            "a launch may not inherit {n}, which looks like a credential: pass it as a vault secret (environment secrets)"
+        ));
     }
     for (n, v) in &r.set {
         if v.len() > MAX_VALUE || v.contains('\0') {
@@ -462,18 +519,22 @@ fn is_script(f: &File) -> bool {
 
 /// The command that runs launch l with environment env: managed (in a process group of its own,
 /// SIGTERM when its parent dies) or detached (a wrapper that starts it in a session of its own
-/// and exits). With secrets given, it and its descendants cannot write core files; otherwise it
-/// gets the app's starting limits back.
+/// and exits). With secrets given, its core file size limits are 1 (soft and hard), inherited by
+/// its descendants: no core file and no core dump handler; otherwise it gets the app's starting
+/// limits back.
 fn command(l: &Launch, env: Vec<(String, OsString)>, holds_secrets: bool) -> Command {
     let exe = l.opened.executable();
     let exe_fd = exe.as_raw_fd();
     let cwd_fd = l.opened.cwd().as_raw_fd();
     let script = is_script(exe);
     let detached = l.lifetime == Lifetime::Detached;
+    // 1, not 0: with 0 the kernel still runs a `|` core dump handler (systemd-coredump), which
+    // records the process's environment, the secret included, in the journal; with 1 it runs
+    // none and writes no file.
     let core = if holds_secrets {
         libc::rlimit {
-            rlim_cur: 0,
-            rlim_max: 0,
+            rlim_cur: 1,
+            rlim_max: 1,
         }
     } else {
         snapshot().core
@@ -643,8 +704,30 @@ impl Entry {
 
 type SecretValue = dyn Fn(&str) -> Option<String> + Send + Sync;
 
+/// The runtimes, and the packages closed to them: disabled (false) or removed (true). A closed
+/// package's runtimes are stopped and their launches dropped, and none starts for it until it is
+/// enabled again (`Runtimes::reopen`).
+#[derive(Default)]
+struct Registry {
+    entries: Vec<Entry>,
+    closed: BTreeMap<String, bool>,
+}
+
+impl std::ops::Deref for Registry {
+    type Target = Vec<Entry>;
+    fn deref(&self) -> &Vec<Entry> {
+        &self.entries
+    }
+}
+
+impl std::ops::DerefMut for Registry {
+    fn deref_mut(&mut self) -> &mut Vec<Entry> {
+        &mut self.entries
+    }
+}
+
 struct Shared {
-    list: Mutex<Vec<Entry>>,
+    list: Mutex<Registry>,
     changed: Condvar,
     file: Option<PathBuf>,
     value: Box<SecretValue>,
@@ -690,7 +773,10 @@ impl Runtimes {
             }
         }
         let r = Runtimes(Arc::new(Shared {
-            list: Mutex::new(list),
+            list: Mutex::new(Registry {
+                entries: list,
+                closed: BTreeMap::new(),
+            }),
             changed: Condvar::new(),
             file,
             value,
@@ -705,26 +791,26 @@ impl Runtimes {
 
     /// Starts managed launch l for package; its runtime ID and process ID.
     pub fn start(&self, package: &str, l: Launch) -> Result<Value, String> {
-        if self.0.quitting.load(Ordering::SeqCst) {
-            return Err("the app is quitting".into());
-        }
+        let id = random_id();
+        let launch = Arc::new(l);
         {
             let mut list = self.0.list.lock().unwrap();
-            let mine = list.iter().filter(|e| e.package == package).count();
+            self.0.open(&list, package)?;
+            // Runtimes left by an earlier run of the app (unknown) take no room.
+            let mine = list
+                .iter()
+                .filter(|e| e.package == package && e.state != State::Unknown)
+                .count();
             if mine >= MAX_RUNTIMES {
+                // Only an ended one nothing is restarting makes room.
                 let oldest = list
                     .iter()
-                    .position(|e| e.package == package && e.state == State::Exited)
+                    .position(|e| e.package == package && e.state == State::Exited && !e.busy)
                     .ok_or(format!(
                         "{package} has {MAX_RUNTIMES} runtimes running already"
                     ))?;
                 list.remove(oldest);
             }
-        }
-        let id = random_id();
-        let launch = Arc::new(l);
-        {
-            let mut list = self.0.list.lock().unwrap();
             list.push(Entry {
                 id: id.clone(),
                 package: package.into(),
@@ -741,21 +827,30 @@ impl Runtimes {
                 launch: Some(Arc::clone(&launch)),
             });
         }
-        let r = self.run(&id, &launch);
+        let r = self.run(package, &id, &launch);
         let mut list = self.0.list.lock().unwrap();
-        match r {
-            Ok(()) => {
-                let e = list
-                    .iter_mut()
-                    .find(|e| e.id == id)
-                    .expect("the new runtime");
+        let started = r.and_then(|()| {
+            list.iter_mut()
+                .find(|e| e.id == id)
+                .ok_or_else(|| format!("{package}'s runtime was retired as it started"))
+        });
+        match started {
+            Ok(e) => {
                 e.busy = false;
                 let v = e.view();
                 self.0.changed.notify_all();
                 Ok(json!({"lifetime": "managed", "runtime": id, "pid": v["pid"]}))
             }
             Err(e) => {
-                list.retain(|x| x.id != id);
+                // Not started, or stopped again as it started: no entry is left for it once
+                // its supervisor has reaped it.
+                if let Some(x) = list.iter_mut().find(|x| x.id == id) {
+                    x.busy = false;
+                    x.launch = None;
+                    if x.state == State::Exited {
+                        list.retain(|x| x.id != id);
+                    }
+                }
                 Err(e)
             }
         }
@@ -763,10 +858,13 @@ impl Runtimes {
 
     /// Starts runtime id's launch on a supervisor thread of its own, which stays until it has
     /// been reaped; returns once it runs (the entry is Running with its process ID).
-    fn run(&self, id: &str, l: &Arc<Launch>) -> Result<(), String> {
+    /// It is refused when package is closed or the app is quitting, both before it starts and as
+    /// it runs (then it is stopped at once).
+    fn run(&self, package: &str, id: &str, l: &Arc<Launch>) -> Result<(), String> {
         l.opened.recheck().map_err(|e| {
             format!("{e}; its executable or cwd changed since it was confirmed: launch it again")
         })?;
+        self.0.open(&self.0.list.lock().unwrap(), package)?;
         let secrets = resolve(l, &*self.0.value)?;
         let env = environment(snapshot(), &l.request, &secrets);
         let token = {
@@ -776,6 +874,7 @@ impl Runtimes {
         };
         let (tx, rx) = std::sync::mpsc::channel();
         let (shared, launch, rid) = (Arc::clone(&self.0), Arc::clone(l), id.to_string());
+        let package = package.to_string();
         let holds = !secrets.is_empty();
         drop(secrets);
         std::thread::Builder::new()
@@ -787,19 +886,25 @@ impl Runtimes {
                 match child {
                     Ok(c) => {
                         let pid = c.id();
-                        {
+                        let refused = {
                             let mut list = shared.list.lock().unwrap();
+                            // Closed or quitting while it started: it is stopped at once.
+                            let refused = shared.open(&list, &package).err();
                             if let Some(e) = list.iter_mut().find(|e| e.id == rid) {
                                 e.state = State::Running;
                                 e.pid = pid;
                                 e.started = now_ms();
                                 e.token = token;
-                                e.stop = false;
+                                e.stop = refused.is_some();
                                 e.exit = None;
+                                if refused.is_some() {
+                                    e.state = State::Stopping;
+                                }
                             }
                             shared.save(&list);
-                        }
-                        let _ = tx.send(Ok(()));
+                            refused
+                        };
+                        let _ = tx.send(refused.map_or(Ok(()), Err));
                         supervise(&shared, &rid, token, c);
                     }
                     Err(e) => {
@@ -813,7 +918,7 @@ impl Runtimes {
     }
 
     fn find<'a>(
-        list: &'a mut MutexGuard<'_, Vec<Entry>>,
+        list: &'a mut MutexGuard<'_, Registry>,
         package: &str,
         id: &str,
     ) -> Result<&'a mut Entry, String> {
@@ -882,8 +987,11 @@ impl Runtimes {
         let launch = {
             let mut list = self.0.list.lock().unwrap();
             let e = Self::find(&mut list, package, id)?;
-            let l = e.launch.clone().ok_or_else(|| {
+            let unknown = e.state == State::Unknown;
+            let l = e.launch.clone().ok_or_else(|| if unknown {
                 format!("{id} was started before the app last stopped without stopping it; the app no longer controls it")
+            } else {
+                format!("{id}'s launch was retired when {package} was disabled or removed, or it failed to start: launch it again")
             })?;
             if e.busy {
                 return Err(format!("{id} is being started or restarted"));
@@ -891,12 +999,9 @@ impl Runtimes {
             e.busy = true;
             l
         };
-        let r = self.end(package, id).and_then(|_| {
-            if self.0.quitting.load(Ordering::SeqCst) {
-                return Err("the app is quitting".into());
-            }
-            self.run(id, &launch)
-        });
+        let r = self
+            .end(package, id)
+            .and_then(|_| self.run(package, id, &launch));
         let mut list = self.0.list.lock().unwrap();
         let e = Self::find(&mut list, package, id)?;
         e.busy = false;
@@ -930,9 +1035,34 @@ impl Runtimes {
         }
     }
 
-    /// Stops package's runtimes: it was disabled or removed, so nothing could control them.
-    pub fn stop_package(&self, package: &str) {
-        self.stop_where(|e| e.package == package);
+    /// Closes package: it was disabled, or removed. Its runtimes are told to stop (their
+    /// supervisors end them within the stop grace; this does not wait) and their launches are
+    /// dropped, so none can be restarted, even once it is enabled again; a removed package's
+    /// entries go once they have been reaped. None starts for it until `reopen`.
+    pub fn close(&self, package: &str, removed: bool) {
+        let mut list = self.0.list.lock().unwrap();
+        list.closed.insert(package.to_string(), removed);
+        for e in list.iter_mut().filter(|e| e.package == package) {
+            e.launch = None;
+            if e.state == State::Running {
+                e.stop = true;
+                e.state = State::Stopping;
+            }
+        }
+        if removed {
+            list.retain(|e| {
+                e.package != package
+                    || matches!(e.state, State::Running | State::Stopping)
+                    || e.busy
+            });
+        }
+        self.0.save(&list);
+        self.0.changed.notify_all();
+    }
+
+    /// Opens package again: it is enabled. Its earlier launches stay dropped.
+    pub fn reopen(&self, package: &str) {
+        self.0.list.lock().unwrap().closed.remove(package);
     }
 
     /// Stops every runtime the app owns, at its quit; none starts after. Detached launches are
@@ -944,6 +1074,19 @@ impl Runtimes {
 }
 
 impl Shared {
+    /// Refused when package is closed or the app is quitting.
+    fn open(&self, list: &Registry, package: &str) -> Result<(), String> {
+        if self.quitting.load(Ordering::SeqCst) {
+            return Err("the app is quitting".into());
+        }
+        if list.closed.contains_key(package) {
+            return Err(format!(
+                "{package} was disabled or removed: none of its runtimes starts"
+            ));
+        }
+        Ok(())
+    }
+
     /// Writes the runtimes running (or stopping) to the registry's file, owner-only.
     fn save(&self, list: &[Entry]) {
         let Some(f) = &self.file else {
@@ -1009,10 +1152,17 @@ fn supervise(shared: &Shared, id: &str, token: u64, mut child: Child) {
         .map(|s| s.to_string())
         .unwrap_or_else(|e| e.to_string());
     let mut list = shared.list.lock().unwrap();
+    let removed = list.closed.clone();
+    let mut gone = false;
     if let Some(e) = list.iter_mut().find(|e| e.id == id && e.token == token) {
         e.state = State::Exited;
         e.stop = false;
         e.exit = Some(status);
+        gone = !e.busy && removed.get(&e.package) == Some(&true);
+    }
+    // Its package was removed: nothing of it stays.
+    if gone {
+        list.retain(|e| e.id != id);
     }
     shared.save(&list);
     shared.changed.notify_all();

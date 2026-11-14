@@ -613,6 +613,23 @@ impl Catalog {
         ))
     }
 
+    /// Refused unless caller's run (its release digest and generation) is still its package's
+    /// enabled, admitted release: a tool's spawn and runtime requests are refused then, as its
+    /// own calls are (`native_grant`).
+    pub fn current_run(
+        &self,
+        (caller, sha256, generation): (&str, &str, u64),
+        roots: &dyn Roots,
+    ) -> Result<(), Refused> {
+        let (c, _) = self.admitted_record(caller, roots).map_err(forbidden)?;
+        if c.sha256 != sha256 || c.installed_at != generation {
+            return Err(forbidden(format!(
+                "{caller} changed since this run of it started: its requests are refused"
+            )));
+        }
+        Ok(())
+    }
+
     /// Package id as native confirmations name a page's requester: a native tool by its admitted
     /// record, a web package by its source, digest and signer (or as Unverified).
     #[cfg(target_os = "linux")]

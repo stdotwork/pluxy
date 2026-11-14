@@ -1866,3 +1866,56 @@ fn a_start_whose_journals_cannot_be_read_fails() {
     assert!(stub.frames.lock().unwrap().is_empty());
     h.stop_all();
 }
+
+#[test]
+fn a_spawn_request_reaches_the_spawner_with_the_served_calls_cancel_and_not_after_its_end() {
+    let h = Arc::new(host(Value::Null));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let s = Arc::clone(&seen);
+    h.set_spawner(Arc::new(
+        move |_tool: &Hop, _c: &Arc<Context>, frame: &Value, cancel: &Cancel| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while frame["block"] == true && !cancel.is_set() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            s.lock()
+                .unwrap()
+                .push((frame["type"].clone(), cancel.is_set()));
+            Err(fail("cancelled", "cancelled"))
+        },
+    ));
+    // The control: a request for the call it serves reaches the spawner, not cancelled.
+    let a = relay(
+        &h,
+        json!({"package": "x", "op": "y", "input": {}, "extra": {"type": "spawn"}}),
+    );
+    assert_eq!(a["answer"]["error"]["code"], "cancelled", "{a}");
+    assert_eq!(seen.lock().unwrap().clone(), vec![(json!("spawn"), false)]);
+    // A cancel of the call it serves reaches the request under way.
+    let h2 = Arc::clone(&h);
+    let t = std::thread::spawn(move || {
+        h2.call(
+            ID,
+            "relay",
+            json!({"package": "x", "op": "y", "input": {},
+                "extra": {"type": "spawn", "block": true}}),
+            Some("t-spawn"),
+        )
+    });
+    until("the blocked spawn request", 10, || {
+        h.status(ID).leases > 0 && seen.lock().unwrap().len() == 1
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    h.cancel("t-spawn").unwrap();
+    let _ = t.join();
+    let s = seen.lock().unwrap().clone();
+    assert_eq!(s.get(1), Some(&(json!("spawn"), true)), "{s:?}");
+    // A request for a call it no longer serves never reaches the spawner.
+    let a = relay(
+        &h,
+        json!({"package": "x", "op": "y", "input": {}, "for": "c-gone",
+            "extra": {"type": "runtime"}}),
+    );
+    assert_eq!(a["answer"]["error"]["code"], "permission", "{a}");
+    assert_eq!(seen.lock().unwrap().len(), 2);
+}

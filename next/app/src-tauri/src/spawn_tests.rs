@@ -135,9 +135,31 @@ fn a_launch_request_is_checked_and_its_review_shows_no_value_it_must_not() {
         json!({"environment": {"set": {"A": "x"}, "inherit": ["A"]}}),
         json!({"environment": {"secrets": {"A": "note"}}}),
         json!({"environment": {"secrets": {"PLUXY_KEY": "key"}}}),
+        // Credentials go through the vault's secrets, never inherited by name.
+        json!({"environment": {"inherit": ["GITHUB_TOKEN"]}}),
+        json!({"environment": {"inherit": ["anthropic_api_key"]}}),
+        json!({"environment": {"inherit": ["TAURI_SIGNING_PRIVATE_KEY"]}}),
+        json!({"environment": {"inherit": ["DB_PASSWORD"]}}),
+        json!({"environment": {"inherit": ["CLIENT_SECRET"]}}),
+        json!({"environment": {"inherit": ["AWS_SECRET_ACCESS_KEY"]}}),
+        // Loader- and interpreter-startup injection, like LD_*.
+        json!({"environment": {"set": {"NODE_OPTIONS": "--require /x"}}}),
+        json!({"environment": {"set": {"GLIBC_TUNABLES": "x"}}}),
+        json!({"environment": {"set": {"GCONV_PATH": "/x"}}}),
+        json!({"environment": {"set": {"BASH_ENV": "/x"}}}),
+        json!({"environment": {"set": {"ENV": "/x"}}}),
+        json!({"environment": {"inherit": ["PYTHONSTARTUP"]}}),
+        json!({"environment": {"inherit": ["PERL5OPT"]}}),
     ] {
         assert!(parse(&bad, &secret_field).is_err(), "{bad} was taken");
     }
+    // A socket path agents need for git is inherited by name; so is a client's config folder.
+    let (_, ok_names) = parse(
+        &json!({"environment": {"inherit": ["SSH_AUTH_SOCK", "CODEX_HOME"]}}),
+        &secret_field,
+    )
+    .unwrap();
+    assert_eq!(ok_names.inherit, vec!["CODEX_HOME", "SSH_AUTH_SOCK"]);
     // Names, set values and the secret's label; never an inherited value or a secret's.
     let review = r.review(&|f| format!("label for {f}"));
     let text = format!("{review:?}");
@@ -254,8 +276,8 @@ fn a_detached_launch_leaves_the_app_with_only_what_it_was_given() {
         assert_eq!(r["env"]["FIXTURE_SET"], "set");
         assert_eq!(
             r["core"],
-            json!([0, 0]),
-            "a key holder may write core files"
+            json!([1, 1]),
+            "a key holder may write core files, or run the kernel's core dump handler"
         );
         for (k, _) in r["env"].as_object().unwrap() {
             assert!(
@@ -469,4 +491,142 @@ fn a_crashed_host_leaves_the_documented_orphans_and_its_next_start_does_not_sign
     if let Err(e) = r {
         std::panic::resume_unwind(e);
     }
+}
+
+/// An opened launch whose recheck waits until the test lets it go: a restart held between its
+/// stop and its new start.
+struct Gated {
+    plain: Plain,
+    gate: Mutex<std::sync::mpsc::Receiver<()>>,
+    held: std::sync::mpsc::Sender<()>,
+}
+
+impl Opened for Gated {
+    fn executable(&self) -> &File {
+        &self.plain.executable
+    }
+    fn cwd(&self) -> &File {
+        &self.plain.cwd
+    }
+    fn recheck(&self) -> Result<(), String> {
+        let _ = self.held.send(());
+        let _ = self
+            .gate
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10));
+        Ok(())
+    }
+}
+
+#[test]
+fn a_disabled_or_removed_packages_runtimes_are_retired_and_never_start_again() {
+    let dir = folder("closed");
+    let rt = Arc::new(Runtimes::open(None, Box::new(no_secret)));
+    let (ra, rb) = (dir.join("a"), dir.join("b"));
+    let a = rt
+        .start("pluxy/one", agent(&dir, &ra, &[], Lifetime::Managed))
+        .unwrap();
+    let ida = a["runtime"].as_str().unwrap().to_string();
+    let x = record(&ra, 0);
+    // A restart held between its stop and its new start, while the package is disabled.
+    let (release, gate) = std::sync::mpsc::channel();
+    let (held, holding) = std::sync::mpsc::channel();
+    let mut gated = agent(&dir, &rb, &[], Lifetime::Managed);
+    gated.opened = Box::new(Gated {
+        plain: Plain {
+            executable: File::open(std::env::current_exe().unwrap()).unwrap(),
+            cwd: File::open(&dir).unwrap(),
+        },
+        gate: Mutex::new(gate),
+        held,
+    });
+    let _ = release.send(());
+    let b = rt.start("pluxy/one", gated).unwrap();
+    let idb = b["runtime"].as_str().unwrap().to_string();
+    holding.recv().unwrap();
+    let y = record(&rb, 0);
+    let mut all = vec![
+        pid(&x, "pid"),
+        pid(&x, "child"),
+        pid(&y, "pid"),
+        pid(&y, "child"),
+    ];
+    let checks = || {
+        let racer = {
+            let (rt, idb) = (Arc::clone(&rt), idb.clone());
+            std::thread::spawn(move || rt.restart("pluxy/one", &idb))
+        };
+        holding.recv().unwrap();
+        rt.close("pluxy/one", false);
+        let _ = release.send(());
+        let r = racer.join().unwrap();
+        assert!(
+            r.is_err(),
+            "a restart racing the disable started again: {r:?}"
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        if let Ok(again) = std::fs::read(&rb) {
+            let again: Value = serde_json::from_slice(&again).unwrap_or(Value::Null);
+            all.extend([pid(&again, "pid"), pid(&again, "child")]);
+            assert!(
+                pid(&again, "pid") == pid(&y, "pid") || ended(pid(&again, "pid"), &rb),
+                "the raced restart left a runtime running"
+            );
+        }
+        // Disabled: both end, and neither starts again, nor does a new one.
+        assert!(ended(pid(&x, "pid"), &ra) && ended(pid(&x, "child"), &ra));
+        assert!(ended(pid(&y, "pid"), &rb) && ended(pid(&y, "child"), &rb));
+        assert!(rt.restart("pluxy/one", &ida).is_err());
+        assert!(rt
+            .start(
+                "pluxy/one",
+                agent(&dir, &dir.join("c"), &[], Lifetime::Managed)
+            )
+            .is_err());
+        // Enabled again: the old launches stay retired (a new launch is confirmed afresh).
+        rt.reopen("pluxy/one");
+        assert!(
+            rt.restart("pluxy/one", &ida).is_err(),
+            "an old launch restarted after re-enable"
+        );
+        assert_eq!(rt.status("pluxy/one", &ida).unwrap()["state"], "exited");
+        // Removed: its entries go.
+        rt.close("pluxy/one", true);
+        assert!(rt.list("pluxy/one").is_empty());
+    };
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(checks));
+    let _ = release.send(());
+    rt.stop_all();
+    clean(&all, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Err(e) = r {
+        std::panic::resume_unwind(e);
+    }
+}
+
+#[test]
+fn unknown_runtimes_do_not_fill_a_packages_room() {
+    let dir = folder("unknown");
+    let file = dir.join("runtimes.json");
+    let left: Vec<Value> = (0..MAX_RUNTIMES)
+        .map(|i| {
+            json!({"runtime": format!("rt-{i}"), "package": "pluxy/one", "pid": 0,
+            "executable": "/x", "argv": [], "started": 0})
+        })
+        .collect();
+    std::fs::write(&file, json!(left).to_string()).unwrap();
+    let rt = Runtimes::open(Some(file), Box::new(no_secret));
+    assert_eq!(rt.list("pluxy/one").len(), MAX_RUNTIMES);
+    let rec = dir.join("a");
+    let r = rt.start("pluxy/one", agent(&dir, &rec, &[], Lifetime::Managed));
+    let mut pids = vec![];
+    if r.is_ok() {
+        let x = record(&rec, 0);
+        pids = vec![pid(&x, "pid"), pid(&x, "child")];
+    }
+    rt.stop_all();
+    clean(&pids, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(r.is_ok(), "{r:?}");
 }

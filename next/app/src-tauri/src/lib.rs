@@ -1335,18 +1335,24 @@ fn device_changed_as(
     stop_tool: bool,
 ) -> Result<device::View, String> {
     let st = app.state::<App>();
-    let (labels, view, mut left, gone) = {
+    let (labels, view, mut left) = {
         let mut catalog = st.device.lock().unwrap();
         f(&mut catalog)?;
-        // Disabled or removed: nothing could control its managed runtimes any more.
-        let gone = catalog.get(id).is_none_or(|p| !p.enabled);
+        // Disabled or removed: nothing could control its managed runtimes any more. They are
+        // retired under the catalog's lock, so a later enable reopens it only after this.
+        #[cfg(target_os = "linux")]
+        match catalog.get(id) {
+            None => st.runtimes.close(id, true),
+            Some(p) if !p.enabled => st.runtimes.close(id, false),
+            Some(_) => st.runtimes.reopen(id),
+        }
         let mut pages = st.pages.lock().unwrap();
         let labels = pages.device_labels(id);
         for l in &labels {
             pages.unbind(l);
         }
         let left: Vec<String> = catalog.take_cleanup().into_iter().collect();
-        (labels, device_view(&st, &catalog), left, gone)
+        (labels, device_view(&st, &catalog), left)
     };
     left.extend(close_webviews(app, labels));
     // Its registrations end with any change, a swap too: its jobs, as consumer or producer, are
@@ -1359,14 +1365,8 @@ fn device_changed_as(
     if stop_tool {
         st.programs.stop(id);
     }
-    // Off this thread, which may be the main one: each takes up to the stop grace.
-    #[cfg(target_os = "linux")]
-    if gone {
-        let (app, id) = (app.clone(), id.to_string());
-        std::thread::spawn(move || app.state::<App>().runtimes.stop_package(&id));
-    }
     #[cfg(not(target_os = "linux"))]
-    let _ = (stop_tool, gone);
+    let _ = stop_tool;
     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
     if left.is_empty() {
         Ok(view)

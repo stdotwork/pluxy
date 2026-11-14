@@ -1008,17 +1008,20 @@ fn spawnable(spawning: Option<Spawning>, a: Authorized) -> Option<spawn::Launch>
 
 /// The host's spawn service for tools' `spawn` and `runtime` frames (`program::Host::set_spawner`).
 pub fn spawner(app: AppHandle) -> program::Spawner {
-    Arc::new(move |tool, context, frame| spawn_frame(&app, tool, context, frame))
+    Arc::new(move |tool, context, frame, cancel| spawn_frame(&app, tool, context, frame, cancel))
 }
 
 /// Tool's `spawn` frame spawns the launch the call it serves (context) confirmed, once, if that
-/// launch was confirmed for the tool's own release; its `runtime` frame looks at, lists, stops or
-/// restarts its own package's managed runtimes.
+/// launch was confirmed for the tool's own release and the call (or the request) was not
+/// cancelled; its `runtime` frame looks at, lists, stops or restarts its own package's managed
+/// runtimes. Either is refused unless the tool still runs its package's admitted release, as its
+/// own calls are.
 fn spawn_frame(
     app: &AppHandle,
     tool: &Hop,
     context: &Arc<Context>,
     frame: &Value,
+    cancel: &Cancel,
 ) -> Result<Value, CallError> {
     let Hop::Package {
         id,
@@ -1029,6 +1032,11 @@ fn spawn_frame(
         return Err(fail("permission", "only a tool's run spawns"));
     };
     let st = app.state::<App>();
+    st.device
+        .lock()
+        .unwrap()
+        .current_run((id, sha256, *generation), &roots())
+        .map_err(refused)?;
     let unavailable = |e: String| fail("unavailable", e);
     if frame["type"] == "spawn" {
         let origin = context.extra.downcast_ref::<Origin>().ok_or_else(|| {
@@ -1047,6 +1055,14 @@ fn spawn_frame(
             return Err(fail(
                 "permission",
                 "the launch was confirmed for another release",
+            ));
+        }
+        // A page closed, a consent revoked, the window closed or the tool's own cancel since the
+        // confirmation: nothing starts.
+        if cancel.is_set() {
+            return Err(fail(
+                "cancelled",
+                "the call it serves, or the request, was cancelled",
             ));
         }
         let vault = Arc::clone(&st.vault);

@@ -35,6 +35,7 @@ const start = {
       environment: object,
       key: str,
       record: str,
+      again: { type: "boolean" },
     },
     required: ["executable", "argv", "cwd"],
     additionalProperties: false,
@@ -48,7 +49,7 @@ const runtime = {
   input_schema: {
     type: "object",
     properties: {
-      op: { type: "string", enum: ["status", "stop", "restart", "list"] },
+      op: { type: "string", enum: ["status", "stop", "restart", "list", "spawn"] },
       runtime: str,
     },
     required: ["op"],

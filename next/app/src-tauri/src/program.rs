@@ -309,9 +309,10 @@ pub struct Outbound {
 pub type Route = Arc<dyn Fn(Outbound) -> Result<Value, CallError> + Send + Sync>;
 
 /// Answers a tool's `spawn` and `runtime` frames (`Host::set_spawner`): the calling tool, the
-/// context of the host call it sent the frame for, and the frame.
+/// context of the host call it sent the frame for, the frame, and the cancel flags of that call
+/// and of the request itself (the tool's `cancel` of its ID).
 pub type Spawner =
-    Arc<dyn Fn(&Hop, &Arc<Context>, &Value) -> Result<Value, CallError> + Send + Sync>;
+    Arc<dyn Fn(&Hop, &Arc<Context>, &Value, &Cancel) -> Result<Value, CallError> + Send + Sync>;
 
 /// The host-private services a tool reaches through the host (`Host::set_private`): the app's
 /// vault.
@@ -2312,7 +2313,9 @@ fn outbound(run: &Arc<Run>, id: &str, v: &Value) {
 
 /// A tool's `spawn` or `runtime` frame v with ID id, for a host call it serves (`for`): the host's
 /// spawn service answers it on a thread of its own (a stop waits for the runtime to end), and the
-/// answer goes back on the tool's stdin. Its ID counts among the tool's own calls (`outbound`).
+/// answer goes back on the tool's stdin. Its ID counts among the tool's own calls (`outbound`),
+/// and the spawner gets the served call's cancel flags with the request's own; a tool that is
+/// stopping is answered nothing.
 fn spawn(run: &Arc<Run>, id: &str, v: &Value) {
     let refuse = |code: &str, message: String| {
         if run.ending() {
@@ -2326,6 +2329,10 @@ fn spawn(run: &Arc<Run>, id: &str, v: &Value) {
         let _ = run.send(&json!({"type": "error", "id": id,
             "error": {"code": code, "message": message}}));
     };
+    // A tool that is stopping starts nothing more.
+    if run.ending() {
+        return;
+    }
     if !valid_ticket(id) {
         return refuse(
             "invalid_request",
@@ -2338,7 +2345,7 @@ fn spawn(run: &Arc<Run>, id: &str, v: &Value) {
             "a spawn or runtime request names the host call it is for".into(),
         );
     };
-    let Some((context, _, _)) = run.serving.lock().unwrap().get(serves).cloned() else {
+    let Some((context, cancel, _)) = run.serving.lock().unwrap().get(serves).cloned() else {
         return refuse(
             "permission",
             format!("{serves} is not a call {} is serving", run.spec.id),
@@ -2347,6 +2354,7 @@ fn spawn(run: &Arc<Run>, id: &str, v: &Value) {
     let Some(spawner) = run.spawner.clone() else {
         return refuse("unsupported", "this host spawns nothing".into());
     };
+    let flag = Arc::new(AtomicBool::new(false));
     {
         let mut out = run.outbound.lock().unwrap();
         if out.contains_key(id) {
@@ -2358,8 +2366,9 @@ fn spawn(run: &Arc<Run>, id: &str, v: &Value) {
                 format!("{} has {MAX_PENDING} calls of its own already", run.spec.id),
             );
         }
-        out.insert(id.to_string(), Arc::new(AtomicBool::new(false)));
+        out.insert(id.to_string(), Arc::clone(&flag));
     }
+    let cancel = cancel.with(&flag);
     let tool = Hop::Package {
         id: run.spec.id.clone(),
         sha256: run.spec.sha256.clone(),
@@ -2367,7 +2376,7 @@ fn spawn(run: &Arc<Run>, id: &str, v: &Value) {
     };
     let (r, rid, frame) = (Arc::clone(run), id.to_string(), v.clone());
     let spawned = spawn_named("pluxy-prog-spawn", move || {
-        let answer = match spawner(&tool, &context, &frame) {
+        let answer = match spawner(&tool, &context, &frame, &cancel) {
             Ok(output) => json!({"type": "result", "id": rid, "output": output}),
             Err(e) => json!({"type": "error", "id": rid,
                 "error": {"code": e.code, "message": e.message}}),

@@ -34,9 +34,10 @@
 //! - `deliver`, the vault check's final consumer: writes the secret delivered for `key` to `out`;
 //! - `start`, the spawn check's launcher (`src/spawn_native.rs`): appends the frame it got to
 //!   `record`, then asks the host to spawn the launch the call confirmed (a `spawn` frame naming
-//!   nothing but the call) and answers with the host's answer;
-//! - `runtime` by sending a `runtime` frame with the input's `op` and `runtime` for the call, and
-//!   answering with the host's answer.
+//!   nothing but the call) and answers with the host's answer (with `again`, it asks a second
+//!   time for the same call, and answers that answer as `again` too);
+//! - `runtime` by sending a `runtime` frame with the input's `op` and `runtime` for the call (or,
+//!   for op `spawn`, a spawn request for that call), and answering with the host's answer.
 //!
 //! Started with `AGENT` as its first argument it is the spawn check's agent instead (`agent`).
 //!
@@ -938,20 +939,33 @@ pub fn main() -> ! {
                             &mut output,
                             json!({"type": "spawn", "id": format!("v-{asked}"), "for": id}),
                         );
+                        // With `again`, a second spawn for the same call: refused.
+                        let mut again = Value::Null;
+                        if f["input"]["again"] == true {
+                            asked += 1;
+                            again = ask(
+                                &mut input,
+                                &mut output,
+                                json!({"type": "spawn", "id": format!("v-{asked}"), "for": id}),
+                            );
+                        }
                         write_frame(
                             &mut output,
                             &json!({"type": "result", "id": id, "output":
-                                {"answer": answer, "pid": std::process::id(), "chain": chain}}),
+                                {"answer": answer, "again": again, "pid": std::process::id(),
+                                 "chain": chain}}),
                         );
                     }
                     "runtime" => {
                         asked += 1;
-                        let answer = ask(
-                            &mut input,
-                            &mut output,
+                        // `spawn`: a spawn request for this call, which confirmed no launch.
+                        let frame = if f["input"]["op"] == "spawn" {
+                            json!({"type": "spawn", "id": format!("v-{asked}"), "for": id})
+                        } else {
                             json!({"type": "runtime", "id": format!("v-{asked}"), "for": id,
-                                "op": f["input"]["op"], "runtime": f["input"]["runtime"]}),
-                        );
+                                "op": f["input"]["op"], "runtime": f["input"]["runtime"]})
+                        };
+                        let answer = ask(&mut input, &mut output, frame);
                         write_frame(
                             &mut output,
                             &json!({"type": "result", "id": id, "output":
