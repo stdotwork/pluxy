@@ -35,6 +35,49 @@ impl sync::Host for Jobs<'_> {
             .map(String::from)
             .ok_or_else(|| Error::internal("the host's start gave no job ID"))
     }
+
+    fn cancel(&self, job: &str) -> Result<(), Error> {
+        self.0.jobs("cancel", json!({"job": job})).map(|_| ())
+    }
+}
+
+/// The largest list of roots kept for a source, as JSON, so a job's input stays well within the
+/// host's 64 KiB.
+const MAX_ROOTS_JSON: usize = 16 << 10;
+
+/// A `roots` call's folders: full paths, at most 16, at most `MAX_ROOTS_JSON` bytes as JSON.
+fn checked_roots(input: &Value) -> Result<Vec<String>, Error> {
+    let roots: Vec<String> = input["roots"]
+        .as_array()
+        .filter(|a| a.len() <= MAX_ROOTS)
+        .ok_or_else(|| Error::invalid_request("roots is not a short list of folders"))?
+        .iter()
+        .map(|r| {
+            r.as_str()
+                .filter(|s| s.len() <= MAX_PATH && Path::new(s).is_absolute())
+                .map(String::from)
+                .ok_or_else(|| Error::invalid_request("a root is not a full path"))
+        })
+        .collect::<Result<_, _>>()?;
+    if json!(roots).to_string().len() > MAX_ROOTS_JSON {
+        return Err(Error::invalid_request(format!(
+            "the folders are longer than {MAX_ROOTS_JSON} bytes in all"
+        )));
+    }
+    Ok(roots)
+}
+
+/// Opens the store at path. One that cannot be opened is replaced by an empty one when the call
+/// is `clear` (clearing it is what the person asked); any other call fails, saying so.
+fn open_store(path: &Path, clearing: bool) -> Result<Store, Error> {
+    match Store::open(path) {
+        Ok(s) => Ok(s),
+        Err(_) if clearing => Store::reset(path)
+            .map_err(|e| Error::unavailable(format!("the usage store could not be replaced: {e}"))),
+        Err(e) => Err(Error::unavailable(format!(
+            "the usage store cannot be read ({e}); Clear Agent history replaces it"
+        ))),
+    }
 }
 
 struct State {
@@ -70,17 +113,14 @@ impl Hub {
                 .data
                 .as_deref()
                 .ok_or_else(|| Error::unavailable("PLUXY_TOOL_DATA_DIR is not set"))?;
-            state.store = Some(
-                Store::open(&dir.join("usage.db"))
-                    .map_err(|e| Error::unavailable(format!("the usage store: {e}")))?,
-            );
+            state.store = Some(open_store(&dir.join("usage.db"), call.op == "clear")?);
         }
         let State { store, sync } = state;
         let store = store.as_mut().unwrap_or_else(|| unreachable!());
         let host = Jobs(call);
         let input = &call.input;
         match call.op.as_str() {
-            "ingest" => sync.ingest(store, input),
+            "ingest" => sync.ingest(store, now(), input),
             "sync" => sync.step(store, &host, input["now"] == true, now()),
             "report" => {
                 let status = sync.status(store).map_err(internal)?;
@@ -144,18 +184,7 @@ impl Hub {
                 if !known && !registered(&host)?.iter().any(|r| r == source) {
                     return Err(Error::not_found(format!("no source {source}")));
                 }
-                let roots: Vec<String> = input["roots"]
-                    .as_array()
-                    .filter(|a| a.len() <= MAX_ROOTS)
-                    .ok_or_else(|| Error::invalid_request("roots is not a short list of folders"))?
-                    .iter()
-                    .map(|r| {
-                        r.as_str()
-                            .filter(|s| s.len() <= MAX_PATH && Path::new(s).is_absolute())
-                            .map(String::from)
-                            .ok_or_else(|| Error::invalid_request("a root is not a full path"))
-                    })
-                    .collect::<Result<_, _>>()?;
+                let roots = checked_roots(input)?;
                 let set = (!roots.is_empty()).then_some(roots.as_slice());
                 store.set_roots(source, set).map_err(internal)?;
                 Ok(json!({"source": source, "roots": set}))

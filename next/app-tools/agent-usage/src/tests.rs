@@ -112,6 +112,7 @@ fn clear_deletes_history_and_revisions_and_keeps_settings() {
 struct FakeHost {
     registrations: Vec<Value>,
     started: RefCell<Vec<(String, Value)>>,
+    cancelled: RefCell<Vec<String>>,
 }
 
 impl FakeHost {
@@ -122,6 +123,7 @@ impl FakeHost {
                 .map(|p| json!({"package": p, "sha256": format!("sha-{p}"), "generation": 1, "schema": 1}))
                 .collect(),
             started: RefCell::new(Vec::new()),
+            cancelled: RefCell::new(Vec::new()),
         }
     }
     /// The last job started, and its input.
@@ -138,8 +140,15 @@ impl Host for FakeHost {
         let mut s = self.started.borrow_mut();
         let id = format!("j-{}", s.len() + 1);
         assert!(r["package"].is_string());
+        // The host refuses an input over 64 KiB.
+        let size = serde_json::to_vec(&input).unwrap().len();
+        assert!(size <= 64 << 10, "a job input of {size} bytes");
         s.push((id.clone(), input));
         Ok(id)
+    }
+    fn cancel(&self, job: &str) -> Result<(), Error> {
+        self.cancelled.borrow_mut().push(job.to_string());
+        Ok(())
     }
 }
 
@@ -171,10 +180,15 @@ fn list(sync: &mut Sync, s: &mut Store, job: &str, package: &str, files: &[(&str
         .iter()
         .map(|(f, size)| json!({"file": f, "size": size, "mtime_ns": 7}))
         .collect();
-    sync.ingest(s, &delivery(job, package, "batch", json!({"files": items})))
-        .unwrap();
     sync.ingest(
         s,
+        T0 + 1,
+        &delivery(job, package, "batch", json!({"files": items})),
+    )
+    .unwrap();
+    sync.ingest(
+        s,
+        T0 + 1,
         &delivery(
             job,
             package,
@@ -191,40 +205,43 @@ fn a_sync_lists_reads_changed_files_and_commits_each_once() {
     let host = FakeHost::new(&["p/a"]);
     let mut sync = Sync::new();
     // Never synced: due on its own.
-    let st = sync.step(&mut s, &host, false, 1000).unwrap();
+    let st = sync.step(&mut s, &host, false, T0).unwrap();
     assert_eq!(st["running"], true);
     let (job, input) = host.last();
     assert_eq!(input, json!({"mode": "files"}));
     list(&mut sync, &mut s, &job, "p/a", &[("f1", 10), ("f2", 20)]);
-    sync.step(&mut s, &host, false, 1001).unwrap();
+    sync.step(&mut s, &host, false, T0 + 1).unwrap();
     let (read, input) = host.last();
     assert_eq!(input, json!({"mode": "read", "files": ["f1", "f2"]}));
     // f1 in two parts; models named alike become one; f2 cannot be read.
     sync.ingest(
         &mut s,
+        T0 + 1,
         &delivery(
             &read,
             "p/a",
             "batch",
-            part("f1", 10, 0, false, json!([row(3600, "Vendor/M-1", 5)])),
+            part("f1", 10, 0, false, json!([row(NOV10 + H, "Vendor/M-1", 5)])),
         ),
     )
     .unwrap();
-    let st = sync.step(&mut s, &host, false, 1002).unwrap();
+    let st = sync.step(&mut s, &host, false, T0 + 2).unwrap();
     assert_eq!(st["sources"][0]["staged"], 1);
     assert!(stored(&s).is_empty());
     sync.ingest(
         &mut s,
+        T0 + 1,
         &delivery(
             &read,
             "p/a",
             "batch",
-            part("f1", 10, 1, true, json!([row(3600, " m-1 ", 2)])),
+            part("f1", 10, 1, true, json!([row(NOV10 + H, " m-1 ", 2)])),
         ),
     )
     .unwrap();
     sync.ingest(
         &mut s,
+        T0 + 1,
         &delivery(
             &read,
             "p/a",
@@ -235,10 +252,11 @@ fn a_sync_lists_reads_changed_files_and_commits_each_once() {
     .unwrap();
     sync.ingest(
         &mut s,
+        T0 + 1,
         &delivery(&read, "p/a", "done", json!({"read": 1, "failed": 1})),
     )
     .unwrap();
-    let st = sync.step(&mut s, &host, false, 1003).unwrap();
+    let st = sync.step(&mut s, &host, false, T0 + 3).unwrap();
     assert_eq!(st["running"], false);
     assert_eq!(
         (
@@ -256,22 +274,25 @@ fn a_sync_lists_reads_changed_files_and_commits_each_once() {
             &json!("Parser A")
         )
     );
-    assert_eq!(st["last_sync"], 1003);
-    assert_eq!(stored(&s), vec![("p/a".into(), 3600, "m-1".into(), 7, 7)]);
+    assert_eq!(st["last_sync"], T0 + 3);
+    assert_eq!(
+        stored(&s),
+        vec![("p/a".into(), NOV10 + H, "m-1".into(), 7, 7)]
+    );
     // Not due before the interval (5 minutes) passes; due after it. Then f1 is unchanged and f2
     // (never committed) is read again.
     assert_eq!(
-        sync.step(&mut s, &host, false, 1003 + 299).unwrap()["running"],
+        sync.step(&mut s, &host, false, T0 + 3 + 299).unwrap()["running"],
         false
     );
     assert_eq!(host.started.borrow().len(), 2);
     assert_eq!(
-        sync.step(&mut s, &host, false, 1003 + 300).unwrap()["running"],
+        sync.step(&mut s, &host, false, T0 + 3 + 300).unwrap()["running"],
         true
     );
     let (job, _) = host.last();
     list(&mut sync, &mut s, &job, "p/a", &[("f1", 10), ("f2", 20)]);
-    sync.step(&mut s, &host, false, 1400).unwrap();
+    sync.step(&mut s, &host, false, T0 + 400).unwrap();
     assert_eq!(host.last().1["files"], json!(["f2"]));
     std::fs::remove_dir_all(d).unwrap();
 }
@@ -281,46 +302,52 @@ fn a_job_ended_mid_file_leaves_no_rows_and_a_resumed_sync_reads_only_what_is_mis
     let (mut s, d) = store("resume");
     let host = FakeHost::new(&["p/a"]);
     let mut sync = Sync::new();
-    sync.step(&mut s, &host, true, 1000).unwrap();
+    sync.step(&mut s, &host, true, T0).unwrap();
     let (job, _) = host.last();
     list(&mut sync, &mut s, &job, "p/a", &[("f1", 10), ("f2", 20)]);
-    sync.step(&mut s, &host, false, 1001).unwrap();
+    sync.step(&mut s, &host, false, T0 + 1).unwrap();
     let (read, _) = host.last();
     sync.ingest(
         &mut s,
+        T0 + 1,
         &delivery(
             &read,
             "p/a",
             "batch",
-            part("f1", 10, 0, true, json!([row(0, "m", 3)])),
+            part("f1", 10, 0, true, json!([row(NOV10, "m", 3)])),
         ),
     )
     .unwrap();
     sync.ingest(
         &mut s,
+        T0 + 1,
         &delivery(
             &read,
             "p/a",
             "batch",
-            part("f2", 20, 0, false, json!([row(0, "m", 100)])),
+            part("f2", 20, 0, false, json!([row(NOV10, "m", 100)])),
         ),
     )
     .unwrap();
-    sync.ingest(&mut s, &delivery(&read, "p/a", "cancelled", Value::Null))
-        .unwrap();
+    sync.ingest(
+        &mut s,
+        T0 + 1,
+        &delivery(&read, "p/a", "cancelled", Value::Null),
+    )
+    .unwrap();
     // Only f1 is stored: f2's part went with its job.
-    assert_eq!(stored(&s), vec![("p/a".into(), 0, "m".into(), 3, 3)]);
-    let st = sync.step(&mut s, &host, false, 1002).unwrap();
+    assert_eq!(stored(&s), vec![("p/a".into(), NOV10, "m".into(), 3, 3)]);
+    let st = sync.step(&mut s, &host, false, T0 + 2).unwrap();
     assert_eq!(
         (&st["running"], &st["sources"][0]["error"]),
         (&json!(false), &json!("the job was cancelled"))
     );
     // The hub stops and starts again: a new sync skips f1 and reads f2.
     let mut sync = Sync::new();
-    sync.step(&mut s, &host, true, 2000).unwrap();
+    sync.step(&mut s, &host, true, T0 + 1000).unwrap();
     let (job, _) = host.last();
     list(&mut sync, &mut s, &job, "p/a", &[("f1", 10), ("f2", 20)]);
-    let st = sync.step(&mut s, &host, false, 2001).unwrap();
+    let st = sync.step(&mut s, &host, false, T0 + 1001).unwrap();
     assert_eq!(st["sources"][0]["changed"], 1);
     assert_eq!(host.last().1["files"], json!(["f2"]));
     std::fs::remove_dir_all(d).unwrap();
@@ -335,38 +362,45 @@ fn deliveries_not_from_the_jobs_source_or_out_of_order_are_refused() {
     let e = sync
         .ingest(
             &mut s,
+            T0 + 1,
             &delivery("j-1", "p/a", "batch", json!({"files": []})),
         )
         .unwrap_err();
     assert_eq!(e.code, "invalid_request");
-    sync.step(&mut s, &host, true, 1000).unwrap();
+    sync.step(&mut s, &host, true, T0).unwrap();
     // j-1 is p/a's files job: a batch naming p/b, or p/a at another digest, is refused.
     let e = sync
         .ingest(
             &mut s,
+            T0 + 1,
             &delivery("j-1", "p/b", "batch", json!({"files": []})),
         )
         .unwrap_err();
     assert_eq!(e.code, "permission");
     let mut other = delivery("j-1", "p/a", "batch", json!({"files": []}));
     other["source"]["sha256"] = json!("sha-else");
-    assert_eq!(sync.ingest(&mut s, &other).unwrap_err().code, "permission");
+    assert_eq!(
+        sync.ingest(&mut s, T0 + 1, &other).unwrap_err().code,
+        "permission"
+    );
     // A job this sync did not start.
     let e = sync
         .ingest(
             &mut s,
+            T0 + 1,
             &delivery("j-99", "p/a", "batch", json!({"files": []})),
         )
         .unwrap_err();
     assert_eq!(e.code, "invalid_request");
     list(&mut sync, &mut s, "j-1", "p/a", &[("f1", 10)]);
     list(&mut sync, &mut s, "j-2", "p/b", &[]);
-    sync.step(&mut s, &host, false, 1001).unwrap();
+    sync.step(&mut s, &host, false, T0 + 1).unwrap();
     let (read, _) = host.last();
     // A file the job does not read, then a part out of order: refused, nothing stored.
     let e = sync
         .ingest(
             &mut s,
+            T0 + 1,
             &delivery(&read, "p/a", "batch", part("f9", 1, 0, true, json!([]))),
         )
         .unwrap_err();
@@ -374,11 +408,12 @@ fn deliveries_not_from_the_jobs_source_or_out_of_order_are_refused() {
     let e = sync
         .ingest(
             &mut s,
+            T0 + 1,
             &delivery(
                 &read,
                 "p/a",
                 "batch",
-                part("f1", 10, 1, true, json!([row(0, "m", 1)])),
+                part("f1", 10, 1, true, json!([row(NOV10, "m", 1)])),
             ),
         )
         .unwrap_err();
@@ -387,6 +422,203 @@ fn deliveries_not_from_the_jobs_source_or_out_of_order_are_refused() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
+#[test]
+fn a_store_error_at_a_jobs_end_fails_its_source_and_the_run_ends() {
+    let (mut s, d) = store("end-error");
+    let host = FakeHost::new(&["p/a"]);
+    let mut sync = Sync::new();
+    sync.step(&mut s, &host, true, T0).unwrap();
+    let (job, _) = host.last();
+    // The store breaks under the hub: its files table is gone.
+    rusqlite::Connection::open(d.join("usage.db"))
+        .unwrap()
+        .execute_batch("ALTER TABLE files RENAME TO elsewhere")
+        .unwrap();
+    list(&mut sync, &mut s, &job, "p/a", &[("f1", 10)]);
+    let st = sync.step(&mut s, &host, false, T0 + 2).unwrap();
+    assert_eq!(st["running"], false, "{st}");
+    assert_eq!(st["sources"][0]["phase"], "failed");
+    assert!(
+        st["sources"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("files"),
+        "{st}"
+    );
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_job_with_no_word_for_a_minute_is_cancelled_and_the_run_ends() {
+    let (mut s, d) = store("stale");
+    let host = FakeHost::new(&["p/a"]);
+    let mut sync = Sync::new();
+    sync.step(&mut s, &host, true, T0).unwrap();
+    let (job, _) = host.last();
+    // A batch at T0 + 50 is word from it: still waited for at T0 + 109, not at T0 + 110.
+    let items = json!({"files": [{"file": "f1", "size": 1, "mtime_ns": 7}]});
+    sync.ingest(&mut s, T0 + 50, &delivery(&job, "p/a", "batch", items))
+        .unwrap();
+    assert_eq!(
+        sync.step(&mut s, &host, false, T0 + 109).unwrap()["running"],
+        true
+    );
+    assert!(host.cancelled.borrow().is_empty());
+    let st = sync.step(&mut s, &host, false, T0 + 110).unwrap();
+    assert_eq!(*host.cancelled.borrow(), vec![job.clone()]);
+    assert_eq!(
+        (&st["running"], &st["sources"][0]["phase"]),
+        (&json!(false), &json!("failed"))
+    );
+    assert!(st["sources"][0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("no word"));
+    // Its end, if it still comes, is not this sync's.
+    let late = delivery(&job, "p/a", "done", json!({"label": "A"}));
+    assert_eq!(
+        sync.ingest(&mut s, T0 + 111, &late).unwrap_err().code,
+        "invalid_request"
+    );
+    // A read job that goes quiet is cancelled the same way.
+    sync.step(&mut s, &host, true, T0 + 200).unwrap();
+    let (job, _) = host.last();
+    list(&mut sync, &mut s, &job, "p/a", &[("f1", 10)]);
+    sync.step(&mut s, &host, false, T0 + 200).unwrap();
+    let (read, _) = host.last();
+    let st = sync.step(&mut s, &host, false, T0 + 260).unwrap();
+    assert_eq!(host.cancelled.borrow().last(), Some(&read));
+    assert_eq!(st["running"], false);
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_file_with_rows_out_of_bounds_fails_and_its_job_goes_on() {
+    let (mut s, d) = store("bounds");
+    let host = FakeHost::new(&["p/a"]);
+    let mut sync = Sync::new();
+    sync.step(&mut s, &host, true, T0).unwrap();
+    let (job, _) = host.last();
+    list(
+        &mut sync,
+        &mut s,
+        &job,
+        "p/a",
+        &[("old", 1), ("future", 1), ("big", 1), ("ok", 1)],
+    );
+    sync.step(&mut s, &host, false, T0 + 1).unwrap();
+    let (read, _) = host.last();
+    let batch = |v: Value| delivery(&read, "p/a", "batch", v);
+    // 1970, and two days after now: refused, the file failed.
+    sync.ingest(
+        &mut s,
+        T0 + 1,
+        &batch(part("old", 1, 0, true, json!([row(0, "m", 5)]))),
+    )
+    .unwrap();
+    let ahead = (T0 + 2 * 86_400).div_euclid(H) * H;
+    sync.ingest(
+        &mut s,
+        T0 + 1,
+        &batch(part("future", 1, 0, true, json!([row(ahead, "m", 5)]))),
+    )
+    .unwrap();
+    // One row more than a file may stage.
+    let many: Vec<Value> = (0..=sync::MAX_STAGED_ROWS as i64)
+        .map(|k| row(NOV10 - k * H, "m", 1))
+        .collect();
+    sync.ingest(
+        &mut s,
+        T0 + 1,
+        &batch(part("big", 1, 0, false, json!(many))),
+    )
+    .unwrap();
+    sync.ingest(
+        &mut s,
+        T0 + 1,
+        &batch(part("ok", 1, 0, true, json!([row(NOV10, "m", 2)]))),
+    )
+    .unwrap();
+    sync.ingest(&mut s, T0 + 1, &delivery(&read, "p/a", "done", json!({})))
+        .unwrap();
+    let st = sync.step(&mut s, &host, false, T0 + 2).unwrap();
+    assert_eq!(
+        (&st["sources"][0]["read"], &st["sources"][0]["failed"]),
+        (&json!(1), &json!(3))
+    );
+    assert_eq!(stored(&s), vec![("p/a".into(), NOV10, "m".into(), 2, 2)]);
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn read_jobs_fit_the_hosts_input_limit_with_long_roots_and_escaped_ids() {
+    let (mut s, d) = store("chunks");
+    // 16 KiB of roots, and file IDs whose JSON is six times their length (control characters).
+    let roots: Vec<String> = (0..4)
+        .map(|i| format!("/{i}{}", "r".repeat(4000)))
+        .collect();
+    s.set_roots("p/a", Some(&roots)).unwrap();
+    let ids: Vec<String> = (0..20)
+        .map(|i| format!("/{i}{}", "\u{1}".repeat(3000)))
+        .collect();
+    let host = FakeHost::new(&["p/a"]);
+    let mut sync = Sync::new();
+    sync.step(&mut s, &host, true, T0).unwrap();
+    let (job, _) = host.last();
+    let listed: Vec<(&str, u64)> = ids.iter().map(|i| (i.as_str(), 1)).collect();
+    list(&mut sync, &mut s, &job, "p/a", &listed);
+    // Four jobs at once, each within 64 KiB (FakeHost checks); the rest at the next calls.
+    sync.step(&mut s, &host, false, T0 + 1).unwrap();
+    let named: usize = host.started.borrow()[1..]
+        .iter()
+        .map(|(_, i)| i["files"].as_array().unwrap().len())
+        .sum();
+    assert!((1..20).contains(&named), "{named} files in the first jobs");
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn roots_longer_than_16_kib_are_refused() {
+    // Each root is well under the 4,096-byte path limit; together they pass 16 KiB.
+    let long: Vec<String> = (0..16)
+        .map(|i| format!("/{i}{}", "r".repeat(1100)))
+        .collect();
+    let e = checked_roots(&json!({"roots": long})).unwrap_err();
+    assert_eq!(e.code, "invalid_request");
+    assert_eq!(
+        checked_roots(&json!({"roots": ["/a", "/b"]})).unwrap(),
+        vec!["/a", "/b"]
+    );
+    assert!(checked_roots(&json!({"roots": ["relative"]})).is_err());
+}
+
+#[test]
+fn the_store_is_private_and_clear_replaces_one_that_will_not_open() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_, d) = store("repair");
+    let path = d.join("usage.db");
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&path), 0o600);
+    // A store an earlier version left readable by others is made private when opened.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    open_store(&path, false).unwrap();
+    assert_eq!(mode(&path), 0o600);
+    std::fs::write(&path, b"not a database at all, not even close to one").unwrap();
+    let e = open_store(&path, false).err().unwrap();
+    assert!(
+        e.message.contains("Clear Agent history replaces it"),
+        "{}",
+        e.message
+    );
+    let s = open_store(&path, true).unwrap();
+    assert_eq!(s.storage().unwrap().1, 0);
+    assert_eq!(mode(&path), 0o600);
+    assert!(open_store(&path, false).is_ok());
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+/// Noon on 2026-11-10 UTC: the syncs' time.
+const T0: i64 = NOV10 + 43_200;
 /// 2026-11-10 00:00 UTC, a Tuesday.
 const NOV10: i64 = 1_794_268_800;
 const H: i64 = 3600;
@@ -577,4 +809,105 @@ fn a_report_refuses_bad_input() {
         assert_eq!(e.code, "invalid_request", "{input}");
     }
     std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn the_last_24_hours_are_24_utc_hours_across_a_clock_change() {
+    let (mut s, d) = store("24h");
+    // +01:00, then +02:00 from 2026-11-10 00:00 UTC; now 13:00 UTC.
+    let offsets = json!([[0, 60], [NOV10, 120]]);
+    let now = NOV10 + 13 * H;
+    // One token in each of the 30 UTC hours to 13:00.
+    let list: Vec<(i64, &str, Tokens)> =
+        (0..30).map(|k| (now - k * H, "m", tok(1, 0, 1))).collect();
+    s.replace_file("p/a", "f1", 1, 1, &rows(&list)).unwrap();
+    let r = ask(
+        &s,
+        json!({"range": "24h", "offsets": offsets, "now": now}),
+        &["p/a"],
+    );
+    let keys = r["buckets"].as_array().unwrap();
+    // From 2026-11-09 14:00 UTC (15:00 local) to 13:00 UTC (15:00 local): 24 hours, 24 tokens.
+    assert_eq!(
+        (keys.len(), &keys[0], &keys[23]),
+        (24, &json!("2026-11-09T15"), &json!("2026-11-10T15"))
+    );
+    assert_eq!(
+        (&r["totals"]["total"], &r["previous"]["total"]),
+        (&json!(24), &json!(6))
+    );
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_report_always_fits_a_frame() {
+    let (mut s, d) = store("fits");
+    // The review's probe: a row at hour 0 and one now; All by day.
+    s.replace_file(
+        "p/a",
+        "f1",
+        1,
+        1,
+        &rows(&[(0, "m", tok(1, 0, 1)), (NOV10, "m", tok(1, 0, 1))]),
+    )
+    .unwrap();
+    let r = ask(
+        &s,
+        json!({"range": "all", "granularity": "day", "offsets": [[0, 0]], "now": NOV10}),
+        &["p/a"],
+    );
+    // From 2000: 323 months, after 9,811 days and 1,402 weeks were too many.
+    assert_eq!(
+        (
+            &r["granularity"],
+            r["buckets"].as_array().unwrap().len(),
+            &r["buckets"][0]
+        ),
+        (&json!("month"), 323, &json!("2000-01"))
+    );
+    assert!(serde_json::to_vec(&r).unwrap().len() < 1 << 20);
+    // About 11.5 years of daily rows from three sources and seven models each.
+    let (mut s2, d2) = store("fits-big");
+    for src in ["p/a", "p/b", "p/c"] {
+        let list: Vec<(i64, String, Tokens)> = (0..4200)
+            .flat_map(|k| {
+                (0..7).map(move |m| {
+                    (
+                        NOV10 - k * 86_400,
+                        format!("model-{src}-{m}"),
+                        tok(123_456_789, 0, 987_654_321),
+                    )
+                })
+            })
+            .collect();
+        let r: Rows = list.into_iter().map(|(h, m, t)| ((h, m), t)).collect();
+        s2.replace_file(src, "f", 1, 1, &r).unwrap();
+    }
+    let r = ask(
+        &s2,
+        json!({"range": "all", "granularity": "day", "offsets": [[0, 0]], "now": NOV10}),
+        &["p/a"],
+    );
+    assert_eq!(r["granularity"], "week");
+    let size = serde_json::to_vec(&r).unwrap().len();
+    assert!(size < 1 << 20, "{size} bytes");
+    // Models past 200 are summed as Other.
+    let (mut s3, d3) = store("fits-models");
+    let many: Rows = (0..205)
+        .map(|m| ((NOV10, format!("m{m:03}")), tok(1, 0, 1)))
+        .collect();
+    s3.replace_file("p/a", "f", 1, 1, &many).unwrap();
+    let r = ask(
+        &s3,
+        json!({"range": "today", "offsets": [[0, 0]], "now": NOV10 + 60}),
+        &["p/a"],
+    );
+    let models = r["models"].as_array().unwrap();
+    assert_eq!(
+        (models.len(), &models[200]),
+        (201, &json!({"model": "__other__", "total": 5}))
+    );
+    for dir in [d, d2, d3] {
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

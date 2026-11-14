@@ -3,6 +3,11 @@
 //! ascending) and the time it asks at (`now`); days, weeks (from Monday), months and hours are
 //! local to those offsets, as the old app's were to its own zone.
 //!
+//! "Last 24 hours" is the 24 UTC hours to the end of the current one, so it is 24 real hours on a
+//! day the clocks change. The answer stays well within a frame: a range with more than
+//! `MAX_BUCKETS` buckets gets the next coarser granularity (the answer says which), "All" starts no
+//! earlier than 2000, and models past the first `MAX_MODELS` are summed as Other.
+//!
 //! shortcut: a zone whose offset is not a whole hour (such as +05:30) gets each UTC hour in the
 //! local hour it starts in; exact half-hour buckets would need rows finer than an hour.
 
@@ -23,6 +28,10 @@ const CALENDAR_DAYS: i64 = 364;
 const HOURS_DAYS: i64 = 30;
 /// "All" with more days than this defaults to weeks.
 const WEEKS_AFTER: i64 = 92;
+/// Buckets a report has at most before it takes a coarser granularity.
+pub const MAX_BUCKETS: usize = 800;
+/// Models listed at most; the rest are summed as Other.
+pub const MAX_MODELS: usize = 200;
 
 /// UTC offsets over time.
 pub struct Zone(Vec<(i64, i64)>);
@@ -113,6 +122,15 @@ impl Granularity {
         }
     }
 
+    fn coarser(self) -> Option<Granularity> {
+        match self {
+            Granularity::Hour => Some(Granularity::Day),
+            Granularity::Day => Some(Granularity::Week),
+            Granularity::Week => Some(Granularity::Month),
+            Granularity::Month => None,
+        }
+    }
+
     fn parse(s: &str) -> Option<Granularity> {
         Some(match s {
             "hour" => Granularity::Hour,
@@ -129,6 +147,13 @@ struct Buckets {
     g: Granularity,
     first: i64,
     keys: Vec<String>,
+    /// Hours counted in UTC ("Last 24 hours"): `of` takes the UTC hour.
+    utc: bool,
+}
+
+/// A local hour's key, `YYYY-MM-DDTHH`.
+fn hour_key(local: i64) -> String {
+    format!("{}T{:02}", date(day(local)), local.rem_euclid(DAY) / HOUR)
 }
 
 impl Buckets {
@@ -138,13 +163,7 @@ impl Buckets {
             Granularity::Hour => {
                 let first = from.div_euclid(HOUR);
                 let keys = (first..=(to - 1).div_euclid(HOUR))
-                    .map(|h| {
-                        format!(
-                            "{}T{:02}",
-                            date(day(h * HOUR)),
-                            (h * HOUR).rem_euclid(DAY) / HOUR
-                        )
-                    })
+                    .map(|h| hour_key(h * HOUR))
                     .collect();
                 (first, keys)
             }
@@ -162,11 +181,32 @@ impl Buckets {
                 (first, keys)
             }
         };
-        Buckets { g, first, keys }
+        Buckets {
+            g,
+            first,
+            keys,
+            utc: false,
+        }
     }
 
-    fn of(&self, local: i64) -> usize {
+    /// The UTC hours from from to to, each keyed by its local hour in zone.
+    fn utc_hours(from: i64, to: i64, zone: &Zone) -> Buckets {
+        let first = from.div_euclid(HOUR);
+        let keys = (first..=(to - 1).div_euclid(HOUR))
+            .map(|h| hour_key(zone.local(h * HOUR)))
+            .collect();
+        Buckets {
+            g: Granularity::Hour,
+            first,
+            keys,
+            utc: true,
+        }
+    }
+
+    /// The bucket of a row at UTC hour hour, local time local.
+    fn of(&self, hour: i64, local: i64) -> usize {
         (match self.g {
+            Granularity::Hour if self.utc => hour.div_euclid(HOUR) - self.first,
             Granularity::Hour => local.div_euclid(HOUR) - self.first,
             Granularity::Day => day(local) - self.first,
             Granularity::Week => (monday(day(local)) - self.first) / 7,
@@ -246,12 +286,16 @@ pub fn report(
     let first_day = store
         .first_hour()
         .map_err(internal)?
-        .map_or(today, |h| day(zone.local(h)).min(today));
-    // The window and the previous period, in local seconds, [from, to).
+        .map_or(today, |h| day(zone.local(h)).min(today))
+        .max(day(crate::sync::MIN_HOUR));
+    // The window and the previous period, [from, to): in local seconds, or for "Last 24 hours"
+    // in UTC.
+    let utc = range == "24h";
+    let utc_end = (now.div_euclid(HOUR) + 1) * HOUR;
     let days = |n: i64| ((today - n + 1) * DAY, (today + 1) * DAY);
     let (from, to, shift) = match range {
         "today" => (today * DAY, hour_end, Some(DAY)),
-        "24h" => (hour_end - 24 * HOUR, hour_end, Some(24 * HOUR)),
+        "24h" => (utc_end - 24 * HOUR, utc_end, Some(24 * HOUR)),
         "7d" => (days(7).0, days(7).1, Some(7 * DAY)),
         "30d" => (days(30).0, days(30).1, Some(30 * DAY)),
         "all" => (first_day * DAY, (today + 1) * DAY, None),
@@ -268,14 +312,30 @@ pub fn report(
         })?),
         _ => return Err(Error::invalid_request("granularity is not a string")),
     };
-    let granularity = match (asked, range) {
+    let mut granularity = match (asked, range) {
         (Some(Granularity::Hour), "all") => Granularity::Day,
         (Some(g), _) => g,
         (None, "today" | "24h") => Granularity::Hour,
         (None, "all") if day(to - 1) - day(from) + 1 > WEEKS_AFTER => Granularity::Week,
         (None, _) => Granularity::Day,
     };
-    let buckets = Buckets::new(granularity, from, to);
+    // The local span the buckets cover.
+    let (local_from, local_to) = if utc {
+        (zone.local(from), zone.local(to - 1) + 1)
+    } else {
+        (from, to)
+    };
+    let buckets = loop {
+        let b = if utc && granularity == Granularity::Hour {
+            Buckets::utc_hours(from, to, &zone)
+        } else {
+            Buckets::new(granularity, local_from, local_to)
+        };
+        match granularity.coarser() {
+            Some(c) if b.keys.len() > MAX_BUCKETS => granularity = c,
+            _ => break b,
+        }
+    };
     let n = buckets.keys.len();
 
     // Rows a little either side of the window and the previous period (offsets are within ±18 h).
@@ -291,12 +351,13 @@ pub fn report(
     let mut source_totals: HashMap<String, (u64, BTreeSet<i64>)> = HashMap::new();
     for (source, hour, model, t) in &rows {
         let local = zone.local(*hour);
+        let at = if utc { *hour } else { local };
         if let Some(s) = shift {
-            if (from - s..to - s).contains(&local) && passes(source) {
+            if (from - s..to - s).contains(&at) && passes(source) {
                 previous.add(t);
             }
         }
-        if !(from..to).contains(&local) {
+        if !(from..to).contains(&at) {
             continue;
         }
         let st = source_totals.entry(source.clone()).or_default();
@@ -307,7 +368,7 @@ pub fn report(
         if !passes(source) {
             continue;
         }
-        let b = buckets.of(local);
+        let b = buckets.of(*hour, local);
         totals.add(t);
         series[b].add(t);
         *by_source[b].entry(source.clone()).or_default() += t.total;
@@ -319,6 +380,11 @@ pub fn report(
     }
     let mut models: Vec<(String, u64)> = models.into_iter().filter(|(_, v)| *v > 0).collect();
     models.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    if models.len() > MAX_MODELS {
+        let rest: u64 = models[MAX_MODELS..].iter().map(|(_, v)| v).sum();
+        models.truncate(MAX_MODELS);
+        models.push((OTHER.into(), rest));
+    }
 
     // Every source with rows, and every one registered now.
     let known = store.sources().map_err(internal)?;

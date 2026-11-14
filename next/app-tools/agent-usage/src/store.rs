@@ -38,8 +38,18 @@ pub struct Store {
 }
 
 impl Store {
-    /// Opens (making it when missing) the store at path.
+    /// Opens (making it when missing) the store at path, readable only by this user.
     pub fn open(path: &Path) -> Result<Store, String> {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(path)
+            .map_err(|err| err.to_string())?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|err| err.to_string())?;
         let db = Connection::open(path).map_err(e)?;
         db.execute_batch(
             "PRAGMA foreign_keys = ON;
@@ -79,6 +89,21 @@ impl Store {
             db,
             path: path.to_path_buf(),
         })
+    }
+
+    /// Removes the store at path (with its journal) and opens a new, empty one.
+    pub fn reset(path: &Path) -> Result<Store, String> {
+        for suffix in ["", "-journal", "-wal", "-shm"] {
+            let mut p = path.as_os_str().to_owned();
+            p.push(suffix);
+            match std::fs::remove_file(&p) {
+                Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(err.to_string())
+                }
+                _ => {}
+            }
+        }
+        Store::open(path)
     }
 
     fn meta(&self, key: &str) -> Result<Option<String>, String> {

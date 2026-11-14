@@ -2,8 +2,10 @@
 //! is; the host delivers the jobs' batches and ends to `ingest` between calls. A sync lists each
 //! registered parser's files (a `files` job), then reads the files whose revision changed (`read`
 //! jobs naming them, in chunks), and commits each file's rows when its last part arrives. Parts of
-//! a file not finished when its job ends are dropped. The run lives in memory: if the hub stops,
-//! the next sync starts over and skips every file already committed.
+//! a file not finished when its job ends are dropped. A job the hub has heard nothing of for
+//! `STALE_SECS` (its end may never come: the host delivers an end once, best-effort) is cancelled
+//! and counted as ended, so a run always ends. The run lives in memory: if the hub stops, the next
+//! sync starts over and skips every file already committed.
 
 use crate::store::{Rows, Store};
 use pluxy_program::Error;
@@ -13,12 +15,20 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Jobs the hub runs at once (the host allows a consumer four).
 pub const MAX_JOBS: usize = 4;
-/// File IDs a `read` job names at most, and their JSON size at most (a job input is at most 64 KiB,
-/// with the roots).
+/// File IDs a `read` job names at most.
 const CHUNK_FILES: usize = 64;
-const CHUNK_BYTES: usize = 24 << 10;
+/// A job input's JSON size at most: the host takes at most 64 KiB.
+const INPUT_BUDGET: usize = 60 << 10;
 /// The longest label kept.
 const MAX_LABEL: usize = 64;
+/// Seconds with no delivery after which a job is cancelled and counted as ended: above the
+/// host's ten-second bound on a delivery's wait.
+pub const STALE_SECS: i64 = 60;
+/// Distinct (hour, model) rows one file may stage; a file past it fails.
+pub const MAX_STAGED_ROWS: usize = 100_000;
+/// The earliest hour a row may name (2000-01-01 UTC), and how far past now (a day).
+pub const MIN_HOUR: i64 = 946_684_800;
+const MAX_AHEAD: i64 = 86_400;
 
 /// What the hub asks the host's job service.
 pub trait Host {
@@ -26,6 +36,8 @@ pub trait Host {
     fn registrations(&self) -> Result<Vec<Value>, Error>;
     /// Starts a job of registration with input: the job's ID.
     fn start(&self, registration: &Value, input: Value) -> Result<String, Error>;
+    /// Cancels one of the hub's jobs.
+    fn cancel(&self, job: &str) -> Result<(), Error>;
 }
 
 /// A model name as the hub keeps it: trimmed, lower case, without a path before its last `/`.
@@ -91,6 +103,8 @@ enum Kind {
 struct JobRun {
     source: usize,
     kind: Kind,
+    /// When it started, or its last delivery came.
+    heard: i64,
 }
 
 struct Run {
@@ -211,8 +225,27 @@ impl Sync {
             }
         }
         if let Some(run) = &mut self.run {
+            let stale: Vec<String> = run
+                .jobs
+                .iter()
+                .filter(|(_, j)| now - j.heard >= STALE_SECS)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in stale {
+                // Its end may still come; it is refused then, as no job of this sync.
+                let _ = host.cancel(&id);
+                if let Some(job) = run.jobs.remove(&id) {
+                    let s = &mut run.sources[job.source];
+                    s.error = Some(format!(
+                        "no word from the parser for {STALE_SECS} seconds: its job was cancelled"
+                    ));
+                    if matches!(job.kind, Kind::Files) {
+                        s.phase = Phase::Failed;
+                    }
+                }
+            }
             for i in 0..run.sources.len() {
-                advance(run, i, host);
+                advance(run, i, host, now);
             }
             let finished = run.jobs.is_empty()
                 && run
@@ -237,7 +270,7 @@ impl Sync {
     }
 
     /// A delivery from the host: a batch or the end of one of this run's jobs.
-    pub fn ingest(&mut self, store: &mut Store, d: &Value) -> Result<Value, Error> {
+    pub fn ingest(&mut self, store: &mut Store, now: i64, d: &Value) -> Result<Value, Error> {
         if d["kind"] != KIND {
             return Err(Error::invalid_request("not a delivery of the hub's kind"));
         }
@@ -265,13 +298,14 @@ impl Sync {
         match d["event"].as_str() {
             Some("batch") => {
                 let job = run.jobs.get_mut(&job_id).unwrap_or_else(|| unreachable!());
+                job.heard = now;
                 match &mut job.kind {
                     Kind::Files => files_batch(source, value),
                     Kind::Read {
                         files,
                         done,
                         staged,
-                    } => read_batch(store, source, files, done, staged, value),
+                    } => read_batch(store, source, files, done, staged, value, now),
                 }
             }
             Some(end @ ("done" | "failed" | "cancelled")) => {
@@ -283,7 +317,13 @@ impl Sync {
                         .unwrap_or_else(|| end.to_string())
                 };
                 match job.kind {
-                    Kind::Files if end == "done" => listed(store, source, &d["output"])?,
+                    // A store that fails here fails the source, so the run can still end.
+                    Kind::Files if end == "done" => {
+                        if let Err(e) = listed(store, source, &d["output"]) {
+                            source.phase = Phase::Failed;
+                            source.error = Some(e.message);
+                        }
+                    }
                     Kind::Files => {
                         source.phase = Phase::Failed;
                         source.error = Some(why());
@@ -301,7 +341,7 @@ impl Sync {
 }
 
 /// Starts source i's next jobs, while the run has room.
-fn advance(run: &mut Run, i: usize, host: &dyn Host) {
+fn advance(run: &mut Run, i: usize, host: &dyn Host, now: i64) {
     let room = |run: &Run| run.jobs.len() < MAX_JOBS;
     match run.sources[i].phase {
         Phase::Waiting if room(run) => {
@@ -318,6 +358,7 @@ fn advance(run: &mut Run, i: usize, host: &dyn Host) {
                         JobRun {
                             source: i,
                             kind: Kind::Files,
+                            heard: now,
                         },
                     );
                 }
@@ -332,15 +373,18 @@ fn advance(run: &mut Run, i: usize, host: &dyn Host) {
         Phase::Reading => {
             while room(run) && !run.sources[i].todo.is_empty() {
                 let s = &mut run.sources[i];
+                // The input's JSON stays within the budget: its roots, then file IDs as JSON.
+                let mut bytes = json!({"mode": "read", "roots": s.roots, "files": []})
+                    .to_string()
+                    .len();
                 let mut chunk = Vec::new();
-                let mut bytes = 0;
                 while let Some(f) = s.todo.front() {
-                    if chunk.len() == CHUNK_FILES
-                        || (bytes + f.len() + 4 > CHUNK_BYTES && !chunk.is_empty())
+                    let n = json!(f).to_string().len() + 1;
+                    if chunk.len() == CHUNK_FILES || (bytes + n > INPUT_BUDGET && !chunk.is_empty())
                     {
                         break;
                     }
-                    bytes += f.len() + 4;
+                    bytes += n;
                     chunk.push(s.todo.pop_front().unwrap_or_default());
                 }
                 let mut input = json!({"mode": "read", "files": chunk});
@@ -358,6 +402,7 @@ fn advance(run: &mut Run, i: usize, host: &dyn Host) {
                                     done: HashSet::new(),
                                     staged: HashMap::new(),
                                 },
+                                heard: now,
                             },
                         );
                     }
@@ -437,7 +482,8 @@ fn listed(store: &mut Store, source: &mut SourceRun, output: &Value) -> Result<(
 }
 
 /// A `read` batch: a part of a file's rows, committed with the file's last part, or the file's
-/// error (its old rows stay).
+/// error (its old rows stay). A file with a row before 2000 or more than a day after now, or with
+/// more than `MAX_STAGED_ROWS` rows, fails (its old rows stay) and the job goes on.
 fn read_batch(
     store: &mut Store,
     source: &mut SourceRun,
@@ -445,6 +491,7 @@ fn read_batch(
     done: &mut HashSet<String>,
     staged: &mut HashMap<String, Staged>,
     value: &Value,
+    now: i64,
 ) -> Result<Value, Error> {
     let file = value["file"]
         .as_str()
@@ -466,13 +513,31 @@ fn read_batch(
         source.failed += 1;
         return Err(bad("part number"));
     }
+    let mut refused = None;
     for r in value["rows"].as_array().ok_or_else(|| bad("rows"))? {
         let row = Row::from_json(r).map_err(|e| bad(&e))?;
+        if row.hour < MIN_HOUR || row.hour > now + MAX_AHEAD {
+            refused = Some(format!(
+                "{file}: a row's hour is before 2000 or more than a day from now"
+            ));
+            break;
+        }
         entry
             .rows
             .entry((row.hour, model_name(&row.model)))
             .or_default()
             .add(&row.tokens);
+        if entry.rows.len() > MAX_STAGED_ROWS {
+            refused = Some(format!("{file}: more than {MAX_STAGED_ROWS} rows"));
+            break;
+        }
+    }
+    if let Some(why) = refused {
+        staged.remove(&file);
+        done.insert(file);
+        source.failed += 1;
+        source.error = Some(why);
+        return Ok(json!({}));
     }
     entry.next += 1;
     if value["last"] == true {

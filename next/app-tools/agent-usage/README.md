@@ -17,7 +17,7 @@ ingest API parsers are built on.
 | `report` | `read` | `{"range", "granularity"?, "sources"?, "offsets", "now"}` | What the page shows (see [Reports](#reports)) |
 | `storage` | `read` | `{}` | `{"bytes", "rows", "files", "last_sync"}` |
 | `settings` | `read` | `{"interval_minutes": 0, 5, 15, 30 or 60}` | `{"interval_minutes"}` |
-| `roots` | `write`: each call asks the person | `{"source", "roots": [full paths]}`, an empty list for the parser's defaults | `{"source", "roots"}` |
+| `roots` | `write`: each call asks the person | `{"source", "roots": [full paths]}`: at most 16, at most 16 KiB as JSON; an empty list for the parser's defaults | `{"source", "roots"}` |
 | `clear` | `write`: each call asks the person | `{}` | `{"cleared": true}`; refused while a sync runs |
 | `ingest` | the deliver operation | A job's delivery | `{}` |
 
@@ -37,11 +37,20 @@ A sync, for each parser registered now:
 
 1. starts a `files` job: the parser lists its files with their size and modification time;
 2. once listed, starts `read` jobs naming the files whose size or modification time is not the one
-   stored, at most 64 a job and four jobs at once;
+   stored, at most 64 a job (fewer when the job's input would pass 60 KiB as JSON, under the host's
+   64 KiB) and four jobs at once;
 3. stores each file's rows when its last part arrives, replacing that file's rows and revision in
    one transaction. A file's parts that have arrived when its job ends early (cancelled, failed,
    the parser disabled) are dropped: the file keeps its old rows and is read again by the next
-   sync. A file a parser cannot read keeps its old rows.
+   sync. A file a parser cannot read keeps its old rows, and so does a file with a row whose hour
+   is before 2000-01-01 or more than a day after the hub's time, or with more than 100,000 rows
+   (distinct hours and models) before its last part: that file counts as failed, with the reason,
+   and its job goes on.
+
+A sync always ends. A job the hub hears nothing from for 60 seconds (the host waits at most 10 for
+a delivery, and delivers a job's end once, best-effort) is cancelled and counted as ended, with the
+reason shown on its source: a `files` job's source fails, and a `read` job's unfinished files keep
+their old rows. A source whose file list cannot be stored when its `files` job ends fails too.
 
 A file no longer listed is marked gone; its rows stay. A sync lives in the hub's memory: if the hub
 stops during one, the next sync starts over and reads only the files not yet stored.
@@ -57,7 +66,14 @@ job, so the file it was reading keeps its old rows.
 `all` over more than 92 days, otherwise days; `all` never has hours), the source IDs to include
 (none: every source), the viewer's UTC offsets over time (`[[unix seconds, minutes east of UTC]]`,
 ascending, the first holding from the beginning) and the time it asks at (`now`, unix seconds).
-Days, weeks, months and hours are the viewer's local ones.
+Days, weeks, months and hours are the viewer's local ones; `24h` is the 24 UTC hours to the end of
+the current one, so it is 24 real hours on a day the clocks change. A range that would have more
+than 800 buckets gets the next coarser granularity, and the answer's `granularity` says which; `all`
+starts no earlier than 2000.
+
+Rows are kept per UTC hour, so in a zone whose offset is not a whole hour (such as +05:30) each
+hour's tokens fall in the local hour, and day, that the UTC hour starts in: at a day's edge they can
+be 30 minutes off. A later schema could keep quarter hours.
 
 | Field | What it holds |
 | --- | --- |
@@ -66,7 +82,7 @@ Days, weeks, months and hours are the viewer's local ones.
 | `previous` | The tokens of the period just before, as long; `null` for `all` |
 | `active_days` | Days with tokens in the range |
 | `by_source`, `by_model` | `{"keys", "values"}`: the six keys with the most tokens, then `__other__` for the rest, and each bucket's totals for them |
-| `models` | Each model with tokens, most first |
+| `models` | Each model with tokens, most first; past the first 200, the rest as one `__other__` |
 | `sources` | Every source: `id`, `label`, `status`, and its `total` and `active_days` in the range, whatever the source filter |
 | `calendar` | `{"start", "totals"}`: each day's total, from the Monday on or before a year ago (or the first stored day's Monday, if earlier) to today |
 | `hours` | Seven rows (Monday first) of 24 hours' totals over the last 30 days |
@@ -77,11 +93,12 @@ The calendar and hours follow the source filter but not the range.
 ## The store
 
 `usage.db` in the hub's data folder (`PLUXY_TOOL_DATA_DIR`), which the app keeps when the hub is
-updated or removed. It holds, per source and file, the file's size and modification time and its
+updated or removed; the hub makes it readable by the person's account only. It holds, per source and file, the file's size and modification time and its
 rows per UTC hour and model; each source's label and custom roots; the interval and the last sync
 time. Rows are kept until the person clears them (`clear`), which deletes every row and file
-revision, so the next sync reads every file again. To delete the store itself, delete the hub's
-data folder while the app is not running.
+revision, so the next sync reads every file again. When the store cannot be read (it is damaged), every
+operation says so, and `clear` deletes it and starts an empty one. To delete the store itself,
+delete the hub's data folder while the app is not running.
 
 ## Schema 1
 
@@ -130,8 +147,10 @@ Rules:
 - Every batch and the output are at most 48 KiB, as the host requires. A source lists at most
   20,000 files, folders at most 8 deep below a root, without following links; a file larger than
   16 MiB is not read.
+- A row's `hour` is from 2000-01-01 to a day after the hub's time, and a file has at most 100,000
+  rows (distinct hours and models); otherwise the file fails and the job goes on.
 - The host names a batch's source; a parser cannot. A batch the hub refuses (a file the job does
-  not read, a part out of order, a row out of bounds) fails the job.
+  not read, a part out of order, a row's field out of bounds) fails the job.
 
 A change to these fields or rules that a hub at schema 1 would misread is schema 2: parsers then
 declare it, and the hub accepts both while parsers move.
