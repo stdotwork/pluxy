@@ -1789,7 +1789,7 @@ async function main(): Promise<number> {
           false,
           false,
           undefined,
-          undefined,
+          release,
           true,
         )),
       );
