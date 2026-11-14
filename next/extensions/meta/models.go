@@ -11,7 +11,9 @@ import (
 
 // modelsJSON is the list a Muse Code login or a Meta API key serves, in protocol.ModelList form:
 // the models of today's core's catalog (core/internal/registry/models/models.json, "meta"), with
-// their metadata. Every one of them is a text model, which the Responses requests serve.
+// their metadata. Every one of them is a text model, which the Responses requests serve. To
+// refresh it by hand, take the meta section of models.json in https://github.com/router-for-me/models, the file the old
+// core copied.
 //
 //go:embed models.json
 var modelsJSON []byte

@@ -14,7 +14,8 @@ import (
 // lists when an account's config names no models, with owned_by "google":
 // core/sdk/cliproxy/service_models.go, case "gemini" takes registry.GetGeminiModels (the gemini
 // section of core/internal/registry/models/models.json), and case "vertex" takes
-// registry.GetGeminiVertexModels (the vertex section).
+// registry.GetGeminiVertexModels (the vertex section). To refresh the lists by hand, take those
+// sections of models.json in https://github.com/router-for-me/models, the file the old core copied.
 //
 // Generated once from that catalog, with two differences. The imagen-* models are left out: their
 // only generation method is predict, which this extension does not serve. A model the catalog

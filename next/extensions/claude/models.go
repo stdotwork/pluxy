@@ -14,7 +14,8 @@ import (
 // names no models: core/sdk/cliproxy/service_models.go, case "claude", takes
 // registry.GetClaudeModels for both kinds (the claude section of
 // core/internal/registry/models/models.json) and owned_by "anthropic". Generated once from that
-// catalog, without the fields protocol.Model does not carry.
+// catalog, without the fields protocol.Model does not carry. To refresh it by hand, take the claude
+// section of models.json in https://github.com/router-for-me/models, the file the old core copied.
 //
 //go:embed models.json
 var modelsJSON []byte
