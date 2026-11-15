@@ -138,6 +138,17 @@
 // and claude through the launcher with no key in argv or environment; the key and a login canary
 // stay out of every window answer, confirmation and the app's output, and removing the package
 // leaves no process.
+// The Codex check (codex.ts, codex_native.rs) runs in one more session with that build:
+// pluxy/codex-setup (next/app-tools/codex, built here) with the execution program imports the
+// core's served models into catalog entries, applies, clears and restores Codex's config.toml and
+// model catalog in the run's HOME to hand-written bytes, after a native confirmation naming both
+// files and the key's label, keeping comments, the person's later edits and their login file;
+// through a stow link and a chezmoi-style root it changes only the targets, a replaced target
+// refuses, files Codex would not take refuse; a manual backup holds both files; its recipes start
+// a stand-in terminal and codex, a named Codex App program, and `codex app-server daemon restart`
+// through the launcher, with no key in argv or environment and an unrelated task left running;
+// the key and a login canary stay out of every window answer, confirmation and the app's output,
+// and removing the package leaves no process.
 // The save-file check (save.ts, save_native.rs) runs in one more session with that build: a signed
 // fixture tool hands bytes to the host's save service from a disclose operation, after its native
 // confirmation; GTK's own save dialog names the package and suggests the tool's name with control
@@ -184,6 +195,7 @@ import { buildAccessFixtures } from "./access";
 import { buildAdmissionFixtures, MARKER_FILE, PROFILE_FILE } from "./admission";
 import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
 import { buildClaudeCodeFixtures } from "./claude-code";
+import { buildCodexFixtures } from "./codex";
 import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
 import { runInstances } from "./instances";
@@ -636,7 +648,8 @@ interface Rotation {
  * runs only the core steps, against that core source. release: the app starts with that release
  * installed and selected. spawnCheck: only the spawn check. launcherCheck: only the launcher check.
  * claudeCode: only the Claude Code setup and launcher check. openCheck: only the check of a tool
- * opening a file in the person's own app. save: only the save-file check.
+ * opening a file in the person's own app. codex: only the Codex setup and launcher check.
+ * save: only the save-file check.
  */
 async function runApp(
   mode: Mode,
@@ -663,6 +676,7 @@ async function runApp(
   transactions = false,
   claudeCode = false,
   openCheck = false,
+  codex = false,
   save = false,
 ): Promise<string[]> {
   if (currentSession === undefined)
@@ -752,6 +766,7 @@ async function runApp(
       !reader &&
       !transactions &&
       !claudeCode &&
+      !codex &&
       !usage &&
       !save &&
       suite !== "access"
@@ -955,6 +970,29 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The Codex check's signed packages, Codex's files in HOME, its stand-in terminal, codex and
+    // Codex App program, its registry and trust profile, and its key and login canary.
+    const codexDir = codex ? join(root, "codex") : undefined;
+    if (codexDir) {
+      mkdirSync(codexDir);
+      const f = buildCodexFixtures(
+        codexDir,
+        dirs.home,
+        next,
+        codexProgram,
+        codexManifest,
+        executionProgram,
+        executionManifest,
+      );
+      nonce = f.nonce;
+      canaries = f.canaries;
+      launcherBin = f.bin;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -986,7 +1024,8 @@ async function runApp(
       !usageDir &&
       !transactionsDir &&
       !saveDir &&
-      !claudeCodeDir
+      !claudeCodeDir &&
+      !codexDir
     ) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
@@ -1053,6 +1092,7 @@ async function runApp(
         : {}),
       ...(transactionsDir ? { PLUXY_APP_TEST_TRANSACTIONS: transactionsDir } : {}),
       ...(claudeCodeDir ? { PLUXY_APP_TEST_CLAUDE_CODE: claudeCodeDir } : {}),
+      ...(codexDir ? { PLUXY_APP_TEST_CODEX: codexDir } : {}),
       ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
       ...(saveDir ? { PLUXY_APP_TEST_SAVE: saveDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
@@ -1387,6 +1427,16 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} claude-code ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: claude-code ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (codex) {
+      const r = steps.get("codex") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the Codex check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} codex ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: codex ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1956,6 +2006,9 @@ const executionProgram = join(appToolsTarget, "debug", "execution");
 /** pluxy/claude-code (next/app-tools/claude-code) and its manifest, for the Claude Code check. */
 const claudeCodeManifest = join(appTools, "claude-code", "pluxy-extension.json");
 const claudeCodeProgram = join(appToolsTarget, "debug", "claude-code");
+/** pluxy/codex-setup (next/app-tools/codex) and its manifest, for the Codex check. */
+const codexManifest = join(appTools, "codex", "pluxy-extension.json");
+const codexProgram = join(appToolsTarget, "debug", "codex-setup");
 /** The transaction library's fixture writer the transaction library check packs. */
 const fixtureWriter = join(appToolsTarget, "debug", "examples", "fixture-writer");
 let appImage = ""; // the smoke AppImage the sessions run
@@ -2045,6 +2098,9 @@ async function main(): Promise<number> {
   // pluxy/claude-code, which the Claude Code check installs.
   if (existsSync(claudeCodeManifest))
     run("cargo", ["build", "--locked", "-p", "claude-code", "--target-dir", appToolsTarget], appTools);
+  // pluxy/codex-setup, which the Codex check installs.
+  if (existsSync(codexManifest))
+    run("cargo", ["build", "--locked", "-p", "codex-setup", "--target-dir", appToolsTarget], appTools);
   // The build without artifact-test-trust, kept aside before the build with it replaces it. The
   // device check needs the one (a normal build refuses the curated native tool), the admission
   // session and the updater gate's identifier check the other (its features are the test
@@ -2498,6 +2554,37 @@ async function main(): Promise<number> {
             true,
           )),
         );
+      // The Codex setup and launcher check, on the same build.
+      if (runsSession("codex"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
       // The save-file check, on the same build.
       if (runsSession("save"))
         p.push(
@@ -2519,6 +2606,7 @@ async function main(): Promise<number> {
             false,
             undefined,
             release,
+            false,
             false,
             false,
             false,
