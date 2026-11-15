@@ -331,6 +331,14 @@ async function main(): Promise<number> {
       steps.get("confirmations")?.close_box === true,
       "the confirmation's close box was not checked",
     );
+    // Key entry whose window goes while it is open: the cancel answer, and key entry free again.
+    const gone = steps.get("owner_gone");
+    for (const field of ["entry_closed", "free_again", "connection_unchanged"])
+      check(
+        `owner gone ${field}`,
+        gone?.[field] === true,
+        `key entry with its window gone: ${JSON.stringify(gone)}`,
+      );
 
     const entry = steps.get("keyentry");
     for (const field of [

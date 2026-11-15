@@ -54,6 +54,8 @@ struct State {
     layout: Layout,
     mono: Option<HFONT>,
     done: bool,
+    /// Windows is destroying the dialog (its owner went, say): `finish` does not destroy it again.
+    destroying: bool,
     shown: bool,
     scroll: i32,
     /// The layout and texts, until `WM_INITDIALOG` makes the controls.
@@ -229,6 +231,7 @@ pub(crate) fn show(spec: Spec, owner: Option<HWND>) -> Result<Handle, String> {
         layout: l,
         mono: None,
         done: false,
+        destroying: false,
         shown: false,
         scroll: 0,
         spec: Some(spec),
@@ -680,26 +683,51 @@ fn cancel(hwnd: HWND) {
     }
 }
 
+/// Windows destroys the dialog other than through `finish` (its owner window was destroyed, which
+/// takes the windows it owns with it): the cancel answer, so whoever waits on the dialog hears
+/// it, and the dialog's state, timers, font and hook go as `finish` makes them go.
+fn destroyed(hwnd: HWND) {
+    let Some(st) = get(hwnd) else {
+        return;
+    };
+    {
+        let mut s = st.borrow_mut();
+        if s.done {
+            return;
+        }
+        s.destroying = true;
+    }
+    cancel(hwnd);
+    // The cancel answer may keep a dialog open; this one is going all the same.
+    finish(hwnd);
+}
+
 fn finish(hwnd: HWND) {
     let Some(st) = get(hwnd) else {
         return;
     };
-    let (owner, mono) = {
+    let (owner, mono, secret, destroying) = {
         let mut s = st.borrow_mut();
         if s.done {
             return;
         }
         s.done = true;
-        (s.owner, s.mono.take())
+        (s.owner, s.mono.take(), s.secret, s.destroying)
     };
     unsafe {
         let _ = KillTimer(Some(hwnd), TIMER_LIFETIME);
         let _ = KillTimer(Some(hwnd), TIMER_WATCH);
         let _ = KillTimer(Some(hwnd), TIMER_DELAY);
+        // Whatever the entry still holds, before the control goes.
+        if let Some(e) = secret {
+            let _ = SetWindowTextW(e, w!(""));
+        }
         if let Some(o) = owner {
             let _ = EnableWindow(o, true);
         }
-        let _ = DestroyWindow(hwnd);
+        if !destroying {
+            let _ = DestroyWindow(hwnd);
+        }
         if let Some(m) = mono {
             let _ = DeleteObject(HGDIOBJ(m.0));
         }
@@ -845,6 +873,10 @@ unsafe extern "system" fn dialog_proc(
         WM_CLOSE => {
             cancel(hwnd);
             1
+        }
+        WM_DESTROY => {
+            destroyed(hwnd);
+            0
         }
         WM_VSCROLL => {
             let pos = get(hwnd).map(|s| s.borrow().scroll).unwrap_or(0);

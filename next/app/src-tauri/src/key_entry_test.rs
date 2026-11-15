@@ -340,3 +340,46 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
     );
     Ok(())
 }
+
+/// Off Linux: the window that key entry is shown on goes while the entry is open (closed to the
+/// tray). The entry gives the cancel answer and closes with it, key entry can be asked for again,
+/// and the connection is as it was. Returns the window's webview once it is open again.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn owner_gone(app: &AppHandle, main: &Webview) -> Result<Webview, String> {
+    if app.state::<App>().conn.lock().unwrap().mode() == Some(crate::conn::Mode::Managed) {
+        return Ok(main.clone());
+    }
+    let before = app.state::<App>().conn.lock().unwrap().view();
+    main.eval("window.__TAURI_INTERNALS__.invoke('key_entry', {change: null}).catch(() => {})")
+        .map_err(|_| "could not request key entry")?;
+    ui::wait_shown(app, text::MANAGEMENT_TITLE)?;
+    app.get_window(WINDOW)
+        .ok_or("no window")?
+        .close()
+        .map_err(|e| e.to_string())?;
+    wait_for("the window to close to the tray", || {
+        app.get_window(WINDOW).is_none().then_some(())
+    })?;
+    // The cancel answer ends the request: key entry is free again, and its window has gone.
+    wait_for("key entry to end with its window", || {
+        let open = app.state::<App>().key_entry_open.load(Ordering::SeqCst);
+        (!open && ui::count(app, text::MANAGEMENT_TITLE) == 0).then_some(())
+    })?;
+    let after = app.state::<App>().conn.lock().unwrap().view();
+    let unchanged = after.signed_in == before.signed_in && after.remembered == before.remembered;
+    let reopen = app.clone();
+    app.run_on_main_thread(move || {
+        let _ = crate::open_window(&reopen);
+    })
+    .map_err(|_| "could not open the window again")?;
+    let main = wait_for("the window", || app.get_webview(MAIN))?;
+    wait_for("the window's shell", || {
+        eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
+    })?;
+    watch(&main)?;
+    log(
+        "owner_gone",
+        json!({"entry_closed": true, "free_again": true, "connection_unchanged": unchanged}),
+    );
+    Ok(main)
+}

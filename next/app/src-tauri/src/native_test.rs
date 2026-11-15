@@ -763,6 +763,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
     key_entry_test::check(app, &main)?;
     // In local and remote mode the window closes to the tray and opens again meanwhile.
     let main = rotation_test::check(app, &main)?;
+    // Key entry whose window goes while it is open (closed to the tray).
+    #[cfg(not(target_os = "linux"))]
+    let main = key_entry_test::owner_gone(app, &main)?;
     // Which way each native input went (`ui_driver.rs`).
     log("input", ui::input_counts());
     ingress::run(app, &main)?;
