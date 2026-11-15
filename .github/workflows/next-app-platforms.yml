@@ -128,7 +128,9 @@ jobs:
           New-Item -ItemType Directory -Force $dir | Out-Null
           function Attempt($how) {
             Remove-Item "$dir\*" -Force -ErrorAction SilentlyContinue
-            Set-Content "$dir\run.cmd" "@`"$exe`" outside_job lifetime_ --include-ignored --test-threads=1 > `"$dir\out.txt`" 2>&1`r`n@echo %ERRORLEVEL%> `"$dir\done.txt`""
+            # The exit code goes first to a file of its own (a redirection before echo: `echo 0>`
+            # would redirect stream 0), then into place, so done.txt never appears empty.
+            Set-Content "$dir\run.cmd" "@`"$exe`" outside_job lifetime_ --include-ignored --test-threads=1 > `"$dir\out.txt`" 2>&1`r`n@> `"$dir\done.tmp`" echo %ERRORLEVEL%`r`n@move /y `"$dir\done.tmp`" `"$dir\done.txt`" > nul"
             if ($how -eq 'WMI') {
               $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "cmd.exe /c `"$dir\run.cmd`""; CurrentDirectory = $dir }
               if ($r.ReturnValue -ne 0) { return "WMI could not start it ($($r.ReturnValue))" }
@@ -139,7 +141,7 @@ jobs:
             for ($i = 0; $i -lt 240 -and -not (Test-Path "$dir\done.txt"); $i++) { Start-Sleep -Milliseconds 500 }
             if ($how -ne 'WMI') { schtasks /delete /f /tn pluxy-outside-job | Out-Null }
             if (-not (Test-Path "$dir\done.txt")) { return "$($how): no result within 120 s" }
-            Get-Content "$dir\out.txt"
+            Get-Content "$dir\out.txt" | Write-Host
             $code = (Get-Content "$dir\done.txt").Trim()
             if ($code -eq '0' -and (Select-String -Quiet -Path "$dir\out.txt" -Pattern '^test result: ok\. 9 passed')) { return 'ok' }
             return "$($how): the test failed (exit $code)"
