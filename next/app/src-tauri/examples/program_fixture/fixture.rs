@@ -13,7 +13,8 @@
 //! - `store` and `launch` with what they were given, doing nothing else: the routing check's
 //!   write- and launch-class operations;
 //! - `relay` by calling another package's operation through the host, as the input says, and
-//!   answering with the host's answer to that;
+//!   answering with the host's answer to that (with `key_as`, the reference it got in `key` goes
+//!   into that field of the input it passes on);
 //! - `slow` after `ms` milliseconds, with its version, process and when it answered;
 //! - `crash` never: it exits at once with status 3;
 //! - `flood` never: it sends 2000 call frames the host refuses, and reads nothing more;
@@ -35,7 +36,8 @@
 //! - `start`, the spawn check's launcher (`src/spawn_native.rs`): appends the frame it got to
 //!   `record`, then asks the host to spawn the launch the call confirmed (a `spawn` frame naming
 //!   nothing but the call) and answers with the host's answer (with `again`, it asks a second
-//!   time for the same call, and answers that answer as `again` too);
+//!   time for the same call, and answers that answer as `again` too; with `hold`, a path, it
+//!   first writes `<hold>.ready` and waits, at most a minute, until `hold` exists);
 //! - `runtime` by sending a `runtime` frame with the input's `op` and `runtime` for the call (or,
 //!   for op `spawn`, a spawn request for that call), and answering with the host's answer;
 //! - `serve`, the client-key check's agent (`src/client_key_native.rs`): sends `GET /v1/models` to
@@ -235,6 +237,9 @@ fn relay(input: &mut impl Read, output: &mut impl Write, f: &Value, n: u64) -> V
         "op": f["input"]["op"],
         "input": f["input"]["input"],
     });
+    if let Some(field) = f["input"]["key_as"].as_str() {
+        call["input"][field] = f["input"]["key"].clone();
+    }
     if let (Some(extra), Some(frame)) = (f["input"]["extra"].as_object(), call.as_object_mut()) {
         for (k, v) in extra {
             frame.insert(k.clone(), v.clone());
@@ -1106,6 +1111,16 @@ pub fn main() -> ! {
                                 .open(record)
                             {
                                 let _ = writeln!(file, "{f}");
+                            }
+                        }
+                        // With `hold`, the spawn waits until the check lets it go.
+                        if let Some(hold) = f["input"]["hold"].as_str() {
+                            let _ = std::fs::write(format!("{hold}.ready"), "");
+                            let until = std::time::Instant::now() + Duration::from_secs(60);
+                            while !std::path::Path::new(hold).exists()
+                                && std::time::Instant::now() < until
+                            {
+                                std::thread::sleep(Duration::from_millis(50));
                             }
                         }
                         asked += 1;
