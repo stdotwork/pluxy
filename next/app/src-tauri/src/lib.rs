@@ -48,6 +48,8 @@ mod release_native;
 #[cfg(target_os = "linux")]
 pub mod route;
 #[cfg(target_os = "linux")]
+pub mod savefile;
+#[cfg(target_os = "linux")]
 pub mod spawn;
 mod startup;
 pub mod trust;
@@ -2008,7 +2010,8 @@ async fn access_grant(webview: Webview, id: String, resource: String) -> Result<
             let Some(path) = access_choose(&app, title, folder)? else {
                 return Ok(serde_json::json!({"outcome": "cancelled"}));
             };
-            let r = access::resolve(&path, &d.kind)?;
+            let own = app.state::<App>().access.lock().unwrap().own();
+            let r = access::resolve(&path, &d.kind, &own)?;
             let ops: Vec<&str> = d
                 .operations
                 .iter()
@@ -2043,7 +2046,7 @@ async fn access_grant(webview: Webview, id: String, resource: String) -> Result<
             if now.sha256 != f.sha256 || now.signed != f.signed || now.source != f.source {
                 return Err(format!("{id} changed during review; grant it again"));
             }
-            if access::resolve(&path, &d.kind)? != r {
+            if access::resolve(&path, &d.kind, &own)? != r {
                 return Err("the chosen file changed during review; grant it again".into());
             }
             let g = st.access.lock().unwrap().add(&now, &d, &r)?;
@@ -2898,8 +2901,19 @@ pub fn run() {
             if let Some(w) = &catalog.warning {
                 eprintln!("pluxy-app: {w}");
             }
+            // The app's own folders, which no Access grant may be, hold or lie inside: its
+            // settings, its data (vault, packages, tools, cores), and its caches.
             #[cfg(unix)]
-            let access_store = access::Store::open(&config);
+            let access_store = access::Store::open(
+                &config,
+                vec![
+                    config.clone(),
+                    app.path().app_data_dir()?,
+                    app.path().app_data_dir()?.join("vault"),
+                    app.path().app_local_data_dir()?,
+                    app.path().app_cache_dir()?,
+                ],
+            );
             #[cfg(unix)]
             if let Some(w) = &access_store.warning {
                 eprintln!("pluxy-app: {w}");
@@ -3023,6 +3037,12 @@ pub fn run() {
                 .state::<App>()
                 .programs
                 .set_spawner(route::spawner(handle.clone()));
+            // And their files frames, to the host's save service.
+            #[cfg(target_os = "linux")]
+            handle
+                .state::<App>()
+                .programs
+                .set_saver(route::saver(handle.clone()));
             // Tools get the app's home and a data folder of their own, beside the vault.
             #[cfg(target_os = "linux")]
             handle
