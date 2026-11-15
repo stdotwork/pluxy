@@ -9,9 +9,9 @@ reference: this folder implements it, it does not change it.
 
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
-cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi)
+cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi, usage-opencode)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
-cargo build --release --locked -p claude-code   # likewise claude-desktop and execution
+cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup and execution
 ```
 
 ## `lib/program`
@@ -48,7 +48,14 @@ format read whole (`parse`) gets a file of at most 16 MiB; a parser of a line-ba
 `streamed` and gets the file's lines one at a time (`parse_lines`, `LineReader`) whatever its size,
 a line over 16 MiB being skipped and counted: the reader holds one line, and what the parser keeps
 of a file meanwhile is its own (usage-claude keeps one small record per message). A parser at schema 2 sends a record that more than one
-file can hold as one keyed event (`Sink::event`). `fields` reads the fields usage records share, by
+file can hold as one keyed event (`Sink::event`). A file that holds many records, such as a
+database of sessions, can list as several entries (`Parser::entries`, `Listing::Parts`), each a file
+of the hub's with its own ID and revision, which the parser reads itself (`Parser::read_entry`,
+`Sink::revise`). An entry listed by more than one file (the same ID under two roots) is listed once,
+at its newest revision; one with an ID over 4,096 bytes is left out; a file whose entries cannot be
+listed now (`Listing::Failed`) is listed as itself, so its read reports why. Either of the last two
+makes the listing count as cut short, so the hub marks no file gone. The listing is sorted newest
+first and cut at 20,000 entries after that. `fields` reads the fields usage records share, by
 the old desktop app's rules: token counters under the names agents use, a model name and a time.
 The schemas are in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
 
@@ -259,6 +266,44 @@ raw entry ID leaves the parser.
 `pluxy/usage-pi`, the usage hub's parser of Pi's session files, from `~/.pi/agent/sessions` and
 `~/.pi/sessions` (the `HOME` the app gives). It is `lib/pi-sessions` with Pi's name and folder.
 
+## `usage-opencode`
+
+`pluxy/usage-opencode`, the usage hub's parser of OpenCode's local store, at schema 2. It reads
+OpenCode's database (`opencode.db`, or `opencode-<channel>.db` from a build of another channel) and
+its older JSON message files (`storage/message/<session>/<message>.json`) under
+`~/.local/share/opencode` and `~/.opencode` (from the `HOME` the app gives; the hub's `roots` name
+others, such as `$XDG_DATA_HOME/opencode`), and sends the hub token counts per message, and nothing
+else: no prompt, reply, title, folder name or raw session or message ID leaves the parser. It never
+writes an OpenCode file.
+
+- Each session in a database is a file of the hub's of its own, `<database path below the
+  root>#<hash of the session ID>`, so the hub reads again only the sessions that changed, and a
+  database of many sessions never passes the 100,000 rows the hub keeps of one file. A session's
+  revision is its message rows' count and data length and their latest update time, read through
+  SQLite, so a change still in the database's `-wal` counts. The same session in databases under
+  two roots is read from the one where it is newest. A database that cannot be opened (a linked
+  `-wal`, say) is listed as itself, its read fails with the reason, and none of its sessions is
+  marked gone. A JSON message file's ID is its path below the root with the session folder and file
+  name replaced by their hashes.
+- The database's current table, `session_message`, is read (its `assistant` rows, and `compaction`
+  rows that carry the compaction request's own tokens), and so is the `message` table of a database
+  OpenCode made before it, which OpenCode's migration copies into `session_message` and leaves in
+  place. A message is a keyed event, the key a hash of its message and session IDs, which OpenCode's
+  migrations (JSON store to database, `message` to `session_message`) keep; a JSON message file's
+  IDs are its file's and folder's names, where OpenCode's migration took them: a message stored in more
+  than one of these ways counts once. A fork copies its parent's history under new message IDs
+  (`<fork event>_<seq>`); a copy takes its original's key, so it counts once too. Forks from before
+  `session_message` cannot be told from new messages and count again.
+- OpenCode's output is the visible output, reasoning apart: the hub's output is output + reasoning,
+  and the total is input + output + reasoning + cache read + cache write (OpenCode's own total; a
+  provider total some older messages carry is not used, so every copy of a message counts the same).
+  A message's time is its `time.created`. Title and other side requests OpenCode records only as
+  session totals are not counted.
+- The database is opened read-only and nothing is made beside it, by `codex-sessions`' rules: when
+  its `-shm` is missing, it is opened immutable if its `-wal` is missing or empty, and otherwise copied
+  with its `-wal` into a private folder in the tool's data folder (`tmp`), read, and removed. A
+  database that is a link, or whose `-wal` or `-shm` is one, is not read.
+
 ## `codex-sessions`
 
 `pluxy/codex-sessions` reads Codex's local sessions, read-only, and shows them on its page
@@ -367,6 +412,64 @@ original back whatever the file holds now. A missing or empty file is an empty o
 reads the file twice (the pins, then the values); when another program wrote it in between, it
 reads again once, then refuses, so the values shown are always those of the file pinned.
 
+## `codex`
+
+`pluxy/codex-setup` (crate `codex-setup`; `pluxy/codex` is the core's Codex extension) sets up
+Codex to use pluxy's core and says how to start it, for the desktop app's Codex page
+(`../app/README.md`, "Codex"). It writes two files through `lib/transactions` (set `codex`, in this
+order): Codex's `config.toml` and the model catalog Codex reads from `model_catalog_json`,
+`pluxy-model-catalog.json` beside it by default. Both are link-preserving, journalled and backed up
+together; the original and applied images stay in the host's vault. It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: two selections (`file`, or `root` and `path`), config.toml then the catalog, by default `~/.codex/config.toml` and `~/.codex/pluxy-model-catalog.json` in the app's `HOME` (the tool sees no `CODEX_HOME`: select that folder as a root); `base_url` (optional) | The library's preview and `settings`: `state` (`not-configured`, `configured`, `needs-update`, or `refused` with a `reason` when Codex would not take either file), `base_url`, `key_set`, `provider` (the `model_provider` now), `model`, `profile`, `catalog`, `remote_compaction`, `agents`, `approval_model` and each catalog model's editable settings (`system_prompt_chars`, never a prompt); never the key |
+| `import` | `read` | `models`: the core's served models (`slug`, `upstream`, `display_name`, `non_codex`) | The editable settings of the entries they would get, and `missing`: those pluxy has no Codex template for. Nothing is written |
+| `apply` | `write`; secret `key` (value) | Two pins, `base_url`, `key`, `model` (one of the catalog's), `approval_model` (empty: Codex default), `remote_compaction`, `agents` (`enabled`, `max_threads`, `model`, `effort`, `interrupt`), `models` (1 to 64: `slug`, for a new entry `upstream` and `non_codex`, `display_name`, `description`, `context_window`, `max_context_window`, `effective_context_window_percent`, `auto_compact_token_limit`, `reasoning`, `default_reasoning`, `input_modalities`, `visible`, `tool_search`, optional `system_prompt`) | The library's outcome |
+| `clear` | `write` | Two pins | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | Two pins | The library's outcome: both originals back (a file that did not exist is removed) |
+| `backup-*` | as the library's | as the library's, two pins | Manual backups of both files; config.toml is diffed by TOML setting path |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | `target`: `cli` (default), `app` or `service`; for `app`, `program`: the full path of the program | `codex` in a terminal with no arguments; Codex App as a direct launch of that program (Codex has no Linux app; refused without a full path); `codex app-server daemon restart` as a direct launch in `HOME` |
+
+What `apply` writes in config.toml, edited in place with `toml_edit` (comments, formatting and
+everything else stay), with Codex's own names (source `openai/codex` at `b1573f102`, read
+2026-11-14: `codex-rs/config/src/config_toml.rs`, `codex-rs/model-provider-info`,
+`codex-rs/core/config.schema.json`):
+
+- at the top level: `model_provider = "pluxy"`, `model`, and `model_catalog_json` (the catalog's
+  file name when it is in config.toml's selected folder, which Codex resolves relative paths
+  against; else its full path);
+- `[model_providers.pluxy]`: `name = "pluxy"`, `base_url` (the core's address with `/v1`),
+  `wire_api = "responses"` (the only one Codex speaks) and `experimental_bearer_token` (the client
+  key, as the old app wrote it); `env_key` and `requires_openai_auth` are removed from that table;
+- **Remote compaction (experimental)**: `capabilities.remote_compaction = "v2"` in that table, or
+  removed (Codex's default for a custom provider is local compaction);
+- `[agents]` (`enabled`, `interrupt_message`, `max_concurrent_threads_per_session`,
+  `default_subagent_model`, `default_subagent_reasoning_effort`; empty ones removed), only when the
+  file has the table or the settings differ from Codex's defaults. Codex also reads `max_threads`
+  as the thread limit: the preview shows it when the other is not set, and Apply removes it.
+
+`auth.json` (the person's ChatGPT login) is never written. The catalog is Codex's `{"models": [...]}`.
+A new entry is made from pluxy's Codex client template for its upstream name
+(`../extensions/codex/client_models.json`, embedded at build time: the file the core serves Codex),
+keeping only the fields Codex requires and those that shape how it drives the model, with
+`model_messages.instructions_template` (Codex refuses a model without instructions); a full
+template is about 88 KB and a file at most 256 KiB, so about ten models fit. A model served by
+another provider gets the core's non-Codex values. Entries already in the file keep every field
+the form does not edit; each gets the form's settings, its place as `priority` and the approval
+model as `auto_review_model_override`. Clear's merge is TOML for config.toml (the current file
+edited in place; a key coming back from the original goes at its table's end) and JSON for the
+catalog, told apart by the file Apply wrote; a file holding only white space counts as none.
+`apply` and `clear` refuse, before writing, a config.toml that is not TOML, or whose
+`model_providers`, `model_providers.pluxy`, its `capabilities` or `agents` is not a table, or whose
+pluxy provider asks for another wire API; and a catalog that is not a JSON object with a `models`
+list of entries with a `slug`. `preview` pins both files all the same and reports them as
+`refused`, so Restore Backup and the backups can be reached: Restore puts both originals back
+whatever the files hold now. `preview` reads the files twice (the pins, then the values); when
+another program wrote one in between, it reads again once, then refuses, so the values shown are
+always those of the files pinned. Codex's files carry no version, and none is assumed.
+
 ## `claude-desktop`
 
 `pluxy/claude-desktop` sets up Claude Desktop to use pluxy's core as its third-party inference
@@ -430,25 +533,44 @@ version, and no minimum Claude Desktop version is assumed.
 
 ## `execution`
 
-`pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, or a
-program run directly. The app's Launcher page and its tray's Start… menu use it, and so will client
-recipes. It never starts a process itself and never holds a secret's value: the host confirms each
+`pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, a program
+run directly, or a file opened in the person's own app. The app's Launcher page and its tray's
+Start… menu use it, and so will client recipes and tools that open one of their files. It never starts a process itself and never holds a secret's value: the host confirms each
 launch natively, spawns exactly what was confirmed when the program asks, and resolves secrets from
 its vault at the spawn (`../app/app-host/README.md`, "Launches and managed runtimes").
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
 | `terminals` | `read` | `search_path`: the launch environment's PATH entries | `terminals`: Automatic first, then each terminal found, with its label and path |
-| `prepare` | `read` | `kind` (`terminal` or `direct`), `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path` | A launch's `executable`, `argv` and `cwd`, and for a terminal the `program` it runs |
+| `prepare` | `read` | `kind` (`terminal`, `direct` or `open`). For `terminal` and `direct`: `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path`. For `open`: `file`, `within` (the folder it must be inside), and optionally `search_path` | A launch's `executable`, `argv` and `cwd`; for a terminal the `program` it runs; for an open launch the `file` and `within` folder, resolved |
 | `launch` | `launch` | What `prepare` gave, with `lifetime`, `environment`, `stdin` and the secret field `key` (a reference only) | The host's answer to its spawn request: `lifetime`, and a managed runtime's `runtime` and `pid` |
 | `runtime` | `read` | `op` (`status`, `list`), `runtime` | The host's answer |
 | `control` | `write` | `op` (`stop`, `restart`), `runtime` | The host's answer |
 
-It exports only `launch`, under export contract 1: another package never looks at, stops or restarts
-its runtimes, and the app asks before each `control` call. Terminals, in Automatic's order (the old
+It exports `prepare` and `launch`, under export contract 1: another package prepares and starts
+launches, but never looks at, stops or restarts its runtimes, and the app asks before each
+`control` call. Terminals, in Automatic's order (the old
 desktop app's list): `x-terminal-emulator` (System terminal), `gnome-terminal` (`--`), `konsole`,
 `xfce4-terminal` (`-x`), `mate-terminal` (`-x`), `kitty`, `alacritty`, `ghostty` and `xterm`, each
 running the program after `-e` unless noted. A terminal launch runs `<terminal> <flag> <program>
 <args>`; a direct one `<program> <args>`. The program must be an executable file, the working folder
 an existing absolute folder.
+
+An **open** launch opens a file in the app the desktop opens its type with, as the old desktop
+app's "Edit with local app" did: it runs `xdg-open <file>`, or `gio open <file>` when there is no
+`xdg-open`, in the file's folder. The opener is taken only from `/usr/local/bin`, `/usr/bin`,
+`/bin` and `/run/current-system/sw/bin`: an open launch takes no `search_path` (only a
+native-test build of the program does, for the native test's stand-in opener). The caller names
+the file and the folder it may open files in (`within`), for the Codex session reader its
+sessions folder: both are resolved, links followed, and the file must be a regular file with no
+execute bit inside that folder, which must not be `/`, the home folder or a folder above it. The
+resolved file is the opener's argument. The app checks all of this again, and more (the file's
+content type, who owns and may write the file and folder, the launch's exact shape), shows the
+file, its type and the folder in its confirmation and binds them
+(`../app/app-host/README.md`, "Launches and managed runtimes"). Which app the opener then starts
+is the desktop's choice for the file's type: the confirmation names the opener, not that app.
+
+A call from another package (a tool's import, or a page's) may prepare only an open launch: a
+terminal or direct preparation answers whether programs and folders exist, so only the app's own
+window asks for those.
 

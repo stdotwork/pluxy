@@ -1,7 +1,7 @@
 [package]
 name = "execution"
 version = "0.1.0"
-description = "Prepares terminal and direct launches for pluxy's desktop app, which spawns them"
+description = "Prepares terminal, direct and open launches for pluxy's desktop app, which spawns them"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
@@ -9,3 +9,8 @@ publish.workspace = true
 [dependencies]
 pluxy-program = { path = "../lib/program" }
 serde_json = "1"
+
+[features]
+# For the native test only (next/app/native/run.ts): an open launch also takes its opener from the
+# input's search_path, for the test's stand-in opener. Never in a release build.
+native-test = []
