@@ -40,7 +40,7 @@ pub fn validate(inputs: &ReleaseInputs) -> Result<(), String> {
     let config = json_file(&inputs.tauri_config)?;
     let _: tauri::Config = serde_json::from_slice(&read_bounded(&inputs.tauri_config)?)
         .map_err(|_| "invalid final Tauri configuration")?;
-    if config.get("identifier").and_then(Value::as_str) != Some("dev.pluxy.desktop")
+    if config.get("identifier").and_then(Value::as_str) != Some(RELEASE_IDENTIFIER)
         || config.get("productName").and_then(Value::as_str) != Some("pluxy")
     {
         return Err("release identifier/product must be dev.pluxy.desktop/pluxy".into());
@@ -131,6 +131,9 @@ pub fn validate(inputs: &ReleaseInputs) -> Result<(), String> {
     }
     Ok(())
 }
+/// The release app's identifier (its macOS bundle identifier too).
+const RELEASE_IDENTIFIER: &str = "dev.pluxy.desktop";
+
 fn json_file(path: &Path) -> Result<Value, String> {
     serde_json::from_slice(&read_bounded(path)?)
         .map_err(|_| format!("{}: invalid JSON release input", path.display()))
@@ -551,10 +554,12 @@ fn well_formed_macho(file: &mut (impl Read + Seek), header: &[u8], len: u64) -> 
 
 /// Checks a bundle folder given as an artifact: a macOS app bundle (a folder named `*.app`), whose
 /// app executable is Contents/MacOS/<name>, a Mach-O file; or a Windows folder bundle, whose app
-/// executable is <name>.exe at its top, a PE file. Every file in it is checked as a file inside
-/// an AppImage is. Says whether the app executable carries the build's receipt.
+/// executable is <name>.exe at its top, a PE file. An app bundle's Info.plist must name the
+/// release (`check_info_plist`). Every file in it is checked as a file inside an AppImage is.
+/// Says whether the app executable carries the build's receipt.
 fn scan_bundle(path: &Path, name: &str, what: &str) -> Result<bool, String> {
     let (app, kind) = if path.extension().is_some_and(|e| e == "app") {
+        check_info_plist(path, name, what)?;
         (Path::new("Contents/MacOS").join(name), Exec::MachO)
     } else {
         (PathBuf::from(format!("{name}.exe")), Exec::Pe)
@@ -563,6 +568,59 @@ fn scan_bundle(path: &Path, name: &str, what: &str) -> Result<bool, String> {
     let mut receipt = false;
     scan_tree(path, path, (&app, kind), what, 0, &mut budget, &mut receipt)?;
     Ok(receipt)
+}
+
+/// An app bundle's Contents/Info.plist: a regular file of at most JSON_MAX bytes, a property list
+/// (XML or binary) whose top is a dictionary naming the release identifier as CFBundleIdentifier
+/// and name as CFBundleExecutable, with no test marker in any key, string or data in it. It is
+/// decoded before it is checked, so an entity or another encoding cannot hide the test identity
+/// from the byte scan.
+fn check_info_plist(bundle: &Path, name: &str, what: &str) -> Result<(), String> {
+    let path = bundle.join("Contents").join("Info.plist");
+    let what = format!("{what}!Contents/Info.plist");
+    let meta = fs::symlink_metadata(&path).map_err(|_| format!("{what}: missing"))?;
+    if !meta.is_file() {
+        return Err(format!("{what}: not a regular file"));
+    }
+    if meta.len() > JSON_MAX {
+        return Err(format!("{what}: too large to check"));
+    }
+    let bytes = fs::read(&path).map_err(|e| format!("{what}: {e}"))?;
+    let value = plist::Value::from_reader(std::io::Cursor::new(bytes))
+        .map_err(|_| format!("{what}: not a property list"))?;
+    fn marked(v: &plist::Value) -> Option<&'static str> {
+        let hit = |b: &[u8]| {
+            FORBIDDEN
+                .iter()
+                .find(|(m, _)| b.windows(m.len()).any(|w| w == *m))
+                .map(|(_, why)| *why)
+        };
+        match v {
+            plist::Value::String(s) => hit(s.as_bytes()),
+            plist::Value::Data(d) => hit(d),
+            plist::Value::Array(a) => a.iter().find_map(marked),
+            plist::Value::Dictionary(d) => d
+                .iter()
+                .find_map(|(k, v)| hit(k.as_bytes()).or_else(|| marked(v))),
+            _ => None,
+        }
+    }
+    if let Some(why) = marked(&value) {
+        return Err(format!("{what}: {why}"));
+    }
+    let dict = value
+        .as_dictionary()
+        .ok_or_else(|| format!("{what}: not a dictionary"))?;
+    let string = |key: &str| dict.get(key).and_then(plist::Value::as_string);
+    if string("CFBundleIdentifier") != Some(RELEASE_IDENTIFIER) {
+        return Err(format!(
+            "{what}: CFBundleIdentifier is not {RELEASE_IDENTIFIER}"
+        ));
+    }
+    if string("CFBundleExecutable") != Some(name) {
+        return Err(format!("{what}: CFBundleExecutable is not {name}"));
+    }
+    Ok(())
 }
 
 /// Streams reader with overlap, so markers split across reads are still found; no

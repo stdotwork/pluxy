@@ -1429,3 +1429,70 @@ fn release_config_checks_executable_headers() {
     drop(case);
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
+
+// Review of #338, finding 3: an app bundle's Info.plist is decoded and must name the release, and
+// test material in it is found however it is encoded. The clean bundle passes beside each.
+#[test]
+fn release_config_checks_app_bundle_info_plist() {
+    let f = Fixture::new();
+    if cfg!(feature = "artifact-test-trust") || cfg!(feature = "native-test") {
+        return;
+    }
+    let program = macho(env!("PLUXY_BUILD_RECEIPT").as_bytes());
+    let bundle = f.dir.join("pluxy.app");
+    let mut wrong = Vec::new();
+    let mut case = |what: &str, plist: Option<&[u8]>, reason: Option<&str>| {
+        let mut files: Vec<(&str, &[u8])> = vec![("Contents/MacOS/pluxy-app", &program)];
+        if let Some(plist) = plist {
+            files.push(("Contents/Info.plist", plist));
+        }
+        tree(&bundle, &files);
+        expect_on(&mut wrong, what, validate_alone(&f, &[&bundle]), reason);
+    };
+    case("the clean bundle", Some(PLIST.as_bytes()), None);
+    case("no Info.plist", None, Some("Contents/Info.plist: missing"));
+    case(
+        "an Info.plist that is not a property list",
+        Some(b"not a property list"),
+        Some("Info.plist: not a property list"),
+    );
+    let entity = PLIST.replace(
+        "<string>dev.pluxy.desktop</string>",
+        "<string>dev.pluxy.desktop&#46;test</string>",
+    );
+    case(
+        "the test identifier behind an XML entity",
+        Some(entity.as_bytes()),
+        Some("Info.plist: test build marker/identity"),
+    );
+    let other = PLIST.replace("dev.pluxy.desktop<", "dev.pluxy.other<");
+    case(
+        "another identifier",
+        Some(other.as_bytes()),
+        Some("CFBundleIdentifier is not dev.pluxy.desktop"),
+    );
+    let exe = PLIST.replace("<string>pluxy-app</string>", "<string>pluxy-other</string>");
+    case(
+        "another executable",
+        Some(exe.as_bytes()),
+        Some("CFBundleExecutable is not pluxy-app"),
+    );
+    // A binary property list, its name stored as UTF-16 (it has a character past ASCII), so no
+    // byte scan for the ASCII marker sees it.
+    let mut dict = plist::Dictionary::new();
+    dict.insert("CFBundleExecutable".into(), "pluxy-app".into());
+    dict.insert("CFBundleIdentifier".into(), "dev.pluxy.desktop".into());
+    dict.insert("CFBundleName".into(), "pluxy Test \u{2713}".into());
+    let mut binary = Vec::new();
+    plist::Value::Dictionary(dict)
+        .to_writer_binary(&mut binary)
+        .unwrap();
+    case(
+        "a binary Info.plist naming the test product in UTF-16",
+        Some(&binary),
+        Some("Info.plist: test build marker/identity"),
+    );
+    case("the clean bundle again", Some(PLIST.as_bytes()), None);
+    drop(case);
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}

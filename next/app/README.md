@@ -1395,7 +1395,10 @@ file, or a universal file of such parts), or a type-2 AppImage, a Windows folder
 macOS app bundle (a folder named `*.app`), and carry the build's receipt itself; anything else
 is refused, since it cannot be looked inside. A bundle folder is read in place, every entry
 checked as an AppImage's are below, and its app executable is `<mainBinaryName>.exe` at its top,
-a PE file, or `Contents/MacOS/<mainBinaryName>`, a Mach-O file; an app bundle's archive
+a PE file, or `Contents/MacOS/<mainBinaryName>`, a Mach-O file. An app bundle's
+`Contents/Info.plist` must be a property list (XML or binary) naming `dev.pluxy.desktop` as
+`CFBundleIdentifier` and the app executable as `CFBundleExecutable`; it is decoded and every
+key, string and data in it checked for test markers. An app bundle's archive
 (`.app.tar.gz`) is refused like any compressed file. An AppImage (found by its header,
 never run) must have its squashfs image where its runtime's header ends, with nothing after it
 but zero padding under 4 KiB. `unsquashfs` (package `squashfs-tools`) first lists the image
