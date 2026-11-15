@@ -277,12 +277,7 @@ fn frame_offsite(app: &AppHandle, main: &Webview, page: &str) -> Result<Value, S
             "csp": eval(&wv, "window.__cspBlocked"),
         }));
     }
-    main.eval("location.hash = '#/extensions'")
-        .map_err(|e| e.to_string())?;
-    wait_for("the last off-site page to close", || {
-        let pages = app.state::<App>().pages.lock().unwrap().labels();
-        pages.is_empty().then_some(())
-    })?;
+    // The last try's page stays open: the steps after this one inspect a page webview.
     Ok(json!({"tried": tries, "probe_hits": ingress::offsite_hits() - hits}))
 }
 
