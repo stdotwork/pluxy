@@ -1225,8 +1225,11 @@ The app's updater ([Application update](#application-update)) calls it.
   `close_range` with `CLOSE_RANGE_CLOEXEC`); a confirmed launch-class call is passed to its
   operation, and the app starts nothing itself yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
-- Vault: Linux only. Secrets are kept in a 0600 file in the app's data folder, not in the system
-  keyring, and only exact values are redacted. The window has no vault page yet. Secrets reach
+- Vault: Linux only. Its storage is built and unit tested on Windows (in the local data folder,
+  private by its access list) and macOS too, but not used there yet. Secrets are kept in a file
+  only the user may read (0600 on Linux and macOS) in the app's data folder, not in the system
+  keyring, and only exact values are redacted. On macOS the modes are checked, not extended access
+  lists. The window has no vault page yet. Secrets reach
   native tools' pipes and the environment of a process a confirmed launch starts (the launching
   tool holds only a reference); a client key is checked at each use, also at a launch's spawn and
   each restart. Backups have no retention: a package keeps at most 256.

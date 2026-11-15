@@ -1,4 +1,6 @@
 use super::*;
+use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 const KEY: &str = "sk-vault-test-canary-0123456789";
@@ -32,8 +34,40 @@ fn package_dir(d: &Dir, id: &str) -> PathBuf {
         .join(Vault::package_name(id))
 }
 
-fn mode(p: &Path) -> u32 {
-    fs::metadata(p).unwrap().permissions().mode() & 0o777
+/// Asserts p is private to this user: 0700 (a folder) or 0600 (a file) on Unix; on Windows by
+/// the rule of `private_windows.rs`.
+fn assert_private(p: &Path) {
+    #[cfg(unix)]
+    {
+        let m = fs::metadata(p).unwrap();
+        let want = if m.is_dir() { 0o700 } else { 0o600 };
+        assert_eq!(m.permissions().mode() & 0o777, want, "{}", p.display());
+    }
+    #[cfg(windows)]
+    assert!(crate::private_windows::tests::private(p), "{}", p.display());
+}
+
+/// Writes a file into the vault as the vault would (private), behind its back.
+fn plant(p: &Path, b: &[u8]) {
+    crate::managed::write_private(p, b).unwrap();
+    #[cfg(windows)]
+    crate::private_windows::make_private(&crate::private_windows::tests::open(p), false).unwrap();
+}
+
+/// Lets others read p.
+fn readable_by_others(p: &Path) {
+    #[cfg(unix)]
+    fs::set_permissions(p, fs::Permissions::from_mode(0o644)).unwrap();
+    #[cfg(windows)]
+    crate::private_windows::tests::readable_by_everyone(p);
+}
+
+/// Makes link a link to the folder target: a symlink on Unix, a junction on Windows.
+fn link_folder(target: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    crate::private_windows::tests::junction(target, link);
 }
 
 #[test]
@@ -87,8 +121,8 @@ fn secrets_are_kept_privately_listed_without_values_and_read_back() {
     assert!(list.contains("client key") && !list.contains(KEY));
     assert_eq!(v.value(&id).as_deref(), Some(KEY));
     let file = d.0.join("vault").join("secrets.json");
-    assert_eq!(mode(&d.0.join("vault")), 0o700);
-    assert_eq!(mode(&file), 0o600);
+    assert_private(&d.0.join("vault"));
+    assert_private(&file);
     // Read back by the next app.
     let again = Vault::open(d.0.join("vault"));
     assert_eq!(again.value(&id).as_deref(), Some(KEY));
@@ -102,7 +136,7 @@ fn a_damaged_vault_keeps_no_secret_and_changes_nothing() {
     let (d, v) = vault();
     v.add_secret("client key", KEY).unwrap();
     let file = d.0.join("vault").join("secrets.json");
-    crate::managed::write_private(&file, b"{not json").unwrap();
+    plant(&file, b"{not json");
     let broken = Vault::open(d.0.join("vault"));
     assert!(broken.broken().is_some());
     assert!(broken.secrets().is_empty());
@@ -116,8 +150,87 @@ fn a_damaged_vault_keeps_no_secret_and_changes_nothing() {
     assert_eq!(r.unwrap_err().code, "unavailable");
     assert_eq!(fs::read(&file).unwrap(), b"{not json");
     // A file others may read is refused too.
-    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+    readable_by_others(&file);
     assert!(Vault::open(d.0.join("vault")).broken().is_some());
+}
+
+#[test]
+fn secrets_others_may_read_are_refused() {
+    let (d, v) = vault();
+    v.add_secret("client key", KEY).unwrap();
+    let file = d.0.join("vault").join("secrets.json");
+    readable_by_others(&file);
+    let refused = Vault::open(d.0.join("vault"));
+    assert!(
+        refused.broken().unwrap().contains("no one else may read"),
+        "{:?}",
+        refused.broken()
+    );
+    assert!(refused.secrets().is_empty());
+}
+
+#[test]
+fn a_vault_folder_others_may_use_is_made_private_again() {
+    let (d, v) = vault();
+    let id = v.add_secret("client key", KEY).unwrap();
+    let root = d.0.join("vault");
+    #[cfg(unix)]
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    #[cfg(windows)]
+    crate::private_windows::tests::readable_by_everyone(&root);
+    let again = Vault::open(root.clone());
+    assert_eq!(again.value(&id).as_deref(), Some(KEY));
+    assert_private(&root);
+}
+
+#[test]
+fn only_plain_names_are_vault_names() {
+    for name in ["", ".", "..", "a/b", "a\0b"] {
+        assert!(check_name(name).is_err(), "{name:?}");
+    }
+    for name in [
+        "index.json",
+        ".index.json.0123456789abcdef.tmp",
+        "packages",
+        "b-0f",
+    ] {
+        assert!(check_name(name).is_ok(), "{name:?}");
+    }
+    // What Windows paths cannot name plainly, refused there (and checked everywhere).
+    for name in [
+        "CON", "con", "nul.txt", "Aux.json", "PRN", "COM1", "lpt9.x", "a:b", "a\\b", "x.", "x ",
+        "a*b", "a?b", "a<b", "a>b", "a|b", "a\"b", "a\tb",
+    ] {
+        assert!(windows_refuses(name), "{name:?}");
+        assert_eq!(check_name(name).is_err(), cfg!(windows), "{name:?}");
+    }
+    for name in [
+        "COM10",
+        "COM0",
+        "console",
+        "nulls",
+        "index.json",
+        ".x.tmp",
+        "LPT",
+    ] {
+        assert!(!windows_refuses(name), "{name:?}");
+    }
+}
+
+/// Windows: a folder the vault holds cannot be renamed or removed under it.
+#[cfg(windows)]
+#[test]
+fn a_held_vault_folder_cannot_be_moved() {
+    let (d, _v) = vault();
+    let root = d.0.join("vault");
+    let held = Folder::root(&root, true).unwrap().unwrap();
+    let packages = held.folder("packages", true).unwrap().unwrap();
+    assert!(fs::rename(&root, d.0.join("moved")).is_err());
+    assert!(fs::rename(root.join("packages"), root.join("other")).is_err());
+    assert_private(&root.join("packages"));
+    drop(packages);
+    drop(held);
+    fs::rename(&root, d.0.join("moved")).unwrap();
 }
 
 #[test]
@@ -377,8 +490,8 @@ fn backups_are_the_packages_own_private_files() {
         .is_ok());
     let dir = package_dir(&d, "pluxy/w");
     let file = dir.join(&b);
-    assert_eq!(mode(&file), 0o600);
-    assert_eq!(mode(&dir), 0o700);
+    assert_private(&file);
+    assert_private(&dir);
     assert!(file.starts_with(&d.0));
     let big = base64::engine::general_purpose::STANDARD.encode(vec![0u8; MAX_IMAGE + 1]);
     assert!(v
@@ -520,7 +633,7 @@ fn files_the_records_do_not_name_are_removed_and_damaged_records_fail() {
     .unwrap();
     let dir = package_dir(&d, "pluxy/w");
     for name in ["b-00000000000000000000000000000000", ".index.json.0123.tmp"] {
-        crate::managed::write_private(&dir.join(name), b"orphan").unwrap();
+        plant(&dir.join(name), b"orphan");
     }
     v.request(&w, "apply", None, &json!({"op": "backup.list"}))
         .unwrap();
@@ -531,7 +644,7 @@ fn files_the_records_do_not_name_are_removed_and_damaged_records_fail() {
     left.sort();
     assert_eq!(left, vec!["index.json".to_string()]);
     // Records that cannot be read are an error, not "no journals".
-    crate::managed::write_private(&dir.join("index.json"), b"{not json").unwrap();
+    plant(&dir.join("index.json"), b"{not json");
     assert!(v.open_journals("pluxy/w").unwrap_err().contains("damaged"));
     assert!(v.journals("pluxy/w").is_err());
 }
@@ -550,7 +663,7 @@ fn a_vault_folder_replaced_by_a_link_is_refused_not_followed() {
     let dir = package_dir(&d, "pluxy/w");
     let elsewhere = d.0.join("elsewhere");
     fs::rename(&dir, &elsewhere).unwrap();
-    std::os::unix::fs::symlink(&elsewhere, &dir).unwrap();
+    link_folder(&elsewhere, &dir);
     let data = base64::engine::general_purpose::STANDARD.encode(b"x");
     let e = v
         .request(
@@ -572,6 +685,6 @@ fn a_vault_folder_replaced_by_a_link_is_refused_not_followed() {
     // The vault folder itself as a link is refused too.
     let root = d.0.join("vault");
     fs::rename(&root, d.0.join("moved")).unwrap();
-    std::os::unix::fs::symlink(d.0.join("moved"), &root).unwrap();
+    link_folder(&d.0.join("moved"), &root);
     assert!(Vault::open(root).broken().is_some());
 }

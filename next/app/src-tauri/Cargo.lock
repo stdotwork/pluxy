@@ -2492,6 +2492,7 @@ dependencies = [
  "ureq",
  "url",
  "webkit2gtk",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

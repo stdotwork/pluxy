@@ -1,7 +1,9 @@
 //! The host-private vault (`../app-host/README.md`, "Secrets, references and the vault"): the
 //! secrets the person entered natively, the references to them the host gives native tools, and
-//! each tool's backups and mutation journals. It lives in the app's data folder (`vault`, 0700;
-//! files 0600), never in a folder a package can name, and no page or window API gives its paths,
+//! each tool's backups and mutation journals. It lives in the app's data folder (`vault`; on
+//! Windows in its local data folder, which does not roam with the profile, `folder`), private to
+//! this user (folders 0700 and files 0600 on Linux and macOS; on Windows an access list naming
+//! only this user and SYSTEM, `private_windows.rs`), never in a folder a package can name, and no page or window API gives its paths,
 //! a secret's value, a backup's bytes or a journal's intent. Same-user programs, native tools among
 //! them, could read it directly: this separates APIs and storage, it is no OS sandbox.
 //!
@@ -28,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
+#[cfg(unix)]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -210,19 +213,98 @@ fn printable(s: &str) -> bool {
     !s.chars().any(char::is_control)
 }
 
+/// The vault's folder: on Windows in the app's local data folder, so it stays on this machine
+/// when the profile roams; elsewhere in its data folder.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn folder<R: tauri::Runtime>(app: &impl tauri::Manager<R>) -> tauri::Result<PathBuf> {
+    #[cfg(windows)]
+    let dir = app.path().app_local_data_dir()?;
+    #[cfg(not(windows))]
+    let dir = app.path().app_data_dir()?;
+    Ok(dir.join("vault"))
+}
+
+/// Refuses a name that is not one plain name inside a vault folder. On Windows also one its
+/// paths cannot name plainly: one holding a character names there may not (`\`, `:` for a
+/// stream, `<>"|?*`, control characters), ending in a dot or space, or a device's name (`CON`,
+/// `NUL`, `COM1` and the like, with or without an extension).
+fn check_name(name: &str) -> Result<(), String> {
+    let refused = name.is_empty()
+        || name.contains(['/', '\0'])
+        || name == "."
+        || name == ".."
+        || (cfg!(windows) && windows_refuses(name));
+    if refused {
+        return Err(format!("{name:?} is not a vault file name"));
+    }
+    Ok(())
+}
+
+fn windows_refuses(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'));
+    device
+        || name.ends_with(['.', ' '])
+        || name
+            .chars()
+            .any(|c| c < ' ' || matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+}
+
+#[cfg(windows)]
+#[path = "vault_windows.rs"]
+mod folder_windows;
+#[cfg(windows)]
+use folder_windows::Folder;
+
 /// A vault folder, opened without following a link and used only relative to its handle: a
 /// folder replaced by a link (to somewhere else) is refused, not followed.
+#[cfg(unix)]
 struct Folder(fs::File);
 
+#[cfg(unix)]
 fn os_err(what: &str) -> String {
     format!("{what}: {}", std::io::Error::last_os_error())
 }
 
+#[cfg(unix)]
 fn c_name(name: &str) -> Result<std::ffi::CString, String> {
-    if name.is_empty() || name.contains('/') || name == "." || name == ".." {
-        return Err(format!("{name:?} is not a vault file name"));
-    }
+    check_name(name)?;
     std::ffi::CString::new(name).map_err(|e| e.to_string())
+}
+
+/// Flushes the folder open as f to disk, so a file renamed into it stays after a power loss.
+/// macOS's full flush (`F_FULLFSYNC`, what `sync_all` asks for there) fails on a file system
+/// without it; there it falls back to `fsync`, as SQLite does.
+#[cfg(unix)]
+fn sync_folder(f: &fs::File) -> std::io::Result<()> {
+    let done = f.sync_all();
+    #[cfg(target_os = "macos")]
+    if done.is_err() {
+        use std::os::fd::AsRawFd;
+        // SAFETY: f is an open descriptor.
+        if unsafe { libc::fsync(f.as_raw_fd()) } == 0 {
+            return Ok(());
+        }
+    }
+    done
+}
+
+/// Sets errno to 0, to tell the end of a listing from a failure (`readdir`).
+#[cfg(unix)]
+fn clear_errno() {
+    // SAFETY: the calling thread's errno.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        *libc::__errno_location() = 0
+    };
+    // SAFETY: as above.
+    #[cfg(target_os = "macos")]
+    unsafe {
+        *libc::__error() = 0
+    };
 }
 
 /// The data folder of native tool id (`publisher/name`, the host-verified package ID) under root
@@ -230,6 +312,7 @@ fn c_name(name: &str) -> Result<std::ffi::CString, String> {
 /// each opened without following a link (from its parent's descriptor below root), made (0700)
 /// when missing, and checked to be this user's folder that no one else may use. Its path, which
 /// the tool gets as `PLUXY_TOOL_DATA_DIR`; it stays across releases and when the tool is removed.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn tool_data_dir(root: &Path, id: &str) -> Result<PathBuf, String> {
     let part = |s: &str| {
         !s.is_empty()
@@ -248,6 +331,7 @@ pub(crate) fn tool_data_dir(root: &Path, id: &str) -> Result<PathBuf, String> {
     Ok(root.join(publisher).join(name))
 }
 
+#[cfg(unix)]
 impl Folder {
     /// A folder of this user's that no one else may use (made so), from its open handle.
     fn checked(f: fs::File, what: &str) -> Result<Folder, String> {
@@ -388,7 +472,7 @@ impl Folder {
                 if unsafe { libc::renameat(self.fd(), tmp.as_ptr(), self.fd(), c.as_ptr()) } != 0 {
                     return Err(os_err(name));
                 }
-                self.0.sync_all().map_err(|e| format!("{name}: {e}"))
+                sync_folder(&self.0).map_err(|e| format!("{name}: {e}"))
             });
         if done.is_err() {
             unsafe { libc::unlinkat(self.fd(), tmp.as_ptr(), 0) };
@@ -408,16 +492,47 @@ impl Folder {
         Ok(())
     }
 
-    /// The names inside it.
+    /// The names inside it, read through a copy of its descriptor.
     fn names(&self) -> Result<Vec<String>, String> {
-        let mut out = Vec::new();
-        for e in fs::read_dir(format!("/proc/self/fd/{}", self.fd())).map_err(|e| e.to_string())? {
-            let e = e.map_err(|e| e.to_string())?;
-            if let Some(n) = e.file_name().to_str() {
-                out.push(n.to_string());
-            }
+        // SAFETY: a copy of an open descriptor, closed with the listing that takes it.
+        let fd = unsafe { libc::fcntl(self.fd(), libc::F_DUPFD_CLOEXEC, 0) };
+        if fd < 0 {
+            return Err(os_err("the vault folder"));
         }
-        Ok(out)
+        // SAFETY: fd is open and ours; the listing owns it from here.
+        let dir = unsafe { libc::fdopendir(fd) };
+        if dir.is_null() {
+            let e = os_err("the vault folder");
+            // SAFETY: fdopendir failed, so fd is still ours to close.
+            unsafe { libc::close(fd) };
+            return Err(e);
+        }
+        // The copy shares the folder's read position: list from the start.
+        // SAFETY: dir is the open listing.
+        unsafe { libc::rewinddir(dir) };
+        let mut out = Vec::new();
+        let done = loop {
+            clear_errno();
+            // SAFETY: dir is the open listing; an entry stays valid until the next call.
+            let e = unsafe { libc::readdir(dir) };
+            if e.is_null() {
+                let err = std::io::Error::last_os_error();
+                break match err.raw_os_error() {
+                    Some(0) | None => Ok(out),
+                    _ => Err(format!("the vault folder: {err}")),
+                };
+            }
+            // SAFETY: d_name is the entry's NUL-terminated name.
+            let name = unsafe { std::ffi::CStr::from_ptr((*e).d_name.as_ptr()) };
+            if let Ok(n) = name.to_str() {
+                if n != "." && n != ".." {
+                    out.push(n.to_string());
+                }
+            }
+        };
+        // SAFETY: dir is the open listing, closed once (with its descriptor).
+        unsafe { libc::closedir(dir) };
+        done
     }
 }
 
@@ -1040,6 +1155,7 @@ impl Vault {
 }
 
 /// The vault as the program host reaches it.
+#[cfg(target_os = "linux")]
 impl crate::program::Private for Vault {
     fn journals(&self, id: &str) -> Result<Vec<Value>, String> {
         self.open_journals(id)
