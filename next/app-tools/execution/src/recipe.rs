@@ -1,21 +1,35 @@
-//! Launch recipes: the terminals pluxy knows on Linux, the openers that open a file in the
-//! person's own app, and how a typed launch becomes the executable, argv and cwd the person
-//! confirms. Nothing here starts a process.
+//! Launch recipes: the terminals pluxy knows, the openers that open a file in the person's own
+//! app, and how a typed launch becomes the executable, argv and cwd the person confirms. Nothing
+//! here starts a process. Linux's terminals and openers are below; Windows' and macOS' are in
+//! `recipe_windows.rs` and `recipe_macos.rs` (`os`), where the execution program itself is the
+//! terminal and opener (`launch.rs`).
 
 use pluxy_program::Error;
 use serde_json::{json, Value};
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+
+#[cfg(windows)]
+#[path = "recipe_windows.rs"]
+pub(crate) mod os;
+#[cfg(target_os = "macos")]
+#[path = "recipe_macos.rs"]
+pub(crate) mod os;
+#[cfg(windows)]
+use os::{executable, find};
 
 /// A terminal: its ID (its program's name), its label and the arguments before the command it
 /// runs. The order is Automatic's, as in the old desktop app; `xfce4-terminal` and `mate-terminal`
 /// take the rest of the command line after `-x` (their `-e` takes one command string).
+#[cfg(target_os = "linux")]
 pub struct Terminal {
     pub id: &'static str,
     pub label: &'static str,
     pub flags: &'static [&'static str],
 }
 
+#[cfg(target_os = "linux")]
 pub const TERMINALS: &[Terminal] = &[
     Terminal {
         id: "x-terminal-emulator",
@@ -70,10 +84,12 @@ pub const AUTOMATIC: &str = "automatic";
 /// The programs that open a file in the app the desktop opens its type with, and the arguments
 /// before the file, in the order tried: the old desktop app's first two (its opener library tries
 /// `xdg-open`, then `gio open`).
+#[cfg(target_os = "linux")]
 pub const OPENERS: &[(&str, &[&str])] = &[("xdg-open", &[]), ("gio", &["open"])];
 
 /// Where an open launch takes its opener from: the system's program folders, the only ones the
 /// app accepts an opener from (a caller's search path could name any program `xdg-open`).
+#[cfg(target_os = "linux")]
 pub const SYSTEM_PATH: &[&str] = &[
     "/usr/local/bin",
     "/usr/bin",
@@ -82,6 +98,7 @@ pub const SYSTEM_PATH: &[&str] = &[
 ];
 
 /// Whether p is an executable regular file.
+#[cfg(unix)]
 fn executable(p: &Path) -> bool {
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
@@ -93,17 +110,28 @@ fn folders(input: &Value) -> Vec<PathBuf> {
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
-        .filter(|d| d.starts_with('/'))
         .map(PathBuf::from)
+        .filter(|d| d.is_absolute())
         .collect()
 }
 
 /// The first executable named name in folders.
+#[cfg(unix)]
 fn find(name: &str, folders: &[PathBuf]) -> Option<PathBuf> {
     folders.iter().map(|d| d.join(name)).find(|p| executable(p))
 }
 
+/// `terminals`: Automatic, then each terminal found on the search path, with its path. On Windows
+/// and macOS, Automatic and each terminal the system has (`os::terminals`).
+#[cfg(not(target_os = "linux"))]
+pub fn terminals(_input: &Value) -> Value {
+    let mut out = vec![json!({"id": AUTOMATIC, "label": "Automatic"})];
+    out.extend(os::terminals());
+    json!({ "terminals": out })
+}
+
 /// `terminals`: Automatic, then each terminal found on the search path, with its path.
+#[cfg(target_os = "linux")]
 pub fn terminals(input: &Value) -> Value {
     let folders = folders(input);
     let mut out = vec![json!({"id": AUTOMATIC, "label": "Automatic"})];
@@ -125,7 +153,7 @@ fn program(input: &Value, folders: &[PathBuf]) -> Result<PathBuf, Error> {
                 "{what} must be an absolute path"
             )));
         }
-        if !executable(&p) {
+        if !runnable(&p) {
             return Err(Error::not_found(format!(
                 "{what} {} is not an executable file",
                 p.display()
@@ -137,10 +165,10 @@ fn program(input: &Value, folders: &[PathBuf]) -> Result<PathBuf, Error> {
         return absolute("the executable override", o);
     }
     let name = input["program"].as_str().unwrap_or_default();
-    if name.starts_with('/') {
+    if Path::new(name).is_absolute() {
         return absolute("the program", name);
     }
-    if name.is_empty() || name.contains('/') {
+    if name.is_empty() || name.contains('/') || (cfg!(windows) && name.contains(['\\', ':'])) {
         return Err(Error::invalid_request(
             "the program is a name or an absolute path",
         ));
@@ -148,16 +176,31 @@ fn program(input: &Value, folders: &[PathBuf]) -> Result<PathBuf, Error> {
     find(name, folders).ok_or_else(|| Error::not_found(format!("{name} is not on the PATH")))
 }
 
-/// A path's text, refused when it is not UTF-8: the host confirms UTF-8 paths only.
+/// Whether p is a program a launch may run: an executable file; on Windows also a batch file,
+/// which is read as the command shim it must be (`os::resolve`).
+fn runnable(p: &Path) -> bool {
+    #[cfg(windows)]
+    return executable(p) || os::batch(p);
+    #[cfg(unix)]
+    executable(p)
+}
+
+/// A path's text, refused when it is not UTF-8: the host confirms UTF-8 paths only. On Windows,
+/// its plain form (`C:\…`, not `\\?\C:\…`), refused when that names another file.
 fn text(what: &str, p: &Path) -> Result<String, Error> {
-    p.to_str()
-        .map(String::from)
-        .ok_or_else(|| Error::invalid_request(format!("{what} is not a UTF-8 path")))
+    let t = p
+        .to_str()
+        .ok_or_else(|| Error::invalid_request(format!("{what} is not a UTF-8 path")))?;
+    #[cfg(windows)]
+    return crate::winpath::plain(t).map_err(|e| Error::invalid_request(format!("{what}: {e}")));
+    #[cfg(unix)]
+    Ok(t.to_string())
 }
 
 /// An open launch, with its opener from `SYSTEM_PATH`. A native-test build also takes the
 /// opener from the input's `search_path`, for the native test's stand-in; a release build refuses
 /// it.
+#[cfg(target_os = "linux")]
 fn open(input: &Value) -> Result<Value, Error> {
     #[allow(unused_mut)]
     let mut fields = vec!["kind", "file", "within"];
@@ -171,10 +214,23 @@ fn open(input: &Value) -> Result<Value, Error> {
     open_from(input, &fields, &folders)
 }
 
+/// An open launch on Windows and macOS: the opener is the system's (`os::opener`), never taken
+/// from a search path. A native-test build accepts and ignores the stand-in's `search_path`: the
+/// native test uses the system's own route there.
+#[cfg(not(target_os = "linux"))]
+fn open(input: &Value) -> Result<Value, Error> {
+    #[allow(unused_mut)]
+    let mut fields = vec!["kind", "file", "within"];
+    #[cfg(feature = "native-test")]
+    fields.push("search_path");
+    open_from(input, &fields, &[])
+}
+
 /// Refused unless every folder from file's parent up to and including within (both resolved, file
 /// inside within) is a real folder that is the effective user's and writable by neither group nor
 /// others, as the host requires: another user could otherwise rename a different file into place
 /// before the opener reads it. Told here so a tool learns it before the person is asked.
+#[cfg(unix)]
 fn folders_own(file: &Path, within: &Path) -> Result<(), Error> {
     // SAFETY: geteuid has no preconditions and cannot fail.
     let me = unsafe { libc::geteuid() };
@@ -182,6 +238,28 @@ fn folders_own(file: &Path, within: &Path) -> Result<(), Error> {
         let m = std::fs::symlink_metadata(d)
             .map_err(|e| Error::not_found(format!("{}: {e}", d.display())))?;
         if !m.is_dir() || m.uid() != me || m.permissions().mode() & 0o022 != 0 {
+            return Err(Error::invalid_request(format!(
+                "the folder {} of the file to open must be your own, writable by no one else",
+                d.display()
+            )));
+        }
+        if d == within {
+            return Ok(());
+        }
+    }
+    Err(Error::invalid_request(
+        "the file to open must be inside its within folder",
+    ))
+}
+
+/// On Windows: every folder from file's parent up to and including within may be changed by no
+/// one but the user, SYSTEM and Administrators (its owner and access list, `others_may_write`).
+#[cfg(windows)]
+fn folders_own(file: &Path, within: &Path) -> Result<(), Error> {
+    for d in file.ancestors().skip(1) {
+        let others = pluxy_files::others_may_write(d)
+            .map_err(|e| Error::not_found(format!("{}: {e}", d.display())))?;
+        if !d.is_dir() || others {
             return Err(Error::invalid_request(format!(
                 "the folder {} of the file to open must be your own, writable by no one else",
                 d.display()
@@ -217,12 +295,17 @@ fn open_from(input: &Value, fields: &[&str], folders: &[PathBuf]) -> Result<Valu
     }
     let resolve = |what: &str, k: &str| -> Result<PathBuf, Error> {
         let p = input[k].as_str().unwrap_or_default();
-        if !p.starts_with('/') {
+        if !Path::new(p).is_absolute() {
             return Err(Error::invalid_request(format!(
                 "{what} must be an absolute path"
             )));
         }
-        std::fs::canonicalize(p).map_err(|e| Error::not_found(format!("{what} {p}: {e}")))
+        let r =
+            std::fs::canonicalize(p).map_err(|e| Error::not_found(format!("{what} {p}: {e}")))?;
+        // On Windows the plain form, the one shown and compared.
+        #[cfg(windows)]
+        let r = PathBuf::from(text(what, &r)?);
+        Ok(r)
     };
     let within = resolve("the within folder", "within")?;
     if !within.is_dir() {
@@ -232,7 +315,13 @@ fn open_from(input: &Value, fields: &[&str], folders: &[PathBuf]) -> Result<Valu
         )));
     }
     let home = std::env::var_os("HOME").and_then(|h| std::fs::canonicalize(h).ok());
-    if within == Path::new("/") || home.as_ref().is_some_and(|h| h.starts_with(&within)) {
+    // The root (`/`, or a drive's root on Windows) has no parent. On Windows HOME is the home
+    // folder the app gives its tools (the profile folder).
+    #[cfg(windows)]
+    let home = home
+        .map(|h| text("the home folder", &h).map(PathBuf::from))
+        .transpose()?;
+    if within.parent().is_none() || home.as_ref().is_some_and(|h| h.starts_with(&within)) {
         return Err(Error::invalid_request(
             "the within folder cannot be /, the home folder or a folder above it",
         ));
@@ -244,6 +333,7 @@ fn open_from(input: &Value, fields: &[&str], folders: &[PathBuf]) -> Result<Valu
             "the file to open must be a regular file",
         ));
     }
+    #[cfg(unix)]
     if meta.permissions().mode() & 0o111 != 0 {
         return Err(Error::invalid_request(
             "the file to open must not be executable",
@@ -255,11 +345,31 @@ fn open_from(input: &Value, fields: &[&str], folders: &[PathBuf]) -> Result<Valu
         ));
     }
     folders_own(&file, &within)?;
+    opened(&file, &within, folders)
+}
+
+/// An open launch of a checked file: on Windows and macOS with the system's opener (`os::opener`).
+#[cfg(not(target_os = "linux"))]
+fn opened(file: &Path, within: &Path, _: &[PathBuf]) -> Result<Value, Error> {
+    let (opener, argv) = os::opener(file)?;
+    let file = text("the file to open", file)?;
+    Ok(json!({
+        "executable": opener,
+        "argv": argv,
+        "cwd": text("the file's folder", Path::new(&file).parent().unwrap_or(within))?,
+        "file": file,
+        "within": text("the within folder", within)?,
+    }))
+}
+
+/// An open launch of a checked file: on Linux the first of `OPENERS` found in folders.
+#[cfg(target_os = "linux")]
+fn opened(file: &Path, within: &Path, folders: &[PathBuf]) -> Result<Value, Error> {
     let (path, flags) = OPENERS
         .iter()
         .find_map(|(name, flags)| find(name, folders).map(|p| (p, *flags)))
         .ok_or_else(|| Error::not_found("no opener (xdg-open or gio) found"))?;
-    let file = text("the file to open", &file)?;
+    let file = text("the file to open", file)?;
     let cwd = text(
         "the file's folder",
         Path::new(&file).parent().unwrap_or(Path::new("/")),
@@ -271,7 +381,7 @@ fn open_from(input: &Value, fields: &[&str], folders: &[PathBuf]) -> Result<Valu
         "argv": argv,
         "cwd": cwd,
         "file": file,
-        "within": text("the within folder", &within)?,
+        "within": text("the within folder", within)?,
     }))
 }
 
@@ -289,9 +399,15 @@ pub fn prepare(input: &Value) -> Result<Value, Error> {
             )));
         }
     }
+    #[cfg(not(target_os = "linux"))]
+    if input["kind"] == "direct" {
+        if let Some(app) = os::app(input)? {
+            return Ok(app);
+        }
+    }
     let folders = folders(input);
     let program = program(input, &folders)?;
-    let args: Vec<String> = input["args"]
+    let mut args: Vec<String> = input["args"]
         .as_array()
         .into_iter()
         .flatten()
@@ -305,14 +421,35 @@ pub fn prepare(input: &Value) -> Result<Value, Error> {
         return Err(Error::invalid_request("an argument holds a NUL"));
     }
     let cwd = input["cwd"].as_str().unwrap_or_default();
-    if !cwd.starts_with('/') || !Path::new(cwd).is_dir() {
+    if !Path::new(cwd).is_absolute() || !Path::new(cwd).is_dir() {
         return Err(Error::invalid_request(format!(
             "the working folder {cwd:?} is not an existing absolute folder"
         )));
     }
+    // On Windows a command shim becomes what it runs (Node and its script, or its program), and a
+    // program that reads its command line its own way takes no arguments.
+    #[cfg(windows)]
+    let program = {
+        let (program, before) = os::resolve(&program, &folders)?;
+        args.splice(0..0, before);
+        os::own_parser(&program, &args)?;
+        program
+    };
+    #[cfg(unix)]
+    let _ = &mut args;
+    #[cfg(windows)]
+    let program_text = text("the program", &program)?;
+    #[cfg(unix)]
     let program_text = program.to_string_lossy().into_owned();
     match input["kind"].as_str() {
         Some("direct") => Ok(json!({"executable": program_text, "argv": args, "cwd": cwd})),
+        #[cfg(not(target_os = "linux"))]
+        Some("terminal") => {
+            let wanted = input["terminal"].as_str().unwrap_or(AUTOMATIC);
+            let (executable, argv) = os::terminal(wanted, &program_text, &args)?;
+            Ok(json!({"executable": executable, "argv": argv, "cwd": cwd, "program": program_text}))
+        }
+        #[cfg(target_os = "linux")]
         Some("terminal") => {
             let wanted = input["terminal"].as_str().unwrap_or(AUTOMATIC);
             let (t, path) = TERMINALS
@@ -339,6 +476,12 @@ pub fn prepare(input: &Value) -> Result<Value, Error> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
+#[path = "recipe_macos_tests.rs"]
+mod macos_tests;
+#[cfg(all(test, target_os = "linux"))]
 #[path = "recipe_tests.rs"]
 mod tests;
+#[cfg(all(test, windows))]
+#[path = "recipe_windows_tests.rs"]
+mod windows_tests;
