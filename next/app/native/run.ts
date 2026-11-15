@@ -1748,10 +1748,12 @@ async function runApp(
     for (const [cmd, c] of Object.entries(invoked?.calls ?? {}))
       check(!c.ok, `${cmd} from the page's frame: ${JSON.stringify(c)}`);
 
-    // The frame's navigations off its site: each cancelled, none allowed, the channel open.
+    // The frame's navigations off its site: each stopped where the evidence shows, refused by the
+    // app's navigation handler or first by the app document's frame-src (native_test.rs
+    // frame_offsite); none allowed, the frame still there, the channel open.
     const offsite = steps.get("frame_offsite") as
       | {
-          tried?: { url: string; stayed: boolean }[];
+          tried?: { url: string; stayed: boolean; error?: unknown; stopped?: string | null }[];
           allowed?: unknown[];
           refused?: string[];
           open?: boolean;
@@ -1761,8 +1763,14 @@ async function runApp(
       offsite?.tried?.length === 3,
       `the page's frame did not try to leave its site: ${JSON.stringify(offsite)}`,
     );
-    for (const t of offsite?.tried ?? [])
+    for (const t of offsite?.tried ?? []) {
+      check(t.error == null, `the page's frame could not try ${t.url}: ${JSON.stringify(offsite)}`);
       check(t.stayed, `the page's frame left for ${t.url}: ${JSON.stringify(offsite)}`);
+      check(
+        (t.stopped === "hook" && offsite?.refused?.includes(t.url)) || t.stopped === "frame-src",
+        `nothing shows where ${t.url} stopped: ${JSON.stringify(offsite)}`,
+      );
+    }
     check(
       offsite?.allowed?.length === 0,
       `the app allowed the frame off its site: ${JSON.stringify(offsite)}`,

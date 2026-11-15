@@ -166,8 +166,86 @@ pub fn navigated(label: &str, url: &Url, allowed: bool) {
         .push(json!({"label": label, "url": url.as_str(), "allowed": allowed}));
 }
 
-fn navigations() -> Vec<Value> {
-    NAVIGATIONS.lock().unwrap().clone()
+/// The navigations of page label decided since the first `from`.
+fn navigations_of(label: &str, from: usize) -> Vec<Value> {
+    NAVIGATIONS.lock().unwrap()[from..]
+        .iter()
+        .filter(|d| d["label"] == label)
+        .cloned()
+        .collect()
+}
+
+/// The page's frame tries each OFFSITE address. Each try must be stopped where it is shown to
+/// stop: refused by the app's navigation handler ("hook"), or refused before it by the page's
+/// app document, whose policy allows frames from the page's site only ("frame-src": the
+/// document's `securitypolicyviolation` event names the address). The frame must still be on its
+/// address afterwards, the app must allow none, and the page's channel must stay open.
+fn frame_offsite(app: &AppHandle, wv: &Webview, label: &str) -> Result<Value, String> {
+    wv.eval("window.__cspBlocked = []; document.addEventListener('securitypolicyviolation', e => window.__cspBlocked.push({uri: e.blockedURI, directive: e.effectiveDirective})); window.__offsite = {}; window.addEventListener('message', e => { if (e.data?.nativeOffsiteTried) window.__offsite.tried = e.data.nativeOffsiteTried; if (typeof e.data?.nativeHere === 'string') window.__offsite.here = e.data.nativeHere; });")
+        .map_err(|e| e.to_string())?;
+    // Where the frame is: only a document still there answers.
+    let here = || -> Result<Value, String> {
+        wv.eval("window.__offsite = {}; document.querySelector('iframe').contentWindow.postMessage({nativeHere: true}, '*')")
+            .map_err(|e| e.to_string())?;
+        wait_for("the frame's address", || {
+            eval(wv, "window.__offsite.here ?? null").filter(|v| v.is_string())
+        })
+    };
+    let before = here()?;
+    let from = NAVIGATIONS.lock().unwrap().len();
+    let mut tries = Vec::new();
+    for url in OFFSITE {
+        let start = NAVIGATIONS.lock().unwrap().len();
+        let blocked = eval(wv, "window.__cspBlocked.length")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        wv.eval(format!(
+            "window.__offsite = {{}}; document.querySelector('iframe').contentWindow.postMessage({{nativeOffsite: {}}}, '*')",
+            json!(url)
+        ))
+        .map_err(|e| e.to_string())?;
+        let tried = wait_for("the frame's off-site try", || {
+            eval(wv, "window.__offsite.tried ?? null").filter(|v| v.is_object())
+        })?;
+        // Wait for the decision, up to a bound, rather than a fixed time.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let stopped = loop {
+            let decided = navigations_of(label, start);
+            if decided
+                .iter()
+                .any(|d| d["url"] == *url && d["allowed"] == false)
+            {
+                break Some("hook");
+            }
+            let csp = eval(
+                wv,
+                &format!("window.__cspBlocked.slice({blocked}).some(v => v.directive === 'frame-src' && v.uri !== '' && {}.startsWith(v.uri))", json!(url)),
+            );
+            if csp == Some(json!(true)) {
+                break Some("frame-src");
+            }
+            if Instant::now() > deadline {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        let after = here()?;
+        tries.push(json!({
+            "url": url,
+            "error": tried.get("error"),
+            "stopped": stopped,
+            "stayed": after == before,
+        }));
+    }
+    let decided = navigations_of(label, from);
+    Ok(json!({
+        "before": before,
+        "tried": tries,
+        "allowed": decided.iter().filter(|d| d["allowed"] == true).cloned().collect::<Vec<_>>(),
+        "refused": decided.iter().filter(|d| d["allowed"] == false).map(|d| d["url"].clone()).collect::<Vec<_>>(),
+        "csp": eval(wv, "window.__cspBlocked"),
+        "open": !app.state::<App>().pages.lock().unwrap().document_closed(label),
+    }))
 }
 
 /// Every app command and every command of the plugins this build registers.
@@ -703,26 +781,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
                 eval(&wv, "window.__frameInvoked ?? null").filter(|v| !v.is_null())
             })?,
         );
-        // The frame tries to leave its site: the app cancels each, and the channel stays open.
-        let reported = navigations();
-        wv.eval(format!(
-            "window.__frameOffsite = null; window.addEventListener('message', e => {{ if (e.data?.nativeOffsite) window.__frameOffsite = e.data.nativeOffsite; }}); document.querySelector('iframe').contentWindow.postMessage({{nativeOffsite: {}}}, '*')",
-            json!(OFFSITE)
-        ))
-        .map_err(|e| e.to_string())?;
-        let tried = wait_for("the frame's off-site navigations", || {
-            eval(&wv, "window.__frameOffsite ?? null").filter(|v| !v.is_null())
-        })?;
-        let decided: Vec<Value> = navigations().split_off(reported.len());
-        log(
-            "frame_offsite",
-            json!({
-                "tried": tried,
-                "allowed": decided.iter().filter(|d| d["allowed"] == true && OFFSITE.contains(&d["url"].as_str().unwrap_or_default())).collect::<Vec<_>>(),
-                "refused": decided.iter().filter(|d| d["allowed"] == false).map(|d| d["url"].clone()).collect::<Vec<_>>(),
-                "open": !app.state::<App>().pages.lock().unwrap().document_closed(&label),
-            }),
-        );
+        log("frame_offsite", frame_offsite(app, &wv, &label)?);
         // The real HTTP pages-site frame navigates while wrapper closed is deliberately lost.
         // The native navigation callback must invalidate admission before its new document loads.
         wv.eval("{ const original=window.fetch; window.fetch=(u,o)=>o?.body && JSON.parse(o.body).type==='closed' ? Promise.resolve(new Response('',{status:204})) : original(u,o); const frame=document.querySelector('iframe');const next=new URL(frame.src);next.hash='';next.search='?native-second';frame.src=next.href; }").map_err(|e|e.to_string())?;

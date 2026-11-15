@@ -110,22 +110,21 @@ window.addEventListener("message", async (e) => {
   parent.postMessage({ nativeInvoked: { internals: typeof inv === "function", calls } }, "*");
 });
 
-// And to leave its site: each navigation must be cancelled, so this document stays to answer.
-window.addEventListener("message", async (e) => {
-  if (e.source !== parent || !Array.isArray(e.data?.nativeOffsite)) return;
-  const before = location.href;
-  const tried = [];
-  for (const url of e.data.nativeOffsite) {
+// And to leave its site, one address at a time: the native test then asks where this frame is,
+// and only a document still here can answer.
+window.addEventListener("message", (e) => {
+  if (e.source !== parent) return;
+  if (typeof e.data?.nativeOffsite === "string") {
+    const url = e.data.nativeOffsite;
+    const tried = { url };
     try {
       location.href = url;
     } catch (err) {
-      tried.push({ url, stayed: location.href === before, error: short(err) });
-      continue;
+      tried.error = short(err);
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    tried.push({ url, stayed: location.href === before });
+    parent.postMessage({ nativeOffsiteTried: tried }, "*");
   }
-  parent.postMessage({ nativeOffsite: tried }, "*");
+  if (e.data?.nativeHere === true) parent.postMessage({ nativeHere: location.href }, "*");
 });
 
 const report = JSON.stringify(results);
