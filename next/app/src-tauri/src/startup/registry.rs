@@ -16,9 +16,9 @@ use std::path::Path;
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
 use windows_sys::Win32::System::Registry::{
-    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
-    RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE,
-    REG_BINARY, REG_OPTION_NON_VOLATILE, REG_SZ,
+    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+    HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_BINARY, REG_OPTION_NON_VOLATILE,
+    REG_SZ,
 };
 
 /// The two keys, below `HKEY_CURRENT_USER`.
@@ -86,9 +86,8 @@ fn read(subkey: &str, name: &str) -> Result<Option<(u32, Vec<u8>)>, String> {
     let name = wide(name);
     let (mut ty, mut len) = (0u32, 0u32);
     // SAFETY: asks for the size only.
-    let code = unsafe {
-        RegQueryValueExW(key.0, name.as_ptr(), null(), &mut ty, null_mut(), &mut len)
-    };
+    let code =
+        unsafe { RegQueryValueExW(key.0, name.as_ptr(), null(), &mut ty, null_mut(), &mut len) };
     if code == ERROR_FILE_NOT_FOUND {
         return Ok(None);
     }
@@ -248,12 +247,7 @@ pub fn restore(keys: &Keys, name: &str, previous: Snapshot) -> Result<(), String
         None => delete(&keys.run, name)?,
     }
     match approved {
-        Some(b) => write(
-            &keys.approved,
-            name,
-            REG_BINARY,
-            &b,
-        ),
+        Some(b) => write(&keys.approved, name, REG_BINARY, &b),
         None => delete(&keys.approved, name),
     }
 }
@@ -394,16 +388,29 @@ mod tests {
         assert!(r.exists && r.owned && !r.enabled);
         assert!(!s.view(on).unwrap().preferences.autostart_enabled);
         // The even first byte is on, as Windows writes it.
-        write(&t.keys.approved, NAME, REG_BINARY, &[2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+        write(
+            &t.keys.approved,
+            NAME,
+            REG_BINARY,
+            &[2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        )
+        .unwrap();
         assert!(s.registration().unwrap().enabled);
         write(&t.keys.approved, NAME, REG_BINARY, &off).unwrap();
         s.save(on, || Ok(t.exe())).unwrap();
         assert!(s.registration().unwrap().enabled);
         assert!(read(&t.keys.approved, NAME).unwrap().is_none());
-        // Removing removes the mark too.
-        write(&t.keys.approved, NAME, REG_BINARY, &off).unwrap();
+        // Removing removes the mark too (the one Windows writes when the item is on).
+        write(
+            &t.keys.approved,
+            NAME,
+            REG_BINARY,
+            &[2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        )
+        .unwrap();
         s.save(Preferences::default(), || Ok(t.exe())).unwrap();
         assert!(read(&t.keys.approved, NAME).unwrap().is_none());
+        assert!(read(&t.keys.run, NAME).unwrap().is_none());
     }
 
     #[test]

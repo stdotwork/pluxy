@@ -474,7 +474,10 @@ mod tests {
             || Ok(s.base.join("pluxy app")),
         )
         .unwrap();
-        assert_eq!(s.entry(), s.base.join("autostart/dev.pluxy.desktop.desktop"));
+        assert_eq!(
+            s.entry(),
+            s.base.join("autostart/dev.pluxy.desktop.desktop")
+        );
         assert_eq!(std::fs::read_to_string(s.entry()).unwrap(), format!("[Desktop Entry]\nType=Application\nName=pluxy\nExec=\"{}/pluxy app\" --autostart\nTerminal=false\nX-Pluxy-Autostart=true\n", s.base.display()));
         s.save(Preferences::default(), || Ok(s.base.join("pluxy app")))
             .unwrap();
@@ -746,7 +749,8 @@ mod macos_tests {
     const ID: &str = "dev.pluxy.desktop";
 
     fn store() -> Store {
-        let root = std::env::temp_dir().join(format!("pluxy-startup-{}", crate::managed::random_key()));
+        let root =
+            std::env::temp_dir().join(format!("pluxy-startup-{}", crate::managed::random_key()));
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("pluxy app"), b"fixture").unwrap();
         Store::new(root.join(ID), root, ID.into())
@@ -763,7 +767,10 @@ mod macos_tests {
     fn the_agent_is_written_in_the_users_launch_agents_and_removed() {
         let s = store();
         let exe = s.base.join("pluxy app");
-        assert_eq!(s.entry(), s.base.join("LaunchAgents/dev.pluxy.desktop.plist"));
+        assert_eq!(
+            s.entry(),
+            s.base.join("LaunchAgents/dev.pluxy.desktop.plist")
+        );
         s.save(on(), || Ok(exe.clone())).unwrap();
         let bytes = fs::read(s.entry()).unwrap();
         assert_eq!(bytes, launch_agent(&exe, ID).unwrap());
@@ -772,7 +779,12 @@ mod macos_tests {
             fs::metadata(s.entry()).unwrap().permissions().mode() & 0o022,
             0
         );
-        assert!(s.view(Preferences::default()).unwrap().preferences.autostart_enabled);
+        assert!(
+            s.view(Preferences::default())
+                .unwrap()
+                .preferences
+                .autostart_enabled
+        );
         s.save(Preferences::default(), || {
             panic!("removing does not resolve the executable")
         })
@@ -791,7 +803,8 @@ mod macos_tests {
         let foreign = fs::read(s.entry()).unwrap();
         assert!(s.view(on()).unwrap().registration_conflict);
         assert!(s.save(on(), || Ok(exe.clone())).is_err());
-        s.save(Preferences::default(), || panic!("must not resolve")).unwrap();
+        s.save(Preferences::default(), || panic!("must not resolve"))
+            .unwrap();
         assert_eq!(fs::read(s.entry()).unwrap(), foreign);
         fs::remove_file(s.entry()).unwrap();
         // A directory where the settings file goes makes the writer's rename fail.

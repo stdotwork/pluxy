@@ -114,23 +114,22 @@ pub mod ipc {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use windows_sys::Win32::Foundation::{
-        CloseHandle, GetLastError, LocalFree, ERROR_BROKEN_PIPE, ERROR_IO_PENDING,
-        ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_SEM_TIMEOUT, GENERIC_READ, GENERIC_WRITE,
-        HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+        CloseHandle, GetLastError, LocalFree, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_PIPE_BUSY,
+        ERROR_PIPE_CONNECTED, ERROR_SEM_TIMEOUT, GENERIC_READ, GENERIC_WRITE, HANDLE,
+        INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::Security::Authorization::{
         ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
         SDDL_REVISION_1,
     };
     use windows_sys::Win32::Security::{
-        EqualSid, GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
-        TOKEN_QUERY, TOKEN_USER, TokenUser,
+        EqualSid, GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
+        TOKEN_QUERY, TOKEN_USER,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, ReadFile, WriteFile, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED,
         OPEN_EXISTING, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
     };
-    use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
     use windows_sys::Win32::System::Pipes::{
         ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeServerProcessId, WaitNamedPipeW,
         PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
@@ -140,6 +139,7 @@ pub mod ipc {
         CreateEventW, GetCurrentProcess, OpenProcess, OpenProcessToken, ResetEvent, SetEvent,
         WaitForMultipleObjects, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
     };
+    use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 
     /// What a pipe's name starts with: nothing else is connected to.
     const PIPE_PREFIX: &str = r"\\.\pipe\pluxy-app-";
@@ -168,7 +168,9 @@ pub mod ipc {
 
     /// Whole milliseconds, rounded up, for a wait.
     fn millis(d: Duration) -> u32 {
-        d.as_millis().saturating_add(1).min(u128::from(u32::MAX - 1)) as u32
+        d.as_millis()
+            .saturating_add(1)
+            .min(u128::from(u32::MAX - 1)) as u32
     }
 
     /// TimedOut once `deadline` has passed.
@@ -209,8 +211,9 @@ pub mod ipc {
         }
         let mut buf = vec![0u64; (len as usize).div_ceil(8)];
         // SAFETY: buf holds at least len bytes.
-        if unsafe { GetTokenInformation(token.0, TokenUser, buf.as_mut_ptr().cast(), len, &mut len) }
-            == 0
+        if unsafe {
+            GetTokenInformation(token.0, TokenUser, buf.as_mut_ptr().cast(), len, &mut len)
+        } == 0
         {
             return Err(io::Error::last_os_error());
         }
@@ -646,6 +649,11 @@ pub mod ipc {
                         }
                     }
                 }
+                // A pipe instance waits for the next client before anything else: with none, a
+                // client finds every instance busy (or no pipe) while this thread waits.
+                if !failed && connecting.is_none() && conns.len() < MAX_CONNECTIONS {
+                    continue;
+                }
                 let mut handles = vec![stop.0];
                 if let Some(c) = &connecting {
                     handles.push(c.op.ev.0);
@@ -866,6 +874,32 @@ pub mod ipc {
             rx.recv_timeout(bound).ok()
         }
 
+        /// A security descriptor's access list as SDDL text.
+        fn sddl_of(sd: PSECURITY_DESCRIPTOR) -> String {
+            let mut text: *mut u16 = null_mut();
+            // SAFETY: sd is a valid descriptor; text is written, and freed below, on success.
+            let ok = unsafe {
+                ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                    sd,
+                    SDDL_REVISION_1,
+                    DACL_SECURITY_INFORMATION,
+                    &mut text,
+                    null_mut(),
+                )
+            };
+            assert_ne!(ok, 0, "{}", io::Error::last_os_error());
+            // SAFETY: text is a NUL-terminated string the call allocated.
+            unsafe {
+                let mut n = 0;
+                while *text.add(n) != 0 {
+                    n += 1;
+                }
+                let s = String::from_utf16_lossy(std::slice::from_raw_parts(text, n));
+                LocalFree(text.cast());
+                s
+            }
+        }
+
         /// A connection to the pipe as any program could make it, with no message sent.
         fn raw(pipe: &Path) -> fs::File {
             fs::OpenOptions::new()
@@ -922,7 +956,10 @@ pub mod ipc {
             let pipe = pipe_of(&i);
             assert!(dir.join(ADDRESS).exists());
             drop(i);
-            assert!(!dir.join(ADDRESS).exists(), "the address goes with its owner");
+            assert!(
+                !dir.join(ADDRESS).exists(),
+                "the address goes with its owner"
+            );
             // The same name is made again as the first of its name: nothing of the old pipe is
             // left, once the serving thread has seen the stop.
             let again = first(&dir);
@@ -995,11 +1032,24 @@ pub mod ipc {
                 LocalFree(sd);
                 s
             };
-            let sid = own_sid().unwrap();
+            // The user's own SID, as SDDL writes it (the built-in Administrator is "LA"): the
+            // same text as an access list made for this user by the app's own code.
+            let reference = sddl_of(Security::this_user().unwrap().sd);
+            let trustee = |s: &str| {
+                s.trim_end_matches(')')
+                    .rsplit(';')
+                    .next()
+                    .unwrap()
+                    .to_owned()
+            };
             assert!(sddl.starts_with("D:P("), "the access list inherits: {sddl}");
             assert_eq!(sddl.matches('(').count(), 1, "more than one entry: {sddl}");
             assert!(sddl.starts_with("D:P(A;"), "{sddl}");
-            assert!(sddl.ends_with(&format!(";;;{sid})")), "{sddl} is not {sid}'s alone");
+            assert_eq!(
+                trustee(&sddl),
+                trustee(&reference),
+                "{sddl} is not this user's alone ({reference})"
+            );
             // The positive control on the same route: the user's own launch gets through.
             drop(h);
             assert!(matches!(
@@ -1019,7 +1069,10 @@ pub mod ipc {
             let squat = Security::this_user().unwrap();
             let _held = create_instance(&wide(name.as_os_str()), &squat, true).unwrap();
             let e = i.listen(&socket_dirs(), || true).err().unwrap();
-            assert!(i.socket().is_none(), "served a pipe it did not make first: {e}");
+            assert!(
+                i.socket().is_none(),
+                "served a pipe it did not make first: {e}"
+            );
             // A later launch is told at once that the window cannot be raised.
             let t0 = Instant::now();
             let e = start(&dir, Duration::from_secs(10)).err().unwrap();

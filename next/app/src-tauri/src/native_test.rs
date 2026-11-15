@@ -834,8 +834,15 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
         }
     }
     if let Some(main) = app.get_webview(MAIN) {
+        // Until a core is installed the window shows only the Connection page, which is all
+        // there is to see where the app runs no managed core (Windows and macOS for now).
+        let ready = if cfg!(target_os = "linux") {
+            "document.querySelector('[data-part=nav]') !== null"
+        } else {
+            "document.querySelector('[data-part=nav]') !== null || document.body.innerText.includes('Save startup preferences')"
+        };
         wait_for("startup window shell", || {
-            eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
+            eval(&main, ready).filter(|v| v == true)
         })?;
     }
     let connection = app.state::<App>().conn.lock().unwrap().view();

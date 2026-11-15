@@ -1237,7 +1237,11 @@ mod tests {
         })
         .unwrap();
         let sock = socket_of(&i);
-        assert!(sock.as_os_str().len() <= MAX_SOCKET_PATH, "{}", sock.display());
+        assert!(
+            sock.as_os_str().len() <= MAX_SOCKET_PATH,
+            "{}",
+            sock.display()
+        );
         assert!(
             sock.parent()
                 .unwrap()
