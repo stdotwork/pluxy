@@ -441,25 +441,44 @@ reads again once, then refuses, so the values shown are always those of the file
 
 ## `execution`
 
-`pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, or a
-program run directly. The app's Launcher page and its tray's Start… menu use it, and so will client
-recipes. It never starts a process itself and never holds a secret's value: the host confirms each
+`pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, a program
+run directly, or a file opened in the person's own app. The app's Launcher page and its tray's
+Start… menu use it, and so will client recipes and tools that open one of their files. It never starts a process itself and never holds a secret's value: the host confirms each
 launch natively, spawns exactly what was confirmed when the program asks, and resolves secrets from
 its vault at the spawn (`../app/app-host/README.md`, "Launches and managed runtimes").
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
 | `terminals` | `read` | `search_path`: the launch environment's PATH entries | `terminals`: Automatic first, then each terminal found, with its label and path |
-| `prepare` | `read` | `kind` (`terminal` or `direct`), `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path` | A launch's `executable`, `argv` and `cwd`, and for a terminal the `program` it runs |
+| `prepare` | `read` | `kind` (`terminal`, `direct` or `open`). For `terminal` and `direct`: `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path`. For `open`: `file`, `within` (the folder it must be inside), and optionally `search_path` | A launch's `executable`, `argv` and `cwd`; for a terminal the `program` it runs; for an open launch the `file` and `within` folder, resolved |
 | `launch` | `launch` | What `prepare` gave, with `lifetime`, `environment`, `stdin` and the secret field `key` (a reference only) | The host's answer to its spawn request: `lifetime`, and a managed runtime's `runtime` and `pid` |
 | `runtime` | `read` | `op` (`status`, `list`), `runtime` | The host's answer |
 | `control` | `write` | `op` (`stop`, `restart`), `runtime` | The host's answer |
 
-It exports only `launch`, under export contract 1: another package never looks at, stops or restarts
-its runtimes, and the app asks before each `control` call. Terminals, in Automatic's order (the old
+It exports `prepare` and `launch`, under export contract 1: another package prepares and starts
+launches, but never looks at, stops or restarts its runtimes, and the app asks before each
+`control` call. Terminals, in Automatic's order (the old
 desktop app's list): `x-terminal-emulator` (System terminal), `gnome-terminal` (`--`), `konsole`,
 `xfce4-terminal` (`-x`), `mate-terminal` (`-x`), `kitty`, `alacritty`, `ghostty` and `xterm`, each
 running the program after `-e` unless noted. A terminal launch runs `<terminal> <flag> <program>
 <args>`; a direct one `<program> <args>`. The program must be an executable file, the working folder
 an existing absolute folder.
+
+An **open** launch opens a file in the app the desktop opens its type with, as the old desktop
+app's "Edit with local app" did: it runs `xdg-open <file>`, or `gio open <file>` when there is no
+`xdg-open`, in the file's folder. The opener is taken only from `/usr/local/bin`, `/usr/bin`,
+`/bin` and `/run/current-system/sw/bin`: an open launch takes no `search_path` (only a
+native-test build of the program does, for the native test's stand-in opener). The caller names
+the file and the folder it may open files in (`within`), for the Codex session reader its
+sessions folder: both are resolved, links followed, and the file must be a regular file with no
+execute bit inside that folder, which must not be `/`, the home folder or a folder above it. The
+resolved file is the opener's argument. The app checks all of this again, and more (the file's
+content type, who owns and may write the file and folder, the launch's exact shape), shows the
+file, its type and the folder in its confirmation and binds them
+(`../app/app-host/README.md`, "Launches and managed runtimes"). Which app the opener then starts
+is the desktop's choice for the file's type: the confirmation names the opener, not that app.
+
+A call from another package (a tool's import, or a page's) may prepare only an open launch: a
+terminal or direct preparation answers whether programs and folders exist, so only the app's own
+window asks for those.
 
