@@ -336,6 +336,11 @@ fn an_access_list_is_read_and_given_back() {
     };
     let inherited = access_list(&open(&plain)).unwrap();
     let protected = access_list(&open(&private)).unwrap();
+    // The text alone: nothing of the system's buffer after it.
+    assert!(
+        !inherited.contains('\0') && !protected.contains('\0'),
+        "{inherited:?} {protected:?}"
+    );
     assert!(
         inherited.starts_with("D:") && !inherited.starts_with("D:P") && inherited.contains(";ID;"),
         "{inherited}"

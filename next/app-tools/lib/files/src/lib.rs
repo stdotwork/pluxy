@@ -595,7 +595,8 @@ mod imp {
         })?;
         let text = Local(text);
         let wide = unsafe { std::slice::from_raw_parts(text.0, len as usize) };
-        let wide = wide.strip_suffix(&[0]).unwrap_or(wide);
+        // The text ends at its first NUL: the length the system gives may count more after it.
+        let wide = &wide[..wide.iter().position(|&c| c == 0).unwrap_or(wide.len())];
         String::from_utf16(wide)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "an access list not in UTF-16"))
     }
