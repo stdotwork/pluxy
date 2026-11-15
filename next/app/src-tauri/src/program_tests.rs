@@ -2023,6 +2023,54 @@ fn a_spawn_request_reaches_the_spawner_with_the_served_calls_cancel_and_not_afte
 }
 
 #[test]
+fn a_files_request_reaches_the_saver_only_and_is_refused_without_one() {
+    let h = Arc::new(host(Value::Null));
+    // No saver yet: refused, and the spawner never sees it.
+    let spawned = Arc::new(Mutex::new(0));
+    let sp = Arc::clone(&spawned);
+    h.set_spawner(Arc::new(
+        move |_: &Hop, _: &Arc<Context>, _: &Value, _: &Cancel| {
+            *sp.lock().unwrap() += 1;
+            Ok(json!({}))
+        },
+    ));
+    let a = relay(
+        &h,
+        json!({"package": "x", "op": "y", "input": {}, "extra": {"type": "files"}}),
+    );
+    assert_eq!(a["answer"]["error"]["code"], "unsupported", "{a}");
+    assert_eq!(*spawned.lock().unwrap(), 0);
+    h.stop_all();
+    // With a saver: the request reaches it, with the frame as the tool sent it.
+    let h = Arc::new(host(Value::Null));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let s = Arc::clone(&seen);
+    h.set_saver(Arc::new(
+        move |_tool: &Hop, _c: &Arc<Context>, frame: &Value, cancel: &Cancel| {
+            s.lock()
+                .unwrap()
+                .push((frame["type"].clone(), cancel.is_set()));
+            Ok(json!({"outcome": "cancelled"}))
+        },
+    ));
+    let a = relay(
+        &h,
+        json!({"package": "x", "op": "y", "input": {}, "extra": {"type": "files"}}),
+    );
+    assert_eq!(a["answer"]["output"]["outcome"], "cancelled", "{a}");
+    assert_eq!(seen.lock().unwrap().clone(), vec![(json!("files"), false)]);
+    // A request for a call it no longer serves never reaches it.
+    let a = relay(
+        &h,
+        json!({"package": "x", "op": "y", "input": {}, "for": "c-gone",
+            "extra": {"type": "files"}}),
+    );
+    assert_eq!(a["answer"]["error"]["code"], "permission", "{a}");
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    h.stop_all();
+}
+
+#[test]
 fn a_start_with_open_journals_that_cannot_take_its_turn_fails_instead_of_describing_none() {
     let h = Arc::new(host(Value::Null));
     let stub = private(&h, Stub::default());

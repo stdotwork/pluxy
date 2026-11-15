@@ -669,7 +669,14 @@ Granting takes three things, each in native UI the window can only start:
    grants.
 3. **A grant.** **Grant…** next to a resource opens the native file chooser (the desktop portal's
    when GTK uses portals) for a file or a folder. A folder that is or holds the root folder,
-   your home folder or the document portal's store is refused. A native confirmation then shows the package with its source, digest and signer, the
+   your home folder or the document portal's store is refused. So is anything that is, holds or
+   lies inside one of the app's own folders: its settings folder (`connection.json`,
+   `access.json`), its data folder (the vault, the extension store, native tools' data), and its
+   cache folder; one not made yet counts from the folder that would hold it, so a folder above
+   it is refused too. The root folder, your home folder and the app's folders are recognised by their
+   identity (device and inode), not their path, so another path to them, such as a bind mount
+   or a link, is refused too; a bind mount of a folder *inside* one of the app's folders, on its
+   own, is not recognised. A native confirmation then shows the package with its source, digest and signer, the
    resource and its operations, what you chose and what it resolves to, and says the package's
    pages can send what they read anywhere they can reach. Cancelling the chooser or the
    confirmation grants nothing.
@@ -682,7 +689,10 @@ release from another source is not granted what the first was; granting again re
 grant. A link that points elsewhere, or a target replaced (as editors save, by rename), refuses
 reads with `changed` until you grant it again, even if it is put back. An error that may pass
 (permissions, an I/O error, too many open files) answers `unavailable` and ends nothing.
-Removing the package removes its grants.
+Removing the package removes its grants. A grant whose target has come to be, hold or lie inside
+one of the app's own folders since it was granted (such as a folder granted before the app's
+data folder was moved into it) refuses reads with `refused`: this is checked before every read and
+listing, also one a handle opened earlier would serve.
 
 Pages read with three channel methods, answered by native code, never by the window, so the
 bytes never reach the window: `resources.status`, `resources.read` and `resources.list`
@@ -782,7 +792,10 @@ Device extensions page; without it the page says so.
 A **new launch** names a client label, a kind (in a terminal or directly), a program (a name found
 on the launch environment's `PATH`, or a full path), an optional executable override, arguments,
 a working folder (the page offers the client's eight most recently used), a terminal (**Automatic**
-or one found on `PATH`) and a lifetime (detached or managed). The execution program prepares the
+or one found on `PATH`) and a lifetime (detached or managed; **managed is for direct launches only**,
+since many terminals hand their windows to a server process and exit at once, so the app could not
+stop an agent run in one: a launch in a terminal is always detached, and the host refuses it
+otherwise). The execution program prepares the
 executable, argv and cwd; the app's native confirmation shows them in full, with the program a
 terminal runs, the lifetime and the environment, and offers **Remember this exact executable,
 argv and cwd**. A remembered launch joins the page's list (client, command, folder, the execution
@@ -791,7 +804,8 @@ program's release that runs it) and the tray's Start… menu.
 **Start** on the page, or a click in the tray's Start… menu, starts a remembered launch again in
 one click, with no dialog, while it is exactly the launch remembered: the same executable and
 program (path, file identity and contents), argv, folder, environment, secrets and execution
-program release, from the same window. Anything changed asks again, and remembering it again
+program release, from the same window. A terminal launch remembered as managed by an earlier
+version is refused when started (**Forget** it and launch it again, detached). Anything changed asks again, and remembering it again
 replaces the old approval; a page's Start or a launch through another package always asks. One
 start of a launch per second; after each the app shows its launch notice ("Started …" or why it
 did not), unless **Show a notice after a one-click start** is off. **Forget** revokes the

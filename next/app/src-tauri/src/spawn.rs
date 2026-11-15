@@ -163,14 +163,25 @@ pub const BASE: &[&str] = &[
     "ALL_PROXY",
 ];
 /// Names a launch may never set, inherit or receive a secret in: the app's own and its tests'
-/// (`PLUXY_`), the dynamic loader's (`LD_`, macOS's `DYLD_`) and the AppImage runtime's; on Windows
-/// those that make the .NET runtime load a profiler or other code (`COR_`, `CORECLR_`).
+/// (`PLUXY_`), the dynamic loader's (`LD_`) and the AppImage runtime's, and the .NET runtime's
+/// profiler and the legacy `COMPlus_` settings. Prefixes are upper case, as names are compared.
+const NEVER_PREFIX: &[&str] = &[
+    "PLUXY_",
+    "LD_",
+    "MALLOC_",
+    "CORECLR_",
+    "COR_PROFILER_PATH",
+    "DOTNET_PROFILER",
+    "COMPLUS_",
+];
+/// And per platform: macOS's dynamic loader (`DYLD_`), the .NET runtime's other settings on
+/// Windows (`COR_`).
 #[cfg(target_os = "linux")]
-const NEVER_PREFIX: &[&str] = &["PLUXY_", "LD_", "MALLOC_"];
+const NEVER_PREFIX_PLATFORM: &[&str] = &[];
 #[cfg(target_os = "macos")]
-const NEVER_PREFIX: &[&str] = &["PLUXY_", "LD_", "MALLOC_", "DYLD_"];
+const NEVER_PREFIX_PLATFORM: &[&str] = &["DYLD_"];
 #[cfg(windows)]
-const NEVER_PREFIX: &[&str] = &["PLUXY_", "LD_", "MALLOC_", "COR_", "CORECLR_"];
+const NEVER_PREFIX_PLATFORM: &[&str] = &["COR_"];
 /// And names that make the dynamic loader, the C library or an interpreter load or run code of
 /// their own, like `LD_*`.
 const NEVER: &[&str] = &[
@@ -200,11 +211,18 @@ const NEVER: &[&str] = &[
     "JAVA_TOOL_OPTIONS",
     "_JAVA_OPTIONS",
     "JDK_JAVA_OPTIONS",
+    "DOTNET_STARTUP_HOOKS",
+    "COR_PROFILER",
+    "DOTNET_ADDITIONAL_DEPS",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "NODE_PATH",
+    "RUBYLIB",
 ];
-/// Windows adds a compatibility layer's and .NET's code loading (`DOTNET_STARTUP_HOOKS`), and
-/// `WSLENV`, which would pass the Windows variables it names on into a WSL distribution.
+/// Windows adds a compatibility layer's code loading (`__COMPAT_LAYER`), and `WSLENV`, which
+/// would pass the Windows variables it names on into a WSL distribution.
 #[cfg(windows)]
-const NEVER_PLATFORM: &[&str] = &["__COMPAT_LAYER", "DOTNET_STARTUP_HOOKS", "WSLENV"];
+const NEVER_PLATFORM: &[&str] = &["__COMPAT_LAYER", "WSLENV"];
 #[cfg(not(windows))]
 const NEVER_PLATFORM: &[&str] = &[];
 /// At most this many names in each of set, unset, inherit and secrets.
@@ -386,7 +404,10 @@ fn allowed_name(n: &str) -> Result<(), String> {
     let upper = n.to_ascii_uppercase();
     if NEVER.contains(&upper.as_str())
         || NEVER_PLATFORM.contains(&upper.as_str())
-        || NEVER_PREFIX.iter().any(|p| upper.starts_with(p))
+        || NEVER_PREFIX
+            .iter()
+            .chain(NEVER_PREFIX_PLATFORM)
+            .any(|p| upper.starts_with(p))
     {
         return Err(format!("a launch may not set or inherit {n}"));
     }
@@ -429,6 +450,14 @@ pub fn parse(
             ))
         }
     };
+    // A launch that names the program a terminal runs is a terminal launch. The process the host
+    // holds is then the terminal's own launcher, which many terminals (gnome-terminal, and konsole
+    // or kitty in single-instance mode) end at once after handing the work to a server process:
+    // stop and status would track a process that is gone, not the agent. So only direct launches
+    // are managed.
+    if lifetime == Lifetime::Managed && input.get("program").is_some() {
+        return Err("a terminal launch is detached only: a terminal may hand its session to a server process and exit, so the app could not stop it (only a direct launch can be managed)".into());
+    }
     let mut r = Request::default();
     if let Some(v) = input.get("stdin") {
         let field = v.as_str().ok_or("a launch's stdin names a secret field")?;

@@ -228,6 +228,33 @@ fn limit(v: libc::rlim_t) -> Value {
 }
 
 #[test]
+fn a_managed_terminal_launch_is_refused_and_a_managed_direct_launch_is_not() {
+    let none = |_: &str| false;
+    let direct =
+        json!({"executable": "/bin/agent", "argv": ["agent"], "cwd": "/", "lifetime": "managed"});
+    assert_eq!(parse(&direct, &none).unwrap().0, Lifetime::Managed);
+    // A launch naming the program a terminal runs is a terminal launch.
+    let terminal = json!({"executable": "/usr/bin/xterm", "argv": ["-e", "/bin/agent"], "cwd": "/",
+        "program": "/bin/agent", "lifetime": "managed"});
+    let refused = parse(&terminal, &none).unwrap_err();
+    assert!(
+        refused.contains("terminal launch is detached only"),
+        "{refused}"
+    );
+    // Detached, stated or by default, is what a terminal launch may be.
+    for lifetime in [json!("detached"), Value::Null] {
+        let mut ok = terminal.clone();
+        match lifetime {
+            Value::Null => {
+                ok.as_object_mut().unwrap().remove("lifetime");
+            }
+            l => ok["lifetime"] = l,
+        }
+        assert_eq!(parse(&ok, &none).unwrap().0, Lifetime::Detached);
+    }
+}
+
+#[test]
 fn a_launch_request_is_checked_and_its_review_shows_no_value_it_must_not() {
     let secret_field = |f: &str| f == "key";
     let ok = json!({"executable": "/x", "argv": [], "cwd": "/", "lifetime": "managed",
@@ -270,6 +297,43 @@ fn a_launch_request_is_checked_and_its_review_shows_no_value_it_must_not() {
     ] {
         assert!(parse(&bad, &secret_field).is_err(), "{bad} was taken");
     }
+    // Each name below is tried on its own. A failed assert would stop at the first name a launch
+    // takes, so every name a launch takes is collected and reported together.
+    let mut taken = Vec::new();
+    for bad in [
+        // .NET's startup hook and profiler variables: code loaded into a .NET program at start.
+        json!({"environment": {"set": {"DOTNET_STARTUP_HOOKS": "/x.dll"}}}),
+        json!({"environment": {"set": {"COR_PROFILER": "{x}"}}}),
+        json!({"environment": {"inherit": ["CORECLR_PROFILER_PATH_64"]}}),
+        json!({"environment": {"set": {"COR_PROFILER_PATH_64": "/x.so"}}}),
+        json!({"environment": {"set": {"DOTNET_PROFILER": "{x}"}}}),
+        json!({"environment": {"inherit": ["DOTNET_PROFILER_PATH_64"]}}),
+        json!({"environment": {"set": {"DOTNET_ADDITIONAL_DEPS": "/x"}}}),
+        // The module search paths of Python, Node.js and Ruby.
+        json!({"environment": {"inherit": ["PYTHONPATH"]}}),
+        json!({"environment": {"set": {"pythonpath": "/x"}}}),
+        json!({"environment": {"set": {"PYTHONHOME": "/x"}}}),
+        json!({"environment": {"set": {"NODE_PATH": "/x"}}}),
+        json!({"environment": {"set": {"RUBYLIB": "/x"}}}),
+        // The legacy COMPlus_ spelling of the runtime's settings, in any case.
+        json!({"environment": {"set": {"COMPlus_ENABLE_PROFILING": "1"}}}),
+        json!({"environment": {"inherit": ["compLUS_PROFILER"]}}),
+    ] {
+        if parse(&bad, &secret_field).is_ok() {
+            taken.push(bad.to_string());
+        }
+    }
+    assert!(taken.is_empty(), "taken: {}", taken.join(", "));
+    // The prefixes are not wider than their families: ordinary names of these runtimes pass.
+    let (_, names) = parse(
+        &json!({"environment": {"inherit": ["DOTNET_ROOT", "NODE_ENV", "PYTHON_VERSION"]}}),
+        &secret_field,
+    )
+    .unwrap();
+    assert_eq!(
+        names.inherit,
+        vec!["DOTNET_ROOT", "NODE_ENV", "PYTHON_VERSION"]
+    );
     // A socket path agents need for git is inherited by name; so is a client's config folder.
     let (_, ok_names) = parse(
         &json!({"environment": {"inherit": ["SSH_AUTH_SOCK", "CODEX_HOME"]}}),
