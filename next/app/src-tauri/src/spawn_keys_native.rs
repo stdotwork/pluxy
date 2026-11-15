@@ -11,7 +11,8 @@
 //! - launch: the launcher's managed launch with its first key in the environment runs with it;
 //! - restart deleted: once that key is deleted on core, the runtime's restart is refused and it
 //!   does not start again;
-//! - launch deleted: a launch with the deleted key is refused before any confirmation;
+//! - launch deleted: a launch with the deleted key, in its environment or on its stdin, is
+//!   refused before any confirmation;
 //! - spawn deleted: a detached launch confirmed with a key core still takes, held before its
 //!   spawn frame while that key is deleted on core, starts nothing;
 //! - other core: a managed runtime with the second key restarts with it; with the app connected
@@ -312,7 +313,22 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "no longer accepts",
             )?;
             std::thread::sleep(Duration::from_millis(500));
-            started_anyway(&rec, "the launch with a deleted client key")
+            started_anyway(&rec, "the launch with a deleted client key")?;
+            // The same key given on its stdin instead.
+            let rec = at("launch-deleted-stdin");
+            let mut on_stdin = input(&agent, &work, &rec, "detached", &one.secret);
+            if let Some(o) = on_stdin.as_object_mut() {
+                o.remove("environment");
+                o.insert("stdin".into(), json!("key"));
+            }
+            refused_unasked(
+                main,
+                "program_call",
+                json!({"package": LAUNCHER, "op": "start", "input": on_stdin}),
+                "no longer accepts",
+            )?;
+            std::thread::sleep(Duration::from_millis(500));
+            started_anyway(&rec, "the launch with a deleted client key on its stdin")
         })(),
     );
 

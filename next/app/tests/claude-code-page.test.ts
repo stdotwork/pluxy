@@ -1,0 +1,88 @@
+// The Claude Code page's form logic (src/claudeCodeForm.ts): the keys it offers from the vault, the
+// form it fills from the tool's read-back, and when Apply is allowed.
+import { describe, expect, test } from "bun:test";
+import { fresh, fromFile, keysOf, ready } from "../src/claudeCodeForm";
+
+describe("keys", () => {
+  test("lists plain secrets and this package's client keys from vault_secrets' answer", () => {
+    const body = {
+      secrets: [
+        { id: "a", label: "Plain" },
+        { id: "b", label: "Ours", client_key: { client: "pluxy/claude-code" } },
+        { id: "c", label: "Codex's", client_key: { client: "pluxy/codex" } },
+      ],
+    };
+    expect(keysOf(body).map((s) => s.id)).toEqual(["a", "b"]);
+  });
+
+  test("lists nothing while the answer is missing or empty", () => {
+    expect(keysOf(undefined)).toEqual([]);
+    expect(keysOf({ secrets: [] })).toEqual([]);
+    expect(keysOf({})).toEqual([]);
+  });
+});
+
+describe("form from the file", () => {
+  test("a file set up with no startup model keeps it empty; a file never set up starts at opus", () => {
+    expect(fromFile({ state: "configured", startup_model: null }).startup).toBe("");
+    expect(fromFile({ state: "needs-update", startup_model: null }).startup).toBe("");
+    expect(fromFile({ state: "not-configured", startup_model: null }).startup).toBe("opus");
+    expect(fromFile({ state: "configured", startup_model: "sonnet" }).startup).toBe("sonnet");
+  });
+
+  test("a refused file gives the fresh form", () => {
+    expect(fromFile({ state: "refused", reason: "not JSON" })).toEqual(fresh());
+  });
+});
+
+describe("apply allowed", () => {
+  test("the fresh form can be applied", () => {
+    expect(ready(fresh())).toBe(true);
+  });
+
+  test("opus, sonnet and haiku each need a model, not only [1m]", () => {
+    for (const role of ["opus", "sonnet", "haiku"] as const) {
+      for (const m of ["", " ", "[1m]", " [1M] ", "[1m][1m]"]) {
+        const f = fresh();
+        f.models[role] = m;
+        expect(ready(f)).toBe(false);
+      }
+    }
+    const f = fresh();
+    f.models.fable = "";
+    expect(ready(f)).toBe(true);
+    f.models.fable = "[1m]";
+    expect(ready(f)).toBe(false);
+  });
+
+  test("the startup and subagent models may be empty, never only [1m]", () => {
+    const f = fresh();
+    f.startup = "";
+    f.subagent = "";
+    expect(ready(f)).toBe(true);
+    f.startup = "[1m]";
+    expect(ready(f)).toBe(false);
+    f.startup = "";
+    f.subagent = "[1M]";
+    expect(ready(f)).toBe(false);
+  });
+
+  test("the window and percentage are whole numbers in range", () => {
+    for (const [window, pct, ok] of [
+      [100000, 1, true],
+      [1000000, 100, true],
+      [400000.5, 90, false],
+      [200000, 90.5, false],
+      [99999, 90, false],
+      [1000001, 90, false],
+      [200000, 0, false],
+      [200000, 101, false],
+      [Number.NaN, 90, false],
+    ] as const) {
+      const f = fresh();
+      f.window = window;
+      f.pct = pct;
+      expect(ready(f)).toBe(ok);
+    }
+  });
+});

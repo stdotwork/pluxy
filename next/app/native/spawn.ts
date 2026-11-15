@@ -39,6 +39,7 @@ const start = {
       record: str,
       again: { type: "boolean" },
       hold: str,
+      stdin: str,
     },
     required: ["executable", "argv", "cwd"],
     additionalProperties: false,

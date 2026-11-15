@@ -1,0 +1,509 @@
+{
+  "manifest_version": 1,
+  "id": "pluxy/claude-code",
+  "version": "0.1.0",
+  "app": {
+    "version": 0,
+    "tier": "native",
+    "host_versions": [
+      0
+    ],
+    "programs": {
+      "linux/amd64": "bin/claude-code",
+      "linux/arm64": "bin/claude-code"
+    },
+    "operations": [
+      {
+        "id": "preview",
+        "description": "Pin Claude Code's settings file (by default ~/.claude/settings.json, or a selected file or a file in a selected folder) and read its values back, never the key",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "base_url": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "set",
+            "targets",
+            "applied",
+            "edited",
+            "settings"
+          ]
+        }
+      },
+      {
+        "id": "apply",
+        "description": "Point Claude Code at pluxy's core: write the core's address, the client key, the Opus, Sonnet, Haiku and Fable models, the startup and subagent models and the context settings into the previewed settings file, keeping everything else in it. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "effect": "write",
+        "secrets": {
+          "key": "value"
+        },
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "selected": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "link": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "identity": {
+                    "type": "object",
+                    "properties": {
+                      "link": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "root": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "parent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "file": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      }
+                    },
+                    "required": [
+                      "link",
+                      "parent",
+                      "file"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "selected",
+                  "link",
+                  "target",
+                  "identity",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "base_url": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 2048
+            },
+            "key": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "opus": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 260
+            },
+            "opus_1m": {
+              "type": "boolean"
+            },
+            "sonnet": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 260
+            },
+            "sonnet_1m": {
+              "type": "boolean"
+            },
+            "haiku": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 260
+            },
+            "haiku_1m": {
+              "type": "boolean"
+            },
+            "fable": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 260
+            },
+            "fable_1m": {
+              "type": "boolean"
+            },
+            "startup_model": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 260
+            },
+            "subagent_model": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 260
+            },
+            "max_context_tokens": {
+              "type": "integer",
+              "minimum": 100000,
+              "maximum": 1000000
+            },
+            "auto_compact_pct": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "disable_auto_compact": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "targets",
+            "base_url",
+            "key",
+            "opus",
+            "sonnet",
+            "haiku",
+            "startup_model",
+            "subagent_model",
+            "max_context_tokens",
+            "auto_compact_pct"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "clear",
+        "description": "Clear the Claude Code integration: take the values Apply wrote out of the previewed settings file, keeping the edits made since. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "effect": "write",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "selected": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "link": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "identity": {
+                    "type": "object",
+                    "properties": {
+                      "link": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "root": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "parent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "file": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      }
+                    },
+                    "required": [
+                      "link",
+                      "parent",
+                      "file"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "selected",
+                  "link",
+                  "target",
+                  "identity",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "targets"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "restore",
+        "description": "Restore Backup: put the previewed settings file's original bytes back, as they were before the first Apply. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "effect": "write",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "selected": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "link": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "identity": {
+                    "type": "object",
+                    "properties": {
+                      "link": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "root": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "parent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "file": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      }
+                    },
+                    "required": [
+                      "link",
+                      "parent",
+                      "file"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "selected",
+                  "link",
+                  "target",
+                  "identity",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "targets"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "status",
+        "description": "Show the applied settings file, the originals kept for restore and the latest recovery reports",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "recipe",
+        "description": "How the launcher starts Claude Code: claude in a terminal, with no arguments",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "client",
+            "kind",
+            "program",
+            "args"
+          ]
+        }
+      }
+    ],
+    "state": {
+      "version": 0,
+      "readable_versions": [
+        0
+      ]
+    }
+  }
+}

@@ -79,6 +79,8 @@ struct Origin {
     /// The launch the call's confirmation authorized, for its target's release, until the target
     /// spawns it.
     launch: Mutex<Option<(Holder, spawn::Launch)>>,
+    /// The remembered approval that authorized the call's launch, or that its confirmation saved.
+    approval: Arc<Mutex<Option<String>>>,
 }
 
 /// Who fills a call's secret fields: the window, with vault secret IDs; a page, never; a tool,
@@ -124,6 +126,19 @@ pub fn call_main(
     input: Value,
     gesture: Option<Gesture>,
 ) -> Result<Value, CallError> {
+    call_main_launch(app, call, package, op, input, gesture).map(|(v, _)| v)
+}
+
+/// `call_main`, also giving the remembered approval that authorized its launch or that its
+/// confirmation saved (the launcher keeps it with the launch, `launcher.rs`).
+pub fn call_main_launch(
+    app: &AppHandle,
+    call: program::Call,
+    package: &str,
+    op: &str,
+    input: Value,
+    gesture: Option<Gesture>,
+) -> Result<(Value, Option<String>), CallError> {
     let grant = || {
         app.state::<App>()
             .device
@@ -132,13 +147,15 @@ pub fn call_main(
             .main_grant(package, op, &roots())
             .map_err(refused)
     };
+    let approval: Arc<Mutex<Option<String>>> = Arc::default();
     let origin = Origin {
         packages: vec![device::main_window()],
         gesture: Arc::new(Mutex::new(gesture)),
         token: 0,
         launch: Mutex::new(None),
+        approval: Arc::clone(&approval),
     };
-    dispatch(
+    let out = dispatch(
         app,
         call,
         grant()?,
@@ -148,7 +165,9 @@ pub fn call_main(
         Filler::Window,
         input,
         Cancel::default(),
-    )
+    )?;
+    let approval = approval.lock().unwrap().take();
+    Ok((out, approval))
 }
 
 /// The router the program host gives tools' own calls to.
@@ -195,6 +214,7 @@ fn outbound(app: &AppHandle, o: Outbound) -> Result<Value, CallError> {
         gesture: Arc::new(Mutex::new(None)),
         token: 0,
         launch: Mutex::new(None),
+        approval: Arc::default(),
     };
     let filler = Filler::Tool {
         holder: Holder {
@@ -292,6 +312,7 @@ fn page_call(app: &AppHandle, label: &str, params: &Value) -> Result<Value, Call
                 gesture: Arc::new(Mutex::new(None)),
                 token: 0,
                 launch: Mutex::new(None),
+                approval: Arc::default(),
             };
             let chain = vec![Hop::Page {
                 id: caller.clone(),
@@ -622,6 +643,7 @@ fn start_job(
                     gesture: Arc::new(Mutex::new(None)),
                     token: 0,
                     launch: Mutex::new(None),
+                    approval: Arc::default(),
                 };
                 let input = i["input"].clone();
                 // A job's operation has no secret fields (`device::Catalog` refuses them at install),
@@ -762,6 +784,7 @@ fn run_job(
                 gesture: Arc::new(Mutex::new(None)),
                 token: 0,
                 launch: Mutex::new(None),
+                approval: Arc::default(),
             }),
             feed: None,
             // A consumer busy past the startup limit fails the job rather than hold it.
@@ -833,10 +856,27 @@ fn launch_of(
                 .collect::<Option<Vec<_>>>()
         })
         .ok_or_else(|| fail("invalid_request", "a launch names its argv, as strings"))?;
+    // The program a terminal runs: bound as the executable is, and it must be what argv runs.
+    let program = match input.get("program") {
+        None => None,
+        Some(v) => {
+            let p = v
+                .as_str()
+                .ok_or_else(|| fail("invalid_request", "a launch's program is a path"))?;
+            if !argv.iter().any(|a| a == p) {
+                return Err(fail(
+                    "invalid_request",
+                    "a launch's program must be one of its argv",
+                ));
+            }
+            Some(PathBuf::from(p))
+        }
+    };
     Ok(confirmation::Launch {
         executable: path("executable")?,
         argv,
         cwd: path("cwd")?,
+        program,
         terminal_adapter: executor.clone(),
         // The caller sets them from the launch's environment request (`spawn::parse`).
         environment_revision: String::new(),
@@ -927,12 +967,19 @@ fn authorize(
                 Some((name.clone(), f.secret.clone()))
             })
             .collect();
+        let stdin = request.stdin.as_ref().and_then(|field| {
+            filled
+                .iter()
+                .find(|x| &x.field == field)
+                .map(|f| f.secret.clone())
+        });
         spawning = Some((
             lifetime,
             request,
             secrets,
             l.executable.clone(),
             l.argv.clone(),
+            stdin,
         ));
         // A remembered launch is bound to the secrets it uses too.
         l.secret_uses = filled
@@ -979,8 +1026,10 @@ fn authorize(
         .room(page, &action.chain[0].id)
         .map_err(refuse)?;
     if let Some(l) = &action.launch {
-        let h = confirmation::Hashed::of(&l.executable).map_err(refuse)?;
-        st.confirmations.lock().unwrap().warm(h);
+        for f in std::iter::once(&l.executable).chain(l.program.as_ref()) {
+            let h = confirmation::Hashed::of(f).map_err(refuse)?;
+            st.confirmations.lock().unwrap().warm(h);
+        }
     }
     let id = if preparation == rules::Preparation::Page {
         let p = st
@@ -999,7 +1048,6 @@ fn authorize(
         id
     } else {
         let mut c = st.confirmations.lock().unwrap();
-        let p = c.prepare_main(action).map_err(refuse)?;
         // Only a launch's confirmation may be remembered: no other effect looks one up.
         let gesture = origin
             .gesture
@@ -1007,11 +1055,17 @@ fn authorize(
             .unwrap()
             .take()
             .filter(|_| crate::device::may_remember(effect));
+        let p = match &gesture {
+            Some(g) => c.prepare_gestured(action, g),
+            None => c.prepare_main(action),
+        }
+        .map_err(refuse)?;
         let p = match gesture {
             Some(g) => match c.remembered(p, g) {
                 Ok(token) => {
                     let id = c.token_action(&token).unwrap_or_default().to_string();
                     let a = c.consume(&id, &token).map_err(refuse)?;
+                    origin.approval.lock().unwrap().clone_from(&a.approval);
                     return Ok((false, spawnable(spawning, a)));
                 }
                 Err(p) => *p,
@@ -1024,22 +1078,24 @@ fn authorize(
         id
     };
     let a = confirmed_authorized(app, &id, cancel).map_err(|e| fail("cancelled", e))?;
+    origin.approval.lock().unwrap().clone_from(&a.approval);
     Ok((true, spawnable(spawning, a)))
 }
 
 /// What a launch's input asked: its lifetime, environment request, secrets (variable name, vault
-/// secret ID), executable as named and argv.
+/// secret ID), executable as named, argv and its stdin secret's vault ID.
 type Spawning = (
     Lifetime,
     spawn::Request,
     Vec<(String, String)>,
     PathBuf,
     Vec<String>,
+    Option<String>,
 );
 
 /// A launch's spawn, from what its confirmation opened (a) and what its input asked.
 fn spawnable(spawning: Option<Spawning>, a: Authorized) -> Option<spawn::Launch> {
-    let (lifetime, request, secrets, named, argv) = spawning?;
+    let (lifetime, request, secrets, named, argv, stdin) = spawning?;
     a.executable()?;
     a.cwd()?;
     Some(spawn::Launch {
@@ -1049,6 +1105,7 @@ fn spawnable(spawning: Option<Spawning>, a: Authorized) -> Option<spawn::Launch>
         lifetime,
         request,
         secrets,
+        stdin,
     })
 }
 
@@ -1171,16 +1228,20 @@ mod tests {
     #[test]
     fn a_launch_delivers_the_secrets_its_environment_gives_the_process() {
         let input = json!({"executable": "/bin/true", "argv": [], "cwd": "/",
-            "key": "r-1", "other": "r-2", "environment": {"secrets": {"API_KEY": "key"}}});
-        let (_, request) = spawn::parse(&input, &|f| f == "key" || f == "other").unwrap();
+            "key": "r-1", "other": "r-2", "bridge": "r-3", "stdin": "bridge",
+            "environment": {"secrets": {"API_KEY": "key"}}});
+        let fields = ["key", "other", "bridge"];
+        let (_, request) = spawn::parse(&input, &|f| fields.contains(&f)).unwrap();
         let filled = |field: &str, value| Filled {
             field: field.into(),
             secret: "s-1".into(),
             label: "a key".into(),
             value,
         };
-        // Given to the process: a delivery, checked as one at the call and at the spawn.
+        // Given to the process, in its environment or on its stdin: a delivery, checked as one at
+        // the call and at the spawn.
         assert!(delivered(&filled("key", false), Some(&request)));
+        assert!(delivered(&filled("bridge", false), Some(&request)));
         // A reference the tool only holds, and any field of a call that is not a launch.
         assert!(!delivered(&filled("other", false), Some(&request)));
         assert!(!delivered(&filled("key", false), None));
