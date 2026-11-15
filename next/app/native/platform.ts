@@ -19,6 +19,14 @@
 //   leaves nothing;
 // - window and tray: the app has a tray icon; closing the window leaves the app in the tray, or
 //   quits it, as the preference says; the window's size and place are kept across a restart.
+// - bundle: the test package (package.ts test, made before this run and named by
+//   PLUXY_APP_TEST_PACKAGE: a folder bundle on Windows, an app bundle on macOS) has the test
+//   identity in its own files, starts from its bundle and passes its updater gate with its test
+//   trust profile, and quits leaving no process; the same bundle without the profile, and the dev
+//   app (normal identifier, no test trust) with it, are refused at the gate;
+// - bundle release gate: the release command (package.ts release) passes a clean release build and
+//   a clean bundle of this system's kind around it, and refuses a bundle holding the test-feature
+//   dev app, the test package renamed and the test package itself.
 //
 // These write what a real run writes: the user's registry or LaunchAgents folder, and on Windows
 // the app's own folder in the user's profile. So it runs only on a GitHub-hosted runner, whose user
@@ -28,12 +36,15 @@
 // the counts. A run that checked nothing fails.
 
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   appendFileSync,
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -42,6 +53,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { MARKER_FILE, PROFILE_FILE } from "./admission";
 import { Launch, type Step } from "./launch";
 import { SESSIONS, selectShard } from "./shards";
 
@@ -126,11 +138,11 @@ interface Profile {
 /** A user's folders for one session. macOS: a home of its own under a temporary folder. Windows:
  * the app's folder in the runner user's profile, which no folder variable moves (the system
  * knows it): it must not exist before, and is removed after. */
-function makeProfile(): Profile {
+function makeProfile(id = identifier): Profile {
   if (mac) {
     const root = mkdtempSync(join(tmpdir(), "pluxy-plat-"));
     const home = join(root, "home");
-    const dir = join(home, "Library", "Application Support", identifier);
+    const dir = join(home, "Library", "Application Support", id);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     return {
       env: { ...process.env, HOME: home },
@@ -141,8 +153,8 @@ function makeProfile(): Profile {
   }
   const appdata = process.env.APPDATA as string;
   const local = process.env.LOCALAPPDATA as string;
-  const dir = join(appdata, identifier);
-  const webview = join(local, identifier);
+  const dir = join(appdata, id);
+  const webview = join(local, id);
   if (existsSync(dir))
     throw new Error(`${dir} exists: this is not a fresh runner, and the test would write over it`);
   mkdirSync(dir, { recursive: true });
@@ -622,6 +634,284 @@ async function windowAndTray() {
   }
 }
 
+// ---- the test package ----------------------------------------------------------------------
+
+/** What the test package must be built as; written here, not read from what package.ts made. */
+const TEST_ID = "dev.pluxy.desktop.test";
+const TEST_PRODUCT = "pluxy Test";
+const appVersion: string = JSON.parse(readFileSync(join(tauri, "tauri.conf.json"), "utf8")).version;
+
+/** What package.ts test wrote into its folder's test-package.json on Windows and macOS. */
+interface BundlePackage {
+  /** The folder bundle (Windows) or app bundle (macOS). */
+  bundle: string;
+  /** The app executable inside it. */
+  program: string;
+  updater_pubkey: string;
+  update: { bundle: string; payload: string; target: string; version: string; signature: string };
+}
+
+function testPackage(): BundlePackage | undefined {
+  const dir = process.env.PLUXY_APP_TEST_PACKAGE;
+  if (!dir) {
+    check(false, "PLUXY_APP_TEST_PACKAGE names no test package (bun run package:test <dir> first)");
+    return undefined;
+  }
+  return readJson(join(dir, "test-package.json")) as BundlePackage;
+}
+
+/** A private folder of this user's for the test trust profile, the app's HOME (its updater gate
+ * reads the profile from HOME). macOS: the profile's own home, made owner-only. Windows: a folder
+ * under the runner's temporary folder whose access list lets in only this user, SYSTEM and
+ * Administrators, and is inherited by the files made in it. */
+function privateHome(p: Profile): string {
+  if (mac) {
+    const home = p.env.HOME as string;
+    chmodSync(home, 0o700);
+    return home;
+  }
+  const home = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-trust-"));
+  const user = run("whoami", []).out;
+  const set = run("icacls", [
+    home,
+    "/inheritance:r",
+    "/grant:r",
+    `${user}:(OI)(CI)F`,
+    "*S-1-5-18:(OI)(CI)F",
+    "*S-1-5-32-544:(OI)(CI)F",
+  ]);
+  if (set.status !== 0) throw new Error(`icacls ${home}: ${set.out}`);
+  return home;
+}
+
+/** Writes a test trust profile in home trusting pubkey for the app's own update, and its marker.
+ * Returns the marker's nonce, PLUXY_TEST_TRUST_NONCE for the app. */
+function writeUpdaterTrust(home: string, pubkey: string): string {
+  writeFileSync(
+    join(home, PROFILE_FILE),
+    JSON.stringify({ roots: [], updater: { kind: "test", public_key: pubkey } }),
+    {
+      mode: 0o600,
+    },
+  );
+  const nonce = randomBytes(32).toString("hex");
+  writeFileSync(
+    join(home, MARKER_FILE),
+    JSON.stringify({
+      format: 1,
+      home: realpathSync.native(home),
+      purpose: "pluxy-artifact-test-trust",
+      nonce,
+    }),
+    { mode: 0o600 },
+  );
+  return nonce;
+}
+
+/** Starts program as the person would, waits for its updater gate's report and its window, then
+ * quits it: it must exit 0 and leave no process. Returns the gate's report. */
+async function gateRun(program: string, label: string, env: Record<string, string | undefined>) {
+  const l = new Launch(program, label, { ...env, PLUXY_APP_TEST_INSTANCES: "1" });
+  launches.push(l);
+  const gate = await l.next("updater_gate", UP_MS);
+  const up = await l.next("up", UP_MS);
+  check(up, `${label}: the app never came up: ${l.dump()}`);
+  say(`${label}: updater_gate ${JSON.stringify(gate)}`);
+  l.send("quit");
+  const code = await l.exitWithin(60_000);
+  if (code === "timeout") l.kill();
+  check(code === 0, `${label}: quit exited with ${code}: ${l.dump()}`);
+  await Bun.sleep(500);
+  check(!alive(l.pid), `${label}: the app's process ${l.pid} is still running after it quit`);
+  return gate;
+}
+
+async function bundle() {
+  const made = testPackage();
+  if (!made) return;
+  const exe = windows ? "pluxy-app-test.exe" : "pluxy-app-test";
+  // What the bundle is, read with the system's own tools.
+  if (windows) {
+    const files = readdirSync(made.bundle);
+    check(
+      JSON.stringify(files) === JSON.stringify([exe]),
+      `the folder bundle holds ${files.join(", ")}, not only ${exe}`,
+    );
+    check(made.program === join(made.bundle, exe), `the program ${made.program} is not the bundle's ${exe}`);
+    check(
+      readFileSync(made.update.payload).subarray(0, 2).toString() === "MZ",
+      "the update payload is not an exe",
+    );
+  } else {
+    const plist = join(made.bundle, "Contents", "Info.plist");
+    const key = (k: string) => run("plutil", ["-extract", k, "raw", "-o", "-", plist]).out;
+    check(made.bundle.endsWith(`${TEST_PRODUCT}.app`), `the app bundle is ${made.bundle}`);
+    check(key("CFBundleIdentifier") === TEST_ID, `Info.plist names ${key("CFBundleIdentifier")}`);
+    check(key("CFBundleExecutable") === "pluxy-app-test", `Info.plist runs ${key("CFBundleExecutable")}`);
+    check(
+      key("CFBundleShortVersionString") === appVersion,
+      `Info.plist says version ${key("CFBundleShortVersionString")}`,
+    );
+    check(
+      run("xattr", ["-p", "com.apple.quarantine", made.bundle]).status !== 0,
+      "the app bundle is quarantined",
+    );
+    const listed = run("tar", ["-tzf", made.update.payload]).out.split(/\r?\n/).filter(Boolean);
+    check(
+      listed.length > 0 && listed.every((e) => e.startsWith(`${TEST_PRODUCT}.app/`) && !e.includes("/._")),
+      `the update archive holds more than one app bundle: ${listed.slice(0, 5).join(", ")}`,
+    );
+    say(`update archive: ${listed.length} entries under ${TEST_PRODUCT}.app/`);
+  }
+  check(
+    made.update.version !== appVersion && made.update.signature.length > 0,
+    "the update has no newer signed version",
+  );
+
+  // The test package, from its bundle, with its trust profile: the gate passes.
+  let p = makeProfile(TEST_ID);
+  try {
+    const home = privateHome(p);
+    const nonce = writeUpdaterTrust(home, made.updater_pubkey);
+    const gate = await gateRun(made.program, "test package", {
+      ...p.env,
+      HOME: home,
+      PLUXY_TEST_TRUST_NONCE: nonce,
+    });
+    check(
+      gate?.passed === true &&
+        gate.marker === true &&
+        gate.identifier === TEST_ID &&
+        gate.product === TEST_PRODUCT,
+      `the test package's updater gate did not pass as ${TEST_ID}/${TEST_PRODUCT}: ${JSON.stringify(gate)}`,
+    );
+    if (windows) rmSync(home, { recursive: true, force: true });
+  } finally {
+    p.remove();
+  }
+  // The same bundle with the profile in a HOME other users can use: refused (Windows: an access
+  // list letting Everyone change it; macOS: a mode letting others read it).
+  p = makeProfile(TEST_ID);
+  try {
+    const home = privateHome(p);
+    const nonce = writeUpdaterTrust(home, made.updater_pubkey);
+    if (windows) {
+      const opened = run("icacls", [home, "/grant", "*S-1-1-0:(OI)(CI)M"]);
+      if (opened.status !== 0) throw new Error(`icacls ${home}: ${opened.out}`);
+    } else {
+      chmodSync(home, 0o755);
+    }
+    const gate = await gateRun(made.program, "test package, shared HOME", {
+      ...p.env,
+      HOME: home,
+      PLUXY_TEST_TRUST_NONCE: nonce,
+    });
+    check(
+      gate?.passed === false && /private owned directory/.test(String(gate.error)),
+      `the test package's trust profile in a shared HOME was not refused: ${JSON.stringify(gate)}`,
+    );
+    if (windows) rmSync(home, { recursive: true, force: true });
+  } finally {
+    p.remove();
+  }
+  // The same bundle, its HOME private but without the profile: refused.
+  p = makeProfile(TEST_ID);
+  try {
+    const home = privateHome(p);
+    const gate = await gateRun(made.program, "test package, no profile", { ...p.env, HOME: home });
+    check(
+      gate?.passed === false && gate.identifier === TEST_ID && /not configured/.test(String(gate.error)),
+      `the test package without its trust profile was not refused: ${JSON.stringify(gate)}`,
+    );
+    if (windows) rmSync(home, { recursive: true, force: true });
+  } finally {
+    p.remove();
+  }
+  // The dev app (the normal identifier, no test trust compiled in) with the same profile: refused.
+  p = makeProfile();
+  try {
+    const home = privateHome(p);
+    const nonce = writeUpdaterTrust(home, made.updater_pubkey);
+    const gate = await gateRun(bin, "dev app", { ...p.env, HOME: home, PLUXY_TEST_TRUST_NONCE: nonce });
+    check(
+      gate?.passed === false &&
+        gate.marker === true &&
+        gate.identifier === identifier &&
+        /not configured/.test(String(gate.error)),
+      `the dev app's updater gate was not refused for ${identifier}: ${JSON.stringify(gate)}`,
+    );
+    if (windows) rmSync(home, { recursive: true, force: true });
+  } finally {
+    p.remove();
+  }
+}
+
+/** A bundle of this system's kind around program, named for release: a folder holding
+ * pluxy-app.exe (Windows), or pluxy.app with its Info.plist and Contents/MacOS/pluxy-app. */
+function releaseBundle(dir: string, program: string): string {
+  mkdirSync(dir, { recursive: true });
+  if (windows) {
+    const folder = join(dir, "pluxy");
+    mkdirSync(folder);
+    copyFileSync(program, join(folder, "pluxy-app.exe"));
+    return folder;
+  }
+  const bundle = join(dir, "pluxy.app");
+  mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
+  copyFileSync(program, join(bundle, "Contents", "MacOS", "pluxy-app"));
+  writeFileSync(
+    join(bundle, "Contents", "Info.plist"),
+    `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>\n<key>CFBundleExecutable</key><string>pluxy-app</string>\n<key>CFBundleIdentifier</key><string>${identifier}</string>\n<key>CFBundleName</key><string>pluxy</string>\n</dict></plist>\n`,
+  );
+  return bundle;
+}
+
+async function bundleReleaseGate() {
+  const made = testPackage();
+  const dir = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-release-"));
+  try {
+    const gate = (what: string, artifacts: string[], want: "valid" | RegExp) => {
+      const r = spawnSync(process.execPath, ["run", "package:release", ...artifacts], {
+        cwd: app,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+      const verdict = /^release-package: .*$/m.exec(r.stdout ?? "")?.[0] ?? "no verdict";
+      say(`${what}: exit ${r.status}: ${verdict}`);
+      check(
+        want === "valid"
+          ? r.status === 0 && verdict.startsWith("release-package: valid")
+          : r.status === 1 && verdict.startsWith("release-package: refused") && want.test(verdict),
+        `${what}: exit ${r.status}: ${verdict}`,
+      );
+    };
+    gate("a clean release build", [], "valid");
+    const release = join(targetDir, "release", windows ? "pluxy-app.exe" : "pluxy-app");
+    gate("a clean bundle", [releaseBundle(join(dir, "clean"), release)], "valid");
+    gate(
+      "a bundle holding the test-feature dev app",
+      [releaseBundle(join(dir, "marked"), bin)],
+      windows
+        ? /pluxy!pluxy-app\.exe: test build marker\/identity in artifact/
+        : /pluxy\.app!Contents\/MacOS\/pluxy-app: test build marker\/identity in artifact/,
+    );
+    if (made) {
+      const renamed = join(dir, windows ? "candidate" : "candidate.app");
+      if (windows) {
+        mkdirSync(renamed);
+        for (const f of readdirSync(made.bundle)) copyFileSync(join(made.bundle, f), join(renamed, f));
+      } else {
+        const copied = run("ditto", [made.bundle, renamed]);
+        if (copied.status !== 0) throw new Error(`ditto: ${copied.out}`);
+      }
+      gate("the test package, renamed", [renamed], windows ? /candidate!/ : /candidate\.app!/);
+      gate("the test package", [made.bundle], /test\/private release input or artifact path/);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // ---- the run --------------------------------------------------------------------------------
 
 async function main() {
@@ -629,6 +919,8 @@ async function main() {
     ["single instance", singleInstance],
     ["login item", loginItem],
     ["window and tray", windowAndTray],
+    ["bundle", bundle],
+    ["bundle release gate", bundleReleaseGate],
   ];
   for (const [name, body] of sessions) {
     if (!runsSession(name)) continue;
