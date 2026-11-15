@@ -43,6 +43,9 @@
 //!   the status core answered to `out` and answers with it and its process ID.
 //!
 //! Started with `AGENT` as its first argument it is the spawn check's agent instead (`agent`).
+//! Started as `x-terminal-emulator` (the launcher check's stand-in terminal, `terminal`) it writes
+//! its arguments, folder and environment to the file `FIXTURE_TERMINAL_RECORD` names and runs the
+//! command after its `-e`, as a terminal would.
 //!
 //! In describe, it reconciles each open vault journal the host names, never redoing it: it ends it
 //! as `committed` when the file holds the bytes the journal names, `rolled_back` otherwise, and
@@ -557,10 +560,17 @@ fn pdeathsig() -> i64 {
 /// process ID to `<record>.orphan`. Then it writes what it sees of itself to record (written
 /// whole, then renamed into place): its process, parent, group and session IDs, its arguments,
 /// working folder, environment, open descriptors and where each leads, its core file size limits
-/// and its group member's process ID. Then it sleeps until it is killed. SIGTERM ends it, as the
+/// and its group member's process ID. With `FIXTURE_READ_STDIN` in its environment it first reads
+/// its stdin to its end (at most 64 KiB), as a credential bridge takes its key, and records that
+/// too (`stdin`). Then it sleeps until it is killed. SIGTERM ends it, as the
 /// default action, leaving its group member to whoever kills its group.
 #[cfg(target_os = "linux")]
 fn agent(args: &[String]) -> ! {
+    let stdin = std::env::var_os("FIXTURE_READ_STDIN").map(|_| {
+        let mut b = Vec::new();
+        let _ = io::stdin().take(64 << 10).read_to_end(&mut b);
+        String::from_utf8_lossy(&b).into_owned()
+    });
     let exe = std::env::current_exe().unwrap_or_default();
     let quiet = |c: &mut std::process::Command| {
         c.stdin(std::process::Stdio::null())
@@ -634,6 +644,7 @@ fn agent(args: &[String]) -> ! {
         "fds": fds,
         "core": [limit(core.rlim_cur), limit(core.rlim_max)],
         "child": child,
+        "stdin": stdin,
     });
     let tmp = format!("{record}.tmp");
     if std::fs::write(&tmp, seen.to_string()).is_ok() {
@@ -642,8 +653,46 @@ fn agent(args: &[String]) -> ! {
     sleep_forever();
 }
 
+/// The launcher check's stand-in terminal, started as `x-terminal-emulator -e <command...>`: it
+/// writes what it was started with (process ID, arguments, folder, environment) to the file
+/// `FIXTURE_TERMINAL_RECORD` names, then runs the command in its place, as a terminal runs it.
+#[cfg(target_os = "linux")]
+fn terminal(args: &[String]) -> ! {
+    use std::os::unix::process::CommandExt;
+    let env: serde_json::Map<String, Value> = std::env::vars_os()
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().into_owned(),
+                json!(v.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    if let Some(record) = std::env::var_os("FIXTURE_TERMINAL_RECORD") {
+        let seen = json!({
+            "pid": std::process::id(),
+            "argv": args,
+            "cwd": std::env::current_dir().ok(),
+            "env": env,
+        });
+        let tmp = format!("{}.tmp", record.to_string_lossy());
+        if std::fs::write(&tmp, seen.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, &record);
+        }
+    }
+    let at = args
+        .iter()
+        .position(|a| a == "-e")
+        .map_or(args.len(), |i| i + 1);
+    if let Some(cmd) = args.get(at) {
+        let e = std::process::Command::new(cmd).args(&args[at + 1..]).exec();
+        eprintln!("x-terminal-emulator: {e}");
+    }
+    std::process::exit(127);
+}
+
 /// Runs the fixture: as its child when started with `CHILD`, as the spawn check's agent when
-/// started with `AGENT`, else as the tool.
+/// started with `AGENT`, as the launcher check's terminal when started as `x-terminal-emulator`,
+/// else as the tool.
 pub fn main() -> ! {
     if std::env::var_os(CHILD).is_some() {
         sleep_forever();
@@ -651,6 +700,13 @@ pub fn main() -> ! {
     #[cfg(target_os = "linux")]
     {
         let args: Vec<String> = std::env::args().collect();
+        if args
+            .first()
+            .and_then(|a| std::path::Path::new(a).file_name())
+            .is_some_and(|n| n == "x-terminal-emulator")
+        {
+            terminal(&args);
+        }
         if args.get(1).is_some_and(|a| a.starts_with(AGENT)) {
             agent(&args);
         }

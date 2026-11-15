@@ -28,7 +28,7 @@
         "output_schema": { "type": "object" }
       }
     ],
-    "produces": [{ "kind": "pluxy/agent-usage/usage", "schema": 1, "operation": "scan" }],
+    "produces": [{ "kind": "pluxy/agent-usage/usage", "schema": 2, "operation": "scan" }],
     "state": { "version": 0, "readable_versions": [0] }
   }
 }
