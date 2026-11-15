@@ -93,6 +93,7 @@ name = "codex-sessions"
 version = "0.1.0"
 dependencies = [
  "pluxy-program",
+ "pluxy-sqlite-ro",
  "rusqlite",
  "serde_json",
 ]
@@ -340,6 +341,14 @@ name = "pluxy-program"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "pluxy-sqlite-ro"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rusqlite",
 ]
 
 [[package]]
@@ -630,6 +639,7 @@ name = "usage-opencode"
 version = "0.1.0"
 dependencies = [
  "pluxy-program",
+ "pluxy-sqlite-ro",
  "pluxy-usage",
  "rusqlite",
  "serde_json",
