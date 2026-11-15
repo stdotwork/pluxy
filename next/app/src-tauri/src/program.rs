@@ -572,6 +572,11 @@ struct Run {
     queued: Arc<AtomicUsize>,
     hello: Mutex<Option<Sender<Value>>>,
     pending: Mutex<HashMap<String, Sender<Reply>>>,
+    /// The host calls sent to it and not answered, by call ID, with their operation. When it has
+    /// exited, those still here are of unknown outcome: whichever of the call's thread and the
+    /// supervisor takes one out of here records it, so the slot knows it before the tool's next
+    /// start, however late the call's thread wakes.
+    sent: Mutex<HashMap<String, String>>,
     /// Its package's turn.
     gate: Arc<Gate>,
     started: Instant,
@@ -1182,6 +1187,9 @@ impl Host {
                     .collect::<serde_json::Map<_, _>>()
                     .into();
             }
+            // Noted before it is sent: a call that reached the tool is of unknown outcome if
+            // the tool exits before it answers.
+            run.sent.lock().unwrap().insert(cid.clone(), op.to_string());
             run.send(&frame)?;
             let mut cancelled: Option<Instant> = None;
             loop {
@@ -1229,19 +1237,21 @@ impl Host {
         if let Some(f) = &context.feed {
             f.attach(None);
         }
-        if let Err(e) = &result {
-            if e.unknown {
-                let mut slots = self.0.slots();
-                slots
-                    .entry(id.to_string())
-                    .or_default()
-                    .unknown
-                    .push(Unknown {
-                        call: cid,
-                        op: op.into(),
-                        generation: run.spec.generation,
-                        why: e.message.clone(),
-                    });
+        // Under the slots lock, as the supervisor's own take is: one of them records the call.
+        {
+            let mut slots = self.0.slots();
+            let kept = run.sent.lock().unwrap().remove(&cid).is_some();
+            let slot = slots.entry(id.to_string()).or_default();
+            match &result {
+                Err(e) if e.unknown && kept => slot.unknown.push(Unknown {
+                    call: cid,
+                    op: op.into(),
+                    generation: run.spec.generation,
+                    why: e.message.clone(),
+                }),
+                // Never sent, though the supervisor may have taken it as sent meanwhile.
+                Err(e) if !e.unknown && !kept => slot.unknown.retain(|u| u.call != cid),
+                _ => {}
             }
         }
         result
@@ -1249,8 +1259,8 @@ impl Host {
 
     /// Stops tool id, if it runs, without waiting: its package changed, or was disabled or
     /// removed. Its next call starts it again from the record admitted then. One that does not
-    /// run stays as it is, but one incompatible or quarantined is checked again at its next call,
-    /// with no backoff: a new count of crashes starts. A release being swapped in, and replaced
+    /// run stays as it is, but one incompatible, quarantined or crashed is checked again at its
+    /// next call, with no backoff: a new count of crashes starts, and it reads as idle. A release being swapped in, and replaced
     /// ones draining, are stopped too. Calls of unknown outcome are still reported at its next
     /// start.
     pub fn stop(&self, id: &str) {
@@ -1270,7 +1280,10 @@ impl Host {
                 }
             } else if slot.phase == Phase::Starting {
                 slot.stop_asked = true;
-            } else if matches!(slot.phase, Phase::Incompatible | Phase::Quarantined) {
+            } else if matches!(
+                slot.phase,
+                Phase::Incompatible | Phase::Quarantined | Phase::Crashed
+            ) {
                 // Not running: its next call checks the package as it is now.
                 slot.phase = Phase::Idle;
             }
@@ -1642,6 +1655,7 @@ fn new_run(
         queued: Arc::new(AtomicUsize::new(0)),
         hello: Mutex::new(Some(hello_tx)),
         pending: Mutex::new(HashMap::new()),
+        sent: Mutex::new(HashMap::new()),
         gate,
         started: Instant::now(),
         end: Mutex::new(None),
@@ -1871,9 +1885,21 @@ fn handshake(
     };
     // The describe's own time, besides any wait for the turn.
     let describe = left();
-    let turn = (unknown && (!pending(inner).is_empty() || !journals()?.is_empty()))
+    let open = journals()?.len();
+    let turn = (unknown && (!pending(inner).is_empty() || open > 0))
         .then(|| take_turn(run, inner.limits.startup))
         .flatten();
+    // Unknown calls wait for a later start's turn, but an open journal is never described
+    // away: a start that cannot reconcile one fails, and is retried.
+    if turn.is_none() && open > 0 {
+        return Err(fail(
+            "extension_unavailable",
+            format!(
+                "{id} could not take its turn to reconcile {open} journal{} within the startup limit",
+                if open == 1 { "" } else { "s" }
+            ),
+        ));
+    }
     let (unknown, journals) = if turn.is_some() {
         (pending(inner), journals()?)
     } else {
@@ -2092,6 +2118,21 @@ fn supervise(
     let last_line = run.last_line.lock().unwrap().clone();
     let mut slots = inner.slots();
     if let Some(slot) = slots.get_mut(&run.spec.id) {
+        // Calls it did not answer are of unknown outcome. They are recorded here, before the
+        // slot can start the tool again: their threads may wake after that start's describe
+        // looked.
+        let unanswered: Vec<(String, String)> = run.sent.lock().unwrap().drain().collect();
+        for (call, op) in unanswered {
+            slot.unknown.push(Unknown {
+                why: format!(
+                    "{} stopped before it answered {op}; its outcome is unknown, and it is not sent again",
+                    run.spec.id
+                ),
+                call,
+                op,
+                generation: run.spec.generation,
+            });
+        }
         // A replaced or a candidate release's tool leaves the one that serves as it is.
         slot.old.retain(|o| !Arc::ptr_eq(&o.run, &run));
         if slot
@@ -2279,6 +2320,8 @@ fn deliver(run: &Arc<Run>, frame: &[u8], said_hello: &mut bool) -> Result<(), St
     if let Some(tx) = run.pending.lock().unwrap().remove(id) {
         let _ = tx.send(reply);
     }
+    // Answered, or answered too late to matter: its outcome is known.
+    run.sent.lock().unwrap().remove(id);
     Ok(())
 }
 

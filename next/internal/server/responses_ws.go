@@ -438,25 +438,27 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 		if rr.Pin == "" || rr.Pin == s.pinned {
 			rr.Pin = s.session.AccountID()
 		}
-		rr.Attempt = func(ctx context.Context, ext string, a protocol.Account, _ llm.Request) route.Stream {
+		// Each attempt takes the request the router made for the account (its upstream model
+		// and its caller), as an HTTP request is sent.
+		rr.Attempt = func(ctx context.Context, ext string, a protocol.Account, req llm.Request) route.Stream {
 			if ext != s.sessionExt || a.ID != s.session.AccountID() || s.session.Ended() {
 				attempted("", nil, "")
 				return failedTurn(openairesponses.PreviousResponseNotFound())
 			}
 			attempted(wsModeSession, s.session, ext)
-			return s.session.Turn(ctx, a, sessReq)
+			return s.session.Turn(ctx, a, req)
 		}
 	case wsModeHTTP:
 		rr.LLM = httpReq
-		rr.Attempt = func(ctx context.Context, ext string, a protocol.Account, _ llm.Request) route.Stream {
+		rr.Attempt = func(ctx context.Context, ext string, a protocol.Account, req llm.Request) route.Stream {
 			attempted(wsModeHTTP, nil, "")
-			return g.Attempt(ctx, ext, a, httpReq)
+			return g.Attempt(ctx, ext, a, req)
 		}
 	default:
-		rr.Attempt = func(ctx context.Context, ext string, a protocol.Account, _ llm.Request) route.Stream {
+		rr.Attempt = func(ctx context.Context, ext string, a protocol.Account, req llm.Request) route.Stream {
 			if s.session != nil && !s.session.Ended() && s.sessionExt == ext && s.session.AccountID() == a.ID {
 				attempted(wsModeSession, s.session, ext)
-				return s.session.Turn(ctx, a, sessReq)
+				return s.session.Turn(ctx, a, req)
 			}
 			key := ext + "\x00" + a.ID
 			if g.OpenSession != nil && !s.noSession[key] {
@@ -464,7 +466,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 				if e == nil {
 					opened = append(opened, ns)
 					attempted(wsModeSession, ns, ext)
-					return ns.Turn(ctx, a, sessReq)
+					return ns.Turn(ctx, a, req)
 				}
 				if e.Code != llm.CodeUnsupported || e.Scope != llm.ScopeCredential {
 					attempted("", nil, "")
@@ -476,7 +478,11 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			if httpTurn.Warmup {
 				return newWarmup(model)
 			}
-			return g.Attempt(ctx, ext, a, httpReq)
+			// The router renamed the turn's own request; the HTTP one, which carries the whole
+			// conversation, is renamed the same way.
+			send := route.Renamed(httpReq, req.Model)
+			send.Caller = req.Caller
+			return g.Attempt(ctx, ext, a, send)
 		}
 	}
 	s.mu.Lock()
