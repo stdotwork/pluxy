@@ -89,7 +89,9 @@ pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
 }
 
 /// Creates the file path, which must not exist, for writing, private (as `O_CREAT|O_EXCL` with
-/// 0600).
+/// 0600). On Windows, in a folder whose inherited entries deny OWNER RIGHTS the right to change an
+/// access list, this (and [`create_private_dir`]) is refused with `PermissionDenied`: that folder
+/// forbids whoever makes something in it to set its list.
 pub fn create_new_private(path: &Path) -> io::Result<File> {
     imp::create_new_private(path)
 }

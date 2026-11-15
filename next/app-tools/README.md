@@ -34,7 +34,10 @@ platform code of its own for them:
   included); deny entries are ignored; any other entry kind is refused. A folder passes its list on
   to what is made in it, but what is made that way is not private until it is made so, as its list
   is not protected. A new private file or folder gets its list as it is made, never afterwards,
-  and the default owner as anything the process makes does. `make_private` changes a file through
+  and the default owner as anything the process makes does. In a folder whose inherited entries
+  deny OWNER RIGHTS the right to change an access list (a way to stop people changing the lists
+  of what they make), Windows refuses that, so making a private file or folder there fails with
+  `PermissionDenied`. `make_private` changes a file through
   a handle to the file itself, not a link (on Linux and macOS with `fchmod`), and refuses anything
   but a file or folder, and a file of another owner (never taking it over).
 - `open_regular` opens a file for reading only if it is a regular file, checked on the open handle,

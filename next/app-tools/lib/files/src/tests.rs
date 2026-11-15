@@ -223,25 +223,41 @@ fn make_private_refuses_a_fifo_and_leaves_it_as_it_was() {
     fs::remove_dir_all(dir).unwrap();
 }
 
-/// Windows: a private folder or file gets its access list as it is made, so a parent whose
-/// inherited entries stop an owner from changing an access list afterwards does not stop it.
+/// Windows: a folder whose inherited entries deny OWNER RIGHTS (S-1-3-4) the right to change an
+/// access list forbids whoever makes something in it to set its list. Windows then refuses any
+/// creation that brings its own security descriptor (Access is denied), and a list set afterwards,
+/// so nothing private can be made there: making one is refused, and nothing is left behind. In a
+/// folder without that entry, the same calls make private ones.
 #[cfg(windows)]
 #[test]
-fn a_private_folder_or_file_is_private_from_the_moment_it_is_made() {
+fn a_folder_that_forbids_setting_access_lists_refuses_private_files() {
     let dir = temp("owner-rights");
-    // OWNER RIGHTS (S-1-3-4) may not change the access list of what is made in dir.
     assert!(icacls(&dir, &["/deny", "*S-1-3-4:(OI)(CI)(IO)(WDAC)"]));
     let folder = dir.join("folder");
-    create_private_dir(&folder).unwrap();
-    assert!(is_private(&folder).unwrap());
     let file = dir.join("file");
-    create_new_private(&file)
-        .unwrap()
-        .write_all(b"secret")
-        .unwrap();
-    assert!(is_private(&file).unwrap());
-    assert_eq!(fs::read(&file).unwrap(), b"secret");
+    let denied = |e: io::Error| assert_eq!(e.kind(), io::ErrorKind::PermissionDenied, "{e}");
+    denied(create_private_dir(&folder).unwrap_err());
+    denied(create_new_private(&file).unwrap_err());
+    assert!(fs::symlink_metadata(&folder).is_err() && fs::symlink_metadata(&file).is_err());
+    // Made plainly, a file there is not private, and make_private either refuses it or makes it
+    // so: it never says it did when it did not.
+    let plain = dir.join("plain");
+    fs::write(&plain, b"x").unwrap();
+    assert!(!is_private(&plain).unwrap());
+    match make_private(&plain) {
+        Ok(()) => assert!(is_private(&plain).unwrap()),
+        Err(e) => {
+            eprintln!("make_private in a folder that forbids setting access lists: {e}");
+            assert!(!is_private(&plain).unwrap());
+        }
+    }
+    // The positive control: the same calls in a folder without that entry.
+    let open = temp("owner-rights-control");
+    create_private_dir(&open.join("folder")).unwrap();
+    drop(create_new_private(&open.join("file")).unwrap());
+    assert!(is_private(&open.join("folder")).unwrap() && is_private(&open.join("file")).unwrap());
     fs::remove_dir_all(dir).unwrap();
+    fs::remove_dir_all(open).unwrap();
 }
 
 /// Windows: an access list that is not protected (a later change to the folder's would reach it),
