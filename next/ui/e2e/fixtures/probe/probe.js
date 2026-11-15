@@ -69,11 +69,8 @@ await attempt("direct pages-site scheme", () =>
   }),
 );
 
-const report = JSON.stringify(results);
-document.getElementById("report").textContent = JSON.stringify(results, null, 2);
-await pluxy.call("config.set", { values: { report } });
-document.getElementById("state").textContent = "reported";
-
+// The native test's requests come as soon as the core has the report, which can be before the
+// report's call returns here: listen first.
 // The native test asks the actual frame document to navigate within itself. Setting the
 // iframe src from its parent can reload a sandboxed frame rather than change only its hash.
 window.addEventListener("message", (e) => {
@@ -105,3 +102,8 @@ window.addEventListener("message", async (e) => {
   );
   parent.postMessage({ nativeInvoked: { internals: typeof inv === "function", calls } }, "*");
 });
+
+const report = JSON.stringify(results);
+document.getElementById("report").textContent = JSON.stringify(results, null, 2);
+await pluxy.call("config.set", { values: { report } });
+document.getElementById("state").textContent = "reported";
