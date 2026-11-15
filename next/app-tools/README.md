@@ -625,8 +625,9 @@ keeping everything else in each file (keys in their order, numbers with their di
 Claude Desktop drops a gateway model whose name does not look like an Anthropic model (it must
 hold `claude`, `anthropic` or a family name such as `sonnet`, and no other family's, such as `gpt`
 or `gemini`), so `apply` refuses such a row: a non-Claude model needs an alias, and the core must
-serve the model under it (an account's or extension's `model_alias`; this package does not change
-the core's config). Clear's three-way merge brings back what Apply removed or replaced unless the
+serve the model under it (an account's or extension's `model_alias`). This package does not change
+the core; the window's Claude Desktop page can add the alias through the management API, and the
+package's Clear and Restore Backup leave it. Clear's three-way merge brings back what Apply removed or replaced unless the
 person changed it since, with two rules of Claude Desktop's own: it seals the key in place with
 the device's keystore at its next launch, which is not the person's edit, so Clear still removes
 the key; and pluxy's entry leaves `_meta.json` unless the original had it. Every operation but
