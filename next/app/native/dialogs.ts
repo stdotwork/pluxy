@@ -390,7 +390,7 @@ async function main(): Promise<number> {
       console.log(`dialogs: UI Automation path to the key entry: ${(uia?.path ?? []).join(" > ")}`);
       check(
         "uia password field",
-        uia?.found === true && uia?.is_password === true,
+        uia?.found === true && uia?.is_edit === true && uia?.is_password === true,
         `UI Automation saw ${JSON.stringify(uia)}`,
       );
       check(

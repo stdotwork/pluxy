@@ -314,14 +314,13 @@ pub(crate) fn fixture_button(
     press(app, title, Key::Access('s'))
 }
 
-/// Reads the key entry titled title as another process can, through UI Automation (Windows
-/// PowerShell): its entry must say it is a password field and must not give out canary, which
-/// was typed into it. UI Automation opens the dialog and its entry by their window handles, and
-/// reports the path from the desktop down to the entry, each element's control type, name and
-/// window class (never its value). The canary goes to PowerShell on stdin; only booleans, counts,
-/// that path and what tells why UI Automation sees the entry as it does come back: the UI
-/// Automation assemblies loaded, the entry's framework and patterns, what Active Accessibility
-/// says of it (role and state), and whether its thread answers a message.
+/// Reads the key entry titled title as another process can, through UI Automation's native
+/// client (Windows PowerShell): its entry must be an edit control that says it is a password field
+/// and must not give out canary, which was typed into it. The client opens the entry by its window
+/// handle and reports the path from the desktop down to it (each element's control type, name and
+/// window class, never its value) and the description of the provider that answered. The canary
+/// goes to PowerShell on stdin; only booleans, that path, the provider and what Active
+/// Accessibility says of the entry (role and state) come back.
 pub(crate) fn uia_canary(
     app: &AppHandle,
     title: &str,
@@ -331,39 +330,90 @@ pub(crate) fn uia_canary(
     use std::io::Write;
     use std::process::{Command, Stdio};
     let t = title.to_string();
-    let (dialog, edit, style_password) = on_main(app, move || {
+    let (edit, style_password) = on_main(app, move || {
         let d = *inspect::all(&t).first()?;
-        Some((raw(d), raw(inspect::secret(d)?), inspect::secret_hidden(d)))
+        Some((raw(inspect::secret(d)?), inspect::secret_hidden(d)))
     })
     .flatten()
     .ok_or("no key window with an entry to read through UI Automation")?;
     let script = format!(
         r#"$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $canary = [Console]::In.ReadLine()
-# The .NET client sees a Win32 edit control as a plain pane unless its client-side providers (the
-# Win32 control proxies) are registered: what any UI Automation client in another process gets.
-$proxies = 'registered'
-# Which UI Automation assemblies the client loaded by itself (the proxies among them or not).
-$loaded = @([System.AppDomain]::CurrentDomain.GetAssemblies() | ForEach-Object {{ $_.GetName().Name }} | Where-Object {{ $_ -like 'UIAutomation*' }})
+# The native UI Automation client (UIAutomationCore's CUIAutomation), as assistive tools use it,
+# with the Win32 control proxies it has built in; the .NET client's System.Windows.Automation
+# loads its proxies from an assembly of its own, which fails on the hosted runners. Declared here
+# only as far as used: each placeholder keeps its method's place in the interface.
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+[ComImport, Guid("d22108aa-8ac5-49a5-837b-37bbb3d7591e"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface PluxyUiaElement {{
+  void SetFocus(); void GetRuntimeId(); void FindFirst(); void FindAll(); void FindFirstBuildCache();
+  void FindAllBuildCache(); void BuildUpdatedCache();
+  [return: MarshalAs(UnmanagedType.Struct)] object GetCurrentPropertyValue(int property);
+}}
+[ComImport, Guid("4042c624-389c-4afc-a630-9df854a541fc"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface PluxyUiaWalker {{
+  PluxyUiaElement GetParentElement(PluxyUiaElement element);
+}}
+[ComImport, Guid("30cbe57d-d9d0-452a-ab13-7ac5ac4825ee"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface PluxyUia {{
+  void CompareElements(); void CompareRuntimeIds(); void GetRootElement();
+  PluxyUiaElement ElementFromHandle(IntPtr hwnd);
+  void ElementFromPoint(); void GetFocusedElement(); void GetRootElementBuildCache();
+  void ElementFromHandleBuildCache(); void ElementFromPointBuildCache(); void GetFocusedElementBuildCache();
+  void CreateTreeWalker(); void ControlViewWalker(); void ContentViewWalker();
+  PluxyUiaWalker RawViewWalker();
+}}
+public class PluxyUiaResult {{
+  public bool found; public bool is_edit; public bool is_password; public bool readable; public bool leaked;
+  public string provider = ""; public string[] path = new string[0];
+}}
+public static class PluxyUiaClient {{
+  static object Prop(PluxyUiaElement e, int id) {{ return e.GetCurrentPropertyValue(id); }}
+  static string Describe(PluxyUiaElement e) {{
+    int t = Convert.ToInt32(Prop(e, 30003));
+    string type = t == 50004 ? "Edit" : t == 50032 ? "Window" : t == 50033 ? "Pane" : t.ToString();
+    return type + " '" + Prop(e, 30005) + "' [" + Prop(e, 30012) + "]";
+  }}
+  // Only booleans, the path and the provider's description come back, never the entry's value.
+  public static PluxyUiaResult Inspect(IntPtr edit, string canary) {{
+    PluxyUiaResult r = new PluxyUiaResult();
+    PluxyUia uia = (PluxyUia)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("ff48dba4-60ef-4201-aa87-54103eef594e")));
+    PluxyUiaElement e = uia.ElementFromHandle(edit);
+    if (e == null) return r;
+    r.found = true;
+    PluxyUiaWalker walker = uia.RawViewWalker();
+    System.Collections.Generic.List<string> path = new System.Collections.Generic.List<string>();
+    for (PluxyUiaElement x = e; x != null && path.Count < 16; x = walker.GetParentElement(x)) path.Insert(0, Describe(x));
+    r.path = path.ToArray();
+    r.is_edit = Convert.ToInt32(Prop(e, 30003)) == 50004;
+    r.is_password = Convert.ToBoolean(Prop(e, 30019));
+    r.provider = Convert.ToString(Prop(e, 30107));
+    try {{
+      if (Convert.ToBoolean(Prop(e, 30043))) {{
+        object v = Prop(e, 30045);
+        r.readable = true;
+        r.leaked = v != null && Convert.ToString(v).Contains(canary);
+      }}
+    }} catch (Exception) {{ }}
+    return r;
+  }}
+}}
+"@
 try {{
-  Add-Type -AssemblyName UIAutomationClientsideProviders
-  $name = ([System.AppDomain]::CurrentDomain.GetAssemblies() | Where-Object {{ $_.GetName().Name -eq 'UIAutomationClientsideProviders' }} | Select-Object -First 1).GetName()
-  [System.Windows.Automation.ClientSettings]::RegisterClientSideProviderAssembly($name)
-}} catch {{ $m = "not registered: $($_.Exception.ToString())"; $proxies = $m.Substring(0, [Math]::Min(700, $m.Length)) }}
-# What Active Accessibility (oleacc) says of a window, and whether its thread answers a message
-# within 2 s: the Win32 proxies ask the control by messages.
-$msaa = 'ready'
+  $r = [PluxyUiaClient]::Inspect([IntPtr]{edit}, $canary)
+  $out = @{{ found = $r.found; is_edit = $r.is_edit; is_password = $r.is_password; readable = $r.readable; leaked = $r.leaked; path = @($r.path); provider = $r.provider }}
+}} catch {{ $out = @{{ found = $false; error = "$($_.Exception.Message)" }} }}
+# What Active Accessibility (oleacc) says of the entry, beside UI Automation.
 try {{
-Add-Type -AssemblyName Accessibility
-Add-Type -ReferencedAssemblies Accessibility -TypeDefinition @"
+  Add-Type -AssemblyName Accessibility
+  Add-Type -ReferencedAssemblies Accessibility -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 public static class PluxyMsaa {{
   [DllImport("oleacc.dll")]
   static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [MarshalAs(UnmanagedType.IUnknown)] out object o);
-  [DllImport("user32.dll")]
-  static extern IntPtr SendMessageTimeoutW(IntPtr h, uint m, IntPtr w, IntPtr l, uint f, uint t, out IntPtr r);
   public static string Describe(IntPtr h) {{
     Guid iid = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
     object o;
@@ -372,45 +422,10 @@ public static class PluxyMsaa {{
     Accessibility.IAccessible a = (Accessibility.IAccessible)o;
     return "role " + a.get_accRole(0) + ", state 0x" + Convert.ToInt64(a.get_accState(0)).ToString("x");
   }}
-  public static bool Answers(IntPtr h) {{
-    IntPtr r;
-    return SendMessageTimeoutW(h, 0, IntPtr.Zero, IntPtr.Zero, 2, 2000, out r) != IntPtr.Zero;
-  }}
 }}
 "@
-}} catch {{ $msaa = "unavailable: $($_.Exception.Message)" }}
-$A = [System.Windows.Automation.AutomationElement]
-$scope = [System.Windows.Automation.TreeScope]
-$walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
-function Describe($e) {{ $c = $e.Current; "$($c.ControlType.ProgrammaticName) '$($c.Name)' [$($c.ClassName)]" }}
-$out = @{{ found = $false; edits = 0; is_password = $false; readable = $false; leaked = $false; path = @(); dialog_in_desktop = $false; proxies = $proxies; loaded = $loaded }}
-$out.msaa = $msaa
-if ($msaa -eq 'ready') {{
-  $out.answers = [PluxyMsaa]::Answers([IntPtr]{edit})
-  try {{ $out.msaa = [PluxyMsaa]::Describe([IntPtr]{edit}) }} catch {{ $out.msaa = "failed: $($_.Exception.Message)" }}
-}}
-$dlg = $A::FromHandle([IntPtr]{dialog})
-$e = $A::FromHandle([IntPtr]{edit})
-if ($e) {{
-  $out.found = $true
-  $path = @()
-  for ($x = $e; $x; $x = $walker.GetParent($x)) {{ $path = @(Describe $x) + $path }}
-  $out.path = $path
-  $out.is_password = [bool]$e.Current.IsPassword
-  $out.framework = $e.Current.FrameworkId
-  $out.patterns = @($e.GetSupportedPatterns() | ForEach-Object {{ $_.ProgrammaticName }})
-  try {{
-    $v = $e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
-    $out.readable = $true
-    if ($v -and $v.Contains($canary)) {{ $out.leaked = $true }}
-  }} catch {{ }}
-}}
-if ($dlg) {{
-  $edits = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
-  $out.edits = $dlg.FindAll($scope::Subtree, $edits).Count
-  $own = New-Object System.Windows.Automation.PropertyCondition($A::NativeWindowHandleProperty, [int]{dialog})
-  $out.dialog_in_desktop = [bool]$A::RootElement.FindFirst($scope::Children, $own)
-}}
+  $out.msaa = [PluxyMsaa]::Describe([IntPtr]{edit})
+}} catch {{ $out.msaa = "unavailable: $($_.Exception.Message)" }}
 $out | ConvertTo-Json -Compress -Depth 3"#
     );
     let encoded: Vec<u8> = script
