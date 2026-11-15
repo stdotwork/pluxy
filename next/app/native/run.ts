@@ -107,6 +107,14 @@
 // and apply is kept, clear keeps the person's later edits, restore puts the original bytes back, a
 // failed second write rolls the first back, and after a crash the next start rolls back or commits
 // from disk, never over a competing edit.
+// The save-file check (save.ts, save_native.rs) runs in one more session with that build: a signed
+// fixture tool hands bytes to the host's save service from a disclose operation, after its native
+// confirmation; GTK's own save dialog names the package and suggests the tool's name with control
+// and format characters replaced; cancel writes nothing; a confirmed save writes exactly the bytes,
+// 0600; an existing file is replaced only after GTK's overwrite question; a read operation's bytes,
+// a caller-named path, more than the limit, a second save for one call and a link swapped in for the
+// chosen file are refused, each beside a save that works on the same route; and the content's
+// canaries never show in the app's output.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -146,6 +154,7 @@ import { runInstances } from "./instances";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
+import { buildSaveFixtures } from "./save";
 import { missingPrerequisites } from "./services";
 import { buildSessionsFixtures } from "./sessions";
 import { buildSpawnFixtures } from "./spawn";
@@ -583,7 +592,7 @@ interface Rotation {
  * checks; routing: only the cross-package routing check; vault: only the vault check; reader: only
  * the session reader check; transactions: only the transaction library check. core: the session
  * runs only the core steps, against that core source. release: the app starts with that release
- * installed and selected. spawnCheck: only the spawn check. */
+ * installed and selected. spawnCheck: only the spawn check. save: only the save-file check. */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -606,6 +615,7 @@ async function runApp(
   reader = false,
   usage = false,
   transactions = false,
+  save = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -688,6 +698,7 @@ async function runApp(
       !reader &&
       !transactions &&
       !usage &&
+      !save &&
       suite !== "access"
         ? join(root, "device")
         : undefined;
@@ -816,6 +827,20 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The save-file check's signed exporter, its registry and trust profile, the bytes it saves and
+    // their canaries.
+    const saveDir = save ? join(root, "save") : undefined;
+    if (saveDir) {
+      mkdirSync(saveDir);
+      const f = buildSaveFixtures(saveDir, dirs.home, programFixture);
+      nonce = f.nonce;
+      canaries = f.canaries;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -903,6 +928,7 @@ async function runApp(
       ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
       ...(transactionsDir ? { PLUXY_APP_TEST_TRANSACTIONS: transactionsDir } : {}),
       ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
+      ...(saveDir ? { PLUXY_APP_TEST_SAVE: saveDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -975,7 +1001,9 @@ async function runApp(
             ? "the session reader check's canary appeared on stdout/stderr"
             : usage
               ? "the usage check's Codex, Claude Code, Oh My Pi or Pi canary appeared on stdout/stderr"
-              : "the vault or spawn check's key or a canary appeared on stdout/stderr",
+              : save
+                ? "the save-file check's content appeared on stdout/stderr"
+                : "the vault or spawn check's key or a canary appeared on stdout/stderr",
         );
         return;
       }
@@ -1198,6 +1226,16 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} transactions ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: transactions ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (save) {
+      const r = steps.get("save") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the save-file check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} save ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: save ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -2118,6 +2156,33 @@ async function main(): Promise<number> {
           false,
           undefined,
           release,
+          false,
+          false,
+          true,
+        )),
+      );
+      // The save-file check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
+          false,
+          false,
           false,
           false,
           true,

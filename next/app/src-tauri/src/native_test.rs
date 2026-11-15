@@ -26,7 +26,8 @@
 //!    `PLUXY_APP_TEST_SESSIONS`, only the read-only Codex session reader (`sessions_native.rs`);
 //!    with `PLUXY_APP_TEST_TRANSACTIONS`, only the transaction library's fixture writer
 //!    (`transactions_native.rs`); with `PLUXY_APP_TEST_USAGE`, only the usage hub and its
-//!    fixture parser (`usage_native.rs`);
+//!    fixture parser (`usage_native.rs`); with `PLUXY_APP_TEST_SAVE`, only the host's save-file
+//!    service (`save_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -74,6 +75,9 @@ mod program;
 #[cfg(target_os = "linux")]
 #[path = "routing_native.rs"]
 mod routing;
+#[cfg(target_os = "linux")]
+#[path = "save_native.rs"]
+mod save;
 #[cfg(target_os = "linux")]
 #[path = "sessions_native.rs"]
 mod sessions;
@@ -494,6 +498,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_USAGE") {
         usage::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The host's save-file service (save_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_SAVE") {
+        save::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
