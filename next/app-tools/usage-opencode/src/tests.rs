@@ -5,7 +5,7 @@
 
 use super::db::Cache;
 use super::message::{self, Out};
-use super::{hash, OpenCode};
+use super::{hash, roots_for, OpenCode};
 use pluxy_program::{
     read_frame, serve, write_frame, Call, Description, Error, Handler, Identity, MAX_INBOUND,
 };
@@ -703,6 +703,9 @@ fn listed(roots: Value) -> (Vec<Value>, Value) {
 
 #[test]
 fn a_database_that_cannot_be_opened_is_listed_as_itself_and_its_read_gives_the_reason() {
+    if !links_allowed() {
+        return;
+    }
     let d = folder("unlisted");
     let root = d.join("opencode");
     std::fs::create_dir_all(&root).unwrap();
@@ -878,4 +881,51 @@ fn deny_reading(path: &Path, deny: bool) {
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
+}
+
+/// Whether this account may make symbolic links (on Windows that takes a privilege or Developer
+/// Mode). When it may not, says so on stderr: a test that needs links is then skipped, and the CI
+/// summary counts the skip.
+fn links_allowed() -> bool {
+    #[cfg(unix)]
+    return true;
+    #[cfg(windows)]
+    {
+        static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let allowed = *ALLOWED.get_or_init(|| {
+            let probe = std::env::temp_dir().join(format!("links-allowed-{}", std::process::id()));
+            let _ = std::fs::remove_file(&probe);
+            let made = std::os::windows::fs::symlink_file("target", &probe).is_ok();
+            let _ = std::fs::remove_file(&probe);
+            made
+        });
+        if !allowed {
+            eprintln!("skipped: this account cannot make a symbolic link");
+        }
+        allowed
+    }
+}
+
+#[test]
+fn on_windows_the_app_data_folders_are_roots_too_when_set_to_a_full_path() {
+    let home = std::env::temp_dir().join("home");
+    let roaming = std::env::temp_dir().join("roaming");
+    let base = vec![
+        home.join(".local").join("share").join("opencode"),
+        home.join(".opencode"),
+    ];
+    let both = |name: &str| match name {
+        "APPDATA" => Some(roaming.clone().into_os_string()),
+        "LOCALAPPDATA" => Some("relative".into()),
+        _ => None,
+    };
+    let mut want = base.clone();
+    want.push(roaming.join("opencode"));
+    assert_eq!(
+        roots_for(&home, true, &both),
+        want,
+        "a relative folder was used"
+    );
+    assert_eq!(roots_for(&home, true, &|_| None), base);
+    assert_eq!(roots_for(&home, false, &both), base, "not on Windows");
 }

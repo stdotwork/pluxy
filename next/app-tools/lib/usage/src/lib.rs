@@ -332,19 +332,18 @@ pub fn locate(roots: &[PathBuf], id: &str, wanted: &dyn Fn(&Path) -> bool) -> Op
     wanted(&at).then_some(at)
 }
 
-/// The file found at path, opened, with its size and modification time: it must still be that
-/// regular file (not replaced by a link meanwhile).
+/// The file found at path, opened, with its size and modification time: opened without following
+/// a link or waiting on a FIFO, and checked to be a regular file on the open handle (so a link or
+/// anything else put there after it was found is refused).
 pub fn open_file(path: &Path) -> Result<(std::fs::File, u64, i64), String> {
-    let before = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
-    if !before.is_file() {
-        return Err("not a regular file".into());
-    }
-    let id = pluxy_files::id_of_path(path).map_err(|e| e.to_string())?;
-    let f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let f = pluxy_files::open_regular(path).map_err(|e| {
+        if std::fs::symlink_metadata(path).is_ok_and(|m| !m.is_file()) {
+            "not a regular file".to_string()
+        } else {
+            e.to_string()
+        }
+    })?;
     let m = f.metadata().map_err(|e| e.to_string())?;
-    if pluxy_files::id_of(&f).map_err(|e| e.to_string())? != id || !m.is_file() {
-        return Err("the file changed while it was opened".into());
-    }
     Ok((f, m.len(), mtime_ns(&m)))
 }
 

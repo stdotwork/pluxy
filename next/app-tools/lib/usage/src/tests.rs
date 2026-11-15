@@ -33,6 +33,9 @@ fn log(p: &Path) -> bool {
 
 #[test]
 fn a_scan_lists_wanted_files_newest_first_skipping_links_and_deep_files() {
+    if !links_allowed() {
+        return;
+    }
     let d = folder("scan");
     let root = d.join("root");
     file(&root.join("a.log"), "a", 1_000);
@@ -69,6 +72,9 @@ fn a_scan_lists_wanted_files_newest_first_skipping_links_and_deep_files() {
 
 #[test]
 fn locate_finds_only_what_a_scan_would() {
+    if !links_allowed() {
+        return;
+    }
     let d = folder("locate");
     let root = d.join("root");
     file(&root.join("x/b.log"), "bb", 3_000);
@@ -109,8 +115,42 @@ fn read_file_reads_a_regular_file_up_to_the_limit() {
     assert!(read_file(&d.join("big.log"))
         .unwrap_err()
         .contains("larger"));
-    make_link(d.join("a.log"), d.join("link.log")).unwrap();
-    assert!(read_file(&d.join("link.log")).is_err());
+    if links_allowed() {
+        make_link(d.join("a.log"), d.join("link.log")).unwrap();
+        assert_eq!(
+            read_file(&d.join("link.log")).unwrap_err(),
+            "not a regular file"
+        );
+    }
+    // A FIFO is refused without waiting for a writer (a wait would hang the test).
+    #[cfg(unix)]
+    {
+        let fifo = d.join("fifo.log");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        assert_eq!(read_file(&fifo).unwrap_err(), "not a regular file");
+    }
+    // A junction (a folder link any account may make on Windows) is not followed.
+    #[cfg(windows)]
+    {
+        let junction = d.join("junction");
+        let out = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&d)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(read_file(&junction).unwrap_err(), "not a regular file");
+        assert!(
+            read_file(&junction.join("a.log")).is_ok(),
+            "the positive control"
+        );
+        std::fs::remove_dir(&junction).unwrap();
+    }
     std::fs::remove_dir_all(d).unwrap();
 }
 
@@ -638,4 +678,27 @@ fn make_link(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Resul
     } else {
         std::os::windows::fs::symlink_file(target, link)
     };
+}
+
+/// Whether this account may make symbolic links (on Windows that takes a privilege or Developer
+/// Mode). When it may not, says so on stderr: a test that needs links is then skipped, and the CI
+/// summary counts the skip.
+fn links_allowed() -> bool {
+    #[cfg(unix)]
+    return true;
+    #[cfg(windows)]
+    {
+        static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let allowed = *ALLOWED.get_or_init(|| {
+            let probe = std::env::temp_dir().join(format!("links-allowed-{}", std::process::id()));
+            let _ = std::fs::remove_file(&probe);
+            let made = std::os::windows::fs::symlink_file("target", &probe).is_ok();
+            let _ = std::fs::remove_file(&probe);
+            made
+        });
+        if !allowed {
+            eprintln!("skipped: this account cannot make a symbolic link");
+        }
+        allowed
+    }
 }

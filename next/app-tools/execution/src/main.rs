@@ -72,6 +72,10 @@ fn runtime(call: &Call, ops: &[&str]) -> Result<Value, Error> {
 #[path = "manifest_tests.rs"]
 mod manifest_tests;
 
+#[cfg(test)]
+#[path = "platform_tests.rs"]
+mod platform_tests;
+
 fn main() -> std::io::Result<()> {
     run(Execution)
 }

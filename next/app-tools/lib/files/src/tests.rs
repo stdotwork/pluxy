@@ -273,3 +273,65 @@ fn an_inherited_list_or_another_owner_is_not_private() {
     }
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn a_lock_is_made_held_and_taken_only_once_released() {
+    let dir = temp("lock");
+    let path = dir.join("a.lock");
+    let held = create_locked(&path).unwrap();
+    assert_eq!(
+        create_locked(&path).err().unwrap().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert!(take_lock(&path).unwrap().is_none(), "a held lock was taken");
+    // On Windows no one else may open a held lock at all, so its access list is not read here.
+    #[cfg(target_os = "macos")]
+    assert!(is_private(&path).unwrap());
+    drop(held);
+    assert!(!path.exists(), "a released lock stayed");
+    // A lock left behind with no holder (as a crash leaves one on macOS) can be taken, once.
+    fs::write(&path, b"").unwrap();
+    let taken = take_lock(&path)
+        .unwrap()
+        .expect("a free lock was not taken");
+    assert!(
+        take_lock(&path).unwrap().is_none(),
+        "a taken lock was taken again"
+    );
+    drop(taken);
+    assert!(!path.exists(), "a released lock stayed");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Windows: a junction (a folder link any account may make) at path to target.
+#[cfg(windows)]
+fn junction(target: &Path, path: &Path) {
+    let out = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(path)
+        .arg(target)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_junction_is_not_opened_or_made_private_and_its_target_is_left_alone() {
+    let dir = temp("junction");
+    let target = dir.join("target");
+    fs::create_dir(&target).unwrap();
+    assert!(icacls(&target, &["/grant", "*S-1-1-0:(R)"]));
+    let link = dir.join("link");
+    junction(&target, &link);
+    assert!(open_regular(&link).is_err());
+    assert!(make_private(&link).is_err());
+    assert!(
+        !is_private(&target).unwrap(),
+        "the junction's target was changed"
+    );
+    assert_ne!(id_of_path(&link).unwrap(), id_of_path(&target).unwrap());
+    fs::remove_dir(&link).unwrap();
+    fs::remove_dir_all(dir).unwrap();
+}

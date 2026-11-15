@@ -25,16 +25,26 @@ Linux only for now, and `execution` refuses every operation outside Linux.
 The file rules the tools share on Linux, macOS and Windows (`pluxy-files`), so no tool has
 platform code of its own for them:
 
-- Private files and folders are this user's alone: 0600 and 0700 on Linux and macOS; on Windows a
-  protected access list that allows only this user and SYSTEM, which a folder passes on to what is
-  made in it (`create_private_dir`, `create_new_private`, `make_private`, `is_private`).
+- Private files and folders are this user's alone: 0600 and 0700 on Linux and macOS. On Windows
+  they are owned by this user (or SYSTEM), with a protected access list (one that takes nothing
+  from its folder's) that allows only this user and SYSTEM. A folder passes its list on to what is
+  made in it, but what is made that way is not private until it is made so, as its list is not
+  protected (`create_private_dir`, `create_new_private`, `make_private`, `is_private`). A new
+  private file or folder gets its owner and list as it is made, never afterwards. `make_private`
+  changes a file through a handle to the file itself, not a link (on Linux and macOS with
+  `fchmod`), refuses anything but a file or folder, and on Windows takes over the ownership where
+  it may, refusing a file owned by another account otherwise.
 - `open_regular` opens a file for reading only if it is a regular file, checked on the open handle,
   without following a link: on Linux and macOS with `O_NOFOLLOW` and `O_NONBLOCK` (a FIFO is
   refused, never waited on); on Windows the link itself is opened and refused, as is anything that
   is not a file on a disk.
 - `Id` tells files apart (device and inode; on Windows the volume serial number and the 128-bit
-  file ID), and `mtime_ns` is a modification time in nanoseconds since the Unix epoch, the same on
-  every system.
+  file ID, or the 64-bit file index on a file system without 128-bit IDs, such as FAT32), and
+  `mtime_ns` is a modification time in nanoseconds since the Unix epoch, the same on every system.
+- On macOS and Windows, a `Lock` is a private file this process holds while it lives, made already
+  held (`create_locked`) or taken when no process holds it (`take_lock`); dropping it releases and
+  removes it. On macOS it is held with `O_EXLOCK`; on Windows it is open for no one else to share,
+  and the system removes it when its handle closes, also when the process stops.
 
 ## `lib/program`
 
@@ -103,13 +113,18 @@ Opens another program's SQLite database strictly read-only and creates no file b
   the folder is removed when the `Db` is dropped.
 - With no `-shm` and no `-wal`, a database with a WAL header is opened `immutable`, and any other
   in place.
-- The tool's own `tmp` must be a real folder, not a link; one open to others is made private.
-  Before a copy is made there, the copies of processes no longer running (folders named exactly
-  `wal-<pid>-<n>`, directories only) are removed; those of this process and of every process still
-  running stay. On Linux a process runs while `/proc` lists its pid; on macOS and Windows a copy
-  holds a `lock` file that its process keeps locked while the copy is open, and is left over once
-  that lock can be taken (or, with no `lock` yet, once its folder is a minute old). Nothing is
-  pruned in the system's temporary folder.
+- The tool's own `tmp` must be a real folder, not a link; one that is not private is made private.
+  Before a copy is made there, the copies left by processes that stopped (folders named exactly
+  `wal-<pid>-<n>`, directories only) are removed. On Linux a copy is left over when `/proc` does
+  not list its pid. On macOS and Windows a copy has a lock beside it, `wal-<pid>-<n>.lock`
+  (`lib/files`), made already held before the folder and released after the folder is removed; a
+  copy is left over when its lock is missing or no process holds it, whatever its pid (pids are
+  reused), and it is removed while the remover holds its lock, so no copy can be made under that
+  name meanwhile. A lock left with no folder goes too. Nothing is pruned in the system's temporary
+  folder. A copy's name that is taken already is passed over for the next.
+- On Windows the database path must be a full one (SQLite would read any other against its own
+  current folder). It is given to SQLite in its long form (`\\?\C:\…`, `\\?\UNC\server\share\…`)
+  with SQLite's `win32-longpath` file layer, so a path longer than 260 characters opens.
 - An `Error` names no path, and carries SQLite's error code, not its message (which names the file).
   A tool that shows a path to its user adds it around the error itself.
 

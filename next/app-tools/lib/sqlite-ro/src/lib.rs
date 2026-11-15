@@ -17,13 +17,16 @@
 //!   and the copy is removed when the [`Db`] is dropped;
 //! - one with no `-shm` and no `-wal` is opened with `immutable=1` when its header says WAL, and
 //!   else in place;
-//! - the tool's own `tmp` must be a real folder, not a link; one open to group or others is
-//!   tightened to 0700 (on Windows, given an access list for this user and SYSTEM only). Before a
-//!   copy is made there, the copies of processes no longer running (folders named exactly
-//!   `wal-<pid>-<n>`) are removed; those of this process and of every process still running stay.
-//!   On Linux a process is running when `/proc` lists its pid; elsewhere a copy holds a `lock`
-//!   file that its process keeps locked while the copy is open, and a copy is stale once that lock
-//!   can be taken (or, with no `lock` file yet, once its folder is a minute old).
+//! - the tool's own `tmp` must be a real folder, not a link; one that is not private is made
+//!   private (0700; on Windows owned by this user with a protected access list for this user and
+//!   SYSTEM only). Before a copy is made there, the copies left by processes that stopped
+//!   (folders named exactly `wal-<pid>-<n>`) are removed. On Linux a copy is left over when `/proc`
+//!   does not list its pid. On macOS and Windows a copy has a lock file beside it,
+//!   `wal-<pid>-<n>.lock`, made already held before the folder and held until the folder is
+//!   removed; a copy is left over when its lock is missing or no process holds it, whatever its
+//!   pid (a pid can be reused), and is removed while the remover holds its lock;
+//! - a copy's name that is taken already (a leftover with a reused pid) is passed over for the
+//!   next.
 //!
 //! An [`Error`] names no path: a tool that shows one to its user adds it itself.
 
@@ -81,19 +84,25 @@ impl std::ops::Deref for Db {
     }
 }
 
-/// A private copy's folder, removed when dropped; and, outside Linux, its lock (see `prune`).
-struct Copy(PathBuf, Option<fs::File>);
+/// A private copy's folder, removed when dropped; and, on macOS and Windows, the lock beside it,
+/// released after the folder is gone (see `prune`).
+struct Copy {
+    dir: PathBuf,
+    #[cfg(any(windows, target_os = "macos"))]
+    _lock: pluxy_files::Lock,
+}
 
 impl Drop for Copy {
     fn drop(&mut self) {
-        drop(self.1.take());
-        let _ = fs::remove_dir_all(&self.0);
+        let _ = fs::remove_dir_all(&self.dir);
     }
 }
 
-/// Outside Linux: the file in a copy's folder that its process holds locked while it is open.
-#[cfg(not(target_os = "linux"))]
-const LOCK: &str = "lock";
+/// The lock file beside copy folder name, on macOS and Windows.
+#[cfg(any(windows, target_os = "macos"))]
+fn lock_path(root: &Path, name: &str) -> PathBuf {
+    root.join(format!("{name}.lock"))
+}
 
 /// Where private copies go: the folder, and whether it is the tool's own (so stale copies in it
 /// are pruned).
@@ -134,7 +143,7 @@ fn open(path: &Path, root: &CopyRoot) -> Result<Db, Error> {
         Ok(_) => {
             let copy = private_copy(path, &wal, root).map_err(Error::Copy)?;
             Ok(Db {
-                connection: connect(&copy.0.join("db"), false)?,
+                connection: connect(&copy.dir.join("db"), false)?,
                 _copy: Some(copy),
             })
         }
@@ -159,30 +168,49 @@ fn copy_root() -> CopyRoot {
 /// Copies db and its -wal into a new folder of this user's that no one else may use. Both are
 /// read through handles opened without following a link or waiting on a FIFO.
 fn private_copy(db: &Path, wal: &Path, root: &CopyRoot) -> std::io::Result<Copy> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(0);
     let mut db_source = open_regular(db)?;
     let mut wal_source = open_regular(wal)?;
     prepare_root(root)?;
-    let dir = root.dir.join(format!(
-        "wal-{}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::SeqCst)
-    ));
-    pluxy_files::create_private_dir(&dir)?;
-    #[allow(unused_mut)]
-    let mut copy = Copy(dir, None);
-    #[cfg(not(target_os = "linux"))]
-    {
-        let lock = pluxy_files::create_new_private(&copy.0.join(LOCK))?;
-        lock.try_lock().map_err(std::io::Error::other)?;
-        copy.1 = Some(lock);
-    }
+    let copy = new_copy(&root.dir)?;
     for (source, name) in [(&mut db_source, "db"), (&mut wal_source, "db-wal")] {
-        let mut dest = pluxy_files::create_new_private(&copy.0.join(name))?;
+        let mut dest = pluxy_files::create_new_private(&copy.dir.join(name))?;
         std::io::copy(source, &mut dest)?;
     }
     Ok(copy)
+}
+
+/// A new private copy folder in root, `wal-<pid>-<n>` with the first n whose name is free; on macOS
+/// and Windows with its lock made and held before the folder, so no prune can take it for a
+/// leftover.
+fn new_copy(root: &Path) -> std::io::Result<Copy> {
+    use std::io::ErrorKind::AlreadyExists;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    loop {
+        let name = format!(
+            "wal-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        );
+        #[cfg(any(windows, target_os = "macos"))]
+        let lock = match pluxy_files::create_locked(&lock_path(root, &name)) {
+            Ok(lock) => lock,
+            Err(e) if e.kind() == AlreadyExists => continue,
+            Err(e) => return Err(e),
+        };
+        let dir = root.join(&name);
+        match pluxy_files::create_private_dir(&dir) {
+            Ok(()) => {
+                return Ok(Copy {
+                    dir,
+                    #[cfg(any(windows, target_os = "macos"))]
+                    _lock: lock,
+                })
+            }
+            Err(e) if e.kind() == AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// Makes root usable for copies. The tool's own `tmp` must be a real folder (not a link, so nothing
@@ -223,9 +251,9 @@ fn prepare_root(root: &CopyRoot) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Removes the copies in root that a process no longer running left behind (cut short); the copies
-/// of this process and of every process still running stay. Only a folder named exactly
-/// `wal-<pid>-<n>` is a copy.
+/// Removes the copies in root that a process that stopped left behind (cut short). Only a folder
+/// named exactly `wal-<pid>-<n>` is a copy.
+#[cfg(not(any(windows, target_os = "macos")))]
 fn prune(root: &Path) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
@@ -233,12 +261,50 @@ fn prune(root: &Path) {
     for e in entries.flatten() {
         let pid = e.file_name().to_str().and_then(copy_pid);
         if let Some(pid) = pid {
-            if pid != std::process::id()
-                && e.file_type().is_ok_and(|t| t.is_dir())
-                && stale(pid, &e.path())
-            {
+            if e.file_type().is_ok_and(|t| t.is_dir()) && stale(pid) {
                 let _ = fs::remove_dir_all(e.path());
             }
+        }
+    }
+}
+
+/// Removes the copies in root that a process that stopped left behind (cut short), and their
+/// locks: a copy whose lock is missing or held by no process, whatever its pid. Each is removed
+/// while this process holds its lock, so no copy can be made under its name meanwhile. Only a
+/// folder named exactly `wal-<pid>-<n>` is a copy; a lock left with no folder goes too.
+#[cfg(any(windows, target_os = "macos"))]
+fn prune(root: &Path) {
+    use std::io::ErrorKind::AlreadyExists;
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let Ok(file_name) = e.file_name().into_string() else {
+            continue;
+        };
+        let Ok(kind) = e.file_type() else {
+            continue;
+        };
+        let name = match file_name.strip_suffix(".lock") {
+            Some(name) if kind.is_file() => name,
+            None if kind.is_dir() => &file_name,
+            _ => continue,
+        };
+        if copy_pid(name).is_none() {
+            continue;
+        }
+        let lock = lock_path(root, name);
+        let held = match pluxy_files::create_locked(&lock) {
+            Ok(held) => Some(held),
+            Err(e) if e.kind() == AlreadyExists => pluxy_files::take_lock(&lock).ok().flatten(),
+            Err(_) => None,
+        };
+        if let Some(held) = held {
+            let dir = root.join(name);
+            if fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
+                let _ = fs::remove_dir_all(&dir);
+            }
+            drop(held);
         }
     }
 }
@@ -253,57 +319,59 @@ fn copy_pid(name: &str) -> Option<u32> {
     pid.parse::<u32>().ok().filter(|p| *p > 0)
 }
 
-/// Whether the copy in folder dir, made by process pid, is left over: that process is no longer
-/// running (as `/proc` tells; never when it cannot tell).
-#[cfg(target_os = "linux")]
-fn stale(pid: u32, _dir: &Path) -> bool {
+/// Whether the copy made by process pid is left over: that process is no longer running (as
+/// `/proc` tells; never when it cannot tell, as where there is no `/proc`).
+#[cfg(not(any(windows, target_os = "macos")))]
+fn stale(pid: u32) -> bool {
     let proc = Path::new("/proc");
     proc.join("self").exists() && !proc.join(pid.to_string()).exists()
 }
 
-/// Whether the copy in folder dir is left over: its `lock` is held by no process (the lock goes
-/// with the process that held it), or it has no `lock` and its folder is over a minute old (a copy
-/// being made gets its lock right after its folder).
-#[cfg(not(target_os = "linux"))]
-fn stale(_pid: u32, dir: &Path) -> bool {
-    match pluxy_files::open_regular(&dir.join(LOCK)) {
-        Ok(lock) => lock.try_lock().is_ok(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => fs::symlink_metadata(dir)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.elapsed().ok())
-            .is_some_and(|age| age > Duration::from_secs(60)),
-        Err(_) => false,
+/// path as what follows `file:` in a URI, before percent-encoding. On Windows the path must be a
+/// full one (SQLite would read any other against its own idea of the current folder); it is
+/// given in its long form (`\\?\C:\…`, `\\?\UNC\server\share\…`), which SQLite passes to Windows
+/// as it is, so a path past Windows' old 260-character limit opens.
+#[cfg(windows)]
+fn uri_path(path: &Path) -> Result<Vec<u8>, Error> {
+    use std::path::{Component, Prefix};
+    let not_full = || Error::Open("the database path is not a full path".into());
+    if !path.is_absolute() {
+        return Err(not_full());
     }
+    let Some(Component::Prefix(prefix)) = path.components().next() else {
+        return Err(not_full());
+    };
+    let long = match prefix.kind() {
+        Prefix::Verbatim(_) | Prefix::VerbatimUNC(..) | Prefix::VerbatimDisk(_) => path.to_owned(),
+        // Made full first (`.` and `..` resolved, `/` turned to `\\`), which the long form leaves
+        // as they are.
+        Prefix::Disk(_) | Prefix::UNC(..) => {
+            let full = std::path::absolute(path).map_err(|_| not_full())?;
+            let s = full.as_os_str().to_str().ok_or_else(not_unicode)?;
+            match s.strip_prefix(r"\\") {
+                Some(share) => PathBuf::from(format!(r"\\?\UNC\{share}")),
+                None => PathBuf::from(format!(r"\\?\{s}")),
+            }
+        }
+        Prefix::DeviceNS(_) => return Err(not_full()),
+    };
+    Ok(long.to_str().ok_or_else(not_unicode)?.as_bytes().to_vec())
 }
 
-/// path as what follows `file:` in a URI. On Windows: separators as `/`, a `\\?\` prefix
-/// dropped, a drive path as `/C:/…` and a share as `////server/share/…` (an empty authority, then
-/// the share's own `//`), as SQLite reads them.
 #[cfg(windows)]
-fn uri_path(path: &Path) -> Vec<u8> {
-    let s = path.to_string_lossy().replace('\\', "/");
-    let s = match s.strip_prefix("//?/UNC/") {
-        Some(share) => format!("//{share}"),
-        None => s.strip_prefix("//?/").map(str::to_string).unwrap_or(s),
-    };
-    let s = if s.starts_with("//") {
-        format!("//{s}")
-    } else {
-        format!("/{s}")
-    };
-    s.into_bytes()
+fn not_unicode() -> Error {
+    Error::Open("the database path is not valid Unicode".into())
 }
 
 #[cfg(not(windows))]
-fn uri_path(path: &Path) -> Vec<u8> {
-    path.as_os_str().as_encoded_bytes().to_vec()
+fn uri_path(path: &Path) -> Result<Vec<u8>, Error> {
+    Ok(path.as_os_str().as_encoded_bytes().to_vec())
 }
 
 /// A read-only connection to path (immutable when asked).
 fn connect(path: &Path, immutable: bool) -> Result<Connection, Error> {
     let mut uri = String::from("file:");
-    for b in &uri_path(path) {
+    for b in &uri_path(path)? {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
                 uri.push(*b as char)
@@ -314,6 +382,10 @@ fn connect(path: &Path, immutable: bool) -> Result<Connection, Error> {
     uri.push_str("?mode=ro");
     if immutable {
         uri.push_str("&immutable=1");
+    }
+    // Windows' SQLite VFS that takes paths up to Windows' own limit, not 260 characters.
+    if cfg!(windows) {
+        uri.push_str("&vfs=win32-longpath");
     }
     let connection = Connection::open_with_flags(
         &uri,

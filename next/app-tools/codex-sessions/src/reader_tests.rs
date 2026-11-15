@@ -214,6 +214,9 @@ fn local_prefixed_threads_and_their_rollouts_are_one_session() {
 
 #[test]
 fn links_in_the_session_folders_are_skipped() {
+    if !links_allowed() {
+        return;
+    }
     let root = Root::new("list-links");
     let outside = Root::new("list-links-outside");
     let id = "019f1234-abcd-7000-8000-0000000000bb";
@@ -465,7 +468,12 @@ fn reading_a_wal_database_leaves_nothing_beside_it() {
 
 #[test]
 fn a_path_with_uri_characters_opens() {
-    let root = Root::new("uri ?#%");
+    // `?` cannot be in a Windows file name.
+    let root = Root::new(if cfg!(windows) {
+        "uri #%&="
+    } else {
+        "uri ?#%&="
+    });
     sql(
         &root.join("state_5.sqlite"),
         "CREATE TABLE threads (id TEXT PRIMARY KEY, name TEXT); INSERT INTO threads VALUES ('u', 'Odd path');",
@@ -611,6 +619,9 @@ fn a_database_of_no_bytes_with_a_wal_that_holds_bytes_leaves_the_wal_alone() {
 
 #[test]
 fn the_opener_refuses_a_database_that_is_not_a_regular_file() {
+    if !links_allowed() {
+        return;
+    }
     let root = Root::new("opener-link");
     let db = root.join("real.db");
     sql(
@@ -639,27 +650,22 @@ fn only_private_copies_of_processes_no_longer_running_are_removed() {
     wal_with_uncheckpointed_rows(&db);
     let tmp = data.join("tmp");
     // A process that is running and one that is not, each with a copy left in the folder. On Linux
-    // a copy's process is told by the pid in its name (pid 1 runs); elsewhere by the `lock` file in
-    // it, which a running process holds locked (pluxy-sqlite-ro).
-    #[cfg(target_os = "linux")]
+    // a copy's process is told by the pid in its name (pid 1 runs); on macOS and Windows by the
+    // lock beside it, which a running process holds (pluxy-sqlite-ro).
+    #[cfg(not(any(windows, target_os = "macos")))]
     let dead = {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         let dead = child.id();
         child.wait().unwrap();
         dead
     };
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(windows, target_os = "macos"))]
     let dead = 4_294_967_294u32;
     for left in ["wal-1-0".to_string(), format!("wal-{dead}-0")] {
         fs::create_dir_all(tmp.join(left)).unwrap();
     }
-    #[cfg(not(target_os = "linux"))]
-    let _held = {
-        fs::write(tmp.join(format!("wal-{dead}-0/lock")), b"").unwrap();
-        let held = fs::File::create(tmp.join("wal-1-0/lock")).unwrap();
-        held.try_lock().unwrap();
-        held
-    };
+    #[cfg(any(windows, target_os = "macos"))]
+    let _held = pluxy_files::create_locked(&tmp.join("wal-1-0.lock")).unwrap();
     std::env::set_var("PLUXY_TOOL_DATA_DIR", &*data);
     let page = list(&root, 0, 50);
     std::env::remove_var("PLUXY_TOOL_DATA_DIR");
@@ -748,6 +754,9 @@ fn a_session_index_over_16_mib_is_a_warning_and_not_read() {
 
 #[test]
 fn linked_databases_and_index_are_skipped() {
+    if !links_allowed() {
+        return;
+    }
     let root = Root::new("linked-db");
     let outside = Root::new("linked-db-outside");
     let db = outside.join("real.db");
@@ -780,6 +789,9 @@ fn one_thread_db(path: &Path) {
 
 #[test]
 fn a_linked_sqlite_folder_is_skipped_with_a_warning_and_a_real_one_is_read() {
+    if !links_allowed() {
+        return;
+    }
     let outside = Root::new("linked-sqlite-outside");
     one_thread_db(&outside.join("other.db"));
     let root = Root::new("linked-sqlite");
@@ -800,6 +812,9 @@ fn a_linked_sqlite_folder_is_skipped_with_a_warning_and_a_real_one_is_read() {
 
 #[test]
 fn linked_session_folders_are_skipped_with_a_warning_each_and_real_ones_are_read() {
+    if !links_allowed() {
+        return;
+    }
     let outside = Root::new("linked-sessions-outside");
     let live = "019f1234-abcd-7000-8000-0000000000c1";
     let old = "019f1234-abcd-7000-8000-0000000000c2";
@@ -835,6 +850,9 @@ fn linked_session_folders_are_skipped_with_a_warning_each_and_real_ones_are_read
 
 #[test]
 fn a_database_with_a_linked_wal_or_shm_is_skipped_with_a_warning() {
+    if !links_allowed() {
+        return;
+    }
     let _lock = COPY_ROOT.lock().unwrap_or_else(|e| e.into_inner());
     let outside = Root::new("linked-wal-outside");
     // A real -wal beside the database is read (the control).
@@ -934,4 +952,27 @@ fn deny_reading(path: &Path, deny: bool) {
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
+}
+
+/// Whether this account may make symbolic links (on Windows that takes a privilege or Developer
+/// Mode). When it may not, says so on stderr: a test that needs links is then skipped, and the CI
+/// summary counts the skip.
+fn links_allowed() -> bool {
+    #[cfg(unix)]
+    return true;
+    #[cfg(windows)]
+    {
+        static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let allowed = *ALLOWED.get_or_init(|| {
+            let probe = std::env::temp_dir().join(format!("links-allowed-{}", std::process::id()));
+            let _ = std::fs::remove_file(&probe);
+            let made = std::os::windows::fs::symlink_file("target", &probe).is_ok();
+            let _ = std::fs::remove_file(&probe);
+            made
+        });
+        if !allowed {
+            eprintln!("skipped: this account cannot make a symbolic link");
+        }
+        allowed
+    }
 }

@@ -8,13 +8,39 @@ use std::collections::BTreeMap;
 use store::{Events, Rows};
 use sync::Host;
 
-/// A store in a new folder of its own.
-fn store(name: &str) -> (Store, PathBuf) {
-    let d = std::env::temp_dir().join(format!("pluxy-agent-usage-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
+/// A folder removed when dropped. A test declares it before the stores in it, so they are dropped
+/// (closed) first: Windows does not remove a file that is still open.
+struct Dir(PathBuf);
+
+impl Dir {
+    fn new(name: &str) -> Dir {
+        let d =
+            std::env::temp_dir().join(format!("pluxy-agent-usage-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        Dir(d)
+    }
+}
+
+impl Drop for Dir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for Dir {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.0
+    }
+}
+
+/// A store in a new folder of its own, the folder first (see `Dir`).
+fn store(name: &str) -> (Dir, Store) {
+    let d = Dir::new(name);
     let path = d.join("usage.db");
-    (Store::open(&path).unwrap(), d)
+    let s = Store::open(&path).unwrap();
+    (d, s)
 }
 
 fn tok(input: u64, output: u64, total: u64) -> Tokens {
@@ -49,7 +75,7 @@ fn stored(s: &Store) -> Vec<(String, i64, String, u64, u64)> {
 
 #[test]
 fn a_files_rows_and_revision_are_replaced_together_or_not_at_all() {
-    let (mut s, d) = store("replace");
+    let (d, mut s) = store("replace");
     s.replace_file(
         "p/a",
         "f1",
@@ -103,12 +129,11 @@ fn a_files_rows_and_revision_are_replaced_together_or_not_at_all() {
     assert!(r.unwrap_err().contains("refused"));
     assert_eq!(stored(&s), want);
     assert_eq!(s.revisions("p/a").unwrap()["f1"], (20, 200, 1));
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn clear_deletes_history_and_revisions_and_keeps_settings() {
-    let (mut s, d) = store("clear");
+    let (_d, mut s) = store("clear");
     s.replace_file(
         "p/a",
         "f1",
@@ -133,7 +158,6 @@ fn clear_deletes_history_and_revisions_and_keeps_settings() {
     assert_eq!(s.interval().unwrap(), 30);
     assert_eq!(s.roots("p/a").unwrap(), Some(vec!["/r".to_string()]));
     assert_eq!(s.storage().unwrap().1, 0);
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 /// The host's job service, played: the registrations given, and every job started.
@@ -229,7 +253,7 @@ fn list(sync: &mut Sync, s: &mut Store, job: &str, package: &str, files: &[(&str
 
 #[test]
 fn a_sync_lists_reads_changed_files_and_commits_each_once() {
-    let (mut s, d) = store("sync");
+    let (_d, mut s) = store("sync");
     let host = FakeHost::new(&["p/a"]);
     let mut sync = Sync::new();
     // Never synced: due on its own.
@@ -324,12 +348,11 @@ fn a_sync_lists_reads_changed_files_and_commits_each_once() {
     list(&mut sync, &mut s, &job, "p/a", &[("f1", 10), ("f2", 20)]);
     sync.step(&mut s, &host, false, T0 + 400).unwrap();
     assert_eq!(host.last().1["files"], json!(["f2"]));
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn a_job_ended_mid_file_leaves_no_rows_and_a_resumed_sync_reads_only_what_is_missing() {
-    let (mut s, d) = store("resume");
+    let (_d, mut s) = store("resume");
     let host = FakeHost::new(&["p/a"]);
     let mut sync = Sync::new();
     sync.step(&mut s, &host, true, T0).unwrap();
@@ -380,12 +403,11 @@ fn a_job_ended_mid_file_leaves_no_rows_and_a_resumed_sync_reads_only_what_is_mis
     let st = sync.step(&mut s, &host, false, T0 + 1001).unwrap();
     assert_eq!(st["sources"][0]["changed"], 1);
     assert_eq!(host.last().1["files"], json!(["f2"]));
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn deliveries_not_from_the_jobs_source_or_out_of_order_are_refused() {
-    let (mut s, d) = store("forged");
+    let (_d, mut s) = store("forged");
     let host = FakeHost::new(&["p/a", "p/b"]);
     let mut sync = Sync::new();
     // No sync under way.
@@ -449,12 +471,11 @@ fn deliveries_not_from_the_jobs_source_or_out_of_order_are_refused() {
         .unwrap_err();
     assert_eq!(e.code, "invalid_request");
     assert!(stored(&s).is_empty());
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn a_store_error_at_a_jobs_end_fails_its_source_and_the_run_ends() {
-    let (mut s, d) = store("end-error");
+    let (d, mut s) = store("end-error");
     let host = FakeHost::new(&["p/a"]);
     let mut sync = Sync::new();
     sync.step(&mut s, &host, true, T0).unwrap();
@@ -475,12 +496,11 @@ fn a_store_error_at_a_jobs_end_fails_its_source_and_the_run_ends() {
             .contains("files"),
         "{st}"
     );
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn a_job_with_no_word_for_a_minute_is_cancelled_and_the_run_ends() {
-    let (mut s, d) = store("stale");
+    let (_d, mut s) = store("stale");
     let host = FakeHost::new(&["p/a"]);
     let mut sync = Sync::new();
     sync.step(&mut s, &host, true, T0).unwrap();
@@ -519,12 +539,11 @@ fn a_job_with_no_word_for_a_minute_is_cancelled_and_the_run_ends() {
     let st = sync.step(&mut s, &host, false, T0 + 260).unwrap();
     assert_eq!(host.cancelled.borrow().last(), Some(&read));
     assert_eq!(st["running"], false);
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn a_file_with_rows_out_of_bounds_fails_and_its_job_goes_on() {
-    let (mut s, d) = store("bounds");
+    let (_d, mut s) = store("bounds");
     let host = FakeHost::new(&["p/a"]);
     let mut sync = Sync::new();
     sync.step(&mut s, &host, true, T0).unwrap();
@@ -577,12 +596,11 @@ fn a_file_with_rows_out_of_bounds_fails_and_its_job_goes_on() {
         (&json!(1), &json!(3))
     );
     assert_eq!(stored(&s), vec![("p/a".into(), NOV10, "m".into(), 2, 2)]);
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn a_file_refused_before_its_last_part_fails_once_and_its_job_goes_on() {
-    let (mut s, d) = store("refused-parts");
+    let (_d, mut s) = store("refused-parts");
     // Old rows of "a" and "big" (an earlier revision): a refused read leaves them.
     s.replace_file(
         "p/a",
@@ -690,7 +708,6 @@ fn a_file_refused_before_its_last_part_fails_once_and_its_job_goes_on() {
     // The old rows of "a" and "big" stay (9 and 8), and "b" is stored (2): 19 in all, one hour.
     assert_eq!(stored(&s), vec![("p/a".into(), NOV10, "m".into(), 19, 19)]);
     assert_eq!(s.revisions("p/a").unwrap()["a"], (1, 1, 1));
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 /// A run with files f1 (committed), f2 (a part staged, not last) and f3 (not reached) in one read
@@ -731,7 +748,7 @@ fn read_job_midway(sync: &mut Sync, s: &mut Store, host: &FakeHost) -> String {
 #[test]
 fn a_read_job_that_ends_without_all_its_files_counts_the_unread_ones_as_failed() {
     for end in ["failed", "cancelled", "done"] {
-        let (mut s, d) = store(&format!("unread-{end}"));
+        let (_d, mut s) = store(&format!("unread-{end}"));
         let host = FakeHost::new(&["p/a"]);
         let mut sync = Sync::new();
         let read = read_job_midway(&mut sync, &mut s, &host);
@@ -769,13 +786,12 @@ fn a_read_job_that_ends_without_all_its_files_counts_the_unread_ones_as_failed()
         // f2's old revision is (1, 1) and f1's is (5, 7): only f2 and f3 are changed.
         sync.step(&mut s, &host, false, T0 + 101).unwrap();
         assert_eq!(host.last().1["files"], json!(["f2", "f3"]), "{end}");
-        std::fs::remove_dir_all(d).unwrap();
     }
 }
 
 #[test]
 fn a_read_job_cancelled_as_stale_counts_its_unread_files_once_each() {
-    let (mut s, d) = store("unread-stale");
+    let (_d, mut s) = store("unread-stale");
     let host = FakeHost::new(&["p/a"]);
     let mut sync = Sync::new();
     let read = read_job_midway(&mut sync, &mut s, &host);
@@ -805,12 +821,11 @@ fn a_read_job_cancelled_as_stale_counts_its_unread_files_once_each() {
     );
     assert!(src["error"].as_str().unwrap().contains("no word"));
     assert_eq!(stored(&s), vec![("p/a".into(), NOV10, "m".into(), 11, 11)]);
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn read_jobs_fit_the_hosts_input_limit_with_long_roots_and_escaped_ids() {
-    let (mut s, d) = store("chunks");
+    let (_d, mut s) = store("chunks");
     // 16 KiB of roots, and file IDs whose JSON is six times their length (control characters).
     let roots: Vec<String> = (0..4)
         .map(|i| format!("/{i}{}", "r".repeat(4000)))
@@ -832,7 +847,6 @@ fn read_jobs_fit_the_hosts_input_limit_with_long_roots_and_escaped_ids() {
         .map(|(_, i)| i["files"].as_array().unwrap().len())
         .sum();
     assert!((1..20).contains(&named), "{named} files in the first jobs");
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
@@ -858,7 +872,7 @@ fn roots_longer_than_16_kib_are_refused() {
 
 #[test]
 fn the_store_is_private_and_clear_replaces_one_that_will_not_open() {
-    let (_, d) = store("repair");
+    let (d, _) = store("repair");
     let path = d.join("usage.db");
     // Private: 0600 on Linux and macOS; on Windows an access list of this user and SYSTEM only.
     let private = |p: &Path| {
@@ -902,7 +916,6 @@ fn the_store_is_private_and_clear_replaces_one_that_will_not_open() {
     assert_eq!(s.storage().unwrap().1, 0);
     assert!(private(&path));
     assert!(open_store(&path, false).is_ok());
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 /// Keyed events (schema 2): key, hour, model and tokens.
@@ -921,7 +934,7 @@ fn hourly(s: &Store) -> Vec<(String, i64, u64)> {
 
 #[test]
 fn a_keyed_event_counts_once_across_files_and_goes_when_no_file_references_it() {
-    let (mut s, d) = store("events");
+    let (_d, mut s) = store("events");
     // A session (f1) and its branch (f2), which copies k1 and k2 and adds k3; f1 also has a plain
     // row. Counted once: hour 0 holds the plain 2; NOV10 holds k1 10 + k3 5 = 15; NOV10 + H holds
     // k2 20. Summed per file it would be 2 + 10 + 20 + 10 + 20 + 5 = 67, not 37.
@@ -1032,14 +1045,11 @@ fn a_keyed_event_counts_once_across_files_and_goes_when_no_file_references_it() 
     s.clear().unwrap();
     assert!(stored(&s).is_empty());
     assert_eq!(s.storage().unwrap().1, 0);
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn a_format_1_store_moves_to_format_2_in_place_keeping_its_rows() {
-    let d = std::env::temp_dir().join(format!("pluxy-agent-usage-format1-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
+    let d = Dir::new("format1");
     let path = d.join("usage.db");
     // The store as the hub at format 1 left it.
     {
@@ -1107,7 +1117,6 @@ fn a_format_1_store_moves_to_format_2_in_place_keeping_its_rows() {
     side.execute("UPDATE meta SET value = '3' WHERE key = 'format'", [])
         .unwrap();
     assert!(Store::open(&path).err().unwrap().contains("format 3"));
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 /// row with a key.
@@ -1125,7 +1134,7 @@ fn at_schema(mut d: Value, schema: u64) -> Value {
 
 #[test]
 fn a_schema_2_producers_keyed_rows_count_once_and_a_schema_1_producer_may_send_no_key() {
-    let (mut s, d) = store("schema2");
+    let (_d, mut s) = store("schema2");
     let host = FakeHost::new(&["p/a"]);
     let mut sync = Sync::new();
     sync.step(&mut s, &host, true, T0).unwrap();
@@ -1182,12 +1191,11 @@ fn a_schema_2_producers_keyed_rows_count_once_and_a_schema_1_producer_may_send_n
         stored(&s),
         vec![("p/a".into(), NOV10 + H, "m".into(), 9, 9)]
     );
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn a_file_refused_before_its_last_part_drops_its_staged_events_too() {
-    let (mut s, d) = store("refused-events");
+    let (_d, mut s) = store("refused-events");
     let mut host = FakeHost::new(&["p/a"]);
     host.registrations[0]["schema"] = json!(2);
     let mut sync = Sync::new();
@@ -1237,7 +1245,6 @@ fn a_file_refused_before_its_last_part_drops_its_staged_events_too() {
     );
     assert_eq!(s.storage().unwrap().1, 1);
     assert!(!s.revisions("p/a").unwrap().contains_key("f1"));
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 /// One whole sync of p/a at now: lists files, then delivers reads (file, size, rows) at schema to
@@ -1273,7 +1280,7 @@ fn sync_once(
 
 #[test]
 fn a_parser_moving_to_schema_2_reads_its_unchanged_files_again() {
-    let (mut s, d) = store("schema-up");
+    let (_d, mut s) = store("schema-up");
     let mut host = FakeHost::new(&["p/a"]);
     let mut sync = Sync::new();
     // At schema 1, a session (f1: message M, 5) and its branch (f2: M copied, and B, 3) are
@@ -1324,12 +1331,11 @@ fn a_parser_moving_to_schema_2_reads_its_unchanged_files_again() {
         (st["running"].clone(), st["sources"][0]["changed"].clone()),
         (json!(false), json!(0))
     );
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn a_parser_moving_back_to_schema_1_reads_its_unchanged_files_again() {
-    let (mut s, d) = store("schema-down");
+    let (_d, mut s) = store("schema-down");
     let mut host = FakeHost::new(&["p/a"]);
     host.registrations[0]["schema"] = json!(2);
     let mut sync = Sync::new();
@@ -1376,7 +1382,6 @@ fn a_parser_moving_back_to_schema_1_reads_its_unchanged_files_again() {
     );
     assert_eq!(s.storage().unwrap().1, 2);
     assert_eq!(s.revisions("p/a").unwrap()["f1"], (10, 7, 1));
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 /// Noon on 2026-11-10 UTC: the syncs' time.
@@ -1392,7 +1397,7 @@ fn ask(s: &Store, input: Value, registered: &[&str]) -> Value {
 
 #[test]
 fn reports_bucket_hours_in_the_viewers_zone() {
-    let (mut s, d) = store("zone");
+    let (_d, mut s) = store("zone");
     // The zone is +01:00 until 2026-11-08 00:00 UTC, then +02:00.
     let offsets = json!([[0, 60], [NOV10 - 2 * 86_400, 120]]);
     // UTC hours: 11-06 23:00 (+1: 11-07 00:00), 11-07 22:00 (+1: 23:00 on 11-07),
@@ -1535,12 +1540,11 @@ fn reports_bucket_hours_in_the_viewers_zone() {
         (&r["granularity"], r["buckets"].as_array().unwrap().len()),
         (&json!("day"), 71)
     );
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn a_trend_stacks_the_top_six_and_the_rest_as_other() {
-    let (mut s, d) = store("top");
+    let (_d, mut s) = store("top");
     // Eight models in one hour: m1 = 8 tokens, ..., m8 = 1.
     let list: Vec<(i64, String, Tokens)> = (1..=8)
         .map(|i| (NOV10, format!("m{i}"), tok(9 - i, 0, 9 - i)))
@@ -1558,12 +1562,11 @@ fn a_trend_stacks_the_top_six_and_the_rest_as_other() {
         json!(["m1", "m2", "m3", "m4", "m5", "m6", "__other__"])
     );
     assert_eq!(out["by_model"]["values"][0], json!([8, 7, 6, 5, 4, 3, 3]));
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn a_report_refuses_bad_input() {
-    let (s, d) = store("bad");
+    let (_d, s) = store("bad");
     for input in [
         json!({"range": "week", "offsets": [[0, 0]], "now": 0}),
         json!({"range": "7d", "offsets": [], "now": 0}),
@@ -1575,12 +1578,11 @@ fn a_report_refuses_bad_input() {
         let e = report::report(&s, &input, &[], json!(null)).unwrap_err();
         assert_eq!(e.code, "invalid_request", "{input}");
     }
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn the_last_24_hours_are_24_utc_hours_across_a_clock_change() {
-    let (mut s, d) = store("24h");
+    let (_d, mut s) = store("24h");
     // +01:00, then +02:00 from 2026-11-10 00:00 UTC; now 13:00 UTC.
     let offsets = json!([[0, 60], [NOV10, 120]]);
     let now = NOV10 + 13 * H;
@@ -1604,12 +1606,11 @@ fn the_last_24_hours_are_24_utc_hours_across_a_clock_change() {
         (&r["totals"]["total"], &r["previous"]["total"]),
         (&json!(24), &json!(6))
     );
-    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn a_report_always_fits_a_frame() {
-    let (mut s, d) = store("fits");
+    let (_d, mut s) = store("fits");
     // The review's probe: a row at hour 0 and one now; All by day.
     s.replace_file(
         "p/a",
@@ -1637,7 +1638,7 @@ fn a_report_always_fits_a_frame() {
     );
     assert!(serde_json::to_vec(&r).unwrap().len() < 1 << 20);
     // About 11.5 years of daily rows from three sources and seven models each.
-    let (mut s2, d2) = store("fits-big");
+    let (_d2, mut s2) = store("fits-big");
     for src in ["p/a", "p/b", "p/c"] {
         let list: Vec<(i64, String, Tokens)> = (0..4200)
             .flat_map(|k| {
@@ -1663,7 +1664,7 @@ fn a_report_always_fits_a_frame() {
     let size = serde_json::to_vec(&r).unwrap().len();
     assert!(size < 1 << 20, "{size} bytes");
     // Models past 200 are summed as Other.
-    let (mut s3, d3) = store("fits-models");
+    let (_d3, mut s3) = store("fits-models");
     let many: Rows = (0..205)
         .map(|m| ((NOV10, format!("m{m:03}")), tok(1, 0, 1)))
         .collect();
@@ -1679,7 +1680,4 @@ fn a_report_always_fits_a_frame() {
         (models.len(), &models[200]),
         (201, &json!({"model": "__other__", "total": 5}))
     );
-    for dir in [d, d2, d3] {
-        std::fs::remove_dir_all(dir).unwrap();
-    }
 }

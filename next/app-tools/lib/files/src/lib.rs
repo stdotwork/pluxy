@@ -1,9 +1,12 @@
 //! The file rules the app tools share on Linux, macOS and Windows.
 //!
 //! - **Private** files and folders are this user's alone: on Linux and macOS a file is 0600 and a
-//!   folder 0700; on Windows each carries a protected access list that allows only this user and
-//!   SYSTEM (the system account, whose reach matches root's), and a folder's list is inherited by
-//!   what is made inside it.
+//!   folder 0700; on Windows each is owned by this user (or SYSTEM, the system account, whose reach
+//!   matches root's) and carries a protected access list (one that takes nothing from its folder's)
+//!   that allows only this user and SYSTEM. A folder's list is inherited by what is made inside it;
+//!   what is made that way is not private until it is made so, since its list is not protected.
+//!   A private file or folder is made with its owner and list in one step, so it is never open to
+//!   anyone else, even for a moment.
 //! - [`open_regular`] opens a file for reading without following a link and only if it is a
 //!   regular file, checked on the open handle: on Linux and macOS with `O_NOFOLLOW` and
 //!   `O_NONBLOCK` (a FIFO is refused, never waited on); on Windows the link itself is opened
@@ -12,6 +15,10 @@
 //!   and 128-bit file ID on Windows.
 //! - [`mtime_ns`] is a file's modification time in nanoseconds since the Unix epoch, the same
 //!   value on every platform.
+//! - On macOS and Windows, a [`Lock`] is a private file this process holds while it lives, made
+//!   and taken in one step each ([`create_locked`], [`take_lock`]): on macOS with `O_EXLOCK`, removed
+//!   when dropped; on Windows opened for no one else to share, and removed by the system when its
+//!   handle closes (when the process stops, too).
 
 use std::fs::{self, File, Metadata};
 use std::io;
@@ -82,18 +89,51 @@ pub fn create_new_private(path: &Path) -> io::Result<File> {
     imp::create_new_private(path)
 }
 
-/// Makes the existing file or folder path private: 0600 or 0700 on Linux and macOS; on Windows
-/// a protected access list allowing only this user and SYSTEM (a folder's inherited by what is made
-/// in it). path itself must not be a link.
+/// Makes the existing file or folder path private, through a handle that is path itself, not a
+/// link it names: 0600 or 0700 on Linux and macOS; on Windows owned by this user, with a protected
+/// access list allowing only this user and SYSTEM (a folder's inherited by what is made in it). A
+/// link, or anything but a file or folder, is refused; so is, on Windows, one owned by another
+/// account that this one may not take over.
 pub fn make_private(path: &Path) -> io::Result<()> {
     imp::make_private(path)
 }
 
 /// Whether the file or folder path (not followed if it is a link) is private already: on Linux and
-/// macOS no group or other permission bit is set; on Windows its access list allows no one but this
-/// user and SYSTEM.
+/// macOS no group or other permission bit is set; on Windows this user or SYSTEM owns it and its
+/// access list is protected and allows no one but this user and SYSTEM.
 pub fn is_private(path: &Path) -> io::Result<bool> {
     imp::is_private(path)
+}
+
+/// A lock file this process holds (macOS and Windows): no other process can take it while this
+/// lives. Dropping it releases and removes it.
+#[cfg(any(windows, target_os = "macos"))]
+pub struct Lock {
+    _file: File,
+    #[cfg(unix)]
+    path: std::path::PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Lock {
+    fn drop(&mut self) {
+        // Removed while still held, so no process can take it between the two.
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// Creates the private file path, which must not exist, already held (in one step: no other
+/// process can see it unheld). An existing path is an `AlreadyExists` error.
+#[cfg(any(windows, target_os = "macos"))]
+pub fn create_locked(path: &Path) -> io::Result<Lock> {
+    imp::create_locked(path)
+}
+
+/// Takes the lock file path when no process holds it: `None` while one does. A link at path is
+/// never followed.
+#[cfg(any(windows, target_os = "macos"))]
+pub fn take_lock(path: &Path) -> io::Result<Option<Lock>> {
+    imp::take_lock(path)
 }
 
 #[cfg(unix)]
@@ -146,49 +186,109 @@ mod imp {
             .open(path)
     }
 
-    pub fn make_private(path: &Path) -> io::Result<()> {
-        let m = fs::symlink_metadata(path)?;
-        if m.file_type().is_symlink() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "a link"));
+    fn a_link(e: io::Error) -> io::Error {
+        if e.raw_os_error() == Some(libc::ELOOP) {
+            io::Error::new(io::ErrorKind::InvalidInput, "a link")
+        } else {
+            e
         }
-        let mode = if m.is_dir() { 0o700 } else { 0o600 };
-        fs::set_permissions(path, fs::Permissions::from_mode(mode))
+    }
+
+    pub fn make_private(path: &Path) -> io::Result<()> {
+        // The mode is changed on the handle (fchmod), so a link swapped in after the open is not
+        // followed.
+        let f = open_nofollow(path).map_err(a_link)?;
+        let m = f.metadata()?;
+        let mode = if m.is_dir() {
+            0o700
+        } else if m.is_file() {
+            0o600
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a file or folder",
+            ));
+        };
+        f.set_permissions(fs::Permissions::from_mode(mode))
     }
 
     pub fn is_private(path: &Path) -> io::Result<bool> {
         Ok(fs::symlink_metadata(path)?.permissions().mode() & 0o077 == 0)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn create_locked(path: &Path) -> io::Result<Lock> {
+        // O_EXLOCK with O_CREAT|O_EXCL: made and locked in one open.
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_EXLOCK | libc::O_NONBLOCK | libc::O_NOFOLLOW)
+            .open(path)?;
+        Ok(Lock {
+            _file: file,
+            path: path.to_owned(),
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn take_lock(path: &Path) -> io::Result<Option<Lock>> {
+        match fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_EXLOCK | libc::O_NONBLOCK | libc::O_NOFOLLOW)
+            .open(path)
+        {
+            Ok(file) => Ok(Some(Lock {
+                _file: file,
+                path: path.to_owned(),
+            })),
+            Err(e) if e.raw_os_error() == Some(libc::EWOULDBLOCK) => Ok(None),
+            Err(e) => Err(a_link(e)),
+        }
     }
 }
 
 #[cfg(windows)]
 mod imp {
     use super::*;
+    use std::os::windows::ffi::OsStrExt;
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-    use std::os::windows::io::AsRawHandle;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle};
     use std::ptr::{null, null_mut};
-    use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, ERROR_SUCCESS, HANDLE};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, LocalFree, ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_SUCCESS,
+        GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+    };
     use windows_sys::Win32::Security::Authorization::{
         GetSecurityInfo, SetEntriesInAclW, SetSecurityInfo, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE,
         SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_IS_WELL_KNOWN_GROUP,
         TRUSTEE_W,
     };
     use windows_sys::Win32::Security::{
-        CreateWellKnownSid, EqualSid, GetAce, GetTokenInformation, TokenUser, WinLocalSystemSid,
-        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE,
-        PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_MAX_SID_SIZE,
+        CreateWellKnownSid, EqualSid, GetAce, GetSecurityDescriptorControl, GetTokenInformation,
+        InitializeSecurityDescriptor, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
+        SetSecurityDescriptorOwner, TokenUser, WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACE_HEADER,
+        ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
+        SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE, SE_DACL_PROTECTED,
         SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_QUERY, TOKEN_USER,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        FileIdInfo, GetFileInformationByHandleEx, GetFileType, FILE_ALL_ACCESS,
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_GENERIC_WRITE, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_TYPE_DISK, READ_CONTROL,
-        WRITE_DAC,
+        CreateDirectoryW, CreateFileW, FileIdInfo, GetFileInformationByHandle,
+        GetFileInformationByHandleEx, GetFileType, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, DELETE,
+        FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        FILE_TYPE_DISK, OPEN_EXISTING, READ_CONTROL, WRITE_DAC, WRITE_OWNER,
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     /// `ACCESS_ALLOWED_ACE_TYPE` and `ACCESS_DENIED_ACE_TYPE` (winnt.h).
     const ACCESS_ALLOWED: u8 = 0;
     const ACCESS_DENIED: u8 = 1;
+    /// `SECURITY_DESCRIPTOR_REVISION` (winnt.h).
+    const SD_REVISION: u32 = 1;
 
     fn handle(f: &File) -> HANDLE {
         f.as_raw_handle() as HANDLE
@@ -202,11 +302,41 @@ mod imp {
         }
     }
 
+    /// A Win32 call's BOOL as a result (the error is the thread's last one).
+    fn ok(b: windows_sys::core::BOOL) -> io::Result<()> {
+        if b == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
     fn refuse_link(m: &Metadata) -> io::Result<()> {
         if m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
             Err(io::Error::new(io::ErrorKind::InvalidInput, "a link"))
         } else {
             Ok(())
+        }
+    }
+
+    /// path as a NUL-terminated wide string.
+    fn wide(path: &Path) -> io::Result<Vec<u16>> {
+        let w: Vec<u16> = path.as_os_str().encode_wide().collect();
+        if w.contains(&0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a NUL in the path",
+            ));
+        }
+        Ok(w.into_iter().chain([0]).collect())
+    }
+
+    /// CreateFileW's handle as a File.
+    fn created(h: HANDLE) -> io::Result<File> {
+        if h == INVALID_HANDLE_VALUE {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(unsafe { File::from_raw_handle(h as _) })
         }
     }
 
@@ -226,7 +356,7 @@ mod imp {
 
     pub fn id_of(file: &File) -> io::Result<Id> {
         let mut info = FILE_ID_INFO::default();
-        let ok = unsafe {
+        let got = unsafe {
             GetFileInformationByHandleEx(
                 handle(file),
                 FileIdInfo,
@@ -234,12 +364,19 @@ mod imp {
                 std::mem::size_of::<FILE_ID_INFO>() as u32,
             )
         };
-        if ok == 0 {
-            return Err(io::Error::last_os_error());
+        if got != 0 {
+            return Ok(Id {
+                volume: info.VolumeSerialNumber,
+                file: u128::from_le_bytes(info.FileId.Identifier),
+            });
         }
+        // A file system with no 128-bit IDs (FAT32, exFAT): its 64-bit index, the same for every
+        // file on that volume.
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        ok(unsafe { GetFileInformationByHandle(handle(file), &mut info) })?;
         Ok(Id {
-            volume: info.VolumeSerialNumber,
-            file: u128::from_le_bytes(info.FileId.Identifier),
+            volume: u64::from(info.dwVolumeSerialNumber),
+            file: u128::from(info.nFileIndexHigh) << 32 | u128::from(info.nFileIndexLow),
         })
     }
 
@@ -256,8 +393,10 @@ mod imp {
     }
 
     pub fn create_private_dir(path: &Path) -> io::Result<()> {
-        fs::create_dir(path)?;
-        make_private(path)
+        let name = wide(path)?;
+        with_private(true, |sa| {
+            ok(unsafe { CreateDirectoryW(name.as_ptr(), sa) })
+        })
     }
 
     pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
@@ -265,20 +404,110 @@ mod imp {
     }
 
     pub fn create_new_private(path: &Path) -> io::Result<File> {
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .access_mode(FILE_GENERIC_WRITE | WRITE_DAC | READ_CONTROL)
-            .open(path)?;
-        set_private(&file, false)?;
-        Ok(file)
+        let name = wide(path)?;
+        with_private(false, |sa| {
+            created(unsafe {
+                CreateFileW(
+                    name.as_ptr(),
+                    GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    sa,
+                    CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL,
+                    null_mut(),
+                )
+            })
+        })
+    }
+
+    pub fn create_locked(path: &Path) -> io::Result<Lock> {
+        let name = wide(path)?;
+        // Shared with no one, so no other open succeeds while it is held; removed when its last
+        // handle closes, so a process that stops leaves none.
+        let file = with_private(false, |sa| {
+            created(unsafe {
+                CreateFileW(
+                    name.as_ptr(),
+                    GENERIC_READ | GENERIC_WRITE | DELETE,
+                    0,
+                    sa,
+                    CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE,
+                    null_mut(),
+                )
+            })
+        })?;
+        Ok(Lock { _file: file })
+    }
+
+    pub fn take_lock(path: &Path) -> io::Result<Option<Lock>> {
+        let name = wide(path)?;
+        let opened = created(unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                GENERIC_READ | DELETE,
+                0,
+                null(),
+                OPEN_EXISTING,
+                FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT,
+                null_mut(),
+            )
+        });
+        match opened {
+            Ok(file) => Ok(Some(Lock { _file: file })),
+            // Held; or being removed by the process that held it (denied while removal is pending).
+            Err(e)
+                if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32)
+                    || e.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub fn make_private(path: &Path) -> io::Result<()> {
-        let f = open_itself(path, FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)?;
+        let base = FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC;
+        // Taking the ownership needs WRITE_OWNER, which an owner does not always have; without it
+        // the file must be this user's or SYSTEM's already.
+        let (f, can_own) = match open_itself(path, base | WRITE_OWNER) {
+            Ok(f) => (f, true),
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+                (open_itself(path, base)?, false)
+            }
+            Err(e) => return Err(e),
+        };
         let m = f.metadata()?;
         refuse_link(&m)?;
-        set_private(&f, m.is_dir())
+        let user = User::current()?;
+        let system = System::sid()?;
+        if !can_own {
+            let (owner, _sd) = owner_of(&f)?;
+            if !unsafe { EqualSid(owner, user.sid()) != 0 || EqualSid(owner, system.ptr()) != 0 } {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "owned by another account",
+                ));
+            }
+        }
+        let acl = private_acl(&user, &system, m.is_dir())?;
+        let mut what = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
+        let mut owner: PSID = null_mut();
+        if can_own {
+            what |= OWNER_SECURITY_INFORMATION;
+            owner = user.sid();
+        }
+        win32(unsafe {
+            SetSecurityInfo(
+                handle(&f),
+                SE_FILE_OBJECT,
+                what,
+                owner,
+                null_mut(),
+                acl.0,
+                null(),
+            )
+        })
     }
 
     /// The user this process runs as: its token's user SID, in a buffer that holds it.
@@ -331,14 +560,23 @@ mod imp {
             Ok(s)
         }
 
-        fn ptr(&mut self) -> PSID {
-            self.0.as_mut_ptr().cast()
+        fn ptr(&self) -> PSID {
+            self.0.as_ptr() as PSID
         }
     }
 
-    fn set_private(f: &File, folder: bool) -> io::Result<()> {
-        let user = User::current()?;
-        let mut system = System::sid()?;
+    /// Memory the system allocated with LocalAlloc, freed when dropped.
+    struct Local<T>(*mut T);
+
+    impl<T> Drop for Local<T> {
+        fn drop(&mut self) {
+            unsafe { LocalFree(self.0.cast()) };
+        }
+    }
+
+    /// An access list allowing this user and SYSTEM everything, inherited by what is made in a
+    /// folder.
+    fn private_acl(user: &User, system: &System, folder: bool) -> io::Result<Local<ACL>> {
         let inheritance = if folder {
             SUB_CONTAINERS_AND_OBJECTS_INHERIT
         } else {
@@ -362,68 +600,103 @@ mod imp {
         ];
         let mut acl: *mut ACL = null_mut();
         win32(unsafe { SetEntriesInAclW(2, entries.as_ptr(), null(), &mut acl) })?;
-        let set = win32(unsafe {
-            SetSecurityInfo(
+        Ok(Local(acl))
+    }
+
+    /// Runs make with security attributes for a private file or folder: owned by this user, with a
+    /// protected list allowing only this user and SYSTEM, so it is private from the moment it is
+    /// made.
+    fn with_private<T>(
+        folder: bool,
+        make: impl FnOnce(*const SECURITY_ATTRIBUTES) -> io::Result<T>,
+    ) -> io::Result<T> {
+        let user = User::current()?;
+        let system = System::sid()?;
+        let acl = private_acl(&user, &system, folder)?;
+        let mut sd = SECURITY_DESCRIPTOR::default();
+        let psd: PSECURITY_DESCRIPTOR = (&mut sd as *mut SECURITY_DESCRIPTOR).cast();
+        ok(unsafe { InitializeSecurityDescriptor(psd, SD_REVISION) })?;
+        ok(unsafe { SetSecurityDescriptorOwner(psd, user.sid(), 0) })?;
+        ok(unsafe { SetSecurityDescriptorDacl(psd, 1, acl.0, 0) })?;
+        ok(unsafe { SetSecurityDescriptorControl(psd, SE_DACL_PROTECTED, SE_DACL_PROTECTED) })?;
+        let sa = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: psd,
+            bInheritHandle: 0,
+        };
+        make(&sa)
+    }
+
+    /// The owner of the file open as f, and the descriptor that holds it.
+    fn owner_of(f: &File) -> io::Result<(PSID, Local<core::ffi::c_void>)> {
+        let mut owner: PSID = null_mut();
+        let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+        win32(unsafe {
+            GetSecurityInfo(
                 handle(f),
                 SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                OWNER_SECURITY_INFORMATION,
+                &mut owner,
                 null_mut(),
                 null_mut(),
-                acl,
-                null(),
+                null_mut(),
+                &mut sd,
             )
-        });
-        unsafe { LocalFree(acl.cast()) };
-        set
+        })?;
+        Ok((owner, Local(sd)))
     }
 
     pub fn is_private(path: &Path) -> io::Result<bool> {
         let f = open_itself(path, FILE_READ_ATTRIBUTES | READ_CONTROL)?;
         let user = User::current()?;
-        let mut system = System::sid()?;
+        let system = System::sid()?;
+        let mut owner: PSID = null_mut();
         let mut dacl: *mut ACL = null_mut();
         let mut sd: PSECURITY_DESCRIPTOR = null_mut();
         win32(unsafe {
             GetSecurityInfo(
                 handle(&f),
                 SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                null_mut(),
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                &mut owner,
                 null_mut(),
                 &mut dacl,
                 null_mut(),
                 &mut sd,
             )
         })?;
-        // No access list at all allows everyone.
-        let mut private = !dacl.is_null();
-        if private {
-            for i in 0..u32::from(unsafe { (*dacl).AceCount }) {
-                let mut ace: *mut core::ffi::c_void = null_mut();
-                if unsafe { GetAce(dacl, i, &mut ace) } == 0 {
-                    private = false;
-                    break;
+        let sd = Local(sd);
+        let ours = |sid: PSID| unsafe {
+            EqualSid(sid, user.sid()) != 0 || EqualSid(sid, system.ptr()) != 0
+        };
+        // Another owner could change the list; an unprotected list takes up what its folder's
+        // passes down later; no list at all allows everyone.
+        let mut control = 0u16;
+        let mut revision = 0u32;
+        ok(unsafe { GetSecurityDescriptorControl(sd.0, &mut control, &mut revision) })?;
+        if owner.is_null() || !ours(owner) || control & SE_DACL_PROTECTED == 0 || dacl.is_null() {
+            return Ok(false);
+        }
+        for i in 0..u32::from(unsafe { (*dacl).AceCount }) {
+            let mut ace: *mut core::ffi::c_void = null_mut();
+            if unsafe { GetAce(dacl, i, &mut ace) } == 0 {
+                return Ok(false);
+            }
+            let header = unsafe { &*(ace as *const ACE_HEADER) };
+            // Deny entries take nothing away from privacy; any other kind of allow entry
+            // (object, callback, compound) is not one this checks, so it is not private.
+            if header.AceType == ACCESS_ALLOWED {
+                let sid =
+                    unsafe { std::ptr::addr_of!((*(ace as *const ACCESS_ALLOWED_ACE)).SidStart) }
+                        as PSID;
+                if !ours(sid) {
+                    return Ok(false);
                 }
-                let header = unsafe { &*(ace as *const ACE_HEADER) };
-                // Deny entries take nothing away from privacy; any other kind of allow entry
-                // (object, callback, compound) is not one this checks, so it is not private.
-                if header.AceType == ACCESS_ALLOWED {
-                    let sid = unsafe {
-                        std::ptr::addr_of!((*(ace as *const ACCESS_ALLOWED_ACE)).SidStart)
-                    } as PSID;
-                    if unsafe { EqualSid(sid, user.sid()) == 0 && EqualSid(sid, system.ptr()) == 0 }
-                    {
-                        private = false;
-                        break;
-                    }
-                } else if header.AceType != ACCESS_DENIED {
-                    private = false;
-                    break;
-                }
+            } else if header.AceType != ACCESS_DENIED {
+                return Ok(false);
             }
         }
-        unsafe { LocalFree(sd.cast()) };
-        Ok(private)
+        Ok(true)
     }
 }
 

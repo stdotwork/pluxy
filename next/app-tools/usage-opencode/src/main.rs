@@ -67,6 +67,28 @@ fn is_message_file(parts: &[&str]) -> bool {
     matches!(parts, [.., "storage", "message", _, file] if file.len() > 5 && file.ends_with(".json"))
 }
 
+/// OpenCode's folders under home; on Windows also those in the roaming and local app data folders
+/// (`%APPDATA%`, `%LOCALAPPDATA%`, as var reads them), where OpenCode may keep its store, when they
+/// are set to a full path.
+fn roots_for(
+    home: &Path,
+    windows: bool,
+    var: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> Vec<PathBuf> {
+    let mut roots = vec![
+        home.join(".local").join("share").join("opencode"),
+        home.join(".opencode"),
+    ];
+    if windows {
+        for name in ["APPDATA", "LOCALAPPDATA"] {
+            if let Some(dir) = var(name).map(PathBuf::from).filter(|d| d.is_absolute()) {
+                roots.push(dir.join("opencode"));
+            }
+        }
+    }
+    roots
+}
+
 struct OpenCode {
     /// The database this call has open, so a job's sessions share one open (and one copy).
     db: db::Cache,
@@ -78,22 +100,7 @@ impl Parser for OpenCode {
     }
 
     fn default_roots(&self, home: &Path) -> Vec<PathBuf> {
-        let mut roots = vec![
-            home.join(".local").join("share").join("opencode"),
-            home.join(".opencode"),
-        ];
-        // On Windows OpenCode may also keep its store in the roaming or local app data folder.
-        if cfg!(windows) {
-            for name in ["APPDATA", "LOCALAPPDATA"] {
-                if let Some(dir) = std::env::var_os(name)
-                    .map(PathBuf::from)
-                    .filter(|d| d.is_absolute())
-                {
-                    roots.push(dir.join("opencode"));
-                }
-            }
-        }
-        roots
+        roots_for(home, cfg!(windows), &|name| std::env::var_os(name))
     }
 
     fn wanted(&self, path: &Path) -> bool {

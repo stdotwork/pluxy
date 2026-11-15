@@ -504,6 +504,9 @@ fn a_session_in_both_roots_is_one_file_and_the_newer_copy_is_read() {
 
 #[test]
 fn never_locates_a_path_out_of_the_roots_or_a_link() {
+    if !links_allowed() {
+        return;
+    }
     let dir = folder("locate");
     let roots = vec![dir.join("agent/sessions"), dir.join("sessions")];
     let p = omp();
@@ -550,4 +553,27 @@ fn make_link(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Resul
     } else {
         std::os::windows::fs::symlink_file(target, link)
     };
+}
+
+/// Whether this account may make symbolic links (on Windows that takes a privilege or Developer
+/// Mode). When it may not, says so on stderr: a test that needs links is then skipped, and the CI
+/// summary counts the skip.
+fn links_allowed() -> bool {
+    #[cfg(unix)]
+    return true;
+    #[cfg(windows)]
+    {
+        static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let allowed = *ALLOWED.get_or_init(|| {
+            let probe = std::env::temp_dir().join(format!("links-allowed-{}", std::process::id()));
+            let _ = std::fs::remove_file(&probe);
+            let made = std::os::windows::fs::symlink_file("target", &probe).is_ok();
+            let _ = std::fs::remove_file(&probe);
+            made
+        });
+        if !allowed {
+            eprintln!("skipped: this account cannot make a symbolic link");
+        }
+        allowed
+    }
 }

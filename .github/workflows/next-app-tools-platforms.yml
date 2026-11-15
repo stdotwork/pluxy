@@ -71,10 +71,12 @@ jobs:
             mkdir -p "$test_env/appdata" "$test_env/localappdata"
           fi
           status=0
-          cargo test --locked --no-fail-fast --workspace $NOT_PORTED 2>&1 | tee "$RUNNER_TEMP/cargo-test.log" || status=$?
-          # Record the counts, and refuse a run that ran nothing.
-          awk '/^test result:/ { p += $4; f += $6; i += $8 } END {
-            printf "passed %d, failed %d, ignored %d\n", p, f, i
+          # --show-output prints what passing tests said, so a test's own skip line is seen.
+          cargo test --locked --no-fail-fast --workspace $NOT_PORTED -- --show-output 2>&1 | tee "$RUNNER_TEMP/cargo-test.log" || status=$?
+          # Record the counts, with the tests that skipped a part this account may not do (such as
+          # making a symbolic link), and refuse a run that ran nothing.
+          awk '/^test result:/ { p += $4; f += $6; i += $8 } /^skipped: / { s++ } END {
+            printf "passed %d, failed %d, ignored %d, skipped parts %d\n", p, f, i, s
             if (p == 0) exit 1
           }' "$RUNNER_TEMP/cargo-test.log" | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$status"

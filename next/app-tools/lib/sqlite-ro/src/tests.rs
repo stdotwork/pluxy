@@ -111,41 +111,42 @@ fn names(root: &Path) -> Vec<String> {
     n
 }
 
-/// The id of a process that has stopped, on Linux, where a copy's process is told by its pid;
-/// elsewhere its lock tells, so any number serves in a name.
+/// The id of a process that has stopped, on Linux, where a copy's process is told by its pid; on
+/// macOS and Windows the lock beside a copy tells, so any number serves in a name.
 fn dead_pid() -> u32 {
-    #[cfg(target_os = "linux")]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         let pid = child.id();
         child.wait().unwrap();
         pid
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(windows, target_os = "macos"))]
     4_294_967_294
 }
 
 /// Makes the copy folder name in root as one left over by a stopped process: on Linux its name says
-/// so; elsewhere it also holds a `lock` that no process holds.
+/// so; on macOS and Windows it has no lock beside it.
 fn stale_copy(root: &Path, name: &str) {
     fs::create_dir_all(root.join(name)).unwrap();
-    #[cfg(not(target_os = "linux"))]
-    fs::write(root.join(name).join(LOCK), b"").unwrap();
 }
 
+/// What keeps a copy alive while it lives: on macOS and Windows its held lock.
+#[cfg(any(windows, target_os = "macos"))]
+type Held = pluxy_files::Lock;
+#[cfg(not(any(windows, target_os = "macos")))]
+struct Held;
+
 /// A copy folder in root of a process still running, and what keeps it so while it lives: on Linux
-/// pid 1's; elsewhere one whose `lock` this test holds.
-fn running_copy(root: &Path) -> (String, Option<fs::File>) {
+/// pid 1's; on macOS and Windows one whose lock this test holds.
+fn running_copy(root: &Path) -> (String, Held) {
     let name = "wal-1-0".to_string();
     fs::create_dir_all(root.join(&name)).unwrap();
-    #[cfg(target_os = "linux")]
-    return (name, None);
-    #[cfg(not(target_os = "linux"))]
-    {
-        let lock = fs::File::create(root.join(&name).join(LOCK)).unwrap();
-        lock.try_lock().unwrap();
-        (name, Some(lock))
-    }
+    #[cfg(any(windows, target_os = "macos"))]
+    let held = pluxy_files::create_locked(&lock_path(root, &name)).unwrap();
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let held = Held;
+    (name, held)
 }
 
 /// A FIFO at path (Linux and macOS: Windows has none in a folder).
@@ -232,12 +233,27 @@ fn a_wal_with_changes_and_no_shm_is_read_from_a_private_copy_removed_when_closed
     let o = open(&db, &root).unwrap();
     // Row 'b' is only in the -wal: the copy has it.
     assert_eq!(ids(&o), ["a", "b"]);
-    // While it is open the copy is there, in a folder only this user can use.
-    let copies = names(&root.dir);
+    // While it is open the copy is there, in a folder only this user can use; on macOS and
+    // Windows with its lock beside it, which no other can take.
+    let copies: Vec<String> = names(&root.dir)
+        .into_iter()
+        .filter(|n| !n.ends_with(".lock"))
+        .collect();
     assert!(
         copies.len() == 1 && copies[0].starts_with(&format!("wal-{}-", std::process::id())),
         "{copies:?}"
     );
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        let lock = lock_path(&root.dir, &copies[0]);
+        assert_eq!(names(&root.dir).len(), 2, "{:?}", names(&root.dir));
+        assert!(pluxy_files::take_lock(&lock).unwrap().is_none());
+        prune(&root.dir);
+        assert!(
+            root.dir.join(&copies[0]).is_dir(),
+            "an open copy was pruned"
+        );
+    }
     for dir in [&root.dir, &root.dir.join(&copies[0])] {
         assert!(pluxy_files::is_private(dir).unwrap(), "{dir:?}");
         #[cfg(unix)]
@@ -315,6 +331,9 @@ fn a_database_a_writer_has_open_is_read_in_place_and_nothing_is_made() {
 
 #[test]
 fn a_link_fifo_folder_or_missing_file_is_not_a_database() {
+    if !links_allowed() {
+        return;
+    }
     let d = Dir::new("not-regular");
     let db = d.join("a.db");
     wal_db(&db);
@@ -360,6 +379,9 @@ fn make_irregular(kind: &str, path: &Path, target: &Path) {
 
 #[test]
 fn a_wal_shm_or_journal_that_is_not_a_regular_file_is_not_read() {
+    if !links_allowed() {
+        return;
+    }
     let d = Dir::new("sidecars");
     let db = d.join("a.db");
     wal_db(&db);
@@ -510,6 +532,9 @@ fn a_copy_prunes_stale_copies_only_in_the_tools_own_folder() {
 
 #[test]
 fn errors_name_no_path() {
+    if !links_allowed() {
+        return;
+    }
     let d = Dir::new("CANARY-PATH");
     let db = d.join("a.db");
     wal_db(&db);
@@ -559,8 +584,10 @@ fn errors_name_no_path() {
 
 #[test]
 fn a_path_with_uri_characters_opens() {
-    let d = Dir::new("uri ?#%");
-    let db = d.join("odd ?#%&=.db");
+    // `?` cannot be in a Windows file name.
+    let odd = if cfg!(windows) { " #%&=" } else { " ?#%&=" };
+    let d = Dir::new(&format!("uri{odd}"));
+    let db = d.join(format!("odd{odd}.db"));
     wal_db(&db);
     let o = open_read_only(&db).unwrap();
     assert_eq!(ids(&o), ["a"]);
@@ -647,6 +674,9 @@ fn a_wal_beside_a_database_is_never_opened_in_place_whatever_the_databases_heade
 
 #[test]
 fn a_tmp_folder_that_is_a_link_is_refused_and_nothing_is_made_or_pruned_through_it() {
+    if !links_allowed() {
+        return;
+    }
     let d = Dir::new("tmp-link");
     let tool = Dir::new("tmp-link-tool");
     let elsewhere = Dir::new("tmp-link-elsewhere");
@@ -717,6 +747,9 @@ fn icacls(path: &Path, args: &[&str]) {
 
 #[test]
 fn a_link_in_place_of_the_database_or_its_wal_is_not_read_or_copied() {
+    if !links_allowed() {
+        return;
+    }
     let d = Dir::new("swapped-link");
     let tool = Dir::new("swapped-link-tool");
     let db = d.join("a.db");
@@ -739,6 +772,9 @@ fn a_link_in_place_of_the_database_or_its_wal_is_not_read_or_copied() {
 #[cfg(unix)]
 #[test]
 fn a_fifo_or_link_in_place_of_the_database_is_caught_when_it_is_opened_and_never_waited_on() {
+    if !links_allowed() {
+        return;
+    }
     let d = Dir::new("swapped");
     let tool = Dir::new("swapped-tool");
     let db = d.join("a.db");
@@ -771,6 +807,9 @@ fn a_fifo_or_link_in_place_of_the_database_is_caught_when_it_is_opened_and_never
 
 #[test]
 fn prune_removes_only_directories_named_wal_pid_counter_of_a_stopped_process() {
+    if !links_allowed() {
+        return;
+    }
     let d = Dir::new("prune-names");
     let dead = dead_pid();
     let gone = format!("wal-{dead}-0");
@@ -805,6 +844,95 @@ fn prune_removes_only_directories_named_wal_pid_counter_of_a_stopped_process() {
     );
 }
 
+/// On macOS and Windows a copy's lock is held before its folder is made: a folder whose lock is
+/// held is never pruned, so a copy being made is not taken for a leftover. Once the lock is free,
+/// the folder and the lock go; so does a lock left with no folder.
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn a_copy_whose_lock_is_held_is_never_pruned_and_one_whose_lock_is_free_is() {
+    let d = Dir::new("prune-locks");
+    let name = format!("wal-{}-0", dead_pid());
+    let lock = lock_path(&d, &name);
+    let held = pluxy_files::create_locked(&lock).unwrap();
+    fs::create_dir(d.join(&name)).unwrap();
+    prune(&d);
+    assert!(
+        d.join(&name).is_dir(),
+        "a copy whose lock is held was pruned"
+    );
+    drop(held);
+    prune(&d);
+    assert!(names(&d).is_empty(), "{:?}", names(&d));
+    // A lock left behind (as a crash leaves one on macOS), free, with no folder: removed; a file
+    // named like a lock but not a copy's stays.
+    fs::write(lock_path(&d, "wal-7-1"), b"").unwrap();
+    fs::write(d.join("other.lock"), b"").unwrap();
+    prune(&d);
+    assert_eq!(names(&d), ["other.lock"]);
+}
+
+/// Windows: a junction (a folder link that needs no privilege) in place of the tool's `tmp` is
+/// refused like a symbolic link, and nothing is made or pruned through it.
+#[cfg(windows)]
+#[test]
+fn a_tmp_folder_that_is_a_junction_is_refused() {
+    let d = Dir::new("tmp-junction");
+    let tool = Dir::new("tmp-junction-tool");
+    let elsewhere = Dir::new("tmp-junction-elsewhere");
+    let db = d.join("live.db");
+    wal_with_rows_in_the_wal(&db);
+    stale_copy(&elsewhere, &format!("wal-{}-0", dead_pid()));
+    let before = names(&elsewhere);
+    let out = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(tool.join("tmp"))
+        .arg(&*elsewhere)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let e = open(&db, &own_root(&tool))
+        .err()
+        .expect("a junction was used");
+    assert!(matches!(e, Error::Copy(_)), "{e:?}");
+    assert_eq!(
+        names(&elsewhere),
+        before,
+        "the junction's target was written"
+    );
+    fs::remove_dir(tool.join("tmp")).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn on_windows_the_uri_path_is_the_long_form_of_a_full_path() {
+    let uri = |p: &str| uri_path(Path::new(p)).map(|b| String::from_utf8(b).unwrap());
+    assert_eq!(uri(r"C:\a\b.db").unwrap(), r"\\?\C:\a\b.db");
+    assert_eq!(uri(r"C:/a/./c/../b.db").unwrap(), r"\\?\C:\a\b.db");
+    assert_eq!(
+        uri(r"\\server\share\b.db").unwrap(),
+        r"\\?\UNC\server\share\b.db"
+    );
+    assert_eq!(uri(r"\\?\C:\a\b.db").unwrap(), r"\\?\C:\a\b.db");
+    assert_eq!(
+        uri(r"\\?\UNC\server\share\b.db").unwrap(),
+        r"\\?\UNC\server\share\b.db"
+    );
+    for not_full in ["b.db", r"a\b.db", r"\a\b.db", "C:b.db", r"\\.\pipe\b"] {
+        assert!(
+            matches!(uri(not_full), Err(Error::Open(ref m)) if m.contains("full path")),
+            "{not_full}"
+        );
+    }
+}
+
+#[cfg(not(windows))]
+#[test]
+fn elsewhere_the_uri_path_is_the_path_itself() {
+    for p in ["/a/b.db", "a/b.db", "/a/odd ?#%.db"] {
+        assert_eq!(uri_path(Path::new(p)).unwrap(), p.as_bytes());
+    }
+}
+
 /// A symbolic link at link to target: on Windows a folder link when target is a folder.
 fn make_link(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
     #[cfg(unix)]
@@ -815,4 +943,27 @@ fn make_link(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Resul
     } else {
         std::os::windows::fs::symlink_file(target, link)
     };
+}
+
+/// Whether this account may make symbolic links (on Windows that takes a privilege or Developer
+/// Mode). When it may not, says so on stderr: a test that needs links is then skipped, and the CI
+/// summary counts the skip.
+fn links_allowed() -> bool {
+    #[cfg(unix)]
+    return true;
+    #[cfg(windows)]
+    {
+        static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let allowed = *ALLOWED.get_or_init(|| {
+            let probe = std::env::temp_dir().join(format!("links-allowed-{}", std::process::id()));
+            let _ = std::fs::remove_file(&probe);
+            let made = std::os::windows::fs::symlink_file("target", &probe).is_ok();
+            let _ = std::fs::remove_file(&probe);
+            made
+        });
+        if !allowed {
+            eprintln!("skipped: this account cannot make a symbolic link");
+        }
+        allowed
+    }
 }
