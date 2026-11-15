@@ -491,8 +491,9 @@ impl Caller {
             .map_err(|kind| format!("core could not be asked ({kind})"))
     }
 
-    /// A caller of the core at base with key, for unit tests against a local listener.
-    #[cfg(test)]
+    /// A caller of the core at base with key, for unit tests against a local listener
+    /// (`core_aliases_tests.rs`, which is Linux only like `core_aliases.rs`).
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn for_test(base: &str, key: &str) -> Caller {
         Caller {
             client: Some(Client::new(base, None)),

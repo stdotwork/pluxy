@@ -23,6 +23,7 @@ mod command_names;
 #[cfg(target_os = "linux")]
 pub mod confirmation;
 pub mod conn;
+#[cfg(target_os = "linux")]
 mod core_aliases;
 mod core_updates;
 pub mod cores;
