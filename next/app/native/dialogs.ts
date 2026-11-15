@@ -28,7 +28,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve as resolvePath } from "node:path";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
 
 const app = resolvePath(import.meta.dir, "..");
@@ -118,6 +118,30 @@ type Probe = { internals?: boolean; calls: Record<string, { ok: boolean; detail:
   // biome-ignore lint/suspicious/noExplicitAny: the app's JSON evidence, checked field by field below
   any
 >;
+
+/**
+ * Prints the stack of every thread of process pid (the app this run started), on Windows with the
+ * console debugger when the runner has it, attached without stopping the process for good (`-pv`,
+ * noninvasive); symbols from the app's folder, where the debug build leaves its PDB. Only names
+ * and addresses come out, never memory.
+ */
+function stacks(pid: number, symbols: string) {
+  if (platform !== "windows") return;
+  const cdb = [
+    "C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe",
+    "C:\\Program Files\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe",
+  ].find((p) => existsSync(p));
+  if (!cdb) {
+    console.log("dialogs: no console debugger (cdb.exe) on this runner, so no thread stacks");
+    return;
+  }
+  const r = spawnSync(cdb, ["-pv", "-p", String(pid), "-y", symbols, "-c", "~*kc 40; qd"], {
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+  console.log(`dialogs: the app's threads (cdb, status ${r.status}):`);
+  for (const line of `${r.stdout ?? ""}${r.stderr ?? ""}`.split("\n")) console.log(`  stack | ${line}`);
+}
 
 async function main(): Promise<number> {
   if (!platform)
@@ -227,11 +251,19 @@ async function main(): Promise<number> {
       order.push(step);
       // The window has closed: the app may quit once its checks are done.
       if (step === "closed") writeFileSync(quit, "");
+      // The app's test thread gave no sign of life: what each of its threads is doing, then
+      // stop it rather than wait out the time limit.
+      if (step === "stalled") {
+        problems.push(`the app stalled: ${json}`);
+        if (proc.pid !== undefined) stacks(proc.pid, dirname(bin));
+        proc.kill();
+      }
     };
     if (proc.stdout) createInterface({ input: proc.stdout }).on("line", onLine);
     if (proc.stderr) createInterface({ input: proc.stderr }).on("line", onLine);
     const timer = setTimeout(() => {
       problems.push(`the app did not finish within ${TIMEOUT / 1000} s; stopped it`);
+      if (proc.pid !== undefined) stacks(proc.pid, dirname(bin));
       // Only the process this run started.
       proc.kill();
     }, TIMEOUT);

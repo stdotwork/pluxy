@@ -318,8 +318,10 @@ pub(crate) fn fixture_button(
 /// PowerShell): its entry must say it is a password field and must not give out canary, which
 /// was typed into it. UI Automation opens the dialog and its entry by their window handles, and
 /// reports the path from the desktop down to the entry, each element's control type, name and
-/// window class (never its value). The canary goes to PowerShell on stdin; only booleans, counts
-/// and that path come back.
+/// window class (never its value). The canary goes to PowerShell on stdin; only booleans, counts,
+/// that path and what tells why UI Automation sees the entry as it does come back: the UI
+/// Automation assemblies loaded, the entry's framework and patterns, what Active Accessibility
+/// says of it (role and state), and whether its thread answers a message.
 pub(crate) fn uia_canary(
     app: &AppHandle,
     title: &str,
@@ -342,16 +344,51 @@ $canary = [Console]::In.ReadLine()
 # The .NET client sees a Win32 edit control as a plain pane unless its client-side providers (the
 # Win32 control proxies) are registered: what any UI Automation client in another process gets.
 $proxies = 'registered'
+# Which UI Automation assemblies the client loaded by itself (the proxies among them or not).
+$loaded = @([System.AppDomain]::CurrentDomain.GetAssemblies() | ForEach-Object {{ $_.GetName().Name }} | Where-Object {{ $_ -like 'UIAutomation*' }})
 try {{
   Add-Type -AssemblyName UIAutomationClientsideProviders
   $name = ([System.AppDomain]::CurrentDomain.GetAssemblies() | Where-Object {{ $_.GetName().Name -eq 'UIAutomationClientsideProviders' }} | Select-Object -First 1).GetName()
   [System.Windows.Automation.ClientSettings]::RegisterClientSideProviderAssembly($name)
-}} catch {{ $proxies = "not registered: $($_.Exception.Message)" }}
+}} catch {{ $m = "not registered: $($_.Exception.ToString())"; $proxies = $m.Substring(0, [Math]::Min(700, $m.Length)) }}
+# What Active Accessibility (oleacc) says of a window, and whether its thread answers a message
+# within 2 s: the Win32 proxies ask the control by messages.
+$msaa = 'ready'
+try {{
+Add-Type -AssemblyName Accessibility
+Add-Type -ReferencedAssemblies Accessibility -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class PluxyMsaa {{
+  [DllImport("oleacc.dll")]
+  static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [MarshalAs(UnmanagedType.IUnknown)] out object o);
+  [DllImport("user32.dll")]
+  static extern IntPtr SendMessageTimeoutW(IntPtr h, uint m, IntPtr w, IntPtr l, uint f, uint t, out IntPtr r);
+  public static string Describe(IntPtr h) {{
+    Guid iid = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
+    object o;
+    int hr = AccessibleObjectFromWindow(h, 0xFFFFFFFC, ref iid, out o);
+    if (hr != 0) return "hr 0x" + hr.ToString("x");
+    Accessibility.IAccessible a = (Accessibility.IAccessible)o;
+    return "role " + a.get_accRole(0) + ", state 0x" + Convert.ToInt64(a.get_accState(0)).ToString("x");
+  }}
+  public static bool Answers(IntPtr h) {{
+    IntPtr r;
+    return SendMessageTimeoutW(h, 0, IntPtr.Zero, IntPtr.Zero, 2, 2000, out r) != IntPtr.Zero;
+  }}
+}}
+"@
+}} catch {{ $msaa = "unavailable: $($_.Exception.Message)" }}
 $A = [System.Windows.Automation.AutomationElement]
 $scope = [System.Windows.Automation.TreeScope]
 $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
 function Describe($e) {{ $c = $e.Current; "$($c.ControlType.ProgrammaticName) '$($c.Name)' [$($c.ClassName)]" }}
-$out = @{{ found = $false; edits = 0; is_password = $false; readable = $false; leaked = $false; path = @(); dialog_in_desktop = $false; proxies = $proxies }}
+$out = @{{ found = $false; edits = 0; is_password = $false; readable = $false; leaked = $false; path = @(); dialog_in_desktop = $false; proxies = $proxies; loaded = $loaded }}
+$out.msaa = $msaa
+if ($msaa -eq 'ready') {{
+  $out.answers = [PluxyMsaa]::Answers([IntPtr]{edit})
+  try {{ $out.msaa = [PluxyMsaa]::Describe([IntPtr]{edit}) }} catch {{ $out.msaa = "failed: $($_.Exception.Message)" }}
+}}
 $dlg = $A::FromHandle([IntPtr]{dialog})
 $e = $A::FromHandle([IntPtr]{edit})
 if ($e) {{
@@ -360,6 +397,8 @@ if ($e) {{
   for ($x = $e; $x; $x = $walker.GetParent($x)) {{ $path = @(Describe $x) + $path }}
   $out.path = $path
   $out.is_password = [bool]$e.Current.IsPassword
+  $out.framework = $e.Current.FrameworkId
+  $out.patterns = @($e.GetSupportedPatterns() | ForEach-Object {{ $_.ProgrammaticName }})
   try {{
     $v = $e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
     $out.readable = $true

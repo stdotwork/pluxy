@@ -53,7 +53,7 @@
 use crate::{App, COMMANDS, MAIN, WINDOW};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
@@ -204,7 +204,71 @@ pub fn updater_gate(app: &AppHandle) {
 }
 
 pub(crate) fn log(step: &str, v: Value) {
+    beat(&format!("after {step}"));
     eprintln!("native-test: {step} {v}");
+}
+
+/// The test thread's last sign of life, and what it was doing then, for the stall report.
+static BEAT: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+
+fn beat(what: &str) {
+    if let Ok(mut b) = BEAT.lock() {
+        *b = Some((Instant::now(), what.to_string()));
+    }
+}
+
+/// How long the test thread may go without a sign of life before the stall report: longer than
+/// any single call it makes (each wait beats every 200 ms between its tries).
+#[cfg(not(target_os = "linux"))]
+const STALL: Duration = Duration::from_secs(90);
+
+/// Off Linux, where the session has no other way to tell where a run stopped: once the test
+/// thread has given no sign of life for STALL, reports what it was waiting for, whether the main
+/// thread still answers, and which of the app's locks are held (step `stalled`), then again
+/// after each new sign of life that stalls.
+#[cfg(not(target_os = "linux"))]
+fn watch_stalls(app: AppHandle) {
+    use std::sync::TryLockError;
+    fn lock<T>(m: &Mutex<T>) -> &'static str {
+        match m.try_lock() {
+            Ok(_) => "free",
+            Err(TryLockError::WouldBlock) => "held",
+            Err(TryLockError::Poisoned(_)) => "poisoned",
+        }
+    }
+    std::thread::spawn(move || {
+        let mut reported: Option<Instant> = None;
+        loop {
+            std::thread::sleep(Duration::from_secs(5));
+            let Some((at, what)) = BEAT.lock().ok().and_then(|b| b.clone()) else {
+                continue;
+            };
+            if at.elapsed() < STALL || reported == Some(at) {
+                continue;
+            }
+            reported = Some(at);
+            let (tx, rx) = mpsc::channel();
+            let main_answers = app
+                .run_on_main_thread(move || {
+                    let _ = tx.send(());
+                })
+                .is_ok()
+                && rx.recv_timeout(Duration::from_secs(5)).is_ok();
+            let st = app.state::<App>();
+            // Printed, not logged: a log is a sign of life.
+            eprintln!(
+                "native-test: stalled {}",
+                json!({
+                    "idle_s": at.elapsed().as_secs(), "last": what, "main_thread_answers": main_answers,
+                    "locks": {
+                        "conn": lock(&st.conn), "pages": lock(&st.pages),
+                        "confirmations": lock(&st.confirmations), "closing": lock(&st.closing),
+                        "device": lock(&st.device), "core_change": lock(&st.core_change),
+                    },
+                })
+            );
+        }
+    });
 }
 
 fn probe_js(calls: &[&str]) -> String {
@@ -232,6 +296,7 @@ fn probe_js(calls: &[&str]) -> String {
 pub(crate) fn wait_for<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> Result<T, String> {
     let deadline = Instant::now() + WAIT;
     loop {
+        beat(what);
         if let Some(v) = f() {
             return Ok(v);
         }
@@ -1024,6 +1089,9 @@ fn early_exit(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn start(app: AppHandle) {
+    beat("start");
+    #[cfg(not(target_os = "linux"))]
+    watch_stalls(app.clone());
     std::thread::spawn(move || {
         let result = if std::env::var_os("PLUXY_APP_TEST_EARLY_EXIT").is_some() {
             early_exit(&app)
