@@ -412,8 +412,15 @@ fn close_pages(app: &AppHandle) {
         notes.clear();
         l
     };
-    // Each one that cannot be closed stays in `closing`.
+    // Each one that cannot be closed stays in `closing`. Off Linux this runs on the main
+    // thread, where the closes must not run inline (`close_webviews`).
+    #[cfg(target_os = "linux")]
     let _ = close_webviews(app, labels);
+    #[cfg(not(target_os = "linux"))]
+    {
+        let app = app.clone();
+        std::thread::spawn(move || close_webviews(&app, labels));
+    }
 }
 
 /// Closes page webviews whose pages are unbound already, and those that could not be closed
@@ -425,6 +432,12 @@ fn close_pages(app: &AppHandle) {
 /// close inline (`send_user_message`), removing the webview's last reference, whose drop
 /// destroys the WebKit widget (wry 0.57.1, `InnerWebView::drop`), before `close` returns. From
 /// another thread `close` only posts the message.
+///
+/// Off Linux, never call this on the main thread: a page webview being made there holds
+/// tauri-runtime-wry's store of web contexts (`create_webview`) while WebView2 delivers the
+/// window's calls, and a webview dropped meanwhile on that thread waits for the same store
+/// (`WebviewWrapper::drop`) for good. From another thread the closes are posted, and the event
+/// loop holds them until the webview being made is done.
 fn close_webviews(app: &AppHandle, labels: Vec<String>) -> Vec<String> {
     // Their calls of native operations in flight are cancelled, their answers not delivered.
     #[cfg(target_os = "linux")]
@@ -1243,7 +1256,11 @@ fn page_place(webview: Webview, label: String, rect: Rect) -> Result<(), String>
     )
 }
 
-#[tauri::command]
+/// Closes a page webview of the window's. Off Linux it runs as an async command, off the main
+/// thread, where closing a webview may never return (`close_webviews`); on Linux it stays on the
+/// main thread.
+#[cfg_attr(target_os = "linux", tauri::command)]
+#[cfg_attr(not(target_os = "linux"), tauri::command(async))]
 fn page_close(webview: Webview, state: tauri::State<App>, label: String) -> Result<(), String> {
     trusted(&webview)?;
     page_webview(webview.app_handle(), &label)?;
