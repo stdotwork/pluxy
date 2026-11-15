@@ -39,6 +39,8 @@ pub struct Store {
     /// The registry keys the Run entry is in (the user's own, outside tests).
     #[cfg(windows)]
     keys: registry::Keys,
+    #[cfg(test)]
+    fault: std::sync::atomic::AtomicBool,
 }
 impl Store {
     pub fn new(config: PathBuf, base: PathBuf, identifier: String) -> Self {
@@ -48,6 +50,8 @@ impl Store {
             identifier,
             #[cfg(windows)]
             keys: registry::Keys::user(),
+            #[cfg(test)]
+            fault: std::sync::atomic::AtomicBool::new(false),
         }
     }
     fn file(&self) -> PathBuf {
@@ -164,9 +168,25 @@ impl Store {
     fn restore(&self, previous: Option<Vec<u8>>) -> Result<(), String> {
         match previous {
             Some(b) => write_private(&self.entry(), &b),
-            None => fs::remove_file(self.entry()),
+            // Nothing was there, and a change that failed may have made nothing either.
+            None => match fs::remove_file(self.entry()) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                r => r,
+            },
         }
         .map_err(|e| e.to_string())
+    }
+    /// For the tests: a change that is made and then reported as failed.
+    #[cfg(test)]
+    fn after_change(&self) -> Result<(), String> {
+        if self.fault.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("the change did not complete".into());
+        }
+        Ok(())
+    }
+    #[cfg(not(test))]
+    fn after_change(&self) -> Result<(), String> {
+        Ok(())
     }
     #[cfg(windows)]
     fn restore(&self, previous: registry::Snapshot) -> Result<(), String> {
@@ -183,16 +203,29 @@ impl Store {
         if changed && registration.exists && !registration.owned {
             return Err("The autostart file belongs to you or another application; pluxy will not replace it".into());
         }
+        // Resolved before anything is changed: an app path that cannot be had changes nothing.
+        let exe = if changed && prefs.autostart_enabled {
+            Some(executable()?)
+        } else {
+            None
+        };
         let previous = if changed {
             Some(self.snapshot(registration.exists)?)
         } else {
             None
         };
         if changed {
-            if prefs.autostart_enabled {
-                self.install(&executable()?)?;
-            } else {
-                self.uninstall()?;
+            let applied = match &exe {
+                Some(exe) => self.install(exe),
+                None => self.uninstall(),
+            }
+            .and_then(|()| self.after_change());
+            if let Err(e) = applied {
+                // It may be done in part: what was there is put back.
+                return Err(match previous.map(|p| self.restore(p)) {
+                    Some(Err(r)) => format!("{e}; restoring autostart entry: {r}"),
+                    _ => e,
+                });
             }
         }
         prefs.autostart_enabled = self.registration()?.enabled;
@@ -814,5 +847,73 @@ mod macos_tests {
         assert!(s.save(on(), || Ok(exe.clone())).is_err());
         assert!(!s.entry().exists(), "the failed save left the agent");
         fs::remove_dir_all(&s.base).unwrap();
+    }
+}
+
+/// A change that fails once it is made is undone, on the systems whose login item is a file.
+#[cfg(all(test, not(windows)))]
+mod rollback_tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    fn store() -> (Store, PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("pluxy-rollback-{}", crate::managed::random_key()));
+        fs::create_dir_all(&root).unwrap();
+        let exe = root.join("pluxy app");
+        fs::write(&exe, b"fixture").unwrap();
+        (
+            Store::new(
+                root.join("config"),
+                root.clone(),
+                "dev.pluxy.desktop".into(),
+            ),
+            exe,
+        )
+    }
+
+    fn on() -> Preferences {
+        Preferences {
+            autostart_enabled: true,
+            ..Preferences::default()
+        }
+    }
+
+    #[test]
+    fn an_item_made_and_then_failed_is_not_left_and_one_removed_and_then_failed_is_put_back() {
+        let (s, exe) = store();
+        let e = exe.clone();
+        // Making it fails after it was made: nothing is left, and the settings did not change.
+        s.fault.store(true, Ordering::SeqCst);
+        assert!(s.save(on(), || Ok(e.clone())).is_err());
+        assert!(!s.entry().exists(), "the failed save left the item");
+        assert!(!s.file().exists(), "the failed save wrote the settings");
+        // The positive control on the same route: without the failure it is made.
+        s.fault.store(false, Ordering::SeqCst);
+        s.save(on(), || Ok(e.clone())).unwrap();
+        let made = fs::read(s.entry()).unwrap();
+        assert!(s.registration().unwrap().enabled);
+        // Removing it fails after it was removed: it is back, as it was.
+        s.fault.store(true, Ordering::SeqCst);
+        let err = s
+            .save(Preferences::default(), || {
+                panic!("removing does not resolve the app")
+            })
+            .err()
+            .expect("the removal was to fail");
+        assert!(err.contains("did not complete"), "{err}");
+        assert_eq!(
+            fs::read(s.entry()).unwrap(),
+            made,
+            "the failed removal did not put it back"
+        );
+        assert!(s.registration().unwrap().enabled);
+        // An app path that cannot be had changes nothing at all.
+        s.fault.store(false, Ordering::SeqCst);
+        s.save(Preferences::default(), || Ok(e.clone())).unwrap();
+        assert!(!s.entry().exists());
+        assert!(s.save(on(), || Err("no path".into())).is_err());
+        assert!(!s.entry().exists());
+        fs::remove_dir_all(exe.parent().unwrap()).unwrap();
     }
 }

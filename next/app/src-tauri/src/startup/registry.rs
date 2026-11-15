@@ -443,6 +443,34 @@ mod tests {
     }
 
     #[test]
+    fn a_change_that_fails_once_made_is_undone() {
+        let Some(t) = Scratch::new() else { return };
+        let s = t.store();
+        let on = Preferences {
+            autostart_enabled: true,
+            ..Preferences::default()
+        };
+        s.fault.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(s.save(on, || Ok(t.exe())).is_err());
+        assert!(
+            !s.registration().unwrap().exists,
+            "the failed save left the item"
+        );
+        // The positive control on the same route: without the failure it is made.
+        s.fault.store(false, std::sync::atomic::Ordering::SeqCst);
+        s.save(on, || Ok(t.exe())).unwrap();
+        let made = snapshot(&t.keys, NAME).unwrap();
+        s.fault.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(s
+            .save(Preferences::default(), || panic!(
+                "removing resolves nothing"
+            ))
+            .is_err());
+        assert_eq!(snapshot(&t.keys, NAME).unwrap(), made);
+        assert!(s.registration().unwrap().enabled);
+    }
+
+    #[test]
     fn a_failed_save_puts_the_item_back() {
         let Some(t) = Scratch::new() else { return };
         let s = t.store();
