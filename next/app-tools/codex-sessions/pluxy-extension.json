@@ -51,6 +51,18 @@
         }
       },
       {
+        "id": "export",
+        "description": "Save one Codex session's rollout, its raw JSONL, as a file the person names in a save dialog",
+        "effect": "disclose",
+        "input_schema": {
+          "type": "object",
+          "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 134 } },
+          "required": ["id"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object", "required": ["outcome"] }
+      },
+      {
         "id": "open",
         "description": "Open one Codex session's rollout, its raw JSONL, in the app the desktop opens its type with, after the person confirms the launch",
         "effect": "read",

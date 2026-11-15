@@ -102,12 +102,15 @@
 // The Codex session reader check (sessions.ts, sessions_native.rs) runs in one more session with
 // that build: the reader (next/app-tools/codex-sessions, built here) lists a copied Codex home
 // exactly as a hand-written expect file says, shows a session only after a native confirmation of
-// each detail call, leaves the Codex home's bytes and modification times as they were, keeps the
-// config.toml and auth.json canaries out of pages, webviews and the app's output, and leaves no
-// reader process when idle or disabled. Its open operation starts the stand-in opener on a
-// session's rollout only through execution's launch (next/app-tools/execution) after a native
-// confirmation naming the file, its type, the folder and the opener: cancelled, nothing runs; a
-// session with no rollout file or a bad ID is refused before any confirmation.
+// each detail call, saves a session's rollout byte for byte only through the real save dialog
+// after the native confirmation of each export call (cancelled: nothing is written), leaves the
+// Codex home's bytes and modification times as they were, keeps the config.toml and auth.json
+// canaries, and the rollout text only the export carries, out of pages, webviews and the app's
+// output, and leaves no reader process when idle or disabled. Its open operation starts the
+// stand-in opener on a session's rollout only through execution's launch
+// (next/app-tools/execution) after a native confirmation naming the file, its type, the folder and
+// the opener: cancelled, nothing runs; a session with no rollout file or a bad ID is refused
+// before any confirmation.
 // The usage hub check (usage.ts, usage_native.rs) runs in one more session with that build: the hub
 // and the test-only fixture parser (next/app-tools/agent-usage and usage-fixture, built here) sync a
 // fixture root through the host's jobs, driven from the hub's page, and its report equals a
@@ -157,6 +160,18 @@
 // a caller-named path, more than the limit, a second save for one call and a link swapped in for the
 // chosen file are refused, each beside a save that works on the same route; and the content's
 // canaries never show in the app's output.
+// The Claude Desktop check (claude-desktop.ts, claude_desktop_native.rs) runs in one more session
+// with that build: pluxy/claude-desktop (next/app-tools/claude-desktop, built here) with the
+// execution program creates Claude Desktop's missing configuration library after a native
+// confirmation, then applies, clears and restores its three third-party files in the run's HOME
+// (the deployment choice, the gateway profile, the library index) to hand-written bytes, after a
+// native confirmation naming the files and the key's label, keeping the person's later edits, their
+// own gateway configuration and the standard app's files; a key Claude Desktop sealed in place is
+// still taken out by Clear; through a stow link and a chezmoi-style root it changes only the
+// target, a replaced target refuses, a missing path writes none of the three, files of another
+// shape refuse; its recipe starts a stand-in claude-desktop through the launcher with no key in argv
+// or environment; the key and a login canary stay out of every window answer, confirmation and
+// the app's output, and removing the package leaves no process.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -195,6 +210,7 @@ import { buildAccessFixtures } from "./access";
 import { buildAdmissionFixtures, MARKER_FILE, PROFILE_FILE } from "./admission";
 import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
 import { buildClaudeCodeFixtures } from "./claude-code";
+import { buildClaudeDesktopFixtures } from "./claude-desktop";
 import { buildCodexFixtures } from "./codex";
 import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
@@ -650,6 +666,7 @@ interface Rotation {
  * claudeCode: only the Claude Code setup and launcher check. openCheck: only the check of a tool
  * opening a file in the person's own app. codex: only the Codex setup and launcher check.
  * save: only the save-file check.
+ * claudeDesktop: only the Claude Desktop setup and launcher check.
  */
 async function runApp(
   mode: Mode,
@@ -678,6 +695,7 @@ async function runApp(
   openCheck = false,
   codex = false,
   save = false,
+  claudeDesktop = false,
 ): Promise<string[]> {
   if (currentSession === undefined)
     throw new Error(
@@ -767,6 +785,7 @@ async function runApp(
       !transactions &&
       !claudeCode &&
       !codex &&
+      !claudeDesktop &&
       !usage &&
       !save &&
       suite !== "access"
@@ -993,6 +1012,28 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The Claude Desktop check's signed packages, Claude Desktop's files in HOME, its stand-in
+    // claude-desktop, its registry and trust profile, and its key and login canary.
+    const claudeDesktopDir = claudeDesktop ? join(root, "claude-desktop") : undefined;
+    if (claudeDesktopDir) {
+      mkdirSync(claudeDesktopDir);
+      const f = buildClaudeDesktopFixtures(
+        claudeDesktopDir,
+        dirs.home,
+        claudeDesktopProgram,
+        claudeDesktopManifest,
+        executionProgram,
+        executionManifest,
+      );
+      nonce = f.nonce;
+      canaries = f.canaries;
+      launcherBin = f.bin;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -1025,7 +1066,8 @@ async function runApp(
       !transactionsDir &&
       !saveDir &&
       !claudeCodeDir &&
-      !codexDir
+      !codexDir &&
+      !claudeDesktopDir
     ) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
@@ -1093,6 +1135,7 @@ async function runApp(
       ...(transactionsDir ? { PLUXY_APP_TEST_TRANSACTIONS: transactionsDir } : {}),
       ...(claudeCodeDir ? { PLUXY_APP_TEST_CLAUDE_CODE: claudeCodeDir } : {}),
       ...(codexDir ? { PLUXY_APP_TEST_CODEX: codexDir } : {}),
+      ...(claudeDesktopDir ? { PLUXY_APP_TEST_CLAUDE_DESKTOP: claudeDesktopDir } : {}),
       ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
       ...(saveDir ? { PLUXY_APP_TEST_SAVE: saveDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
@@ -1437,6 +1480,16 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} codex ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: codex ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (claudeDesktop) {
+      const r = steps.get("claude_desktop") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the Claude Desktop check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} claude-desktop ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: claude-desktop ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -2009,6 +2062,9 @@ const claudeCodeProgram = join(appToolsTarget, "debug", "claude-code");
 /** pluxy/codex-setup (next/app-tools/codex) and its manifest, for the Codex check. */
 const codexManifest = join(appTools, "codex", "pluxy-extension.json");
 const codexProgram = join(appToolsTarget, "debug", "codex-setup");
+/** pluxy/claude-desktop (next/app-tools/claude-desktop) and its manifest, for the Claude Desktop check. */
+const claudeDesktopManifest = join(appTools, "claude-desktop", "pluxy-extension.json");
+const claudeDesktopProgram = join(appToolsTarget, "debug", "claude-desktop");
 /** The transaction library's fixture writer the transaction library check packs. */
 const fixtureWriter = join(appToolsTarget, "debug", "examples", "fixture-writer");
 let appImage = ""; // the smoke AppImage the sessions run
@@ -2101,6 +2157,9 @@ async function main(): Promise<number> {
   // pluxy/codex-setup, which the Codex check installs.
   if (existsSync(codexManifest))
     run("cargo", ["build", "--locked", "-p", "codex-setup", "--target-dir", appToolsTarget], appTools);
+  // pluxy/claude-desktop, which the Claude Desktop check installs.
+  if (existsSync(claudeDesktopManifest))
+    run("cargo", ["build", "--locked", "-p", "claude-desktop", "--target-dir", appToolsTarget], appTools);
   // The build without artifact-test-trust, kept aside before the build with it replaces it. The
   // device check needs the one (a normal build refuses the curated native tool), the admission
   // session and the updater gate's identifier check the other (its features are the test
@@ -2606,6 +2665,39 @@ async function main(): Promise<number> {
             false,
             undefined,
             release,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
+      // The Claude Desktop setup and launcher check, on the same build.
+      if (runsSession("claude-desktop"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
             false,
             false,
             false,
