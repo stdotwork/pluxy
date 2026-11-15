@@ -373,6 +373,8 @@ fn the_opener_refuses_network_paths_streams_long_paths_and_types_no_app_opens() 
         (r"\\server\share\a.txt".to_string(), "network path"),
         (r"C:\dir\a:stream.txt".to_string(), ""),
         (format!(r"C:\{}.txt", "a".repeat(260)), "260"),
+        // 137 characters, 267 UTF-16 units.
+        (format!(r"C:\{}.txt", "\u{1F600}".repeat(130)), "260"),
     ] {
         let e = os::opener(Path::new(&p)).unwrap_err();
         assert_eq!(e.code, "invalid_request", "{p}");

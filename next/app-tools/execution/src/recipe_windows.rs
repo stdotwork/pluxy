@@ -287,7 +287,8 @@ pub fn opener(file: &Path) -> Result<(String, Vec<String>), Error> {
             "the file to open must not name an alternate data stream",
         ));
     }
-    if shown.chars().count() >= 260 {
+    // MAX_PATH counts UTF-16 units: a character outside the Basic Multilingual Plane is two.
+    if shown.encode_utf16().count() >= 260 {
         return Err(Error::invalid_request(
             "the file to open must have a path shorter than 260 characters",
         ));
