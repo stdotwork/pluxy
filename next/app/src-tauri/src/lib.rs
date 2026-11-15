@@ -1154,10 +1154,7 @@ fn add_page(webview: &Webview, label: String, site: Binding, rect: Rect) -> Resu
                 .frame_navigation(&navigation_label, u);
             notify_page_closed(&navigation_app, &navigation_label);
             #[cfg(feature = "native-test")]
-            if u.scheme() == pages::SCHEME
-                && u.host_str() == Some("localhost")
-                && u.path() == "/ingress-test"
-            {
+            if pages::ingress_test(u) && (cfg!(windows) || u.host_str() == Some("localhost")) {
                 return true;
             }
             *u == app_doc || site.on_site(u)

@@ -6,6 +6,41 @@ use std::time::{Duration, Instant};
 use url::Url;
 
 pub const SCHEME: &str = "pluxy-page";
+/// The ingress fixture's frame (native-test only), at the page scheme's address: the scheme
+/// itself on Linux and macOS, its `http://pluxy-page.localhost` form on Windows.
+#[cfg(feature = "native-test")]
+pub const INGRESS_URL: &str = if cfg!(windows) {
+    "http://pluxy-page.localhost/ingress-test"
+} else {
+    "pluxy-page://localhost/ingress-test"
+};
+/// The ingress fixture's frame's source in a content security policy.
+#[cfg(feature = "native-test")]
+const INGRESS_SOURCE: &str = if cfg!(windows) {
+    "http://pluxy-page.localhost"
+} else {
+    "pluxy-page:"
+};
+/// Each navigation the page webviews reported to `Pages::frame_navigation` (native-test only, the
+/// last 64), with the page's document state after it: what a native check shows when a frame
+/// navigation is handled differently from Linux.
+#[cfg(feature = "native-test")]
+static NAVIGATIONS: std::sync::Mutex<Vec<Value>> = std::sync::Mutex::new(Vec::new());
+/// The navigations reported so far (`NAVIGATIONS`).
+#[cfg(feature = "native-test")]
+pub fn navigations() -> Vec<Value> {
+    NAVIGATIONS.lock().unwrap().clone()
+}
+/// Whether url is the ingress fixture's frame (native-test only).
+#[cfg(feature = "native-test")]
+pub fn ingress_test(url: &Url) -> bool {
+    url.path() == "/ingress-test"
+        && if cfg!(windows) {
+            url.scheme() == "http" && url.host_str() == Some("pluxy-page.localhost")
+        } else {
+            url.scheme() == SCHEME
+        }
+}
 pub const MAX_SEND: usize = 256 << 10;
 pub const MAX_CALL: usize = 64 << 10;
 pub const MAX_OPEN: usize = 16;
@@ -219,12 +254,28 @@ impl Pages {
     /// second document, including one that drops the fragment, or a nested frame loading another
     /// pages-site document.
     pub fn frame_navigation(&mut self, label: &str, url: &Url) {
+        self.navigation(label, url);
+        #[cfg(feature = "native-test")]
+        if let Some(w) = self.open.get(label) {
+            let mut seen = NAVIGATIONS.lock().unwrap();
+            if seen.len() >= 64 {
+                seen.remove(0);
+            }
+            seen.push(json!({
+                "label": label,
+                "url": url.as_str(),
+                "frame_url": w.document.frame_url.as_ref().map(Url::as_str),
+                "hello": w.document.hello,
+                "closed": w.document.closed,
+            }));
+        }
+    }
+    fn navigation(&mut self, label: &str, url: &Url) {
         let Some(w) = self.open.get_mut(label) else {
             return;
         };
         #[cfg(feature = "native-test")]
-        let test_frame =
-            self.ingress_fixture && url.scheme() == SCHEME && url.path() == "/ingress-test";
+        let test_frame = self.ingress_fixture && ingress_test(url);
         #[cfg(not(feature = "native-test"))]
         let test_frame = false;
         if !w.binding.on_site(url) && !test_frame {
@@ -375,7 +426,7 @@ impl Pages {
                 if w.document.frame_url.is_none() {
                     #[cfg(feature = "native-test")]
                     let url = if self.ingress_fixture {
-                        Url::parse("pluxy-page://localhost/ingress-test").unwrap()
+                        Url::parse(INGRESS_URL).unwrap()
                     } else {
                         w.binding.url.clone()
                     };
@@ -698,9 +749,12 @@ fn serve_at(
     let csp = format!("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src {}; base-uri 'none'; form-action 'none'", w.binding.frame_source());
     #[cfg(feature = "native-test")]
     let csp = if pages.ingress_fixture {
-        csp.replace("frame-src ", "frame-src pluxy-page: ")
-            .replace("script-src 'self'", "script-src pluxy-page:")
-            .replace("connect-src 'self'", "connect-src pluxy-page:")
+        csp.replace("frame-src ", &format!("frame-src {INGRESS_SOURCE} "))
+            .replace("script-src 'self'", &format!("script-src {INGRESS_SOURCE}"))
+            .replace(
+                "connect-src 'self'",
+                &format!("connect-src {INGRESS_SOURCE}"),
+            )
     } else {
         csp
     };
@@ -726,7 +780,7 @@ fn serve_at(
             let info = json!({"url": w.binding.url.as_str(), "title": w.binding.title, "generation": w.document.generation, "native_frame_navigation": cfg!(target_os = "linux")});
             #[cfg(feature = "native-test")]
             let info = if pages.ingress_fixture {
-                json!({"url":"pluxy-page://localhost/ingress-test", "title":w.binding.title, "generation":w.document.generation, "native_frame_navigation": cfg!(target_os = "linux")})
+                json!({"url":INGRESS_URL, "title":w.binding.title, "generation":w.document.generation, "native_frame_navigation": cfg!(target_os = "linux")})
             } else {
                 info
             };
