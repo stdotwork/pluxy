@@ -283,16 +283,14 @@ fn a_session_with_no_rollout_a_link_or_a_bad_id_asks_the_host_for_nothing() {
     let outside = Home::new();
     let target = outside.0.join("outside.jsonl");
     std::fs::write(&target, format!("{CANARY}\n")).unwrap();
-    let link = home.0.join(format!(
-        "sessions/2026/08/rollout-2026-08-04T10-00-00-{ID}.jsonl"
-    ));
-    #[cfg(unix)]
-    let linked = std::os::unix::fs::symlink(&target, &link).map_err(|e| panic!("{e}"));
-    // On Windows a link takes a privilege or Developer Mode.
-    #[cfg(windows)]
-    let linked = std::os::windows::fs::symlink_file(&target, &link)
-        .map_err(|e| eprintln!("skipped: this account cannot make a symbolic link ({e})"));
-    if linked.is_ok() {
+    if links_allowed() {
+        make_link(
+            &target,
+            home.0.join(format!(
+                "sessions/2026/08/rollout-2026-08-04T10-00-00-{ID}.jsonl"
+            )),
+        )
+        .unwrap();
         let seen = export(&home.0, json!({"id": ID}), Answer::Saved);
         assert!(seen.ops.is_empty());
         assert_eq!(code(&seen), "not_found");
@@ -308,5 +306,40 @@ fn a_session_with_no_rollout_a_link_or_a_bad_id_asks_the_host_for_nothing() {
         let seen = export(&home.0, input.clone(), Answer::Saved);
         assert!(seen.ops.is_empty(), "{input}");
         assert_eq!(code(&seen), "invalid_request", "{input}");
+    }
+}
+
+/// A symbolic link at link to target: on Windows a folder link when target is a folder.
+fn make_link(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return if target.as_ref().is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+}
+
+/// Whether this account may make symbolic links (on Windows that takes a privilege or Developer
+/// Mode). When it may not, says so on stderr: a test that needs links is then skipped, and the CI
+/// summary counts the skip.
+fn links_allowed() -> bool {
+    #[cfg(unix)]
+    return true;
+    #[cfg(windows)]
+    {
+        static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let allowed = *ALLOWED.get_or_init(|| {
+            let probe = std::env::temp_dir().join(format!("links-allowed-{}", std::process::id()));
+            let _ = std::fs::remove_file(&probe);
+            let made = std::os::windows::fs::symlink_file("target", &probe).is_ok();
+            let _ = std::fs::remove_file(&probe);
+            made
+        });
+        if !allowed {
+            eprintln!("skipped: this account cannot make a symbolic link");
+        }
+        allowed
     }
 }

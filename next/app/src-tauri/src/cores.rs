@@ -796,6 +796,9 @@ impl Store {
             io::copy(&mut src, &mut h).map_err(|e| e.to_string())?;
             let (got, copied) = (artifact::hex(&h.hash.finalize()), h.size);
             dst.sync_all().map_err(|e| e.to_string())?;
+            // Closed before the copy is moved into place and run: a file open for writing
+            // cannot be run (ETXTBSY).
+            drop(dst);
             if got != sha256 || copied != size {
                 return Err(changed());
             }
