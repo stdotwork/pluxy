@@ -599,7 +599,9 @@ pub mod ipc {
         fn run(self, stop: &Handle, on_activate: impl Fn() -> bool) {
             let Listener { first, name, sec } = self;
             let mut spare = Some(first);
-            let mut conns: Vec<Conn> = Vec::new();
+            // Boxed: a read in flight names the connection's buffer, which must stay where it is
+            // while the vector grows, shifts and swaps its entries.
+            let mut conns: Vec<Box<Conn>> = Vec::new();
             let mut connecting: Option<Connecting> = None;
             loop {
                 let now = Instant::now();
@@ -613,7 +615,7 @@ pub mod ipc {
                     };
                     match pipe.and_then(start_connecting) {
                         Ok(Started::Connected(p)) => match Conn::new(p) {
-                            Ok(c) => conns.push(c),
+                            Ok(c) => conns.push(Box::new(c)),
                             Err(_) => failed = true,
                         },
                         Ok(Started::Waiting(c)) => connecting = Some(c),
@@ -627,7 +629,7 @@ pub mod ipc {
                         // Only this user's connections are read at all: the pipe's access list
                         // keeps every other one out.
                         match Conn::new(pipe) {
-                            Ok(c) => conns.push(c),
+                            Ok(c) => conns.push(Box::new(c)),
                             Err(_) => failed = true,
                         }
                     } else {
@@ -1150,6 +1152,67 @@ pub mod ipc {
             let r = start(&dir, Duration::from_millis(1500));
             assert!(matches!(r, Ok(Start::Raised)), "{:?}", r.err());
             assert_eq!(n.load(Ordering::SeqCst), 1);
+        }
+
+        /// Reads in flight name each connection's buffer: many connections, some part way through
+        /// the message, come and go (the list of them grows past its capacity, entries are
+        /// swapped out, and expired ones are removed) while the others finish, and each message
+        /// that is finished is answered and nothing else activates.
+        #[test]
+        fn connections_that_come_and_go_keep_their_reads() {
+            let t = temp();
+            let dir = t.0.join("instance");
+            let (i, n) = counting(&dir);
+            let pipe = pipe_of(&i);
+            // Three have said part of the message, three part of something else; fourteen say
+            // nothing, which takes the list past its capacity of 16 on the way.
+            let begun: Vec<fs::File> = (0..3)
+                .map(|_| {
+                    let mut f = raw(&pipe);
+                    f.write_all(&MESSAGE[..8]).unwrap();
+                    f
+                })
+                .collect();
+            let junk: Vec<fs::File> = (0..3)
+                .map(|_| {
+                    let mut f = raw(&pipe);
+                    f.write_all(b"xxxxxxxx").unwrap();
+                    f
+                })
+                .collect();
+            let silent: Vec<fs::File> = (0..14).map(|_| raw(&pipe)).collect();
+            // Some of the silent ones leave, so entries are swapped out under the others.
+            let (leaving, _staying): (Vec<_>, Vec<_>) = silent
+                .into_iter()
+                .enumerate()
+                .partition(|(k, _)| k % 2 == 0);
+            drop(leaving);
+            for mut f in junk {
+                f.write_all(b"yyyy\n").unwrap();
+                let mut out = Vec::new();
+                let _ = f.read_to_end(&mut out);
+                assert!(out.is_empty(), "junk was answered with {out:?}");
+            }
+            assert_eq!(
+                n.load(Ordering::SeqCst),
+                0,
+                "something but a message activated"
+            );
+            for mut f in begun {
+                f.write_all(&MESSAGE[8..]).unwrap();
+                let mut answer = [0u8; 3];
+                f.read_exact(&mut answer).unwrap();
+                assert_eq!(&answer, OK);
+            }
+            assert_eq!(n.load(Ordering::SeqCst), 3);
+            // The ones that said nothing are dropped after the read bound, and a launch still
+            // raises the first app.
+            std::thread::sleep(READ_BOUND + Duration::from_millis(500));
+            assert!(matches!(
+                start(&dir, Duration::from_secs(5)).unwrap(),
+                Start::Raised
+            ));
+            assert_eq!(n.load(Ordering::SeqCst), 4);
         }
 
         #[test]
