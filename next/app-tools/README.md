@@ -25,17 +25,18 @@ Linux only for now, and `execution` refuses every operation outside Linux.
 The file rules the tools share on Linux, macOS and Windows (`pluxy-files`), so no tool has
 platform code of its own for them:
 
-- Private files and folders are this user's alone: 0600 and 0700 on Linux and macOS. On Windows
-  they are owned by this user, by the owner the process gives what it makes (its token's default
-  owner: its user, or for an elevated administrator the Administrators group) or by SYSTEM, with a
-  protected access list (one that takes nothing from its folder's) that allows only this user and
-  SYSTEM. A folder passes its list on to what is made in it, but what is made that way is not
-  private until it is made so, as its list is not protected (`create_private_dir`,
-  `create_new_private`, `make_private`, `is_private`). A new private file or folder gets its list
-  as it is made, never afterwards, and the default owner as anything the process makes does.
-  `make_private` changes a file through a handle to the file itself, not a link (on Linux and
-  macOS with `fchmod`), refuses anything but a file or folder, and on Windows hands a file owned
-  by another account to the default owner where it may, refusing it otherwise.
+- Private files and folders are this user's alone (`create_private_dir`, `create_new_private`,
+  `make_private`, `is_private`). On Linux and macOS: owned by this user (the effective user ID),
+  0600 and 0700. On Windows: owned by this user, the token's default owner (its user, or for an
+  elevated administrator the Administrators group) or SYSTEM; any other owner is refused, as the
+  Unix check refuses another user's file. The access list must exist and be protected (take
+  nothing from its folder's); every allow entry is for this user or SYSTEM only (inherit-only
+  included); deny entries are ignored; any other entry kind is refused. A folder passes its list on
+  to what is made in it, but what is made that way is not private until it is made so, as its list
+  is not protected. A new private file or folder gets its list as it is made, never afterwards,
+  and the default owner as anything the process makes does. `make_private` changes a file through
+  a handle to the file itself, not a link (on Linux and macOS with `fchmod`), and refuses anything
+  but a file or folder, and a file of another owner (never taking it over).
 - `open_regular` opens a file for reading only if it is a regular file, checked on the open handle,
   without following a link: on Linux and macOS with `O_NOFOLLOW` and `O_NONBLOCK` (a FIFO is
   refused, never waited on); on Windows the link itself is opened and refused, as is anything that

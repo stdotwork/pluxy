@@ -262,11 +262,14 @@ fn an_inherited_list_or_another_owner_is_not_private() {
     drop(create_new_private(&file).unwrap());
     assert!(is_private(&file).unwrap());
     // Handed to the Users group (which takes the restore privilege an elevated administrator
-    // has): taken back by make_private.
+    // has): not private, and refused by make_private, never taken over.
     if icacls(&file, &["/setowner", "*S-1-5-32-545"]) {
         assert!(!is_private(&file).unwrap(), "owned by the Users group");
-        make_private(&file).unwrap();
-        assert!(is_private(&file).unwrap());
+        assert_eq!(
+            make_private(&file).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(!is_private(&file).unwrap(), "taken over");
     } else {
         eprintln!("skipped: this account cannot hand a file to the Users group");
     }
@@ -333,4 +336,57 @@ fn a_junction_is_not_opened_or_made_private_and_its_target_is_left_alone() {
     assert_ne!(id_of_path(&link).unwrap(), id_of_path(&target).unwrap());
     fs::remove_dir(&link).unwrap();
     fs::remove_dir_all(dir).unwrap();
+}
+
+/// Linux and macOS: another user's file is not private and is refused, even where this process
+/// could change it (as root, the only account that can make one here).
+#[cfg(unix)]
+#[test]
+fn another_users_file_is_not_private_and_is_refused() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("skipped: only root can give a file to another user");
+        return;
+    }
+    let dir = temp("other-user");
+    let file = dir.join("file");
+    drop(create_new_private(&file).unwrap());
+    std::os::unix::fs::chown(&file, Some(65534), None).unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(!is_private(&file).unwrap());
+    assert_eq!(
+        make_private(&file).unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(fs::metadata(&file).unwrap().mode() & 0o777, 0o644);
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(!is_private(&file).unwrap(), "0600 but another user's");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Linux and macOS: a file of the system's that only its owner may use, but whose owner is another
+/// user (root's), is not private to this one.
+#[cfg(unix)]
+#[test]
+fn a_file_only_another_user_may_use_is_not_private() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let me = unsafe { libc::geteuid() };
+    let theirs = [
+        "/etc/shadow",
+        "/etc/gshadow",
+        "/etc/sudoers",
+        "/var/lib/private",
+        "/root",
+        "/var/root",
+        "/private/var/root",
+    ]
+    .into_iter()
+    .map(Path::new)
+    .find(|p| {
+        fs::symlink_metadata(p).is_ok_and(|m| m.uid() != me && m.permissions().mode() & 0o077 == 0)
+    });
+    match theirs {
+        Some(p) => assert!(!is_private(p).unwrap(), "{p:?}"),
+        None => eprintln!("skipped: no file of another user with no group or other permission"),
+    }
 }

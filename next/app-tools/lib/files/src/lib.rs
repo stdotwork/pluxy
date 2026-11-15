@@ -1,7 +1,7 @@
 //! The file rules the app tools share on Linux, macOS and Windows.
 //!
-//! - **Private** files and folders are this user's alone: on Linux and macOS a file is 0600 and a
-//!   folder 0700; on Windows each is owned by this user, by the owner this process gives what it
+//! - **Private** files and folders are this user's alone: on Linux and macOS owned by this user, a
+//!   file 0600 and a folder 0700; on Windows each is owned by this user, by the owner this process gives what it
 //!   makes (its user, or for an elevated administrator the Administrators group), or by SYSTEM (the
 //!   system account, whose reach matches root's), and carries a protected access list (one that
 //!   takes nothing from its folder's) that allows only this user and SYSTEM. A folder's list is inherited by what is made inside it;
@@ -44,6 +44,10 @@ pub fn mtime_ns(m: &Metadata) -> i64 {
         Ok(d) => ns(d),
         Err(e) => ns(e.duration()).saturating_neg(),
     }
+}
+
+fn another_owner() -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, "owned by another account")
 }
 
 fn not_regular() -> io::Error {
@@ -92,18 +96,17 @@ pub fn create_new_private(path: &Path) -> io::Result<File> {
 
 /// Makes the existing file or folder path private, through a handle that is path itself, not a
 /// link it names: 0600 or 0700 on Linux and macOS; on Windows a protected access list allowing only
-/// this user and SYSTEM (a folder's inherited by what is made in it), and an owner other than those
-/// `is_private` accepts replaced by the owner this process gives what it makes. A link, or anything
-/// but a file or folder, is refused; so is, on Windows, one owned by another account that this one
-/// may not take over.
+/// this user and SYSTEM (a folder's inherited by what is made in it). A link, anything but a file or
+/// folder, and one owned by an account `is_private` does not accept are refused, never taken over.
 pub fn make_private(path: &Path) -> io::Result<()> {
     imp::make_private(path)
 }
 
 /// Whether the file or folder path (not followed if it is a link) is private already: on Linux and
-/// macOS no group or other permission bit is set; on Windows this user, the owner this process gives
-/// what it makes, or SYSTEM owns it, and its access list is protected and allows no one but this
-/// user and SYSTEM.
+/// macOS this user (the effective user ID) owns it and no group or other permission bit is set; on
+/// Windows this user, the owner this process gives what it makes, or SYSTEM owns it, its access list
+/// exists and is protected, every allow entry in it is for this user or SYSTEM (inherit-only ones
+/// included), deny entries are ignored, and it holds no other kind of entry.
 pub fn is_private(path: &Path) -> io::Result<bool> {
     imp::is_private(path)
 }
@@ -202,6 +205,10 @@ mod imp {
         // followed.
         let f = open_nofollow(path).map_err(a_link)?;
         let m = f.metadata()?;
+        // Another user's file is refused, even where this process could change it (as root).
+        if m.uid() != unsafe { libc::geteuid() } {
+            return Err(another_owner());
+        }
         let mode = if m.is_dir() {
             0o700
         } else if m.is_file() {
@@ -216,7 +223,8 @@ mod imp {
     }
 
     pub fn is_private(path: &Path) -> io::Result<bool> {
-        Ok(fs::symlink_metadata(path)?.permissions().mode() & 0o077 == 0)
+        let m = fs::symlink_metadata(path)?;
+        Ok(m.uid() == unsafe { libc::geteuid() } && m.permissions().mode() & 0o077 == 0)
     }
 
     #[cfg(target_os = "macos")]
@@ -283,7 +291,7 @@ mod imp {
         FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_REPARSE_POINT,
         FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        FILE_TYPE_DISK, OPEN_EXISTING, READ_CONTROL, WRITE_DAC, WRITE_OWNER,
+        FILE_TYPE_DISK, OPEN_EXISTING, READ_CONTROL, WRITE_DAC,
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -470,43 +478,24 @@ mod imp {
     }
 
     pub fn make_private(path: &Path) -> io::Result<()> {
-        let base = FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC;
-        // Taking the ownership needs WRITE_OWNER, which an owner does not always have; without it
-        // the file must have an owner `is_private` accepts already.
-        let (f, can_own) = match open_itself(path, base | WRITE_OWNER) {
-            Ok(f) => (f, true),
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-                (open_itself(path, base)?, false)
-            }
-            Err(e) => return Err(e),
-        };
+        let f = open_itself(path, FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)?;
         let m = f.metadata()?;
         refuse_link(&m)?;
         let user = TokenSid::user()?;
         let default_owner = TokenSid::default_owner()?;
         let system = System::sid()?;
+        // Another account's file is refused, never taken over, as on Linux and macOS.
         let (owner, _sd) = owner_of(&f)?;
-        let take_over = !owner_accepted(owner, &user, &default_owner, &system);
-        if take_over && !can_own {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "owned by another account",
-            ));
+        if !owner_accepted(owner, &user, &default_owner, &system) {
+            return Err(another_owner());
         }
         let acl = private_acl(&user, &system, m.is_dir())?;
-        let mut what = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
-        let mut owner: PSID = null_mut();
-        // Handed to the owner this process gives what it makes, which it may always assign.
-        if take_over {
-            what |= OWNER_SECURITY_INFORMATION;
-            owner = default_owner.sid();
-        }
         win32(unsafe {
             SetSecurityInfo(
                 handle(&f),
                 SE_FILE_OBJECT,
-                what,
-                owner,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                null_mut(),
                 null_mut(),
                 acl.0,
                 null(),
