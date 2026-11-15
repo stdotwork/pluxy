@@ -1312,17 +1312,25 @@ fn save_frame(
                 cancel.is_set()
             })
             .map_err(|e| fail("unavailable", e))?;
-            let Some(chosen) = chosen else {
-                return Ok(json!({"outcome": "cancelled"}));
+            // The tool must still run its package's admitted release once the person answered: a
+            // release disabled, removed or swapped out meanwhile saves nothing.
+            let current = || {
+                app.state::<App>()
+                    .device
+                    .lock()
+                    .unwrap()
+                    .current_run((id, sha256, *generation), &roots())
+                    .map_err(|r| r.message)
             };
-            if cancel.is_set() {
-                return Ok(json!({"outcome": "cancelled"}));
-            }
-            crate::savefile::write(&chosen, &bytes).map_err(|r| match r {
-                crate::savefile::Refusal::Changed(m) => fail("permission", m),
-                crate::savefile::Refusal::Failed(m) => fail("unavailable", m),
-            })?;
-            Ok(json!({"outcome": "saved", "size": size}))
+            let outcome = crate::savefile::finish(chosen, &bytes, &|| cancel.is_set(), &current)
+                .map_err(|r| match r {
+                    crate::savefile::Refusal::Changed(m) => fail("permission", m),
+                    crate::savefile::Refusal::Failed(m) => fail("unavailable", m),
+                })?;
+            Ok(match outcome {
+                crate::savefile::Outcome::Saved => json!({"outcome": "saved", "size": size}),
+                crate::savefile::Outcome::Cancelled => json!({"outcome": "cancelled"}),
+            })
         }
         _ => Err(fail(
             "unsupported",

@@ -9,7 +9,7 @@ reference: this folder implements it, it does not change it.
 
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
-cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi)
+cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi, usage-opencode)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
 cargo build --release --locked -p claude-code   # likewise execution
 ```
@@ -49,7 +49,14 @@ format read whole (`parse`) gets a file of at most 16 MiB; a parser of a line-ba
 `streamed` and gets the file's lines one at a time (`parse_lines`, `LineReader`) whatever its size,
 a line over 16 MiB being skipped and counted: the reader holds one line, and what the parser keeps
 of a file meanwhile is its own (usage-claude keeps one small record per message). A parser at schema 2 sends a record that more than one
-file can hold as one keyed event (`Sink::event`). `fields` reads the fields usage records share, by
+file can hold as one keyed event (`Sink::event`). A file that holds many records, such as a
+database of sessions, can list as several entries (`Parser::entries`, `Listing::Parts`), each a file
+of the hub's with its own ID and revision, which the parser reads itself (`Parser::read_entry`,
+`Sink::revise`). An entry listed by more than one file (the same ID under two roots) is listed once,
+at its newest revision; one with an ID over 4,096 bytes is left out; a file whose entries cannot be
+listed now (`Listing::Failed`) is listed as itself, so its read reports why. Either of the last two
+makes the listing count as cut short, so the hub marks no file gone. The listing is sorted newest
+first and cut at 20,000 entries after that. `fields` reads the fields usage records share, by
 the old desktop app's rules: token counters under the names agents use, a model name and a time.
 The schemas are in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
 
@@ -84,6 +91,13 @@ journal store of its own. Linux.
 | `Merge`, `Json`, `merge_value` | The three-way merge, and the one for JSON files (written with two-space indentation, keys in the file's order and numbers with their exact digits, through serde_json's `preserve_order` and `arbitrary_precision`; other formatting and comments are not kept, so a format that must keep them brings its own `Merge`). |
 | `Target`, `Pin` | Resolving and pinning, and the checked reads and writes, for a writer that needs them directly. `Pin::from_json` refuses any field `Pin::to_json` does not write. |
 | `pin_schema()` | The JSON Schema of a pin, in the host's schema subset: what a writer's write operations take as `targets` items (the fixture writer's manifest uses it exactly). |
+| `backup_create(set, pins)` | Manual Backup: keeps the pinned files as they are now (an empty image and `exists: false` for one that does not exist) as one version of `set`, vault backups labelled `bk <set>`; then deletes the oldest versions over `KEEP_BACKUPS` (10): `{"backup", "deleted"}`. |
+| `backup_list(set)` | The versions, newest first: `{"backups": [{"id", "created", "files": [{"selected", "path", "target", "exists", "size"}]}], "keep"}`. |
+| `backup_diff(set, id, leaves)` | For each file of version `id`, as its selection resolves now: `exists`, `now_exists`, `same`, `readable` and `changes`, each changed setting's `path` (its keys) and what a restore does to it (`adds`, `changes`, `removes`), at most 200 and the rest counted in `more`. Never a value. A selection that resolves to another file is refused. |
+| `backup_restore(set, pins, id, written)` | Puts version `id` back in its files (the pins must be of exactly its targets, in order), removing one it did not have, through a journal like every write. A file there keeps its permission bits, as with clear and restore; one made again gets the backed-up bits. No automatic backup is made; the set's record and the originals kept for restore stay. |
+| `backup_delete(set, id)` | Deletes version `id` from the state file and the vault. |
+| `backup_call(call, tx, set, leaves)`, `backup_operations(files)` | The backup browser's standard operations, which every writer exports with exactly these manifest entries (`files` targets per version) and serves with `backup_call`: `backup-list`, `backup-diff` (reads), `backup-create`, `backup-restore`, `backup-delete` (writes, each confirmed). The app's shared backup browser (`../app/src/backups.tsx`) calls them. |
+| `Leaves`, `json_leaves` | A writer's reading of its file into settings for a diff (path and value, in file order; None when it cannot read it), and the one for JSON files: objects by key, arrays and other values as one setting each. |
 
 How a write goes:
 
@@ -128,6 +142,20 @@ Saving replaces the file; an edit made in the same instant by another program ma
 so where the person confirms: the writers' write operations carry this sentence in their
 descriptions, which their native confirmations show.
 This is cooperative write correctness for a full-access tool, not a confinement.
+
+Manual backups and retention:
+
+- A manual backup's bytes are only in the vault; the state file records each version's vault IDs,
+  selections, targets, presence, sizes and permission bits, never the bytes or a hash of them, and
+  pages get only the IDs, the paths and a diff of setting names. Values are compared inside the
+  tool. A setting whose name is itself a secret would show as that name; the host's redaction of
+  the vault's secrets applies to every answer as well.
+- Retention counts only: 10 versions per set, the oldest deleted when another is saved (the
+  operation's confirmation says so). Nothing is deleted by age. Retention and the backup
+  operations never touch the library's own backups (`tx `), which stay while a set's record, an
+  original kept after a conflict or a replaced record, or an open journal names them; `sweep`
+  deletes only backups nothing names, manual ones whose delete failed among them. The vault's
+  limit of 256 backups per package stays a backstop.
 
 The example `fixture-writer` (`examples/fixture-writer`, package `pluxy/fixture-writer`) is the
 library's test fixture, never a curated tool: it sets top-level values in JSON files with
@@ -239,6 +267,44 @@ raw entry ID leaves the parser.
 `pluxy/usage-pi`, the usage hub's parser of Pi's session files, from `~/.pi/agent/sessions` and
 `~/.pi/sessions` (the `HOME` the app gives). It is `lib/pi-sessions` with Pi's name and folder.
 
+## `usage-opencode`
+
+`pluxy/usage-opencode`, the usage hub's parser of OpenCode's local store, at schema 2. It reads
+OpenCode's database (`opencode.db`, or `opencode-<channel>.db` from a build of another channel) and
+its older JSON message files (`storage/message/<session>/<message>.json`) under
+`~/.local/share/opencode` and `~/.opencode` (from the `HOME` the app gives; the hub's `roots` name
+others, such as `$XDG_DATA_HOME/opencode`), and sends the hub token counts per message, and nothing
+else: no prompt, reply, title, folder name or raw session or message ID leaves the parser. It never
+writes an OpenCode file.
+
+- Each session in a database is a file of the hub's of its own, `<database path below the
+  root>#<hash of the session ID>`, so the hub reads again only the sessions that changed, and a
+  database of many sessions never passes the 100,000 rows the hub keeps of one file. A session's
+  revision is its message rows' count and data length and their latest update time, read through
+  SQLite, so a change still in the database's `-wal` counts. The same session in databases under
+  two roots is read from the one where it is newest. A database that cannot be opened (a linked
+  `-wal`, say) is listed as itself, its read fails with the reason, and none of its sessions is
+  marked gone. A JSON message file's ID is its path below the root with the session folder and file
+  name replaced by their hashes.
+- The database's current table, `session_message`, is read (its `assistant` rows, and `compaction`
+  rows that carry the compaction request's own tokens), and so is the `message` table of a database
+  OpenCode made before it, which OpenCode's migration copies into `session_message` and leaves in
+  place. A message is a keyed event, the key a hash of its message and session IDs, which OpenCode's
+  migrations (JSON store to database, `message` to `session_message`) keep; a JSON message file's
+  IDs are its file's and folder's names, where OpenCode's migration took them: a message stored in more
+  than one of these ways counts once. A fork copies its parent's history under new message IDs
+  (`<fork event>_<seq>`); a copy takes its original's key, so it counts once too. Forks from before
+  `session_message` cannot be told from new messages and count again.
+- OpenCode's output is the visible output, reasoning apart: the hub's output is output + reasoning,
+  and the total is input + output + reasoning + cache read + cache write (OpenCode's own total; a
+  provider total some older messages carry is not used, so every copy of a message counts the same).
+  A message's time is its `time.created`. Title and other side requests OpenCode records only as
+  session totals are not counted.
+- The database is opened read-only and nothing is made beside it, by `codex-sessions`' rules: when
+  its `-shm` is missing, it is opened immutable if its `-wal` is missing or empty, and otherwise copied
+  with its `-wal` into a private folder in the tool's data folder (`tmp`), read, and removed. A
+  database that is a link, or whose `-wal` or `-shm` is one, is not read.
+
 ## `codex-sessions`
 
 `pluxy/codex-sessions` reads Codex's local sessions, read-only, and shows them on its page
@@ -316,7 +382,8 @@ The page renders every session's text as text, never as HTML.
 `pluxy/claude-code` sets up Claude Code to use pluxy's core and says how to start it, for the
 desktop app's Claude Code page (`../app/README.md`, "Claude Code"). It writes one settings file
 through `lib/transactions` (set `claude-code`): link-preserving, journalled, the original and
-applied images in the host's vault. It exports nothing.
+applied images in the host's vault, and its manual backups (the backup browser). It exports
+nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
@@ -326,6 +393,7 @@ applied images in the host's vault. It exports nothing.
 | `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
 | `status` | `read` | — | The library's status |
 | `recipe` | `read` | — | `{"client": "Claude Code", "kind": "terminal", "program": "claude", "args": []}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed with `json_leaves` | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
 
 What `apply` writes, keeping everything else in the file (keys in its order, numbers with their
 digits), with Claude Code's own names

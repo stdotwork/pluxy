@@ -46,7 +46,7 @@
 //!   most `chunk` bytes (default 700,000) at their offsets, then one `save` with `name` and the
 //!   input's `extra` fields; with `again`, a second `save` for the same call. It answers with the
 //!   host's answers: `{"appended": [...], "answer": ..., "again": ...}`, stopping at the first
-//!   refused append.
+//!   refused append (with `save_anyway`, it still asks the `save` after it).
 //!
 //! Started with `AGENT` as its first argument it is the spawn check's agent instead (`agent`).
 //! Started as `x-terminal-emulator` (the launcher check's stand-in terminal, `terminal`) it writes
@@ -280,8 +280,11 @@ fn export(input: &mut impl Read, output: &mut impl Write, f: &Value, asked: &mut
         );
         let refused = a.get("error").is_some();
         appended.push(a);
-        if refused {
+        if refused && i["save_anyway"] != true {
             return json!({"appended": appended});
+        }
+        if refused {
+            break;
         }
     }
     let mut save = json!({"name": i["name"]});
