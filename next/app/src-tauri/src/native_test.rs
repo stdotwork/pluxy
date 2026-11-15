@@ -98,13 +98,13 @@ mod jobs;
 #[cfg(target_os = "linux")]
 #[path = "launcher_native.rs"]
 mod launcher;
+#[path = "omp_native.rs"]
+mod omp;
 #[cfg(target_os = "linux")]
 #[path = "open_native.rs"]
 mod open;
 #[path = "opencode_native.rs"]
 mod opencode;
-#[path = "omp_native.rs"]
-mod omp;
 #[cfg(target_os = "linux")]
 #[path = "program_native.rs"]
 mod program;
