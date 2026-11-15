@@ -316,10 +316,13 @@ fn non_utf8_paths_are_rejected_before_review() {
         std::ffi::OsString::from_wide(&[u16::from(b'f'), 0xd800])
     };
     let file = dir.join(name);
+    // macOS file systems refuse the name itself; the path is refused before it is looked up.
+    #[cfg(not(target_os = "macos"))]
     fs::write(&file, b"fixture").unwrap();
     a.files.push(file);
-    assert!(
-        c.prepare(a, Origin::NativeUi).is_err(),
+    assert_eq!(
+        c.prepare(a, Origin::NativeUi).err().as_deref(),
+        Some("review requires UTF-8 paths"),
         "non-UTF-8 paths must be refused before review"
     );
     remove(&dir);
@@ -482,7 +485,8 @@ fn review_escapes_unicode_format_characters_and_rejects_non_utf8_resolutions() {
         assert!(review.contains(escaped), "missing {escaped}");
     }
     assert!(!p.notice().contains('\u{202e}'));
-    #[cfg(unix)]
+    // A link that resolves to a name that is not UTF-8; macOS file systems refuse such names.
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         use std::os::unix::{ffi::OsStringExt, fs::symlink};
         let invalid = dir.join(std::ffi::OsString::from_vec(vec![b'd', 0xff]));
@@ -492,7 +496,7 @@ fn review_escapes_unicode_format_characters_and_rejects_non_utf8_resolutions() {
         a.launch.as_mut().unwrap().cwd = link;
         assert!(c.prepare(a, Origin::NativeUi).is_err());
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     let _ = a;
     remove(&dir);
 }
