@@ -496,14 +496,20 @@ fn quit(app: &AppHandle) {
     // the connection for seconds while a core starts or stops. Tray actions refuse to start now.
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        #[cfg(target_os = "linux")]
-        app.state::<App>().programs.stop_all();
-        // The app's managed runtimes stop with it; detached launches are not its own.
-        #[cfg(target_os = "linux")]
-        app.state::<App>().runtimes.stop_all();
-        app.state::<App>().conn.lock().unwrap().stop_core();
+        stop_owned(&app.state::<App>());
         app.exit(0);
     });
+}
+
+/// Stops what the app owns, in this order: its native tools, its managed runtimes, then its own
+/// core, if it runs one. Quit and the restart after an update install (`updater::restart_into`)
+/// both stop the app this way. Detached launches are not the app's own and run on.
+fn stop_owned(st: &App) {
+    #[cfg(target_os = "linux")]
+    st.programs.stop_all();
+    #[cfg(target_os = "linux")]
+    st.runtimes.stop_all();
+    st.conn.lock().unwrap().stop_core();
 }
 
 /// Saves the window's size and place, as it is now if it is open.
