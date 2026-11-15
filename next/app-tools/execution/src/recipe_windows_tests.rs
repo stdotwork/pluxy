@@ -39,14 +39,36 @@ fn me() -> String {
 
 #[test]
 fn the_terminals_are_the_console_and_the_shells_it_can_stay_at() {
-    let t = terminals(&json!({"search_path": []}));
+    let mut t = terminals(&json!({"search_path": []}))["terminals"].clone();
+    // The shells are System32's: the same files, whatever case Windows reports the folder in
+    // (`GetSystemDirectoryW` gives `C:\Windows\system32`), as Windows compares names.
+    let same = |shown: &Value, want: PathBuf| {
+        let final_path = |p: &Path| {
+            std::fs::canonicalize(p)
+                .unwrap()
+                .to_string_lossy()
+                .to_lowercase()
+        };
+        assert_eq!(
+            final_path(Path::new(shown.as_str().unwrap())),
+            final_path(&want),
+            "{shown}"
+        );
+    };
+    same(
+        &t[1]["path"],
+        system32(r"WindowsPowerShell\v1.0\powershell.exe"),
+    );
+    same(&t[2]["path"], system32("cmd.exe"));
+    for i in [1, 2] {
+        t[i].as_object_mut().unwrap().remove("path");
+    }
     assert_eq!(
-        t["terminals"],
+        t,
         json!([
             {"id": "automatic", "label": "Automatic"},
-            {"id": "powershell", "label": "PowerShell",
-                "path": system32(r"WindowsPowerShell\v1.0\powershell.exe")},
-            {"id": "cmd", "label": "Command Prompt", "path": system32("cmd.exe")},
+            {"id": "powershell", "label": "PowerShell"},
+            {"id": "cmd", "label": "Command Prompt"},
             {"id": "console", "label": "Console window"},
         ])
     );
