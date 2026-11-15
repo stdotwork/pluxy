@@ -103,7 +103,10 @@
 // after the native confirmation of each export call (cancelled: nothing is written), leaves the
 // Codex home's bytes and modification times as they were, keeps the config.toml and auth.json
 // canaries, and the rollout text only the export carries, out of pages, webviews and the app's
-// output, and leaves no reader process when idle or disabled.
+// output, and leaves no reader process when idle or disabled. Its open operation starts the stand-in
+// opener on a session's rollout only through execution's launch (next/app-tools/execution) after a
+// native confirmation naming the file, its type, the folder and the opener: cancelled, nothing runs;
+// a session with no rollout file or a bad ID is refused before any confirmation.
 // The usage hub check (usage.ts, usage_native.rs) runs in one more session with that build: the hub
 // and the test-only fixture parser (next/app-tools/agent-usage and usage-fixture, built here) sync a
 // fixture root through the host's jobs, driven from the hub's page, and its report equals a
@@ -861,7 +864,11 @@ async function runApp(
     const sessionsDir = reader ? join(root, "sessions") : undefined;
     if (sessionsDir) {
       mkdirSync(sessionsDir);
-      const f = buildSessionsFixtures(sessionsDir, dirs.home, appTools, sessionsReader);
+      const f = buildSessionsFixtures(sessionsDir, dirs.home, appTools, sessionsReader, {
+        execution: executionProgram,
+        manifest: executionManifest,
+        opener: programFixture,
+      });
       nonce = f.nonce;
       canaries = f.canaries;
       roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
@@ -1031,7 +1038,9 @@ async function runApp(
       ...(launcherDir ? { PLUXY_APP_TEST_LAUNCHER: launcherDir, PLUXY_APP_TEST_PROBE: probe } : {}),
       // The only folder besides the system's a native-test build takes an opener from.
       ...(openDir ? { PLUXY_APP_TEST_OPEN: openDir, PLUXY_APP_TEST_OPENERS: join(openDir, "bin") } : {}),
-      ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
+      ...(sessionsDir
+        ? { PLUXY_APP_TEST_SESSIONS: sessionsDir, PLUXY_APP_TEST_OPENERS: join(sessionsDir, "opener", "bin") }
+        : {}),
       ...(transactionsDir ? { PLUXY_APP_TEST_TRANSACTIONS: transactionsDir } : {}),
       ...(claudeCodeDir ? { PLUXY_APP_TEST_CLAUDE_CODE: claudeCodeDir } : {}),
       ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
@@ -2016,7 +2025,21 @@ async function main(): Promise<number> {
   // The Codex session reader, from the app tools' workspace, when it is there; and the usage hub
   // and its fixture parser, each when its folder is there.
   if (existsSync(join(appTools, "Cargo.toml"))) {
-    run("cargo", ["build", "--locked", "-p", "codex-sessions", "--target-dir", appToolsTarget], appTools);
+    // Its native-test feature lets `open` send the stand-in opener's folder to execution.
+    run(
+      "cargo",
+      [
+        "build",
+        "--locked",
+        "-p",
+        "codex-sessions",
+        "--features",
+        "native-test",
+        "--target-dir",
+        appToolsTarget,
+      ],
+      appTools,
+    );
     const usageTools = [
       "agent-usage",
       "usage-fixture",
