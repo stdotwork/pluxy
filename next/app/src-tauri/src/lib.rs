@@ -23,6 +23,8 @@ mod command_names;
 #[cfg(target_os = "linux")]
 pub mod confirmation;
 pub mod conn;
+#[cfg(target_os = "linux")]
+mod core_aliases;
 mod core_updates;
 pub mod cores;
 pub mod device;
@@ -2561,6 +2563,29 @@ async fn client_key_enter(
     }
 }
 
+/// Makes alias a name of model in the connected core, on the accounts added by login that serve
+/// it, after a native confirmation (`core_aliases.rs`); gives the accounts that have it.
+#[tauri::command]
+async fn core_alias_create(
+    webview: Webview,
+    model: String,
+    alias: String,
+) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || core_aliases::create(&app, &model, &alias))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (model, alias);
+        Err("native confirmations are supported on Linux only".into())
+    }
+}
+
 /// The `pluxy-app:` scheme: a device page's files, served only to the page webview bound to
 /// that page's release folder, while the release is active and each file is unchanged.
 fn asset_scheme(
@@ -2853,6 +2878,7 @@ pub fn run() {
             vault_secret_remove,
             client_key_capture,
             client_key_enter,
+            core_alias_create,
             window_get,
             window_set,
             window_close,
