@@ -90,6 +90,7 @@ mod device;
 #[cfg(target_os = "linux")]
 #[path = "grok_native.rs"]
 mod grok;
+#[cfg(target_os = "linux")]
 #[path = "hermes_native.rs"]
 mod hermes;
 #[path = "native_ingress.rs"]
