@@ -19,6 +19,40 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 /// How many of core's last log lines the app keeps, to say why it stopped.
 const TAIL: usize = 20;
 
+/// How often a start is tried while the program's file is busy, and the pause after the nth
+/// try (n times this): about 0.9 s in all.
+const BUSY_TRIES: u32 = 10;
+const BUSY_PAUSE: Duration = Duration::from_millis(20);
+
+/// Whether e says the program's file is open for writing (ETXTBSY).
+fn is_busy(e: &io::Error) -> bool {
+    #[cfg(unix)]
+    return e.raw_os_error() == Some(libc::ETXTBSY);
+    #[cfg(not(unix))]
+    {
+        let _ = e;
+        false
+    }
+}
+
+/// Runs `start`, again after a pause (growing by `pause` each time) up to `BUSY_TRIES` tries
+/// while it fails because the program's file is busy, and returns the last result. A program the
+/// app has just written can be busy for a moment although the app closed it: a process forked
+/// by another thread meanwhile holds a copy of the write handle until it execs. Any other
+/// error is returned at once.
+fn start_when_free<T>(pause: Duration, mut start: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    let mut tried = 1;
+    loop {
+        match start() {
+            Err(e) if is_busy(&e) && tried < BUSY_TRIES => {
+                std::thread::sleep(pause * tried);
+                tried += 1;
+            }
+            r => return r,
+        }
+    }
+}
+
 /// 32 random bytes, hex-encoded.
 pub fn random_key() -> String {
     let mut b = [0u8; 32];
@@ -299,7 +333,7 @@ impl ManagedCore {
         let waiting = hold.as_ref().map(Arc::downgrade);
         let name = name.display().to_string();
         std::thread::spawn(move || {
-            let spawned = cmd.spawn();
+            let spawned = start_when_free(BUSY_PAUSE, || cmd.spawn());
             drop(program);
             let mut child = match spawned {
                 Ok(c) => c,
@@ -830,6 +864,71 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.contains("listen is required"), "{err}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn busy() -> io::Error {
+        io::Error::from_raw_os_error(libc::ETXTBSY)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_start_that_finds_the_file_busy_is_tried_again() {
+        let mut calls = 0;
+        let r = start_when_free(Duration::ZERO, || {
+            calls += 1;
+            if calls < 3 {
+                Err(busy())
+            } else {
+                Ok(calls)
+            }
+        });
+        assert_eq!(r.unwrap(), 3);
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_start_that_fails_any_other_way_is_not_tried_again() {
+        let mut calls = 0;
+        let r: io::Result<()> = start_when_free(Duration::ZERO, || {
+            calls += 1;
+            Err(io::Error::from_raw_os_error(libc::ENOENT))
+        });
+        assert_eq!(r.unwrap_err().raw_os_error(), Some(libc::ENOENT));
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_file_that_stays_busy_fails_with_its_last_error_after_the_tries() {
+        let mut calls = 0;
+        let r: io::Result<()> = start_when_free(Duration::ZERO, || {
+            calls += 1;
+            Err(busy())
+        });
+        assert_eq!(r.unwrap_err().raw_os_error(), Some(libc::ETXTBSY));
+        assert_eq!(calls, BUSY_TRIES);
+    }
+
+    /// The real start: a program some other handle still has open for writing cannot be run
+    /// yet, and runs once that handle is closed.
+    #[test]
+    #[cfg(target_os = "linux")] // the core starts from /proc/self/fd, which only Linux has
+    fn a_core_still_open_for_writing_starts_once_it_is_closed() {
+        let dir = temp("busy");
+        let program = script(&dir, &format!("{}\nexec sleep 30", listening(&dir)));
+        let writer = fs::OpenOptions::new().append(true).open(&program).unwrap();
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            drop(writer);
+        });
+        let mut core =
+            ManagedCore::start(File::open(&program).unwrap(), &program, &dir, None).unwrap();
+        closer.join().unwrap();
+        core.stop();
+        assert!(core.exited().is_some());
         fs::remove_dir_all(dir).unwrap();
     }
 }
