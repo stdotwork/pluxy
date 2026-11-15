@@ -1061,12 +1061,14 @@ impl Rect {
     }
 }
 
-/// Opens a webview for an extension page over rect of the window, and returns its label. Async:
-/// a synchronous command runs on the main thread, and making a WebView2 there from a command
-/// never returns on Windows.
-#[tauri::command]
+/// Opens a webview for an extension page over rect of the window, and returns its label. Off
+/// Linux it runs as an async command, off the main thread: a command on the main thread that
+/// makes a WebView2 never returns on Windows. On Linux it stays on the main thread, where the
+/// page's GTK overlay is made (`place::adopt`).
+#[cfg_attr(target_os = "linux", tauri::command)]
+#[cfg_attr(not(target_os = "linux"), tauri::command(async))]
 #[allow(clippy::too_many_arguments)]
-async fn page_open(
+fn page_open(
     webview: Webview,
     extension: String,
     page: String,
@@ -1091,12 +1093,13 @@ async fn page_open(
     )
 }
 
-/// Opens a webview for page of package id on this device, at the address its catalog gives.
-/// Async, as `page_open` is.
-#[tauri::command]
-async fn device_page_open(
+/// Opens a webview for page of package id on this device, at the address its catalog gives. On
+/// the main thread on Linux only, as `page_open` is.
+#[cfg_attr(target_os = "linux", tauri::command)]
+#[cfg_attr(not(target_os = "linux"), tauri::command(async))]
+fn device_page_open(
     webview: Webview,
-    state: tauri::State<'_, App>,
+    state: tauri::State<App>,
     id: String,
     page: String,
     rect: Rect,
