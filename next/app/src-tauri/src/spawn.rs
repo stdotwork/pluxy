@@ -689,6 +689,8 @@ struct Entry {
     token: u64,
     stop: bool,
     busy: bool,
+    /// Its package was removed: the entry goes once it has been reaped and is not being started.
+    removed: bool,
     exit: Option<String>,
     launch: Option<Arc<Launch>>,
 }
@@ -776,6 +778,7 @@ impl Runtimes {
                         token: 0,
                         stop: false,
                         busy: false,
+                        removed: false,
                         exit: None,
                         launch: None,
                     });
@@ -833,6 +836,7 @@ impl Runtimes {
                 token: 0,
                 stop: false,
                 busy: true,
+                removed: false,
                 exit: None,
                 launch: Some(Arc::clone(&launch)),
             });
@@ -848,6 +852,10 @@ impl Runtimes {
             Ok(e) => {
                 e.busy = false;
                 let v = e.view();
+                // Its package was removed as it started, and it was reaped meanwhile.
+                if e.removed && e.state == State::Exited {
+                    list.retain(|x| x.id != id);
+                }
                 self.0.changed.notify_all();
                 Ok(json!({"lifetime": "managed", "runtime": id, "pid": v["pid"]}))
             }
@@ -868,13 +876,15 @@ impl Runtimes {
 
     /// Starts runtime id's launch on a supervisor thread of its own, which stays until it has
     /// been reaped; returns once it runs (the entry is Running with its process ID).
-    /// It is refused when package is closed or the app is quitting, both before it starts and as
-    /// it runs (then it is stopped at once).
+    /// It is refused when package is closed, the entry's launch was dropped (by a close, even if
+    /// the package was opened again since) or the app is quitting: checked before its secrets are
+    /// resolved, and again under the registry's lock as it is spawned, so a close or the app's quit
+    /// either comes first and nothing starts, or finds it running and stops it.
     fn run(&self, package: &str, id: &str, l: &Arc<Launch>) -> Result<(), String> {
         l.opened.recheck().map_err(|e| {
             format!("{e}; its executable or cwd changed since it was confirmed: launch it again")
         })?;
-        self.0.open(&self.0.list.lock().unwrap(), package)?;
+        self.0.live(&self.0.list.lock().unwrap(), package, id)?;
         let secrets = resolve(l, &|id| (self.0.value)(package, id))?;
         let env = environment(snapshot(), &l.request, &secrets);
         let token = {
@@ -890,34 +900,33 @@ impl Runtimes {
         std::thread::Builder::new()
             .name("pluxy-runtime".into())
             .spawn(move || {
+                // Spawned under the registry's lock, which a close and the app's quit take too.
+                let mut list = shared.list.lock().unwrap();
+                if let Err(e) = shared.live(&list, &package, &rid) {
+                    drop(list);
+                    let _ = tx.send(Err(e));
+                    return;
+                }
                 let mut cmd = command(&launch, env, holds);
                 let child = cmd.spawn();
                 drop(cmd);
                 match child {
                     Ok(c) => {
-                        let pid = c.id();
-                        let refused = {
-                            let mut list = shared.list.lock().unwrap();
-                            // Closed or quitting while it started: it is stopped at once.
-                            let refused = shared.open(&list, &package).err();
-                            if let Some(e) = list.iter_mut().find(|e| e.id == rid) {
-                                e.state = State::Running;
-                                e.pid = pid;
-                                e.started = now_ms();
-                                e.token = token;
-                                e.stop = refused.is_some();
-                                e.exit = None;
-                                if refused.is_some() {
-                                    e.state = State::Stopping;
-                                }
-                            }
-                            shared.save(&list);
-                            refused
-                        };
-                        let _ = tx.send(refused.map_or(Ok(()), Err));
+                        if let Some(e) = list.iter_mut().find(|e| e.id == rid) {
+                            e.state = State::Running;
+                            e.pid = c.id();
+                            e.started = now_ms();
+                            e.token = token;
+                            e.stop = false;
+                            e.exit = None;
+                        }
+                        shared.save(&list);
+                        drop(list);
+                        let _ = tx.send(Ok(()));
                         supervise(&shared, &rid, token, c);
                     }
                     Err(e) => {
+                        drop(list);
                         let _ = tx.send(Err(format!("the runtime did not start: {e}")));
                     }
                 }
@@ -1020,6 +1029,11 @@ impl Runtimes {
             e.restarts += 1;
         }
         let v = e.view();
+        // Its package was removed as it restarted, and it is not running: nothing of it stays, as
+        // after a reap.
+        if e.removed && e.state == State::Exited {
+            list.retain(|x| x.id != id);
+        }
         drop(list);
         r.map(|_| v)
     }
@@ -1055,6 +1069,7 @@ impl Runtimes {
         list.closed.insert(package.to_string(), removed);
         for e in list.iter_mut().filter(|e| e.package == package) {
             e.launch = None;
+            e.removed |= removed;
             if e.state == State::Running {
                 e.stop = true;
                 e.state = State::Stopping;
@@ -1079,7 +1094,11 @@ impl Runtimes {
     /// Stops every runtime the app owns, at its quit; none starts after. Detached launches are
     /// not the app's and go on.
     pub fn stop_all(&self) {
+        // Under the registry's lock, which every spawn holds: a start or restart under way either
+        // spawns before this, and runs to be stopped below, or is refused after it.
+        let list = self.0.list.lock().unwrap();
         self.0.quitting.store(true, Ordering::SeqCst);
+        drop(list);
         self.stop_where(|_| true);
     }
 }
@@ -1093,6 +1112,18 @@ impl Shared {
         if list.closed.contains_key(package) {
             return Err(format!(
                 "{package} was disabled or removed: none of its runtimes starts"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Refused unless runtime id of package may start now: package open, the app not quitting, and
+    /// the entry still holding its launch (a close drops it, even if the package is opened again).
+    fn live(&self, list: &Registry, package: &str, id: &str) -> Result<(), String> {
+        self.open(list, package)?;
+        if !list.iter().any(|e| e.id == id && e.launch.is_some()) {
+            return Err(format!(
+                "{package}'s runtime {id} was retired when {package} was disabled or removed: launch it again"
             ));
         }
         Ok(())
@@ -1163,13 +1194,12 @@ fn supervise(shared: &Shared, id: &str, token: u64, mut child: Child) {
         .map(|s| s.to_string())
         .unwrap_or_else(|e| e.to_string());
     let mut list = shared.list.lock().unwrap();
-    let removed = list.closed.clone();
     let mut gone = false;
     if let Some(e) = list.iter_mut().find(|e| e.id == id && e.token == token) {
         e.state = State::Exited;
         e.stop = false;
         e.exit = Some(status);
-        gone = !e.busy && removed.get(&e.package) == Some(&true);
+        gone = !e.busy && e.removed;
     }
     // Its package was removed: nothing of it stays.
     if gone {
