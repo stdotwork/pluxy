@@ -2,9 +2,14 @@
 //! as this test program. When the host starts it, with the contract's environment, the hook
 //! below runs the fixture before any test does; each test's package folder holds a link to this
 //! program as its tool, its manifest, and a `fixture.json` that makes the fixture misbehave.
+//!
+//! The lifetime checks (`lifetime_*`, at the end) run on Linux, macOS and Windows: the tool host
+//! and the spawn service (`spawn.rs`) together, with the fixture's heartbeat as the managed
+//! runtime and the detached launch.
 
 use super::*;
-use std::collections::BTreeSet;
+use crate::spawn::{Launch, Lifetime, Runtimes, Values};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -18,6 +23,10 @@ mod fixture;
 #[cfg_attr(windows, link_section = ".CRT$XCU")]
 static FIXTURE: extern "C" fn() = {
     extern "C" fn run_fixture() {
+        if let Some(role) = std::env::var_os(LIFETIME_HOST) {
+            let dir = std::env::var_os(LIFETIME_DIR).unwrap_or_default();
+            lifetime_host(&role.to_string_lossy(), Path::new(&dir));
+        }
         // The spawn tests' agent (`spawn_tests.rs`) is started with `AGENT` as its first argument,
         // the lifetime checks' heartbeat with `HEARTBEAT`.
         let first = |prefix: &str| {
@@ -311,17 +320,23 @@ fn alive(pid: u64) -> bool {
     n == size && info.pbi_status != libc::SZOMB
 }
 
+/// Process pid, opened with access only: rights to look at it (to wait for it, to query it),
+/// none that could end it. None when there is no such process.
+#[cfg(windows)]
+fn look_at(pid: u64, access: u32) -> Option<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::Threading::OpenProcess;
+    let h = unsafe { OpenProcess(access, 0, pid as u32) };
+    (!h.is_null()).then(|| unsafe { OwnedHandle::from_raw_handle(h) })
+}
+
 #[cfg(windows)]
 fn alive(pid: u64) -> bool {
-    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
-    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
-    let h = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid as u32) };
-    if h.is_null() {
-        return false;
-    }
-    let running = unsafe { WaitForSingleObject(h, 0) } == WAIT_TIMEOUT;
-    unsafe { CloseHandle(h) };
-    running
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+    use windows_sys::Win32::System::Threading::{WaitForSingleObject, PROCESS_SYNCHRONIZE};
+    look_at(pid, PROCESS_SYNCHRONIZE)
+        .is_some_and(|h| unsafe { WaitForSingleObject(h.as_raw_handle(), 0) } == WAIT_TIMEOUT)
 }
 
 fn until(what: &str, secs: u64, f: impl Fn() -> bool) {
@@ -1293,6 +1308,8 @@ fn cancel_all_ends_every_call_and_the_tool_stops_when_idle() {
     assert!(!alive(pid));
 }
 
+// Unix only: process groups, which a process may leave (on Windows a tool's job holds it and all
+// it starts, and none of them can leave it).
 #[cfg(unix)]
 #[test]
 fn a_tool_that_leaves_its_group_and_ignores_the_end_of_its_input_is_killed() {
@@ -1372,6 +1389,8 @@ fn a_stop_while_its_record_is_read_starts_nothing() {
     h.stop_all();
 }
 
+// Linux only: the parent-death signal and descriptors read from /proc (the lifetime checks probe
+// for an inherited handle on every platform).
 #[cfg(target_os = "linux")]
 #[test]
 fn the_tool_gets_its_name_the_parent_death_signal_and_no_inherited_descriptor() {
@@ -2072,6 +2091,7 @@ fn stopping_a_crashed_tool_that_is_not_running_reads_as_idle() {
     h.stop_all();
 }
 
+// Linux only: the vault, which makes a tool's data folder, is Linux's for now.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_tool_gets_its_home_and_its_own_data_folder_and_a_planted_link_refuses_the_start() {
@@ -2120,4 +2140,1020 @@ fn a_tool_gets_its_home_and_its_own_data_folder_and_a_planted_link_refuses_the_s
     assert!(e.message.contains("data folder"), "{e:?}");
     assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none());
     assert_eq!(h.status(ID).pid, None);
+}
+
+// Lifetimes, on every platform ----------------------------------------------------------------
+//
+// What each kind of process does when its tool idles or crashes, when the app quits or crashes,
+// and what a stop does, as `app-host/README.md` states it for each platform. The managed runtime
+// and the detached launch are the fixture's heartbeat (`fixture::heartbeat`): a process lives
+// while its heartbeat file advances. Each process a check starts ends through its stop file (a
+// `Lab`) or through the check's own handle of it (`Held`), also when an assertion fails; never by
+// a process ID.
+
+/// The variable that makes this test program a lifetime check's host (`lifetime_host`): its role.
+const LIFETIME_HOST: &str = "PLUXY_LIFETIME_TEST_HOST";
+/// And the host's folder.
+const LIFETIME_DIR: &str = "PLUXY_LIFETIME_TEST_DIR";
+/// How long a stop waits, once it has asked a runtime to stop, before it ends it: five seconds
+/// (`app-host/README.md`).
+const GRACE: Duration = Duration::from_secs(5);
+
+/// path with `.ext` added to its name.
+fn with(path: &Path, ext: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(".");
+    s.push(ext);
+    s.into()
+}
+
+/// The heartbeat file of heartbeat f's child (`child`).
+fn child_of(f: &Path) -> PathBuf {
+    with(f, "child")
+}
+
+/// p without the `\\?\` that `canonicalize` puts before a Windows path: the form a process sees
+/// its working folder in.
+fn plain(p: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(s) = p.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        if !s.starts_with(r"UNC\") {
+            return PathBuf::from(s);
+        }
+    }
+    p
+}
+
+/// Folder dir, opened as a launch's cwd is (on Windows a folder opens only with backup
+/// semantics).
+fn open_dir(dir: &Path) -> std::fs::File {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS)
+            .open(dir)
+            .unwrap()
+    }
+    #[cfg(not(windows))]
+    std::fs::File::open(dir).unwrap()
+}
+
+/// Starts cmd as std starts a process. On Windows under the app's spawn lock, as the app's own
+/// such spawns are (`owned::windows::std_spawn`), so it is not passed a handle another check's
+/// spawn has made inheritable for a moment.
+fn spawn_std(cmd: &mut std::process::Command) -> std::process::Child {
+    #[cfg(windows)]
+    {
+        crate::owned::windows::std_spawn(cmd).unwrap()
+    }
+    #[cfg(not(windows))]
+    {
+        cmd.spawn().unwrap()
+    }
+}
+
+/// A process the check started itself and holds: ended through its handle when dropped.
+struct Held(std::process::Child);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Runs its function when dropped, also when an assertion fails.
+struct OnDrop<F: FnMut()>(F);
+
+impl<F: FnMut()> Drop for OnDrop<F> {
+    fn drop(&mut self) {
+        (self.0)()
+    }
+}
+
+/// A lifetime check's folder and the heartbeats named in it. Dropped, it asks each heartbeat (and
+/// its child) to stop through its stop file, waits until each has exited and removes the folder;
+/// should one still run, the folder stays, with its stop file, and it is reported.
+struct Lab {
+    dir: PathBuf,
+    beats: Mutex<Vec<PathBuf>>,
+}
+
+impl Lab {
+    fn new(name: &str) -> Lab {
+        let mut rnd = [0u8; 6];
+        getrandom::fill(&mut rnd).unwrap();
+        let tag: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
+        let dir = std::env::temp_dir().join(format!("pluxy-lifetime-{name}-{tag}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        Lab {
+            dir: plain(std::fs::canonicalize(&dir).unwrap()),
+            beats: Mutex::default(),
+        }
+    }
+
+    /// Heartbeat file name in the folder, to be stopped with it (its child too).
+    fn beat(&self, name: &str) -> PathBuf {
+        let f = self.dir.join(name);
+        let mut beats = self.beats.lock().unwrap();
+        beats.push(f.clone());
+        beats.push(child_of(&f));
+        f
+    }
+}
+
+impl Drop for Lab {
+    fn drop(&mut self) {
+        let beats = std::mem::take(&mut *self.beats.lock().unwrap_or_else(|e| e.into_inner()));
+        for f in &beats {
+            let _ = std::fs::write(with(f, "stop"), "");
+        }
+        let running = || -> Vec<u64> {
+            beats
+                .iter()
+                .filter_map(|f| pid_of(f))
+                .filter(|p| alive(*p))
+                .collect()
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut left = running();
+        while !left.is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+            left = running();
+        }
+        if left.is_empty() {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        } else {
+            eprintln!(
+                "processes {left:?} still run; {} keeps their stop files",
+                self.dir.display()
+            );
+        }
+    }
+}
+
+/// The process ID heartbeat f wrote, once it has.
+fn pid_of(f: &Path) -> Option<u64> {
+    std::fs::read(with(f, "json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| v["pid"].as_u64())
+}
+
+/// What heartbeat f wrote of itself as it started (`<f>.json`), waiting for it.
+fn seen(f: &Path) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(v) = std::fs::read(with(f, "json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        {
+            return v;
+        }
+        assert!(Instant::now() < deadline, "{} never started", f.display());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Whether heartbeat f's process runs: its count advances (it writes one every 50 ms).
+fn beating(f: &Path) -> bool {
+    let count = || -> Option<u64> { std::fs::read_to_string(f).ok()?.trim().parse().ok() };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut first = count();
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+        match (first, count()) {
+            (Some(a), Some(b)) if b > a => return true,
+            (None, now) => first = now,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Whether heartbeat f's process has exited, within ten seconds.
+fn ends(f: &Path) -> bool {
+    let pid = seen(f)["pid"].as_u64().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while alive(pid) {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
+}
+
+/// A launch of the heartbeat f, in f's folder, named as this program's path, with args after f.
+fn heartbeat(f: &Path, args: &[&str], lifetime: Lifetime) -> Launch {
+    let mut argv = vec![
+        fixture::HEARTBEAT.to_string(),
+        f.to_string_lossy().into_owned(),
+    ];
+    argv.extend(args.iter().map(|a| a.to_string()));
+    Launch {
+        opened: Box::new(crate::spawn::Plain {
+            executable: std::fs::File::open(std::env::current_exe().unwrap()).unwrap(),
+            cwd: open_dir(f.parent().unwrap()),
+        }),
+        named: std::env::current_exe().unwrap(),
+        argv,
+        lifetime,
+        request: Default::default(),
+        secrets: vec![],
+        stdin: None,
+    }
+}
+
+/// The lifetime checks' secrets: each its ID with SECRET before it.
+struct Canary;
+
+impl Values for Canary {
+    fn value(&self, _: &str, id: &str) -> Result<(String, Option<u64>), String> {
+        Ok((format!("{SECRET}-{id}"), None))
+    }
+    fn still(&self, _: &[crate::spawn::Given]) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Whether detached launch f started, from what its start answered (r). Once started it beats.
+/// On Windows a detached launch runs outside every job of the app's or not at all: where the job
+/// the check runs in may not be left (`owned::windows::breakaway` says so; GitHub's hosted runners
+/// run every step in such a job) it must be refused (`NO_BREAKAWAY`) before any of it ran; where
+/// it runs, it is in no job.
+fn let_go(f: &Path, r: Result<(), String>) -> bool {
+    #[cfg(windows)]
+    {
+        use crate::owned::windows::{breakaway, NO_BREAKAWAY};
+        let refused = r.as_ref().is_err_and(|e| e.contains(NO_BREAKAWAY));
+        if let Err(why) = breakaway() {
+            assert_eq!(why, NO_BREAKAWAY);
+            assert!(
+                refused,
+                "a detached launch was not refused in a job it may not leave: {r:?}"
+            );
+        }
+        // Refused although breakaway() allowed it: a job further out does not (also refused).
+        if refused {
+            std::thread::sleep(Duration::from_millis(500));
+            assert!(
+                !with(f, "json").exists() && !f.exists(),
+                "a refused detached launch ran"
+            );
+            return false;
+        }
+    }
+    r.unwrap();
+    assert!(beating(f), "{} does not run", f.display());
+    #[cfg(windows)]
+    assert!(
+        !in_a_job(seen(f)["pid"].as_u64().unwrap()),
+        "a detached launch runs in a job"
+    );
+    true
+}
+
+/// Whether process pid is in a job (a look at it; nothing is asked of it).
+#[cfg(windows)]
+fn in_a_job(pid: u64) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+    use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
+    let h = look_at(pid, PROCESS_QUERY_LIMITED_INFORMATION)
+        .unwrap_or_else(|| panic!("process {pid}: {}", std::io::Error::last_os_error()));
+    let mut b = 0;
+    let ok = unsafe { IsProcessInJob(h.as_raw_handle(), std::ptr::null_mut(), &mut b) };
+    assert_ne!(ok, 0, "{}", std::io::Error::last_os_error());
+    b != 0
+}
+
+/// The host's spawn service for the lifetime checks (`Host::set_spawner`): a tool's `spawn` frame
+/// starts the heartbeat it names (`file`, in dir, with `args`) for the tool's package, managed in
+/// rt or detached as its `lifetime` says; a `runtime` frame's op (status, stop, restart) goes to
+/// rt, for the tool's package.
+fn spawner(rt: &Arc<Runtimes>, dir: &Path) -> Spawner {
+    let (rt, dir) = (Arc::clone(rt), dir.to_path_buf());
+    Arc::new(
+        move |tool: &Hop, _: &Arc<Context>, frame: &Value, _: &Cancel| {
+            let package = tool.package().unwrap_or_default();
+            let r = if frame["type"] == "spawn" {
+                let f = dir.join(frame["file"].as_str().unwrap_or_default());
+                let args: Vec<&str> = frame["args"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(Value::as_str).collect())
+                    .unwrap_or_default();
+                if frame["lifetime"] == "managed" {
+                    rt.start(package, heartbeat(&f, &args, Lifetime::Managed))
+                } else {
+                    crate::spawn::detached(
+                        &heartbeat(&f, &args, Lifetime::Detached),
+                        package,
+                        &Canary,
+                    )
+                    .map(|()| json!({"lifetime": "detached"}))
+                }
+            } else {
+                let id = frame["runtime"].as_str().unwrap_or_default();
+                match frame["op"].as_str() {
+                    Some("status") => rt.status(package, id),
+                    Some("stop") => rt.stop(package, id),
+                    Some("restart") => rt.restart(package, id),
+                    _ => Err("no such runtime op".into()),
+                }
+            };
+            r.map_err(|e| fail("refused", e))
+        },
+    )
+}
+
+/// The tool's request to the host's spawn service (a frame with fields extra, for the call it
+/// serves) and its answer: the output, or the error's message.
+fn request(h: &Host, extra: Value) -> Result<Value, String> {
+    let a = relay(
+        h,
+        json!({"package": "-", "op": "-", "input": {}, "extra": extra}),
+    );
+    match a["answer"].get("output") {
+        Some(o) => Ok(o.clone()),
+        None => Err(a["answer"]["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()),
+    }
+}
+
+/// Limits that keep a tool running between a check's calls.
+fn steady() -> Limits {
+    Limits {
+        idle: Duration::from_secs(120),
+        ..fast()
+    }
+}
+
+/// This test program started again as a lifetime check's host (`lifetime_host`) in role, in
+/// folder dir (its stderr in `host.log` there), held by the check. On Windows with no console,
+/// as the app has none (it is a windowed program): only a process without one may ask on a
+/// runtime's console.
+fn start_host(role: &str, dir: &Path) -> Held {
+    let log = std::fs::File::create(dir.join("host.log")).unwrap();
+    let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+    cmd.env(LIFETIME_HOST, role)
+        .env(LIFETIME_DIR, dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(log);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(windows_sys::Win32::System::Threading::DETACHED_PROCESS);
+    }
+    Held(spawn_std(&mut cmd))
+}
+
+/// What the host wrote to its log.
+fn host_log(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join("host.log")).unwrap_or_default()
+}
+
+/// Waits, at most secs, until the host has written file in dir (or exited, when file is None).
+fn host_wrote(host: &mut Held, dir: &Path, file: Option<&str>, secs: u64) {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    loop {
+        let exited = host.0.try_wait().unwrap();
+        match (file, exited) {
+            (Some(f), _) if dir.join(f).exists() => return,
+            (Some(f), Some(s)) => panic!("the host exited ({s}) before {f}: {}", host_log(dir)),
+            (None, Some(s)) if s.success() => return,
+            (None, Some(s)) => panic!("the host failed ({s}): {}", host_log(dir)),
+            _ => {}
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the host took too long: {}",
+            host_log(dir)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A lifetime check's host (`start_host`), which never returns:
+/// - `crash`: starts a tool (its process, its child and its package folder in `tool.json`), a
+///   managed runtime with a child (heartbeat `runtime`) recorded in `runtimes.json`, and a
+///   detached launch (heartbeat `agent`, or `agent.refused` saying why it was refused), writes
+///   `ready` and waits to be killed;
+/// - `stop`: starts two managed runtimes with a child each, `handles` and `ignores` (which goes on
+///   when asked to stop), stops both at once, writes how long each stop took and what it
+///   answered to `<name>.stopped`, and exits.
+fn lifetime_host(role: &str, dir: &Path) -> ! {
+    match role {
+        "crash" => {
+            let rt = Runtimes::open(Some(dir.join("runtimes.json")), Box::new(Canary));
+            rt.start(
+                ID,
+                heartbeat(&dir.join("runtime"), &["child"], Lifetime::Managed),
+            )
+            .expect("the runtime");
+            let agent = dir.join("agent");
+            if let Err(e) =
+                crate::spawn::detached(&heartbeat(&agent, &[], Lifetime::Detached), ID, &Canary)
+            {
+                let _ = std::fs::write(with(&agent, "refused"), e);
+            }
+            let spec = package(Value::Null);
+            let folder = spec.dir.clone();
+            let h = host_for(spec, steady());
+            let out = summary(&h, &[]).expect("the tool");
+            let _ = std::fs::write(
+                dir.join("tool.json"),
+                json!({"pid": out["pid"], "child": out["child"], "package": folder}).to_string(),
+            );
+            let _ = std::fs::write(dir.join("ready"), "");
+            loop {
+                std::thread::sleep(Duration::from_secs(3600));
+            }
+        }
+        "stop" => {
+            let rt = Arc::new(Runtimes::open(None, Box::new(Canary)));
+            let ids: Vec<(&str, String)> = [
+                ("handles", &["child"][..]),
+                ("ignores", &["child", "ignore"][..]),
+            ]
+            .into_iter()
+            .map(|(name, args)| {
+                let f = dir.join(name);
+                let v = rt
+                    .start(ID, heartbeat(&f, args, Lifetime::Managed))
+                    .expect("the runtime");
+                // Asked once each has set what it does when asked to stop, child and all.
+                let _ = seen(&f);
+                let _ = seen(&child_of(&f));
+                (name, v["runtime"].as_str().unwrap_or_default().to_string())
+            })
+            .collect();
+            let stops: Vec<_> = ids
+                .into_iter()
+                .map(|(name, id)| {
+                    let (rt, dir) = (Arc::clone(&rt), dir.to_path_buf());
+                    std::thread::spawn(move || {
+                        let t = Instant::now();
+                        let r = rt.stop(ID, &id);
+                        let ms = t.elapsed().as_millis() as u64;
+                        let answer = r.unwrap_or_else(|e| json!({"error": e}));
+                        let _ = std::fs::write(
+                            dir.join(format!("{name}.stopped")),
+                            json!({"ms": ms, "answer": answer}).to_string(),
+                        );
+                    })
+                })
+                .collect();
+            for s in stops {
+                let _ = s.join();
+            }
+            std::process::exit(0);
+        }
+        _ => std::process::exit(2),
+    }
+}
+
+#[test]
+fn lifetime_a_tools_idle_stop_leaves_its_detached_launch_and_managed_runtime_running() {
+    let lab = Lab::new("idle");
+    let (runtime, agent) = (lab.beat("runtime"), lab.beat("agent"));
+    let rt = Arc::new(Runtimes::open(None, Box::new(Canary)));
+    let h = host(Value::Null);
+    let _stop = OnDrop(|| h.stop_all());
+    h.set_spawner(spawner(&rt, &lab.dir));
+    let id = request(
+        &h,
+        json!({"type": "spawn", "file": "runtime", "lifetime": "managed", "args": ["child"]}),
+    )
+    .unwrap()["runtime"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let detached = let_go(
+        &agent,
+        request(
+            &h,
+            json!({"type": "spawn", "file": "agent", "lifetime": "detached"}),
+        )
+        .map(drop),
+    );
+    let (tool, tool_child) = pids(&summary(&h, &[]).unwrap());
+    let pid = seen(&runtime)["pid"].clone();
+    // The tool stops for idleness, child and all.
+    until("the idle stop", 10, || h.status(ID).state == "idle");
+    until("the tool and its child to end", 10, || {
+        !alive(tool) && !alive(tool_child)
+    });
+    assert!(
+        beating(&runtime) && beating(&child_of(&runtime)),
+        "the tool's idle stop stopped its package's managed runtime"
+    );
+    assert!(
+        !detached || beating(&agent),
+        "the tool's idle stop stopped its detached launch"
+    );
+    // The tool's next run sees the same runtime, running.
+    let s = request(
+        &h,
+        json!({"type": "runtime", "op": "status", "runtime": id}),
+    )
+    .unwrap();
+    assert_eq!((&s["state"], &s["pid"]), (&json!("running"), &pid), "{s}");
+    assert_ne!(h.status(ID).pid, Some(tool as u32));
+}
+
+#[test]
+fn lifetime_a_tools_crash_leaves_its_launches_running_and_its_next_run_restarts_and_stops_its_runtime(
+) {
+    let lab = Lab::new("tool-crash");
+    let (runtime, agent) = (lab.beat("runtime"), lab.beat("agent"));
+    let rt = Arc::new(Runtimes::open(None, Box::new(Canary)));
+    let h = host_for(package(json!({"crash_on": "crash"})), steady());
+    let _stop = OnDrop(|| h.stop_all());
+    h.set_spawner(spawner(&rt, &lab.dir));
+    let id = request(
+        &h,
+        json!({"type": "spawn", "file": "runtime", "lifetime": "managed", "args": ["child"]}),
+    )
+    .unwrap()["runtime"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let detached = let_go(
+        &agent,
+        request(
+            &h,
+            json!({"type": "spawn", "file": "agent", "lifetime": "detached"}),
+        )
+        .map(drop),
+    );
+    let (old, old_child) = (
+        seen(&runtime)["pid"].as_u64().unwrap(),
+        seen(&child_of(&runtime))["pid"].as_u64().unwrap(),
+    );
+    let (tool, tool_child) = pids(&summary(&h, &[]).unwrap());
+    // The tool crashes; its own child goes with it (its group; on Windows its job).
+    let e = h.call(ID, "crash", json!({}), None).unwrap_err();
+    assert_eq!(e.code, "extension_crashed", "{e}");
+    until("the crash", 5, || h.status(ID).state == "crashed");
+    until("the tool and its child to end", 10, || {
+        !alive(tool) && !alive(tool_child)
+    });
+    assert!(
+        beating(&runtime) && beating(&child_of(&runtime)),
+        "the tool's crash stopped its package's managed runtime"
+    );
+    assert!(
+        !detached || beating(&agent),
+        "the tool's crash stopped its detached launch"
+    );
+    // After the backoff the tool runs again, a new process, and controls its package's runtime.
+    std::thread::sleep(fast().backoff + Duration::from_millis(100));
+    let s = request(
+        &h,
+        json!({"type": "runtime", "op": "status", "runtime": id}),
+    )
+    .unwrap();
+    assert_eq!(
+        (&s["state"], &s["pid"]),
+        (&json!("running"), &json!(old)),
+        "{s}"
+    );
+    assert!(h.status(ID).pid.is_some_and(|p| u64::from(p) != tool));
+    // A restart replaces the runtime, child and all.
+    let r = request(
+        &h,
+        json!({"type": "runtime", "op": "restart", "runtime": id}),
+    )
+    .unwrap();
+    let new = r["pid"].as_u64().unwrap();
+    assert_ne!(new, old);
+    assert_eq!(
+        (&r["state"], &r["restarts"]),
+        (&json!("running"), &json!(1)),
+        "{r}"
+    );
+    until("the old runtime and its child to end", 10, || {
+        !alive(old) && !alive(old_child)
+    });
+    until("the new runtime to start", 20, || {
+        pid_of(&runtime) == Some(new)
+    });
+    until("the new runtime's child to start", 20, || {
+        pid_of(&child_of(&runtime)).is_some_and(|p| p != old_child)
+    });
+    let new_child = pid_of(&child_of(&runtime)).unwrap();
+    assert!(beating(&runtime) && beating(&child_of(&runtime)));
+    // A stop ends it, child and all, and the tool's package controls nothing more of it.
+    let s = request(&h, json!({"type": "runtime", "op": "stop", "runtime": id})).unwrap();
+    assert_eq!(s["state"], "exited", "{s}");
+    until("the runtime and its child to end", 10, || {
+        !alive(new) && !alive(new_child)
+    });
+    assert!(
+        !detached || beating(&agent),
+        "a runtime's stop stopped a detached launch"
+    );
+}
+
+#[test]
+fn lifetime_the_apps_quit_stops_its_tools_and_managed_runtimes_and_leaves_detached_launches() {
+    let lab = Lab::new("quit");
+    let (runtime, agent) = (lab.beat("runtime"), lab.beat("agent"));
+    let file = lab.dir.join("runtimes.json");
+    let rt = Arc::new(Runtimes::open(Some(file.clone()), Box::new(Canary)));
+    let h = host_for(package(Value::Null), steady());
+    let _stop = OnDrop(|| h.stop_all());
+    h.set_spawner(spawner(&rt, &lab.dir));
+    let id = request(
+        &h,
+        json!({"type": "spawn", "file": "runtime", "lifetime": "managed", "args": ["child"]}),
+    )
+    .unwrap()["runtime"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let detached = let_go(
+        &agent,
+        request(
+            &h,
+            json!({"type": "spawn", "file": "agent", "lifetime": "detached"}),
+        )
+        .map(drop),
+    );
+    let (tool, tool_child) = pids(&summary(&h, &[]).unwrap());
+    let (pid, child) = (
+        seen(&runtime)["pid"].as_u64().unwrap(),
+        seen(&child_of(&runtime))["pid"].as_u64().unwrap(),
+    );
+    assert!(std::fs::read_to_string(&file).unwrap().contains(&id));
+    // The app's quit, in its order (`lib.rs`): its tools, then its runtimes. Each returns once
+    // what it stopped has been reaped.
+    h.stop_all();
+    rt.stop_all();
+    assert!(!alive(tool) && !alive(pid));
+    until("the tool's and the runtime's children to end", 10, || {
+        !alive(tool_child) && !alive(child)
+    });
+    assert_eq!(rt.status(ID, &id).unwrap()["state"], "exited");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "[]");
+    // Nothing starts after it.
+    let late = lab.beat("late");
+    let e = rt
+        .start(ID, heartbeat(&late, &[], Lifetime::Managed))
+        .unwrap_err();
+    assert!(e.contains("quitting"), "{e}");
+    // A detached launch is not the app's: it runs on.
+    assert!(
+        !detached || beating(&agent),
+        "the app's quit stopped a detached launch"
+    );
+}
+
+#[test]
+fn lifetime_a_stop_asks_a_runtime_first_and_ends_one_that_ignores_it_at_the_grace() {
+    let lab = Lab::new("stop");
+    let (handles, ignores) = (lab.beat("handles"), lab.beat("ignores"));
+    // The stops run in a host of their own, with no console on Windows, as the app's.
+    let mut host = start_host("stop", &lab.dir);
+    host_wrote(&mut host, &lab.dir, None, 60);
+    let stopped = |name: &str| -> Value {
+        serde_json::from_slice(&std::fs::read(lab.dir.join(format!("{name}.stopped"))).unwrap())
+            .unwrap()
+    };
+    let (a, b) = (stopped("handles"), stopped("ignores"));
+    for s in [&a, &b] {
+        assert_eq!(s["answer"]["state"], "exited", "{s}");
+    }
+    // Asked (SIGTERM to its group; on Windows CTRL_BREAK to its group, on its own console), the
+    // one that handles it exits at once, child and all, well inside the grace.
+    assert!(
+        with(&handles, "term").exists() && with(&child_of(&handles), "term").exists(),
+        "the runtime was not asked to stop, or not its child: {}",
+        host_log(&lab.dir)
+    );
+    assert!(
+        a["ms"].as_u64().unwrap() < (GRACE - Duration::from_secs(1)).as_millis() as u64,
+        "{a}"
+    );
+    assert!(ends(&handles) && ends(&child_of(&handles)));
+    // The one that ignores it was asked too, and was ended, child and all, once the grace was
+    // over.
+    assert!(
+        with(&ignores, "term").exists(),
+        "the runtime was not asked to stop"
+    );
+    assert!(
+        b["ms"].as_u64().unwrap() >= GRACE.as_millis() as u64,
+        "ended before the grace: {b}"
+    );
+    assert!(ends(&ignores) && ends(&child_of(&ignores)));
+}
+
+#[test]
+fn lifetime_a_host_crash_ends_its_tool_leaves_its_detached_launch_and_its_runtime_as_documented() {
+    let lab = Lab::new("host-crash");
+    let (runtime, agent) = (lab.beat("runtime"), lab.beat("agent"));
+    let mut host = start_host("crash", &lab.dir);
+    host_wrote(&mut host, &lab.dir, Some("ready"), 60);
+    let tool: Value =
+        serde_json::from_slice(&std::fs::read(lab.dir.join("tool.json")).unwrap()).unwrap();
+    // The tool's package folder, which the crashed host cannot remove, goes with the check.
+    let _package = Folder(PathBuf::from(tool["package"].as_str().unwrap()));
+    let (tool, tool_child) = pids(&tool);
+    let refused = std::fs::read_to_string(with(&agent, "refused"));
+    let detached = let_go(&agent, refused.map_or(Ok(()), Err));
+    assert!(beating(&runtime) && beating(&child_of(&runtime)));
+    let pid = seen(&runtime)["pid"].as_u64().unwrap();
+    // The host dies without stopping anything: ended through the check's own handle of it.
+    host.0.kill().unwrap();
+    host.0.wait().unwrap();
+    // Its tool ends, child and all: on Linux by its parent-death signal, on macOS at the end of
+    // its input, on Windows with its job.
+    until("the tool and its child to end", 10, || {
+        !alive(tool) && !alive(tool_child)
+    });
+    // Its runtime: Linux's parent-death signal ends the leader alone, its child lives on; on
+    // Windows its job ends, child and all; macOS has neither, both live on.
+    #[cfg(target_os = "linux")]
+    let left = {
+        assert!(ends(&runtime), "the runtime outlived the host");
+        vec![child_of(&runtime)]
+    };
+    #[cfg(windows)]
+    let left: Vec<PathBuf> = {
+        assert!(
+            ends(&runtime) && ends(&child_of(&runtime)),
+            "the runtime's job outlived the host"
+        );
+        vec![]
+    };
+    #[cfg(target_os = "macos")]
+    let left = vec![runtime.clone(), child_of(&runtime)];
+    let mut left = left;
+    if detached {
+        left.push(agent.clone());
+    }
+    for f in &left {
+        assert!(beating(f), "{} did not outlive the host", f.display());
+    }
+    // The next start reports the runtime unknown, and neither stops nor restarts it.
+    let rt = Runtimes::open(Some(lab.dir.join("runtimes.json")), Box::new(Canary));
+    let list = rt.list(ID);
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(
+        (&list[0]["state"], &list[0]["pid"]),
+        (&json!("unknown"), &json!(pid))
+    );
+    let id = list[0]["runtime"].as_str().unwrap().to_string();
+    for e in [rt.stop(ID, &id), rt.restart(ID, &id)] {
+        assert!(e.unwrap_err().contains("no longer controls"));
+    }
+    rt.stop_all();
+    // What lived on was never asked to stop, and still runs.
+    for f in &left {
+        assert!(beating(f), "{} was stopped", f.display());
+        assert!(!with(f, "term").exists(), "{} was signalled", f.display());
+    }
+    assert_eq!(
+        std::fs::read_to_string(lab.dir.join("runtimes.json")).unwrap(),
+        "[]"
+    );
+}
+
+#[test]
+fn lifetime_a_runtime_record_naming_a_live_process_never_gets_it_signalled() {
+    let lab = Lab::new("decoy");
+    let (decoy, own) = (lab.beat("decoy"), lab.beat("own"));
+    // A process the check started itself, outside the registry, which it holds.
+    let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+    cmd.arg(fixture::HEARTBEAT)
+        .arg(&decoy)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let mut held = Held(spawn_std(&mut cmd));
+    assert!(beating(&decoy));
+    let pid = held.0.id();
+    // A record that names it, as one an earlier run of the app left would.
+    let file = lab.dir.join("runtimes.json");
+    std::fs::write(
+        &file,
+        json!([{"runtime": "rt-decoy", "package": ID, "pid": pid, "started": 1,
+            "executable": std::env::current_exe().unwrap(), "argv": [fixture::HEARTBEAT, decoy]}])
+        .to_string(),
+    )
+    .unwrap();
+    let rt = Runtimes::open(Some(file), Box::new(Canary));
+    let list = rt.list(ID);
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(
+        (&list[0]["state"], &list[0]["pid"]),
+        (&json!("unknown"), &json!(pid))
+    );
+    for e in [rt.stop(ID, "rt-decoy"), rt.restart(ID, "rt-decoy")] {
+        assert!(e.unwrap_err().contains("no longer controls"));
+    }
+    // A runtime of the registry's own beside it: a close and the quit do end that one.
+    rt.start(ID, heartbeat(&own, &[], Lifetime::Managed))
+        .unwrap();
+    assert!(beating(&own));
+    rt.close(ID, false);
+    assert!(ends(&own), "a close did not stop the package's runtime");
+    rt.reopen(ID);
+    rt.stop_all();
+    rt.close(ID, true);
+    assert!(beating(&decoy), "the process the record names was stopped");
+    assert!(
+        !with(&decoy, "term").exists(),
+        "the process the record names was asked to stop"
+    );
+    assert!(held.0.try_wait().unwrap().is_none());
+}
+
+/// A pipe whose read end this process leaves inheritable, as a library might, with a mark
+/// waiting in it: n is that end's descriptor or handle number, and holder what the fixture's probe
+/// of n reports in a process that holds it (unix: its device and inode; Windows: the mark).
+struct Inheritable {
+    n: u64,
+    holder: Value,
+    #[cfg(unix)]
+    _ends: (std::os::fd::OwnedFd, std::os::fd::OwnedFd),
+    #[cfg(windows)]
+    _ends: (std::fs::File, std::fs::File),
+}
+
+impl Inheritable {
+    #[cfg(unix)]
+    fn new() -> Inheritable {
+        use std::os::fd::FromRawFd;
+        let mut fds = [0; 2];
+        // Neither end is close-on-exec.
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::fstat(fds[0], &mut st) }, 0);
+        Inheritable {
+            n: fds[0] as u64,
+            holder: json!(format!("{}:{}", st.st_dev, st.st_ino)),
+            _ends: unsafe {
+                (
+                    std::os::fd::OwnedFd::from_raw_fd(fds[0]),
+                    std::os::fd::OwnedFd::from_raw_fd(fds[1]),
+                )
+            },
+        }
+    }
+
+    #[cfg(windows)]
+    fn new() -> Inheritable {
+        use std::io::Write as _;
+        use std::os::windows::io::{AsRawHandle, FromRawHandle};
+        use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+        let (mut r, mut w) = (std::ptr::null_mut(), std::ptr::null_mut());
+        assert_ne!(
+            unsafe {
+                windows_sys::Win32::System::Pipes::CreatePipe(&mut r, &mut w, std::ptr::null(), 0)
+            },
+            0
+        );
+        assert_ne!(
+            unsafe { SetHandleInformation(r, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) },
+            0
+        );
+        let mark = format!("pluxy-probe-{}", std::process::id());
+        let (r, mut w) = unsafe {
+            (
+                std::fs::File::from_raw_handle(r),
+                std::fs::File::from_raw_handle(w),
+            )
+        };
+        w.write_all(mark.as_bytes()).unwrap();
+        Inheritable {
+            n: r.as_raw_handle() as usize as u64,
+            holder: json!(mark),
+            _ends: (r, w),
+        }
+    }
+}
+
+#[test]
+fn lifetime_a_tool_a_runtime_and_a_detached_launch_get_no_handle_they_were_not_given() {
+    let lab = Lab::new("probe");
+    let (control, runtime, agent) = (lab.beat("control"), lab.beat("runtime"), lab.beat("agent"));
+    let pipe = Inheritable::new();
+    let probe = format!("probe={}", pipe.n);
+    // The control: a process started the way std starts one gets it, and the probe sees it.
+    let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+    cmd.arg(fixture::HEARTBEAT)
+        .arg(&control)
+        .arg(&probe)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let _control = Held(spawn_std(&mut cmd));
+    assert_eq!(
+        seen(&control)["probe"],
+        pipe.holder,
+        "the probe does not see what a process holds"
+    );
+    // A managed runtime, a detached launch and a tool do not get it. (What one holds at that
+    // number, if anything, is its own: a number is used again.)
+    let rt = Runtimes::open(None, Box::new(Canary));
+    let _quit = OnDrop(|| rt.stop_all());
+    rt.start(ID, heartbeat(&runtime, &[&probe], Lifetime::Managed))
+        .unwrap();
+    assert_ne!(seen(&runtime)["probe"], pipe.holder, "the runtime got it");
+    let l = heartbeat(&agent, &[&probe], Lifetime::Detached);
+    if let_go(&agent, crate::spawn::detached(&l, ID, &Canary)) {
+        assert_ne!(
+            seen(&agent)["probe"],
+            pipe.holder,
+            "the detached launch got it"
+        );
+    }
+    let h = host(json!({"probe": pipe.n}));
+    let _stop = OnDrop(|| h.stop_all());
+    let out = summary(&h, &[]).unwrap();
+    assert_ne!(out["probe"], pipe.holder, "the tool got it");
+    assert!(out.get("probe").is_some(), "the tool was not asked: {out}");
+}
+
+#[test]
+fn lifetime_a_launch_gets_exactly_its_arguments_working_folder_and_environment() {
+    let lab = Lab::new("exact");
+    let (runtime, agent) = (lab.beat("runtime"), lab.beat("agent"));
+    // Arguments a command line must quote and escape to pass on whole (Windows).
+    let odd = [
+        "two words",
+        "",
+        r#"a "quoted" word"#,
+        r"back\slash\",
+        r"\",
+        "tab\tand ünïcödé",
+        "--flag=x y",
+    ];
+    let launch = |f: &Path, lifetime| {
+        let mut l = heartbeat(f, &odd, lifetime);
+        l.request
+            .set
+            .insert("LIFETIME_SET".into(), "a value = with spaces".into());
+        l.request.unset.push("PATH".into());
+        l.request
+            .secrets
+            .insert("LIFETIME_KEY".into(), "key".into());
+        l.secrets = vec![("LIFETIME_KEY".into(), "s-1".into())];
+        l
+    };
+    // Exactly: its session values as this program has them (`spawn::BASE`, and `LC_*`) but
+    // PATH, which it removes, and the variables it sets and is given.
+    let mut want: BTreeMap<String, String> = std::env::vars_os()
+        .filter_map(|(k, v)| {
+            let k = k.into_string().ok()?;
+            let k = if cfg!(windows) {
+                k.to_ascii_uppercase()
+            } else {
+                k
+            };
+            let session = crate::spawn::BASE.contains(&k.as_str()) || k.starts_with("LC_");
+            (session && k != "PATH").then(|| (k, v.to_string_lossy().into_owned()))
+        })
+        .collect();
+    want.insert("LIFETIME_SET".into(), "a value = with spaces".into());
+    want.insert("LIFETIME_KEY".into(), format!("{SECRET}-s-1"));
+    let check = |f: &Path| {
+        let v = seen(f);
+        let mut argv = vec![
+            std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            fixture::HEARTBEAT.to_string(),
+            f.to_string_lossy().into_owned(),
+        ];
+        argv.extend(odd.iter().map(|a| a.to_string()));
+        assert_eq!(v["argv"], json!(argv));
+        assert_eq!(v["cwd"], json!(lab.dir));
+        let got: BTreeMap<String, String> = v["env"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
+            .collect();
+        assert_eq!(got, want);
+    };
+    let rt = Runtimes::open(None, Box::new(Canary));
+    let _quit = OnDrop(|| rt.stop_all());
+    rt.start(ID, launch(&runtime, Lifetime::Managed)).unwrap();
+    check(&runtime);
+    if let_go(
+        &agent,
+        crate::spawn::detached(&launch(&agent, Lifetime::Detached), ID, &Canary),
+    ) {
+        check(&agent);
+    }
 }

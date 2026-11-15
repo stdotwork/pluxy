@@ -104,14 +104,15 @@ jobs:
         working-directory: next/app/src-tauri
         run: |
           case "$RUNNER_OS" in
-            Windows) expected=LIFETIME_WINDOWS ;;
-            macOS) expected=LIFETIME_MACOS ;;
+            Windows) expected=8 ;;
+            macOS) expected=8 ;;
           esac
           ran=$(grep -cE '^test [^ ]*lifetime_[a-z0-9_]* \.\.\. ok$' "$RUNNER_TEMP/cargo-test.log" || true)
           echo "lifetime tests passed: $ran of $expected" | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$ran" -eq "$expected" ]
       # A detached launch must leave the app's job. The runner's own job refuses that (the unit
-      # tests check the refusal), so the check that it works runs the test program from a process
+      # tests check the refusal), so the check that it works runs the breakaway test and the
+      # lifetime tests, whose detached launches then run and must be in no job, from a process
       # outside that job: started by WMI, or failing that by the Task Scheduler.
       - name: Detached launch outside the runner's job
         if: runner.os == 'Windows'
@@ -126,7 +127,7 @@ jobs:
           New-Item -ItemType Directory -Force $dir | Out-Null
           function Attempt($how) {
             Remove-Item "$dir\*" -Force -ErrorAction SilentlyContinue
-            Set-Content "$dir\run.cmd" "@`"$exe`" outside_job --ignored --test-threads=1 > `"$dir\out.txt`" 2>&1`r`n@echo %ERRORLEVEL%> `"$dir\done.txt`""
+            Set-Content "$dir\run.cmd" "@`"$exe`" outside_job lifetime_ --include-ignored --test-threads=1 > `"$dir\out.txt`" 2>&1`r`n@echo %ERRORLEVEL%> `"$dir\done.txt`""
             if ($how -eq 'WMI') {
               $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "cmd.exe /c `"$dir\run.cmd`""; CurrentDirectory = $dir }
               if ($r.ReturnValue -ne 0) { return "WMI could not start it ($($r.ReturnValue))" }
@@ -139,7 +140,7 @@ jobs:
             if (-not (Test-Path "$dir\done.txt")) { return "$($how): no result within 120 s" }
             Get-Content "$dir\out.txt"
             $code = (Get-Content "$dir\done.txt").Trim()
-            if ($code -eq '0' -and (Select-String -Quiet -Path "$dir\out.txt" -Pattern '^test result: ok\. [1-9]')) { return 'ok' }
+            if ($code -eq '0' -and (Select-String -Quiet -Path "$dir\out.txt" -Pattern '^test result: ok\. 9 passed')) { return 'ok' }
             return "$($how): the test failed (exit $code)"
           }
           $why = @()

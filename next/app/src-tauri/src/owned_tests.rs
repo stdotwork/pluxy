@@ -65,7 +65,7 @@ const ALLOWED: &[(&str, Part, &str, usize, &str)] = &[
         Part::Code,
         "OpenProcess",
         2,
-        "test (Windows): opens a process with SYNCHRONIZE only, to see whether it still runs; that handle cannot end it",
+        "test (Windows): opens a process only to wait for it (SYNCHRONIZE) or to ask whether it is in a job (QUERY_LIMITED_INFORMATION); neither right can end it",
     ),
     (
         "spawn_keys_native.rs",

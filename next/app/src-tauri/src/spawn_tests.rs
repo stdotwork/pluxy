@@ -1,17 +1,24 @@
 //! The spawn service against real processes. The agent is the fixture program
 //! (`examples/program_fixture`), which this test program runs when its first argument says so
 //! (the hook in `program_tests.rs`); the host-crash check runs this test program as a host too
-//! (the hook below), which it then kills. Every process a test starts is ended by it, by process
-//! ID and only while its command line still names the test's folder.
+//! (the hook below), which it then kills. Every process a test starts is ended by it: on Linux by
+//! process ID and only while its command line still names the test's folder; elsewhere, where a
+//! process ID alone is all a test could name, through a file named `stop` in the test's folder,
+//! which the agents wait for (the fixture's `until_stop`). The lifetime checks on every platform
+//! are in `program_tests.rs` (`lifetime_*`).
 
 use super::*;
 use serde_json::Value;
 use std::path::Path;
 
 const AGENT: &str = "pluxy-fixture-agent";
+#[cfg(target_os = "linux")]
 const HOST: &str = "PLUXY_SPAWN_TEST_HOST";
 const CANARY: &str = "pluxy-spawn-test-canary-0f1e2d";
 
+// Linux only, with the check it serves: the parent-death signal and the orphans it leaves are
+// Linux's (`lifetime_a_host_crash_*` in `program_tests.rs` checks a host crash everywhere).
+#[cfg(target_os = "linux")]
 #[used]
 #[link_section = ".init_array"]
 static CRASH_HOST: extern "C" fn() = {
@@ -32,10 +39,26 @@ fn folder(name: &str) -> PathBuf {
     std::fs::canonicalize(&d).unwrap()
 }
 
+/// Folder dir, opened as a launch's cwd is (on Windows a folder opens only with backup
+/// semantics).
+fn open_dir(dir: &Path) -> File {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS)
+            .open(dir)
+            .unwrap()
+    }
+    #[cfg(not(windows))]
+    File::open(dir).unwrap()
+}
+
 fn opened(dir: &Path) -> Box<dyn Opened> {
     Box::new(Plain {
         executable: File::open(std::env::current_exe().unwrap()).unwrap(),
-        cwd: File::open(dir).unwrap(),
+        cwd: open_dir(dir),
     })
 }
 
@@ -68,11 +91,43 @@ fn record(path: &Path, not: u64) -> Value {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn owned(pid: u64, marker: &Path) -> bool {
     pid > 0
         && unsafe { libc::kill(pid as libc::pid_t, 0) } == 0
         && std::fs::read(format!("/proc/{pid}/cmdline"))
             .is_ok_and(|c| String::from_utf8_lossy(&c).contains(&*marker.to_string_lossy()))
+}
+
+/// The counts agent pid writes while it waits, under the record named marker (the fixture's
+/// `until_stop`).
+#[cfg(not(target_os = "linux"))]
+fn beats(pid: u64, marker: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.{pid}.beat", marker.display()))
+}
+
+/// The count in beat file f.
+#[cfg(not(target_os = "linux"))]
+fn count(f: &Path) -> Option<u64> {
+    std::fs::read_to_string(f).ok()?.trim().parse().ok()
+}
+
+/// Whether agent pid, of the record named marker, runs: its count advances (one every 50 ms).
+/// There is no command line to read here, and nothing is signalled.
+#[cfg(not(target_os = "linux"))]
+fn owned(pid: u64, marker: &Path) -> bool {
+    let f = beats(pid, marker);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut first = count(&f);
+    while pid > 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+        match (first, count(&f)) {
+            (Some(a), Some(b)) if b > a => return true,
+            (None, now) => first = now,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn ended(pid: u64, marker: &Path) -> bool {
@@ -87,12 +142,58 @@ fn ended(pid: u64, marker: &Path) -> bool {
 }
 
 /// Kills each process in pids that still runs as one of the test folder dir's.
+#[cfg(target_os = "linux")]
 fn clean(pids: &[u64], dir: &Path) {
     for &p in pids {
         if owned(p, dir) {
             unsafe { libc::kill(p as libc::pid_t, libc::SIGKILL) };
         }
     }
+}
+
+/// Ends the agents of the test folder dir, which each exit once a file named `stop` is there,
+/// and waits until no count there advances. Nothing is signalled.
+#[cfg(not(target_os = "linux"))]
+fn clean(_pids: &[u64], dir: &Path) {
+    let _ = std::fs::write(dir.join("stop"), "");
+    let counts = || -> Vec<Option<u64>> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|d| d.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+            .unwrap_or_default();
+        files.retain(|f| f.extension().is_some_and(|x| x == "beat"));
+        files.sort();
+        files.iter().map(|f| count(f)).collect()
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut before = counts();
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(300));
+        let now = counts();
+        if now == before {
+            return;
+        }
+        before = now;
+    }
+}
+
+/// Starts detached launch l for package: true once it runs. On Windows a detached launch runs
+/// only where the job the tests run in lets it leave (`owned::windows::breakaway`; GitHub's hosted
+/// runners do not), and is refused before it runs otherwise (`NO_BREAKAWAY`): false.
+fn let_go(l: &Launch, package: &str, values: &dyn Values) -> bool {
+    let r = detached(l, package, values);
+    #[cfg(windows)]
+    {
+        use crate::owned::windows::{breakaway, NO_BREAKAWAY};
+        if r.as_ref().is_err_and(|e| e.contains(NO_BREAKAWAY)) {
+            return false;
+        }
+        assert!(
+            breakaway().is_ok(),
+            "a detached launch was not refused in a job it may not leave: {r:?}"
+        );
+    }
+    r.unwrap();
+    true
 }
 
 fn pid(r: &Value, k: &str) -> u64 {
@@ -117,6 +218,7 @@ fn none(_: &str, _: &str) -> Result<String, String> {
     Err("no secret".into())
 }
 
+#[cfg(target_os = "linux")]
 fn limit(v: libc::rlim_t) -> Value {
     if v == libc::RLIM_INFINITY {
         json!("unlimited")
@@ -201,6 +303,8 @@ fn a_launch_request_is_checked_and_its_review_shows_no_value_it_must_not() {
     assert_ne!(r.revision(lifetime), other.revision(lifetime));
 }
 
+// Linux only: its session values (`BASE`) and the AppImage's folders are Linux's.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_launch_environment_holds_session_values_and_what_was_asked_only() {
     let snap = Snapshot::of(
@@ -248,6 +352,9 @@ fn the_launch_environment_holds_session_values_and_what_was_asked_only() {
     assert_eq!(got, want);
 }
 
+// Linux only: sessions, descriptors read from /proc and core limits (the lifetime checks in
+// `program_tests.rs` check what a launch gets everywhere).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_detached_launch_leaves_the_app_with_only_what_it_was_given() {
     let dir = folder("detached");
@@ -361,12 +468,16 @@ fn a_managed_runtime_is_the_registrys_and_only_its_package_controls_it() {
     let checks = || {
         let p = pid(&x, "pid");
         assert_eq!(a["pid"].as_u64(), Some(p));
-        assert_eq!(x["pgid"].as_u64(), Some(p), "{x}");
-        assert_eq!(
-            x["ppid"].as_u64(),
-            Some(u64::from(std::process::id())),
-            "{x}"
-        );
+        // A group of its own, and the app's own child (on Windows its job: see the lifetime checks).
+        #[cfg(unix)]
+        {
+            assert_eq!(x["pgid"].as_u64(), Some(p), "{x}");
+            assert_eq!(
+                x["ppid"].as_u64(),
+                Some(u64::from(std::process::id())),
+                "{x}"
+            );
+        }
         assert!(std::fs::read_to_string(&file).unwrap().contains(&ida));
         assert_eq!(rt.status("pluxy/one", &ida).unwrap()["state"], "running");
         assert_eq!(rt.list("pluxy/one").len(), 2);
@@ -476,6 +587,7 @@ fn a_restart_resolves_its_secrets_again_for_its_package_and_a_refusal_refuses_it
 
 /// The host-crash check's host: starts a managed runtime whose leader leaves an orphan, and a
 /// detached agent, says so, and waits to be killed.
+#[cfg(target_os = "linux")]
 fn crash_host(dir: &Path) -> ! {
     let rt = Runtimes::open(Some(dir.join("runtimes.json")), Box::new(By(none)));
     let leader = dir.join("leader");
@@ -496,6 +608,9 @@ fn crash_host(dir: &Path) -> ! {
     }
 }
 
+// Linux only: the parent-death signal and the orphans it leaves are Linux's
+// (`lifetime_a_host_crash_*` in `program_tests.rs` checks a host crash on every platform).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_crashed_host_leaves_the_documented_orphans_and_its_next_start_does_not_signal_them() {
     let dir = folder("crash");
@@ -624,7 +739,7 @@ fn a_disabled_or_removed_packages_runtimes_are_retired_and_never_start_again() {
     gated.opened = Box::new(Gated {
         plain: Plain {
             executable: File::open(std::env::current_exe().unwrap()).unwrap(),
-            cwd: File::open(&dir).unwrap(),
+            cwd: open_dir(&dir),
         },
         gate: Mutex::new(gate),
         held,
@@ -778,7 +893,7 @@ fn a_restart_racing_a_removal_leaves_nothing_and_never_starts_the_dropped_launch
         gated.opened = Box::new(Gated {
             plain: Plain {
                 executable: File::open(std::env::current_exe().unwrap()).unwrap(),
-                cwd: File::open(&dir).unwrap(),
+                cwd: open_dir(&dir),
             },
             gate: Mutex::new(gate),
             held,
@@ -865,7 +980,14 @@ fn a_launchs_stdin_secret_reaches_it_on_its_stdin_only() {
         };
         let rt = Runtimes::open(None, Box::new(By(value)));
         if lifetime == Lifetime::Detached {
-            detached(&l, "p", &By(value)).unwrap();
+            if !let_go(&l, "p", &By(value)) {
+                // Refused before it ran (Windows, in a job it may not leave): nothing started.
+                std::thread::sleep(Duration::from_millis(300));
+                let started = rec.exists();
+                let _ = std::fs::remove_dir_all(&dir);
+                assert!(!started, "a refused detached launch started");
+                continue;
+            }
         } else {
             rt.start("p", l).unwrap();
         }
@@ -874,6 +996,7 @@ fn a_launchs_stdin_secret_reaches_it_on_its_stdin_only() {
         let checks = || {
             assert_eq!(r["stdin"], CANARY, "{r}");
             assert!(!r["env"].to_string().contains(CANARY), "{r}");
+            #[cfg(unix)]
             assert_eq!(r["core"], json!([1, 1]), "{r}");
         };
         let ok = std::panic::catch_unwind(checks);
@@ -1013,6 +1136,8 @@ fn a_launch_is_checked_once_more_right_before_its_spawn_and_nothing_starts_when_
     }
 }
 
+// Linux only: systemd's scopes.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_detached_launch_runs_in_a_scope_of_its_own_under_a_user_manager() {
     let dir = folder("scope");
@@ -1041,6 +1166,8 @@ fn a_detached_launch_runs_in_a_scope_of_its_own_under_a_user_manager() {
     ok.unwrap();
 }
 
+// Linux only: the session bus the systemd scopes are asked for on.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_bus_that_never_answers_holds_a_launch_no_longer_than_the_wait() {
     use gtk::gio;
@@ -1072,10 +1199,18 @@ fn a_bus_that_never_answers_holds_a_launch_no_longer_than_the_wait() {
 
 #[test]
 fn an_open_launch_gets_only_the_absolute_path_entries() {
-    let snap = Snapshot::of(
-        &[("HOME", "/home/me"), ("PATH", ".:bin:/usr/bin::/bin")],
-        core_limit(),
+    // Windows separates PATH's entries with `;`, and an absolute one names its drive.
+    #[cfg(unix)]
+    let (all, absolute) = (".:bin:/usr/bin::/bin", "/usr/bin:/bin");
+    #[cfg(windows)]
+    let (all, absolute) = (
+        r".;bin;C:\Windows;;D:\tools;\rooted",
+        r"C:\Windows;D:\tools",
     );
+    #[cfg(unix)]
+    let snap = Snapshot::of(&[("HOME", "/home/me"), ("PATH", all)], core_limit());
+    #[cfg(windows)]
+    let snap = Snapshot::of(&[("USERPROFILE", r"C:\Users\me"), ("PATH", all)]);
     let path = |r: &Request| {
         environment(&snap, r, &[])
             .into_iter()
@@ -1083,7 +1218,7 @@ fn an_open_launch_gets_only_the_absolute_path_entries() {
             .map(|(_, v)| v.to_string_lossy().into_owned())
     };
     let mut r = Request::default();
-    assert_eq!(path(&r).as_deref(), Some(".:bin:/usr/bin::/bin"));
+    assert_eq!(path(&r).as_deref(), Some(all));
     r.absolute_path = true;
-    assert_eq!(path(&r).as_deref(), Some("/usr/bin:/bin"));
+    assert_eq!(path(&r).as_deref(), Some(absolute));
 }
