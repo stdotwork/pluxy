@@ -15,8 +15,15 @@ mod fixture;
 #[link_section = ".init_array"]
 static FIXTURE: extern "C" fn() = {
     extern "C" fn run_fixture() {
+        // The spawn tests' agent (`spawn_tests.rs`) is started with `AGENT` as its first argument.
+        let agent = std::fs::read("/proc/self/cmdline").is_ok_and(|c| {
+            c.split(|b| *b == 0)
+                .nth(1)
+                .is_some_and(|a| a.starts_with(fixture::AGENT.as_bytes()))
+        });
         if std::env::var_os("PLUXY_EXTENSION_ID").is_some()
             || std::env::var_os(fixture::CHILD).is_some()
+            || agent
         {
             fixture::main();
         }
@@ -1861,6 +1868,59 @@ fn a_start_whose_journals_cannot_be_read_fails() {
 }
 
 #[test]
+fn a_spawn_request_reaches_the_spawner_with_the_served_calls_cancel_and_not_after_its_end() {
+    let h = Arc::new(host(Value::Null));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let s = Arc::clone(&seen);
+    h.set_spawner(Arc::new(
+        move |_tool: &Hop, _c: &Arc<Context>, frame: &Value, cancel: &Cancel| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while frame["block"] == true && !cancel.is_set() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            s.lock()
+                .unwrap()
+                .push((frame["type"].clone(), cancel.is_set()));
+            Err(fail("cancelled", "cancelled"))
+        },
+    ));
+    // The control: a request for the call it serves reaches the spawner, not cancelled.
+    let a = relay(
+        &h,
+        json!({"package": "x", "op": "y", "input": {}, "extra": {"type": "spawn"}}),
+    );
+    assert_eq!(a["answer"]["error"]["code"], "cancelled", "{a}");
+    assert_eq!(seen.lock().unwrap().clone(), vec![(json!("spawn"), false)]);
+    // A cancel of the call it serves reaches the request under way.
+    let h2 = Arc::clone(&h);
+    let t = std::thread::spawn(move || {
+        h2.call(
+            ID,
+            "relay",
+            json!({"package": "x", "op": "y", "input": {},
+                "extra": {"type": "spawn", "block": true}}),
+            Some("t-spawn"),
+        )
+    });
+    until("the blocked spawn request", 10, || {
+        h.status(ID).leases > 0 && seen.lock().unwrap().len() == 1
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    h.cancel("t-spawn").unwrap();
+    let _ = t.join();
+    let s = seen.lock().unwrap().clone();
+    assert_eq!(s.get(1), Some(&(json!("spawn"), true)), "{s:?}");
+    // A request for a call it no longer serves never reaches the spawner.
+    let a = relay(
+        &h,
+        json!({"package": "x", "op": "y", "input": {}, "for": "c-gone",
+            "extra": {"type": "runtime"}}),
+    );
+    assert_eq!(a["answer"]["error"]["code"], "permission", "{a}");
+    assert_eq!(seen.lock().unwrap().len(), 2);
+}
+
+#[test]
 fn a_start_with_open_journals_that_cannot_take_its_turn_fails_instead_of_describing_none() {
     let h = Arc::new(host(Value::Null));
     let stub = private(&h, Stub::default());
@@ -1903,6 +1963,53 @@ fn a_start_with_open_journals_that_cannot_take_its_turn_fails_instead_of_describ
     let out = h.call(ID, "report", json!({}), None).unwrap();
     assert_eq!(out["reconciled"][0]["journal"], "j-7");
     assert!(stub.journals.lock().unwrap().is_empty());
+    h.stop_all();
+}
+
+#[test]
+fn a_call_unanswered_when_its_tool_exits_is_known_to_the_slot_before_its_thread_wakes() {
+    let h = Arc::new(host(Value::Null));
+    let slow = call_in_thread(&h, "slow", json!({"ms": 8000}));
+    let run = || h.0.slots().get(ID).and_then(|s| s.run.clone());
+    until("the call is sent", 5, || {
+        run().is_some_and(|r| !r.pending.lock().unwrap().is_empty())
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    // Hold up the call's thread where it ends: it wakes only once the tool has been reaped, as
+    // it can when it is slow to get a processor.
+    let run = run().unwrap();
+    let stall = run.serving.lock().unwrap();
+    h.stop(ID);
+    until("the stop", 5, || h.status(ID).state == "stopped");
+    // The next start's describe looks now: the call is already of unknown outcome.
+    let known = h.status(ID).unknown;
+    assert_eq!(known.len(), 1, "the slot does not know the unanswered call");
+    assert_eq!(known[0].op, "slow");
+    drop(stall);
+    let e = slow.join().unwrap().unwrap_err();
+    assert!(e.unknown, "{e}");
+    // Recorded once, not again by its thread.
+    assert_eq!(h.status(ID).unknown.len(), 1);
+    // The next start reports it, and the tool serves.
+    summary(&h, &[]).unwrap();
+    assert!(h.status(ID).unknown.is_empty());
+    h.stop_all();
+}
+
+#[test]
+fn stopping_a_crashed_tool_that_is_not_running_reads_as_idle() {
+    let h = host(json!({"crash_on": "crash"}));
+    summary(&h, &[]).unwrap();
+    h.call(ID, "crash", json!({}), None).unwrap_err();
+    until("the crash", 5, || h.status(ID).state == "crashed");
+    assert_eq!(h.status(ID).crashes, 1);
+    h.stop(ID);
+    let s = h.status(ID);
+    assert_eq!(s.state, "idle");
+    assert_eq!(s.crashes, 0);
+    assert_eq!(s.retry_in_ms, None);
+    // Its next call starts it at once, with no backoff.
+    summary(&h, &[]).unwrap();
     h.stop_all();
 }
 

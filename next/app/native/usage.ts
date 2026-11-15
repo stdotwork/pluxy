@@ -16,7 +16,7 @@
 // message ID; prompt, reply, thinking, tool result, summary and working folder canaries, and the raw
 // message and request IDs, must not reach a report, the store or the app's output.
 // The Oh My Pi parser check (usage-omp, usage-omp.ts) is the same kind of check on an Oh My Pi home, run
-// after the Codex one, and the Pi parser's (usage-pi, usage-pi.ts) after that.
+// after the Claude Code one, and the Pi parser's (usage-pi, usage-pi.ts) after that.
 //
 // Each test archive adds one page to its package's manifest: routing.ts's relay page (`page`), which
 // sends the calls the check posts it on its channel. The hub's own page stays as it is; the parser has
@@ -1062,7 +1062,8 @@ export function buildUsageFixtures(
           ],
         }),
       },
-      // The Pi parser, enabled after the Oh My Pi one, which the check left disabled (archived, its rows kept).
+      // The Pi parser, enabled after the Oh My Pi one, which the check left disabled (archived, its rows
+      // kept); Claude Code and Codex stay active, their files unchanged since their steps.
       pi: {
         id: PI_ID,
         writes: piWrites,
