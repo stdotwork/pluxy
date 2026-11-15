@@ -90,6 +90,12 @@
 // given its key in its environment, a final process given key, base URL and model, a credential
 // bridge given its key on stdin) get the key and the execution program only references. After
 // the app quits, the runner checks the launched agents still run, then ends them.
+// The open check (open.ts, open_native.rs) runs in one more session with that build: a stand-in
+// tool asks the execution program to prepare opening one of its files with the desktop's opener
+// and to launch it; the native confirmation names the opener, the file and the folder the tool may
+// open files in; cancelled nothing runs, confirmed the stand-in opener runs with exactly that file;
+// a file outside that folder (directly, through `..` or a link), an executable one, or a launch
+// naming no folder or the whole file system is refused before any confirmation.
 // The Codex session reader check (sessions.ts, sessions_native.rs) runs in one more session with
 // that build: the reader (next/app-tools/codex-sessions, built here) lists a copied Codex home
 // exactly as a hand-written expect file says, shows a session only after a native confirmation of
@@ -152,6 +158,7 @@ import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
 import { runInstances } from "./instances";
 import { buildLauncherFixtures } from "./launcher";
+import { buildOpenFixtures } from "./open";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
@@ -593,6 +600,7 @@ interface Rotation {
  * the session reader check; transactions: only the transaction library check. core: the session
  * runs only the core steps, against that core source. release: the app starts with that release
  * installed and selected. spawnCheck: only the spawn check. launcherCheck: only the launcher check.
+ * openCheck: only the check of a tool opening a file in the person's own app.
  */
 async function runApp(
   mode: Mode,
@@ -617,6 +625,7 @@ async function runApp(
   usage = false,
   launcherCheck = false,
   transactions = false,
+  openCheck = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -697,6 +706,7 @@ async function runApp(
       !core &&
       !spawnCheck &&
       !launcherCheck &&
+      !openCheck &&
       !reader &&
       !transactions &&
       !usage &&
@@ -803,6 +813,18 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The open check's signed packages, stand-in opener, files, registry and trust profile.
+    const openDir = openCheck ? join(root, "open") : undefined;
+    if (openDir) {
+      mkdirSync(openDir);
+      const f = buildOpenFixtures(openDir, dirs.home, programFixture, executionProgram, executionManifest);
+      nonce = f.nonce;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     // The session reader check's signed reader, its registry and trust profile, the Codex home
     // and its canaries.
     const sessionsDir = reader ? join(root, "sessions") : undefined;
@@ -876,6 +898,7 @@ async function runApp(
       !spawnDir &&
       !sessionsDir &&
       !launcherDir &&
+      !openDir &&
       !usageDir &&
       !transactionsDir
     ) {
@@ -937,6 +960,7 @@ async function runApp(
       ...(spawnDir ? { PLUXY_APP_TEST_SPAWN: spawnDir, ...spawnEnv } : {}),
       // The probe clicks the tray's Start… items through the real watcher's dbusmenu.
       ...(launcherDir ? { PLUXY_APP_TEST_LAUNCHER: launcherDir, PLUXY_APP_TEST_PROBE: probe } : {}),
+      ...(openDir ? { PLUXY_APP_TEST_OPEN: openDir } : {}),
       ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
       ...(transactionsDir ? { PLUXY_APP_TEST_TRANSACTIONS: transactionsDir } : {}),
       ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
@@ -1243,6 +1267,16 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} launcher ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: launcher ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (openDir) {
+      const r = steps.get("open") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the open check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} open ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: open ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -2206,6 +2240,34 @@ async function main(): Promise<number> {
           false,
           undefined,
           release,
+          false,
+          false,
+          false,
+          true,
+        )),
+      );
+      // The open check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
+          false,
+          false,
           false,
           false,
           false,

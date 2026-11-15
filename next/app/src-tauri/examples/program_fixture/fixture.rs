@@ -45,7 +45,9 @@
 //! Started with `AGENT` as its first argument it is the spawn check's agent instead (`agent`).
 //! Started as `x-terminal-emulator` (the launcher check's stand-in terminal, `terminal`) it writes
 //! its arguments, folder and environment to the file `FIXTURE_TERMINAL_RECORD` names and runs the
-//! command after its `-e`, as a terminal would.
+//! command after its `-e`, as a terminal would. Started as `xdg-open` (the open check's stand-in
+//! opener, `opener`) it writes its arguments and folder to the file `FIXTURE_OPENER_RECORD` names
+//! and exits.
 //!
 //! In describe, it reconciles each open vault journal the host names, never redoing it: it ends it
 //! as `committed` when the file holds the bytes the journal names, `rolled_back` otherwise, and
@@ -690,9 +692,28 @@ fn terminal(args: &[String]) -> ! {
     std::process::exit(127);
 }
 
+/// The open check's stand-in opener, started as `xdg-open <file>`: it writes what it was started
+/// with (process ID, arguments, folder) to the file `FIXTURE_OPENER_RECORD` names and exits, as
+/// an opener that has handed the file to an app does.
+#[cfg(target_os = "linux")]
+fn opener(args: &[String]) -> ! {
+    if let Some(record) = std::env::var_os("FIXTURE_OPENER_RECORD") {
+        let seen = json!({
+            "pid": std::process::id(),
+            "argv": args,
+            "cwd": std::env::current_dir().ok(),
+        });
+        let tmp = format!("{}.tmp", record.to_string_lossy());
+        if std::fs::write(&tmp, seen.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, &record);
+        }
+    }
+    std::process::exit(0);
+}
+
 /// Runs the fixture: as its child when started with `CHILD`, as the spawn check's agent when
 /// started with `AGENT`, as the launcher check's terminal when started as `x-terminal-emulator`,
-/// else as the tool.
+/// as the open check's opener when started as `xdg-open`, else as the tool.
 pub fn main() -> ! {
     if std::env::var_os(CHILD).is_some() {
         sleep_forever();
@@ -706,6 +727,13 @@ pub fn main() -> ! {
             .is_some_and(|n| n == "x-terminal-emulator")
         {
             terminal(&args);
+        }
+        if args
+            .first()
+            .and_then(|a| std::path::Path::new(a).file_name())
+            .is_some_and(|n| n == "xdg-open")
+        {
+            opener(&args);
         }
         if args.get(1).is_some_and(|a| a.starts_with(AGENT)) {
             agent(&args);
