@@ -170,6 +170,31 @@ fn text_of(p: &Path) -> Result<String, Error> {
     text("a path", p)
 }
 
+/// The final path of p (links, junctions and short 8.3 names resolved), in its plain form: what
+/// a launch confirms and runs, and what `own_parser` judges.
+pub fn canonical(what: &str, p: &Path) -> Result<PathBuf, Error> {
+    let r = std::fs::canonicalize(p)
+        .map_err(|e| Error::not_found(format!("{what} {}: {e}", p.display())))?;
+    Ok(PathBuf::from(text(what, &r)?))
+}
+
+/// A launch's working folder: an existing absolute folder, as its final plain path.
+pub fn working_folder(cwd: &str) -> Result<String, Error> {
+    let refuse = || {
+        Error::invalid_request(format!(
+            "the working folder {cwd:?} is not an existing absolute folder"
+        ))
+    };
+    if !Path::new(cwd).is_absolute() {
+        return Err(refuse());
+    }
+    let d = std::fs::canonicalize(cwd).map_err(|_| refuse())?;
+    if !d.is_dir() {
+        return Err(refuse());
+    }
+    text("the working folder", &d)
+}
+
 /// Refused when program reads its command line its own way and args is not empty.
 pub fn own_parser(program: &Path, args: &[String]) -> Result<(), Error> {
     let name = program
@@ -360,12 +385,7 @@ pub fn app(input: &Value) -> Result<Option<Value>, Error> {
             "an app takes no arguments and no override",
         ));
     }
-    let cwd = input["cwd"].as_str().unwrap_or_default();
-    if !Path::new(cwd).is_absolute() || !Path::new(cwd).is_dir() {
-        return Err(Error::invalid_request(format!(
-            "the working folder {cwd:?} is not an existing absolute folder"
-        )));
-    }
+    let cwd = working_folder(input["cwd"].as_str().unwrap_or_default())?;
     Ok(Some(json!({
         "executable": this_program()?,
         "argv": ["app", "--", aumid],

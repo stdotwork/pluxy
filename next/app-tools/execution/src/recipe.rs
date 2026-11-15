@@ -431,11 +431,22 @@ pub fn prepare(input: &Value) -> Result<Value, Error> {
             "the working folder {cwd:?} is not an existing absolute folder"
         )));
     }
+    // On Windows the folder's final path, plain, refused when its plain form is another folder.
+    #[cfg(windows)]
+    let cwd = &os::working_folder(cwd)?;
     // On Windows a command shim becomes what it runs (Node and its script, or its program), and a
     // program that reads its command line its own way takes no arguments.
     #[cfg(windows)]
     let program = {
         let (program, before) = os::resolve(&program, &folders)?;
+        // Judged and confirmed by its final path: a link or short name for cmd.exe is cmd.exe.
+        let program = os::canonical("the program", &program)?;
+        if !executable(&program) {
+            return Err(Error::not_found(format!(
+                "the program {} is not an executable file",
+                program.display()
+            )));
+        }
         args.splice(0..0, before);
         os::own_parser(&program, &args)?;
         program

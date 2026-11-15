@@ -220,6 +220,94 @@ fn a_verbatim_path_shows_plainly_and_is_refused_when_its_plain_form_is_another_f
     std::fs::remove_dir_all(d).unwrap();
 }
 
+#[test]
+fn a_link_to_a_program_that_reads_its_command_line_its_own_way_is_judged_as_that_program() {
+    let d = folder();
+    let cmd = system32("cmd.exe");
+    // A symbolic link takes a privilege or Developer Mode; GitHub's runners allow it.
+    if let Err(e) = std::os::windows::fs::symlink_file(&cmd, d.join("agent.exe")) {
+        println!("skipped: this account cannot make a symbolic link ({e})");
+        std::fs::remove_dir_all(d).unwrap();
+        return;
+    }
+    let direct = |args: Value| {
+        prepare(
+            &json!({"kind": "direct", "program": "agent", "args": args, "cwd": d,
+            "search_path": [d]}),
+        )
+    };
+    let e = direct(json!(["/c", "calc"])).unwrap_err();
+    assert_eq!(e.code, "invalid_request", "{}", e.message);
+    assert!(e.message.contains("its own way"), "{}", e.message);
+    // With no arguments, confirmed as what it is.
+    assert_eq!(direct(json!([])).unwrap()["executable"], json!(s(&cmd)));
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+/// The short 8.3 form of path, when the volume makes them.
+fn short(path: &Path) -> Option<String> {
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+    let long = os::wide(&s(path));
+    let mut buf = vec![0u16; 1024];
+    // SAFETY: long is NUL-terminated and buf holds buf.len() characters.
+    let n = unsafe { GetShortPathNameW(long.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+    let short = String::from_utf16(&buf[..n as usize]).ok()?;
+    (n > 0 && (n as usize) < buf.len() && short.contains('~')).then_some(short)
+}
+
+#[test]
+fn a_short_name_is_confirmed_as_its_long_path() {
+    let d = folder();
+    let long = d.join("Long Folder Name");
+    std::fs::create_dir(&long).unwrap();
+    pe(&long.join("agent.exe"));
+    let Some(short) = short(&long) else {
+        println!("skipped: this volume makes no short names");
+        std::fs::remove_dir_all(d).unwrap();
+        return;
+    };
+    let r = prepare(
+        &json!({"kind": "direct", "program": format!(r"{short}\agent.exe"),
+        "args": [], "cwd": short, "search_path": []}),
+    )
+    .unwrap();
+    assert_eq!(r["executable"], json!(s(&long.join("agent.exe"))));
+    assert_eq!(r["cwd"], json!(s(&long)));
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_working_folder_is_confirmed_by_its_plain_path_and_refused_when_that_is_another_folder() {
+    let d = folder();
+    pe(&d.join("agent.exe"));
+    let direct = |cwd: &str| {
+        prepare(
+            &json!({"kind": "direct", "program": "agent", "args": [], "cwd": cwd,
+            "search_path": [d]}),
+        )
+    };
+    let verbatim = format!(r"\\?\{}", s(&d));
+    assert_eq!(direct(&verbatim).unwrap()["cwd"], json!(s(&d)));
+    // `dir.` exists only in the verbatim form: the plain `dir.` is `dir`.
+    std::fs::create_dir(format!(r"{verbatim}\dir.")).unwrap();
+    std::fs::create_dir(d.join("dir")).unwrap();
+    let e = direct(&format!(r"{verbatim}\dir.")).unwrap_err();
+    assert_eq!(e.code, "invalid_request", "{}", e.message);
+    assert!(e.message.contains("would change"), "{}", e.message);
+    // A terminal launch and an app launch take their folder the same way.
+    let e = prepare(&json!({"kind": "terminal", "program": "agent", "args": [],
+        "cwd": format!(r"{verbatim}\dir."), "search_path": [d]}))
+    .unwrap_err();
+    assert!(e.message.contains("would change"), "{}", e.message);
+    let e = prepare(&json!({"kind": "direct",
+        "program": r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+        "args": [], "cwd": format!(r"{verbatim}\dir."), "search_path": []}))
+    .unwrap_err();
+    assert!(e.message.contains("would change"), "{}", e.message);
+    std::fs::remove_dir_all(format!(r"{verbatim}\dir.")).unwrap();
+    std::fs::remove_dir_all(d).unwrap();
+}
+
 /// A folder to open files in, with a session file; and the folder above it.
 fn files() -> (PathBuf, PathBuf, PathBuf) {
     let root = folder();
