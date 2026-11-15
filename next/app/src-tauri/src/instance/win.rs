@@ -248,7 +248,9 @@ pub mod ipc {
         Ok(s)
     }
 
-    /// The access list the pipe is made with: this user alone, nothing inherited.
+    /// The access list the pipe is made with: this user alone, nothing inherited, and a Medium
+    /// integrity label that bars lower ones (a sandboxed program of the same user) from reading
+    /// or writing it.
     struct Security {
         sd: PSECURITY_DESCRIPTOR,
         attrs: SECURITY_ATTRIBUTES,
@@ -257,7 +259,10 @@ pub mod ipc {
     unsafe impl Send for Security {}
     impl Security {
         fn this_user() -> io::Result<Security> {
-            let sddl = wide(OsStr::new(&format!("D:P(A;;GA;;;{})", own_sid()?)));
+            let sddl = wide(OsStr::new(&format!(
+                "D:P(A;;GA;;;{})S:(ML;;NRNW;;;ME)",
+                own_sid()?
+            )));
             let mut sd: PSECURITY_DESCRIPTOR = null_mut();
             // SAFETY: sd is written, and freed by Drop, when this succeeds.
             if unsafe {
@@ -845,7 +850,7 @@ pub mod ipc {
         use windows_sys::Win32::Security::Authorization::{
             ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SE_KERNEL_OBJECT,
         };
-        use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+        use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION};
 
         struct Temp(PathBuf);
         impl Drop for Temp {
@@ -899,14 +904,14 @@ pub mod ipc {
         }
 
         /// A security descriptor's access list as SDDL text.
-        fn sddl_of(sd: PSECURITY_DESCRIPTOR) -> String {
+        fn sddl_of(sd: PSECURITY_DESCRIPTOR, info: u32) -> String {
             let mut text: *mut u16 = null_mut();
             // SAFETY: sd is a valid descriptor; text is written, and freed below, on success.
             let ok = unsafe {
                 ConvertSecurityDescriptorToStringSecurityDescriptorW(
                     sd,
                     SDDL_REVISION_1,
-                    DACL_SECURITY_INFORMATION,
+                    info,
                     &mut text,
                     null_mut(),
                 )
@@ -922,6 +927,29 @@ pub mod ipc {
                 LocalFree(text.cast());
                 s
             }
+        }
+
+        /// What the system holds of an open pipe's security (`info`), as SDDL text.
+        fn security_of(pipe: HANDLE, info: u32) -> String {
+            let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+            // SAFETY: sd is written, and freed below, when this succeeds.
+            let r = unsafe {
+                GetSecurityInfo(
+                    pipe,
+                    SE_KERNEL_OBJECT,
+                    info,
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    &mut sd,
+                )
+            };
+            assert_eq!(r, 0, "GetSecurityInfo failed with {r}");
+            let s = sddl_of(sd, info);
+            // SAFETY: sd was allocated by GetSecurityInfo.
+            unsafe { LocalFree(sd) };
+            s
         }
 
         /// A connection to the pipe as any program could make it, with no message sent. Like a
@@ -1028,47 +1056,11 @@ pub mod ipc {
             };
             assert_ne!(h, INVALID_HANDLE_VALUE, "{}", io::Error::last_os_error());
             let h = Handle(h);
-            let mut sd: PSECURITY_DESCRIPTOR = null_mut();
-            // SAFETY: sd is written, and freed below, when this succeeds.
-            let r = unsafe {
-                GetSecurityInfo(
-                    h.0,
-                    SE_KERNEL_OBJECT,
-                    DACL_SECURITY_INFORMATION,
-                    null_mut(),
-                    null_mut(),
-                    null_mut(),
-                    null_mut(),
-                    &mut sd,
-                )
-            };
-            assert_eq!(r, 0, "GetSecurityInfo failed with {r}");
-            let mut text: *mut u16 = null_mut();
-            // SAFETY: as above.
-            let ok = unsafe {
-                ConvertSecurityDescriptorToStringSecurityDescriptorW(
-                    sd,
-                    SDDL_REVISION_1,
-                    DACL_SECURITY_INFORMATION,
-                    &mut text,
-                    null_mut(),
-                )
-            };
-            assert_ne!(ok, 0, "{}", io::Error::last_os_error());
-            // SAFETY: text is a NUL-terminated string the call allocated.
-            let sddl = unsafe {
-                let mut n = 0;
-                while *text.add(n) != 0 {
-                    n += 1;
-                }
-                let s = String::from_utf16_lossy(std::slice::from_raw_parts(text, n));
-                LocalFree(text.cast());
-                LocalFree(sd);
-                s
-            };
+            let sddl = security_of(h.0, DACL_SECURITY_INFORMATION);
+            let label = security_of(h.0, LABEL_SECURITY_INFORMATION);
             // The user's own SID, as SDDL writes it (the built-in Administrator is "LA"): the
             // same text as an access list made for this user by the app's own code.
-            let reference = sddl_of(Security::this_user().unwrap().sd);
+            let reference = sddl_of(Security::this_user().unwrap().sd, DACL_SECURITY_INFORMATION);
             let trustee = |s: &str| {
                 s.trim_end_matches(')')
                     .rsplit(';')
@@ -1083,6 +1075,16 @@ pub mod ipc {
                 trustee(&sddl),
                 trustee(&reference),
                 "{sddl} is not this user's alone ({reference})"
+            );
+            // The pipe was made with its integrity label (the Medium level, barring lower ones),
+            // and still was: a label the system refused would have failed the pipe's making.
+            assert!(
+                label.starts_with("S:(ML;") && label.ends_with(";;;ME)"),
+                "the pipe has no Medium integrity label: {label}"
+            );
+            assert!(
+                label.contains("NW") && label.contains("NR"),
+                "the label does not bar lower levels from reading and writing: {label}"
             );
             // The positive control on the same route: the user's own launch gets through.
             drop(h);
