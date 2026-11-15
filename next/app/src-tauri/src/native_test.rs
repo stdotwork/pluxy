@@ -28,7 +28,9 @@
 //!    (`transactions_native.rs`); with `PLUXY_APP_TEST_USAGE`, only the usage hub and its
 //!    fixture parser (`usage_native.rs`); with `PLUXY_APP_TEST_LAUNCHER`, only the execution
 //!    program and the launcher (`launcher_native.rs`); with `PLUXY_APP_TEST_OPEN`, only a tool's
-//!    opening of a file in the person's own app (`open_native.rs`);
+//!    opening of a file in the person's own app (`open_native.rs`); with
+//!    `PLUXY_APP_TEST_CLAUDE_CODE`, only the Claude Code setup and launcher
+//!    (`claude_code_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -58,6 +60,8 @@ mod access;
 #[path = "admission_native.rs"]
 mod admission;
 #[cfg(target_os = "linux")]
+#[path = "claude_code_native.rs"]
+mod claude_code;
 #[path = "client_key_native.rs"]
 mod client_key;
 #[cfg(target_os = "linux")]
@@ -494,6 +498,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_OPEN") {
         open::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The Claude Code setup and launcher (claude_code_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_CLAUDE_CODE") {
+        claude_code::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
