@@ -67,11 +67,13 @@
 //! A tool's `spawn` and `runtime` frames, for a host call it serves, go to the host's spawn service
 //! (`Host::set_spawner`, `spawn.rs`), on a thread of their own; their IDs count among its own calls.
 
+use crate::owned::{
+    kill_group, leader, read_some, Child, ChildStderr, ChildStdin, ChildStdout, Leader,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
-use crate::owned::{kill_group, leader, read_some, Child, ChildStderr, ChildStdin, ChildStdout, Leader};
 use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;

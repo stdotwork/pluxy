@@ -38,7 +38,7 @@ use windows_sys::Win32::Foundation::{
     SetHandleInformation, ERROR_ACCESS_DENIED, HANDLE, HANDLE_FLAG_INHERIT, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    GetFileInformationByHandleEx, GetFinalPathNameByHandleW, FileBasicInfo, FileIdInfo,
+    FileBasicInfo, FileIdInfo, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
     FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO, FILE_NAME_NORMALIZED,
     FILE_SHARE_READ, FILE_SHARE_WRITE, VOLUME_NAME_DOS,
 };
@@ -194,7 +194,12 @@ fn state(f: &File) -> io::Result<(u64, i64, i64, u32)> {
         return Err(io::Error::last_os_error());
     }
     let size = f.metadata()?.file_size();
-    Ok((size, info.LastWriteTime, info.ChangeTime, info.FileAttributes))
+    Ok((
+        size,
+        info.LastWriteTime,
+        info.ChangeTime,
+        info.FileAttributes,
+    ))
 }
 
 /// Opens path so that no process can write, rename or delete it while the file is open (only
@@ -447,13 +452,14 @@ impl Command {
         let mut std_handles: [HANDLE; 3] = [ptr::null_mut(); 3];
         if !own_console {
             let mut null: Option<File> = None;
-            for (i, io) in [self.stdin, self.stdout, self.stderr].into_iter().enumerate() {
+            for (i, io) in [self.stdin, self.stdout, self.stderr]
+                .into_iter()
+                .enumerate()
+            {
                 match io {
                     Io::Null => {
                         if null.is_none() {
-                            null = Some(
-                                OpenOptions::new().read(true).write(true).open("NUL")?,
-                            );
+                            null = Some(OpenOptions::new().read(true).write(true).open("NUL")?);
                         }
                         std_handles[i] = null.as_ref().unwrap().as_raw_handle() as HANDLE;
                     }
@@ -470,7 +476,8 @@ impl Command {
                 child.push(n);
             }
         }
-        let mut flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP | extra;
+        let mut flags =
+            CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP | extra;
         flags |= if own_console {
             CREATE_NEW_CONSOLE
         } else {
@@ -486,7 +493,9 @@ impl Command {
         let created = {
             let _held = SPAWN.lock().unwrap_or_else(|e| e.into_inner());
             for h in &handles {
-                if unsafe { SetHandleInformation(*h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) } == 0 {
+                if unsafe { SetHandleInformation(*h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) }
+                    == 0
+                {
                     return Err(io::Error::last_os_error());
                 }
             }
@@ -804,7 +813,9 @@ impl Child {
         if let Some(s) = self.status {
             return Ok(Some(s));
         }
-        if unsafe { WaitForSingleObject(self.process.as_raw_handle() as HANDLE, 0) } != WAIT_OBJECT_0 {
+        if unsafe { WaitForSingleObject(self.process.as_raw_handle() as HANDLE, 0) }
+            != WAIT_OBJECT_0
+        {
             return Ok(None);
         }
         self.exit_code().map(Some)

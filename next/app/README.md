@@ -20,7 +20,7 @@ its config folder (on Linux `~/.config/dev.pluxy.desktop/`), readable only by yo
 
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
-| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it. |
+| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
 | Core on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address and management key. | Leaves it running. The app never starts or stops it. |
 | Remote core (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
@@ -1221,8 +1221,10 @@ The app's updater ([Application update](#application-update)) calls it.
   session.
 - The native test runs on Linux only. On Windows and macOS, CI builds the app's crate, runs
   clippy and the Rust tests (`.github/workflows/next-app-platforms.yml`); the native features
-  (confirmations, key entry, process ownership, starting the app's own core) stay Linux only
-  and refuse at run time. On Windows the page document's address is
+  (confirmations, key entry, starting native tools and launches) stay Linux only and refuse at
+  run time. How the app starts, holds and stops processes there is built and tested
+  ([Windows and macOS](app-host/README.md#windows-and-macos)), and the app's own core starts on
+  macOS; on Windows its core store does not build yet. On Windows the page document's address is
   `http://pluxy-page.localhost/`.
 - No installer or bundled core yet: the only package is the test AppImage, which is not for release.
   The app updates only itself, only as an AppImage, on Linux x86_64, and only with test updater

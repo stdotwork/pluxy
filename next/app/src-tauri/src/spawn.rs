@@ -829,7 +829,11 @@ fn command(
         .arg0(&l.named)
         .args(&l.argv)
         .envs(env)
-        .stdin(if l.stdin.is_some() { Io::Piped } else { Io::Null })
+        .stdin(if l.stdin.is_some() {
+            Io::Piped
+        } else {
+            Io::Null
+        })
         .secrets(holds_secrets);
     Ok(cmd)
 }

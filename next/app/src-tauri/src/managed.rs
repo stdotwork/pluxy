@@ -2,13 +2,13 @@
 //! its data folder, supervises (only that process) and stops when it quits or the person picks
 //! another mode.
 
+use crate::owned::Child;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
-use crate::owned::Child;
 use std::process::ExitStatus;
 #[cfg(unix)]
 use std::process::{Command, Stdio};
@@ -255,7 +255,11 @@ impl ManagedCore {
         let mut cmd = {
             use crate::owned::windows::{self as w, Io, Kind};
             let mut c = w::Command::new(w::pin_file(&program)?, Kind::Managed);
-            c.arg0(name).envs(std::env::vars_os()).stdin(Io::Null).stdout(Io::Null).stderr(Io::Piped);
+            c.arg0(name)
+                .envs(std::env::vars_os())
+                .stdin(Io::Null)
+                .stdout(Io::Null)
+                .stderr(Io::Piped);
             c
         };
         cmd.args([std::ffi::OsStr::new("-config"), cfg.as_os_str()]);
@@ -586,9 +590,105 @@ pub fn owns_listener(core: &ManagedCore, base: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn owns_listener(_core: &ManagedCore, _base: &str) -> Result<(), String> {
-    Err("checking that the app's own core is what listens works on Linux only for now".into())
+/// On Windows: every listener on base's port, on any address, is the core's process (the
+/// system's table of listeners and the process that owns each, which lists every user's). The
+/// app holds the core's process handle, so its process ID is not another process's meanwhile.
+#[cfg(windows)]
+pub fn owns_listener(core: &ManagedCore, base: &str) -> Result<(), String> {
+    let not = || format!("the started core is not listening on {base} itself");
+    let port = url::Url::parse(base)
+        .ok()
+        .and_then(|u| u.port_or_known_default())
+        .ok_or_else(not)?;
+    let owners =
+        listener_owners(port).map_err(|e| format!("reading this computer's listeners: {e}"))?;
+    if core.exited().is_some() || owners.is_empty() || owners.iter().any(|p| *p != core.pid()) {
+        return Err(not());
+    }
+    Ok(())
+}
+
+/// The process IDs owning each TCP socket listening on port, IPv4 and IPv6, on any address.
+#[cfg(windows)]
+fn listener_owners(port: u16) -> io::Result<Vec<u32>> {
+    use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetExtendedTcpTable, MIB_TCP6TABLE_OWNER_PID, MIB_TCPTABLE_OWNER_PID,
+        TCP_TABLE_OWNER_PID_LISTENER,
+    };
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
+    let mut found = Vec::new();
+    for family in [AF_INET, AF_INET6] {
+        // u64s, so the table is aligned as its rows need.
+        let mut buf: Vec<u64> = Vec::new();
+        let mut size = 0u32;
+        loop {
+            let r = unsafe {
+                GetExtendedTcpTable(
+                    buf.as_mut_ptr().cast(),
+                    &mut size,
+                    0,
+                    u32::from(family),
+                    TCP_TABLE_OWNER_PID_LISTENER,
+                    0,
+                )
+            };
+            match r {
+                NO_ERROR => break,
+                // The table grew since its size was asked: ask again.
+                ERROR_INSUFFICIENT_BUFFER => buf = vec![0; (size as usize).div_ceil(8) + 1],
+                e => return Err(io::Error::from_raw_os_error(e as i32)),
+            }
+        }
+        if buf.is_empty() {
+            continue;
+        }
+        // The port is in network byte order, in the low 16 bits.
+        let ours = |p: u32| u16::from_be(p as u16) == port;
+        unsafe {
+            if family == AF_INET {
+                let t = &*(buf.as_ptr() as *const MIB_TCPTABLE_OWNER_PID);
+                let rows = std::slice::from_raw_parts(t.table.as_ptr(), t.dwNumEntries as usize);
+                found.extend(
+                    rows.iter()
+                        .filter(|r| ours(r.dwLocalPort))
+                        .map(|r| r.dwOwningPid),
+                );
+            } else {
+                let t = &*(buf.as_ptr() as *const MIB_TCP6TABLE_OWNER_PID);
+                let rows = std::slice::from_raw_parts(t.table.as_ptr(), t.dwNumEntries as usize);
+                found.extend(
+                    rows.iter()
+                        .filter(|r| ours(r.dwLocalPort))
+                        .map(|r| r.dwOwningPid),
+                );
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// On macOS: core still runs and base is the address of the socket the app bound and gave it,
+/// which the app still holds. No other user can listen on that address and port meanwhile: the
+/// system refuses another user's bind over a port a socket of this user's holds (wildcard or
+/// not), unless both set `SO_REUSEPORT`, which the app's socket does not (checked on the CI
+/// runner with a second user, `next-app-platforms.yml`). Other processes of this user are not
+/// looked at: they can read the core's config, management key and all, anyway.
+#[cfg(target_os = "macos")]
+pub fn owns_listener(core: &ManagedCore, base: &str) -> Result<(), String> {
+    let not = || format!("the started core is not listening on {base} itself");
+    let u = url::Url::parse(base).map_err(|_| not())?;
+    let port = u.port_or_known_default().ok_or_else(not)?;
+    let ip: std::net::IpAddr = match u.host() {
+        Some(url::Host::Ipv4(a)) => a.into(),
+        Some(url::Host::Ipv6(a)) => a.into(),
+        _ => return Err(not()),
+    };
+    let held = core.hold.as_ref().and_then(|l| l.local_addr().ok());
+    if core.exited().is_some() || held != Some(SocketAddr::new(ip, port)) {
+        return Err(not());
+    }
+    Ok(())
 }
 
 /// The inodes of the sockets listening on port, on any address.
@@ -740,13 +840,13 @@ mod tests {
     }
 
     /// A script line saying the core listens on the socket the app will give it.
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn listening(dir: &Path) -> String {
         let addr = listen_addr(&ensure_config(dir).unwrap()).unwrap();
         format!("echo 'pluxy: listening on http://{addr}' >&2")
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn script(dir: &Path, body: &str) -> PathBuf {
         let script = dir.join("core.sh");
         fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -761,7 +861,7 @@ mod tests {
     /// Commands start the core from worker threads that end when idle; the core must outlive
     /// the thread that started it (on Linux the parent-death signal follows that thread).
     #[test]
-    #[cfg(target_os = "linux")] // the core starts from /proc/self/fd, which only Linux has
+    #[cfg(unix)] // a #! script stands in for the core; Windows runs programs only
     fn the_core_outlives_the_thread_that_started_it() {
         let dir = temp("thread");
         let program = script(&dir, &format!("{}\nexec sleep 30", listening(&dir)));
@@ -812,8 +912,73 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    /// The real core (`next/cmd/pluxy`), built once by `go build` into a folder of its own.
+    fn real_core() -> PathBuf {
+        static BUILT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        BUILT
+            .get_or_init(|| {
+                let dir = temp("real-core");
+                let program = dir.join(if cfg!(windows) { "pluxy.exe" } else { "pluxy" });
+                let mut go = std::process::Command::new("go");
+                go.args(["build", "-o"])
+                    .arg(&program)
+                    .arg("./cmd/pluxy")
+                    .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+                #[cfg(windows)]
+                let built = crate::owned::windows::std_spawn(&mut go);
+                #[cfg(not(windows))]
+                let built = go.spawn();
+                let status = built
+                    .and_then(|mut c| c.wait())
+                    .expect("go, to build the core");
+                assert!(status.success(), "go build ./cmd/pluxy: {status}");
+                program
+            })
+            .clone()
+    }
+
+    /// The real core starts from the file the app opened, listens where its config says, is the
+    /// only thing listening on that port before the key goes there, and stops when asked: on
+    /// Unix it drains and exits cleanly. (On Windows it would get CTRL_BREAK only from an app
+    /// with no console of its own; this test program has one, so it is ended at once there.)
     #[test]
-    #[cfg(target_os = "linux")] // the core starts from /proc/self/fd, which only Linux has
+    fn the_real_core_starts_owns_its_port_and_stops() {
+        let program = real_core();
+        let dir = temp("real");
+        let mut core =
+            ManagedCore::start(File::open(&program).unwrap(), &program, &dir, None).unwrap();
+        let base = core.base().to_string();
+        owns_listener(&core, &base).unwrap();
+        let port = url::Url::parse(&base).unwrap().port().unwrap();
+        // Another program listening on the same port, on another loopback address: the key must
+        // not be sent there.
+        #[cfg(not(target_os = "macos"))]
+        {
+            let other = TcpListener::bind(("127.0.0.2", port)).unwrap();
+            let err = owns_listener(&core, &base).unwrap_err();
+            assert!(err.contains("not listening"), "{err}");
+            drop(other);
+            owns_listener(&core, &base).unwrap();
+        }
+        // macOS checks that base is the socket the app gave the core.
+        #[cfg(target_os = "macos")]
+        {
+            let elsewhere = format!("http://127.0.0.1:{}", if port == 1 { 2 } else { port - 1 });
+            assert!(owns_listener(&core, &elsewhere).is_err());
+            assert!(owns_listener(&core, &format!("http://[::1]:{port}")).is_err());
+        }
+        core.stop();
+        let why = core.exited().expect("the core stopped");
+        assert!(cfg!(windows) || why.contains("exit status: 0"), "{why}");
+        assert!(
+            owns_listener(&core, &base).is_err(),
+            "a stopped core still owns {base}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)] // a #! script stands in for the core; Windows runs programs only
     fn a_core_that_exits_at_start_says_why() {
         let dir = temp("exit");
         let script = dir.join("core.sh");

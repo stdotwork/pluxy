@@ -589,8 +589,8 @@ fn run_bounded(
     #[cfg(not(windows))]
     let spawned = command.spawn();
     let mut child = spawned.map_err(|e| {
-            format!("{what}: unsquashfs (package squashfs-tools) checks AppImages: {e}")
-        })?;
+        format!("{what}: unsquashfs (package squashfs-tools) checks AppImages: {e}")
+    })?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(UNPACK_SECONDS);
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|e| format!("{what}: {e}"))? {
