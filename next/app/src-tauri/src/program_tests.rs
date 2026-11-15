@@ -125,6 +125,10 @@ struct Stub {
 type Frame = (String, String, Option<Vec<String>>);
 
 impl Private for Stub {
+    #[cfg(feature = "native-test")]
+    fn test_carries(&self, _: &str) -> (bool, bool) {
+        (false, false)
+    }
     fn journals(&self, _: &str) -> Result<Vec<Value>, String> {
         if self.unreadable {
             return Err("its records are damaged".into());

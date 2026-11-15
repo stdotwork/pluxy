@@ -28,6 +28,8 @@ pub mod cores;
 pub mod device;
 pub mod instance;
 mod key_entry;
+#[cfg(target_os = "linux")]
+pub mod launcher;
 pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
@@ -124,6 +126,9 @@ struct App {
     /// The managed runtimes tools started through the host's spawn service (`spawn.rs`).
     #[cfg(target_os = "linux")]
     runtimes: spawn::Runtimes,
+    /// The launcher's remembered launches, recent folders and notice setting (`launcher.rs`).
+    #[cfg(target_os = "linux")]
+    launcher: Mutex<launcher::Launcher>,
     status: Mutex<Option<MenuItem<Wry>>>,
     /// Start, Stop and Restart, in that order.
     core_actions: Mutex<Vec<MenuItem<Wry>>>,
@@ -455,11 +460,12 @@ fn begin_quit(quitting: &AtomicBool) -> bool {
     !quitting.swap(true, Ordering::SeqCst)
 }
 
-/// Whether a tray item acts now. Once the app is quitting, Open, Quit and Remembered launches do
-/// nothing: they would reopen a window over stopped tools or end the process that waits for a new
-/// version to accept itself. The core items refuse for themselves (`tray_action`).
+/// Whether a tray item acts now. Once the app is quitting, Open, Quit, Remembered launches and
+/// the `launch:` items (one-click starts of a remembered launch) do nothing: they would reopen a
+/// window over stopped tools or end the process that waits for a new version to accept itself.
+/// The core items refuse for themselves (`tray_action`).
 fn tray_item_acts(id: &str, quitting: bool) -> bool {
-    !quitting || !matches!(id, "open" | "quit" | "launch-settings")
+    !quitting || !(matches!(id, "open" | "quit" | "launch-settings") || id.starts_with("launch:"))
 }
 
 /// Stops the app's own core, if it runs one, and exits. A local or remote core keeps running.
@@ -570,6 +576,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let sep = PredefinedMenuItem::separator(app)?;
+    // Remembered launches, one click each (`launcher.rs`).
+    #[cfg(target_os = "linux")]
+    let launches = launcher::tray_menu(app)?;
     let start = MenuItem::with_id(app, "core-start", "Start core", false, None::<&str>)?;
     let stop = MenuItem::with_id(app, "core-stop", "Stop core", false, None::<&str>)?;
     let restart = MenuItem::with_id(app, "core-restart", "Restart core", false, None::<&str>)?;
@@ -579,6 +588,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &status, &start, &stop, &restart, &sep, &open, &access, &quit_item,
         ],
     )?;
+    #[cfg(target_os = "linux")]
+    menu.insert(&launches, 6)?;
     let mut tray = TrayIconBuilder::with_id("pluxy")
         .tooltip("pluxy")
         .menu(&menu)
@@ -623,6 +634,8 @@ fn tray_menu(app: &AppHandle, id: &str) {
         "launch-settings" => {
             let _ = confirmation::settings(app);
         }
+        #[cfg(target_os = "linux")]
+        id if id.starts_with("launch:") => launcher::tray_start(app, id),
         _ => {}
     }
 }
@@ -1675,6 +1688,11 @@ async fn device_enable(
         if native {
             return native_enable(&app, &id);
         }
+        // Disabling stops its managed runtimes: asked first, when any runs.
+        #[cfg(target_os = "linux")]
+        if !enabled {
+            launcher::confirm_runtimes(&app, &id, "Disable")?;
+        }
         device_changed(&app, &id, |c| {
             c.set_enabled(&id, enabled, &trust::TrustStore::current())
         })
@@ -1770,24 +1788,32 @@ async fn device_imports(
 }
 
 #[tauri::command]
-fn device_remove(webview: Webview, id: String) -> Result<device::View, String> {
-    let view = device_change(&webview, &id, |c| c.remove(&id));
-    // A removed package keeps no grants: installing it again starts with none.
-    #[cfg(unix)]
-    if webview
-        .state::<App>()
-        .device
-        .lock()
-        .unwrap()
-        .get(&id)
-        .is_none()
-    {
-        let st = webview.state::<App>();
-        let removed = st.access.lock().unwrap().remove_package(&id);
-        st.access_done.notify_all();
-        removed.map_err(|e| format!("{id} was removed, but its grants could not be: {e}"))?;
-    }
-    view
+async fn device_remove(webview: Webview, id: String) -> Result<device::View, String> {
+    trusted(&webview)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        // Removing stops its managed runtimes: asked first when any runs.
+        #[cfg(target_os = "linux")]
+        launcher::confirm_runtimes(webview.app_handle(), &id, "Remove")?;
+        let view = device_change(&webview, &id, |c| c.remove(&id));
+        // A removed package keeps no grants: installing it again starts with none.
+        #[cfg(unix)]
+        if webview
+            .state::<App>()
+            .device
+            .lock()
+            .unwrap()
+            .get(&id)
+            .is_none()
+        {
+            let st = webview.state::<App>();
+            let removed = st.access.lock().unwrap().remove_package(&id);
+            st.access_done.notify_all();
+            removed.map_err(|e| format!("{id} was removed, but its grants could not be: {e}"))?;
+        }
+        view
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // Access (`access.rs`): the window's commands, the native file chooser and confirmation for
@@ -2264,12 +2290,127 @@ fn program_status(webview: Webview, package: String) -> Result<Value, String> {
         }
         // Its managed runtimes: running, ended, or left by a run of the app that did not stop.
         status["runtimes"] = Value::from(st.runtimes.list(&package));
+        #[cfg(feature = "native-test")]
+        {
+            status["test_frames"] = program::test_frames(&package);
+        }
         Ok(status)
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = package;
         Err("native tools run on Linux only for now".into())
+    }
+}
+
+/// The launcher's state (`launcher.rs`): whether the execution program can be used, the
+/// remembered launches with their source, the recent folders and the notice setting.
+#[tauri::command]
+async fn launcher_state(webview: Webview) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || Ok(launcher::state(&app)))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("the launcher runs on Linux only for now".into())
+    }
+}
+
+/// The terminals the execution program finds, Automatic first.
+#[tauri::command]
+async fn launcher_terminals(webview: Webview) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || launcher::terminals(&app))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("the launcher runs on Linux only for now".into())
+    }
+}
+
+/// A new launch from the launcher, prepared by the execution program; it always asks a native
+/// confirmation.
+#[tauri::command]
+async fn launcher_launch(webview: Webview, launch: Value) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || launcher::launch(&app, &launch))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = launch;
+        Err("the launcher runs on Linux only for now".into())
+    }
+}
+
+/// One-click start of remembered launch id from the window's launcher. Only the app's own window
+/// reaches this, naming a launch of the host's own list: it may use that launch's remembered
+/// approval and nothing else (`confirmation::Gesture::main_window`).
+#[tauri::command]
+async fn launcher_start(webview: Webview, id: String) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        let gesture = confirmation::Gesture::main_window();
+        tauri::async_runtime::spawn_blocking(move || launcher::start(&app, &id, gesture))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = id;
+        Err("the launcher runs on Linux only for now".into())
+    }
+}
+
+/// Forgets remembered launch id, revoking its approval.
+#[tauri::command]
+async fn launcher_forget(webview: Webview, id: String) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || launcher::forget(&app, &id))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = id;
+        Err("the launcher runs on Linux only for now".into())
+    }
+}
+
+/// Whether one-click starts show a launch notice.
+#[tauri::command]
+async fn launcher_settings(webview: Webview, notice: bool) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(target_os = "linux")]
+    {
+        let app = webview.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || launcher::settings(&app, notice))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = notice;
+        Err("the launcher runs on Linux only for now".into())
     }
 }
 
@@ -2676,6 +2817,12 @@ pub fn run() {
             program_call,
             program_cancel,
             program_status,
+            launcher_state,
+            launcher_terminals,
+            launcher_launch,
+            launcher_start,
+            launcher_forget,
+            launcher_settings,
             vault_secret_add,
             vault_secrets,
             vault_secret_remove,
@@ -2736,6 +2883,8 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             let confirmations =
                 confirmation::Confirmations::open(config.join("remembered-launches.json"))?;
+            #[cfg(target_os = "linux")]
+            let launcher_file = launcher::file(&config);
             let release_settings = release::settings_path(&config);
             let device_dirs = device::Dirs {
                 root: app.path().app_data_dir()?.join("device-packages"),
@@ -2842,6 +2991,8 @@ pub fn run() {
                         Box::new(move |id| vault.value(id))
                     },
                 ),
+                #[cfg(target_os = "linux")]
+                launcher: Mutex::new(launcher::Launcher::open(launcher_file)),
                 status: Mutex::new(None),
                 core_actions: Mutex::new(Vec::new()),
                 shown: Mutex::new(Shown::default()),
@@ -3068,6 +3219,8 @@ mod tests {
         }
         // The core items decide for themselves, and unknown ids were always ignored.
         assert!(tray_item_acts("core-start", true));
+        assert!(!tray_item_acts("launch:x", true));
+        assert!(tray_item_acts("launch:x", false));
         let quitting = AtomicBool::new(false);
         assert!(begin_quit(&quitting));
         assert!(!begin_quit(&quitting), "a second quit must not run");
