@@ -9,6 +9,7 @@
 //!
 //! - capture: three client keys for pluxy/launcher and one for pluxy/other;
 //! - launch: the launcher's managed launch with its first key in the environment runs with it;
+//! - launch stdin: its detached launch with that key on its stdin reads it there, and only there;
 //! - restart deleted: once that key is deleted on core, the runtime's restart is refused and it
 //!   does not start again;
 //! - launch deleted: a launch with the deleted key, in its environment or on its stdin, is
@@ -18,7 +19,8 @@
 //! - other core: a managed runtime with the second key restarts with it; with the app connected
 //!   to another core (a listener of this check's), its restart is refused, and a managed launch
 //!   confirmed before the switch and held before its spawn frame starts nothing, and nothing
-//!   reaches that core; connected to the app's own core again, the restart starts it with the key;
+//!   reaches that core (each of these is checked, and every failure reported); connected to the
+//!   app's own core again, the restart starts it with the key;
 //! - recipient: pluxy/other passes its reference to a plain vault secret on to the launcher's start
 //!   and, once the import is confirmed, the runtime gets it; its reference to its own client key
 //!   is refused before the import's confirmation, and nothing starts;
@@ -110,6 +112,30 @@ fn input(agent: &str, work: &Path, rec: &Path, lifetime: &str, secret: &str) -> 
     })
 }
 
+/// input with its secret given on the agent's stdin, which it reads, instead of in its
+/// environment.
+fn on_stdin(mut input: Value) -> Value {
+    if let Some(o) = input.as_object_mut() {
+        o.insert(
+            "environment".into(),
+            json!({"set": {"FIXTURE_READ_STDIN": "1"}}),
+        );
+        o.insert("stdin".into(), json!("key"));
+    }
+    input
+}
+
+/// Ends the agent whose record (r, at rec) says it started, while it still runs as that agent.
+fn end(r: &Value, rec: &Path) {
+    let marker = rec.to_string_lossy().into_owned();
+    for k in ["pid", "child"] {
+        let pid = r[k].as_u64().unwrap_or(0);
+        if owned(pid, &marker) {
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        }
+    }
+}
+
 /// Ends what an agent that should not have started left, and says so.
 fn started_anyway(rec: &Path, what: &str) -> Result<(), String> {
     let Some(r) = std::fs::read(rec)
@@ -118,13 +144,7 @@ fn started_anyway(rec: &Path, what: &str) -> Result<(), String> {
     else {
         return Ok(());
     };
-    let marker = rec.to_string_lossy().into_owned();
-    for k in ["pid", "child"] {
-        let pid = r[k].as_u64().unwrap_or(0);
-        if owned(pid, &marker) {
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-        }
-    }
+    end(&r, rec);
     let leaked = r["env"]["FIXTURE_KEY"].as_str().is_some();
     Err(format!(
         "{what} started anyway{}",
@@ -291,6 +311,27 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         })(),
     )?;
 
+    // ---- launch stdin: the positive control of the stdin refusal below
+    each(
+        "launch stdin",
+        (|| {
+            let rec = at("one-stdin");
+            launch(
+                app,
+                main,
+                on_stdin(input(&agent, &work, &rec, "detached", &one.secret)),
+                &["pluxy/launcher start", "detached", "stdin", &one.label],
+                &values,
+            )?;
+            let r = record(&rec, 0)?;
+            end(&r, &rec);
+            require(
+                r["stdin"] == one.value.as_str() && !r["env"].to_string().contains(&one.value),
+                "the launch did not get its client key on its stdin, and only there",
+            )
+        })(),
+    );
+
     // ---- restart deleted: a restart checks the key again
     each(
         "restart deleted",
@@ -316,15 +357,11 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             started_anyway(&rec, "the launch with a deleted client key")?;
             // The same key given on its stdin instead.
             let rec = at("launch-deleted-stdin");
-            let mut on_stdin = input(&agent, &work, &rec, "detached", &one.secret);
-            if let Some(o) = on_stdin.as_object_mut() {
-                o.remove("environment");
-                o.insert("stdin".into(), json!("key"));
-            }
             refused_unasked(
                 main,
                 "program_call",
-                json!({"package": LAUNCHER, "op": "start", "input": on_stdin}),
+                json!({"package": LAUNCHER, "op": "start",
+                    "input": on_stdin(input(&agent, &work, &rec, "detached", &one.secret))}),
                 "no longer accepts",
             )?;
             std::thread::sleep(Duration::from_millis(500));
@@ -406,35 +443,45 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 v["target"] == other.base.as_str(),
                 format!("the switch: {v}"),
             )?;
+            // Each check below runs, and every failure is reported: none hides another, and the
+            // app is connected to its own core again whatever failed.
             let refused = restart_refused(main, &id, &rec_two, &b, "another core");
-            let answer = released(main, &slot, &hold)?;
+            let answer = released(main, &slot, &hold).and_then(|answer| {
+                require(
+                    answer["error"]["code"] == "unavailable"
+                        && answer["error"]["message"]
+                            .as_str()
+                            .is_some_and(|m| m.contains("another core")),
+                    format!("the spawn while connected to another core: {answer}"),
+                )
+            });
             std::thread::sleep(Duration::from_millis(500));
             let spawned = started_anyway(&rec_held, "the launch held across a core switch");
             std::thread::sleep(Duration::from_millis(1000));
             let got = other.received();
             drop(other);
+            let sent = require(
+                !got.contains("/v1/models") && !values.iter().any(|k| got.contains(k)),
+                "a client key was sent to the other core",
+            );
             let back = ok(
                 main,
                 "connection_set",
                 json!({"change": {"mode": "managed", "core_source": saved["core_source"]}}),
-            )?;
-            require(
-                back["target"] == base.as_str() && back["signed_in"] == true,
-                format!("back to the app's own core: {back}"),
-            )?;
-            refused?;
-            spawned?;
-            require(
-                answer["error"]["code"] == "unavailable"
-                    && answer["error"]["message"]
-                        .as_str()
-                        .is_some_and(|m| m.contains("another core")),
-                format!("the spawn while connected to another core: {answer}"),
-            )?;
-            require(
-                !got.contains("/v1/models") && !values.iter().any(|k| got.contains(k)),
-                "a client key was sent to the other core",
-            )?;
+            )
+            .and_then(|back| {
+                require(
+                    back["target"] == base.as_str() && back["signed_in"] == true,
+                    format!("back to the app's own core: {back}"),
+                )
+            });
+            let failures: Vec<String> = [refused, answer, spawned, sent, back]
+                .into_iter()
+                .filter_map(Result::err)
+                .collect();
+            if !failures.is_empty() {
+                return Err(failures.join("; "));
+            }
             // The app's own core again: the restart starts it with the key.
             let r = runtime(main, LAUNCHER, "restart", &id)?;
             require(
