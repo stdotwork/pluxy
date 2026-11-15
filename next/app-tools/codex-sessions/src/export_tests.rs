@@ -283,17 +283,21 @@ fn a_session_with_no_rollout_a_link_or_a_bad_id_asks_the_host_for_nothing() {
     let outside = Home::new();
     let target = outside.0.join("outside.jsonl");
     std::fs::write(&target, format!("{CANARY}\n")).unwrap();
-    std::os::unix::fs::symlink(
-        &target,
-        home.0.join(format!(
-            "sessions/2026/08/rollout-2026-08-04T10-00-00-{ID}.jsonl"
-        )),
-    )
-    .unwrap();
-    let seen = export(&home.0, json!({"id": ID}), Answer::Saved);
-    assert!(seen.ops.is_empty());
-    assert_eq!(code(&seen), "not_found");
-    says_nothing_of(&seen, &outside.0);
+    let link = home.0.join(format!(
+        "sessions/2026/08/rollout-2026-08-04T10-00-00-{ID}.jsonl"
+    ));
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(&target, &link).map_err(|e| panic!("{e}"));
+    // On Windows a link takes a privilege or Developer Mode.
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_file(&target, &link)
+        .map_err(|e| eprintln!("skipped: this account cannot make a symbolic link ({e})"));
+    if linked.is_ok() {
+        let seen = export(&home.0, json!({"id": ID}), Answer::Saved);
+        assert!(seen.ops.is_empty());
+        assert_eq!(code(&seen), "not_found");
+        says_nothing_of(&seen, &outside.0);
+    }
     // IDs that are paths, or none.
     for input in [
         json!({"id": "../etc/passwd"}),
