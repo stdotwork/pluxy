@@ -202,6 +202,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
                 argv: vec!["fixture-script".into(), "--exact".into()],
                 cwd: dir.clone(),
                 program: None,
+                opens: None,
                 terminal_adapter: pkg,
                 environment_revision: "1".into(),
                 environment_review: vec![],
