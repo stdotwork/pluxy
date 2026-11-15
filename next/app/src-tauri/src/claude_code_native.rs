@@ -800,6 +800,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             let mut left = leftovers(&home.join(".claude"))?;
             left.extend(leftovers(&home.join("dotfiles"))?);
             left.extend(leftovers(&home.join(".local/share/chezmoi"))?);
+            left.extend(leftovers(&home.join("easy"))?);
             require(left.is_empty(), format!("temporary files left: {left:?}"))?;
             untouched()?;
             require(

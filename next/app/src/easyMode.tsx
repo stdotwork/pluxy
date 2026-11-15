@@ -59,6 +59,7 @@ const t = strings("easyMode", {
   enable: "Enable",
   waiting: "Waiting for the native confirmation…",
   setUp: "Set up",
+  registryError: "Registry {name}: {error}",
   safeMode: "This device's extensions are in safe mode: no native tool runs until it is turned off.",
 });
 
@@ -69,6 +70,8 @@ function PackageRow(props: {
   onChanged: () => void;
   onSetUp?: () => void;
   selected?: boolean;
+  /** Safe mode: no native tool runs, so Enable and Set up stay off. */
+  safe?: boolean;
 }) {
   const { item } = props;
   const act = useAction(props.onChanged);
@@ -102,14 +105,14 @@ function PackageRow(props: {
           </Button>
         )}
         {item.state === "installed" && (
-          <Button variant="primary" disabled={act.busy} onClick={enable}>
+          <Button variant="primary" disabled={act.busy || props.safe} onClick={enable}>
             {t("enable")}
           </Button>
         )}
         {props.onSetUp && (
           <Button
             variant={props.selected ? "quiet" : "primary"}
-            disabled={act.busy || item.state !== "enabled"}
+            disabled={act.busy || props.safe || item.state !== "enabled"}
             onClick={props.onSetUp}
           >
             {t("setUp")}
@@ -134,12 +137,19 @@ function ConnectAgent(props: { agents: AgentPage[]; catalog?: DeviceCatalog; onC
   );
   const [launcher] = items([LAUNCHER], props.catalog, registries.data);
   const page = props.agents.find((a) => a.id === chosen);
-  const ready = clients.find((c) => c.id === page?.package)?.state === "enabled";
+  const safe = props.catalog?.safe_mode === true;
+  const ready = !safe && clients.find((c) => c.id === page?.package)?.state === "enabled";
+  const broken = (registries.data ?? []).filter((r) => r.error);
   return (
     <>
       <p class="muted">{t("agentDescription")}</p>
       {props.catalog?.safe_mode && <Notice tone="warn">{t("safeMode")}</Notice>}
       {registries.error && <Notice tone="warn">{registries.error}</Notice>}
+      {broken.map((r) => (
+        <Notice key={r.name} tone="warn">
+          {t("registryError", { name: r.name, error: r.error ?? "" })}
+        </Notice>
+      ))}
       <Notice tone="warn">{t("fullAccess")}</Notice>
       <Card title={t("clients")}>
         {clients.length === 0 ? (
@@ -156,6 +166,7 @@ function ConnectAgent(props: { agents: AgentPage[]; catalog?: DeviceCatalog; onC
                   onChanged={changed}
                   selected={a?.id === chosen}
                   onSetUp={() => setChosen(a?.id)}
+                  safe={safe}
                 />
               );
             })}
@@ -166,7 +177,7 @@ function ConnectAgent(props: { agents: AgentPage[]; catalog?: DeviceCatalog; onC
         <p class="muted">{t("launcherHint")}</p>
         {launcher ? (
           <ul class="stack">
-            <PackageRow item={launcher} title={t("launcher")} onChanged={changed} />
+            <PackageRow item={launcher} title={t("launcher")} onChanged={changed} safe={safe} />
           </ul>
         ) : (
           <Notice tone="warn">{t("noLauncher")}</Notice>

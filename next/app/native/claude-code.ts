@@ -39,7 +39,7 @@ export interface ClaudeCode {
   registries: { name: string; url: string }[];
   /** PLUXY_TEST_TRUST_NONCE for the app: the marker's nonce. */
   nonce: string;
-  /** The key and the login canary: neither may show in the app's output. */
+  /** The key, the login canary and the guided sign-in's API key: none may show in the app's output. */
   canaries: string[];
   /** The folder to put first on the app's PATH. */
   bin: string;
@@ -122,7 +122,7 @@ function env(first: string[]): string {
 }
 
 /** The files and links in home, and what the check expects of them, by hand. */
-function configs(home: string, login: string) {
+function configs(home: string, login: string, guided: string) {
   const claude = join(home, ".claude");
   const settings = join(claude, "settings.json");
   const credentials = join(claude, ".credentials.json");
@@ -180,7 +180,7 @@ function configs(home: string, login: string) {
     easy: {
       settings: easy,
       account: "guided-account",
-      api_key: `pluxy-guided-login-${randomBytes(8).toString("hex")}`,
+      api_key: guided,
     },
     settings_input: SETTINGS,
     bytes: {
@@ -289,6 +289,8 @@ export function buildClaudeCodeFixtures(
 
   const key = `pluxy-claude-code-key-${randomBytes(16).toString("hex")}`;
   const login = `pluxy-claude-login-${randomBytes(16).toString("hex")}`;
+  // The API key Beginner Mode's guided sign-in types: like the key, never in the app's output.
+  const guided = `pluxy-guided-login-${randomBytes(16).toString("hex")}`;
   writeFileSync(join(root, "keys.json"), JSON.stringify({ key }));
   writeFileSync(
     join(root, "expect.json"),
@@ -301,9 +303,9 @@ export function buildClaudeCodeFixtures(
       terminal: join(bin, "x-terminal-emulator"),
       claude: join(bin, "claude"),
       override: join(root, "override", "claude"),
-      ...configs(home, login),
+      ...configs(home, login, guided),
     }),
   );
   const nonce = writeTrustProfile(home, [curatedFile], publicKey);
-  return { registries: [{ name: "curated", url: curatedFile }], nonce, canaries: [key, login], bin };
+  return { registries: [{ name: "curated", url: curatedFile }], nonce, canaries: [key, login, guided], bin };
 }
