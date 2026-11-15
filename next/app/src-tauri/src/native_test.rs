@@ -274,6 +274,22 @@ pub(crate) fn on_main<T: Send + 'static>(
     rx.recv_timeout(Duration::from_secs(5)).ok()
 }
 
+/// Where webview w is in its window, in logical pixels: off Linux, where the page webview is a
+/// child webview the window places itself (`place::place`).
+#[cfg(not(target_os = "linux"))]
+fn webview_bounds(w: &Webview) -> Option<crate::place::Bounds> {
+    let r = w.bounds().ok()?;
+    let scale = w.window().scale_factor().ok()?;
+    let p = r.position.to_logical::<f64>(scale);
+    let s = r.size.to_logical::<f64>(scale);
+    Some(crate::place::Bounds {
+        x: p.x,
+        y: p.y,
+        width: s.width,
+        height: s.height,
+    })
+}
+
 /// Whether two places agree, to the rounding of logical pixels to whole ones.
 #[cfg(target_os = "linux")]
 fn same_place(a: &Value, b: &Value) -> bool {
@@ -623,8 +639,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
         r["url"] = eval(&wv, "location.href").unwrap_or(Value::Null);
         // Where the page webview is, against the page area the window drew for it.
         r["area"] = eval(&main, AREA).unwrap_or(Value::Null);
-        let l = label.clone();
-        r["placed"] = json!(on_main(app, move || crate::place::allocation(&l)).flatten());
+        #[cfg(target_os = "linux")]
+        let placed = {
+            let l = label.clone();
+            on_main(app, move || crate::place::allocation(&l)).flatten()
+        };
+        #[cfg(not(target_os = "linux"))]
+        let placed = webview_bounds(&wv);
+        r["placed"] = json!(placed);
         log("page", r);
         #[cfg(target_os = "linux")]
         log("page_allocation", shrunk_page(app, &main, &label));

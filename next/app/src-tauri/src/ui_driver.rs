@@ -43,13 +43,15 @@ pub(crate) enum Key {
     Tab,
 }
 
-/// How many inputs went each way: [(way, count)].
-static WAYS: [(&str, AtomicUsize); 5] = [
+/// How many inputs went each way: [(way, count)]. On macOS, `performClick` counts the clicks
+/// whose mouse events did not reach the control (`dialog_macos::inspect::click`).
+static WAYS: [(&str, AtomicUsize); 6] = [
     ("xtest", AtomicUsize::new(0)),
     ("sendinput", AtomicUsize::new(0)),
     ("posted", AtomicUsize::new(0)),
     ("application", AtomicUsize::new(0)),
     ("window", AtomicUsize::new(0)),
+    ("performClick", AtomicUsize::new(0)),
 ];
 
 fn went(way: &str) {

@@ -41,6 +41,8 @@ define_class!(
         #[unsafe(method(pluxyPress:))]
         fn pluxy_press(&self, sender: &NSButton) {
             let serial = self.ivars().serial.get();
+            #[cfg(feature = "native-test")]
+            inspect::PRESSED.with(|p| p.set(p.get() + 1));
             press(serial, sender.tag() as Id);
         }
 
@@ -578,6 +580,12 @@ pub(crate) fn copy_concealed(text: &str) {
 #[cfg(feature = "native-test")]
 pub(crate) mod inspect {
     use super::*;
+    use objc2_app_kit::NSEventMask;
+
+    thread_local! {
+        /// How many times a dialog button's action has run.
+        pub(super) static PRESSED: Cell<u64> = const { Cell::new(0) };
+    }
 
     /// The open, shown dialogs titled title.
     pub(crate) fn all(title: &str) -> Vec<u64> {
@@ -743,9 +751,22 @@ pub(crate) mod inspect {
             1,
             1.0,
         )?;
+        let before = (PRESSED.with(Cell::get), view.state());
         // The button's tracking loop takes the mouse up from the queue.
-        NSApplication::sharedApplication(mtm).postEvent_atStart(&up, true);
-        Some(deliver(mtm, &d, &down))
+        let app = NSApplication::sharedApplication(mtm);
+        app.postEvent_atStart(&up, true);
+        let way = deliver(mtm, &d, &down);
+        if (PRESSED.with(Cell::get), view.state()) != before {
+            return Some(way);
+        }
+        // The window took the mouse down without passing it to the control (as a window that is
+        // not active does with a first click): the mouse up left waiting goes, and the control is
+        // clicked through AppKit's own `performClick:`, which runs the same action. Counted apart.
+        app.discardEventsMatchingMask_beforeEvent(NSEventMask::LeftMouseUp, None);
+        // SAFETY: `performClick:` sends the control's action with the control itself as the
+        // sender, which `pluxyPress:` takes as the `NSButton` it is; the check box has no action.
+        unsafe { view.performClick(None) };
+        Some("performClick")
     }
 
     /// The access keys (GTK form) of dialog d's buttons and check box: (key, button id or None
