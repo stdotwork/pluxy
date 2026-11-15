@@ -782,7 +782,10 @@ Device extensions page; without it the page says so.
 A **new launch** names a client label, a kind (in a terminal or directly), a program (a name found
 on the launch environment's `PATH`, or a full path), an optional executable override, arguments,
 a working folder (the page offers the client's eight most recently used), a terminal (**Automatic**
-or one found on `PATH`) and a lifetime (detached or managed). The execution program prepares the
+or one found on `PATH`) and a lifetime (detached or managed; **managed is for direct launches only**,
+since many terminals hand their windows to a server process and exit at once, so the app could not
+stop an agent run in one: a launch in a terminal is always detached, and the host refuses it
+otherwise). The execution program prepares the
 executable, argv and cwd; the app's native confirmation shows them in full, with the program a
 terminal runs, the lifetime and the environment, and offers **Remember this exact executable,
 argv and cwd**. A remembered launch joins the page's list (client, command, folder, the execution
@@ -791,7 +794,8 @@ program's release that runs it) and the tray's Start… menu.
 **Start** on the page, or a click in the tray's Start… menu, starts a remembered launch again in
 one click, with no dialog, while it is exactly the launch remembered: the same executable and
 program (path, file identity and contents), argv, folder, environment, secrets and execution
-program release, from the same window. Anything changed asks again, and remembering it again
+program release, from the same window. A terminal launch remembered as managed by an earlier
+version is refused when started (**Forget** it and launch it again, detached). Anything changed asks again, and remembering it again
 replaces the old approval; a page's Start or a launch through another package always asks. One
 start of a launch per second; after each the app shows its launch notice ("Started …" or why it
 did not), unless **Show a notice after a one-click start** is off. **Forget** revokes the
