@@ -588,7 +588,8 @@ program's name) and `cwd`, and may name:
   `GLIBC_TUNABLES`, `LOCPATH`, `NLSPATH`, `HOSTALIASES`, `RES_OPTIONS`, `NODE_OPTIONS`, `BASH_ENV`,
   `ENV`, `SHELLOPTS`, `BASHOPTS`, `PROMPT_COMMAND`, `PS4`, `PYTHONSTARTUP`, `PYTHONINSPECT`,
   `PERL5OPT`, `PERL5DB`, `PERL5LIB`, `RUBYOPT`, `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`,
-  `JDK_JAVA_OPTIONS`), in any case. A name that looks like a credential (containing `TOKEN`,
+  `JDK_JAVA_OPTIONS`, `DOTNET_STARTUP_HOOKS`, `COR_PROFILER`, `CORECLR_*` and `COR_PROFILER_PATH*`),
+  in any case. A name that looks like a credential (containing `TOKEN`,
   `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `APIKEY` or `_KEY_`, ending in `_KEY`, or starting
   `TAURI_SIGNING_`, in any case) cannot be inherited: such a value reaches a launch only as a vault
   secret, through `secrets`. `SSH_AUTH_SOCK`, a socket path, can be inherited.

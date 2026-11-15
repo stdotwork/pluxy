@@ -165,6 +165,11 @@ fn a_launch_request_is_checked_and_its_review_shows_no_value_it_must_not() {
         json!({"environment": {"set": {"ENV": "/x"}}}),
         json!({"environment": {"inherit": ["PYTHONSTARTUP"]}}),
         json!({"environment": {"inherit": ["PERL5OPT"]}}),
+        // .NET's startup hook and profiler variables: code loaded into a .NET program at start.
+        json!({"environment": {"set": {"DOTNET_STARTUP_HOOKS": "/x.dll"}}}),
+        json!({"environment": {"set": {"COR_PROFILER": "{x}"}}}),
+        json!({"environment": {"inherit": ["CORECLR_PROFILER_PATH_64"]}}),
+        json!({"environment": {"set": {"COR_PROFILER_PATH_64": "/x.so"}}}),
     ] {
         assert!(parse(&bad, &secret_field).is_err(), "{bad} was taken");
     }

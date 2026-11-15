@@ -92,7 +92,7 @@ pub const BASE: &[&str] = &[
 ];
 /// Names a launch may never set, inherit or receive a secret in: the app's own and its tests'
 /// (`PLUXY_`), the dynamic loader's (`LD_`) and the AppImage runtime's.
-const NEVER_PREFIX: &[&str] = &["PLUXY_", "LD_", "MALLOC_"];
+const NEVER_PREFIX: &[&str] = &["PLUXY_", "LD_", "MALLOC_", "CORECLR_", "COR_PROFILER_PATH"];
 /// And names that make the dynamic loader, the C library or an interpreter load or run code of
 /// their own, like `LD_*`.
 const NEVER: &[&str] = &[
@@ -122,6 +122,8 @@ const NEVER: &[&str] = &[
     "JAVA_TOOL_OPTIONS",
     "_JAVA_OPTIONS",
     "JDK_JAVA_OPTIONS",
+    "DOTNET_STARTUP_HOOKS",
+    "COR_PROFILER",
 ];
 /// At most this many names in each of set, unset, inherit and secrets.
 const MAX_NAMES: usize = 64;
