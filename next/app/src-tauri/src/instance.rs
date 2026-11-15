@@ -951,14 +951,17 @@ mod tests {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
-    fn temp() -> Temp {
-        // On macOS the temporary folder is a long path below a link (`/var`): too long for a
-        // socket, and refused as a socket folder. `/tmp` resolved is short, and sticky.
+    /// Where the tests' folders go. A socket path must fit in about 100 bytes, which macOS's
+    /// temporary folder (`/var/folders/..`, a link into `/private`) is too long for.
+    fn temp_base() -> PathBuf {
         #[cfg(target_os = "macos")]
-        let base = fs::canonicalize("/tmp").unwrap();
+        return PathBuf::from("/private/tmp");
         #[cfg(not(target_os = "macos"))]
-        let base = std::env::temp_dir();
-        let d = base.join(format!(
+        std::env::temp_dir()
+    }
+
+    fn temp() -> Temp {
+        let d = temp_base().join(format!(
             "pluxy-app-inst-{}",
             &crate::managed::random_key()[..12]
         ));
@@ -1327,12 +1330,12 @@ mod tests {
             };
             if r != 0 {
                 let e = io::Error::last_os_error();
-                // A full queue is "try again" here and a refusal on the BSDs.
-                let full = if cfg!(target_os = "macos") {
-                    io::ErrorKind::ConnectionRefused
-                } else {
-                    io::ErrorKind::WouldBlock
-                };
+                // A full queue refuses a connection: with WouldBlock on Linux, ConnectionRefused
+                // on macOS.
+                #[cfg(target_os = "macos")]
+                let full = io::ErrorKind::ConnectionRefused;
+                #[cfg(not(target_os = "macos"))]
+                let full = io::ErrorKind::WouldBlock;
                 assert_eq!(e.kind(), full, "{e}");
                 return held;
             }
