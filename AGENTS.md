@@ -160,6 +160,22 @@ Workflows live in `.github/workflows/`, one set per folder, each limited to its 
 
 When you add a workflow, add a row here.
 
+### Where jobs run
+
+By default every job runs on GitHub's own runners. Two repository variables send some jobs to
+the maintainers' own machines instead:
+
+- `PLUXY_LINUX_RUNNER` takes the Linux jobs of `core-pr-test-build.yml`, `app-ci.yml`,
+  `next-app.yml` and `next-corpus.yml`. `next-ci.yml` stays on GitHub's runners.
+- `PLUXY_WINDOWS_RUNNER` takes the Windows legs of the `app` job in `next-app-platforms.yml` and
+  the `tools` job in `next-app-tools-platforms.yml`. macOS jobs, the `native` job in
+  `next-app-platforms.yml` and the release workflows always stay on GitHub's runners.
+
+Each variable holds a runner label as JSON, for example `"self-hosted"` or
+`["self-hosted", "linux"]`. When a variable is not set, its jobs run on the GitHub runner they
+named before. Jobs from pull requests opened from a fork always run on GitHub's runners, so
+code from a fork never runs on the maintainers' machines.
+
 ## How changes flow
 
 - `main` is the only long-lived branch. Work on a task branch and open a PR against `main`.
