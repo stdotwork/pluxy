@@ -92,7 +92,7 @@ pub(crate) fn reveal(app: &AppHandle, key: String, notice: String) {
             }),
         );
         spec.text = Some(notice);
-        spec.value = Some(key);
+        spec.value = Some(zeroize::Zeroizing::new(key));
         spec.buttons = vec![(COPY, text::COPY.into()), (CLOSE, text::CLOSE.into())];
         spec.default = Some(CLOSE);
         spec.cancel = Some(CLOSE);

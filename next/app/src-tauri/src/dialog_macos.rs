@@ -142,8 +142,8 @@ struct State {
     buttons: Vec<(Id, Retained<NSButton>)>,
     check: Option<Retained<NSButton>>,
     secret: Option<Retained<NSSecureTextField>>,
-    /// Every text shown, for the native test.
-    #[cfg_attr(not(feature = "native-test"), allow(dead_code))]
+    /// Every text shown, for the native test (only there: one is the rotated key).
+    #[cfg(feature = "native-test")]
     texts: Vec<String>,
     timers: Vec<Retained<NSTimer>>,
     done: bool,
@@ -244,6 +244,7 @@ pub(crate) fn show(
     // Laid out top down in a flipped view.
     let mut y = MARGIN;
     let mut parts: Vec<(Retained<NSView>, bool)> = Vec::new();
+    #[cfg(feature = "native-test")]
     let mut texts = Vec::new();
     let mut state_secret = None;
     let mut state_check = None;
@@ -257,6 +258,7 @@ pub(crate) fn show(
             NSRect::new(NSPoint::new(MARGIN, y), NSSize::new(inner, h)),
         );
         parts.push((Retained::into_super(Retained::into_super(l)), false));
+        #[cfg(feature = "native-test")]
         texts.push(t.clone());
         y += h + GAP;
     }
@@ -268,6 +270,7 @@ pub(crate) fn show(
             NSRect::new(NSPoint::new(MARGIN, y), NSSize::new(inner, h)),
         );
         parts.push((Retained::into_super(s), false));
+        #[cfg(feature = "native-test")]
         texts.push(t.clone());
         y += h + GAP;
     }
@@ -282,7 +285,8 @@ pub(crate) fn show(
             NSSize::new(inner, 22.0),
         ));
         parts.push((Retained::into_super(Retained::into_super(l)), false));
-        texts.push(v.clone());
+        #[cfg(feature = "native-test")]
+        texts.push(v.to_string());
         y += 22.0 + GAP;
     }
     if spec.secret {
@@ -334,6 +338,7 @@ pub(crate) fn show(
                 NSRect::new(NSPoint::new(0.0, ry), NSSize::new(inner - 24.0, row_h)),
             );
             doc.addSubview(&s);
+            #[cfg(feature = "native-test")]
             texts.push(text.clone());
             ry += row_h + GAP;
             let b = button(
@@ -411,6 +416,7 @@ pub(crate) fn show(
         buttons,
         check: state_check,
         secret: state_secret,
+        #[cfg(feature = "native-test")]
         texts,
         timers: Vec::new(),
         done: false,

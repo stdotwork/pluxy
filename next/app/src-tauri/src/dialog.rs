@@ -40,8 +40,9 @@ pub(crate) struct Spec {
     pub text: Option<String>,
     /// A long text, read-only and selectable, in a scrolled area.
     pub review: Option<String>,
-    /// One value, read-only, selectable, in a fixed-width font (the rotated key).
-    pub value: Option<String>,
+    /// One value, read-only, selectable, in a fixed-width font (the rotated key): cleared from
+    /// memory when the dialog's spec goes.
+    pub value: Option<zeroize::Zeroizing<String>>,
     /// A hidden entry, which gets the focus.
     pub secret: bool,
     /// A check box, unticked, with this label (GTK mnemonic form).

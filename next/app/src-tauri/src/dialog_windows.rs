@@ -90,9 +90,12 @@ fn open_dialogs() -> Vec<HWND> {
     OPEN.with(|o| o.borrow().values().map(|s| s.borrow().hwnd).collect())
 }
 
-/// text as a NUL-terminated UTF-16 string, lines ending in CR LF as edit controls need.
-fn wide(text: &str) -> Vec<u16> {
-    let mut v: Vec<u16> = Vec::with_capacity(text.len() + 1);
+/// text as a NUL-terminated UTF-16 string, lines ending in CR LF as edit controls need. Cleared
+/// from memory when dropped (one of these texts is the rotated key), and made at its largest size
+/// at once, so no smaller copy is left behind by growing it.
+fn wide(text: &str) -> Zeroizing<Vec<u16>> {
+    // At most two units for each byte (an LF becomes CR LF), and the NUL.
+    let mut v: Zeroizing<Vec<u16>> = Zeroizing::new(Vec::with_capacity(2 * text.len() + 1));
     let mut prev_cr = false;
     for u in text.encode_utf16() {
         if u == u16::from(b'\n') && !prev_cr {
