@@ -590,10 +590,13 @@ program's name) and `cwd`, and may name:
   `GLIBC_TUNABLES`, `LOCPATH`, `NLSPATH`, `HOSTALIASES`, `RES_OPTIONS`, `NODE_OPTIONS`, `BASH_ENV`,
   `ENV`, `SHELLOPTS`, `BASHOPTS`, `PROMPT_COMMAND`, `PS4`, `PYTHONSTARTUP`, `PYTHONINSPECT`,
   `PERL5OPT`, `PERL5DB`, `PERL5LIB`, `RUBYOPT`, `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`,
-  `JDK_JAVA_OPTIONS`), in any case. A name that looks like a credential (containing `TOKEN`,
-  `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `APIKEY` or `_KEY_`, ending in `_KEY`, or starting
-  `TAURI_SIGNING_`, in any case) cannot be inherited: such a value reaches a launch only as a vault
-  secret, through `secrets`. `SSH_AUTH_SOCK`, a socket path, can be inherited.
+  `JDK_JAVA_OPTIONS`, `DOTNET_STARTUP_HOOKS`, `COR_PROFILER`, `DOTNET_ADDITIONAL_DEPS`,
+  `PYTHONPATH`, `PYTHONHOME`, `NODE_PATH`, `RUBYLIB`, and the prefixes `CORECLR_*`,
+  `COR_PROFILER_PATH*`, `DOTNET_PROFILER*` and `COMPlus_*`), in any case. A name that looks like a
+  credential (containing `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `APIKEY` or `_KEY_`,
+  ending in `_KEY`, or starting `TAURI_SIGNING_`, in any case) cannot be inherited: such a value
+  reaches a launch only as a vault secret, through `secrets`. `SSH_AUTH_SOCK`, a socket path, can
+  be inherited.
 
 The native confirmation shows the lifetime and each variable: its name, a set value, "inherited
 from the app's environment", "removed", or the secret's label and ID; never an inherited value or
@@ -673,13 +676,15 @@ Another package's runtime is `not_found`, as one that never was. A package keeps
 runtimes, running or ended (those reported `unknown` do not count); the oldest ended one that is
 not being restarted makes room. A runtime whose leader exits on its
 own has the rest of its group killed as it is reaped. The window's `program_status` lists the
-package's runtimes too. The app's quit stops every managed runtime (and starts none after).
+package's runtimes too. The app's quit stops every managed runtime (and starts none after: a
+start or restart under way is either running already, and stopped with the rest, or refused).
 Disabling or removing the package retires its runtimes, since nothing could control them then:
 each is stopped, its confirmed launch is dropped (enabling the package again does not bring it
 back: `restart` is refused, and a new launch needs a new confirmation), no runtime starts for the
-package until it is enabled again (a start or restart under way when it is disabled is stopped as
-it starts and refused), and a removed package's entries go once they have been reaped. A tool's
-idle stop, crash or swap stops none.
+package until it is enabled again (a start or restart under way when it is disabled is stopped if
+it started already, and refused otherwise, also when the package is enabled again before it
+would start), and a removed package's entries go once they have been reaped, those of a start or
+restart under way too. A tool's idle stop, crash or swap stops none.
 
 A tool's `spawn` and `runtime` requests are refused once the tool is stopping, and unless it still
 runs its package's enabled, admitted release, as its own calls are. A spawn is refused, and starts

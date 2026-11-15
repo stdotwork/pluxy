@@ -168,6 +168,43 @@ fn a_launch_request_is_checked_and_its_review_shows_no_value_it_must_not() {
     ] {
         assert!(parse(&bad, &secret_field).is_err(), "{bad} was taken");
     }
+    // Each name below is tried on its own. A failed assert would stop at the first name a launch
+    // takes, so every name a launch takes is collected and reported together.
+    let mut taken = Vec::new();
+    for bad in [
+        // .NET's startup hook and profiler variables: code loaded into a .NET program at start.
+        json!({"environment": {"set": {"DOTNET_STARTUP_HOOKS": "/x.dll"}}}),
+        json!({"environment": {"set": {"COR_PROFILER": "{x}"}}}),
+        json!({"environment": {"inherit": ["CORECLR_PROFILER_PATH_64"]}}),
+        json!({"environment": {"set": {"COR_PROFILER_PATH_64": "/x.so"}}}),
+        json!({"environment": {"set": {"DOTNET_PROFILER": "{x}"}}}),
+        json!({"environment": {"inherit": ["DOTNET_PROFILER_PATH_64"]}}),
+        json!({"environment": {"set": {"DOTNET_ADDITIONAL_DEPS": "/x"}}}),
+        // The module search paths of Python, Node.js and Ruby.
+        json!({"environment": {"inherit": ["PYTHONPATH"]}}),
+        json!({"environment": {"set": {"pythonpath": "/x"}}}),
+        json!({"environment": {"set": {"PYTHONHOME": "/x"}}}),
+        json!({"environment": {"set": {"NODE_PATH": "/x"}}}),
+        json!({"environment": {"set": {"RUBYLIB": "/x"}}}),
+        // The legacy COMPlus_ spelling of the runtime's settings, in any case.
+        json!({"environment": {"set": {"COMPlus_ENABLE_PROFILING": "1"}}}),
+        json!({"environment": {"inherit": ["compLUS_PROFILER"]}}),
+    ] {
+        if parse(&bad, &secret_field).is_ok() {
+            taken.push(bad.to_string());
+        }
+    }
+    assert!(taken.is_empty(), "taken: {}", taken.join(", "));
+    // The prefixes are not wider than their families: ordinary names of these runtimes pass.
+    let (_, names) = parse(
+        &json!({"environment": {"inherit": ["DOTNET_ROOT", "NODE_ENV", "PYTHON_VERSION"]}}),
+        &secret_field,
+    )
+    .unwrap();
+    assert_eq!(
+        names.inherit,
+        vec!["DOTNET_ROOT", "NODE_ENV", "PYTHON_VERSION"]
+    );
     // A socket path agents need for git is inherited by name; so is a client's config folder.
     let (_, ok_names) = parse(
         &json!({"environment": {"inherit": ["SSH_AUTH_SOCK", "CODEX_HOME"]}}),
@@ -717,6 +754,121 @@ fn unknown_runtimes_do_not_fill_a_packages_room() {
     clean(&pids, &dir);
     let _ = std::fs::remove_dir_all(&dir);
     assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn the_apps_quit_leaves_no_start_under_way_to_spawn_after_it() {
+    let dir = folder("quit");
+    // A resolver held until the test lets it go: a start past its first checks, not spawned yet.
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    let (held, holding) = std::sync::mpsc::channel::<()>();
+    let gate = Mutex::new(gate);
+    let rt = Arc::new(Runtimes::open(
+        None,
+        Box::new(By(move |_: &str, _: &str| {
+            let _ = held.send(());
+            let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(10));
+            Ok(CANARY.to_string())
+        })),
+    ));
+    let rec = dir.join("a");
+    let mut l = agent(&dir, &rec, &[], Lifetime::Managed);
+    l.request.secrets.insert("FIXTURE_KEY".into(), "key".into());
+    l.secrets = vec![("FIXTURE_KEY".into(), "s-1".into())];
+    let starting = {
+        let rt = Arc::clone(&rt);
+        std::thread::spawn(move || rt.start("pluxy/one", l))
+    };
+    holding.recv().unwrap();
+    rt.stop_all();
+    let _ = release.send(());
+    let r = starting.join().unwrap();
+    // Nothing of it may run once the quit's stop has returned: it never spawned.
+    let left = rt.list("pluxy/one");
+    std::thread::sleep(Duration::from_millis(500));
+    let spawned = std::fs::read(&rec)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    if let Some(x) = &spawned {
+        clean(&[pid(x, "pid"), pid(x, "child")], &dir);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(r.is_err(), "a start after the quit's stop: {r:?}");
+    assert!(
+        left.is_empty(),
+        "a start spawned after the quit's stop: {left:?}"
+    );
+    assert!(spawned.is_none(), "a start spawned after the quit's stop");
+}
+
+#[test]
+fn a_restart_racing_a_removal_leaves_nothing_and_never_starts_the_dropped_launch() {
+    let dir = folder("raced");
+    let rt = Arc::new(Runtimes::open(None, Box::new(By(none))));
+    let mut all = vec![];
+    let checks = |package: &str, reinstall: bool, all: &mut Vec<u64>| {
+        let rec = dir.join(package.replace('/', "-"));
+        // A restart held between its stop and its new start.
+        let (release, gate) = std::sync::mpsc::channel();
+        let (held, holding) = std::sync::mpsc::channel();
+        let mut gated = agent(&dir, &rec, &[], Lifetime::Managed);
+        gated.opened = Box::new(Gated {
+            plain: Plain {
+                executable: File::open(std::env::current_exe().unwrap()).unwrap(),
+                cwd: File::open(&dir).unwrap(),
+            },
+            gate: Mutex::new(gate),
+            held,
+        });
+        let _ = release.send(());
+        let a = rt.start(package, gated).unwrap();
+        let id = a["runtime"].as_str().unwrap().to_string();
+        holding.recv().unwrap();
+        let x = record(&rec, 0);
+        all.extend([pid(&x, "pid"), pid(&x, "child")]);
+        let racer = {
+            let (rt, package, id) = (Arc::clone(&rt), package.to_string(), id.clone());
+            std::thread::spawn(move || rt.restart(&package, &id))
+        };
+        holding.recv().unwrap();
+        // Removed while it restarts (and, with reinstall, installed and enabled again at once).
+        rt.close(package, true);
+        if reinstall {
+            rt.reopen(package);
+        }
+        let _ = release.send(());
+        let r = racer.join().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let again: Value = std::fs::read(&rec)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or(Value::Null);
+        all.extend([pid(&again, "pid"), pid(&again, "child")]);
+        assert!(
+            r.is_err(),
+            "{package}: the raced restart started again: {r:?}"
+        );
+        assert_eq!(
+            again["pid"], x["pid"],
+            "{package}: the dropped launch ran again"
+        );
+        assert!(ended(pid(&x, "pid"), &rec) && ended(pid(&x, "child"), &rec));
+        assert!(
+            rt.list(package).is_empty(),
+            "{package}: the removed package keeps {:?}",
+            rt.list(package)
+        );
+    };
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        checks("pluxy/one", false, &mut all);
+        checks("pluxy/two", true, &mut all);
+    }));
+    rt.stop_all();
+    clean(&all, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Err(e) = r {
+        std::panic::resume_unwind(e);
+    }
 }
 
 #[test]

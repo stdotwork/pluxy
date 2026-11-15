@@ -18,6 +18,7 @@ export const SHARDS: Record<string, readonly string[]> = {
     "sessions",
     "launcher",
     "claude-code",
+    "codex",
     "open",
     "save",
   ],

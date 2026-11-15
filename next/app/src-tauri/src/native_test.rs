@@ -31,6 +31,7 @@
 //!    opening of a file in the person's own app (`open_native.rs`); with
 //!    `PLUXY_APP_TEST_CLAUDE_CODE`, only the Claude Code setup and launcher
 //!    (`claude_code_native.rs`), with its backup browser (`backups_native.rs`); with
+//!    `PLUXY_APP_TEST_CODEX`, only the Codex setup and launcher (`codex_native.rs`); with
 //!    `PLUXY_APP_TEST_SAVE`, only the host's save-file service (`save_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
@@ -68,6 +69,9 @@ mod backups;
 mod claude_code;
 #[path = "client_key_native.rs"]
 mod client_key;
+#[cfg(target_os = "linux")]
+#[path = "codex_native.rs"]
+mod codex;
 #[cfg(target_os = "linux")]
 #[path = "native_core.rs"]
 mod core_updates;
@@ -519,6 +523,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_CLAUDE_CODE") {
         claude_code::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The Codex setup and launcher (codex_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_CODEX") {
+        codex::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
