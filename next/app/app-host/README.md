@@ -155,13 +155,16 @@ inside the granted folder; for `resources.list`, empty or absent means the folde
 | --- | --- |
 | `bad_request` | Parameters of the wrong shape or unknown, an undeclared resource or operation, a `path` with a `file` resource |
 | `not_granted` | No grant for this package, release, source and signer, or the operation is not granted |
-| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, a file or folder on another mount than the granted folder (such as one mounted inside it), or not a regular file |
+| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, a file or folder on another mount than the granted folder (such as one mounted inside it), not a regular file, or a grant whose target has come to be, hold or lie inside one of the app's own folders (the app README's Access section) |
 | `changed` | The chosen link, where it resolves, or the target (its identity or its mount) changed since it was granted; it stays refused until granted again |
 | `unavailable` | The file is gone, cannot be reached for now (permissions, an I/O error, too many open files), or the document portal no longer offers it; the grant stays, and a later call may read |
 | `revoked` | The grant was revoked while the call was in flight |
 
 The native ingress limits of every page channel call apply to these too. Grants are bound to the
-package's source, release digest and approved signer: a new release asks again.
+package's source, release digest and approved signer: a new release asks again. No grant reaches
+the app's own folders (its settings, data, vault, packages and caches): the app refuses to grant
+one, anything inside one or a folder holding one, so the vault below stays out of every page's
+reach.
 
 ## App program contract v0
 
@@ -551,8 +554,14 @@ program's name) and `cwd`, and may name:
   refuses, before any dialog:
   - a file that is not a regular file, has an execute bit, is named `.desktop`, or does not
     resolve inside the folder;
-  - a file or folder that is not the person's own or that someone else may write (group or
-    world write bits): another user could replace it before the opener reads it;
+  - a file, the folder it must be inside, or any folder between the two (from the file's
+    parent up to and including that folder) that is not the person's own (the effective
+    user's) or that someone else may write (group or world write bits), or that is not a
+    real folder (a link): another user could replace the file, or rename another into its
+    place, before the opener reads it. The spawn checks every one of these again, by its
+    resolved path and without following links, so a folder made writable or turned into a
+    link since the confirmation is refused. Folders above the one it must be inside are not
+    checked;
   - a folder that is `/`, the home folder or a folder above it;
   - a file whose content type is not plain text (`text/plain`, `application/json`,
     `application/x-ndjson`, `application/jsonl`, `text/markdown` or `text/x-log`). The type is
@@ -579,7 +588,9 @@ program's name) and `cwd`, and may name:
   environment or a file. The confirmation names it; it is part of the environment revision;
 
 - `lifetime`: `detached` (the default: an agent or a terminal that is no longer the app's) or
-  `managed` (a runtime the app keeps and stops);
+  `managed` (a runtime the app keeps and stops). `managed` applies to direct launches only: a
+  launch that names a `program` (a terminal launch) may be detached only, and the host refuses
+  `managed` for it, before any confirmation ([Detached and managed](#detached-and-managed));
 - `environment`: `{"set": {NAME: value}, "unset": [NAME], "inherit": [NAME], "secrets": {NAME: <secret field>}}`,
   at most 64 names in each: variables set, session values removed, variables of the app's own
   environment passed on by name, and variables that get the secret of one of the launch's secret
@@ -653,6 +664,21 @@ A **detached** launch is started by a short-lived wrapper process, which starts 
 process group of its own with no parent-death signal and exits; the app reaps the wrapper. The app
 never signals a detached launch again: it runs on after its tool stops when idle, crashes, is
 swapped, disabled or removed, and after the app quits.
+
+Only a direct launch can be managed. For a terminal launch (one that names a `program`), the
+process the host holds is the terminal emulator's own launcher, and many terminals end it at once:
+gnome-terminal's `gnome-terminal` command is only a client that asks `gnome-terminal-server` to
+open the window and returns (the man page's `--wait` option, "wait until the terminal's child
+exits", exists for that reason), and konsole and kitty may do the same (kitty, run with
+`--single-instance`, opens its window in the first instance and quits at once). The
+agent then runs under that server, outside the process group the host signals, so a managed
+terminal launch's `status` would report a process that has exited and `stop` would stop nothing.
+A promise that holds for some terminals and silently fails for others is worse than none, so the
+host refuses `lifetime: "managed"` with a `program` (`invalid_request`, before the confirmation,
+for a new launch, a remembered one started again, or a launch another package asks for), and the
+Launcher page offers Managed for direct launches only. A terminal that keeps its process, such as
+xterm or foot, loses nothing the app promised before: launch the agent directly to have the app
+stop it.
 
 A **managed** runtime is the app's. It leads a process group of its own (never its tool's) and gets
 SIGTERM if the app dies without stopping it. The host keeps its live process (so its process ID is

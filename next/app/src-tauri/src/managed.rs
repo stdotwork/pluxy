@@ -213,13 +213,19 @@ impl ManagedCore {
     /// its caller checked, not from its path again. On Unix the app binds core's `listen` address
     /// itself and hands core the socket (`-listen-fd`), keeping its own copy; core must say it
     /// listens there. Core's log goes to the app's stderr, each line prefixed `core: `. on_exit
-    /// runs once core has exited.
+    /// runs once core has exited. Off Unix it refuses: the open program cannot be started from.
+    #[cfg_attr(
+        not(unix),
+        allow(unreachable_code, unused_variables, unused_mut, unused_assignments)
+    )]
     pub fn start(
         program: File,
         name: &Path,
         dir: &Path,
         on_exit: Option<OnExit>,
     ) -> Result<ManagedCore, String> {
+        #[cfg(not(unix))]
+        return Err("starting the app's own core is supported on Linux only".into());
         let cfg = ensure_config(dir)?;
         let key = management_key(&cfg)?;
         #[cfg(unix)]
@@ -231,7 +237,11 @@ impl ManagedCore {
             use std::os::fd::AsRawFd;
             program.as_raw_fd()
         };
+        #[cfg(unix)]
         let mut cmd = Command::new(format!("/proc/self/fd/{fd}"));
+        // Never run: `start` refused above.
+        #[cfg(not(unix))]
+        let mut cmd = Command::new(name);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -718,20 +728,24 @@ mod tests {
         assert!(core_program(Some("pluxy"))
             .unwrap_err()
             .contains("full path"));
-        assert_eq!(
-            core_program(Some("/opt/pluxy/pluxy")).unwrap(),
-            PathBuf::from("/opt/pluxy/pluxy")
-        );
+        // A full path starts at the root, or at a drive on Windows.
+        #[cfg(windows)]
+        let full = r"C:\opt\pluxy\pluxy";
+        #[cfg(not(windows))]
+        let full = "/opt/pluxy/pluxy";
+        assert_eq!(core_program(Some(full)).unwrap(), PathBuf::from(full));
         // Beside the test program there is no pluxy.
         assert!(core_program(None).unwrap_err().contains("no core program"));
     }
 
     /// A script line saying the core listens on the socket the app will give it.
+    #[cfg(target_os = "linux")]
     fn listening(dir: &Path) -> String {
         let addr = listen_addr(&ensure_config(dir).unwrap()).unwrap();
         format!("echo 'pluxy: listening on http://{addr}' >&2")
     }
 
+    #[cfg(target_os = "linux")]
     fn script(dir: &Path, body: &str) -> PathBuf {
         let script = dir.join("core.sh");
         fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -746,6 +760,7 @@ mod tests {
     /// Commands start the core from worker threads that end when idle; the core must outlive
     /// the thread that started it (on Linux the parent-death signal follows that thread).
     #[test]
+    #[cfg(target_os = "linux")] // the core starts from /proc/self/fd, which only Linux has
     fn the_core_outlives_the_thread_that_started_it() {
         let dir = temp("thread");
         let program = script(&dir, &format!("{}\nexec sleep 30", listening(&dir)));
@@ -797,6 +812,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")] // the core starts from /proc/self/fd, which only Linux has
     fn a_core_that_exits_at_start_says_why() {
         let dir = temp("exit");
         let script = dir.join("core.sh");

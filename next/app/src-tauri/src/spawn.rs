@@ -320,6 +320,14 @@ pub fn parse(
             ))
         }
     };
+    // A launch that names the program a terminal runs is a terminal launch. The process the host
+    // holds is then the terminal's own launcher, which many terminals (gnome-terminal, and konsole
+    // or kitty in single-instance mode) end at once after handing the work to a server process:
+    // stop and status would track a process that is gone, not the agent. So only direct launches
+    // are managed.
+    if lifetime == Lifetime::Managed && input.get("program").is_some() {
+        return Err("a terminal launch is detached only: a terminal may hand its session to a server process and exit, so the app could not stop it (only a direct launch can be managed)".into());
+    }
     let mut r = Request::default();
     if let Some(v) = input.get("stdin") {
         let field = v.as_str().ok_or("a launch's stdin names a secret field")?;
