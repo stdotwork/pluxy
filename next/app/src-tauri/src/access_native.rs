@@ -9,8 +9,9 @@
 //!
 //! - signer policy: an unsigned package and a signed one whose signer is not approved are
 //!   refused a grant; the signer's native approval, cancelled then confirmed, lets it ask;
-//! - grants: a cancelled chooser and a cancelled confirmation grant nothing; a confirmed one
-//!   grants the chosen config-manager link's target, which the package's page reads;
+//! - grants: a cancelled chooser and a cancelled confirmation grant nothing; the app's own
+//!   settings file and data folder are refused before any confirmation; a confirmed one grants
+//!   the chosen config-manager link's target, which the package's page reads;
 //! - scope: a path with a file grant, an undeclared or ungranted resource, another package's
 //!   grant, a page core lists, traversal, absolute paths and a link leaving a granted folder are
 //!   refused, while the granted folder lists and reads, also through a link inside it;
@@ -129,6 +130,29 @@ fn grant(
         format!("access_grant {id} {resource} ({path:?}) should be {want}: {r}"),
     )?;
     Ok(r["value"].clone())
+}
+
+/// Asks for a grant of resource to package id, choosing path, which must be refused before any
+/// native confirmation. Returns the refusal.
+fn grant_refused(
+    main: &Webview,
+    id: &str,
+    resource: &str,
+    path: &Path,
+    folder: bool,
+) -> Result<String, String> {
+    let slot = start(
+        main,
+        "access_grant",
+        json!({"id": id, "resource": resource}),
+    )?;
+    choose(&chooser_title(id, resource, folder), path, folder)?;
+    let r = settle(main, &slot)?;
+    require(
+        r["ok"] == false && window(CONFIRMATION).is_none(),
+        format!("access_grant {id} {resource} ({path:?}) should be refused unasked: {r}"),
+    )?;
+    Ok(r["error"].as_str().unwrap_or_default().to_string())
 }
 
 /// Approves (or cancels approving) the signer of package id's active release.
@@ -459,6 +483,26 @@ fn grant_stage(
         Answer::CancelConfirmation,
     )?;
     require(grants(main)?.is_empty(), "a cancelled grant was kept")?;
+    // The app's own folders: its saved Access file and its data folder are refused before any
+    // confirmation. The confirmed grants of `config` and `tree` below are the positive controls on
+    // the same route.
+    let own_file = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join("access.json");
+    let own_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    for (resource, path, folder) in [("config", &own_file, false), ("tree", &own_dir, true)] {
+        let why = grant_refused(main, "example/files", resource, path, folder)?;
+        require(
+            why.contains("the app's own folder"),
+            format!("{resource} on {path:?} was refused for another reason: {why}"),
+        )?;
+    }
+    require(
+        grants(main)?.is_empty(),
+        "a grant of the app's own folder was kept",
+    )?;
     let g = grant(
         main,
         "example/files",

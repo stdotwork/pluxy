@@ -2478,6 +2478,7 @@ dependencies = [
  "gtk",
  "json-patch",
  "libc",
+ "plist",
  "pulldown-cmark",
  "pulldown-cmark-escape",
  "semver",
@@ -2492,6 +2493,7 @@ dependencies = [
  "ureq",
  "url",
  "webkit2gtk",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
