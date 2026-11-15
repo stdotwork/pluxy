@@ -1,7 +1,8 @@
 name: Next app platforms
 
-# Builds and unit-tests the desktop app's Rust crate on Windows and macOS. The native test
-# (real windows, portals, tray) stays on Linux in next-app.yml.
+# Builds and unit-tests the desktop app's Rust crate on Windows and macOS, and runs the real app
+# there (next/app/native/platform.ts: a second launch raising the first, the login item, the
+# window and the tray). The Linux native test (Xvfb, portals) stays in next-app.yml.
 
 on:
   workflow_dispatch:
@@ -99,3 +100,45 @@ jobs:
             printf "passed %d, failed %d, ignored %d\n", p, f, i
             if (p == 0) exit 1
           }' "$RUNNER_TEMP/cargo-test.log" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # The real app on a hosted Windows and macOS runner, as a person would use it, with the system's
+  # own tools reading back what it leaves in the registry or the LaunchAgents folder. The runner's
+  # user is thrown away after the job; the test removes what it made as well. The sessions are named
+  # in next/app/native/shards.ts (PLATFORM_SHARDS); the summary has the counts.
+  native:
+    name: native (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: next/app/src-tauri -> target
+          key: ${{ matrix.os }}-native
+      - name: UI kit install
+        working-directory: next/ui
+        run: bun install --frozen-lockfile
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Build the window
+        run: bun run build
+      # The app with the test hooks (never in a release build): the one the checks start.
+      - name: Build the app for the native test
+        working-directory: next/app/src-tauri
+        run: cargo build --locked --features native-test
+      - name: Native test
+        timeout-minutes: 40
+        run: bun run test:native:platform

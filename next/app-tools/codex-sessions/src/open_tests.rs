@@ -246,10 +246,13 @@ fn an_archived_rollout_is_inside_the_archived_sessions_folder_not_the_codex_home
 
 #[test]
 fn the_paths_named_are_resolved_even_when_the_codex_home_is_reached_through_a_link() {
+    if !links_allowed() {
+        return;
+    }
     let home = Home::new();
     let file = home.rollout("sessions/2026/08");
     let link = home.0.join("link-to-home");
-    std::os::unix::fs::symlink(&home.0, &link).unwrap();
+    make_link(&home.0, &link).unwrap();
     let o = open(&link, json!({"id": ID}));
     assert_eq!(
         o.calls[0].2,
@@ -291,6 +294,9 @@ fn a_file_that_is_not_a_rollout_is_not_opened() {
 
 #[test]
 fn a_folder_or_a_link_outside_the_sessions_folders_is_not_opened() {
+    if !links_allowed() {
+        return;
+    }
     let home = Home::new();
     // A folder with a rollout's name.
     let dir = home.0.join(format!(
@@ -308,7 +314,7 @@ fn a_folder_or_a_link_outside_the_sessions_folders_is_not_opened() {
     // the database.
     let outside = Home::new();
     let target = outside.write("outside.jsonl", &format!("{CANARY}\n"));
-    std::os::unix::fs::symlink(&target, &dir).unwrap();
+    make_link(&target, &dir).unwrap();
     let o = open(&home.0, json!({"id": ID}));
     asked_nothing(&o);
     assert_eq!(code(&o), "not_found");
@@ -327,10 +333,13 @@ fn a_folder_or_a_link_outside_the_sessions_folders_is_not_opened() {
 
 #[test]
 fn a_link_to_a_rollout_inside_the_folder_is_opened_as_the_file_it_resolves_to() {
+    if !links_allowed() {
+        return;
+    }
     let home = Home::new();
     let target = home.rollout("sessions/2026/08");
     let link = home.0.join("sessions/2026/rollout-link-to-it.jsonl");
-    std::os::unix::fs::symlink(&target, &link).unwrap();
+    make_link(&target, &link).unwrap();
     home.database(&text(&link));
     let o = open(&home.0, json!({"id": ID}));
     assert_eq!(o.calls[0].2["file"], text(&target));
@@ -393,4 +402,39 @@ fn a_launch_the_person_did_not_confirm_is_the_calls_error() {
         "the native confirmation was cancelled"
     );
     says_nothing_of(&o, &home.0);
+}
+
+/// A symbolic link at link to target: on Windows a folder link when target is a folder.
+fn make_link(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return if target.as_ref().is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+}
+
+/// Whether this account may make symbolic links (on Windows that takes a privilege or Developer
+/// Mode). When it may not, says so on stderr: a test that needs links is then skipped, and the CI
+/// summary counts the skip.
+fn links_allowed() -> bool {
+    #[cfg(unix)]
+    return true;
+    #[cfg(windows)]
+    {
+        static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let allowed = *ALLOWED.get_or_init(|| {
+            let probe = std::env::temp_dir().join(format!("links-allowed-{}", std::process::id()));
+            let _ = std::fs::remove_file(&probe);
+            let made = std::os::windows::fs::symlink_file("target", &probe).is_ok();
+            let _ = std::fs::remove_file(&probe);
+            made
+        });
+        if !allowed {
+            eprintln!("skipped: this account cannot make a symbolic link");
+        }
+        allowed
+    }
 }
