@@ -669,11 +669,14 @@ fn listener_owners(port: u16) -> io::Result<Vec<u32>> {
 }
 
 /// On macOS: core still runs and base is the address of the socket the app bound and gave it,
-/// which the app still holds. No other user can listen on that address and port meanwhile: the
-/// system refuses another user's bind over a port a socket of this user's holds (wildcard or
-/// not), unless both set `SO_REUSEPORT`, which the app's socket does not (checked on the CI
-/// runner with a second user, `next-app-platforms.yml`). Other processes of this user are not
-/// looked at: they can read the core's config, management key and all, anyway.
+/// which the app still holds; base is a loopback address (`conn::local_origin`). No other user
+/// can listen where that address's connections would go meanwhile: the system refuses another
+/// user's bind of that address, or of a wildcard over it, on a port a socket of this user's
+/// holds, unless both set `SO_REUSEPORT`, which the app's socket does not (checked on the CI
+/// runner with a second user, `next-app-platforms.yml`). A wildcard the app held would not be
+/// kept so (another user's dual-stack `[::]` binds over `0.0.0.0` there), but the app never
+/// sends its key to one. Other processes of this user are not looked at: they can read the
+/// core's config, management key and all, anyway.
 #[cfg(target_os = "macos")]
 pub fn owns_listener(core: &ManagedCore, base: &str) -> Result<(), String> {
     let not = || format!("the started core is not listening on {base} itself");

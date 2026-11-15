@@ -187,7 +187,7 @@ jobs:
 
           def held(addr):
               # As the app binds its core's socket: Rust's TcpListener sets SO_REUSEADDR, not SO_REUSEPORT.
-              s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+              s = socket.socket(socket.AF_INET6 if ":" in addr else socket.AF_INET, socket.SOCK_STREAM)
               s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
               s.bind((addr, 0))
               s.listen()
@@ -206,10 +206,16 @@ jobs:
               failed |= not ok
               print(f"{'ok  ' if ok else 'FAIL'} {what}: {got} (expected {want})")
 
-          for app_addr in ["127.0.0.1", "0.0.0.0"]:
+          # The app sends its key only to a loopback address, the one its socket holds (`local_origin`,
+          # `owns_listener`): every bind that would take that address's connections is tried.
+          overlapping = {
+              "127.0.0.1": ["127.0.0.1", "0.0.0.0", "::", "::ffff:127.0.0.1"],
+              "::1": ["::1", "::"],
+          }
+          for app_addr, addrs in overlapping.items():
               s = held(app_addr)
               port = s.getsockname()[1]
-              for addr in ["127.0.0.1", "0.0.0.0", "::", "::ffff:127.0.0.1"]:
+              for addr in addrs:
                   expect(f"another user binds {addr}:{port} over the app's {app_addr}", probe(OTHER, addr, port), "refused")
               s.close()
 
