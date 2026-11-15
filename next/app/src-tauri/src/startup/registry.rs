@@ -468,6 +468,18 @@ mod tests {
             .is_err());
         assert_eq!(snapshot(&t.keys, NAME).unwrap(), made);
         assert!(s.registration().unwrap().enabled);
+        // Reading the item back fails after it was changed: it is put back as well.
+        s.fault.store(false, std::sync::atomic::Ordering::SeqCst);
+        s.read_fault
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(s
+            .save(Preferences::default(), || panic!(
+                "removing resolves nothing"
+            ))
+            .is_err());
+        assert_eq!(snapshot(&t.keys, NAME).unwrap(), made);
+        s.read_fault
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     #[test]

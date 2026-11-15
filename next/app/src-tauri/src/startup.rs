@@ -41,6 +41,8 @@ pub struct Store {
     keys: registry::Keys,
     #[cfg(test)]
     fault: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    read_fault: std::sync::atomic::AtomicBool,
 }
 impl Store {
     pub fn new(config: PathBuf, base: PathBuf, identifier: String) -> Self {
@@ -52,6 +54,8 @@ impl Store {
             keys: registry::Keys::user(),
             #[cfg(test)]
             fault: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            read_fault: std::sync::atomic::AtomicBool::new(false),
         }
     }
     fn file(&self) -> PathBuf {
@@ -188,6 +192,18 @@ impl Store {
     fn after_change(&self) -> Result<(), String> {
         Ok(())
     }
+    /// The entry as it stands after the change (for the tests, a read that fails).
+    #[cfg(test)]
+    fn read_back(&self) -> Result<Registration, String> {
+        if self.read_fault.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("the entry could not be read".into());
+        }
+        self.registration()
+    }
+    #[cfg(not(test))]
+    fn read_back(&self) -> Result<Registration, String> {
+        self.registration()
+    }
     #[cfg(windows)]
     fn restore(&self, previous: registry::Snapshot) -> Result<(), String> {
         registry::restore(&self.keys, &self.identifier, previous)
@@ -228,17 +244,20 @@ impl Store {
                 });
             }
         }
-        prefs.autostart_enabled = self.registration()?.enabled;
-        let bytes = serde_json::to_vec_pretty(&prefs).expect("startup preferences are JSON");
-        if let Err(e) = write_private(&self.file(), &bytes) {
+        // What is read back and saved after the entry changed: if either fails, the entry is put back.
+        let saved = self.read_back().map_err(|e| e.to_string()).and_then(|r| {
+            prefs.autostart_enabled = r.enabled;
+            let bytes = serde_json::to_vec_pretty(&prefs).expect("startup preferences are JSON");
+            write_private(&self.file(), &bytes)
+                .map_err(|e| format!("saving startup preferences: {e}"))
+        });
+        if let Err(e) = saved {
             if let Some(previous) = previous {
                 if let Err(r) = self.restore(previous) {
-                    return Err(format!(
-                        "saving startup preferences: {e}; restoring autostart entry: {r}"
-                    ));
+                    return Err(format!("{e}; restoring autostart entry: {r}"));
                 }
             }
-            return Err(format!("saving startup preferences: {e}"));
+            return Err(e);
         }
         self.view(prefs)
     }
@@ -908,6 +927,28 @@ mod rollback_tests {
             "the failed removal did not put it back"
         );
         assert!(s.registration().unwrap().enabled);
+        // Reading the entry back fails after it was changed: it is put back, and both are reported.
+        s.fault.store(false, Ordering::SeqCst);
+        s.read_fault.store(true, Ordering::SeqCst);
+        let err = s
+            .save(Preferences::default(), || {
+                panic!("removing does not resolve the app")
+            })
+            .err()
+            .expect("the read was to fail");
+        assert!(err.contains("could not be read"), "{err}");
+        assert_eq!(
+            fs::read(s.entry()).unwrap(),
+            made,
+            "the failed read did not put it back"
+        );
+        s.read_fault.store(false, Ordering::SeqCst);
+        s.save(Preferences::default(), || Ok(e.clone())).unwrap();
+        assert!(!s.entry().exists());
+        s.read_fault.store(true, Ordering::SeqCst);
+        assert!(s.save(on(), || Ok(e.clone())).is_err());
+        assert!(!s.entry().exists(), "the failed read left the new item");
+        s.read_fault.store(false, Ordering::SeqCst);
         // An app path that cannot be had changes nothing at all.
         s.fault.store(false, Ordering::SeqCst);
         s.save(Preferences::default(), || Ok(e.clone())).unwrap();
