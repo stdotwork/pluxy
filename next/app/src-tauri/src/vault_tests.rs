@@ -197,6 +197,102 @@ fn a_name_too_long_is_refused_never_cut_to_another() {
     assert_eq!(root.read("a").unwrap().as_deref(), Some(&b"short"[..]));
 }
 
+/// Makes link a symbolic link to the file target. False when this account may not (on Windows it
+/// takes a privilege or developer mode).
+fn link_file(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(target, link);
+    match made {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("SKIPPED: this account cannot make a symbolic link: {e}");
+            false
+        }
+    }
+}
+
+#[test]
+fn a_file_link_in_the_vault_is_never_followed() {
+    let (d, v) = vault();
+    v.add_secret("client key", KEY).unwrap();
+    let path = d.0.join("vault");
+    let target = d.0.join("target");
+    fs::write(&target, b"outside").unwrap();
+    let link = path.join("link");
+    if !link_file(&target, &link) {
+        return;
+    }
+    let root = Folder::root(&path, false).unwrap().unwrap();
+    assert!(root.read("link").is_err());
+    // Removing it removes the link itself, never what it names.
+    root.remove("link").unwrap();
+    assert!(fs::symlink_metadata(&link).is_err());
+    assert_eq!(fs::read(&target).unwrap(), b"outside");
+    // Writing it puts a private file of the vault's in the link's place; what it named is as it was.
+    assert!(link_file(&target, &link));
+    root.write("link", b"inside").unwrap();
+    assert!(!fs::symlink_metadata(&link).unwrap().is_symlink());
+    assert_private(&link);
+    assert_eq!(root.read("link").unwrap().as_deref(), Some(&b"inside"[..]));
+    assert_eq!(fs::read(&target).unwrap(), b"outside");
+    // The vault's secrets as a link: refused, not read.
+    let secrets = path.join("secrets.json");
+    fs::remove_file(&secrets).unwrap();
+    assert!(link_file(&target, &secrets));
+    let refused = Vault::open(path.clone());
+    assert!(refused.broken().is_some());
+    assert_eq!(fs::read(&target).unwrap(), b"outside");
+}
+
+/// Windows: a data folder whose entries forbid setting an access list on what is made in it (OWNER
+/// RIGHTS denied WRITE_DAC) gets no vault: nothing private can be made there, so nothing is.
+#[cfg(windows)]
+#[test]
+fn a_data_folder_that_forbids_private_files_keeps_no_vault() {
+    let t = crate::private_windows::tests::temp();
+    assert!(crate::private_windows::tests::icacls(
+        &t.0,
+        &["/deny", "*S-1-3-4:(OI)(CI)(IO)(WDAC)"]
+    ));
+    let v = Vault::open(t.0.join("vault"));
+    assert!(v.add_secret("client key", KEY).is_err());
+    assert!(fs::symlink_metadata(t.0.join("vault")).is_err());
+}
+
+/// Windows: a vault file another program holds open is replaced when that program lets it be
+/// deleted (`FILE_SHARE_DELETE`); when it does not, the write fails, the file stays as it was and
+/// no temporary file is left.
+#[cfg(windows)]
+#[test]
+fn a_vault_file_held_open_elsewhere_is_replaced_or_left_whole() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let (d, _v) = vault();
+    let path = d.0.join("vault");
+    let root = Folder::root(&path, true).unwrap().unwrap();
+    root.write("f", b"one").unwrap();
+    let hold = |share| {
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(share)
+            .open(path.join("f"))
+            .unwrap()
+    };
+    let held = hold(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    root.write("f", b"two").unwrap();
+    assert_eq!(root.read("f").unwrap().as_deref(), Some(&b"two"[..]));
+    drop(held);
+    let held = hold(FILE_SHARE_READ);
+    assert!(root.write("f", b"three").is_err());
+    assert_eq!(root.names().unwrap(), vec!["f".to_string()]);
+    drop(held);
+    assert_eq!(root.read("f").unwrap().as_deref(), Some(&b"two"[..]));
+}
+
 #[test]
 fn only_plain_names_are_vault_names() {
     for name in ["", ".", "..", "a/b", "a\0b"] {

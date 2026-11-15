@@ -185,3 +185,19 @@ fn another_owner_is_refused_never_taken_over() {
     // Still LocalService's: refused, not taken over.
     assert!(!owned(&open(&dir)).unwrap());
 }
+
+/// A folder whose inherited entries deny OWNER RIGHTS (S-1-3-4) the right to change an access list
+/// forbids whoever makes something in it to set its list: Windows refuses any creation that brings
+/// its own descriptor, so nothing private can be made there, and nothing is left behind. The same
+/// call in a folder without that entry makes private ones.
+#[test]
+fn a_folder_that_forbids_setting_access_lists_refuses_private_folders() {
+    let t = temp();
+    assert!(icacls(&t.0, &["/deny", "*S-1-3-4:(OI)(CI)(IO)(WDAC)"]));
+    let e = create_private_dir_all(&t.0.join("x").join("y")).unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::PermissionDenied, "{e}");
+    assert!(fs::symlink_metadata(t.0.join("x")).is_err());
+    let open = temp();
+    create_private_dir_all(&open.0.join("x").join("y")).unwrap();
+    assert!(private(&open.0.join("x")) && private(&open.0.join("x").join("y")));
+}
