@@ -554,8 +554,14 @@ program's name) and `cwd`, and may name:
   refuses, before any dialog:
   - a file that is not a regular file, has an execute bit, is named `.desktop`, or does not
     resolve inside the folder;
-  - a file or folder that is not the person's own or that someone else may write (group or
-    world write bits): another user could replace it before the opener reads it;
+  - a file, the folder it must be inside, or any folder between the two (from the file's
+    parent up to and including that folder) that is not the person's own (the effective
+    user's) or that someone else may write (group or world write bits), or that is not a
+    real folder (a link): another user could replace the file, or rename another into its
+    place, before the opener reads it. The spawn checks every one of these again, by its
+    resolved path and without following links, so a folder made writable or turned into a
+    link since the confirmation is refused. Folders above the one it must be inside are not
+    checked;
   - a folder that is `/`, the home folder or a folder above it;
   - a file whose content type is not plain text (`text/plain`, `application/json`,
     `application/x-ndjson`, `application/jsonl`, `text/markdown` or `text/x-log`). The type is

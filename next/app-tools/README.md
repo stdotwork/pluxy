@@ -550,9 +550,11 @@ app's "Edit with local app" did: it runs `xdg-open <file>`, or `gio open <file>`
 native-test build of the program does, for the native test's stand-in opener). The caller names
 the file and the folder it may open files in (`within`), for the Codex session reader its
 sessions folder: both are resolved, links followed, and the file must be a regular file with no
-execute bit inside that folder, which must not be `/`, the home folder or a folder above it. The
-resolved file is the opener's argument. The app checks all of this again, and more (the file's
-content type, who owns and may write the file and folder, the launch's exact shape), shows the
+execute bit inside that folder, which must not be `/`, the home folder or a folder above it. That
+folder and every folder between it and the file must be the user's own and writable by neither
+group nor others (`prepare` refuses the call otherwise, so the caller learns before the person
+is asked). The resolved file is the opener's argument. The app checks all of this again, and more
+(the file's content type, who owns and may write the file, the launch's exact shape), shows the
 file, its type and the folder in its confirmation and binds them
 (`../app/app-host/README.md`, "Launches and managed runtimes"). Which app the opener then starts
 is the desktop's choice for the file's type: the confirmation names the opener, not that app.
