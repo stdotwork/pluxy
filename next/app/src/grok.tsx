@@ -37,6 +37,7 @@ import {
   withServed,
 } from "./grokForm";
 import { connectionGet } from "./host";
+import { keptTerminal, useDeviceChanged } from "./startCli";
 
 const t = strings("grok", {
   title: "Grok Build",
@@ -165,8 +166,10 @@ function StartCli(props: { available: boolean }) {
   const terminals = useLoad(() =>
     reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
   );
+  useDeviceChanged(terminals.reload);
   const action = useAction(state.reload);
   const recent = state.data?.history[CLIENT] ?? [];
+  const shownTerminal = keptTerminal(terminal, terminals.data?.terminals);
   const start = () =>
     action.run(async () => {
       const recipe = await tool<Record<string, unknown>>("recipe", {});
@@ -175,7 +178,7 @@ function StartCli(props: { available: boolean }) {
         launch: {
           ...recipe.body,
           cwd: cwd.trim(),
-          terminal,
+          terminal: shownTerminal,
           ...(override.trim() ? { override: override.trim() } : {}),
         },
       });
@@ -195,7 +198,7 @@ function StartCli(props: { available: boolean }) {
       {terminals.data && (
         <Choices
           label={t("terminal")}
-          value={terminal}
+          value={shownTerminal}
           choices={terminals.data.terminals.map((x) => ({ value: x.id, label: x.label }))}
           onChange={setTerminal}
         />
