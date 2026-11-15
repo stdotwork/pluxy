@@ -502,8 +502,8 @@ fn quit(app: &AppHandle) {
 }
 
 /// Stops what the app owns, in this order: its native tools, its managed runtimes, then its own
-/// core, if it runs one. Quit and the restart after an update install (`updater::restart_into`)
-/// both stop the app this way. Detached launches are not the app's own and run on.
+/// core, if it runs one. Quit, the restart after an update install (`updater::restart_into`) and
+/// the app's exit all stop it this way. Detached launches are not the app's own and run on.
 fn stop_owned(st: &App) {
     #[cfg(target_os = "linux")]
     st.programs.stop_all();
@@ -3228,11 +3228,7 @@ pub fn run() {
         }
         RunEvent::Exit => {
             if let Some(st) = app.try_state::<App>() {
-                #[cfg(target_os = "linux")]
-                st.programs.stop_all();
-                #[cfg(target_os = "linux")]
-                st.runtimes.stop_all();
-                st.conn.lock().unwrap().stop_core();
+                stop_owned(&st);
             }
             if let Some(i) = app.try_state::<instance::Instance>() {
                 i.release();

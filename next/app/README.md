@@ -494,8 +494,9 @@ AppImage itself, in this order (`src-tauri/src/updater.rs`):
    flushed to disk, renamed over it, and the folder flushed.
 7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
    that order; detached launches run on) and hides its window, but keeps its profile lock and
-   hands it to the new AppImage it starts, so no other launch takes the profile meanwhile; the tray stays responsive while it waits. It waits up to 90 seconds for
-   the new version to accept itself: once it has started, with the installed file's digest the one
+   hands it to the new AppImage it starts, so no other launch takes the profile meanwhile; the
+   tray stays responsive while it waits. It waits up to 90 seconds for the new version to accept
+   itself: once it has started, with the installed file's digest the one
    pinned, it writes `updates/accepted.json`. If it ends first or does not accept in time, the kept
    copy (checked against its digest) is put back the same way, the page later says the update
    failed, and the earlier version starts again with the lock. If the kept copy cannot be put back,
