@@ -24,30 +24,28 @@ use std::path::Path;
 use std::ptr::{null, null_mut};
 use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows_sys::Wdk::Storage::FileSystem::{
-    NtCreateFile, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
-    FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT,
+    FileRenameInformation, FileRenameInformationEx, NtCreateFile, NtSetInformationFile,
+    FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT,
+    FILE_RENAME_INFORMATION, FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS,
+    FILE_SYNCHRONOUS_IO_NONALERT,
 };
 use windows_sys::Win32::Foundation::{
     RtlNtStatusToDosError, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, ERROR_NO_MORE_FILES,
-    HANDLE, OBJ_CASE_INSENSITIVE, UNICODE_STRING,
+    HANDLE, NTSTATUS, OBJ_CASE_INSENSITIVE, STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER,
+    STATUS_NOT_SUPPORTED, UNICODE_STRING,
 };
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::{
     CreateDirectoryW, FileDispositionInfo, FileDispositionInfoEx, FileFullDirectoryInfo,
-    FileFullDirectoryRestartInfo, FileRenameInfo, FileRenameInfoEx, GetFileInformationByHandleEx,
-    SetFileInformationByHandle, DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY,
-    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DELETE_CHILD,
-    FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO,
-    FILE_DISPOSITION_INFO_EX, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_FULL_DIR_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY,
-    FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    FILE_TRAVERSE, READ_CONTROL, SYNCHRONIZE, WRITE_DAC,
+    FileFullDirectoryRestartInfo, GetFileInformationByHandleEx, SetFileInformationByHandle, DELETE,
+    FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_DELETE_CHILD, FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+    FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_FULL_DIR_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+    FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FILE_TRAVERSE, READ_CONTROL, SYNCHRONIZE, WRITE_DAC,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
-
-/// `FILE_RENAME_FLAG_REPLACE_IF_EXISTS` and `FILE_RENAME_FLAG_POSIX_SEMANTICS` (winbase.h).
-const RENAME_REPLACE: u32 = 0x1;
-const RENAME_POSIX: u32 = 0x2;
 
 /// What a held folder may be used for: list, open and make inside it, delete inside it, read and
 /// change its access list.
@@ -127,12 +125,17 @@ fn at(
         )
     };
     if status < 0 {
-        // SAFETY: a plain conversion of a status code.
-        let code = unsafe { RtlNtStatusToDosError(status) };
-        return Err(io::Error::from_raw_os_error(code as i32));
+        return Err(nt_error(status));
     }
     // SAFETY: h is the handle NtCreateFile opened, owned by nothing else.
     Ok(unsafe { File::from_raw_handle(h as _) })
+}
+
+/// A failed `NTSTATUS` as the Win32 error it stands for.
+fn nt_error(status: NTSTATUS) -> io::Error {
+    // SAFETY: a plain conversion of a status code.
+    let code = unsafe { RtlNtStatusToDosError(status) };
+    io::Error::from_raw_os_error(code as i32)
 }
 
 fn is_link(f: &File) -> io::Result<bool> {
@@ -184,20 +187,26 @@ fn delete(f: &File) -> io::Result<()> {
 }
 
 /// Renames the file open as f (with `DELETE`) to name in the folder dir, replacing what is
-/// there: through the file's handle, relative to the folder's handle.
+/// there: through the file's handle, relative to the folder's handle. Through
+/// `NtSetInformationFile`: `SetFileInformationByHandle` makes the name a full path from the
+/// current folder, which a rename relative to a folder's handle refuses.
 fn rename(f: &File, dir: &File, name: &str) -> io::Result<()> {
     let name = wide(name.as_ref());
-    let at = offset_of!(FILE_RENAME_INFO, FileName);
-    let size = at + name.len() * 2;
+    let at = offset_of!(FILE_RENAME_INFORMATION, FileName);
+    let size = (at + name.len() * 2).max(size_of::<FILE_RENAME_INFORMATION>());
     // u64s keep the structure aligned.
-    let mut buf = vec![0u64; size.div_ceil(8) + 1];
-    let info = buf.as_mut_ptr() as *mut FILE_RENAME_INFO;
-    let set = |class, flags: Option<u32>| {
+    let mut buf = vec![0u64; size.div_ceil(8)];
+    let info = buf.as_mut_ptr() as *mut FILE_RENAME_INFORMATION;
+    let set = |class, flags: Option<u32>| -> NTSTATUS {
+        let mut io = IO_STATUS_BLOCK::default();
         // SAFETY: buf holds the structure and the name after it; the name is written in bounds.
         unsafe {
             match flags {
                 Some(flags) => (*info).Anonymous.Flags = flags,
-                None => (*info).Anonymous.ReplaceIfExists = true,
+                None => {
+                    (*info).Anonymous.Flags = 0;
+                    (*info).Anonymous.ReplaceIfExists = true;
+                }
             }
             (*info).RootDirectory = handle(dir);
             (*info).FileNameLength = (name.len() * 2) as u32;
@@ -206,21 +215,26 @@ fn rename(f: &File, dir: &File, name: &str) -> io::Result<()> {
                 (info as *mut u8).add(at) as *mut u16,
                 name.len(),
             );
-            SetFileInformationByHandle(handle(f), class, info.cast(), size as u32) != 0
+            NtSetInformationFile(handle(f), &mut io, info.cast(), size as u32, class)
         }
     };
-    if set(FileRenameInfoEx, Some(RENAME_REPLACE | RENAME_POSIX)) {
+    let status = set(
+        FileRenameInformationEx,
+        Some(FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS),
+    );
+    if status >= 0 {
         return Ok(());
     }
-    let e = io::Error::last_os_error();
-    if !matches!(e.raw_os_error(), Some(c) if c == ERROR_INVALID_PARAMETER as i32 || c == ERROR_NOT_SUPPORTED as i32)
-    {
-        return Err(e);
+    // A system or file system without the extended rename: the plain one.
+    if !matches!(
+        status,
+        STATUS_INVALID_INFO_CLASS | STATUS_INVALID_PARAMETER | STATUS_NOT_SUPPORTED
+    ) {
+        return Err(nt_error(status));
     }
-    if set(FileRenameInfo, None) {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
+    match set(FileRenameInformation, None) {
+        s if s >= 0 => Ok(()),
+        s => Err(nt_error(s)),
     }
 }
 
