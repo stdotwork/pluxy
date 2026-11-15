@@ -90,6 +90,7 @@ struct App {
     startup: Mutex<(startup::Store, startup::Preferences)>,
     conn: Mutex<Connection>,
     /// A change of the app's own core waiting for its native confirmation (`core_updates.rs`).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     core_change: Mutex<Option<core_updates::Pending>>,
     #[cfg(target_os = "linux")]
     confirmations: Mutex<confirmation::Confirmations>,
@@ -1625,6 +1626,15 @@ fn choose_archive(app: &AppHandle) -> Result<Option<std::path::PathBuf>, String>
 /// Installs or updates a package from a local archive the person chooses in the native file
 /// chooser; the window names no path.
 #[tauri::command]
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        unreachable_code,
+        unused_variables,
+        unused_assignments,
+        clippy::diverging_sub_expression
+    )
+)]
 async fn device_install_file(webview: Webview) -> Result<device::View, String> {
     trusted(&webview)?;
     let app = webview.app_handle().clone();
@@ -1897,6 +1907,7 @@ fn access_choose(
     rx.recv().map_err(|_| "the file chooser closed".to_string())
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn access_facts(app: &AppHandle, id: &str) -> Result<access::Facts, String> {
     app.state::<App>()
         .device

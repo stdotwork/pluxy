@@ -69,6 +69,7 @@ pub fn build_core(dir: &Path, version: &str) {
 }
 
 /// A shell script standing in for a core that breaks its config (`-config <path>`) and exits.
+#[cfg(unix)]
 pub fn bad_core(dir: &Path) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir).unwrap();
@@ -82,6 +83,7 @@ pub fn bad_core(dir: &Path) {
 }
 
 /// A shell script standing in for a core, with body after `#!/bin/sh`.
+#[cfg(unix)]
 pub fn script_core(dir: &Path, body: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir).unwrap();
