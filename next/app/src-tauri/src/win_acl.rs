@@ -69,9 +69,14 @@ fn token_info(token: &Token, class: i32) -> Result<Vec<u64>, String> {
 }
 
 /// Checks that path is a folder (folder set) or a plain file, not a link or another reparse
-/// point; owned by this user (or by the owner this user's files get, which is the Administrators
-/// group for an elevated administrator); with an access list that lets no one else in beyond
-/// others allows. Inherit-only entries, which apply to what is made inside, are not counted.
+/// point; owned by this user, or by the token's default owner (the owner this user's new files
+/// get: the Administrators group for an elevated administrator, as on a hosted CI runner); with
+/// an access list that lets no one else in beyond others allows. Allow entries for SYSTEM and the
+/// Administrators group are accepted: they are the Windows form of root, which a unix mode check
+/// cannot exclude either, and folders such as a runner's temporary folder carry them by
+/// inheritance. Entries present on the object are judged whether inherited or not; inherit-only
+/// entries, which apply only to what is made inside, are not counted. As on unix, this is the
+/// object's state now: its parents are not checked.
 pub fn check(path: &Path, folder: bool, others: Others) -> Result<(), String> {
     let what = path.display();
     let file = OpenOptions::new()
@@ -133,7 +138,9 @@ pub fn check(path: &Path, folder: bool, others: Others) -> Result<(), String> {
     result.map_err(|why| format!("{what}: {why}"))
 }
 
-/// Judges an owner and access list. SAFETY: every pointer must be valid (dacl may be null).
+/// Judges an owner and access list by `check`'s rule: me is this user's SID, my_owner the token's
+/// default owner; both count as this user, and SYSTEM and Administrators allow entries are
+/// accepted (see `check`). SAFETY: every pointer must be valid (dacl may be null).
 unsafe fn judge(
     owner: PSID,
     dacl: *mut ACL,
