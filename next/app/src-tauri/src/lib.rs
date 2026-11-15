@@ -46,6 +46,8 @@ mod release_native;
 #[cfg(target_os = "linux")]
 pub mod route;
 #[cfg(target_os = "linux")]
+pub mod savefile;
+#[cfg(target_os = "linux")]
 pub mod spawn;
 mod startup;
 pub mod trust;
@@ -2872,6 +2874,12 @@ pub fn run() {
                 .state::<App>()
                 .programs
                 .set_spawner(route::spawner(handle.clone()));
+            // And their files frames, to the host's save service.
+            #[cfg(target_os = "linux")]
+            handle
+                .state::<App>()
+                .programs
+                .set_saver(route::saver(handle.clone()));
             // Tools get the app's home and a data folder of their own, beside the vault.
             #[cfg(target_os = "linux")]
             handle

@@ -76,6 +76,9 @@ struct Origin {
     /// The launch the call's confirmation authorized, for its target's release, until the target
     /// spawns it.
     launch: Mutex<Option<(Holder, spawn::Launch)>>,
+    /// A confirmed `disclose` call's one save, for its target's release (`save_frame`): the bytes
+    /// handed to the save service so far, until the target saves them.
+    save: Mutex<Option<(Holder, Vec<u8>)>>,
 }
 
 /// Who fills a call's secret fields: the window, with vault secret IDs; a page, never; a tool,
@@ -134,6 +137,7 @@ pub fn call_main(
         gesture: Arc::new(Mutex::new(gesture)),
         token: 0,
         launch: Mutex::new(None),
+        save: Mutex::new(None),
     };
     dispatch(
         app,
@@ -192,6 +196,7 @@ fn outbound(app: &AppHandle, o: Outbound) -> Result<Value, CallError> {
         gesture: Arc::new(Mutex::new(None)),
         token: 0,
         launch: Mutex::new(None),
+        save: Mutex::new(None),
     };
     let filler = Filler::Tool {
         holder: Holder {
@@ -289,6 +294,7 @@ fn page_call(app: &AppHandle, label: &str, params: &Value) -> Result<Value, Call
                 gesture: Arc::new(Mutex::new(None)),
                 token: 0,
                 launch: Mutex::new(None),
+                save: Mutex::new(None),
             };
             let chain = vec![Hop::Page {
                 id: caller.clone(),
@@ -434,6 +440,10 @@ fn dispatch(
         generation: grant.target.installed_at(),
     };
     *origin.launch.lock().unwrap() = launch.map(|l| (holder.clone(), l));
+    // A disclose call, confirmed: its target may save one file of what it shows.
+    if grant.op.effect == "disclose" {
+        *origin.save.lock().unwrap() = Some((holder.clone(), Vec::new()));
+    }
     let mut secrets = Vec::new();
     for f in &filled {
         let minted = vault.mint(&f.secret, &holder, token).and_then(|r| {
@@ -603,6 +613,7 @@ fn start_job(
                     gesture: Arc::new(Mutex::new(None)),
                     token: 0,
                     launch: Mutex::new(None),
+                    save: Mutex::new(None),
                 };
                 let input = i["input"].clone();
                 // A job's operation has no secret fields (`device::Catalog` refuses them at install),
@@ -743,6 +754,7 @@ fn run_job(
                 gesture: Arc::new(Mutex::new(None)),
                 token: 0,
                 launch: Mutex::new(None),
+                save: Mutex::new(None),
             }),
             feed: None,
             // A consumer busy past the startup limit fails the job rather than hold it.
@@ -1119,6 +1131,146 @@ fn spawn_frame(
         "stop" => rt.stop(id, runtime).map_err(unavailable),
         "restart" => rt.restart(id, runtime).map_err(unavailable),
         _ => Ok(status),
+    }
+}
+
+/// The host's save service for tools' `files` frames (`program::Host::set_saver`).
+pub fn saver(app: AppHandle) -> program::Saver {
+    Arc::new(move |tool, context, frame, cancel| save_frame(&app, tool, context, frame, cancel))
+}
+
+/// Tool's `files` frame, for a call it serves (context) whose operation's effect is `disclose`,
+/// confirmed for the tool's own release: `append` adds bytes (`{"offset", "data"}`: base64, at the
+/// size so far, at most `savefile::MAX_BYTES` in all), and `save` (`{"name"}`, a suggested file
+/// name) asks the person where to save them in the native save dialog, titled with the tool's
+/// package, and saves them there. One save per call: once asked, the call's bytes are gone, whatever
+/// the answer. Refused unless the tool still runs its package's admitted release, as its own calls
+/// are; a page or tool never names the path.
+fn save_frame(
+    app: &AppHandle,
+    tool: &Hop,
+    context: &Arc<Context>,
+    frame: &Value,
+    cancel: &Cancel,
+) -> Result<Value, CallError> {
+    use base64::Engine;
+    let Hop::Package {
+        id,
+        sha256,
+        generation,
+    } = tool
+    else {
+        return Err(fail("permission", "only a tool's run saves files"));
+    };
+    app.state::<App>()
+        .device
+        .lock()
+        .unwrap()
+        .current_run((id, sha256, *generation), &roots())
+        .map_err(refused)?;
+    let origin = context.extra.downcast_ref::<Origin>().ok_or_else(|| {
+        fail(
+            "permission",
+            "the call it serves was not made by the router",
+        )
+    })?;
+    let op = frame["op"].as_str().unwrap_or_default();
+    let input = frame["input"].as_object();
+    let fields: Option<Vec<&str>> = input.map(|i| {
+        let mut k: Vec<&str> = i.keys().map(String::as_str).collect();
+        k.sort_unstable();
+        k
+    });
+    let mut slot = origin.save.lock().unwrap();
+    let Some((holder, bytes)) = slot.as_mut() else {
+        return Err(fail(
+            "permission",
+            "the call it serves does not show content (its effect is not disclose), or its file was saved already",
+        ));
+    };
+    if holder.id != *id || holder.sha256 != *sha256 || holder.generation != *generation {
+        return Err(fail(
+            "permission",
+            "the call was confirmed for another release",
+        ));
+    }
+    if cancel.is_set() {
+        return Err(fail(
+            "cancelled",
+            "the call it serves, or the request, was cancelled",
+        ));
+    }
+    match op {
+        "append" => {
+            let i = input.filter(|_| fields.as_deref() == Some(&["data", "offset"][..]));
+            let (Some(offset), Some(data)) = (
+                i.and_then(|i| i["offset"].as_u64()),
+                i.and_then(|i| i["data"].as_str()),
+            ) else {
+                return Err(fail(
+                    "invalid_request",
+                    "an append's input is {\"offset\", \"data\"}: the size so far and base64 bytes",
+                ));
+            };
+            if offset != bytes.len() as u64 {
+                return Err(fail(
+                    "invalid_request",
+                    format!("the bytes so far are {}, not {offset}", bytes.len()),
+                ));
+            }
+            let more = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .map_err(|_| fail("invalid_request", "an append's data is not base64"))?;
+            if bytes.len() + more.len() > crate::savefile::MAX_BYTES {
+                // Too much: nothing of it is saved.
+                *slot = None;
+                return Err(fail(
+                    "invalid_request",
+                    format!(
+                        "a file saved through the host is at most {} bytes",
+                        crate::savefile::MAX_BYTES
+                    ),
+                ));
+            }
+            bytes.extend_from_slice(&more);
+            Ok(json!({"size": bytes.len()}))
+        }
+        "save" => {
+            let name = input
+                .filter(|_| fields.as_deref() == Some(&["name"][..]))
+                .and_then(|i| i["name"].as_str())
+                .ok_or_else(|| {
+                    fail(
+                        "invalid_request",
+                        "a save's input is {\"name\"}, a suggested file name; the person chooses where",
+                    )
+                })?;
+            let name = crate::savefile::file_name(name).map_err(|e| fail("invalid_request", e))?;
+            let (_, bytes) = slot
+                .take()
+                .ok_or_else(|| fail("permission", "the call's file was saved already"))?;
+            drop(slot);
+            let size = bytes.len();
+            let chosen = crate::savefile::ask(app, format!("Save a file from {id}"), name, &|| {
+                cancel.is_set()
+            })
+            .map_err(|e| fail("unavailable", e))?;
+            let Some(chosen) = chosen else {
+                return Ok(json!({"outcome": "cancelled"}));
+            };
+            if cancel.is_set() {
+                return Ok(json!({"outcome": "cancelled"}));
+            }
+            crate::savefile::write(&chosen, &bytes).map_err(|r| match r {
+                crate::savefile::Refusal::Changed(m) => fail("permission", m),
+                crate::savefile::Refusal::Failed(m) => fail("unavailable", m),
+            })?;
+            Ok(json!({"outcome": "saved", "size": size}))
+        }
+        _ => Err(fail(
+            "unsupported",
+            format!("a files request's op is append or save, not {op:?}"),
+        )),
     }
 }
 

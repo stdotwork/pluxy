@@ -349,7 +349,9 @@ Each operation has an effect: `read` (runs with no question asked), `write` (ask
 confirmation each call), `launch` (asks a native confirmation of the exact launch) or `disclose`
 (shows content the tool reads, such as a session's messages: asks a native confirmation each
 call, as `write` does; dialogs and the Device page say it "shows content"). Every effect but an
-exact `read` asks, and only a launch's confirmation can be remembered. A launch operation's input
+exact `read` asks, and only a launch's confirmation can be remembered. A `disclose` call may also
+hand the person one file of what it shows, through the host's save dialog
+([Saving files](#saving-files)). A launch operation's input
 schema must require `executable`, `argv` and `cwd`.
 
 ### Enabling a native tool with imports
@@ -674,6 +676,54 @@ limit of 0 the kernel writes no core file, but still runs a `|` core dump handle
 (systemd-coredump keeps no core then, and records the app's environment in the journal). Unlike a
 launch given a secret, the app keeps the vault's secrets in its memory, not in its environment, so
 that record holds no secret.
+
+## Saving files
+
+A native tool saves a file for the person only through the host, and only where the person
+chooses it in a native save dialog: neither a page nor a tool ever names the path. The tool asks
+while it serves a call of one of its `disclose` operations, which the person confirmed for that
+call (from the window, a page or another tool); the file's bytes go from the tool's pipe to the
+host and the chosen file, never through a page. That is how a page offers an export: it calls its
+tool's `disclose` operation, and the tool hands over what it read. A call of any other effect, a
+job and a delivery cannot save. There is no page channel method for it.
+
+The tool sends `files` frames for the call it serves, as it sends `spawn` frames, and the host
+answers each on its stdin with a `result` or `error` frame of that ID:
+
+```json
+{"type":"files","id":"f-1","for":"c-2","op":"append","input":{"offset":0,"data":"<base64>"}}
+{"type":"files","id":"f-2","for":"c-2","op":"save","input":{"name":"session-019a.jsonl"}}
+```
+
+- `append` adds bytes (`data`, standard base64) at `offset`, which must be the number of bytes
+  so far; it answers `{"size": <bytes so far>}`. A frame is at most 1 MiB, so a larger file takes
+  several. At most 64 MiB in all: the append that would pass it is refused with
+  `invalid_request`, and the bytes so far are dropped.
+- `save` names the file name to suggest, nothing else; the host shows the native save dialog,
+  titled `Save a file from <package>` and holding the suggested name, and answers
+  `{"outcome": "saved", "size": <bytes>}` or `{"outcome": "cancelled"}`. A name holding `/`, `\`
+  or NUL (a path) and an input with any other field are refused with `invalid_request`; control
+  and format characters (such as U+202E) become `_`, leading dots and spaces are dropped and the
+  name is cut to 255 bytes. One save per call: once a `save` passes those checks, whatever the
+  answer, every later `append` or `save` for the call is refused with `permission`, and so is a
+  `files` frame for a call whose operation is not `disclose`.
+
+The dialog is GTK's file chooser in save mode, as the Access chooser (the desktop portal's with
+`GTK_USE_PORTAL=1` or inside a sandbox), with its own overwrite question: an existing file is
+replaced only after the person answers Replace. One save dialog shows at a time; a `save` while
+another shows is refused with `unavailable`. Cancelling it writes nothing; so does the call it
+serves ending (cancelled, its page closing, the window closing), which closes the dialog. The
+chosen name must be a regular file or nothing: a link or a folder there is refused
+(`unavailable`), since writing through a link would write a file the dialog did not show.
+
+The host writes the file atomically beside the chosen one: a temporary file in the same folder,
+opened relative to that folder without following a link, mode 0600 (a replaced file keeps its
+permission bits), the bytes, fsync, then a rename over the chosen name (for a new file, one that
+replaces nothing) and an fsync of the folder. Before the rename it checks that the folder and the
+name are still what the dialog answered: a link, another file or a folder now at the name, a file
+that appeared where there was none, or a replaced folder is refused with `permission`, and the
+temporary file is removed. The check and the rename are two steps; a change between them is not
+caught. Nothing of the bytes or the chosen path is logged, and the answers carry neither.
 
 ## Secrets, references and the vault
 
