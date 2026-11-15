@@ -321,9 +321,51 @@ pub(crate) fn make_private(f: &File, folder: bool) -> io::Result<()> {
     })
 }
 
+/// Makes the folder path and every missing folder above it, each private as it is made (the
+/// protected list comes with the descriptor it is made with, so it is never open to others in
+/// between), then checks path as `make_private_dir` does: the `mkdir -p -m 0700` of `device.rs`'s
+/// `private_dir`. Folders that were there already, above path, are left as they are.
+pub(crate) fn create_private_dir_all(path: &std::path::Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
+    let mut missing = Vec::new();
+    let mut p = path;
+    loop {
+        match std::fs::symlink_metadata(p) {
+            Ok(_) => break,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                missing.push(p);
+                match p.parent() {
+                    Some(q) if !q.as_os_str().is_empty() => p = q,
+                    _ => break,
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    let private = Private::new(true)?;
+    let sa = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: private.descriptor(),
+        bInheritHandle: 0,
+    };
+    for dir in missing.iter().rev() {
+        let name: Vec<u16> = dir.as_os_str().encode_wide().chain([0]).collect();
+        // SAFETY: name is NUL-terminated; sa and its descriptor live through the call.
+        if unsafe { CreateDirectoryW(name.as_ptr(), &sa) } == 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() != io::ErrorKind::AlreadyExists {
+                return Err(e);
+            }
+        }
+    }
+    make_private_dir(path)
+}
+
 /// Opens the folder path itself (never a link it names: a link is refused) for checking and
-/// changing its access list, then makes it private as `make_private` does: the `chmod 0700` of
-/// `device.rs`'s `private_dir`.
+/// changing its access list, and makes it private as `make_private` does when it is not: the
+/// `chmod 0700` of `device.rs`'s `private_dir`.
 pub(crate) fn make_private_dir(path: &std::path::Path) -> io::Result<()> {
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     use windows_sys::Win32::Storage::FileSystem::{
@@ -340,6 +382,9 @@ pub(crate) fn make_private_dir(path: &std::path::Path) -> io::Result<()> {
             io::ErrorKind::InvalidInput,
             "a link or not a folder",
         ));
+    }
+    if is_private(&f)? {
+        return Ok(());
     }
     make_private(&f, true)
 }

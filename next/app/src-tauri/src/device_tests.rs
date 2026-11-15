@@ -2924,6 +2924,9 @@ fn private_folders_are_private_on_windows() {
     let dir = t.0.join("a").join("b");
     private_dir(&dir).unwrap();
     assert!(private(&dir));
+    // The folder it made above it too; the one that was there already is left as it was.
+    assert!(private(&t.0.join("a")));
+    assert!(!private(&t.0));
     // Again on a folder that is no longer private.
     crate::private_windows::tests::readable_by_everyone(&dir);
     assert!(!private(&dir));

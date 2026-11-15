@@ -437,8 +437,7 @@ fn private_dir(p: &Path) -> Result<(), String> {
 }
 #[cfg(windows)]
 fn private_dir(p: &Path) -> Result<(), String> {
-    fs::create_dir_all(p).map_err(|e| format!("{}: {e}", p.display()))?;
-    crate::private_windows::make_private_dir(p).map_err(|e| format!("{}: {e}", p.display()))
+    crate::private_windows::create_private_dir_all(p).map_err(|e| format!("{}: {e}", p.display()))
 }
 
 /// Removes a store or staging folder, whose files and folders are read-only.
