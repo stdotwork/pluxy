@@ -6,7 +6,7 @@ const PAGE_SIZE = 50;
 const t = {
   title: "Codex Session Management",
   description:
-    "Codex's local sessions on this computer, read-only. Showing a session's messages asks you each time.",
+    "Codex's local sessions on this computer, read-only. Showing a session's messages, or opening its file in another app, asks you each time.",
   refresh: "Refresh",
   total: "Total sessions",
   active: "Active",
@@ -59,6 +59,11 @@ const t = {
   loadMore: "Show more messages",
   detailFailed: "Failed to load session context: {error}",
   emptyMessages: "No conversational messages found in this session.",
+  openLocal: "Open in local app",
+  opening: "Waiting for your confirmation to open the file…",
+  opened:
+    "Asked your desktop to open the session's rollout file. Which app shows it is your desktop's choice for JSON Lines files.",
+  openFailed: "The session's file was not opened: {error}",
 };
 
 const fill = (s, vars) => s.replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ""));
@@ -299,11 +304,37 @@ async function showDetail(id, title) {
           ),
     );
   };
+  // The rollout is opened by the desktop's own opener, after you confirm the launch in a native
+  // dialog that names the file, its type, the folder and the opener: this page learns only whether
+  // it was started. A refusal or a declined confirmation is shown as text.
+  const status = el("p", { class: "muted", role: "status" });
+  const openButton = el(
+    "button",
+    {
+      type: "button",
+      onclick: async () => {
+        openButton.disabled = true;
+        status.setAttribute("class", "muted");
+        status.textContent = t.opening;
+        try {
+          await call("open", { id: d.id });
+          status.textContent = t.opened;
+        } catch (e) {
+          status.setAttribute("class", "error");
+          status.textContent = fill(t.openFailed, { error: errorText(e) });
+        } finally {
+          openButton.disabled = false;
+        }
+      },
+    },
+    t.openLocal,
+  );
   filter.addEventListener("change", render);
   render();
   loadMore(d.next_offset);
   show(
-    el("div", { class: "row" }, back),
+    el("div", { class: "row" }, back, openButton),
+    status,
     el("h1", {}, d.title || t.untitled),
     el(
       "div",

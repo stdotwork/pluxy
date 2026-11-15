@@ -1,6 +1,8 @@
 //! pluxy/codex-sessions: reads Codex's local sessions for pluxy's desktop app, read-only. Its
-//! operations (README.md): `list` (read), `detail` (disclose: each call asks the person) and
-//! `settings` (write: the Codex home folder, kept in the tool's data folder).
+//! operations (README.md): `list` (read), `detail` (disclose: each call asks the person),
+//! `open` (read: opens a rollout in the person's own app through `pluxy/execution`, whose
+//! launch the person confirms) and `settings` (write: the Codex home folder, kept in the tool's
+//! data folder).
 
 mod reader;
 
@@ -11,7 +13,10 @@ use std::path::{Path, PathBuf};
 /// The settings file in the tool's data folder.
 const SETTINGS: &str = "settings.json";
 
-struct Sessions;
+struct Sessions {
+    /// The Codex home to read instead of the one the app's environment gives, for tests.
+    home: Option<PathBuf>,
+}
 
 /// The tool's data folder, which the host gives it.
 fn data_dir() -> Result<PathBuf, Error> {
@@ -82,11 +87,81 @@ fn count(input: &Value, key: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+/// The error a call of `detail` or `open` ends with.
+fn failure(e: reader::DetailError) -> Error {
+    match e {
+        reader::DetailError::Invalid(m) => Error::invalid_request(m),
+        reader::DetailError::NotFound(m) => Error::not_found(m),
+        reader::DetailError::Unavailable(m) => Error::unavailable(m),
+        reader::DetailError::Cancelled => Error::cancelled(),
+    }
+}
+
+/// The program that prepares and starts a launch, which this one imports (`prepare` and `launch`).
+const EXECUTION: &str = "pluxy/execution";
+
+/// The path's text: the host confirms UTF-8 paths only.
+fn utf8(p: &Path) -> Result<String, Error> {
+    p.to_str()
+        .map(String::from)
+        .ok_or_else(|| Error::unavailable("the session's rollout path is not UTF-8"))
+}
+
+/// Opens the rollout file inside within in the person's own app, through execution: it prepares
+/// an open launch of exactly these resolved paths, then starts that launch as prepared, detached,
+/// with no environment, standard input or secret. The call that starts it is the one the person
+/// confirms (the confirmation names this program and execution, the file, its type, the folder and
+/// the opener); this program never spawns anything, and a refusal or a cancelled confirmation is
+/// the call's error.
+fn open_in_local_app(call: &Call, file: &Path, within: &Path) -> Result<Value, Error> {
+    let (file, within) = (utf8(file)?, utf8(within)?);
+    #[allow(unused_mut)]
+    let mut request = json!({"kind": "open", "file": file, "within": within});
+    // The native test's stand-in opener, from a folder only the test names (never in a release).
+    #[cfg(feature = "native-test")]
+    if let Some(folder) = test_opener_folder()? {
+        request["search_path"] = json!([folder]);
+    }
+    let mut launch = call.call(EXECUTION, "prepare", request)?;
+    if launch["file"] != file || launch["within"] != within {
+        return Err(Error::internal(
+            "the prepared launch does not open the rollout asked for",
+        ));
+    }
+    launch["lifetime"] = json!("detached");
+    call.call(EXECUTION, "launch", launch)?;
+    Ok(json!({"outcome": "opened"}))
+}
+
+/// The folder the native test's stand-in opener is in, named by the file `opener-folder` in the
+/// tool's data folder, which only the test writes.
+#[cfg(feature = "native-test")]
+fn test_opener_folder() -> Result<Option<String>, Error> {
+    let Ok(data) = data_dir() else {
+        return Ok(None);
+    };
+    match std::fs::read_to_string(data.join("opener-folder")) {
+        Ok(f) => Ok(Some(f.trim().to_string()).filter(|f| !f.is_empty())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Error::unavailable(format!("the opener folder: {e}"))),
+    }
+}
+
+impl Sessions {
+    /// The Codex home to read, and whether it is custom.
+    fn home(&self) -> Result<(PathBuf, bool), Error> {
+        match &self.home {
+            Some(home) => Ok((home.clone(), false)),
+            None => codex_home(),
+        }
+    }
+}
+
 impl Handler for Sessions {
     fn call(&self, call: &Call) -> Result<Value, Error> {
         match call.op.as_str() {
             "list" => {
-                let (home, _) = codex_home()?;
+                let (home, _) = self.home()?;
                 Ok(reader::list(
                     &home,
                     count(&call.input, "offset", 0),
@@ -95,7 +170,7 @@ impl Handler for Sessions {
                 .to_json())
             }
             "detail" => {
-                let (home, _) = codex_home()?;
+                let (home, _) = self.home()?;
                 let id = call.input["id"].as_str().unwrap_or_default();
                 reader::detail(
                     &home,
@@ -104,12 +179,15 @@ impl Handler for Sessions {
                     count(&call.input, "limit", reader::DEFAULT_PAGE_SIZE),
                     &|| call.cancelled(),
                 )
-                .map_err(|e| match e {
-                    reader::DetailError::Invalid(m) => Error::invalid_request(m),
-                    reader::DetailError::NotFound(m) => Error::not_found(m),
-                    reader::DetailError::Unavailable(m) => Error::unavailable(m),
-                    reader::DetailError::Cancelled => Error::cancelled(),
-                })
+                .map_err(failure)
+            }
+            // Only the rollout's resolved path and its folder leave this program, for execution to
+            // prepare and the host to confirm; the answer says only that the launch was started.
+            "open" => {
+                let (home, _) = self.home()?;
+                let id = call.input["id"].as_str().unwrap_or_default();
+                let (file, within) = reader::open_target(&home, id).map_err(failure)?;
+                open_in_local_app(call, &file, &within)
             }
             "settings" => {
                 let data = data_dir()?;
@@ -123,8 +201,11 @@ impl Handler for Sessions {
 }
 
 fn main() {
-    if let Err(e) = run(Sessions) {
+    if let Err(e) = run(Sessions { home: None }) {
         eprintln!("codex-sessions: {e}");
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod open_tests;
