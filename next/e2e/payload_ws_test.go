@@ -363,3 +363,107 @@ func TestPayloadWebSocketTurnsOverHTTP(t *testing.T) {
 		}
 	}
 }
+
+// An account that names its model differently from the client (an alias) is sent the upstream
+// name, and the payload rules written for the upstream name apply to it, on a WebSocket turn as
+// on POST /v1/responses: the turn takes the request the router made for the account, over an
+// upstream session and as an HTTP call alike. The client asks for "my-gpt"; the account serves
+// it as "gpt-test", and the rule matches only "gpt-test".
+func TestPayloadAndUpstreamModelOfAliasedAccount(t *testing.T) {
+	rules := map[string]any{
+		"override": []any{map[string]any{
+			"models": []any{map[string]any{"name": "gpt-test", "protocol": "codex"}},
+			"params": map[string]any{"reasoning.effort": "high"},
+		}},
+	}
+	start := func(t *testing.T, upstreamURL string, websockets bool) string {
+		return runCore(t, map[string]any{
+			"listen":      "127.0.0.1:0",
+			"client_keys": []string{clientKey},
+			"payload":     rules,
+			"extension": map[string]any{
+				"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
+				"accounts": []any{map[string]any{
+					"id":         "acct-alias",
+					"models":     []any{map[string]any{"name": "gpt-test", "alias": "my-gpt"}},
+					"settings":   map[string]any{"base_url": upstreamURL + "/v1", "websockets": websockets},
+					"credential": map[string]any{"kind": "api_key", "api_key": "sk-alias"},
+				}},
+			},
+		})
+	}
+	check := func(t *testing.T, m map[string]any) {
+		t.Helper()
+		if v, _ := at(m, "model"); v != "gpt-test" {
+			t.Errorf("the upstream was asked for model %v, want gpt-test (the account's name for my-gpt)", v)
+		}
+		if v, _ := at(m, "reasoning.effort"); v != "high" {
+			t.Errorf("reasoning.effort = %v, want high (the rule for gpt-test applies); message %v", v, m)
+		}
+	}
+	turn := wsCreate("one", "")
+	turn["model"] = "my-gpt"
+
+	t.Run("HTTP", func(t *testing.T) {
+		u := newWSUpstream(t)
+		base := start(t, u.URL, false)
+		resp := postPath(t, context.Background(), base, "/v1/responses", clientKey, `{"model":"my-gpt","input":"hi"}`)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST /v1/responses: status %d", resp.StatusCode)
+		}
+		u.mu.Lock()
+		posts := append([]map[string]any(nil), u.posts...)
+		u.mu.Unlock()
+		if len(posts) != 1 {
+			t.Fatalf("upstream saw %d HTTP requests, want 1", len(posts))
+		}
+		check(t, posts[0])
+	})
+	t.Run("WebSocket turn sent as HTTP", func(t *testing.T) {
+		u := newWSUpstream(t)
+		base := start(t, u.URL, false)
+		c := dialResponses(t, base)
+		first := wsTurn(t, c, turn)
+		if first["type"] != "response.completed" {
+			t.Fatalf("the first turn ended with %v", first)
+		}
+		// The second turn continues the first: it goes as an HTTP call with the whole conversation.
+		second := wsCreate("two", responseID(first))
+		second["model"] = "my-gpt"
+		if m := wsTurn(t, c, second); m["type"] != "response.completed" {
+			t.Fatalf("the second turn ended with %v", m)
+		}
+		u.mu.Lock()
+		posts := append([]map[string]any(nil), u.posts...)
+		u.mu.Unlock()
+		if len(posts) != 2 {
+			t.Fatalf("upstream saw %d HTTP requests, want 2", len(posts))
+		}
+		for _, p := range posts {
+			check(t, p)
+		}
+	})
+	t.Run("WebSocket turn on an upstream session", func(t *testing.T) {
+		u := newPayloadWSUpstream(t)
+		base := start(t, u.URL, true)
+		c := dialResponses(t, base)
+		first := wsTurn(t, c, turn)
+		if first["type"] != "response.completed" {
+			t.Fatalf("the first turn ended with %v", first)
+		}
+		// The second turn continues the first on the same session.
+		second := wsCreate("two", responseID(first))
+		second["model"] = "my-gpt"
+		if m := wsTurn(t, c, second); m["type"] != "response.completed" {
+			t.Fatalf("the second turn ended with %v", m)
+		}
+		_, got := u.received(t)
+		if len(got) != 2 {
+			t.Fatalf("upstream saw %d messages, want 2", len(got))
+		}
+		for _, m := range got {
+			check(t, m)
+		}
+	})
+}

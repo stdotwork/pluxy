@@ -145,7 +145,17 @@ interface QuotaState {
   unsupported?: boolean;
 }
 
-function QuotaBody({ state, refresh, disabled }: { state?: QuotaState; refresh(): void; disabled: boolean }) {
+function QuotaBody({
+  state,
+  refresh,
+  disabled,
+  ids,
+}: {
+  state?: QuotaState;
+  refresh(): void;
+  disabled: boolean;
+  ids: readonly string[];
+}) {
   const p = usePrivacy();
   return (
     <section class="card quota-body" data-part="card" aria-busy={state?.busy ?? false}>
@@ -155,7 +165,7 @@ function QuotaBody({ state, refresh, disabled }: { state?: QuotaState; refresh()
         </Button>
       </div>
       {state?.busy && <Notice tone="muted">{t("loading")}</Notice>}
-      {state?.error && <Notice tone="danger">{p.text(state.error)}</Notice>}
+      {state?.error && <Notice tone="danger">{p.text(state.error, ids)}</Notice>}
       {state?.data ? (
         <>
           <QuotaSummary data={state.data} />
@@ -293,6 +303,7 @@ export function QuotaPage() {
                   state={states[a.id]}
                   refresh={() => void refresh(a.id)}
                   disabled={batch || !!states[a.id]?.busy}
+                  ids={accountIdentities(a)}
                 />
               ),
             },
