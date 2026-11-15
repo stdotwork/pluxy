@@ -234,13 +234,22 @@ On Windows:
 
 - A file's permissions are its access list: records keep it as SDDL text where Linux and macOS keep
   the permission bits. The new file is private from the moment it is made (a protected list
-  allowing only this user and SYSTEM) and open to no other handle until it is renamed and closed.
+  allowing only this user and SYSTEM, given as it is made, relative to the folder's handle) and
+  open to no other handle until it is renamed and closed.
   Clear and restore give it the old file's list (protected or taking up its folder's, as it was);
   an apply leaves it private, the twin of owner-only; a file that did not exist stays private, or
   gets the list recorded for it.
 - The rename goes through the new file's own handle into the folder's handle (`rename_open`), with
-  POSIX semantics where the file system has them. The folder is not flushed: Windows has no flush
-  of a folder's entries through a handle opened to read it, and NTFS logs them itself.
+  POSIX semantics where the file system has them. A file another program holds open without
+  letting it be deleted, or one marked read-only, is not replaced: the write fails and is rolled
+  back. The folder is not flushed: Windows has no flush of a folder's entries through a handle
+  opened to read it, and NTFS logs them itself.
+- An existing file is written under the name it has on disk, whatever case (or short 8.3 name)
+  selected it, and one file selected under two spellings is refused as named twice (as on macOS,
+  whose file systems also ignore case by default).
+- A name Windows would read as another file (a stream such as `a.json:x`, a name ending in a dot
+  or a blank, a device name such as `NUL` or `COM1.json`) and a path in a device namespace
+  (`\\.\…`, `\\?\GLOBALROOT\…`) are refused, selected or reached through a link.
 - Links are symbolic links and junctions alike: a selected file or root may be either, and either
   inside a selected root is refused. A file's or folder's identity is the volume serial number and
   the 64-bit file index (NTFS gives a reused index a new sequence number, so a link made again is

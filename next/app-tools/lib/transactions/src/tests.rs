@@ -1822,6 +1822,110 @@ fn a_file_selected_by_its_short_name_keeps_its_long_name() {
     assert!(e.message.contains("named twice"), "{e}");
 }
 
+/// Windows: a file's access list as SDDL.
+#[cfg(windows)]
+fn acl(p: &Path) -> String {
+    pluxy_files::access_list(&std::fs::File::open(p).unwrap()).unwrap()
+}
+
+/// Windows: a file whose access list is its folder's (inherited, not protected) gets that list back
+/// when an apply is rolled back, and keeps it through a manual backup's restore.
+#[cfg(windows)]
+#[test]
+fn an_inherited_access_list_comes_back_as_it_was() {
+    let t = Tmp::new();
+    let (a, b, mem, data) = two(&t);
+    let inherited = acl(&a);
+    assert!(
+        !inherited.starts_with("D:P") && inherited.contains(";ID;"),
+        "{inherited}"
+    );
+    let tx = Transactions::new(&mem, &data);
+    let sel = [Selection::File(a.clone()), Selection::File(b.clone())];
+    let p = pins(&tx, "s", &sel);
+    chmod(&t.at("two"), 0o555);
+    let e = tx
+        .apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap_err();
+    chmod(&t.at("two"), 0o755);
+    assert!(e.message.contains("rolled back"), "{e}");
+    assert_eq!(
+        (read(&a).unwrap(), acl(&a)),
+        ("{}\n".into(), inherited.clone())
+    );
+    // A manual backup's restore keeps the list the file has.
+    let one = [Selection::File(a.clone())];
+    let id = tx.backup_create("s", &pins(&tx, "s", &one)).unwrap()["backup"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    std::fs::write(&a, "{\"x\": 2}\n").unwrap();
+    tx.backup_restore("s", &pins(&tx, "s", &one), &id, &mut none)
+        .unwrap();
+    assert_eq!((read(&a).unwrap(), acl(&a)), ("{}\n".into(), inherited));
+}
+
+/// The names in folder.
+#[cfg(windows)]
+fn names_in(folder: &Path) -> Vec<std::ffi::OsString> {
+    let mut n: Vec<_> = std::fs::read_dir(folder)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    n.sort();
+    n
+}
+
+/// Windows: a file another program holds open without letting it be deleted, or one marked
+/// read-only, is not replaced: the write fails, the file keeps its bytes, and no temporary file is
+/// left. Once the program lets go, or the mark is taken off, the write goes through.
+#[cfg(windows)]
+#[test]
+fn a_file_held_open_or_read_only_is_left_as_it_was() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let t = Tmp::new();
+    let a = t.put("one/a.json", "{}\n");
+    let (mem, data) = (Mem::default(), t.at("data"));
+    std::fs::create_dir(&data).unwrap();
+    let tx = Transactions::new(&mem, &data);
+    let sel = [Selection::File(a.clone())];
+    // FILE_SHARE_READ only: no other handle may delete or replace it while this is open.
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&a)
+        .unwrap();
+    let p = pins(&tx, "s", &sel);
+    let e = tx
+        .apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap_err();
+    assert_eq!(
+        (read(&a).unwrap(), names_in(&t.at("one"))),
+        ("{}\n".into(), vec!["a.json".into()]),
+        "{e}"
+    );
+    drop(held);
+    let mut ro = std::fs::metadata(&a).unwrap().permissions();
+    ro.set_readonly(true);
+    std::fs::set_permissions(&a, ro.clone()).unwrap();
+    let p = pins(&tx, "s", &sel);
+    let e = tx
+        .apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap_err();
+    assert_eq!(
+        (read(&a).unwrap(), names_in(&t.at("one"))),
+        ("{}\n".into(), vec!["a.json".into()]),
+        "{e}"
+    );
+    #[allow(clippy::permissions_set_readonly_false)]
+    ro.set_readonly(false);
+    std::fs::set_permissions(&a, ro).unwrap();
+    let p = pins(&tx, "s", &sel);
+    tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap();
+    assert_eq!(read(&a).unwrap(), "{\n  \"x\": 1\n}\n");
+}
+
 /// Windows reaches a WSL distribution's files as `\\wsl.localhost\<distribution>\…`: the Windows
 /// program refuses those (the package's Linux program serves them, inside the distribution).
 #[test]
