@@ -117,6 +117,10 @@ fn files() -> (PathBuf, PathBuf, PathBuf) {
     let within = root.join("codex");
     let sessions = within.join("sessions");
     std::fs::create_dir_all(&sessions).unwrap();
+    // Whatever the umask: an open launch wants its folders the user's alone.
+    for d in [&within, &sessions] {
+        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let file = sessions.join("rollout-a.jsonl");
     std::fs::write(&file, b"{}\n").unwrap();
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -215,6 +219,54 @@ fn an_open_launch_names_only_a_plain_file_inside_its_folder() {
         let e = open_from(&i, OPEN, from).unwrap_err();
         assert!(e.message.contains(says), "{k} {v}: {}", e.message);
     }
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(openers).unwrap();
+}
+
+#[test]
+fn an_open_launch_wants_every_folder_up_to_its_folder_to_be_the_users_own() {
+    let (root, within, _) = files();
+    let openers = bin(&["xdg-open"]);
+    let from = std::slice::from_ref(&openers);
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let sessions = within.join("sessions");
+    let deep = sessions.join("2026/11");
+    std::fs::create_dir_all(&deep).unwrap();
+    for d in [sessions.join("2026"), deep.clone()] {
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let nested = deep.join("rollout-b.jsonl");
+    std::fs::write(&nested, b"{}\n").unwrap();
+    std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let open = || {
+        let i = json!({"kind": "open", "file": s(&nested), "within": s(&within)});
+        open_from(&i, OPEN, from)
+    };
+    // A clean nested path passes.
+    assert!(open().is_ok());
+    // A folder between the file and its folder, or the folder itself, that group or others may
+    // write is refused.
+    for (folder, mode) in [
+        (sessions.clone(), 0o770),
+        (sessions.join("2026"), 0o707),
+        (deep.clone(), 0o777),
+        (within.clone(), 0o770),
+    ] {
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(mode)).unwrap();
+        let e = open()
+            .err()
+            .unwrap_or_else(|| panic!("{} at {mode:o} was accepted", folder.display()));
+        assert_eq!(e.code, "invalid_request");
+        assert!(
+            e.message.contains("writable by no one else")
+                && e.message.contains(&folder.display().to_string()),
+            "{}: {}",
+            folder.display(),
+            e.message
+        );
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    assert!(open().is_ok());
     std::fs::remove_dir_all(root).unwrap();
     std::fs::remove_dir_all(openers).unwrap();
 }
