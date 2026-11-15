@@ -20,12 +20,14 @@ fn program(path: &Path, bytes: &[u8]) {
     #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
 }
-/// The mode a settings file has on Unix; on Windows its folder's access list makes it private.
+/// Makes a settings file the app writes private: mode 0600 on Unix; on Windows the protected,
+/// owner-only access list the app gives it (a file made in the fixture's folder takes up that
+/// folder's list, which is not private).
 fn owner_only(path: &Path) {
     #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     #[cfg(windows)]
-    let _ = path;
+    windows_files::protect(path, false).unwrap();
 }
 /// Changes path's metadata, not its bytes: its mode, or on Windows its read-only attribute.
 fn change_metadata(path: &Path) {
@@ -387,6 +389,7 @@ fn settings_version_access_lists_and_reparse_points_fail_closed() {
     assert_eq!(json["version"], 1);
     for bytes in [b"[]".as_slice(), b"{\"version\":2,\"approvals\":[]}"] {
         fs::write(&c.settings, bytes).unwrap();
+        owner_only(&c.settings);
         let loaded = Confirmations::open(c.settings.clone()).unwrap();
         assert!(loaded.approvals.is_empty());
         assert!(loaded.startup_warning.is_some());
