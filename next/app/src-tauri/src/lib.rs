@@ -34,6 +34,8 @@ mod dialog;
 mod dialog_macos;
 #[cfg(windows)]
 mod dialog_windows;
+#[cfg(windows)]
+mod files_windows;
 pub(crate) mod format_chars;
 pub mod instance;
 mod key_entry;

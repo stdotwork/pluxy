@@ -4,7 +4,9 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -758,14 +760,21 @@ fn open_settings(path: &Path) -> std::io::Result<File> {
         windows_files::open_no_follow(path)
     }
 }
-/// Creates new file tmp, readable and writable only by this user (on Windows `save` then gives it
-/// a protected access list of its own).
+/// Creates new file tmp, readable and writable only by this user (on Windows with a protected
+/// access list of its own, given as it is made).
 fn create_private(tmp: &Path) -> std::io::Result<File> {
-    let mut o = OpenOptions::new();
-    o.write(true).create_new(true);
     #[cfg(unix)]
-    o.mode(0o600);
-    o.open(tmp)
+    {
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(tmp)
+    }
+    #[cfg(windows)]
+    {
+        crate::files_windows::create_new_private(tmp)
+    }
 }
 fn refuse_settings_symlink(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
@@ -804,14 +813,21 @@ fn secure_parent(path: &Path, create: bool) -> Result<(), String> {
     }
     Ok(())
 }
-/// Windows: the folder made when missing (with an access list of its own), refused when it is a
-/// link or not this user's, and given an access list of its own when others may write it.
+/// Windows: the folder made private when missing (its access list given as it is made), refused
+/// when it is a link, not a folder or its permissions cannot be read, and made private through a
+/// handle that is the folder itself when it is not (refused when another account owns it).
 #[cfg(windows)]
 fn secure_parent(path: &Path, create: bool) -> Result<(), String> {
     let dir = path.parent().ok_or("settings has no parent")?;
-    let made = create && !dir.exists();
     if create {
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        if let Some(up) = dir.parent() {
+            fs::create_dir_all(up).map_err(|e| e.to_string())?;
+        }
+        match crate::files_windows::create_private_dir(dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(format!("settings folder refused: {e}")),
+        }
     }
     let f = match windows_files::open_no_follow(dir) {
         Ok(f) => f,
@@ -821,12 +837,12 @@ fn secure_parent(path: &Path, create: bool) -> Result<(), String> {
     if !windows_files::is_dir(windows_files::info(&f)?.attributes) {
         return Err("settings folder refused: not a folder".into());
     }
-    match windows_files::private(&f, "settings folder") {
-        Ok(()) if !made => Ok(()),
-        Err(e) if e.contains("not owned") => Err(e),
-        _ => {
+    match windows_files::privacy(&f, "settings folder")? {
+        Ok(()) => Ok(()),
+        Err(_) => {
             drop(f);
-            windows_files::protect(dir, true)
+            crate::files_windows::make_private(dir)
+                .map_err(|e| format!("settings folder refused: {e}"))
         }
     }
 }
@@ -951,9 +967,6 @@ impl Confirmations {
         let tmp = dir.join(format!(".confirmation-{}", crate::managed::random_key()));
         let result = (|| {
             let mut f = create_private(&tmp).map_err(|e| e.to_string())?;
-            // What the folder passes down is not protected: the new file gets a list of its own.
-            #[cfg(windows)]
-            windows_files::protect(&tmp, false)?;
             #[cfg(windows)]
             private_file(&f)?;
             f.write_all(

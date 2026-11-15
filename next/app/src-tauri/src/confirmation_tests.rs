@@ -27,7 +27,7 @@ fn owner_only(path: &Path) {
     #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     #[cfg(windows)]
-    windows_files::protect(path, false).unwrap();
+    crate::files_windows::make_private(path).unwrap();
 }
 /// Changes path's metadata, not its bytes: its mode, or on Windows its read-only attribute.
 fn change_metadata(path: &Path) {
@@ -398,7 +398,7 @@ fn settings_version_access_lists_and_reparse_points_fail_closed() {
     fs::write(&c.settings, b"{}").unwrap();
     // What the folder passes down is not protected, so a file made there is not private yet.
     assert!(!private_path(&c.settings));
-    windows_files::protect(&c.settings, false).unwrap();
+    crate::files_windows::make_private(&c.settings).unwrap();
     assert!(
         private_path(&c.settings),
         "the control: a protected file is private"
@@ -444,7 +444,11 @@ fn settings_create_private_parent() {
     #[cfg(unix)]
     assert_eq!(fs::metadata(parent).unwrap().mode() & 0o777, 0o700);
     #[cfg(windows)]
-    assert!(private_path(&parent));
+    {
+        assert!(private_path(&parent));
+        // Made private as the temporary file it was, before it replaced the settings.
+        assert!(private_path(&parent.join("settings.json")));
+    }
     remove(&dir);
 }
 

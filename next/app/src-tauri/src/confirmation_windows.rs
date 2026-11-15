@@ -6,25 +6,20 @@
 //! and attributes. The settings folder and file are private when this user, the owner this process
 //! gives what it makes (its user, or for an elevated administrator the Administrators group) or
 //! SYSTEM owns them, and their access list is protected (takes nothing from their folder's) and
-//! allows no one but this user and SYSTEM: the same rule as `next/app-tools/lib/files`.
+//! allows no one but this user and SYSTEM: the same rule as `next/app-tools/lib/files`, whose way
+//! of making them so is in `files_windows.rs`.
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
-use windows::core::{HSTRING, PWSTR};
 use windows::Win32::Foundation::{LocalFree, ERROR_SUCCESS, HANDLE, HLOCAL};
-use windows::Win32::Security::Authorization::{
-    GetSecurityInfo, SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, SET_ACCESS,
-    SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
-};
+use windows::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
 use windows::Win32::Security::{
     CreateWellKnownSid, EqualSid, GetAce, GetSecurityDescriptorControl, GetTokenInformation,
-    TokenOwner, TokenUser, WinLocalSystemSid, ACE_FLAGS, ACE_HEADER, ACL,
-    DACL_SECURITY_INFORMATION, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
-    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
-    SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_INFORMATION_CLASS, TOKEN_OWNER, TOKEN_QUERY,
-    TOKEN_USER, WELL_KNOWN_SID_TYPE,
+    TokenOwner, TokenUser, WinLocalSystemSid, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION,
+    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
+    TOKEN_INFORMATION_CLASS, TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER, WELL_KNOWN_SID_TYPE,
 };
 use windows::Win32::Storage::FileSystem::{
     FileBasicInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
@@ -188,6 +183,13 @@ struct AllowedAce {
 /// or by SYSTEM, with a protected access list whose allow entries are only this user's and
 /// SYSTEM's (what the mode check refuses on Unix: another owner, or group or world bits).
 pub(super) fn private(f: &File, what: &str) -> Result<(), String> {
+    privacy(f, what)?
+}
+
+/// Whether f is private: an error when its permissions cannot be read, otherwise why it is not
+/// private (another owner, an unprotected or missing list, or an entry for someone else), if it
+/// is not.
+pub(super) fn privacy(f: &File, what: &str) -> Result<Result<(), String>, String> {
     let mut owner = PSID::default();
     let mut dacl: *mut ACL = std::ptr::null_mut();
     let mut sd = PSECURITY_DESCRIPTOR::default();
@@ -215,7 +217,7 @@ pub(super) fn private(f: &File, what: &str) -> Result<(), String> {
             .iter()
             .any(|s| unsafe { EqualSid(owner, s.psid()) }.is_ok())
     {
-        return Err(format!("{what} is not owned by this user"));
+        return Ok(Err(format!("{what} is not owned by this user")));
     }
     // An unprotected list takes up what its folder's passes down later; no list allows everyone.
     let mut control = 0u16;
@@ -223,10 +225,12 @@ pub(super) fn private(f: &File, what: &str) -> Result<(), String> {
     unsafe { GetSecurityDescriptorControl(sd, &mut control, &mut revision) }
         .map_err(|e| e.to_string())?;
     if control & SE_DACL_PROTECTED.0 == 0 {
-        return Err(format!("{what} takes its access list from its folder"));
+        return Ok(Err(format!("{what} takes its access list from its folder")));
     }
     if dacl.is_null() {
-        return Err(format!("{what} has no access list, so anyone may write it"));
+        return Ok(Err(format!(
+            "{what} has no access list, so anyone may write it"
+        )));
     }
     let count = unsafe { (*dacl).AceCount };
     for i in 0..u32::from(count) {
@@ -239,9 +243,9 @@ pub(super) fn private(f: &File, what: &str) -> Result<(), String> {
             ACCESS_DENIED => continue,
             ACCESS_ALLOWED => {}
             _ => {
-                return Err(format!(
+                return Ok(Err(format!(
                     "{what} has an access entry of a kind this app does not read"
-                ))
+                )))
             }
         }
         let ace = unsafe { &*(ace as *const AllowedAce) };
@@ -250,67 +254,23 @@ pub(super) fn private(f: &File, what: &str) -> Result<(), String> {
             .iter()
             .any(|a| unsafe { EqualSid(sid, a.psid()) }.is_ok())
         {
-            return Err(format!("{what} may be opened by another user or group"));
+            return Ok(Err(format!(
+                "{what} may be opened by another user or group"
+            )));
         }
     }
-    Ok(())
-}
-
-/// Makes the file or folder path private: a protected access list of its own allowing this user
-/// and SYSTEM full control, a folder's inherited by what is made inside it (the 0700 or 0600 of
-/// Unix). What a folder passes down is not protected: each file is made private itself.
-pub(super) fn protect(path: &Path, folder: bool) -> Result<(), String> {
-    let inheritance: ACE_FLAGS = if folder {
-        SUB_CONTAINERS_AND_OBJECTS_INHERIT
-    } else {
-        NO_INHERITANCE
-    };
-    let sids = [Sid::user()?, Sid::well_known(WinLocalSystemSid)?];
-    let entries: Vec<EXPLICIT_ACCESS_W> = sids
-        .iter()
-        .map(|s| EXPLICIT_ACCESS_W {
-            grfAccessPermissions: 0x1000_0000, // GENERIC_ALL
-            grfAccessMode: SET_ACCESS,
-            grfInheritance: inheritance,
-            Trustee: TRUSTEE_W {
-                TrusteeForm: TRUSTEE_IS_SID,
-                TrusteeType: TRUSTEE_IS_UNKNOWN,
-                ptstrName: PWSTR(s.psid().0 as *mut u16),
-                ..Default::default()
-            },
-        })
-        .collect();
-    let mut acl: *mut ACL = std::ptr::null_mut();
-    let r = unsafe { SetEntriesInAclW(Some(&entries), None, &mut acl) };
-    if r != ERROR_SUCCESS {
-        return Err(format!(
-            "could not make the settings' access list ({})",
-            r.0
-        ));
-    }
-    let r = unsafe {
-        SetNamedSecurityInfoW(
-            &HSTRING::from(path.as_os_str()),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            None,
-            None,
-            Some(acl),
-            None,
-        )
-    };
-    unsafe {
-        LocalFree(Some(HLOCAL(acl as *mut core::ffi::c_void)));
-    }
-    if r != ERROR_SUCCESS {
-        return Err(format!("could not make the settings private ({})", r.0));
-    }
-    Ok(())
+    Ok(Ok(()))
 }
 
 /// Adds an entry letting Everyone write path: for the tests of refusing such a file or folder.
 #[cfg(test)]
 pub(super) fn let_everyone_write(path: &Path) {
+    use windows::core::{HSTRING, PWSTR};
+    use windows::Win32::Security::Authorization::{
+        SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, TRUSTEE_IS_SID,
+        TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    };
+    use windows::Win32::Security::NO_INHERITANCE;
     let everyone = Sid::well_known(windows::Win32::Security::WinWorldSid).unwrap();
     let mut old: *mut ACL = std::ptr::null_mut();
     let mut sd = PSECURITY_DESCRIPTOR::default();
