@@ -155,13 +155,16 @@ inside the granted folder; for `resources.list`, empty or absent means the folde
 | --- | --- |
 | `bad_request` | Parameters of the wrong shape or unknown, an undeclared resource or operation, a `path` with a `file` resource |
 | `not_granted` | No grant for this package, release, source and signer, or the operation is not granted |
-| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, a file or folder on another mount than the granted folder (such as one mounted inside it), or not a regular file |
+| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, a file or folder on another mount than the granted folder (such as one mounted inside it), not a regular file, or a grant whose target has come to be, hold or lie inside one of the app's own folders (the app README's Access section) |
 | `changed` | The chosen link, where it resolves, or the target (its identity or its mount) changed since it was granted; it stays refused until granted again |
 | `unavailable` | The file is gone, cannot be reached for now (permissions, an I/O error, too many open files), or the document portal no longer offers it; the grant stays, and a later call may read |
 | `revoked` | The grant was revoked while the call was in flight |
 
 The native ingress limits of every page channel call apply to these too. Grants are bound to the
-package's source, release digest and approved signer: a new release asks again.
+package's source, release digest and approved signer: a new release asks again. No grant reaches
+the app's own folders (its settings, data, vault, packages and caches): the app refuses to grant
+one, anything inside one or a folder holding one, so the vault below stays out of every page's
+reach.
 
 ## App program contract v0
 
