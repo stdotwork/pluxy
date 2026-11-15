@@ -111,6 +111,7 @@ mod open;
 #[cfg(target_os = "linux")]
 #[path = "opencode_native.rs"]
 mod opencode;
+#[cfg(target_os = "linux")]
 #[path = "pi_native.rs"]
 mod pi;
 #[cfg(target_os = "linux")]
