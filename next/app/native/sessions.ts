@@ -16,6 +16,9 @@
 //   symbolic link (skipped);
 // - session_index.jsonl, with a broken line;
 // - config.toml and auth.json holding canary strings no page and no log may show;
+// - a canary in a line of T1's rollout that detail never shows (an event record): the export
+//   saves it (the check compares the saved file with the rollout written here, byte for byte), and
+//   no page reply and no line of the app's output may show it.
 // - the person's own app, for the open check: pluxy/execution (the real execution program, built with
 //   its native-test feature) in the registry beside the reader, and a stand-in opener,
 //   opener/bin/xdg-open (the fixture program), which appends what it was started with to
@@ -27,8 +30,9 @@
 // own page stays as it is.
 //
 // expect.json holds what the check compares with, written out by hand here, never worked out by
-// the reader's code: each list page, each detail page, what the open of T1 must launch (the resolved
-// rollout, its folder, the sessions folder and the opener) and the canaries. When the reader has not
+// the reader's code: each list page, each detail page, the text the export of T1 must save (and the
+// empty folder it is saved into), what the open of T1 must launch (the resolved rollout, its folder,
+// the sessions folder and the opener) and the canaries. When the reader has not
 // been built (its program is missing), the registry lists nothing and the check fails at its
 // first step, installing the reader.
 
@@ -102,7 +106,7 @@ function liveDatabase(source: string, dest: string) {
 }
 
 /** The JSONL lines of T1's rollout, by line number. */
-function rolloutLines(): string[] {
+function rolloutLines(canary: string): string[] {
   const record = (type: string, payload: object, timestamp?: string) =>
     JSON.stringify(timestamp ? { timestamp, type, payload } : { type, payload });
   return [
@@ -133,7 +137,7 @@ function rolloutLines(): string[] {
       call_id: "call_1",
     }),
     record("response_item", { type: "function_call_output", call_id: "call_1", output: "parser.rs" }),
-    record("event_msg", { type: "agent_message", message: "not a response item" }),
+    record("event_msg", { type: "agent_message", message: `not a response item ${canary}` }),
     "not JSON",
     record(
       "response_item",
@@ -156,7 +160,8 @@ function codexHome(home: string, outside: string) {
     mkdirSync(join(codex, d), { recursive: true });
   }
   const t1Rollout = join(codex, "sessions/2026/08/04", `rollout-2026-08-04T10-00-00-${T1}.jsonl`);
-  const t1Bytes = `${rolloutLines().join("\n")}\n`;
+  const exported = `canary-export-${randomBytes(12).toString("hex")}`;
+  const t1Bytes = `${rolloutLines(exported).join("\n")}\n`;
   writeFileSync(t1Rollout, t1Bytes);
   // The host opens only a file and folder no one else may write.
   chmodSync(t1Rollout, 0o600);
@@ -213,7 +218,13 @@ function codexHome(home: string, outside: string) {
   const auth = `canary-auth-${randomBytes(12).toString("hex")}`;
   writeFileSync(join(codex, "config.toml"), `model_provider = "${config}"\n`);
   writeFileSync(join(codex, "auth.json"), JSON.stringify({ OPENAI_API_KEY: auth }), { mode: 0o600 });
-  return { codex, t1Rollout, t1Size: Buffer.byteLength(t1Bytes), canaries: [config, auth] };
+  return {
+    codex,
+    t1Rollout,
+    t1Bytes,
+    t1Size: Buffer.byteLength(t1Bytes),
+    canaries: [config, auth, exported],
+  };
 }
 
 /** What the list and detail pages must say, by hand. */
@@ -401,7 +412,10 @@ export function buildSessionsFixtures(
       },
     }),
   );
-  const { codex, t1Rollout, t1Size, canaries } = codexHome(home, join(root, "outside"));
+  const { codex, t1Rollout, t1Bytes, t1Size, canaries } = codexHome(home, join(root, "outside"));
+  const exportFolder = join(root, "export-out");
+  // The save service takes only a folder no other user can change.
+  mkdirSync(exportFolder, { mode: 0o700 });
   // The stand-in opener: the app takes an opener from this folder only in a native-test build
   // (PLUXY_APP_TEST_OPENERS), and the reader's native-test build sends it as its prepare's search path.
   const openers = join(root, "opener", "bin");
@@ -418,6 +432,7 @@ export function buildSessionsFixtures(
       bin: reader?.bin ?? "bin/codex-sessions",
       codex,
       canaries,
+      export: { id: T1, text: t1Bytes, folder: exportFolder },
       execution: {
         id: EXECUTION_ID,
         version: execution?.version ?? "0.1.0",

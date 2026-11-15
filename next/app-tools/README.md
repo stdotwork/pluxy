@@ -14,6 +14,44 @@ cargo build --locked -p pluxy-transactions --example fixture-writer   # the nati
 cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup, execution and opencode
 ```
 
+Platforms: every tool runs on Linux. The usage hub, the usage parsers and `codex-sessions` also
+build and are tested on Windows and macOS (`.github/workflows/next-app-tools-platforms.yml`), and
+their manifests name programs for `darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does
+not run native tools on those systems yet. `lib/transactions`, `claude-code`, `claude-desktop` and `codex-setup` are
+Linux only for now, and `execution` refuses every operation outside Linux.
+
+## `lib/files`
+
+The file rules the tools share on Linux, macOS and Windows (`pluxy-files`), so no tool has
+platform code of its own for them:
+
+- Private files and folders are this user's alone (`create_private_dir`, `create_new_private`,
+  `make_private`, `is_private`). On Linux and macOS: owned by this user (the effective user ID),
+  0600 and 0700. On Windows: owned by this user, the token's default owner (its user, or for an
+  elevated administrator the Administrators group) or SYSTEM; any other owner is refused, as the
+  Unix check refuses another user's file. The access list must exist and be protected (take
+  nothing from its folder's); every allow entry is for this user or SYSTEM only (inherit-only
+  included); deny entries are ignored; any other entry kind is refused. A folder passes its list on
+  to what is made in it, but what is made that way is not private until it is made so, as its list
+  is not protected. A new private file or folder gets its list as it is made, never afterwards,
+  and the default owner as anything the process makes does. In a folder whose inherited entries
+  deny OWNER RIGHTS the right to change an access list (a way to stop people changing the lists
+  of what they make), Windows refuses that, so making a private file or folder there fails with
+  `PermissionDenied`. `make_private` changes a file through
+  a handle to the file itself, not a link (on Linux and macOS with `fchmod`), and refuses anything
+  but a file or folder, and a file of another owner (never taking it over).
+- `open_regular` opens a file for reading only if it is a regular file, checked on the open handle,
+  without following a link: on Linux and macOS with `O_NOFOLLOW` and `O_NONBLOCK` (a FIFO is
+  refused, never waited on); on Windows the link itself is opened and refused, as is anything that
+  is not a file on a disk.
+- `Id` tells files apart (device and inode; on Windows the volume serial number and the 128-bit
+  file ID, or the 64-bit file index on a file system without 128-bit IDs, such as FAT32), and
+  `mtime_ns` is a modification time in nanoseconds since the Unix epoch, the same on every system.
+- On macOS and Windows, a `Lock` is a private file this process holds while it lives, made already
+  held (`create_locked`) or taken when no process holds it (`take_lock`); dropping it releases and
+  removes it. On macOS it is held with `O_EXLOCK`; on Windows it is open for no one else to share,
+  and the system removes it when its handle closes, also when the process stops.
+
 ## `lib/program`
 
 The program side of the contract, for any tool (`pluxy-program`):
@@ -26,6 +64,7 @@ The program side of the contract, for any tool (`pluxy-program`):
 | `Handler::reconcile(&Call, unknown, journals)` | Before `describe` is answered: the calls of unknown outcome and the open journals the host names. By default nothing. |
 | `Call` | `id`, `op`, `input`, `chain`, `secrets`, `job`; `cancelled()` and `check()`; `progress(value)`; `call(package, op, input)` (an import, through the host; cancelled with its call); `vault(op, fields)` (backups and journals); `jobs(op, input)` (a consumer's `registrations`, `start` or `cancel`); `batch(value)` (a producer's next batch, once the job's window has room) and `acked()`; `spawn()` (asks the host to spawn the launch this call confirmed, naming nothing of it; cancelled with its call); `runtime(op, runtime)` (status, list, stop or restart of its package's managed runtimes). |
 | `Job` | The job a producer's call runs: `id`, `kind`, `window`. |
+| `Call::save_file(name, bytes)`, `SaveOutcome` | For a call of a `disclose` operation: hands the host `bytes` as `append` frames of at most `APPEND_BYTES` (783,000 bytes, base64 under the frame limit) and one `save` suggesting `name` (the host's save service, [`../app/app-host/README.md`](../app/app-host/README.md) "Saving files"). The person chooses the place in the host's dialog; the answer is `Saved { size }` or `Cancelled`, or the host's error (not a `disclose` call, a name holding a path, more than 64 MiB, a second save, no dialog). One save per call. |
 | `Error` | The contract's error object: `invalid_request`, `unsupported`, `not_found`, `unavailable`, `internal`, `cancelled`, or any code. |
 | `read_frame`, `write_frame` | The framing: a four-byte big-endian length and UTF-8 JSON; a program's frames are at most `MAX_FRAME` (1 MiB). |
 | `MAX_BATCH` | The largest batch a producer may send, 48 KiB of JSON. |
@@ -76,15 +115,23 @@ Opens another program's SQLite database strictly read-only and creates no file b
 - With no `-shm` and a `-wal`, the database is never opened in place, whatever its header says
   (SQLite deletes a `-wal` that holds bytes beside a database of 0 bytes, and creates a `-shm` beside
   one whose header is not WAL's). With the `-wal` empty it is opened `immutable`. With the `-wal`
-  holding bytes it is copied, with its `-wal`, into a private folder (0700, `wal-<pid>-<n>`) under
+  holding bytes it is copied, with its `-wal`, into a private folder (`lib/files`; `wal-<pid>-<n>`) under
   `$PLUXY_TOOL_DATA_DIR/tmp` (the system's temporary folder when that is not set), read there, and
   the folder is removed when the `Db` is dropped.
 - With no `-shm` and no `-wal`, a database with a WAL header is opened `immutable`, and any other
   in place.
-- The tool's own `tmp` must be a real folder, not a link; one open to group or others is tightened
-  to 0700. Before a copy is made there, the copies of processes no longer running (folders named
-  exactly `wal-<pid>-<n>`, directories only) are removed; those of this process and of every process
-  still running stay. Nothing is pruned in the system's temporary folder.
+- The tool's own `tmp` must be a real folder, not a link; one that is not private is made private.
+  Before a copy is made there, the copies left by processes that stopped (folders named exactly
+  `wal-<pid>-<n>`, directories only) are removed. On Linux a copy is left over when `/proc` does
+  not list its pid. On macOS and Windows a copy has a lock beside it, `wal-<pid>-<n>.lock`
+  (`lib/files`), made already held before the folder and released after the folder is removed; a
+  copy is left over when its lock is missing or no process holds it, whatever its pid (pids are
+  reused), and it is removed while the remover holds its lock, so no copy can be made under that
+  name meanwhile. A lock left with no folder goes too. Nothing is pruned in the system's temporary
+  folder. A copy's name that is taken already is passed over for the next.
+- On Windows the database path must be a full one (SQLite would read any other against its own
+  current folder). It is given to SQLite in its long form (`\\?\C:\…`, `\\?\UNC\server\share\…`)
+  with SQLite's `win32-longpath` file layer, so a path longer than 260 characters opens.
 - An `Error` names no path, and carries SQLite's error code, not its message (which names the file).
   A tool that shows a path to its user adds it around the error itself.
 
@@ -304,10 +351,11 @@ raw entry ID leaves the parser.
 `pluxy/usage-opencode`, the usage hub's parser of OpenCode's local store, at schema 2. It reads
 OpenCode's database (`opencode.db`, or `opencode-<channel>.db` from a build of another channel) and
 its older JSON message files (`storage/message/<session>/<message>.json`) under
-`~/.local/share/opencode` and `~/.opencode` (from the `HOME` the app gives; the hub's `roots` name
-others, such as `$XDG_DATA_HOME/opencode`), and sends the hub token counts per message, and nothing
-else: no prompt, reply, title, folder name or raw session or message ID leaves the parser. It never
-writes an OpenCode file.
+`~/.local/share/opencode` and `~/.opencode` (from the `HOME` the app gives), and on Windows also
+`opencode` in the roaming and local app data folders (`APPDATA`, `LOCALAPPDATA`, when the app gives
+them); the hub's `roots` name others, such as `$XDG_DATA_HOME/opencode`. It sends the hub token
+counts per message, and nothing else: no prompt, reply, title, folder name or raw session or message
+ID leaves the parser. It never writes an OpenCode file.
 
 - Each session in a database is a file of the hub's of its own, `<database path below the
   root>#<hash of the session ID>`, so the hub reads again only the sessions that changed, and a
@@ -339,15 +387,27 @@ writes an OpenCode file.
 
 `pluxy/codex-sessions` reads Codex's local sessions, read-only, and shows them on its page
 (*Codex sessions*). It never writes a Codex file, never reads `config.toml` or `auth.json`, and
-has no repair, delete, export or editor. `open` starts the person's own app on a rollout, after
+has no repair, delete or editor. Its one write outside its data folder is a file the person saves
+from `export`, in the host's save dialog. `open` starts the person's own app on a rollout, after
 the person confirms the launch (below); the reader itself spawns nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
 | `list` | `read` | `offset` (default 0), `limit` (1 to 100, default 50) | The Codex home, the databases read, a page of sessions (ID, title, folder, provider, archived, update time, database), the total, whether there are more, the page's active and archived counts, and warnings |
 | `detail` | `disclose`: each call asks the person | `id`, `offset`, `limit` (messages) | The session's title, folder, provider, model, archived, update time, rollout file and database; its statistics; a page of its messages, each cut at 8 KiB (`truncated`), at most 512 KiB in all, and `next_offset` |
+| `export` | `disclose`: each call asks the person | `id` | Whether the person `saved` the session's rollout (and its `size`) or `cancelled` the save dialog; never the rollout's bytes |
 | `open` | `read`; the launch it asks for is confirmed | `id` | `{"outcome": "opened"}` once the launch was started; the call's error (a refused or declined launch, a session with no rollout file, `pluxy/execution` not enabled); never a path or a byte of the file |
 | `settings` | `write` | `codex_home`: a full path, or empty for the default | The Codex home now read, and whether it is custom |
+
+`export` finds a session's rollout as `detail` does (same ID checks; a link to a file outside the
+Codex home is refused) and saves its bytes exactly as they are on disk, with
+[`Call::save_file`](lib/program/src/lib.rs): the host asks where in its native save dialog,
+titled *Save a file from pluxy/codex-sessions*, which suggests `session-<id>-<YYYY-MM-DD>.jsonl`
+(the ID without `local:`, the date in UTC), as the old app's *Export JSONL* did. The page shows
+the outcome as text and never holds the bytes. Like the old app it saves only a rollout of at
+most 10 MiB that is UTF-8 text (the host takes up to 64 MiB): the whole file is read to be sent,
+so this also bounds the reader's memory. No error names the rollout's path or holds a byte of
+it.
 
 `open` is the old app's *Edit with local app*, as a launch the person confirms: the session's
 rollout is opened by the desktop's own opener (`xdg-open`, else `gio open`), which starts whatever
