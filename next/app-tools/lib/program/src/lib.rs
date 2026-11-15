@@ -34,6 +34,9 @@
 //! end. The reading thread routes cancels, and the answers to a call's own calls and vault frames,
 //! to the call they belong to, and a job's acks to its producer's call. When stdin ends it cancels every call, fails what they wait for,
 //! waits for them and returns: the program then exits.
+//!
+//! A call of a `disclose` operation may hand the person one file through the host's save dialog,
+//! with [`Call::save_file`] (`next/app/app-host/README.md`, "Saving files").
 
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -52,6 +55,10 @@ pub const MAX_FRAME: usize = 1 << 20;
 pub const MAX_INBOUND: usize = 64 << 20;
 /// The largest batch value a producer may send, as JSON; the host fails a job sent a larger one.
 pub const MAX_BATCH: usize = 48 << 10;
+/// The most bytes [`Call::save_file`] puts in one `append` frame: their base64 (1,044,000 bytes)
+/// and the frame around it stay under [`MAX_FRAME`], and it is a multiple of 3, so every frame's
+/// base64 but the last has no padding.
+pub const APPEND_BYTES: usize = 783_000;
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -298,6 +305,34 @@ impl Acks {
     }
 }
 
+/// What the host answers a save: the person saved the file (`size` bytes were written) or
+/// cancelled the dialog (nothing was).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveOutcome {
+    Saved { size: u64 },
+    Cancelled,
+}
+
+/// bytes as standard base64 with padding.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for group in bytes.chunks(3) {
+        let n = group
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | (*b as u32) << (16 - 8 * i));
+        for i in 0..4 {
+            out.push(if i <= group.len() {
+                ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char
+            } else {
+                '='
+            });
+        }
+    }
+    out
+}
+
 /// One call the host made: its operation, input, chain and secrets, and what it may do while it
 /// runs.
 pub struct Call {
@@ -400,6 +435,46 @@ impl Call {
     /// How many batches of this call's job the host has acknowledged.
     pub fn acked(&self) -> u64 {
         *self.acks.acked.lock().unwrap()
+    }
+
+    /// Hands the host `bytes` to save as a file for this call, which must be one of a `disclose`
+    /// operation: `append` frames of at most [`APPEND_BYTES`] each, then one `save` suggesting
+    /// `name`. The person chooses where in the host's native save dialog; the answer is whether
+    /// they saved it (and the bytes the host wrote) or cancelled, or the host's error: it refuses
+    /// a call that is not a `disclose` operation's (`permission`), a name holding a path
+    /// (`invalid_request`), more than 64 MiB (`invalid_request`, at the append that passes it), a
+    /// second save for the call (`permission`) and a dialog that cannot show (`unavailable`). One
+    /// save per call: after any answer to `save`, whatever it is, a call cannot save again. Once
+    /// this call is cancelled the request is cancelled too, and nothing is written. The bytes
+    /// appear in no error.
+    pub fn save_file(&self, name: &str, bytes: &[u8]) -> Result<SaveOutcome, Error> {
+        let mut offset = 0usize;
+        for part in bytes.chunks(APPEND_BYTES) {
+            let answer = self.files("append", json!({"offset": offset, "data": base64(part)}))?;
+            offset += part.len();
+            if answer["size"].as_u64() != Some(offset as u64) {
+                return Err(Error::internal(
+                    "the host's count of the bytes so far is not what was sent",
+                ));
+            }
+        }
+        let answer = self.files("save", json!({"name": name}))?;
+        match (answer["outcome"].as_str(), answer["size"].as_u64()) {
+            (Some("saved"), Some(size)) => Ok(SaveOutcome::Saved { size }),
+            (Some("cancelled"), _) => Ok(SaveOutcome::Cancelled),
+            _ => Err(Error::internal(
+                "the host's answer to a save is not an outcome",
+            )),
+        }
+    }
+
+    /// Sends one `files` frame (`append` or `save`, with its input) for this call: the host's
+    /// answer, or its error.
+    fn files(&self, op: &str, input: Value) -> Result<Value, Error> {
+        self.check()?;
+        let id = format!("f-{}", self.shared.next.fetch_add(1, Ordering::SeqCst));
+        let frame = json!({"type": "files", "id": id, "for": self.id, "op": op, "input": input});
+        self.ask(id, frame, true)
     }
 
     /// Sends a vault frame (`backup.put`, `journal.begin`, ...) with fields for this call: its
