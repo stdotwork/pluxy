@@ -850,7 +850,16 @@ pub mod ipc {
         use windows_sys::Win32::Security::Authorization::{
             ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SE_KERNEL_OBJECT,
         };
-        use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION};
+        use windows_sys::Win32::Security::{
+            GetAce, GetSecurityDescriptorSacl, GetSidIdentifierAuthority, GetSidSubAuthority,
+            GetSidSubAuthorityCount, IsValidSid, ACL, DACL_SECURITY_INFORMATION,
+            LABEL_SECURITY_INFORMATION, SECURITY_MANDATORY_LABEL_AUTHORITY,
+            SYSTEM_MANDATORY_LABEL_ACE,
+        };
+        use windows_sys::Win32::System::SystemServices::{
+            SECURITY_MANDATORY_MEDIUM_RID, SYSTEM_MANDATORY_LABEL_ACE_TYPE,
+            SYSTEM_MANDATORY_LABEL_NO_READ_UP, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
+        };
 
         struct Temp(PathBuf);
         impl Drop for Temp {
@@ -950,6 +959,58 @@ pub mod ipc {
             // SAFETY: sd was allocated by GetSecurityInfo.
             unsafe { LocalFree(sd) };
             s
+        }
+
+        /// The integrity label an open pipe carries, read through the API: its entry count, then
+        /// the first entry's type, mask, SID authority and sub-authorities.
+        fn label_of(pipe: HANDLE) -> (u16, u8, u32, [u8; 6], Vec<u32>) {
+            let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+            // SAFETY: sd is written, and freed below, when this succeeds.
+            let r = unsafe {
+                GetSecurityInfo(
+                    pipe,
+                    SE_KERNEL_OBJECT,
+                    LABEL_SECURITY_INFORMATION,
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    &mut sd,
+                )
+            };
+            assert_eq!(r, 0, "GetSecurityInfo failed with {r}");
+            let (mut present, mut defaulted) = (0, 0);
+            let mut acl: *mut ACL = null_mut();
+            // SAFETY: sd is a valid descriptor; the outputs are written.
+            let ok =
+                unsafe { GetSecurityDescriptorSacl(sd, &mut present, &mut acl, &mut defaulted) };
+            assert!(
+                ok != 0 && present != 0 && !acl.is_null(),
+                "the pipe has no label"
+            );
+            // SAFETY: acl points into sd, which lives until the LocalFree below; an entry's
+            // pointer and its SID stay inside the list.
+            let found = unsafe {
+                let count = (*acl).AceCount;
+                let mut ace: *mut core::ffi::c_void = null_mut();
+                assert_ne!(
+                    GetAce(acl, 0, &mut ace),
+                    0,
+                    "{}",
+                    io::Error::last_os_error()
+                );
+                let ace = ace.cast::<SYSTEM_MANDATORY_LABEL_ACE>();
+                let sid: PSID = std::ptr::addr_of_mut!((*ace).SidStart).cast();
+                assert_ne!(IsValidSid(sid), 0, "the label's SID is not valid");
+                let authority = (*GetSidIdentifierAuthority(sid)).Value;
+                let subs = (0..u32::from(*GetSidSubAuthorityCount(sid)))
+                    .map(|n| *GetSidSubAuthority(sid, n))
+                    .collect();
+                (count, (*ace).Header.AceType, (*ace).Mask, authority, subs)
+            };
+            // SAFETY: sd was allocated by GetSecurityInfo.
+            unsafe { LocalFree(sd) };
+            found
         }
 
         /// A connection to the pipe as any program could make it, with no message sent. Like a
@@ -1057,7 +1118,6 @@ pub mod ipc {
             assert_ne!(h, INVALID_HANDLE_VALUE, "{}", io::Error::last_os_error());
             let h = Handle(h);
             let sddl = security_of(h.0, DACL_SECURITY_INFORMATION);
-            let label = security_of(h.0, LABEL_SECURITY_INFORMATION);
             // The user's own SID, as SDDL writes it (the built-in Administrator is "LA"): the
             // same text as an access list made for this user by the app's own code.
             let reference = sddl_of(Security::this_user().unwrap().sd, DACL_SECURITY_INFORMATION);
@@ -1076,15 +1136,26 @@ pub mod ipc {
                 trustee(&reference),
                 "{sddl} is not this user's alone ({reference})"
             );
-            // The pipe was made with its integrity label (the Medium level, barring lower ones),
-            // and still was: a label the system refused would have failed the pipe's making.
-            assert!(
-                label.starts_with("S:(ML;") && label.ends_with(";;;ME)"),
-                "the pipe has no Medium integrity label: {label}"
+            // The pipe carries its integrity label: one entry, a mandatory label that bars lower
+            // levels from reading and writing, at the Medium level. Read through the API, not
+            // from the SDDL text, which the system writes with flags and an order of its own.
+            let (count, kind, mask, authority, subs) = label_of(h.0);
+            assert_eq!(count, 1, "more than one entry in the label list");
+            assert_eq!(
+                u32::from(kind),
+                SYSTEM_MANDATORY_LABEL_ACE_TYPE,
+                "not a label entry"
             );
-            assert!(
-                label.contains("NW") && label.contains("NR"),
-                "the label does not bar lower levels from reading and writing: {label}"
+            assert_eq!(
+                mask,
+                SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP,
+                "the label does not bar lower levels from reading and writing"
+            );
+            assert_eq!(authority, SECURITY_MANDATORY_LABEL_AUTHORITY.Value);
+            assert_eq!(
+                subs,
+                [SECURITY_MANDATORY_MEDIUM_RID as u32],
+                "not the Medium level"
             );
             // The positive control on the same route: the user's own launch gets through.
             drop(h);
