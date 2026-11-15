@@ -900,13 +900,23 @@ pub mod ipc {
             }
         }
 
-        /// A connection to the pipe as any program could make it, with no message sent.
+        /// A connection to the pipe as any program could make it, with no message sent. Like a
+        /// real client, it waits when every instance is busy: the server makes the next one
+        /// just after it takes a client, so a burst of connections can arrive in between.
         fn raw(pipe: &Path) -> fs::File {
-            fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(pipe)
-                .unwrap()
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                match fs::OpenOptions::new().read(true).write(true).open(pipe) {
+                    Ok(f) => return f,
+                    Err(e)
+                        if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32)
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(e) => panic!("{}: {e}", pipe.display()),
+                }
+            }
         }
 
         #[test]
