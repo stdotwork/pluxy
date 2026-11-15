@@ -595,23 +595,20 @@ impl Target {
     /// [`Target::replace`] names them) when the program stopped between writing one and renaming
     /// it; they may hold the new bytes. The names removed.
     pub fn remove_temps(&self) -> Result<Vec<String>, Error> {
-        let prefix = format!(".{}.pluxy-", self.name.to_string_lossy());
-        let mut removed = Vec::new();
-        let entries = self
-            .dir
-            .entries()
-            .map_err(|e| io(&format!("{}", self.pin.target.display()), e))?;
-        for e in entries.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let hex = name
-                .strip_prefix(&prefix)
-                .and_then(|r| r.strip_suffix(".tmp"))
-                .is_some_and(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()));
-            if hex && self.dir.remove_file(&name).is_ok() {
-                removed.push(name);
-            }
+        remove_temps_in(&self.dir, &self.name, &self.pin.target)
+    }
+
+    /// The same, for a pin whose target cannot be opened as a [`Target`] now (it became a link,
+    /// or grew past the size limit): through the pinned folder, never reading the file. The
+    /// folder must still be the pinned one.
+    pub fn remove_temps_of(pin: &Pin) -> Result<Vec<String>, Error> {
+        let folder = pin.target.parent().unwrap_or(Path::new("/"));
+        let dir = open_dir(folder)?;
+        if dir_id(&dir, folder)? != pin.parent_id {
+            return Err(changed(&pin.target, "its folder was replaced"));
         }
-        Ok(removed)
+        let name = PathBuf::from(pin.target.file_name().unwrap_or_default());
+        remove_temps_in(&dir, &name, &pin.target)
     }
 
     /// Whether the file is now the one expected: its identity (when given) and its SHA-256.
@@ -775,4 +772,24 @@ pub(crate) fn random_hex() -> Result<String, Error> {
     let mut b = [0u8; 8];
     getrandom::fill(&mut b).map_err(|e| Error::unavailable(format!("no randomness: {e}")))?;
     Ok(b.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Removes the temporary files of a write to `name` in `dir` (`.<name>.pluxy-<16 hex>.tmp`).
+fn remove_temps_in(dir: &Dir, name: &Path, at: &Path) -> Result<Vec<String>, Error> {
+    let prefix = format!(".{}.pluxy-", name.to_string_lossy());
+    let mut removed = Vec::new();
+    let entries = dir
+        .entries()
+        .map_err(|e| io(&format!("{}", at.display()), e))?;
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let hex = name
+            .strip_prefix(&prefix)
+            .and_then(|r| r.strip_suffix(".tmp"))
+            .is_some_and(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()));
+        if hex && dir.remove_file(&name).is_ok() {
+            removed.push(name);
+        }
+    }
+    Ok(removed)
 }
