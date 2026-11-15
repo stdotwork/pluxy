@@ -60,6 +60,15 @@ impl Handler for Tool {
             "big" => call
                 .batch(json!({"text": "x".repeat(MAX_BATCH)}))
                 .map(|_| json!({})),
+            "save" => call
+                .save_file(
+                    call.input["name"].as_str().unwrap_or_default(),
+                    &save_bytes(call.input["len"].as_u64().unwrap_or(0) as usize),
+                )
+                .map(|o| match o {
+                    SaveOutcome::Saved { size } => json!({"outcome": "saved", "size": size}),
+                    SaveOutcome::Cancelled => json!({"outcome": "cancelled"}),
+                }),
             op => Err(Error::unsupported(format!("no operation {op}"))),
         };
         self.running.fetch_sub(1, Ordering::SeqCst);
@@ -73,6 +82,11 @@ impl Handler for Tool {
             .push((unknown.to_vec(), journals.to_vec()));
         Ok(())
     }
+}
+
+/// The bytes the "save" operation saves: len of them, every value in turn (never all zero).
+fn save_bytes(len: usize) -> Vec<u8> {
+    (0..len).map(|i| (i % 251) as u8).collect()
 }
 
 struct Host {
@@ -398,5 +412,133 @@ fn a_batch_is_refused_too_big_outside_a_job_and_once_cancelled() {
         h.next(),
         json!({"type": "error", "id": "c-4", "error": {"code": "cancelled", "message": "the call was cancelled"}})
     );
+    h.end().unwrap();
+}
+
+#[test]
+fn base64_is_the_standard_alphabet_with_padding() {
+    // RFC 4648, section 10.
+    for (plain, coded) in [
+        ("", ""),
+        ("f", "Zg=="),
+        ("fo", "Zm8="),
+        ("foo", "Zm9v"),
+        ("foob", "Zm9vYg=="),
+        ("fooba", "Zm9vYmE="),
+        ("foobar", "Zm9vYmFy"),
+    ] {
+        assert_eq!(base64(plain.as_bytes()), coded);
+    }
+    assert_eq!(base64(&[0xfb, 0xff, 0xfe, 0x00, 0x80]), "+//+AIA=");
+}
+
+/// The next frame, which must be a `files` frame of call `call`: its ID, op and input.
+fn files_frame(h: &mut Host, call: &str) -> (Value, String, Value) {
+    let f = h.next();
+    assert_eq!((&f["type"], &f["for"]), (&json!("files"), &json!(call)));
+    assert!(f["id"].as_str().unwrap().starts_with("f-"));
+    let op = f["op"].as_str().unwrap().to_string();
+    (f["id"].clone(), op, f["input"].clone())
+}
+
+#[test]
+fn a_call_saves_a_file_in_appends_then_one_save_and_hears_the_outcome() {
+    let mut h = Host::start();
+    h.next();
+    // Two full appends and a short third.
+    let len = 2 * APPEND_BYTES + 5;
+    let bytes = save_bytes(len);
+    h.send(json!({"type": "call", "id": "c-2", "op": "save", "input": {"name": "s.jsonl", "len": len}}));
+    for (n, part) in bytes.chunks(APPEND_BYTES).enumerate() {
+        let (id, op, input) = files_frame(&mut h, "c-2");
+        assert_eq!(op, "append");
+        assert_eq!(
+            input,
+            json!({"offset": n * APPEND_BYTES, "data": base64(part)})
+        );
+        h.send(
+            json!({"type": "result", "id": id, "output": {"size": n * APPEND_BYTES + part.len()}}),
+        );
+    }
+    let (id, op, input) = files_frame(&mut h, "c-2");
+    assert_eq!((op.as_str(), input), ("save", json!({"name": "s.jsonl"})));
+    h.send(json!({"type": "result", "id": id, "output": {"outcome": "saved", "size": len}}));
+    assert_eq!(
+        h.next(),
+        json!({"type": "result", "id": "c-2", "output": {"outcome": "saved", "size": len}})
+    );
+    h.end().unwrap();
+}
+
+#[test]
+fn a_save_the_person_cancels_is_the_outcome_cancelled_and_an_empty_file_has_no_append() {
+    let mut h = Host::start();
+    h.next();
+    h.send(
+        json!({"type": "call", "id": "c-2", "op": "save", "input": {"name": "e.jsonl", "len": 0}}),
+    );
+    let (id, op, input) = files_frame(&mut h, "c-2");
+    assert_eq!((op.as_str(), input), ("save", json!({"name": "e.jsonl"})));
+    h.send(json!({"type": "result", "id": id, "output": {"outcome": "cancelled"}}));
+    assert_eq!(
+        h.next(),
+        json!({"type": "result", "id": "c-2", "output": {"outcome": "cancelled"}})
+    );
+    h.end().unwrap();
+}
+
+#[test]
+fn the_hosts_error_ends_the_save_at_once_and_its_message_is_the_calls() {
+    let mut h = Host::start();
+    h.next();
+    h.send(json!({"type": "call", "id": "c-2", "op": "save", "input": {"name": "s", "len": 2 * APPEND_BYTES}}));
+    let (id, _, _) = files_frame(&mut h, "c-2");
+    h.send(json!({"type": "result", "id": id, "output": {"size": APPEND_BYTES}}));
+    let (id, _, _) = files_frame(&mut h, "c-2");
+    h.send(json!({"type": "error", "id": id, "error": {"code": "invalid_request", "message": "too much"}}));
+    // No further append and no save: the next frame is the call's own error.
+    assert_eq!(
+        h.next(),
+        json!({"type": "error", "id": "c-2", "error": {"code": "invalid_request", "message": "too much"}})
+    );
+    // A refused save is the call's error too.
+    h.send(json!({"type": "call", "id": "c-3", "op": "save", "input": {"name": "a/b", "len": 0}}));
+    let (id, _, _) = files_frame(&mut h, "c-3");
+    h.send(json!({"type": "error", "id": id, "error": {"code": "permission", "message": "no"}}));
+    assert_eq!(h.next()["error"]["code"], "permission");
+    h.end().unwrap();
+}
+
+#[test]
+fn an_answer_that_is_not_what_was_sent_fails_the_save_and_names_no_bytes() {
+    let mut h = Host::start();
+    h.next();
+    h.send(json!({"type": "call", "id": "c-2", "op": "save", "input": {"name": "s", "len": 10}}));
+    let (id, _, _) = files_frame(&mut h, "c-2");
+    h.send(json!({"type": "result", "id": id, "output": {"size": 9}}));
+    let e = h.next();
+    assert_eq!(
+        (&e["type"], &e["error"]["code"]),
+        (&json!("error"), &json!("internal"))
+    );
+    h.send(json!({"type": "call", "id": "c-3", "op": "save", "input": {"name": "s", "len": 0}}));
+    let (id, _, _) = files_frame(&mut h, "c-3");
+    h.send(json!({"type": "result", "id": id, "output": {"outcome": "maybe"}}));
+    assert_eq!(h.next()["error"]["code"], "internal");
+    h.end().unwrap();
+}
+
+#[test]
+fn cancelling_a_call_cancels_its_save_request() {
+    let mut h = Host::start();
+    h.next();
+    h.send(json!({"type": "call", "id": "c-2", "op": "save", "input": {"name": "s", "len": 0}}));
+    let (id, _, _) = files_frame(&mut h, "c-2");
+    h.send(json!({"type": "cancel", "id": "c-2"}));
+    assert_eq!(h.next(), json!({"type": "cancel", "id": id}));
+    h.send(
+        json!({"type": "error", "id": id, "error": {"code": "cancelled", "message": "cancelled"}}),
+    );
+    assert_eq!(h.next()["error"]["code"], "cancelled");
     h.end().unwrap();
 }
