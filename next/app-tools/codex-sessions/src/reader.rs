@@ -796,6 +796,11 @@ pub fn find_rollout(codex_home: &Path, id: &str) -> Option<PathBuf> {
         .and_then(|p| validated_rollout(codex_home, p))
 }
 
+/// The most of a rollout that `export` saves, in bytes: the old app's limit for its raw JSONL. The
+/// whole file is read to be saved, so this also bounds the reader's memory; the host would take
+/// 64 MiB.
+pub const MAX_EXPORT: u64 = 10 << 20;
+
 /// The rollout of session id (as `validate_id` gives it), found as `detail` finds it: the
 /// `rollout_path` of the first database that has the session, if that resolves to a `.jsonl` file
 /// inside the Codex home's `sessions/` or `archived_sessions/`, else the rollout file whose name
@@ -828,6 +833,68 @@ fn rollout_for(codex_home: &Path, id: &str) -> Option<PathBuf> {
             .or_else(|| find_rollout(codex_home, id));
     }
     find_rollout(codex_home, id)
+}
+
+/// A session's rollout file exactly as it is on disk, for `export`: its session ID (as
+/// `validate_id` gives it) and its bytes. Refused when there is none, when it is larger than
+/// MAX_EXPORT or when it is not UTF-8 text, as the old app refused its raw JSONL. No error names
+/// the path or holds a byte of the file.
+pub fn export_bytes(codex_home: &Path, raw_id: &str) -> Result<(String, Vec<u8>), DetailError> {
+    let id = validate_id(raw_id).map_err(DetailError::Invalid)?;
+    let path = rollout_for(codex_home, &id)
+        .ok_or_else(|| DetailError::NotFound("the session has no rollout file to export".into()))?;
+    let unreadable = |e: std::io::Error| {
+        DetailError::Unavailable(format!(
+            "could not read the session's rollout file: {}",
+            e.kind()
+        ))
+    };
+    let too_large = || {
+        DetailError::Unavailable(format!(
+            "the session's rollout file is larger than {} MiB, which is the most exported",
+            MAX_EXPORT >> 20
+        ))
+    };
+    let file = fs::File::open(&path).map_err(unreadable)?;
+    let meta = file.metadata().map_err(unreadable)?;
+    if !meta.is_file() {
+        return Err(DetailError::Unavailable(
+            "the session's rollout is not a file".into(),
+        ));
+    }
+    if meta.len() > MAX_EXPORT {
+        return Err(too_large());
+    }
+    // One more byte than the limit tells a file that grew since the check.
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    file.take(MAX_EXPORT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(unreadable)?;
+    if bytes.len() as u64 > MAX_EXPORT {
+        return Err(too_large());
+    }
+    if std::str::from_utf8(&bytes).is_err() {
+        return Err(DetailError::Unavailable(
+            "the session's rollout file is not UTF-8 text".into(),
+        ));
+    }
+    Ok((id, bytes))
+}
+
+/// The file name `export` suggests, as the old app's: `session-<id>-<YYYY-MM-DD>.jsonl`, the date
+/// in UTC, from seconds since 1970.
+pub fn export_name(id: &str, unix_secs: u64) -> String {
+    // The civil date of a day number (Howard Hinnant's algorithm).
+    let z = (unix_secs / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("session-{id}-{year:04}-{month:02}-{day:02}.jsonl")
 }
 
 /// The rollout of session id (as `validate_id` gives it) that `open` opens in the person's own
