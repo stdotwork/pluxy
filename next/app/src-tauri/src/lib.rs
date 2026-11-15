@@ -151,6 +151,40 @@ struct App {
     updater: updater::State,
 }
 
+/// Every command of the plugins this build registers, as a webview calls it
+/// (`plugin:<name>|<command>`), from the ACL manifests Tauri's build writes for each plugin. The
+/// native test calls each from the page webview and its frame, so a plugin command added later
+/// is tried without a list to keep up.
+#[cfg(any(test, feature = "native-test"))]
+pub(crate) fn plugin_commands() -> Vec<String> {
+    let manifests: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/gen/schemas/acl-manifests.json"
+    )))
+    .expect("Tauri's ACL manifests");
+    let mut all = std::collections::BTreeSet::new();
+    for (plugin, manifest) in manifests.as_object().expect("a map of plugins") {
+        // The app's own commands are COMMANDS.
+        if plugin == "__app-acl__" {
+            continue;
+        }
+        let name = plugin.strip_prefix("core:").unwrap_or(plugin);
+        for permission in manifest["permissions"].as_object().into_iter().flatten() {
+            for list in ["allow", "deny"] {
+                for command in permission.1["commands"][list]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                {
+                    let command = command.as_str().expect("a command name");
+                    all.insert(format!("plugin:{name}|{command}"));
+                }
+            }
+        }
+    }
+    all.into_iter().collect()
+}
+
 /// Every command checks its caller too: the capability already allows only the window.
 fn trusted(w: &Webview) -> Result<(), String> {
     // The native test checks that no command is ever reached from another webview.
@@ -3314,6 +3348,31 @@ mod tests {
         assert_eq!(conf["app"]["withGlobalTauri"], false);
         let dir = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities")).unwrap();
         assert_eq!(dir.count(), 1, "one capability file, for the window");
+    }
+
+    /// The native test's probes take the plugin commands from Tauri's manifests: every
+    /// registered plugin gives some, including those the probes always tried.
+    #[test]
+    fn plugin_commands_cover_every_registered_plugin() {
+        let all = plugin_commands();
+        for c in [
+            "plugin:event|listen",
+            "plugin:event|emit",
+            "plugin:window|close",
+            "plugin:webview|create_webview",
+            "plugin:app|version",
+            "plugin:path|resolve_directory",
+            "plugin:menu|new",
+            "plugin:tray|new",
+            "plugin:image|new",
+            "plugin:resources|close",
+        ] {
+            assert!(all.iter().any(|a| a == c), "{c} missing from {all:?}");
+        }
+        #[cfg(unix)]
+        assert!(all.iter().any(|a| a == "plugin:updater|check"));
+        assert!(all.iter().all(|c| !c.contains("__app-acl__")));
+        assert!(all.len() > 100, "{} plugin commands", all.len());
     }
 
     #[test]

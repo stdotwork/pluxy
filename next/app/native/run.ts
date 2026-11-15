@@ -239,6 +239,22 @@ const TEST_PRODUCT = "pluxy Test";
 const commands = [
   ...readFileSync(join(tauri, "src", "command_names.rs"), "utf8").matchAll(/^\s+"(\w+)",$/gm),
 ].map((m) => m[1] as string);
+/** Every command of the plugins the build registers, from the ACL manifests Tauri's build
+ * writes (as lib.rs plugin_commands reads them); read once the app is built. */
+function pluginCommands(): string[] {
+  const manifests = JSON.parse(readFileSync(join(tauri, "gen", "schemas", "acl-manifests.json"), "utf8"));
+  const all = new Set<string>();
+  for (const [plugin, manifest] of Object.entries<{
+    permissions?: Record<string, { commands?: { allow?: string[]; deny?: string[] } }>;
+  }>(manifests)) {
+    if (plugin === "__app-acl__") continue;
+    const name = plugin.replace(/^core:/, "");
+    for (const p of Object.values(manifest.permissions ?? {}))
+      for (const c of [...(p.commands?.allow ?? []), ...(p.commands?.deny ?? [])])
+        all.add(`plugin:${name}|${c}`);
+  }
+  return [...all];
+}
 const PAGE = "ext/test/probe/probe";
 /** Tauri's command check refusing a call (debug builds say where; release builds "by ACL"). */
 const REFUSED = /not allowed( on window|\. Permissions associated| by ACL)/;
@@ -1703,7 +1719,10 @@ async function runApp(
       `the page webview after the window shrank: ${JSON.stringify(allocation)}`,
     );
     console.log(`${mode} page_allocation ${JSON.stringify(allocation)}`);
-    for (const cmd of commands) check(page?.calls[cmd], `the page webview's probe did not try ${cmd}`);
+    const plugins = pluginCommands();
+    check(plugins.length > 0, "no plugin commands in Tauri's ACL manifests");
+    for (const cmd of [...commands, ...plugins])
+      check(page?.calls[cmd], `the page webview's probe did not try ${cmd}`);
     for (const [cmd, c] of Object.entries(page?.calls ?? {})) {
       check(!c.ok && REFUSED.test(c.detail), `${cmd} from the page webview: ${JSON.stringify(c)}`);
     }
@@ -1724,7 +1743,8 @@ async function runApp(
     // The frame's calls through a Tauri bridge of its own: it has none, and none succeeds.
     const invoked = steps.get("frame_invoke") as Probe | undefined;
     check(invoked?.internals === false, `the page's frame has a Tauri bridge: ${JSON.stringify(invoked)}`);
-    for (const cmd of commands) check(invoked?.calls?.[cmd], `the page's frame did not try ${cmd}`);
+    for (const cmd of [...commands, ...plugins])
+      check(invoked?.calls?.[cmd], `the page's frame did not try ${cmd}`);
     for (const [cmd, c] of Object.entries(invoked?.calls ?? {}))
       check(!c.ok, `${cmd} from the page's frame: ${JSON.stringify(c)}`);
 

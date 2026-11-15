@@ -148,18 +148,12 @@ pub fn window_call(method: &str, path: &str) {
 
 const WAIT: Duration = Duration::from_secs(120);
 
-/// Tauri's own commands a page webview might try.
-const PLUGINS: &[&str] = &[
-    "plugin:event|listen",
-    "plugin:event|emit",
-    "plugin:window|close",
-    "plugin:webview|create_webview",
-    "plugin:app|version",
-    "plugin:path|resolve_directory",
-    "plugin:menu|new",
-    "plugin:tray|new",
-    "plugin:image|new",
-];
+/// Every app command and every command of the plugins this build registers.
+fn every_command() -> Vec<String> {
+    let mut all: Vec<String> = COMMANDS.iter().map(|c| c.to_string()).collect();
+    all.extend(crate::plugin_commands());
+    all
+}
 
 /// Commands the window's probe leaves out: they take no arguments and would act.
 const ACTING: &[&str] = &[
@@ -625,8 +619,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
         wait_for("the page's frame", || {
             eval(&wv, "document.querySelector('iframe')?.src ?? null").filter(|v| v.is_string())
         })?;
-        let mut all: Vec<&str> = COMMANDS.to_vec();
-        all.extend(PLUGINS);
+        let every = every_command();
+        let all: Vec<&str> = every.iter().map(String::as_str).collect();
         let mut r = probe(&wv, &all)?;
         r["label"] = json!(label);
         r["url"] = eval(&wv, "location.href").unwrap_or(Value::Null);
@@ -673,7 +667,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
         {
             return Err("fragment navigation closed admission".into());
         }
-        // The frame calls every command through a Tauri bridge of its own, where it has one.
+        // The frame calls every command through a Tauri bridge of its own, where it has one: on
+        // Windows it has the page webview's, until wry keeps Tauri's scripts out of frames on
+        // WebView2 (https://github.com/tauri-apps/wry/pull/1874).
         wv.eval(format!(
             "window.__frameInvoked = null; window.addEventListener('message', e => {{ if (e.data?.nativeInvoked) window.__frameInvoked = e.data.nativeInvoked; }}); document.querySelector('iframe').contentWindow.postMessage({{nativeInvoke: {}}}, '*')",
             json!(all)
@@ -718,8 +714,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
     ingress::run(app, &main)?;
     #[cfg(target_os = "linux")]
     {
-        let mut all: Vec<&str> = COMMANDS.to_vec();
-        all.extend(PLUGINS);
+        let every = every_command();
+        let all: Vec<&str> = every.iter().map(String::as_str).collect();
         crate::release_native::run(app, &main, |w| probe(w, &all))?;
     }
 
