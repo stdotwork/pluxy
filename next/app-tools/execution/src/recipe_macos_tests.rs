@@ -176,3 +176,57 @@ fn a_terminal_launch_too_large_to_hand_over_is_refused() {
     assert!(e.message.contains("too large"), "{}", e.message);
     std::fs::remove_dir_all(d).unwrap();
 }
+
+#[test]
+fn an_open_launch_is_refused_for_a_type_no_app_opens() {
+    let (root, within, _) = files();
+    let file = within.join("sessions/rollout-a.jsonl");
+    std::fs::write(&file, b"{}\n").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let r = prepare(&json!({"kind": "open", "file": file, "within": within}));
+    // No app claims .jsonl on a new macOS (`open` fails with kLSApplicationNotFoundErr);
+    // elsewhere this Mac's own file types decide.
+    if std::env::var_os("GITHUB_ACTIONS").is_some() || !os::opens(&file) {
+        let e = r.unwrap_err();
+        assert_eq!(e.code, "not_found", "{}", e.message);
+        assert!(
+            e.message
+                .starts_with("no app opens .jsonl files on this Mac"),
+            "{}",
+            e.message
+        );
+    } else {
+        assert!(r.is_ok(), "{r:?}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn an_open_launch_is_refused_for_an_executable_file_or_a_folder_others_may_write() {
+    let (root, within, file) = files();
+    let open = json!({"kind": "open", "file": file, "within": within});
+    assert!(prepare(&open).is_ok());
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let e = prepare(&open).unwrap_err();
+    assert!(
+        e.message.contains("must not be executable"),
+        "{}",
+        e.message
+    );
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    for (folder, mode) in [(within.join("sessions"), 0o777), (within.clone(), 0o770)] {
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(mode)).unwrap();
+        let e = prepare(&open).unwrap_err();
+        assert_eq!(e.code, "invalid_request", "{}", e.message);
+        assert!(
+            e.message.contains(&format!(
+                "the folder {} of the file to open",
+                folder.display()
+            )),
+            "{}",
+            e.message
+        );
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

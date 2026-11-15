@@ -476,6 +476,49 @@ fn an_open_launchs_folders_are_real_folders_not_reparse_points() {
 }
 
 #[test]
+fn an_open_launch_is_refused_when_others_may_change_a_folder_on_the_way() {
+    let (root, within, file) = files();
+    let open = json!({"kind": "open", "file": file, "within": within});
+    let refused = |e: pluxy_program::Error, folder: &Path| {
+        assert_eq!(e.code, "invalid_request", "{}", e.message);
+        assert!(
+            e.message.contains(&format!(
+                "the folder {} of the file to open",
+                folder.display()
+            )),
+            "{}",
+            e.message
+        );
+    };
+    // Everyone may write the sessions folder, then (that taken back) the within folder itself.
+    let sessions = within.join("sessions");
+    let icacls = |d: &Path, args: &[&str]| {
+        let out = std::process::Command::new(system32("icacls.exe"))
+            .arg(d)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    icacls(&sessions, &["/grant", "*S-1-1-0:(W)"]);
+    refused(prepare(&open).unwrap_err(), &sessions);
+    icacls(&sessions, &["/remove:g", "*S-1-1-0"]);
+    icacls(&within, &["/grant", "*S-1-1-0:(W)"]);
+    refused(prepare(&open).unwrap_err(), &within);
+    // The folder above within is not the launch's to judge.
+    icacls(&within, &["/remove:g", "*S-1-1-0"]);
+    icacls(&root, &["/grant", "*S-1-1-0:(W)"]);
+    let r = prepare(&open);
+    assert!(
+        r.as_ref().is_ok_and(|_| os::opens("jsonl"))
+            || r.as_ref()
+                .is_err_and(|e| e.message.starts_with("no app opens")),
+        "{r:?}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn the_opener_refuses_network_paths_streams_long_paths_and_types_no_app_opens() {
     for (p, why) in [
         (r"\\server\share\a.txt".to_string(), "network path"),
