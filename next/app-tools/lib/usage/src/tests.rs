@@ -222,11 +222,104 @@ impl Parser for Streamed {
     }
 }
 
+/// A parser of files whose lines are parts listed apart: `<name>.parts` holds lines
+/// `<part> <mtime_ns> <tokens>`, each an entry `<path below the root>#<part>` of its own revision
+/// (its line's length and time), read by `read_entry`; a part named `long` gets an ID longer than
+/// `MAX_PATH`, and a file whose first line is `fail` cannot list its parts.
+struct Parts;
+
+impl Parts {
+    fn lines(path: &Path) -> Vec<(String, i64, u64, u64)> {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| {
+                let f: Vec<&str> = l.split(' ').collect();
+                Some((
+                    f.first()?.to_string(),
+                    f.get(1)?.parse().ok()?,
+                    f.get(2)?.parse().ok()?,
+                    l.len() as u64,
+                ))
+            })
+            .collect()
+    }
+}
+
+impl Parser for Parts {
+    fn label(&self) -> &str {
+        "Parts"
+    }
+    fn default_roots(&self, home: &Path) -> Vec<PathBuf> {
+        vec![home.join(".parts")]
+    }
+    fn wanted(&self, path: &Path) -> bool {
+        path.extension().is_some_and(|e| e == "parts")
+    }
+    fn file_id_under(&self, root: &Path, path: &Path) -> Option<String> {
+        path.strip_prefix(root).ok()?.to_str().map(String::from)
+    }
+    fn entries(&self, root: &Path, found: &Found) -> Listing {
+        if std::fs::read_to_string(&found.path).is_ok_and(|t| t.starts_with("fail")) {
+            return Listing::Failed;
+        }
+        let id = self.file_id_under(root, &found.path).unwrap();
+        Listing::Parts(
+            Parts::lines(&found.path)
+                .into_iter()
+                .map(|(part, mtime_ns, _, size)| Entry {
+                    id: if part == "long" {
+                        format!("{id}#{}", "x".repeat(MAX_PATH))
+                    } else {
+                        format!("{id}#{part}")
+                    },
+                    size,
+                    mtime_ns,
+                })
+                .collect(),
+        )
+    }
+    fn read_entry(
+        &self,
+        roots: &[PathBuf],
+        id: &str,
+        sink: &mut Sink,
+    ) -> Option<Result<(), Error>> {
+        let (file, part) = id.split_once('#')?;
+        let mut read = || {
+            let path = roots
+                .iter()
+                .find_map(|r| self.locate(roots, r.join(file).to_str()?))
+                .ok_or_else(|| Error::invalid_request("no such file"))?;
+            let (_, mtime_ns, tokens, size) = Parts::lines(&path)
+                .into_iter()
+                .find(|l| l.0 == part)
+                .ok_or_else(|| Error::invalid_request("no such part"))?;
+            sink.revise(size, mtime_ns)?;
+            let t = Tokens {
+                input: tokens,
+                total: tokens,
+                samples: 1,
+                ..Tokens::default()
+            };
+            sink.row(3600, "m", &t)?;
+            sink.end_part()?;
+            // Too late once a part was sent.
+            assert_eq!(sink.revise(1, 1).unwrap_err().code, "internal");
+            Ok(())
+        };
+        Some(read())
+    }
+}
+
 struct Producer;
 impl Handler for Producer {
     fn call(&self, call: &Call) -> Result<Value, Error> {
         if call.input["streamed"] == true {
             return produce(call, &Streamed);
+        }
+        if call.input["parts"] == true {
+            return produce(call, &Parts);
         }
         produce(call, &Lines)
     }
@@ -440,5 +533,97 @@ fn a_streamed_parser_reads_a_file_over_the_document_limit_and_counts_a_long_line
     );
     assert_eq!(batches.last().unwrap()["size"], size);
     assert_eq!(end["output"], json!({"read": 1, "failed": 0}));
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_parser_lists_and_reads_the_parts_of_a_file_as_entries_of_their_own() {
+    let d = folder("parts");
+    let root = d.join("root");
+    let a = root.join("a.parts");
+    file(&a, "x 300 5\ny 100 7\n", 50);
+    file(&root.join("b.parts"), "z 200 9\n", 60);
+    let s = |p: &Path, part: &str| {
+        format!(
+            "{}#{part}",
+            p.strip_prefix(&root).unwrap().to_str().unwrap()
+        )
+    };
+    // Every part of every file, newest first by the part's own time.
+    let (batches, end) = job(json!({"mode": "files", "roots": [root], "parts": true}));
+    assert_eq!(
+        batches,
+        vec![json!({"files": [
+            {"file": s(&a, "x"), "size": 7, "mtime_ns": 300},
+            {"file": s(&root.join("b.parts"), "z"), "size": 7, "mtime_ns": 200},
+            {"file": s(&a, "y"), "size": 7, "mtime_ns": 100},
+        ]})]
+    );
+    assert_eq!(end["output"]["count"], 3);
+    // Each part read alone, at its own revision; a part or file that is not there fails alone.
+    let row = |i: u64| {
+        json!({"hour": 3600, "model": "m", "input": i, "output": 0, "cache_read": 0,
+            "cache_write": 0, "reasoning": 0, "total": i, "samples": 1})
+    };
+    let ids = [s(&a, "y"), s(&a, "gone"), "elsewhere.parts#x".to_string()];
+    let (batches, end) = job(json!({"mode": "read", "roots": [root], "files": ids, "parts": true}));
+    assert_eq!(
+        batches,
+        vec![
+            json!({"file": ids[0], "size": 7, "mtime_ns": 100, "part": 0, "last": false,
+                "rows": [row(7)]}),
+            json!({"file": ids[0], "size": 7, "mtime_ns": 100, "part": 1, "last": true,
+                "rows": []}),
+            json!({"file": ids[1], "error": "no such part"}),
+            json!({"file": ids[2], "error": "no such file"}),
+        ]
+    );
+    assert_eq!(end["output"], json!({"read": 1, "failed": 2}));
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn parts_listed_twice_are_listed_once_at_their_newest_revision_and_unlistable_ones_cut_the_listing()
+{
+    let d = folder("parts-twice");
+    let (one, two) = (d.join("one"), d.join("two"));
+    // a.parts under both roots: x is newer under two, y newer under one; z only under two.
+    file(&one.join("a.parts"), "x 100 1\ny 400 1\n", 50);
+    file(&two.join("a.parts"), "x 300 22\ny 200 1\nz 250 1\n", 60);
+    let listed = |roots: Value| {
+        let (batches, end) = job(json!({"mode": "files", "roots": roots, "parts": true}));
+        let files: Vec<Value> = batches
+            .iter()
+            .flat_map(|b| b["files"].as_array().unwrap().clone())
+            .collect();
+        (files, end["output"].clone())
+    };
+    let (files, out) = listed(json!([one, two]));
+    assert_eq!(
+        files,
+        vec![
+            json!({"file": "a.parts#y", "size": 7, "mtime_ns": 400}),
+            json!({"file": "a.parts#x", "size": 8, "mtime_ns": 300}),
+            json!({"file": "a.parts#z", "size": 7, "mtime_ns": 250}),
+        ]
+    );
+    assert_eq!(
+        (&out["count"], &out["truncated"]),
+        (&json!(3), &json!(false))
+    );
+    // A part whose ID is too long is left out, and the listing is cut short; the rest is listed.
+    file(&one.join("b.parts"), "long 500 1\nw 500 1\n", 70);
+    let (files, out) = listed(json!([one]));
+    assert!(files
+        .iter()
+        .all(|f| f["file"].as_str().unwrap().len() <= MAX_PATH));
+    assert!(files.contains(&json!({"file": "b.parts#w", "size": 7, "mtime_ns": 500})));
+    assert_eq!(out["truncated"], true);
+    // A file that cannot list its parts is listed as itself, and the listing is cut short.
+    std::fs::remove_file(one.join("b.parts")).unwrap();
+    file(&one.join("c.parts"), "fail\n", 80);
+    let (files, out) = listed(json!([one]));
+    assert!(files.contains(&json!({"file": "c.parts", "size": 5, "mtime_ns": 80_000_000_000i64})));
+    assert_eq!(out["truncated"], true);
     std::fs::remove_dir_all(d).unwrap();
 }
