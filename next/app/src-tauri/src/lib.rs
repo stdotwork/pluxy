@@ -2984,12 +2984,10 @@ pub fn run() {
                 #[cfg(target_os = "linux")]
                 runtimes: spawn::Runtimes::open(
                     Some(app.path().app_data_dir()?.join("runtimes.json")),
-                    {
-                        // Checked as a delivery to the runtime's package at each start and
-                        // restart: a client key revoked or unbound since is refused.
-                        let app = app.handle().clone();
-                        Box::new(move |package, id| client_keys::launch_value(&app, id, package))
-                    },
+                    // Checked as a delivery to the runtime's package at each start and restart,
+                    // and again right before its spawn: a client key revoked or unbound since is
+                    // refused.
+                    Box::new(client_keys::Launches(app.handle().clone())),
                 ),
                 #[cfg(target_os = "linux")]
                 launcher: Mutex::new(launcher::Launcher::open(launcher_file)),
