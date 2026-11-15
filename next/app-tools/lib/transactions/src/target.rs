@@ -755,7 +755,9 @@ impl Target {
                 MAX_FILE >> 10
             ))));
         }
-        let give = protection(rule, mode, self.mode_now().ok().flatten());
+        // The permissions now; failing to read them fails the write (never taken as no file).
+        let now = self.mode_now().map_err(before)?;
+        let give = protection(rule, mode, now);
         let tmp = PathBuf::from(format!(
             ".{}.pluxy-{}.tmp",
             self.name.to_string_lossy(),
