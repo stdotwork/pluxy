@@ -252,16 +252,21 @@ fn folders_own(file: &Path, within: &Path) -> Result<(), Error> {
     ))
 }
 
-/// On Windows: every folder from file's parent up to and including within may be changed by no
-/// one but the user, SYSTEM and Administrators (its owner and access list, `others_may_write`).
+/// On Windows: every folder from file's parent up to and including within is a real folder (not a
+/// link, junction or other reparse point) that no one but the user, SYSTEM and Administrators may
+/// change (its owner and access list, `others_may_write`).
 #[cfg(windows)]
 fn folders_own(file: &Path, within: &Path) -> Result<(), Error> {
+    use std::os::windows::fs::MetadataExt;
+    /// `FILE_ATTRIBUTE_REPARSE_POINT`.
+    const REPARSE_POINT: u32 = 0x400;
     for d in file.ancestors().skip(1) {
-        let others = pluxy_files::others_may_write(d)
-            .map_err(|e| Error::not_found(format!("{}: {e}", d.display())))?;
-        if !d.is_dir() || others {
+        let not_found = |e: std::io::Error| Error::not_found(format!("{}: {e}", d.display()));
+        let m = std::fs::symlink_metadata(d).map_err(not_found)?;
+        let others = pluxy_files::others_may_write(d).map_err(not_found)?;
+        if !m.is_dir() || m.file_attributes() & REPARSE_POINT != 0 || others {
             return Err(Error::invalid_request(format!(
-                "the folder {} of the file to open must be your own, writable by no one else",
+                "the folder {} of the file to open must be a folder of your own (not a link or junction), writable by no one else",
                 d.display()
             )));
         }

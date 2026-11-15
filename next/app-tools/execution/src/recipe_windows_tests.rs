@@ -368,6 +368,26 @@ fn an_open_launch_runs_the_execution_programs_open_mode_on_the_resolved_file() {
 }
 
 #[test]
+fn an_open_launchs_folders_are_real_folders_not_reparse_points() {
+    let (root, within, file) = files();
+    assert!(folders_own(&file, &within).is_ok());
+    // A junction (no privilege needed) to the sessions folder, named as a folder on the way.
+    let junction = within.join("linked");
+    let out = std::process::Command::new(system32("cmd.exe"))
+        .args(["/D", "/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(within.join("sessions"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let e = folders_own(&junction.join("rollout-a.jsonl"), &within).unwrap_err();
+    assert_eq!(e.code, "invalid_request", "{}", e.message);
+    assert!(e.message.contains("linked"), "{}", e.message);
+    std::fs::remove_dir(&junction).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn the_opener_refuses_network_paths_streams_long_paths_and_types_no_app_opens() {
     for (p, why) in [
         (r"\\server\share\a.txt".to_string(), "network path"),
