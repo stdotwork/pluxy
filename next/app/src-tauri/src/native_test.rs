@@ -701,28 +701,45 @@ fn run(app: &AppHandle) -> Result<(), String> {
         // The real HTTP pages-site frame navigates while wrapper closed is deliberately lost.
         // The native navigation callback must invalidate admission before its new document loads.
         wv.eval("{ const original=window.fetch; window.fetch=(u,o)=>o?.body && JSON.parse(o.body).type==='closed' ? Promise.resolve(new Response('',{status:204})) : original(u,o); const frame=document.querySelector('iframe');const next=new URL(frame.src);next.hash='';next.search='?native-second';frame.src=next.href; }").map_err(|e|e.to_string())?;
-        wait_for("native HTTP frame navigation closure", || {
+        let closed = wait_for("native HTTP frame navigation closure", || {
             app.state::<App>()
                 .pages
                 .lock()
                 .unwrap()
                 .document_closed(&label)
                 .then_some(())
-        })?;
-        wv.eval("fetch('/frame').then(r=>r.json()).then(info=>fetch('/send',{method:'POST',body:JSON.stringify({generation:info.generation,type:'call',data:{v:0,id:'after-http-navigation',method:'theme.get',params:null}})})).then(r=>window.__navStatus=r.status)").map_err(|e|e.to_string())?;
-        let status = wait_for("HTTP navigation refusal", || {
-            eval(&wv, "window.__navStatus ?? null").filter(|v| v.is_number())
-        })?;
-        if status != 409 {
-            return Err("HTTP frame navigation left native calls open".into());
+        });
+        if let Err(e) = closed {
+            #[cfg(target_os = "linux")]
+            return Err(e);
+            // Off Linux the session records what it saw and goes on to key entry and rotation:
+            // on Windows the webview does not report a navigation inside a frame, and dialogs.ts
+            // names this check an expected failure there until that is fixed.
+            #[cfg(not(target_os = "linux"))]
+            log(
+                "http_navigation",
+                json!({
+                    "native_closed": false,
+                    "error": e,
+                    "frame": eval(&wv, "document.querySelector('iframe')?.src ?? null"),
+                }),
+            );
+        } else {
+            wv.eval("fetch('/frame').then(r=>r.json()).then(info=>fetch('/send',{method:'POST',body:JSON.stringify({generation:info.generation,type:'call',data:{v:0,id:'after-http-navigation',method:'theme.get',params:null}})})).then(r=>window.__navStatus=r.status)").map_err(|e|e.to_string())?;
+            let status = wait_for("HTTP navigation refusal", || {
+                eval(&wv, "window.__navStatus ?? null").filter(|v| v.is_number())
+            })?;
+            if status != 409 {
+                return Err("HTTP frame navigation left native calls open".into());
+            }
+            wait_for("window closed state", || {
+                eval(&main,"document.querySelector('[data-part=extension-frame]')?.dataset.phase === 'closed' && document.body.innerText.includes('Load the page again')").filter(|v|v==true)
+            })?;
+            log(
+                "http_navigation",
+                json!({"native_closed":true,"status":status,"wrapper_closed_suppressed":true,"window_closed":true,"fragment_open":true}),
+            );
         }
-        wait_for("window closed state", || {
-            eval(&main,"document.querySelector('[data-part=extension-frame]')?.dataset.phase === 'closed' && document.body.innerText.includes('Load the page again')").filter(|v|v==true)
-        })?;
-        log(
-            "http_navigation",
-            json!({"native_closed":true,"status":status,"wrapper_closed_suppressed":true,"window_closed":true,"fragment_open":true}),
-        );
     }
 
     key_entry_test::check(app, &main)?;

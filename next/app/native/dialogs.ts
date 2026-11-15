@@ -45,10 +45,24 @@ const platform =
 
 /**
  * Checks that are expected to fail on a platform until the slice named fixes them: each one is
- * reported by name and counted, and passing one is a problem too (the expectation is stale).
- * Each points at the plan row that owns it.
+ * reported by name, with what it saw, and counted, and passing one is a problem too (the
+ * expectation is stale). Each points at the plan row that owns it, and only two may: P8p4a (the
+ * tray, single instance and window preferences on Windows and macOS) and P8p7 (extension page
+ * isolation on Windows and macOS). Whichever of this change and the owner's fix lands second
+ * removes the entry.
  */
-const EXPECTED: Record<string, { platforms: string[]; owner: string; why: string }> = {};
+const FRAME_NAVIGATION =
+  "WebView2 does not report a navigation inside the page's frame (wry hooks only the top-level " +
+  "NavigationStarting), so the app does not close the page's channel when its frame navigates";
+const EXPECTED: Record<string, { platforms: string[]; owner: string; why: string }> = {
+  http_navigation: { platforms: ["windows"], owner: "P8p7", why: FRAME_NAVIGATION },
+  ingress_navigation: { platforms: ["windows"], owner: "P8p7", why: FRAME_NAVIGATION },
+  "frame own tauri internals": {
+    platforms: ["windows"],
+    owner: "P8p7",
+    why: "the Tauri bridge (window.__TAURI_INTERNALS__) is present in the page's frame, though every call from it is refused",
+  },
+};
 
 function refuse(why: string): never {
   console.error(`dialogs: refused to start: ${why}`);
