@@ -43,6 +43,13 @@ fn never() -> bool {
     false
 }
 
+/// The `-wal` or `-shm` file beside a database.
+fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
 fn write(path: &Path, text: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, text).unwrap();
@@ -443,7 +450,8 @@ fn reading_a_wal_database_leaves_nothing_beside_it() {
         )
         .unwrap();
     }
-    assert!(is_wal(&db));
+    // The database is in WAL mode (byte 18 of its header is 2).
+    assert_eq!(fs::read(&db).unwrap()[18], 2);
     assert!(!sidecar(&db, "-wal").exists() && !sidecar(&db, "-shm").exists());
     let before = fs::read(&db).unwrap();
     let page = list(&root, 0, 50);
@@ -508,6 +516,7 @@ fn wal_with_uncheckpointed_rows(dest: &Path) {
 
 #[test]
 fn committed_rows_still_in_the_wal_are_read_and_nothing_is_written_beside_it() {
+    let _lock = COPY_ROOT.lock().unwrap_or_else(|e| e.into_inner());
     let root = Root::new("wal-rows");
     let db = root.join("sqlite/live.db");
     wal_with_uncheckpointed_rows(&db);
@@ -531,6 +540,95 @@ fn committed_rows_still_in_the_wal_are_read_and_nothing_is_written_beside_it() {
         .unwrap()
         .flatten()
         .any(|e| e.file_name().to_string_lossy().starts_with(&prefix)));
+}
+
+/// Tests that set `PLUXY_TOOL_DATA_DIR`, or read a -wal that needs a private copy, take this lock:
+/// the variable is the process's, and a copy's folder is under it while it is set.
+static COPY_ROOT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn a_database_whose_wal_or_shm_is_not_a_regular_file_is_skipped_with_a_warning() {
+    let root = Root::new("linked-sidecar");
+    let outside = Root::new("linked-sidecar-outside");
+    let db = root.join("sqlite/threads.db");
+    fs::create_dir_all(db.parent().unwrap()).unwrap();
+    sql(
+        &db,
+        "PRAGMA journal_mode = WAL;
+         CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, updated_at_ms INTEGER);
+         INSERT INTO threads VALUES ('w', 'WAL thread', 5);",
+    );
+    // The positive control: with no -wal or -shm beside it, it is read.
+    let page = list(&root, 0, 50);
+    assert_eq!(page.sessions.len(), 1);
+    assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+    let elsewhere = outside.join("elsewhere");
+    write(&elsewhere, "");
+    for side in ["-wal", "-shm"] {
+        std::os::unix::fs::symlink(&elsewhere, sidecar(&db, side)).unwrap();
+        let page = list(&root, 0, 50);
+        assert!(page.databases.is_empty(), "{side}: {:?}", page.databases);
+        assert!(page.sessions.is_empty(), "{side} is a link");
+        assert!(
+            page.warnings
+                .iter()
+                .any(|w| w.starts_with("Skipped database ") && w.contains(side)),
+            "{side}: {:?}",
+            page.warnings
+        );
+        fs::remove_file(sidecar(&db, side)).unwrap();
+    }
+}
+
+#[test]
+fn the_opener_refuses_a_database_that_is_not_a_regular_file() {
+    let root = Root::new("opener-link");
+    let db = root.join("real.db");
+    sql(
+        &db,
+        "CREATE TABLE threads (id TEXT PRIMARY KEY); INSERT INTO threads VALUES ('x');",
+    );
+    let link = root.join("link.db");
+    std::os::unix::fs::symlink(&db, &link).unwrap();
+    // The positive control: the file itself opens.
+    assert!(open_read_only(&db).is_ok());
+    let e = open_read_only(&link)
+        .err()
+        .expect("a linked database opened");
+    assert!(
+        e.starts_with("Skipped database ") && e.contains(&*link.to_string_lossy()),
+        "{e}"
+    );
+}
+
+#[test]
+fn only_private_copies_of_processes_no_longer_running_are_removed() {
+    let _lock = COPY_ROOT.lock().unwrap_or_else(|e| e.into_inner());
+    let root = Root::new("prune-root");
+    let data = Root::new("prune-data");
+    let db = root.join("sqlite/live.db");
+    wal_with_uncheckpointed_rows(&db);
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead = child.id();
+    child.wait().unwrap();
+    let tmp = data.join("tmp");
+    // A process that is running (pid 1) and one that is not, each with a copy left in the folder.
+    for left in ["wal-1-0".to_string(), format!("wal-{dead}-0")] {
+        fs::create_dir_all(tmp.join(left)).unwrap();
+    }
+    std::env::set_var("PLUXY_TOOL_DATA_DIR", &*data);
+    let page = list(&root, 0, 50);
+    std::env::remove_var("PLUXY_TOOL_DATA_DIR");
+    let ids: Vec<&str> = page.sessions.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, ["b", "a"], "{:?}", page.warnings);
+    assert!(
+        tmp.join("wal-1-0").exists(),
+        "a running process's copy was removed"
+    );
+    assert!(
+        !tmp.join(format!("wal-{dead}-0")).exists(),
+        "a stopped process's copy stayed"
+    );
 }
 
 #[test]
