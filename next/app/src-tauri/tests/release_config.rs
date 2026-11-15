@@ -1336,3 +1336,96 @@ fn release_config_checks_windows_and_macos_forms() {
 fn gzip_bytes() -> Vec<u8> {
     b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03".to_vec()
 }
+
+/// A universal Mach-O file whose entries are (cputype, offset, size), followed by data at 0x1000.
+fn fat_with(entries: &[(u32, u32, u32)], data: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0u8; 0x1000];
+    bytes[..4].copy_from_slice(&0xcafe_babeu32.to_be_bytes());
+    bytes[4..8].copy_from_slice(&(entries.len() as u32).to_be_bytes());
+    for (i, (cpu, offset, size)) in entries.iter().enumerate() {
+        let at = 8 + 20 * i;
+        bytes[at..at + 4].copy_from_slice(&cpu.to_be_bytes());
+        bytes[at + 8..at + 12].copy_from_slice(&offset.to_be_bytes());
+        bytes[at + 12..at + 16].copy_from_slice(&size.to_be_bytes());
+        bytes[at + 16..at + 20].copy_from_slice(&12u32.to_be_bytes());
+    }
+    bytes.extend_from_slice(data);
+    bytes
+}
+
+// Review of #338, finding 2: an executable's headers must be what their fields say, or the file
+// cannot be checked. Each refusal carries the receipt, so only its headers refuse it; the
+// well-formed file of the same kind passes beside each.
+#[test]
+fn release_config_checks_executable_headers() {
+    let f = Fixture::new();
+    if cfg!(feature = "artifact-test-trust") || cfg!(feature = "native-test") {
+        return;
+    }
+    let receipt = env!("PLUXY_BUILD_RECEIPT").as_bytes();
+    let mut wrong = Vec::new();
+    let file = f.dir.join("pluxy-app-headers");
+    let mut case = |what: &str, bytes: Vec<u8>, ok: bool| {
+        fs::write(&file, bytes).unwrap();
+        expect_on(
+            &mut wrong,
+            what,
+            validate_alone(&f, &[&file]),
+            if ok { None } else { Some("cannot be checked") },
+        );
+    };
+    let thin = macho(receipt);
+    let size = thin.len() as u32;
+    case(
+        "a universal file",
+        fat_with(&[(0x0100_000c, 0x1000, size)], &thin),
+        true,
+    );
+    case(
+        "a part starting inside the universal header",
+        fat_with(&[(0x0100_000c, 8, size)], &thin),
+        false,
+    );
+    case(
+        "two parts at the same place",
+        fat_with(
+            &[(0x0100_000c, 0x1000, size), (0x0100_0007, 0x1000, size)],
+            &thin,
+        ),
+        false,
+    );
+    case(
+        "a part that is not a Mach-O file",
+        fat_with(
+            &[(0x0100_000c, 0x1000, pe(receipt).len() as u32)],
+            &pe(receipt),
+        ),
+        false,
+    );
+    case(
+        "a part of another CPU type than its entry names",
+        fat_with(&[(0x0100_0007, 0x1000, size)], &thin),
+        false,
+    );
+    case(
+        "a part too short for its load commands",
+        fat_with(&[(0x0100_000c, 0x1000, 40)], &thin),
+        false,
+    );
+    case("a thin file", thin.clone(), true);
+    let mut short = thin.clone();
+    short[16..20].copy_from_slice(&4u32.to_le_bytes()); // four load commands in 16 bytes
+    case("load commands shorter than 8 bytes each", short, false);
+    case("a PE image", pe(receipt), true);
+    // The PE header placed inside the MZ header (e_lfanew 8), its fields otherwise valid.
+    let mut inside = pe(receipt);
+    let header: Vec<u8> = inside[0x80..0x80 + 26].to_vec();
+    inside[0x08..0x08 + 26].copy_from_slice(&header);
+    inside[0x3c..0x40].copy_from_slice(&8u32.to_le_bytes());
+    case("a PE header inside the MZ header", inside, false);
+    let mut small = pe(receipt);
+    small[0x94..0x96].copy_from_slice(&2u16.to_le_bytes()); // SizeOfOptionalHeader
+    case("an optional header too short for its fields", small, false);
+    drop(case);
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}

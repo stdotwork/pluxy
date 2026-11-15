@@ -314,7 +314,10 @@ fn format(path: &Path) -> Result<Format, String> {
         format!("{what}: not an app executable (ELF, PE or Mach-O) or a type-2 AppImage, so it cannot be checked")
     };
     let len = file.metadata().map_err(|e| format!("{what}: {e}"))?.len();
-    if matches!(executable(&header, len), Some(Exec::Pe | Exec::MachO)) {
+    if matches!(
+        executable(&mut file, &header, len),
+        Some(Exec::Pe | Exec::MachO)
+    ) {
         return Ok(Format::Executable);
     }
     if header.len() < 20 || header[..4] != *b"\x7fELF" || !matches!(header[5], 1 | 2) {
@@ -422,15 +425,16 @@ fn well_formed_elf(header: &[u8], len: u64) -> bool {
     check() == Some(true)
 }
 
-/// What kind of executable a file is, from its first bytes (header) and its length: an ELF file
-/// as `well_formed_elf` takes one, a PE image, or a Mach-O file (thin or universal). Only the
-/// headers are read, never run; None for anything else, a bare magic number included.
-fn executable(header: &[u8], len: u64) -> Option<Exec> {
+/// What kind of executable a file is, from its first bytes (header), its length and, for a
+/// universal Mach-O file, the headers of its parts read from file: an ELF file as
+/// `well_formed_elf` takes one, a PE image, or a Mach-O file (thin or universal). Only headers are
+/// read, never run; None for anything else, a bare magic number included.
+fn executable(file: &mut (impl Read + Seek), header: &[u8], len: u64) -> Option<Exec> {
     if well_formed_elf(header, len) {
         Some(Exec::Elf)
     } else if well_formed_pe(header, len) {
         Some(Exec::Pe)
-    } else if well_formed_macho(header, len) {
+    } else if well_formed_macho(file, header, len) {
         Some(Exec::MachO)
     } else {
         None
@@ -438,56 +442,77 @@ fn executable(header: &[u8], len: u64) -> Option<Exec> {
 }
 
 /// A PE image (Windows executable or DLL) for x86, x86-64 or arm64: the MZ header's e_lfanew
-/// leads, inside header, to the PE signature and a file header marked an executable image, whose
-/// optional header (PE32 or PE32+) lies inside the file.
+/// (past the MZ header's own 64 bytes) leads, inside header, to the PE signature and a file
+/// header marked an executable image, whose optional header (PE32 or PE32+, at least its standard
+/// and Windows-specific fields long) lies inside the file.
 fn well_formed_pe(header: &[u8], len: u64) -> bool {
-    let u16_at = |at: usize| {
-        header
-            .get(at..at + 2)
-            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+    let u16_at = |at: usize| -> Option<u16> {
+        let b = header.get(at..at.checked_add(2)?)?;
+        Some(u16::from_le_bytes([b[0], b[1]]))
     };
     let check = || -> Option<bool> {
         if !header.starts_with(b"MZ") {
             return Some(false);
         }
         let pe = u32::from_le_bytes(header.get(0x3c..0x40)?.try_into().ok()?) as usize;
-        let machine = u16_at(pe + 4)?;
-        let sections = u16_at(pe + 6)?;
-        let optional = u16_at(pe + 20)?;
-        let characteristics = u16_at(pe + 22)?;
-        let magic = u16_at(pe + 24)?;
+        if pe < 0x40 || header.get(pe..pe.checked_add(4)?)? != b"PE\0\0" {
+            return Some(false);
+        }
+        let machine = u16_at(pe.checked_add(4)?)?;
+        let sections = u16_at(pe.checked_add(6)?)?;
+        let optional = usize::from(u16_at(pe.checked_add(20)?)?);
+        let characteristics = u16_at(pe.checked_add(22)?)?;
+        let magic = u16_at(pe.checked_add(24)?)?;
+        // The optional header's standard and Windows-specific fields: 96 bytes in PE32, 112 in
+        // PE32+, before the data directories.
+        let least = match magic {
+            0x10b => 96,
+            0x20b => 112,
+            _ => return Some(false),
+        };
+        let end = pe.checked_add(24)?.checked_add(optional)?;
         Some(
-            header.get(pe..pe + 4)? == b"PE\0\0"
-                && matches!(machine, 0x14c | 0x8664 | 0xaa64)
+            matches!(machine, 0x14c | 0x8664 | 0xaa64)
                 && sections >= 1
                 && characteristics & 0x0002 != 0
-                && matches!(magic, 0x10b | 0x20b)
-                && (pe + 24 + usize::from(optional)) as u64 <= len,
+                && optional >= least
+                && end as u64 <= len,
         )
     };
     check() == Some(true)
 }
 
-/// A Mach-O file for x86-64 or arm64: a 64-bit executable, library or bundle whose load
-/// commands lie inside the file, or a universal file of one to eight such parts (each inside the
-/// file; the parts' bytes are scanned with the rest).
-fn well_formed_macho(header: &[u8], len: u64) -> bool {
-    const CPUS: [u32; 2] = [0x0100_0007, 0x0100_000c];
+/// The Mach-O CPU types the app is built for: x86-64 and arm64.
+const MACHO_CPUS: [u32; 2] = [0x0100_0007, 0x0100_000c];
+
+/// A thin 64-bit Mach-O header (its first 32 bytes, h) for x86-64 or arm64: an executable,
+/// library or bundle with at least one load command, each at least 8 bytes, all within room bytes
+/// of where the header starts. Returns its CPU type.
+fn thin_macho(h: &[u8], room: u64) -> Option<u32> {
     let le = |at: usize| -> Option<u32> {
-        Some(u32::from_le_bytes(header.get(at..at + 4)?.try_into().ok()?))
+        Some(u32::from_le_bytes(h.get(at..at + 4)?.try_into().ok()?))
     };
+    let (magic, cpu, kind, commands, size) = (le(0)?, le(4)?, le(12)?, le(16)?, le(20)?);
+    (magic == 0xfeed_facf
+        && MACHO_CPUS.contains(&cpu)
+        && matches!(kind, 2 | 6 | 8)
+        && commands >= 1
+        && u64::from(size) >= 8 * u64::from(commands)
+        && 32 + u64::from(size) <= room)
+        .then_some(cpu)
+}
+
+/// A Mach-O file for x86-64 or arm64: a thin 64-bit executable, library or bundle (`thin_macho`),
+/// or a universal file of one to eight parts, each after the universal header, inside the file,
+/// overlapping no other, and holding a thin header of the CPU type its entry names (read from
+/// file). Every byte of the file, parts included, is scanned with the rest.
+fn well_formed_macho(file: &mut (impl Read + Seek), header: &[u8], len: u64) -> bool {
     let be = |at: usize| -> Option<u32> {
         Some(u32::from_be_bytes(header.get(at..at + 4)?.try_into().ok()?))
     };
-    let check = || -> Option<bool> {
-        if le(0)? == 0xfeed_facf {
-            let (cpu, kind, commands, size) = (le(4)?, le(12)?, le(16)?, le(20)?);
-            return Some(
-                CPUS.contains(&cpu)
-                    && matches!(kind, 2 | 6 | 8)
-                    && commands >= 1
-                    && 32 + u64::from(size) <= len,
-            );
+    let mut check = || -> Option<bool> {
+        if header.get(..4)? == 0xfeed_facfu32.to_le_bytes() {
+            return Some(thin_macho(header, len).is_some());
         }
         if be(0)? != 0xcafe_babe {
             return Some(false);
@@ -497,10 +522,25 @@ fn well_formed_macho(header: &[u8], len: u64) -> bool {
         if !(1..=8).contains(&parts) {
             return Some(false);
         }
+        let start = 8 + 20 * parts as u64;
+        let mut slices = Vec::with_capacity(parts);
         for i in 0..parts {
             let at = 8 + 20 * i;
-            let (cpu, offset, size) = (be(at)?, be(at + 8)?, be(at + 12)?);
-            if !CPUS.contains(&cpu) || u64::from(offset) + u64::from(size) > len || size < 32 {
+            let (cpu, offset, size) = (be(at)?, u64::from(be(at + 8)?), u64::from(be(at + 12)?));
+            if offset < start || offset.checked_add(size)? > len {
+                return Some(false);
+            }
+            slices.push((offset, size, cpu));
+        }
+        slices.sort_unstable();
+        if slices.windows(2).any(|w| w[0].0 + w[0].1 > w[1].0) {
+            return Some(false);
+        }
+        for (offset, size, cpu) in slices {
+            let mut thin = [0u8; 32];
+            file.seek(SeekFrom::Start(offset)).ok()?;
+            file.read_exact(&mut thin).ok()?;
+            if thin_macho(&thin, size) != Some(cpu) {
                 return Some(false);
             }
         }
@@ -859,9 +899,9 @@ fn scan_tree(
             let first = first_byte(&head, &mut file).map_err(|e| format!("{what}: {e}"))?;
             file.seek(SeekFrom::Start(0))
                 .map_err(|e| format!("{what}: {e}"))?;
-            let has = scan_stream(file, &what)?;
+            let has = scan_stream(&mut file, &what)?;
             if path.strip_prefix(root).is_ok_and(|p| p == app.0) {
-                *receipt = has && executable(&head, meta.len()) == Some(app.1);
+                *receipt = has && executable(&mut file, &head, meta.len()) == Some(app.1);
             }
             check_json(&path, name.ends_with(".json"), first, meta.len(), &what)?;
         } else {
