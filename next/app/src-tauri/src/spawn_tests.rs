@@ -49,6 +49,7 @@ fn agent(dir: &Path, record: &Path, extra: &[&str], lifetime: Lifetime) -> Launc
         lifetime,
         request: Request::default(),
         secrets: vec![],
+        stdin: None,
     }
 }
 
@@ -629,4 +630,106 @@ fn unknown_runtimes_do_not_fill_a_packages_room() {
     clean(&pids, &dir);
     let _ = std::fs::remove_dir_all(&dir);
     assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn a_launchs_stdin_secret_reaches_it_on_its_stdin_only() {
+    // Refused unless it names a secret field the launch fills; shown and part of the revision.
+    let input = json!({"executable": "/x", "argv": [], "cwd": "/", "stdin": "key"});
+    assert!(parse(&input, &|_| false).is_err());
+    let (lifetime, request) = parse(&input, &|f| f == "key").unwrap();
+    assert_eq!(request.stdin.as_deref(), Some("key"));
+    let review = request.review(&|f| format!("label ({f})"));
+    assert!(review
+        .iter()
+        .any(|(n, v)| n == "(stdin)" && v.as_deref().is_some_and(|v| v.contains("label (key)"))));
+    assert_ne!(
+        request.revision(lifetime),
+        Request::default().revision(lifetime)
+    );
+    for lifetime in [Lifetime::Detached, Lifetime::Managed] {
+        let dir = folder("stdin");
+        let rec = dir.join("agent");
+        let mut l = agent(&dir, &rec, &[], lifetime);
+        l.request
+            .set
+            .insert("FIXTURE_READ_STDIN".into(), "1".into());
+        l.request.stdin = Some("key".into());
+        l.stdin = Some("s-1".into());
+        let value = |id: &str| (id == "s-1").then(|| CANARY.to_string());
+        let rt = Runtimes::open(None, Box::new(value));
+        if lifetime == Lifetime::Detached {
+            detached(&l, &value).unwrap();
+        } else {
+            rt.start("p", l).unwrap();
+        }
+        let r = record(&rec, 0);
+        let all = [pid(&r, "pid"), pid(&r, "child")];
+        let checks = || {
+            assert_eq!(r["stdin"], CANARY, "{r}");
+            assert!(!r["env"].to_string().contains(CANARY), "{r}");
+            assert_eq!(r["core"], json!([1, 1]), "{r}");
+        };
+        let ok = std::panic::catch_unwind(checks);
+        rt.stop_all();
+        clean(&all, &dir);
+        ok.unwrap();
+    }
+}
+
+#[test]
+fn a_detached_launch_runs_in_a_scope_of_its_own_under_a_user_manager() {
+    let dir = folder("scope");
+    let rec = dir.join("agent");
+    let l = agent(&dir, &rec, &[], Lifetime::Detached);
+    detached(&l, &no_secret).unwrap();
+    let r = record(&rec, 0);
+    let all = [pid(&r, "pid"), pid(&r, "child")];
+    let cgroup = |p: u64| std::fs::read_to_string(format!("/proc/{p}/cgroup")).unwrap_or_default();
+    let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    // Whether a systemd user manager answers on this session bus at all.
+    let manager = scope::available();
+    let checks = || {
+        if manager {
+            for p in all {
+                let c = cgroup(p);
+                assert!(c.contains("/app-pluxy-launch-"), "pid {p} cgroup {c}");
+            }
+        } else {
+            eprintln!("no systemd user manager on this session bus: the launch stays in {own}");
+            assert_eq!(cgroup(all[0]), own);
+        }
+    };
+    let ok = std::panic::catch_unwind(checks);
+    clean(&all, &dir);
+    ok.unwrap();
+}
+
+#[test]
+fn a_bus_that_never_answers_holds_a_launch_no_longer_than_the_wait() {
+    use gtk::gio;
+    // A socket that accepts connections (its backlog) and never says a word.
+    let dir = std::env::temp_dir().join(format!("pluxy-silent-bus-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("bus");
+    let _ = std::fs::remove_file(&path);
+    let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let address = format!("unix:path={}", path.display());
+    let began = std::time::Instant::now();
+    let r = scope::within(Duration::from_millis(500), |c| {
+        gio::DBusConnection::for_address_sync(
+            &address,
+            gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
+                | gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
+            None,
+            Some(c),
+        )
+    });
+    assert!(r.is_err(), "a silent bus answered");
+    assert!(
+        began.elapsed() < Duration::from_secs(3),
+        "the silent bus held the call {:?}",
+        began.elapsed()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
