@@ -37,7 +37,7 @@
 //! again before the call is made. A launch's secret that its environment gives to the process it
 //! starts is a delivery to the target too: checked so before the confirmation and the call, and
 //! again whenever the host resolves it (`client_keys::launch_value`), with nothing older standing
-//! for it.
+//! for it, and all of a launch's secrets once more right before its spawn (`client_keys::Launches`).
 //!
 //! A launch-class call's confirmation opens the executable and cwd it names; the router keeps them
 //! with the call, with the launch's lifetime, environment request and secrets (`spawn.rs`). The
@@ -1168,10 +1168,11 @@ fn spawn_frame(
                 "the call it serves, or the request, was cancelled",
             ));
         }
-        // Each secret checked as a delivery to this tool now, as the host gives it to the process.
-        let value = |s: &str| crate::client_keys::launch_value(app, s, id);
+        // Each secret checked as a delivery to this tool now, as the host gives it to the process,
+        // and all of them once more right before the spawn.
+        let values = crate::client_keys::Launches(app.clone());
         return match launch.lifetime {
-            Lifetime::Detached => spawn::detached(&launch, &value)
+            Lifetime::Detached => spawn::detached(&launch, id, &values)
                 .map(|_| json!({"lifetime": "detached"}))
                 .map_err(unavailable),
             Lifetime::Managed => st.runtimes.start(id, launch).map_err(unavailable),

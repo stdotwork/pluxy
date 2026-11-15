@@ -772,14 +772,19 @@ it is put in the call frame:
 - The app must be connected to the core the key belongs to. This is checked before anything is
   sent, so the key never goes to another core.
 - Before its value is delivered, that core must still take it: the app asks core's client API
-  (`GET /v1/models`) with the key, and a key core no longer has (deleted on core) is refused.
+  (`GET /v1/models`) with the key, and a key core no longer has (deleted on core) is refused. Once
+  core has answered, the app checks again that its connection has not changed meanwhile (no
+  switch, sign-out or key change) and that the secret is still in the vault.
 
 A launch's secret that its `environment` or `stdin` gives to the process it starts is a value
 delivered to the tool whose launch it is, though that tool holds only a reference. Its checks are made before the
 native confirmation and before the call, like any delivery's, and again each time the host turns
 the reference into a value: at the spawn, and at a managed runtime's start and every restart. A
 key deleted on core, bound to a core the app is not connected to then, or bound to another tool
-refuses that spawn, start or restart; no value from an earlier check stands for it.
+refuses that spawn, start or restart; no value from an earlier check stands for it. Once all of a
+launch's secrets have values, right before the process is started, the host checks once more that
+each is still in the vault and that the connection is the one each client key was checked on. A
+key deleted on core in the moment between core's answer and the start is not seen.
 
 ```json
 {"id":"s-<hex>","label":"Claude Code","client_key":{"core":{"mode":"managed","origin":"http://127.0.0.1:8400"},

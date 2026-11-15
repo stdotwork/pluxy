@@ -12,18 +12,23 @@
 //! only to its tool, and its value is delivered only to that tool; the app must be connected to
 //! the core it belongs to, which is checked before anything is sent anywhere; and before its
 //! value is delivered, that core must still take it (`Caller::client_key_status`: a key deleted
-//! on core is refused there). The value then travels only in the tool's call frame, as any vault
-//! secret's does. A launch's key given to the process it starts is a delivery to the tool whose
-//! launch it is: checked so at the call, and again by `launch_value` whenever the host resolves
-//! it (the spawn, a managed runtime's start and each restart).
+//! on core is refused there), and once core has answered, the connection must be unchanged and
+//! the secret still in the vault. The value then travels only in the tool's call frame, as any
+//! vault secret's does. A launch's key given to the process it starts is a delivery to the tool
+//! whose launch it is: checked so at the call, and again by `launch_value` whenever the host
+//! resolves it (the spawn, a managed runtime's start and each restart); once all of a launch's
+//! secrets are resolved, they are checked once more right before the spawn (`Launches`).
 //!
 //! Linux only, as the vault and native key entry.
 
+use crate::conn::{Caller, Connection};
 use crate::program::CallError;
+use crate::spawn::{Given, Values};
 use crate::vault::{ClientKey, CoreTarget, Vault};
 use crate::App;
 use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
+use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
 /// The native key entry's title.
@@ -297,7 +302,8 @@ fn binding_of(vault: &Vault, secret: &str, label: &str) -> Result<Option<ClientK
 /// Checks the use of vault secret secret (labelled label) in a call of recipient: nothing for a
 /// secret that is no client key. A client key goes from the window (window) only to its tool, and
 /// its value (deliver) only to its tool; the app must be connected to its core; and before its
-/// value is delivered, that core must still take it.
+/// value is delivered, that core must still take it, with the connection unchanged and the secret
+/// still in the vault once core has answered.
 pub fn admit(
     app: &AppHandle,
     secret: &str,
@@ -307,8 +313,30 @@ pub fn admit(
     deliver: bool,
 ) -> Result<(), CallError> {
     let st = app.state::<App>();
-    let Some(binding) = binding_of(&st.vault, secret, label)? else {
-        return Ok(());
+    admitted(
+        &st.conn,
+        &st.vault,
+        (secret, label, recipient),
+        window,
+        deliver,
+        |caller, key| caller.client_key_status(key),
+    )
+    .map(|_| ())
+}
+
+/// admit's check of secret, label and recipient, with status asking core whether it takes a key
+/// now (`Caller::client_key_status`). For a client key whose value may be delivered, the
+/// connection revision its check held on.
+fn admitted(
+    conn: &Mutex<Connection>,
+    vault: &Vault,
+    (secret, label, recipient): (&str, &str, &str),
+    window: bool,
+    deliver: bool,
+    status: impl FnOnce(&Caller, &str) -> Result<u16, String>,
+) -> Result<Option<u64>, CallError> {
+    let Some(binding) = binding_of(vault, secret, label)? else {
+        return Ok(None);
     };
     if (window || deliver) && recipient != binding.client {
         return Err(refuse(format!(
@@ -318,9 +346,9 @@ pub fn admit(
     }
     let origin = &binding.core.origin;
     // Checked before anything is sent: the key never goes to another core.
-    let (now, caller) = {
-        let c = st.conn.lock().unwrap();
-        (c.target(), c.caller())
+    let (now, revision, caller) = {
+        let c = conn.lock().unwrap();
+        (c.target(), c.revision(), c.caller())
     };
     if now.as_ref() != Some(&binding.core) {
         return Err(refuse(format!(
@@ -328,41 +356,113 @@ pub fn admit(
         )));
     }
     if !deliver {
-        return Ok(());
+        return Ok(None);
     }
-    let value = st
-        .vault
+    let value = vault
         .value(secret)
         .ok_or_else(|| refuse(format!("the secret \"{label}\" was removed from the vault")))?;
-    match caller.client_key_status(&value) {
-        Ok(200) => Ok(()),
-        Ok(401) => Err(refuse(format!(
-            "the core at {origin} no longer accepts the client key \"{label}\": it was deleted there"
-        ))),
-        Ok(s) => Err(refuse(format!(
-            "the core at {origin} refuses the client key \"{label}\" ({s})"
-        ))),
-        Err(e) => Err(CallError {
-            code: "unavailable".into(),
-            message: format!(
-                "whether the core at {origin} still accepts the client key \"{label}\" is not known: {e}"
-            ),
-            unknown: false,
-        }),
+    let answer = status(&caller, &value);
+    // Let go before the connection's lock is taken again: a restart holds that lock while it
+    // binds the address this caller may hold (`Caller::call_or_retry`).
+    drop(caller);
+    match answer {
+        Ok(200) => {}
+        Ok(401) => {
+            return Err(refuse(format!(
+                "the core at {origin} no longer accepts the client key \"{label}\": it was deleted there"
+            )))
+        }
+        Ok(s) => {
+            return Err(refuse(format!(
+                "the core at {origin} refuses the client key \"{label}\" ({s})"
+            )))
+        }
+        Err(e) => {
+            return Err(CallError {
+                code: "unavailable".into(),
+                message: format!(
+                    "whether the core at {origin} still accepts the client key \"{label}\" is not known: {e}"
+                ),
+                unknown: false,
+            })
+        }
     }
+    // Core was asked without the connection's lock, for as long as its answer took: the
+    // connection and the vault are checked again, under that lock, before the key counts as
+    // taken.
+    let c = conn.lock().unwrap();
+    if c.revision() != revision || c.target().as_ref() != Some(&binding.core) {
+        return Err(refuse(format!(
+            "the app's connection changed while the core at {origin} was asked about the client key \"{label}\""
+        )));
+    }
+    if vault.secret(secret).is_none() {
+        return Err(refuse(format!(
+            "the secret \"{label}\" was removed from the vault"
+        )));
+    }
+    Ok(Some(revision))
 }
 
 /// Vault secret secret's value for a launch of recipient's (the tool whose launch it is), at the
-/// moment the host gives it to the launched process (its spawn, a runtime's start or restart):
-/// checked first as a delivery is (`admit`, deliver), so it is refused, with no earlier value to
-/// fall back on, once the secret is gone, and a client key once it is another tool's, of a core
-/// the app is not connected to now, or no longer taken by that core.
-pub fn launch_value(app: &AppHandle, secret: &str, recipient: &str) -> Result<String, String> {
-    let vault = &app.state::<App>().vault;
+/// moment the host gives it to the launched process (its spawn, a runtime's start or restart),
+/// and the connection revision its check held on (a client key's): checked first as a delivery is
+/// (`admit`, deliver), so it is refused, with no earlier value to fall back on, once the secret is
+/// gone, and a client key once it is another tool's, of a core the app is not connected to now,
+/// or no longer taken by that core.
+pub fn launch_value(
+    app: &AppHandle,
+    secret: &str,
+    recipient: &str,
+) -> Result<(String, Option<u64>), String> {
+    let st = app.state::<App>();
     let gone = || "a secret of the launch was removed from the vault".to_string();
-    let label = vault.secret(secret).ok_or_else(gone)?.label;
-    admit(app, secret, &label, recipient, false, true).map_err(|e| e.message)?;
-    vault.value(secret).ok_or_else(gone)
+    let label = st.vault.secret(secret).ok_or_else(gone)?.label;
+    let revision = admitted(
+        &st.conn,
+        &st.vault,
+        (secret, &label, recipient),
+        false,
+        true,
+        |caller, key| caller.client_key_status(key),
+    )
+    .map_err(|e| e.message)?;
+    Ok((st.vault.value(secret).ok_or_else(gone)?, revision))
+}
+
+/// Whether a launch may still be given the secrets resolved for it (given), right before its
+/// spawn: each still in the vault, and the connection still on the revision each client key's
+/// check held on. Read under the connection's lock.
+fn still_given(conn: &Mutex<Connection>, vault: &Vault, given: &[Given]) -> Result<(), String> {
+    let c = conn.lock().unwrap();
+    if given
+        .iter()
+        .any(|(_, r)| r.is_some_and(|r| r != c.revision()))
+    {
+        return Err(
+            "the app's connection changed after the launch's client keys were checked".into(),
+        );
+    }
+    if given.iter().any(|(id, _)| vault.secret(id).is_none()) {
+        return Err("a secret of the launch was removed from the vault".into());
+    }
+    Ok(())
+}
+
+/// The host's `spawn::Values`: each secret of a launch checked as a delivery to the tool whose
+/// launch it is when it resolves (`launch_value`), and all of them once more right before the
+/// spawn (`still_given`).
+pub struct Launches(pub AppHandle);
+
+impl Values for Launches {
+    fn value(&self, package: &str, id: &str) -> Result<(String, Option<u64>), String> {
+        launch_value(&self.0, id, package)
+    }
+
+    fn still(&self, given: &[Given]) -> Result<(), String> {
+        let st = self.0.state::<App>();
+        still_given(&st.conn, &st.vault, given)
+    }
 }
 
 #[cfg(test)]
@@ -468,6 +568,169 @@ mod tests {
         let e = binding_of(&v, &bound, "bound").unwrap_err();
         assert_eq!(e.code, "permission");
         assert!(e.message.contains("removed"), "{}", e.message);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    const KEY: &str = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    /// A vault holding a client key for pluxy/a of a local core and a plain secret, and a
+    /// connection to that core (nothing is sent to it): its folder, the vault, the connection, and
+    /// the two secrets' IDs.
+    fn fixture(name: &str) -> (std::path::PathBuf, Vault, Mutex<Connection>, String, String) {
+        let d =
+            std::env::temp_dir().join(format!("pluxy-ck-{name}-{}", crate::managed::random_key()));
+        let dirs = crate::conn::Dirs {
+            config: d.join("config"),
+            core: d.join("core"),
+            cores: d.join("cores"),
+        };
+        crate::conn::Settings {
+            mode: Some(Mode::Local),
+            url: Some("http://127.0.0.1:9".into()),
+            key: Some(crate::managed::random_key()),
+            ..Default::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        let conn = Connection::open(dirs, None);
+        let core = conn.target().expect("connected");
+        let vault = Vault::open(d.join("vault"));
+        let bound = vault
+            .add_client_key(
+                "bound",
+                KEY,
+                ClientKey {
+                    core,
+                    key_id: None,
+                    masked: masked(KEY),
+                    client: "pluxy/a".into(),
+                },
+            )
+            .unwrap();
+        let plain = vault.add_secret("plain", "plain-secret-value").unwrap();
+        (d, vault, Mutex::new(conn), bound, plain)
+    }
+
+    /// The connection switched to another core and back to this one: the same core, a newer
+    /// revision.
+    fn away_and_back(conn: &Mutex<Connection>) {
+        let mut c = conn.lock().unwrap();
+        let here = c.target().unwrap().origin;
+        for url in ["http://127.0.0.1:10".to_string(), here] {
+            c.change(crate::conn::Change {
+                mode: Some(Mode::Local),
+                url: Some(url),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn a_delivery_is_refused_when_the_connection_or_the_vault_changed_while_core_was_asked() {
+        let (d, vault, conn, bound, plain) = fixture("asked");
+        let deliver = |status: &dyn Fn() -> u16| {
+            admitted(
+                &conn,
+                &vault,
+                (&bound, "bound", "pluxy/a"),
+                false,
+                true,
+                |_, key| {
+                    assert_eq!(key, KEY);
+                    Ok(status())
+                },
+            )
+        };
+        // Nothing changed while core answered: taken, on the revision its check held on.
+        let revision = conn.lock().unwrap().revision();
+        assert_eq!(deliver(&|| 200).unwrap(), Some(revision));
+        // Signed out meanwhile, on the same core.
+        let e = deliver(&|| {
+            conn.lock().unwrap().sign_out().unwrap();
+            200
+        })
+        .unwrap_err();
+        assert!(
+            e.code == "permission" && e.message.contains("connection changed"),
+            "{}",
+            e.message
+        );
+        // Switched to another core and back meanwhile: the same core, but not the connection the
+        // check began on.
+        let e = deliver(&|| {
+            away_and_back(&conn);
+            200
+        })
+        .unwrap_err();
+        assert!(
+            e.code == "permission" && e.message.contains("connection changed"),
+            "{}",
+            e.message
+        );
+        // A plain secret, or a client key given without its value, asks core nothing and holds
+        // on no revision.
+        let unasked = |_: &Caller, _: &str| -> Result<u16, String> { panic!("core was asked") };
+        assert_eq!(
+            admitted(
+                &conn,
+                &vault,
+                (&plain, "plain", "pluxy/b"),
+                false,
+                true,
+                unasked
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            admitted(
+                &conn,
+                &vault,
+                (&bound, "bound", "pluxy/a"),
+                true,
+                false,
+                unasked
+            )
+            .unwrap(),
+            None
+        );
+        // Removed from the vault meanwhile.
+        let e = deliver(&|| {
+            vault.remove_secret(&bound).unwrap();
+            200
+        })
+        .unwrap_err();
+        assert!(
+            e.code == "permission" && e.message.contains("removed"),
+            "{}",
+            e.message
+        );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_launch_is_refused_right_before_its_spawn_once_the_connection_or_the_vault_changed() {
+        let (d, vault, conn, bound, plain) = fixture("spawn");
+        let at = conn.lock().unwrap().revision();
+        let given = vec![(bound.clone(), Some(at)), (plain.clone(), None)];
+        still_given(&conn, &vault, &given).unwrap();
+        // The connection switched away and back since the client key's check.
+        away_and_back(&conn);
+        let e = still_given(&conn, &vault, &given).unwrap_err();
+        assert!(e.contains("connection changed"), "{e}");
+        // A plain secret is bound to no connection.
+        still_given(&conn, &vault, &given[1..]).unwrap();
+        // Two client keys checked on different revisions: the connection changed between them.
+        let now = conn.lock().unwrap().revision();
+        let mixed = vec![(bound.clone(), Some(now)), (bound.clone(), Some(at))];
+        assert!(still_given(&conn, &vault, &mixed).is_err());
+        still_given(&conn, &vault, &[(bound.clone(), Some(now))]).unwrap();
+        // A secret removed from the vault since it resolved, a plain one too.
+        vault.remove_secret(&plain).unwrap();
+        let e =
+            still_given(&conn, &vault, &[(bound.clone(), Some(now)), (plain, None)]).unwrap_err();
+        assert!(e.contains("removed"), "{e}");
         let _ = std::fs::remove_dir_all(d);
     }
 
