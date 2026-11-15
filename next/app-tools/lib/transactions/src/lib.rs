@@ -32,7 +32,9 @@ mod target;
 mod tests;
 
 pub use merge::{merge_value, Json, Merge};
-pub use target::{pin_schema, sha256, sha256_of, Failed, Id, Pin, Selection, Target, MAX_FILE};
+pub use target::{
+    pin_schema, sha256, sha256_of, Failed, Id, Pin, Selection, Target, WriteMode, MAX_FILE,
+};
 
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
@@ -591,6 +593,12 @@ impl<'a> Transactions<'a> {
                 &from,
                 c.after.as_deref(),
                 c.after_mode,
+                // An apply writes the writer's values, a key among them: owner-only.
+                if op == "apply" {
+                    WriteMode::OwnerOnly
+                } else {
+                    WriteMode::Keep
+                },
             ) {
                 Ok(id) => {
                     done.push((i, id));
@@ -718,10 +726,13 @@ impl<'a> Transactions<'a> {
                     );
                     remember_kept(state, k);
                 }
-            } else if let Err(f) = c
-                .target
-                .replace(Some(*id), &after, c.before.as_deref(), c.mode)
-            {
+            } else if let Err(f) = c.target.replace(
+                Some(*id),
+                &after,
+                c.before.as_deref(),
+                c.mode,
+                WriteMode::Exact,
+            ) {
                 failed.push(format!(
                     "{}: {}",
                     c.target.pin.target.display(),
@@ -857,8 +868,14 @@ impl<'a> Transactions<'a> {
                         Err(e) => return Err(e),
                     };
                     let mode = f["mode"].as_u64().map(|m| m as u32);
-                    t.replace(None, &t.pin.sha256, before.as_deref(), mode)
-                        .map_err(|f| f.error)?;
+                    t.replace(
+                        None,
+                        &t.pin.sha256,
+                        before.as_deref(),
+                        mode,
+                        WriteMode::Exact,
+                    )
+                    .map_err(|f| f.error)?;
                     restored.push(at);
                 }
                 "rolled_back"
