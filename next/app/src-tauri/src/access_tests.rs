@@ -51,14 +51,14 @@ fn facts() -> Facts {
 
 /// A store in dir/app with the fixture signer approved.
 fn store(dir: &Path) -> Store {
-    let mut s = Store::open(&dir.join("app"));
+    let mut s = Store::open(&dir.join("app"), vec![dir.join("app")]);
     s.approve(&signed()).unwrap();
     s
 }
 
 fn grant(s: &mut Store, f: &Facts, resource: &str, path: &Path) -> Grant {
     let d = s.may_grant(f, resource).unwrap();
-    let r = resolve(path, &d.kind).unwrap();
+    let r = resolve(path, &d.kind, &s.own()).unwrap();
     s.add(f, &d, &r).unwrap()
 }
 
@@ -385,7 +385,7 @@ fn saved_grants_survive_a_restart_and_session_only_ones_do_not() {
     // A document portal file, as resolve marks it.
     let d = s.may_grant(&f, "tree").unwrap();
     fs::create_dir(t.0.join("dir")).unwrap();
-    let mut r = resolve(&t.0.join("dir"), "subtree").unwrap();
+    let mut r = resolve(&t.0.join("dir"), "subtree", &[]).unwrap();
     r.portal = true;
     let portal = s.add(&f, &d, &r).unwrap();
     assert!(portal.session_only);
@@ -398,7 +398,7 @@ fn saved_grants_survive_a_restart_and_session_only_ones_do_not() {
         .mode();
     assert_eq!(mode & 0o777, 0o600);
 
-    let mut again = Store::open(&t.0.join("app"));
+    let mut again = Store::open(&t.0.join("app"), vec![t.0.join("app")]);
     assert!(again.warning.is_none());
     assert_eq!(again.signers().len(), 1);
     assert_eq!(again.grants().count(), 1);
@@ -416,7 +416,7 @@ fn saved_grants_survive_a_restart_and_session_only_ones_do_not() {
     // A file replaced while the app was not running is refused when it starts again.
     fs::write(t.0.join("new"), "new").unwrap();
     fs::rename(t.0.join("new"), t.0.join("file")).unwrap();
-    let mut third = Store::open(&t.0.join("app"));
+    let mut third = Store::open(&t.0.join("app"), vec![t.0.join("app")]);
     assert_eq!(
         call(
             &mut third,
@@ -435,7 +435,7 @@ fn a_damaged_file_is_moved_aside() {
     let dir = t.0.join("config");
     fs::create_dir(&dir).unwrap();
     fs::write(dir.join("access.json"), "{not json").unwrap();
-    let s = Store::open(&dir);
+    let s = Store::open(&dir, vec![]);
     assert!(s.warning.as_deref().unwrap().contains("moved to"));
     assert_eq!(s.grants().count(), 0);
     assert!(!dir.join("access.json").exists());
@@ -449,7 +449,7 @@ fn a_damaged_file_is_moved_aside() {
         r#"{"version":9,"revision":0,"signers":[],"grants":[]}"#,
     )
     .unwrap();
-    assert!(Store::open(&dir)
+    assert!(Store::open(&dir, vec![])
         .warning
         .unwrap()
         .contains("version 9 is not supported"));
@@ -460,21 +460,21 @@ fn a_damaged_file_is_moved_aside() {
     )
     .unwrap();
     symlink(t.0.join("elsewhere"), dir.join("access.json")).unwrap();
-    assert!(Store::open(&dir).warning.is_some());
+    assert!(Store::open(&dir, vec![]).warning.is_some());
 }
 
 #[test]
 fn what_can_be_chosen() {
     let t = tmp();
     fs::write(t.0.join("file"), "x").unwrap();
-    assert!(resolve(&t.0.join("file"), "subtree").is_err());
-    assert!(resolve(&t.0, "file").is_err());
-    assert!(resolve(Path::new("relative"), "file").is_err());
-    assert!(resolve(Path::new("/"), "subtree")
+    assert!(resolve(&t.0.join("file"), "subtree", &[]).is_err());
+    assert!(resolve(&t.0, "file", &[]).is_err());
+    assert!(resolve(Path::new("relative"), "file", &[]).is_err());
+    assert!(resolve(Path::new("/"), "subtree", &[])
         .unwrap_err()
         .contains("whole home"));
-    assert!(resolve(&t.0.join("missing"), "file").is_err());
-    let r = resolve(&t.0.join("file"), "file").unwrap();
+    assert!(resolve(&t.0.join("missing"), "file", &[]).is_err());
+    let r = resolve(&t.0.join("file"), "file", &[]).unwrap();
     assert!(!r.portal && r.link.is_none());
     // A path under this session's document portal mount.
     let mount = portal_mount();
@@ -497,10 +497,10 @@ fn a_folder_holding_the_home_folder_or_the_portal_store_is_refused() {
     // The process's own HOME: its parent holds it, so granting the parent grants all of it.
     let home = fs::canonicalize(std::env::var_os("HOME").expect("HOME")).unwrap();
     let parent = home.parent().unwrap();
-    assert!(resolve(parent, "subtree")
+    assert!(resolve(parent, "subtree", &[])
         .unwrap_err()
         .contains("whole home"));
-    assert!(resolve(&home, "subtree")
+    assert!(resolve(&home, "subtree", &[])
         .unwrap_err()
         .contains("whole home"));
     // The document portal's store, and every folder holding it.
@@ -516,7 +516,7 @@ fn a_folder_holding_the_home_folder_or_the_portal_store_is_refused() {
         (&doc.join("abc"), false),
         (&t.0.join("work"), false),
     ] {
-        let r = resolve_with(target, "subtree", Some(&home), &doc);
+        let r = resolve_with(target, "subtree", &Fence::new(Some(&home), &[]), &doc);
         assert_eq!(r.is_err(), refused, "{}: {r:?}", target.display());
     }
     // With home inside the temporary folder: it and its parents are refused, a folder in it is
@@ -528,7 +528,7 @@ fn a_folder_holding_the_home_folder_or_the_portal_store_is_refused() {
         (t.0.join("work"), true),
         (fake_home.join("projects"), false),
     ] {
-        let r = resolve_with(&target, "subtree", Some(&fake_home), &doc);
+        let r = resolve_with(&target, "subtree", &Fence::new(Some(&fake_home), &[]), &doc);
         assert_eq!(r.is_err(), refused, "{}: {r:?}", target.display());
     }
 }
@@ -701,4 +701,170 @@ fn the_person_asks_in_the_main_window() {
     assert!(a.executor.signer.contains(&"ab".repeat(32)));
     assert!(!a.native_tool && a.launch.is_none());
     assert_eq!(a.files, [PathBuf::from("/x")]);
+}
+
+#[test]
+fn the_apps_own_folders_are_refused() {
+    let t = tmp();
+    let config = t.0.join("config");
+    let vault = t.0.join("data").join("vault");
+    fs::create_dir_all(&config).unwrap();
+    fs::create_dir_all(&vault).unwrap();
+    fs::create_dir_all(t.0.join("work")).unwrap();
+    fs::write(config.join("connection.json"), "{}").unwrap();
+    fs::write(vault.join("secrets.json"), "{}").unwrap();
+    fs::write(t.0.join("work").join("notes"), "x").unwrap();
+    symlink(
+        config.join("connection.json"),
+        t.0.join("work").join("link"),
+    )
+    .unwrap();
+    let own = [config.clone(), t.0.join("data")];
+    // No document portal store anywhere near (one inside t would refuse t for that reason).
+    let doc = Path::new("/nonexistent/doc");
+    for (target, kind, refused) in [
+        // Positive controls: a folder and a file beside the app's folders.
+        (t.0.join("work"), "subtree", false),
+        (t.0.join("work").join("notes"), "file", false),
+        // An own folder, a folder inside one, a folder holding them, files inside them, and a
+        // link that resolves inside one.
+        (config.clone(), "subtree", true),
+        (vault.clone(), "subtree", true),
+        (t.0.clone(), "subtree", true),
+        (config.join("connection.json"), "file", true),
+        (vault.join("secrets.json"), "file", true),
+        (t.0.join("work").join("link"), "file", true),
+    ] {
+        let r = resolve_with(&target, kind, &Fence::new(None, &own), doc);
+        assert_eq!(r.is_err(), refused, "{}: {r:?}", target.display());
+        if refused {
+            assert!(r.unwrap_err().contains("the app's own folder"));
+        }
+    }
+    // Through the store: a folder granted before the app's own folder came to lie inside it is
+    // refused from then on, while the same grant reads with no own folder in it.
+    let mut s = store(&t.0);
+    let f = facts();
+    grant(&mut s, &f, "tree", &t.0.join("work"));
+    let read = json!({"resource": "tree", "path": "notes"});
+    assert_eq!(
+        text(&call(&mut s, &f, "resources.read", read.clone()).unwrap()),
+        "x"
+    );
+    let mut moved = Store::open(&t.0.join("app"), vec![t.0.join("work").join("appdata")]);
+    fs::create_dir_all(t.0.join("work").join("appdata")).unwrap();
+    assert_eq!(
+        call(&mut moved, &f, "resources.read", read),
+        Err(Denial::Refused)
+    );
+}
+
+/// Another path to home's folder or one above it (as a bind mount gives) and another path to an
+/// own folder are refused by identity, where a path comparison would let them through. The
+/// identities are forged as `granted_on` forges a mount; `a_bind_mount_is_refused` makes a real
+/// bind mount where the system lets an unprivileged user.
+#[test]
+fn home_and_own_folders_are_known_by_identity() {
+    let t = tmp();
+    let home = t.0.join("home").join("me");
+    let view = t.0.join("view");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(view.join("inner")).unwrap();
+    fs::write(view.join("inner").join("file"), "x").unwrap();
+    let doc = t.0.join("no-portal");
+    let mut fence = Fence::new(Some(&home), &[]);
+    assert!(resolve_with(&view, "subtree", &fence, &doc).is_ok());
+    assert!(resolve_with(&t.0.join("home"), "subtree", &fence, &doc)
+        .unwrap_err()
+        .contains("whole home"));
+    // view, as if it were a bind mount of home's parent.
+    fence.whole.extend(ident(&view));
+    assert!(resolve_with(&view, "subtree", &fence, &doc)
+        .unwrap_err()
+        .contains("whole home"));
+    assert!(resolve_with(&view.join("inner"), "subtree", &fence, &doc).is_ok());
+    // view/inner, as if it were a bind mount of an own folder.
+    let inner = ident(&view.join("inner")).unwrap();
+    fence.own.push((t.0.join("own"), inner, vec![inner]));
+    assert!(
+        resolve_with(&view.join("inner").join("file"), "file", &fence, &doc)
+            .unwrap_err()
+            .contains("the app's own folder")
+    );
+}
+
+/// A real bind mount, in a user and mount namespace of its own (`unshare`): the test binary runs
+/// itself there, mounts real onto view and checks that view, which holds home, and a file of an
+/// own folder seen through view are refused. Where the system does not let an unprivileged user
+/// make such a namespace, it says so and checks nothing (the forged case above still runs).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_bind_mount_is_refused() {
+    const CHILD: &str = "PLUXY_ACCESS_BIND_TEST";
+    if let Some(dir) = std::env::var_os(CHILD) {
+        let dir = PathBuf::from(dir);
+        let (real, view) = (dir.join("real"), dir.join("view"));
+        let c = |p: &Path| std::ffi::CString::new(p.to_str().unwrap()).unwrap();
+        let rc = unsafe {
+            libc::mount(
+                c(&real).as_ptr(),
+                c(&view).as_ptr(),
+                std::ptr::null(),
+                libc::MS_BIND,
+                std::ptr::null(),
+            )
+        };
+        assert_eq!(rc, 0, "mount: {}", std::io::Error::last_os_error());
+        fs::write(dir.join("mounted"), "").unwrap();
+        let home = real.join("home");
+        let fence = Fence::new(Some(&home), &[home.join("app")]);
+        let doc = dir.join("no-portal");
+        assert!(resolve_with(&view.join("other"), "subtree", &fence, &doc).is_ok());
+        assert!(resolve_with(&view, "subtree", &fence, &doc)
+            .unwrap_err()
+            .contains("whole home"));
+        assert!(resolve_with(
+            &view.join("home").join("app").join("connection.json"),
+            "file",
+            &fence,
+            &doc
+        )
+        .unwrap_err()
+        .contains("the app's own folder"));
+        return;
+    }
+    let t = tmp();
+    fs::create_dir_all(t.0.join("real").join("home").join("app")).unwrap();
+    fs::create_dir_all(t.0.join("real").join("other")).unwrap();
+    fs::create_dir_all(t.0.join("view")).unwrap();
+    fs::write(
+        t.0.join("real")
+            .join("home")
+            .join("app")
+            .join("connection.json"),
+        "{}",
+    )
+    .unwrap();
+    let out = std::process::Command::new("unshare")
+        .args(["--user", "--map-root-user", "--mount"])
+        .arg(std::env::current_exe().unwrap())
+        .args(["--exact", "access::broker::tests::a_bind_mount_is_refused"])
+        .args(["--nocapture", "--test-threads=1"])
+        .env(CHILD, &t.0)
+        .output();
+    if !t.0.join("mounted").exists() {
+        eprintln!(
+            "a_bind_mount_is_refused: no bind mount here (an unprivileged user namespace is not allowed: {}); the forged case covers it",
+            out.map(|o| String::from_utf8_lossy(&o.stderr).trim().to_string())
+                .unwrap_or_else(|e| e.to_string())
+        );
+        return;
+    }
+    let out = out.unwrap();
+    assert!(
+        out.status.success() && String::from_utf8_lossy(&out.stdout).contains("1 passed"),
+        "the bind-mounted run: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
