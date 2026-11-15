@@ -6,7 +6,11 @@
 //!   rename or delete it while that handle is open, checks that it is the same file (volume and
 //!   file ID, size and times) and a program image (`MZ`, `.exe` or `.com`: never a script, which
 //!   `CreateProcessW` would hand to `cmd.exe`), and starts that path while it holds the handle.
-//!   The folder it starts in is held the same way (`pin_dir`).
+//!   The folder it starts in is held the same way (`pin_dir`). These pins close once the
+//!   process runs, when its image is mapped and Windows itself keeps the file from changing;
+//!   `Command::keep` keeps a pin for as long as the process is held instead, for a file the
+//!   process opens itself later (`wsl.exe --exec` running a Linux program from `/mnt/c`, pinned
+//!   with `pin_other`).
 //! - **What it gets.** Only its standard handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), a cleared
 //!   environment with exactly what the host gives, and a process group of its own.
 //! - **Tools, managed runtimes and the app's own core** run in a job of their own (unnamed, so no
@@ -230,6 +234,14 @@ pub(crate) fn image(f: &File, path: &Path) -> Result<(), String> {
 
 /// held, the program a confirmation opened, pinned by the path it has now (see the module).
 pub(crate) fn pin_file(held: &File) -> Result<Pinned, String> {
+    let p = pin_other(held)?;
+    image(&p._file, &p.path)?;
+    Ok(p)
+}
+
+/// held, a file a confirmation opened that the process runs or reads by its path itself, not a
+/// program image (such as a Linux program `wsl.exe` runs), pinned as `pin_file` pins a program.
+pub(crate) fn pin_other(held: &File) -> Result<Pinned, String> {
     let path = final_path(held)?;
     let f = open_pinned(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let (a, b) = (file_id(&f), file_id(held));
@@ -239,7 +251,6 @@ pub(crate) fn pin_file(held: &File) -> Result<Pinned, String> {
             path.display()
         ));
     }
-    image(&f, &path)?;
     Ok(Pinned { path, _file: f })
 }
 
@@ -275,6 +286,8 @@ pub(crate) struct Command {
     stderr: Io,
     kind: Kind,
     secrets: bool,
+    keep_program: bool,
+    kept: Vec<Pinned>,
 }
 
 impl Command {
@@ -292,6 +305,8 @@ impl Command {
             stderr: Io::Null,
             kind,
             secrets: false,
+            keep_program: false,
+            kept: Vec::new(),
         }
     }
 
@@ -361,6 +376,21 @@ impl Command {
         self
     }
 
+    /// Keeps the program's pin (and its folder's) for as long as the returned child is held, not
+    /// only until it runs. Tools and managed processes only.
+    pub(crate) fn keep_program(&mut self) -> &mut Self {
+        self.keep_program = true;
+        self
+    }
+
+    /// Keeps pin, another file the process uses by its path (`pin_other`), from being written,
+    /// renamed or removed for as long as the returned child is held. Tools and managed processes
+    /// only.
+    pub(crate) fn keep(&mut self, pin: Pinned) -> &mut Self {
+        self.kept.push(pin);
+        self
+    }
+
     /// Starts a tool or a managed process, in a job of its own, held by the returned child.
     pub(crate) fn spawn(&mut self) -> io::Result<Child> {
         if self.kind == Kind::Detached {
@@ -387,7 +417,19 @@ impl Command {
             }
         };
         let c = c.resume()?;
+        // A duplicate handle is the same open file, with the same sharing it allows.
+        let mut kept = Vec::new();
+        if self.keep_program {
+            kept.push(self.program._file.try_clone()?);
+            if let Some(d) = &self.cwd {
+                kept.push(d._file.try_clone()?);
+            }
+        }
+        for p in std::mem::take(&mut self.kept) {
+            kept.push(p._file);
+        }
         Ok(Child {
+            _kept: kept,
             process: c.process,
             job,
             pid: c.pid,
@@ -403,6 +445,11 @@ impl Command {
     pub(crate) fn spawn_detached(&mut self) -> io::Result<Option<File>> {
         if self.kind != Kind::Detached {
             return Err(io::Error::other("only a detached launch is let go"));
+        }
+        if self.keep_program || !self.kept.is_empty() {
+            return Err(io::Error::other(
+                "a detached launch is not held, so nothing could keep its files pinned",
+            ));
         }
         let flags = breakaway().map_err(|e| io::Error::new(io::ErrorKind::PermissionDenied, e))?;
         let c = match self.create(flags) {
@@ -785,6 +832,8 @@ pub(crate) fn environment_block(vars: &[(OsString, OsString)]) -> io::Result<Vec
 /// A process the host started and holds: its process handle (its process ID is never another
 /// process's while this is held) and its job.
 pub(crate) struct Child {
+    /// Pins held as long as it is (`Command::keep`, `Command::keep_program`).
+    _kept: Vec<File>,
     process: OwnedHandle,
     job: OwnedHandle,
     pid: u32,

@@ -201,9 +201,10 @@ const NEVER: &[&str] = &[
     "_JAVA_OPTIONS",
     "JDK_JAVA_OPTIONS",
 ];
-/// Windows adds a compatibility layer's and .NET's code loading (`DOTNET_STARTUP_HOOKS`).
+/// Windows adds a compatibility layer's and .NET's code loading (`DOTNET_STARTUP_HOOKS`), and
+/// `WSLENV`, which would pass the Windows variables it names on into a WSL distribution.
 #[cfg(windows)]
-const NEVER_PLATFORM: &[&str] = &["__COMPAT_LAYER", "DOTNET_STARTUP_HOOKS"];
+const NEVER_PLATFORM: &[&str] = &["__COMPAT_LAYER", "DOTNET_STARTUP_HOOKS", "WSLENV"];
 #[cfg(not(windows))]
 const NEVER_PLATFORM: &[&str] = &[];
 /// At most this many names in each of set, unset, inherit and secrets.

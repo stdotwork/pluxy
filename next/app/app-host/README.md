@@ -351,7 +351,8 @@ checks the sources for any other call that could end a process.
 
 Names of environment variables are compared ignoring case on Windows. A launch never gets
 `DYLD_*` on macOS, nor `COR_*`, `CORECLR_*`, `__COMPAT_LAYER` or `DOTNET_STARTUP_HOOKS` on
-Windows: each makes a program load code it was not asked to run.
+Windows: each makes a program load code it was not asked to run. Nor does it get `WSLENV` on
+Windows, which would pass the Windows variables it names on into a WSL distribution.
 
 ## Calls between packages
 
