@@ -281,9 +281,9 @@ pub(crate) fn uia_canary(
     use std::io::Write;
     use std::process::{Command, Stdio};
     let t = title.to_string();
-    let (dialog, edit) = on_main(app, move || {
+    let (dialog, edit, style_password) = on_main(app, move || {
         let d = *inspect::all(&t).first()?;
-        Some((raw(d), raw(inspect::secret(d)?)))
+        Some((raw(d), raw(inspect::secret(d)?), inspect::secret_hidden(d)))
     })
     .flatten()
     .ok_or("no key window with an entry to read through UI Automation")?;
@@ -291,11 +291,19 @@ pub(crate) fn uia_canary(
         r#"$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $canary = [Console]::In.ReadLine()
+# The .NET client sees a Win32 edit control as a plain pane unless its client-side providers (the
+# Win32 control proxies) are registered: what any UI Automation client in another process gets.
+$proxies = 'registered'
+try {{
+  Add-Type -AssemblyName UIAutomationClientsideProviders
+  $name = ([System.AppDomain]::CurrentDomain.GetAssemblies() | Where-Object {{ $_.GetName().Name -eq 'UIAutomationClientsideProviders' }} | Select-Object -First 1).GetName()
+  [System.Windows.Automation.ClientSettings]::RegisterClientSideProviderAssembly($name)
+}} catch {{ $proxies = "not registered: $($_.Exception.Message)" }}
 $A = [System.Windows.Automation.AutomationElement]
 $scope = [System.Windows.Automation.TreeScope]
 $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
 function Describe($e) {{ $c = $e.Current; "$($c.ControlType.ProgrammaticName) '$($c.Name)' [$($c.ClassName)]" }}
-$out = @{{ found = $false; edits = 0; is_password = $false; readable = $false; leaked = $false; path = @(); dialog_in_desktop = $false }}
+$out = @{{ found = $false; edits = 0; is_password = $false; readable = $false; leaked = $false; path = @(); dialog_in_desktop = $false; proxies = $proxies }}
 $dlg = $A::FromHandle([IntPtr]{dialog})
 $e = $A::FromHandle([IntPtr]{edit})
 if ($e) {{
@@ -340,7 +348,7 @@ $out | ConvertTo-Json -Compress -Depth 3"#
         .wait_with_output()
         .map_err(|e| format!("PowerShell failed: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout);
-    serde_json::from_str(text.trim()).map_err(|_| {
+    let mut v: serde_json::Value = serde_json::from_str(text.trim()).map_err(|_| {
         format!(
             "PowerShell gave no UI Automation result (status {}): {}",
             out.status,
@@ -349,5 +357,8 @@ $out | ConvertTo-Json -Compress -Depth 3"#
                 .take(500)
                 .collect::<String>()
         )
-    })
+    })?;
+    // What the control itself says, beside what UI Automation reports of it.
+    v["style_password"] = style_password.into();
+    Ok(v)
 }
