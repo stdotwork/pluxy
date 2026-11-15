@@ -1102,8 +1102,14 @@ pub fn main() -> ! {
                                 .iter()
                                 .copied()
                                 .fold("", |a, b| if b.len() > a.len() { b } else { a });
+                        // On macOS CoreFoundation, which this program links, sets
+                        // `__CF_USER_TEXT_ENCODING` in its own environment as it starts: not
+                        // something the host gave it.
                         let mut names: Vec<String> = std::env::vars_os()
                             .map(|(k, _)| k.to_string_lossy().into_owned())
+                            .filter(|k| {
+                                !(cfg!(target_os = "macos") && k == "__CF_USER_TEXT_ENCODING")
+                            })
                             .collect();
                         names.sort();
                         #[cfg(unix)]

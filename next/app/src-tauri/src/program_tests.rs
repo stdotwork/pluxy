@@ -198,6 +198,28 @@ fn private(h: &Host, stub: Stub) -> Arc<Stub> {
     stub
 }
 
+/// One copy of this test program in the temporary folder, for the package folders there to link
+/// to: named by its digest, so each build of it is copied once, however often the tests run.
+#[cfg(windows)]
+fn this_program_in_temp() -> &'static Path {
+    static COPY: OnceLock<PathBuf> = OnceLock::new();
+    COPY.get_or_init(|| {
+        let copy = std::env::temp_dir().join(format!(
+            "pluxy-program-tests-{}.exe",
+            &this_program_sha256()[..16]
+        ));
+        if !copy.exists() {
+            let part = with(&copy, &crate::managed::random_key());
+            std::fs::copy(std::env::current_exe().unwrap(), &part).unwrap();
+            // Another test run may have put it there meanwhile: the same bytes.
+            if std::fs::rename(&part, &copy).is_err() {
+                let _ = std::fs::remove_file(&part);
+            }
+        }
+        copy
+    })
+}
+
 /// A package folder for the fixture, misbehaving as mode says (null: not at all).
 fn package(mode: Value) -> Spec {
     release(mode, "1.0.0", 1)
@@ -228,11 +250,12 @@ fn release(mode: Value, version: &str, generation: u64) -> Spec {
     let program = dir.join("bin").join("tool");
     #[cfg(unix)]
     std::os::unix::fs::symlink(std::env::current_exe().unwrap(), &program).unwrap();
-    // Windows runs programs only (`.exe`): a hard link of this test program.
+    // Windows runs programs only (`.exe`): a hard link of this test program, made from one copy
+    // of it in the temporary folder, which can be on another drive than the program.
     #[cfg(windows)]
     let program = dir.join("bin").join("tool.exe");
     #[cfg(windows)]
-    std::fs::hard_link(std::env::current_exe().unwrap(), &program).unwrap();
+    std::fs::hard_link(this_program_in_temp(), &program).unwrap();
     Spec {
         id: ID.into(),
         sha256: "ab".repeat(32),
@@ -820,12 +843,13 @@ fn crashes_back_off_then_quarantine_until_the_package_changes() {
         assert!(!alive(pid));
         std::thread::sleep(wait + Duration::from_millis(50));
     }
-    // 300 ms doubling, up to 1200 ms.
+    // 300 ms doubling, up to 1200 ms: what is left of it once the crash is seen, which takes
+    // longer on a loaded runner (up to 160 ms seen on macOS), still tells each step apart.
     let expect = [300u64, 600, 1200, 1200];
     for (w, e) in waits.iter().zip(expect) {
         assert!(
             *w <= Duration::from_millis(e + 1)
-                && *w + Duration::from_millis(100) >= Duration::from_millis(e),
+                && *w + Duration::from_millis(250) >= Duration::from_millis(e),
             "{waits:?}"
         );
     }

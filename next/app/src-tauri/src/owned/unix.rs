@@ -131,8 +131,9 @@ pub(crate) fn exec_target(f: &File) -> Result<PathBuf, String> {
 
 /// What runs the opened file f: macOS cannot execute a descriptor, so the path f has now
 /// (`F_GETPATH`, links resolved), once no other user can change any folder on it or the file
-/// (`secure`) and that path still names f, as it was opened (its device, inode, size, mode and
-/// times). Only a process of this same user could swap it between this check and the exec.
+/// (`secure`) and that path still names f (the same device and inode, with the size, mode and
+/// times f has now). Only a process of this same user could swap it between this check and the
+/// exec. What the file holds is the callers' to check, as on Linux (`recheck`).
 #[cfg(target_os = "macos")]
 pub(crate) fn exec_target(f: &File) -> Result<PathBuf, String> {
     use std::os::unix::ffi::OsStrExt;

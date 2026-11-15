@@ -610,11 +610,10 @@ mod macos {
         file(&p, 0o700);
         let f = fs::File::open(&p).unwrap();
         assert_eq!(exec_target(&f).unwrap(), p);
+        // Written in place it is still the file that was opened, as on Linux, where the kernel
+        // runs what it holds then: what it holds is checked by the callers (`recheck`).
         fs::write(&p, b"#!/bin/sh\necho changed\n").unwrap();
-        assert!(
-            exec_target(&f).is_err(),
-            "a file written after it was opened"
-        );
+        assert_eq!(exec_target(&f).unwrap(), p);
 
         let q = dir.join("swapped");
         file(&q, 0o700);
