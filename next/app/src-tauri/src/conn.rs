@@ -364,10 +364,12 @@ pub(crate) struct KeyTarget {
 pub(crate) struct RotationTarget {
     revision: u64,
     /// What the native confirmation says: the core, and how the new key will be kept.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub summary: String,
 }
 
 impl RotationTarget {
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
@@ -489,8 +491,9 @@ impl Caller {
             .map_err(|kind| format!("core could not be asked ({kind})"))
     }
 
-    /// A caller of the core at base with key, for unit tests against a local listener.
-    #[cfg(test)]
+    /// A caller of the core at base with key, for unit tests against a local listener
+    /// (`core_aliases_tests.rs`, which is Linux only like `core_aliases.rs`).
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn for_test(base: &str, key: &str) -> Caller {
         Caller {
             client: Some(Client::new(base, None)),
@@ -1339,6 +1342,7 @@ impl Connection {
     }
 
     /// Changes each time the connection does (another core, mode or key).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
@@ -1366,6 +1370,7 @@ impl Connection {
     }
 
     #[cfg(feature = "native-test")]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn test_settings_path(&self) -> PathBuf {
         self.dirs.settings()
     }
@@ -1932,6 +1937,7 @@ mod tests {
     /// After a rotated key could not be kept, saving the same connection again keeps the key
     /// the app uses, not the old one core no longer accepts.
     #[test]
+    #[cfg(unix)] // it makes the settings folder read-only with Unix permission bits
     fn saving_the_connection_after_a_failed_save_keeps_the_rotated_key() {
         use std::os::unix::fs::PermissionsExt;
         let new = crate::managed::random_key();

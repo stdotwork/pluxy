@@ -302,6 +302,7 @@ pub(super) fn import_decls(id: &str, app: &App) -> Result<Vec<ImportDecl>, Strin
 }
 
 /// The imports, for a native confirmation: empty when there are none.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(super) fn listing(imports: &[ImportDecl]) -> String {
     if imports.is_empty() {
         return String::new();

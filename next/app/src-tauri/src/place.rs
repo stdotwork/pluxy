@@ -256,6 +256,7 @@ pub fn allocation(label: &str) -> Option<Bounds> {
 
 /// The page webview's own height request, its document's height (Linux only).
 #[cfg(feature = "native-test")]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn natural_height(label: &str) -> Option<f64> {
     #[cfg(target_os = "linux")]
     return gtk_overlay::natural_height(label);

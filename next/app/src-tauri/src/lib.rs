@@ -23,6 +23,7 @@ mod command_names;
 #[cfg(target_os = "linux")]
 pub mod confirmation;
 pub mod conn;
+#[cfg(target_os = "linux")]
 mod core_aliases;
 mod core_updates;
 pub mod cores;
@@ -48,6 +49,8 @@ pub mod release_config;
 mod release_native;
 #[cfg(target_os = "linux")]
 pub mod route;
+#[cfg(target_os = "linux")]
+pub mod savefile;
 #[cfg(target_os = "linux")]
 pub mod spawn;
 mod startup;
@@ -89,6 +92,7 @@ struct App {
     startup: Mutex<(startup::Store, startup::Preferences)>,
     conn: Mutex<Connection>,
     /// A change of the app's own core waiting for its native confirmation (`core_updates.rs`).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     core_change: Mutex<Option<core_updates::Pending>>,
     #[cfg(target_os = "linux")]
     confirmations: Mutex<confirmation::Confirmations>,
@@ -344,8 +348,20 @@ fn page_scheme_url() -> Url {
     Url::parse(&s).expect("the page scheme's URL")
 }
 
+/// Whether the app shows in the Dock: only while it has a window, as the old app did. In the
+/// tray alone it is a menu bar item. Only macOS has a Dock.
+fn show_in_dock(app: &AppHandle, shown: bool) {
+    #[cfg(target_os = "macos")]
+    if let Err(e) = app.set_dock_visibility(shown) {
+        eprintln!("pluxy-app: dock icon: {e}");
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, shown);
+}
+
 /// Shows the window, making a new one if it was closed.
 fn open_window(app: &AppHandle) -> tauri::Result<()> {
+    show_in_dock(app, true);
     if let Some(w) = app.get_window(WINDOW) {
         let _ = w.unminimize();
         w.show()?;
@@ -518,6 +534,7 @@ fn close_to_tray(app: &AppHandle) {
     if let Some(w) = app.get_window(WINDOW) {
         let _ = w.destroy();
     }
+    show_in_dock(app, false);
 }
 
 /// The person closed the window: do what they chose. Off the window's thread, since asking the
@@ -1624,6 +1641,15 @@ fn choose_archive(app: &AppHandle) -> Result<Option<std::path::PathBuf>, String>
 /// Installs or updates a package from a local archive the person chooses in the native file
 /// chooser; the window names no path.
 #[tauri::command]
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        unreachable_code,
+        unused_variables,
+        unused_assignments,
+        clippy::diverging_sub_expression
+    )
+)]
 async fn device_install_file(webview: Webview) -> Result<device::View, String> {
     trusted(&webview)?;
     let app = webview.app_handle().clone();
@@ -1896,6 +1922,7 @@ fn access_choose(
     rx.recv().map_err(|_| "the file chooser closed".to_string())
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn access_facts(app: &AppHandle, id: &str) -> Result<access::Facts, String> {
     app.state::<App>()
         .device
@@ -2009,7 +2036,8 @@ async fn access_grant(webview: Webview, id: String, resource: String) -> Result<
             let Some(path) = access_choose(&app, title, folder)? else {
                 return Ok(serde_json::json!({"outcome": "cancelled"}));
             };
-            let r = access::resolve(&path, &d.kind)?;
+            let own = app.state::<App>().access.lock().unwrap().own();
+            let r = access::resolve(&path, &d.kind, &own)?;
             let ops: Vec<&str> = d
                 .operations
                 .iter()
@@ -2044,7 +2072,7 @@ async fn access_grant(webview: Webview, id: String, resource: String) -> Result<
             if now.sha256 != f.sha256 || now.signed != f.signed || now.source != f.source {
                 return Err(format!("{id} changed during review; grant it again"));
             }
-            if access::resolve(&path, &d.kind)? != r {
+            if access::resolve(&path, &d.kind, &own)? != r {
                 return Err("the chosen file changed during review; grant it again".into());
             }
             let g = st.access.lock().unwrap().add(&now, &d, &r)?;
@@ -2897,9 +2925,15 @@ pub fn run() {
             #[cfg(feature = "native-test")]
             native_test::updater_gate(app.handle());
             let config = app.path().app_config_dir()?;
+            // The folder the login item's own folder is in: the XDG config folder on Linux, the
+            // user's `Library` on macOS. (On Windows it is a registry value.)
+            #[cfg(target_os = "macos")]
+            let autostart_base = app.path().home_dir()?.join("Library");
+            #[cfg(not(target_os = "macos"))]
+            let autostart_base = app.path().config_dir()?;
             let startup_store = startup::Store::new(
                 config.clone(),
-                app.path().config_dir()?,
+                autostart_base,
                 app.config().identifier.clone(),
             );
             let preferences = startup_store.load();
@@ -2923,8 +2957,19 @@ pub fn run() {
             if let Some(w) = &catalog.warning {
                 eprintln!("pluxy-app: {w}");
             }
+            // The app's own folders, which no Access grant may be, hold or lie inside: its
+            // settings, its data (vault, packages, tools, cores), and its caches.
             #[cfg(unix)]
-            let access_store = access::Store::open(&config);
+            let access_store = access::Store::open(
+                &config,
+                vec![
+                    config.clone(),
+                    app.path().app_data_dir()?,
+                    app.path().app_data_dir()?.join("vault"),
+                    app.path().app_local_data_dir()?,
+                    app.path().app_cache_dir()?,
+                ],
+            );
             #[cfg(unix)]
             if let Some(w) = &access_store.warning {
                 eprintln!("pluxy-app: {w}");
@@ -3009,10 +3054,10 @@ pub fn run() {
                 #[cfg(target_os = "linux")]
                 runtimes: spawn::Runtimes::open(
                     Some(app.path().app_data_dir()?.join("runtimes.json")),
-                    {
-                        let vault = std::sync::Arc::clone(&vault);
-                        Box::new(move |id| vault.value(id))
-                    },
+                    // Checked as a delivery to the runtime's package at each start and restart,
+                    // and again right before its spawn: a client key revoked or unbound since is
+                    // refused.
+                    Box::new(client_keys::Launches(app.handle().clone())),
                 ),
                 #[cfg(target_os = "linux")]
                 launcher: Mutex::new(launcher::Launcher::open(launcher_file)),
@@ -3048,6 +3093,12 @@ pub fn run() {
                 .state::<App>()
                 .programs
                 .set_spawner(route::spawner(handle.clone()));
+            // And their files frames, to the host's save service.
+            #[cfg(target_os = "linux")]
+            handle
+                .state::<App>()
+                .programs
+                .set_saver(route::saver(handle.clone()));
             // Tools get the app's home and a data folder of their own, beside the vault.
             #[cfg(target_os = "linux")]
             handle
@@ -3101,6 +3152,8 @@ pub fn run() {
                 };
             if !silent || !usable_tray {
                 open_window(&handle)?;
+            } else {
+                show_in_dock(&handle, false);
             }
             // A version an update installed accepts itself, which the earlier one waits for.
             #[cfg(unix)]
@@ -3157,6 +3210,14 @@ pub fn run() {
             // The window closed: stay in the tray.
             if st.has_tray.load(Ordering::SeqCst) && !st.quitting.load(Ordering::SeqCst) {
                 api.prevent_exit();
+            }
+        }
+        // The Dock icon (or Finder opening the app again) while it is in the tray only: the
+        // window comes back. A second program launch is the instance lock's business (`instance`).
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => {
+            if tray_item_acts("open", app.state::<App>().quitting.load(Ordering::SeqCst)) {
+                let _ = open_window(app);
             }
         }
         RunEvent::Exit => {

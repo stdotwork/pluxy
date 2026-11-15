@@ -269,6 +269,9 @@ fn reads_from_the_codex_home_and_names_a_file_by_its_name() {
 
 #[test]
 fn finds_a_file_by_name_where_codex_puts_it_and_elsewhere() {
+    if !links_allowed() {
+        return;
+    }
     let dir = folder("locate");
     let roots = [dir.join("sessions"), dir.join("archived_sessions")];
     let dated = roots[0].join("2026/10/29").join(NAME);
@@ -292,7 +295,7 @@ fn finds_a_file_by_name_where_codex_puts_it_and_elsewhere() {
         assert_eq!(Codex.locate(&roots, bad), None, "{bad:?}");
     }
     let link = roots[1].join("link.jsonl");
-    std::os::unix::fs::symlink(&dated, &link).unwrap();
+    make_link(&dated, &link).unwrap();
     assert_eq!(Codex.locate(&roots, "link.jsonl"), None);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -311,4 +314,39 @@ fn a_session_in_both_folders_is_the_newer_file() {
     assert_eq!(found[0].path, archived);
     assert_eq!(Codex.locate(&roots, NAME), Some(archived));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A symbolic link at link to target: on Windows a folder link when target is a folder.
+fn make_link(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return if target.as_ref().is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+}
+
+/// Whether this account may make symbolic links (on Windows that takes a privilege or Developer
+/// Mode). When it may not, says so on stderr: a test that needs links is then skipped, and the CI
+/// summary counts the skip.
+fn links_allowed() -> bool {
+    #[cfg(unix)]
+    return true;
+    #[cfg(windows)]
+    {
+        static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let allowed = *ALLOWED.get_or_init(|| {
+            let probe = std::env::temp_dir().join(format!("links-allowed-{}", std::process::id()));
+            let _ = std::fs::remove_file(&probe);
+            let made = std::os::windows::fs::symlink_file("target", &probe).is_ok();
+            let _ = std::fs::remove_file(&probe);
+            made
+        });
+        if !allowed {
+            eprintln!("skipped: this account cannot make a symbolic link");
+        }
+        allowed
+    }
 }

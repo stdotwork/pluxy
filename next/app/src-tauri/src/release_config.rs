@@ -477,6 +477,7 @@ fn scan_appimage(path: &Path, offset: u64, app: &Path) -> Result<bool, String> {
         "pluxy-release-scan-{}",
         crate::artifact::hex(&random)
     ));
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
