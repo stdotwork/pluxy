@@ -1160,6 +1160,7 @@ async function runApp(
         writeFileSync(trustReady, "");
       }
       if (step.startsWith("core_")) console.log(`  ${label} | ${step} ${json}`);
+      if (step === "save_progress") console.log(`  ${label} | save steps passed: ${value.passed.join(", ")}`);
       if (step === "confirmations")
         console.log(`  ${label} | native confirmations: ${JSON.stringify(value)}`);
       if (step === "frame") before = webProcesses(pid);
@@ -1376,7 +1377,11 @@ async function runApp(
     if (save) {
       const r = steps.get("save") as { passed?: boolean } | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
-      check(r?.passed === true, `the save-file check did not complete: ${failure}`);
+      const passed = (steps.get("save_progress") as { passed?: string[] } | undefined)?.passed ?? [];
+      check(
+        r?.passed === true,
+        `the save-file check did not complete: ${failure} (steps passed: ${passed.join(", ") || "none"})`,
+      );
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} save ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: save ${problems.length === 0 ? "ok" : "FAILED"}`);

@@ -31,7 +31,7 @@
 
 use super::admission::{dialog_text, press, require, settle, start, x};
 use super::routing::{enable, install, showing, Page};
-use super::{eval, log, wait_for};
+use super::{eval, log, on_main, wait_for};
 use serde_json::{json, Value};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -105,17 +105,20 @@ fn chooser_key(keys: &str) -> Result<(), String> {
 /// The title the check gives GTK's overwrite question, which has none, to find its X window.
 const QUESTION: &str = "pluxy save overwrite question";
 
-/// GTK's overwrite question, once it shows (a visible message dialog of the app's saying the file
-/// already exists): the check titles it `QUESTION` and gives its X window. On a timeout, says
-/// which toplevel windows were showing.
-fn question(app: &AppHandle) -> Result<String, String> {
-    use gtk::prelude::*;
-    let deadline = Instant::now() + Duration::from_secs(60);
-    let mut seen = String::new();
-    loop {
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.run_on_main_thread(move || {
-            let mut found = false;
+/// What the check's GTK watcher last saw showing, for a timeout's message.
+type Seen = std::sync::Arc<std::sync::Mutex<String>>;
+
+/// Starts a GTK timer that titles GTK's overwrite question `QUESTION` once it shows (a visible
+/// message dialog of the app's saying the file already exists) and keeps the list of the visible
+/// toplevel windows. GTK runs the question in a main loop of its own until it is answered, where
+/// the app's run_on_main_thread calls wait (the check cannot ask GTK then); a GLib timer still runs
+/// there. It runs until the app quits.
+fn watch_questions(app: &AppHandle) -> Result<Seen, String> {
+    let seen = Seen::default();
+    let shown = seen.clone();
+    on_main(app, move || {
+        use gtk::prelude::*;
+        gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
             let mut showing = Vec::new();
             for w in gtk::Window::list_toplevels() {
                 let Some(win) = w.downcast_ref::<gtk::Window>() else {
@@ -128,39 +131,48 @@ fn question(app: &AppHandle) -> Result<String, String> {
                     .downcast_ref::<gtk::MessageDialog>()
                     .and_then(|d| d.text())
                     .map(|t| t.to_string());
+                if text
+                    .as_deref()
+                    .is_some_and(|t| t.contains("already exists"))
+                    && win.title().as_deref() != Some(QUESTION)
+                {
+                    win.set_title(QUESTION);
+                }
                 showing.push(format!(
                     "{} {:?} {:?}",
                     w.type_().name(),
                     win.title().map(|t| t.to_string()),
                     text
                 ));
-                if text.is_some_and(|t| t.contains("already exists")) {
-                    win.set_title(QUESTION);
-                    found = true;
-                }
             }
-            let _ = tx.send((found, showing.join("; ")));
-        })
-        .map_err(|e| e.to_string())?;
-        if let Ok((found, showing)) = rx.recv_timeout(Duration::from_secs(5)) {
-            seen = showing;
-            if found {
-                if let Some(id) = x(&[
-                    "search",
-                    "--onlyvisible",
-                    "--name",
-                    &format!("^{QUESTION}$"),
-                ])
-                .ok()
-                .and_then(|s| s.lines().last().map(String::from))
-                {
-                    return Ok(id);
-                }
-            }
+            *shown.lock().unwrap() = showing.join("; ");
+            gtk::glib::ControlFlow::Continue
+        });
+    })
+    .ok_or("the main thread did not answer")?;
+    Ok(seen)
+}
+
+/// GTK's overwrite question's X window, once it shows (titled by `watch_questions`). On a
+/// timeout, says which toplevel windows were showing.
+fn question(seen: &Seen) -> Result<String, String> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some(id) = x(&[
+            "search",
+            "--onlyvisible",
+            "--name",
+            &format!("^{QUESTION}$"),
+        ])
+        .ok()
+        .and_then(|s| s.lines().last().map(String::from))
+        {
+            return Ok(id);
         }
         if Instant::now() > deadline {
             return Err(format!(
-                "no overwrite question showed within a minute; showing: {seen}"
+                "no overwrite question showed within a minute; showing: {}",
+                seen.lock().unwrap()
             ));
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -292,7 +304,15 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     let out = fixtures.join("out");
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     let out = std::fs::canonicalize(&out).map_err(|e| e.to_string())?;
-    let step = |name: &str, r: Result<(), String>| r.map_err(|e| format!("{name}: {e}"));
+    // Each step that passed, as it passes: a session that runs out of time still says how far it got.
+    let passed = std::cell::RefCell::new(Vec::<String>::new());
+    let step = |name: &str, r: Result<(), String>| -> Result<(), String> {
+        r.map_err(|e| format!("{name}: {e}"))?;
+        passed.borrow_mut().push(name.into());
+        log("save_progress", json!({"passed": *passed.borrow()}));
+        Ok(())
+    };
+    let seen = watch_questions(app)?;
     // A saved file's answer, and the content's canaries nowhere in what the tool heard.
     let saved = |r: &Value, what: &str| -> Result<(), String> {
         require(
@@ -498,16 +518,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             chooser()?;
             choose(&path)?;
-            let q = question(app)?;
-            std::thread::sleep(Duration::from_millis(500));
-            require(
-                eval(
-                    main,
-                    &format!("window.__pluxyAdmission?.[{}] ?? null", json!(slot)),
-                )
-                .is_some_and(|v| v.is_null()),
-                "the save answered while the overwrite question showed",
-            )?;
+            // While the question shows, GTK holds the main thread, so the window cannot be asked
+            // whether the call answered; the old bytes, and "cancelled" below, say it did not save.
+            let q = question(&seen)?;
             holds(&path, b"the old bytes\n", 0o644)?;
             question_key(&q, "Escape")?;
             std::thread::sleep(Duration::from_millis(500));
@@ -527,7 +540,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             chooser()?;
             choose(&path)?;
-            let q = question(app)?;
+            let q = question(&seen)?;
             question_key(&q, "alt+r")?;
             let r = output(main, &slot)?;
             saved(&r, "the confirmed overwrite")?;
@@ -565,7 +578,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 chooser()?;
                 choose(&path)?;
                 if existing {
-                    let q = question(app)?;
+                    let q = question(&seen)?;
                     question_key(&q, "alt+r")?;
                 }
                 wait_for("the save service's hold", || held.exists().then_some(()))?;
