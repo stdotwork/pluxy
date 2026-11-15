@@ -491,7 +491,7 @@ fn freeze(dir: &Path, root: bool) -> Result<(), String> {
 fn sync_dir(dir: &Path) -> Result<(), String> {
     #[cfg(unix)]
     fs::File::open(dir)
-        .and_then(|f| f.sync_all())
+        .and_then(|f| crate::vault::sync_folder(&f))
         .map_err(|e| format!("{}: {e}", dir.display()))?;
     #[cfg(not(unix))]
     let _ = dir;

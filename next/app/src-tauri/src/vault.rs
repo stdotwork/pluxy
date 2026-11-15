@@ -277,9 +277,9 @@ fn c_name(name: &str) -> Result<std::ffi::CString, String> {
 
 /// Flushes the folder open as f to disk, so a file renamed into it stays after a power loss.
 /// macOS's full flush (`F_FULLFSYNC`, what `sync_all` asks for there) fails on a file system
-/// without it; there it falls back to `fsync`, as SQLite does.
+/// without it; there it falls back to `fsync`, as SQLite does. `device.rs`'s `sync_dir` uses it too.
 #[cfg(unix)]
-fn sync_folder(f: &fs::File) -> std::io::Result<()> {
+pub(crate) fn sync_folder(f: &fs::File) -> std::io::Result<()> {
     let done = f.sync_all();
     #[cfg(target_os = "macos")]
     if done.is_err() {
