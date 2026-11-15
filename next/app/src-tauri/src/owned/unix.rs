@@ -1,0 +1,215 @@
+//! Linux and macOS: a held process is an unreaped `std::process::Child` in a process group of its
+//! own (its leader's process ID is the group's number), stopped through that group.
+
+use super::Leader;
+use std::fs::File;
+use std::io::{self, Read};
+use std::os::fd::AsRawFd;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+pub(crate) use std::process::{Child, ChildStderr, ChildStdin, ChildStdout};
+
+/// How long a pipe reader waits before it looks again whether its process was reaped.
+const TICK: Duration = Duration::from_millis(100);
+
+/// The state of child, without reaping it.
+pub(crate) fn leader(child: &Child) -> Leader {
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let r = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id() as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    match (r, unsafe { info.si_pid() }) {
+        (0, 0) => Leader::Running,
+        (0, _) => Leader::Exited,
+        _ => Leader::Gone,
+    }
+}
+
+/// Asks child's process group to stop (SIGTERM), while its leader runs; true once asked, as the
+/// caller then waits the stop grace.
+pub(crate) fn term_group(child: &Child) -> bool {
+    if leader(child) == Leader::Running {
+        unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGTERM) };
+    }
+    true
+}
+
+/// Ends child's whole process group (SIGKILL), and child itself should it have left its group.
+/// Never once it has been reaped, when its group's number could be another's.
+pub(crate) fn kill_group(child: &mut Child) {
+    if leader(child) != Leader::Gone {
+        unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
+        let _ = child.kill();
+    }
+}
+
+/// Reads from r until it has data, the end, or closed is set (its process was reaped, while some
+/// other process may still hold the pipe open): then None.
+pub(crate) fn read_some(
+    closed: &AtomicBool,
+    r: &mut (impl Read + AsRawFd),
+    buf: &mut [u8],
+) -> Option<usize> {
+    let fd = r.as_raw_fd();
+    loop {
+        if closed.load(Ordering::SeqCst) {
+            return None;
+        }
+        let mut p = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let n = unsafe { libc::poll(&mut p, 1, TICK.as_millis() as i32) };
+        if n < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+            return None;
+        }
+        if n > 0 {
+            return match r.read(buf) {
+                Ok(0) | Err(_) => None,
+                Ok(n) => Some(n),
+            };
+        }
+    }
+}
+
+/// In a child between fork and exec: every descriptor but 0-2 closes as it executes. Nothing in it
+/// may allocate.
+///
+/// # Safety
+/// Only between fork and exec.
+pub(crate) unsafe fn close_on_exec_from_3() -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        if libc::syscall(
+            libc::SYS_close_range,
+            3u32,
+            u32::MAX,
+            libc::CLOSE_RANGE_CLOEXEC,
+        ) != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    // No close_range: each possible descriptor up to the limit on their numbers (the soft limit
+    // on open files). One that is not open fails with EBADF, which is what it should be.
+    #[cfg(target_os = "macos")]
+    {
+        let max = libc::getdtablesize();
+        let mut fd = 3;
+        while fd < max {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            fd += 1;
+        }
+    }
+    Ok(())
+}
+
+/// What runs the opened file f: on Linux its descriptor's `/proc/self/fd` path, which the kernel
+/// opens as it executes, so a file replaced after the check never runs.
+#[cfg(target_os = "linux")]
+pub(crate) fn exec_target(f: &File) -> Result<PathBuf, String> {
+    Ok(PathBuf::from(format!("/proc/self/fd/{}", f.as_raw_fd())))
+}
+
+/// What runs the opened file f: macOS cannot execute a descriptor, so the path f has now
+/// (`F_GETPATH`, links resolved), once no other user can change any folder on it or the file
+/// (`secure`) and that path still names f, as it was opened (its device, inode, size, mode and
+/// times). Only a process of this same user could swap it between this check and the exec.
+#[cfg(target_os = "macos")]
+pub(crate) fn exec_target(f: &File) -> Result<PathBuf, String> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = vec![0u8; libc::MAXPATHLEN as usize];
+    if unsafe { libc::fcntl(f.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) } != 0 {
+        return Err(format!(
+            "finding the opened file's path: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    let len = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+    let path = PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..len]));
+    secure(&path)?;
+    let now = std::fs::symlink_metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let opened = f.metadata().map_err(|e| e.to_string())?;
+    if !same(&now, &opened) {
+        return Err(format!(
+            "{} is no longer the file that was opened",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
+#[cfg(target_os = "macos")]
+fn same(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev()
+        && a.ino() == b.ino()
+        && a.size() == b.size()
+        && a.mode() == b.mode()
+        && (a.mtime(), a.mtime_nsec()) == (b.mtime(), b.mtime_nsec())
+        && (a.ctime(), a.ctime_nsec()) == (b.ctime(), b.ctime_nsec())
+}
+
+/// Refused unless no user but root and this one can change path or any folder above it: each is
+/// owned by root or this user and not writable by group or others, except group write for `wheel`
+/// (0) or `admin` (80), whose members can become root anyway, and a sticky folder (`/tmp`), where
+/// only the owner of the entry below it (root or this user) can rename or remove it. No part of
+/// path may be a link (it is `F_GETPATH`'s, which resolves them).
+#[cfg(target_os = "macos")]
+pub(crate) fn secure(path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let me = unsafe { libc::geteuid() };
+    let trusted_owner = |m: &std::fs::Metadata| m.uid() == 0 || m.uid() == me;
+    let others_write = |m: &std::fs::Metadata| {
+        m.mode() & 0o002 != 0 || (m.mode() & 0o020 != 0 && m.gid() != 0 && m.gid() != 80)
+    };
+    let refuse = |p: &std::path::Path, why: &str| {
+        Err(format!(
+            "{} {why}: on macOS the app runs a program by its path, so no other user may be able to change it",
+            p.display()
+        ))
+    };
+    if !path.is_absolute() {
+        return refuse(path, "is not a full path");
+    }
+    let parts: Vec<&std::path::Path> = path.ancestors().collect();
+    // From the file up to `/`; the entry below each folder is the one before it here.
+    for (i, p) in parts.iter().enumerate() {
+        let m = std::fs::symlink_metadata(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let ft = m.file_type();
+        if ft.is_symlink() {
+            return refuse(p, "is a link");
+        }
+        if !trusted_owner(&m) {
+            return refuse(p, "belongs to another user");
+        }
+        if i == 0 {
+            if !ft.is_file() {
+                return refuse(p, "is not a file");
+            }
+            if others_write(&m) {
+                return refuse(p, "may be written by other users");
+            }
+            continue;
+        }
+        if !ft.is_dir() {
+            return refuse(p, "is not a folder");
+        }
+        if others_write(&m) {
+            let sticky = m.mode() & 0o1000 != 0;
+            let below = std::fs::symlink_metadata(parts[i - 1]).map_err(|e| e.to_string())?;
+            if !(sticky && trusted_owner(&below)) {
+                return refuse(p, "may be changed by other users");
+            }
+        }
+    }
+    Ok(())
+}

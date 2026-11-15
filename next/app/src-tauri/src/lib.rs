@@ -34,10 +34,12 @@ pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
 pub mod notes;
+mod owned;
 pub mod pages;
 mod place;
 mod privacy;
-#[cfg(target_os = "linux")]
+// Built and tested on every platform; the app starts tools on Linux only for now.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub mod program;
 pub mod recovery;
 pub mod release;
@@ -47,7 +49,7 @@ pub mod release_config;
 mod release_native;
 #[cfg(target_os = "linux")]
 pub mod route;
-#[cfg(target_os = "linux")]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub mod spawn;
 mod startup;
 pub mod trust;

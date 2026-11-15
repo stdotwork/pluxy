@@ -11,19 +11,31 @@ use std::sync::OnceLock;
 #[path = "../examples/program_fixture/fixture.rs"]
 mod fixture;
 
+// Runs before main: ELF's `.init_array`, Mach-O's `__mod_init_func`, the MSVC runtime's `.CRT$XCU`.
 #[used]
-#[link_section = ".init_array"]
+#[cfg_attr(target_os = "linux", link_section = ".init_array")]
+#[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
+#[cfg_attr(windows, link_section = ".CRT$XCU")]
 static FIXTURE: extern "C" fn() = {
     extern "C" fn run_fixture() {
-        // The spawn tests' agent (`spawn_tests.rs`) is started with `AGENT` as its first argument.
-        let agent = std::fs::read("/proc/self/cmdline").is_ok_and(|c| {
-            c.split(|b| *b == 0)
+        // The spawn tests' agent (`spawn_tests.rs`) is started with `AGENT` as its first argument,
+        // the lifetime checks' heartbeat with `HEARTBEAT`.
+        let first = |prefix: &str| {
+            #[cfg(target_os = "linux")]
+            return std::fs::read("/proc/self/cmdline").is_ok_and(|c| {
+                c.split(|b| *b == 0)
+                    .nth(1)
+                    .is_some_and(|a| a.starts_with(prefix.as_bytes()))
+            });
+            #[cfg(not(target_os = "linux"))]
+            std::env::args_os()
                 .nth(1)
-                .is_some_and(|a| a.starts_with(fixture::AGENT.as_bytes()))
-        });
+                .is_some_and(|a| a.to_string_lossy().starts_with(prefix))
+        };
         if std::env::var_os("PLUXY_EXTENSION_ID").is_some()
             || std::env::var_os(fixture::CHILD).is_some()
-            || agent
+            || first(fixture::AGENT)
+            || first(fixture::HEARTBEAT)
         {
             fixture::main();
         }
@@ -203,8 +215,15 @@ fn release(mode: Value, version: &str, generation: u64) -> Spec {
     if !mode.is_null() {
         std::fs::write(dir.join("fixture.json"), serde_json::to_vec(&mode).unwrap()).unwrap();
     }
+    #[cfg(unix)]
     let program = dir.join("bin").join("tool");
+    #[cfg(unix)]
     std::os::unix::fs::symlink(std::env::current_exe().unwrap(), &program).unwrap();
+    // Windows runs programs only (`.exe`): a hard link of this test program.
+    #[cfg(windows)]
+    let program = dir.join("bin").join("tool.exe");
+    #[cfg(windows)]
+    std::fs::hard_link(std::env::current_exe().unwrap(), &program).unwrap();
     Spec {
         id: ID.into(),
         sha256: "ab".repeat(32),
@@ -267,11 +286,42 @@ fn summary(h: &Host, items: &[&str]) -> Result<Value, CallError> {
     h.call(ID, "summary", json!({"items": items}), None)
 }
 
+/// Whether process pid runs (a zombie does not). A look, never a signal.
+#[cfg(target_os = "linux")]
 fn alive(pid: u64) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
         .ok()
         .and_then(|s| s.rsplit_once(") ").and_then(|(_, r)| r.chars().next()))
         .is_some_and(|c| c != 'Z')
+}
+
+#[cfg(target_os = "macos")]
+fn alive(pid: u64) -> bool {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid as i32,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        )
+    };
+    n == size && info.pbi_status != libc::SZOMB
+}
+
+#[cfg(windows)]
+fn alive(pid: u64) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+    let h = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid as u32) };
+    if h.is_null() {
+        return false;
+    }
+    let running = unsafe { WaitForSingleObject(h, 0) } == WAIT_TIMEOUT;
+    unsafe { CloseHandle(h) };
+    running
 }
 
 fn until(what: &str, secs: u64, f: impl Fn() -> bool) {
@@ -336,8 +386,11 @@ fn concurrent_calls_start_one_tool_with_only_the_contract() {
             "PLUXY_EXTENSION_ID"
         ])
     );
-    assert_eq!(a["fds"], json!([0, 1, 2]));
-    assert_eq!(a["pgid"], pid);
+    #[cfg(unix)]
+    {
+        assert_eq!(a["fds"], json!([0, 1, 2]));
+        assert_eq!(a["pgid"], pid);
+    }
     let s = h.status(ID);
     assert_eq!((s.state, s.pid), ("ready", Some(pid as u32)));
     assert!(alive(child));
@@ -1240,6 +1293,7 @@ fn cancel_all_ends_every_call_and_the_tool_stops_when_idle() {
     assert!(!alive(pid));
 }
 
+#[cfg(unix)]
 #[test]
 fn a_tool_that_leaves_its_group_and_ignores_the_end_of_its_input_is_killed() {
     let h = host(json!({"ignore_eof": true, "leave_group": true}));
@@ -1318,6 +1372,7 @@ fn a_stop_while_its_record_is_read_starts_nothing() {
     h.stop_all();
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn the_tool_gets_its_name_the_parent_death_signal_and_no_inherited_descriptor() {
     // A descriptor the app leaves inheritable, as a library might: dup clears close-on-exec.
@@ -2017,6 +2072,7 @@ fn stopping_a_crashed_tool_that_is_not_running_reads_as_idle() {
     h.stop_all();
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_tool_gets_its_home_and_its_own_data_folder_and_a_planted_link_refuses_the_start() {
     use std::os::unix::fs::PermissionsExt;

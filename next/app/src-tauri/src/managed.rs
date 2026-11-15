@@ -8,7 +8,10 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use crate::owned::Child;
+use std::process::ExitStatus;
+#[cfg(unix)]
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, Weak};
@@ -210,10 +213,11 @@ pub struct ManagedCore {
 impl ManagedCore {
     /// Starts the open program (named name in messages) with the config in dir (made if missing)
     /// and waits until core says where it listens. The program runs from that open file, the one
-    /// its caller checked, not from its path again. On Unix the app binds core's `listen` address
-    /// itself and hands core the socket (`-listen-fd`), keeping its own copy; core must say it
-    /// listens there. Core's log goes to the app's stderr, each line prefixed `core: `. on_exit
-    /// runs once core has exited.
+    /// its caller checked (on macOS and Windows by the path it has now, checked again: see
+    /// `owned`). On Unix the app binds core's `listen` address itself and hands core the socket
+    /// (`-listen-fd`), keeping its own copy; core must say it listens there. On Windows it runs
+    /// in a job of its own, which ends it if the app ends without stopping it. Core's log goes to
+    /// the app's stderr, each line prefixed `core: `. on_exit runs once core has exited.
     pub fn start(
         program: File,
         name: &Path,
@@ -227,18 +231,17 @@ impl ManagedCore {
         #[cfg(not(unix))]
         let hold: Option<Hold> = None;
         #[cfg(unix)]
-        let fd = {
-            use std::os::fd::AsRawFd;
-            program.as_raw_fd()
-        };
-        let mut cmd = Command::new(format!("/proc/self/fd/{fd}"));
+        let mut cmd = Command::new(crate::owned::exec_target(&program)?);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
             cmd.arg0(name);
-            // The child keeps the open program across exec, which a #! script's interpreter
-            // then reads (as /dev/fd/N); the app's own copy closes on exec as usual.
+            // On Linux the child keeps the open program across exec, which a #! script's
+            // interpreter then reads (as /dev/fd/N); the app's own copy closes on exec as usual.
+            #[cfg(target_os = "linux")]
             unsafe {
+                use std::os::fd::AsRawFd;
+                let fd = program.as_raw_fd();
                 cmd.pre_exec(move || {
                     if libc::fcntl(fd, libc::F_SETFD, 0) != 0 {
                         return Err(io::Error::last_os_error());
@@ -247,7 +250,15 @@ impl ManagedCore {
                 });
             }
         }
-        cmd.arg("-config").arg(&cfg);
+        // Its environment is the app's, as on Unix, where it inherits it.
+        #[cfg(windows)]
+        let mut cmd = {
+            use crate::owned::windows::{self as w, Io, Kind};
+            let mut c = w::Command::new(w::pin_file(&program)?, Kind::Managed);
+            c.arg0(name).envs(std::env::vars_os()).stdin(Io::Null).stdout(Io::Null).stderr(Io::Piped);
+            c
+        };
+        cmd.args([std::ffi::OsStr::new("-config"), cfg.as_os_str()]);
         #[cfg(unix)]
         if let Some(l) = &hold {
             use std::os::fd::AsRawFd;
@@ -264,8 +275,9 @@ impl ManagedCore {
                 });
             }
         }
-        cmd.current_dir(dir)
-            .stdin(Stdio::null())
+        cmd.current_dir(dir);
+        #[cfg(unix)]
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
         #[cfg(target_os = "linux")]
@@ -490,12 +502,11 @@ impl ManagedCore {
                 self.wait(Duration::from_secs(1));
                 return;
             }
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(c.id() as libc::pid_t, libc::SIGTERM);
+            // SIGTERM to it (on Windows CTRL_BREAK to its group), while it is unreaped; one that
+            // cannot be asked (on Windows: no console it can get one on) is ended at once.
+            if !crate::owned::term_process(&c) {
+                let _ = c.kill();
             }
-            #[cfg(not(unix))]
-            let _ = c.kill();
         }
         if !self.wait(STOP_TIMEOUT) {
             self.kill();

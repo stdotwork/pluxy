@@ -91,6 +91,9 @@ pub const CHILD: &str = "PLUXY_FIXTURE_CHILD";
 /// The first argument that makes it the spawn check's agent (`agent`); its group member and its
 /// orphan get this with `-child` and `-orphan` added.
 pub const AGENT: &str = "pluxy-fixture-agent";
+/// The first argument that makes it the lifetime checks' stand-in agent or runtime (`heartbeat`),
+/// on every platform.
+pub const HEARTBEAT: &str = "pluxy-fixture-heartbeat";
 
 /// How the unit tests make it misbehave, from `fixture.json`. Absent: it behaves.
 #[derive(Default)]
@@ -198,6 +201,21 @@ fn error(id: &Value, code: &str, message: &str) -> Value {
 
 /// The file descriptors open in this process, but for the one listing them.
 fn fds() -> Vec<u32> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut out: Vec<u32> = std::fs::read_dir("/dev/fd")
+            .map(|d| {
+                d.filter_map(|e| e.ok())
+                    .filter_map(|e| e.file_name().to_str()?.parse().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        // The listing's own descriptor is closed by now.
+        out.retain(|fd| unsafe { libc::fcntl(*fd as i32, libc::F_GETFD) } != -1);
+        out.sort();
+        return out;
+    }
+    #[allow(unreachable_code)]
     let mut out: Vec<u32> = std::fs::read_dir("/proc/self/fd")
         .map(|d| {
             d.filter_map(|e| e.ok())
@@ -214,6 +232,117 @@ fn fds() -> Vec<u32> {
 fn sleep_forever() -> ! {
     loop {
         std::thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+/// The file the heartbeat writes when it is asked to stop, for its signal handler.
+#[cfg(unix)]
+static TERM_FILE: std::sync::OnceLock<std::ffi::CString> = std::sync::OnceLock::new();
+#[cfg(unix)]
+static IGNORE_TERM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(windows)]
+static TERM_PATH: std::sync::OnceLock<(String, bool)> = std::sync::OnceLock::new();
+
+#[cfg(unix)]
+extern "C" fn on_heartbeat_term(_: libc::c_int) {
+    unsafe {
+        if let Some(p) = TERM_FILE.get() {
+            let fd = libc::open(p.as_ptr(), libc::O_WRONLY | libc::O_CREAT | libc::O_CLOEXEC, 0o600);
+            if fd >= 0 {
+                libc::close(fd);
+            }
+        }
+        if !IGNORE_TERM.load(std::sync::atomic::Ordering::SeqCst) {
+            libc::_exit(0);
+        }
+    }
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn on_heartbeat_ctrl(kind: u32) -> windows_sys::core::BOOL {
+    if kind != windows_sys::Win32::System::Console::CTRL_BREAK_EVENT {
+        return 0;
+    }
+    if let Some((p, ignore)) = TERM_PATH.get() {
+        let _ = std::fs::write(p, "");
+        if !ignore {
+            std::process::exit(0);
+        }
+    }
+    1
+}
+
+/// The lifetime checks' stand-in agent or runtime, on every platform, started as
+/// `<program> HEARTBEAT <file> [child] [ignore]`. It writes what it was started with (process ID,
+/// arguments, working folder, environment) to `<file>.json`, then a count to file every 50 ms
+/// (written whole, then renamed into place), until `<file>.stop` exists: then it exits 0. With
+/// `child` it first starts itself again as the heartbeat `<file>.child` (in its process group, on
+/// Windows its job). Asked to stop (SIGTERM; on Windows CTRL_BREAK) it writes `<file>.term` and
+/// exits 0, or with `ignore` goes on.
+pub fn heartbeat(args: &[String]) -> ! {
+    let Some(file) = args.get(2).cloned() else {
+        std::process::exit(2);
+    };
+    let ignore = args.iter().any(|a| a == "ignore");
+    let term = format!("{file}.term");
+    #[cfg(unix)]
+    unsafe {
+        let _ = TERM_FILE.set(std::ffi::CString::new(term).unwrap_or_default());
+        IGNORE_TERM.store(ignore, std::sync::atomic::Ordering::SeqCst);
+        libc::signal(
+            libc::SIGTERM,
+            on_heartbeat_term as *const () as libc::sighandler_t,
+        );
+    }
+    #[cfg(windows)]
+    unsafe {
+        let _ = TERM_PATH.set((term, ignore));
+        windows_sys::Win32::System::Console::SetConsoleCtrlHandler(Some(on_heartbeat_ctrl), 1);
+    }
+    if args.iter().skip(3).any(|a| a == "child") {
+        if let Ok(exe) = std::env::current_exe() {
+            let mut c = std::process::Command::new(exe);
+            c.arg(HEARTBEAT).arg(format!("{file}.child"));
+            if ignore {
+                c.arg("ignore");
+            }
+            let _ = c
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+    }
+    let env: serde_json::Map<String, Value> = std::env::vars_os()
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().into_owned(),
+                json!(v.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    let seen = json!({
+        "pid": std::process::id(),
+        "argv": std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+        "cwd": std::env::current_dir().ok(),
+        "env": env,
+    });
+    let put = |path: &str, text: String| {
+        let tmp = format!("{path}.tmp");
+        if std::fs::write(&tmp, text).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
+        }
+    };
+    put(&format!("{file}.json"), seen.to_string());
+    let stop = format!("{file}.stop");
+    let mut n: u64 = 0;
+    loop {
+        if std::path::Path::new(&stop).exists() {
+            std::process::exit(0);
+        }
+        n += 1;
+        put(&file, n.to_string());
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -727,6 +856,12 @@ fn opener(args: &[String]) -> ! {
 pub fn main() -> ! {
     if std::env::var_os(CHILD).is_some() {
         sleep_forever();
+    }
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).is_some_and(|a| a == HEARTBEAT) {
+            heartbeat(&args);
+        }
     }
     #[cfg(target_os = "linux")]
     {
