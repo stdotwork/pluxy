@@ -15,6 +15,8 @@
 // that copies its history, and a session of another project; one response's content blocks repeat its
 // message ID; prompt, reply, thinking, tool result, summary and working folder canaries, and the raw
 // message and request IDs, must not reach a report, the store or the app's output.
+// The Oh My Pi parser check (usage-omp, usage-omp.ts) is the same kind of check on an Oh My Pi home, run
+// after the Claude Code one, and the Pi parser's (usage-pi, usage-pi.ts) after that.
 //
 // The OpenCode parser check (usage-opencode, packed the same way) reads an OpenCode home written here by
 // hand in the run's HOME: a database in WAL mode with OpenCode's old `message` table and today's
@@ -51,6 +53,8 @@ import {
 import { join } from "node:path";
 import { artifact, type Fixture, platform, writeTrustProfile } from "./admission";
 import { native, PAGE_SCRIPT, pack as packPackage, summary } from "./routing";
+import { OMP_CANARIES, OMP_ID, ompExpected, ompHome } from "./usage-omp";
+import { PI_CANARIES, PI_ID, piExpected, piHome } from "./usage-pi";
 
 export const HUB_ID = "pluxy/agent-usage";
 export const PARSER_ID = "pluxy/usage-fixture";
@@ -1080,6 +1084,9 @@ function opencodeExpected() {
   const fixture = { id: PARSER_ID, label: "Fixture", status: "archived", total: 1547, active_days: 4 };
   const codex = { id: CODEX_ID, label: "Codex", status: "active", total: 5930, active_days: 2 };
   const claude = { id: CLAUDE_ID, label: "Claude Code", status: "active", total: 8555, active_days: 2 };
+  // Oh My Pi and Pi, each disabled after its step: 3,295 and 2,995 in the seven days, over three days each.
+  const omp = { id: OMP_ID, label: "Oh My Pi", status: "archived", total: 3295, active_days: 3 };
+  const pi = { id: PI_ID, label: "Pi", status: "archived", total: 2995, active_days: 3 };
   const opencode = (total: number) => ({
     id: OPENCODE_ID,
     label: "OpenCode",
@@ -1117,7 +1124,7 @@ function opencodeExpected() {
             { model: "claude-sonnet-4-5", total: 700 },
             { model: "gpt-5.5-mini", total: 15 },
           ],
-          sources: [claude, codex, opencode(2325), fixture],
+          sources: [claude, codex, omp, pi, opencode(2325), fixture],
           calendar: { start: "2025-11-10", days: 366, nonzero: { "2026-11-09": 700, "2026-11-10": 1625 } },
           hours: { "0:23": 700, "1:10": 1250, "1:11": 360, "1:13": 15 },
         }),
@@ -1140,7 +1147,7 @@ function opencodeExpected() {
             { model: "claude-sonnet-4-5", total: 700 },
             { model: "gpt-5.5-mini", total: 15 },
           ],
-          sources: [claude, codex, opencode(2335), fixture],
+          sources: [claude, codex, omp, pi, opencode(2335), fixture],
           calendar: { start: "2025-11-10", days: 366, nonzero: { "2026-11-09": 700, "2026-11-10": 1635 } },
           hours: { "0:23": 700, "1:10": 1250, "1:11": 360, "1:13": 15, "1:14": 10 },
         }),
@@ -1227,7 +1234,9 @@ export function buildUsageFixtures(
   const opencode = pack(root, tools, "usage-opencode", join(target, "usage-opencode"), publicKey, privateKey);
   const curated = join(root, "curated.json");
   const packages: Record<string, object> = {};
-  for (const p of [hub, parser, peer, codex, claude, opencode]) {
+  const omp = pack(root, tools, "usage-omp", join(target, "usage-omp"), publicKey, privateKey);
+  const pi = pack(root, tools, "usage-pi", join(target, "usage-pi"), publicKey, privateKey);
+  for (const p of [hub, parser, peer, codex, claude, omp, pi, opencode]) {
     if (p) packages[p.id] = { releases: [{ version: p.version, artifacts: { [platform()]: p.entry } }] };
   }
   writeFileSync(curated, JSON.stringify({ registry_version: 0, packages }));
@@ -1237,6 +1246,8 @@ export function buildUsageFixtures(
   writeFileSync(join(usageRoot, "b.jsonl"), `${B.join("\n")}\n`);
   const codexWrites = codexHome(home);
   const claudeWrites = claudeHome(home);
+  const ompWrites = ompHome(home);
+  const piWrites = piHome(home);
   const opencodeFiles = opencodeHome(root, home);
   writeFileSync(
     join(root, "expect.json"),
@@ -1252,6 +1263,8 @@ export function buildUsageFixtures(
         [PEER_ID]: peer?.version ?? "1.0.0",
         [CODEX_ID]: codex?.version ?? "0.1.0",
         [CLAUDE_ID]: claude?.version ?? "0.1.0",
+        [OMP_ID]: omp?.version ?? "0.1.0",
+        [PI_ID]: pi?.version ?? "0.1.0",
         [OPENCODE_ID]: opencode?.version ?? "0.1.0",
       },
       sha256: {
@@ -1260,6 +1273,8 @@ export function buildUsageFixtures(
         [PEER_ID]: peer?.sha256 ?? null,
         [CODEX_ID]: codex?.sha256 ?? null,
         [CLAUDE_ID]: claude?.sha256 ?? null,
+        [OMP_ID]: omp?.sha256 ?? null,
+        [PI_ID]: pi?.sha256 ?? null,
         [OPENCODE_ID]: opencode?.sha256 ?? null,
       },
       bin: {
@@ -1268,6 +1283,8 @@ export function buildUsageFixtures(
         [PEER_ID]: peer?.bin ?? "bin/tool",
         [CODEX_ID]: codex?.bin ?? "bin/usage-codex",
         [CLAUDE_ID]: claude?.bin ?? "bin/usage-claude",
+        [OMP_ID]: omp?.bin ?? "bin/usage-omp",
+        [PI_ID]: pi?.bin ?? "bin/usage-pi",
         [OPENCODE_ID]: opencode?.bin ?? "bin/usage-opencode",
       },
       root: usageRoot,
@@ -1312,8 +1329,58 @@ export function buildUsageFixtures(
         },
         reports: claudeExpected(),
       },
-      // The OpenCode parser, enabled after the Claude Code one: its home is in the run's HOME, its roots
-      // default.
+      // The Oh My Pi parser, enabled after the Claude Code one; the other sources its reports list are
+      // the Claude Code and Codex sources (active) and the fixture parser (archived), as the steps before leave them.
+      omp: {
+        id: OMP_ID,
+        writes: ompWrites,
+        canaries: OMP_CANARIES,
+        // A model name both the store and the reports must hold (the positive control of the canary search).
+        model: "gpt-5.5-mini",
+        // Each sync's counts for the source: listed (one session in both roots, so twice), changed (to
+        // read), read, failed.
+        syncs: {
+          first: { listed: 4, changed: 3, read: 3, failed: 0 },
+          repeat: { listed: 4, changed: 0, read: 0, failed: 0 },
+          after: { listed: 4, changed: 1, read: 1, failed: 0 },
+        },
+        reports: ompExpected({
+          now: NOW,
+          offsets: OFFSETS,
+          days: DAYS,
+          others: [
+            { id: CLAUDE_ID, label: "Claude Code", status: "active", total: 8555, active_days: 2 },
+            { id: CODEX_ID, label: "Codex", status: "active", total: 5930, active_days: 2 },
+            { id: PARSER_ID, label: "Fixture", status: "archived", total: 1547, active_days: 4 },
+          ],
+        }),
+      },
+      // The Pi parser, enabled after the Oh My Pi one, which the check left disabled (archived, its rows
+      // kept); Claude Code and Codex stay active, their files unchanged since their steps.
+      pi: {
+        id: PI_ID,
+        writes: piWrites,
+        canaries: PI_CANARIES,
+        model: "gpt-5.5-mini",
+        syncs: {
+          first: { listed: 4, changed: 3, read: 3, failed: 0 },
+          repeat: { listed: 4, changed: 0, read: 0, failed: 0 },
+          after: { listed: 4, changed: 1, read: 1, failed: 0 },
+        },
+        reports: piExpected({
+          now: NOW,
+          offsets: OFFSETS,
+          days: DAYS,
+          others: [
+            { id: CLAUDE_ID, label: "Claude Code", status: "active", total: 8555, active_days: 2 },
+            { id: CODEX_ID, label: "Codex", status: "active", total: 5930, active_days: 2 },
+            { id: OMP_ID, label: "Oh My Pi", status: "archived", total: 3295, active_days: 3 },
+            { id: PARSER_ID, label: "Fixture", status: "archived", total: 1547, active_days: 4 },
+          ],
+        }),
+      },
+      // The OpenCode parser, enabled after the Pi one (the checks leave Oh My Pi and Pi disabled, archived):
+      // its home is in the run's HOME, its roots default.
       opencode: {
         id: OPENCODE_ID,
         files: opencodeFiles,
@@ -1336,6 +1403,6 @@ export function buildUsageFixtures(
   return {
     registries: [{ name: "curated", url: curated }],
     nonce,
-    canaries: [...CODEX_CANARIES, ...CLAUDE_CANARIES, ...OPENCODE_CANARIES],
+    canaries: [...CODEX_CANARIES, ...CLAUDE_CANARIES, ...OMP_CANARIES, ...PI_CANARIES, ...OPENCODE_CANARIES],
   };
 }

@@ -9,7 +9,8 @@ reference: this folder implements it, it does not change it.
 
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
-cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-opencode)
+cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi, usage-opencode)
+cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
 ```
 
 ## `lib/program`
@@ -68,6 +69,71 @@ page. See [its README](agent-usage/README.md).
 test packs it); never released. It reads `*.jsonl` files of records `{"id"?, "ts", "model",
 "input", "output", ...}` under its roots, and lines that end a part or pause a read, so a check can
 cancel a job between two parts of one file.
+
+## `lib/transactions`
+
+Link-preserving, journalled config writes for any writer tool (`pluxy-transactions`), a client of
+the host's vault (backups and journals) through the contract's `vault` frames; it keeps no
+journal store of its own. Linux.
+
+| Item | What it does |
+| --- | --- |
+| `Selection` | What the person selected: `File(path)`, a config file that may be a link (as stow makes), or `Root { root, path }`, a file inside a root folder that may be a link (as chezmoi can make), `path` being slash-separated parts inside it. |
+| `Transactions::new(vault, data)` | The operations for one call: `vault` is the `Call` (or any `Vault`), `data` the tool's data folder (`data_dir()`, `PLUXY_TOOL_DATA_DIR`), where the state file `transactions.json` (0600) keeps each set's targets and backup IDs, the originals kept for restore, and the journals left open. |
+| `preview(set, selections)` | Resolves and pins each selection: `{"set", "targets": [<pin>], "applied", "edited"}`. A pin names the selected path, its link's text, the file it resolves to, the identities (device and inode) of the link, the root, the file's folder and the file, and the file's SHA-256. A link inside a selected root, a part that leaves it (`..`, `.`, empty) and anything but a regular file are refused. A read: it asks nothing, and it reports a file's existence and SHA-256 for any path, so a writer must not export it to other packages. |
+| `apply(set, pins, image, merge, written)` | Writes each pinned target with what `image` makes of its bytes now, and records `set` as applied: its original images (with the person's edits since the last apply promoted into them by `merge`) and its applied images, as vault backups. A record none of whose selections still resolves to its target (a link pointed elsewhere) is replaced, its originals kept for restore. |
+| `clear(set, pins, merge, written)` | Each target becomes what `merge` makes of its original, its applied image and its bytes now: the writer's untouched values go, the person's edits stay. A pin of the recorded target file itself (named directly) reaches a record made through a link that now points elsewhere. |
+| `restore(set, pins, written)` | Puts the original bytes back with the original's mode (removing a file that did not exist). With no record for these targets, it puts back the originals kept for them: after a conflict, or after a new apply replaced a retargeted record. |
+| `reconcile(journals)` | For `Handler::reconcile`: each open journal the host names, reconciled from what is on disk (below). |
+| `status()` | The applied sets, the originals kept for restore and the latest recovery reports. |
+| `Merge`, `Json`, `merge_value` | The three-way merge, and the one for JSON files (written with two-space indentation, keys in the file's order and numbers with their exact digits, through serde_json's `preserve_order` and `arbitrary_precision`; other formatting and comments are not kept, so a format that must keep them brings its own `Merge`). |
+| `Target`, `Pin` | Resolving and pinning, and the checked reads and writes, for a writer that needs them directly. `Pin::from_json` refuses any field `Pin::to_json` does not write. |
+| `pin_schema()` | The JSON Schema of a pin, in the host's schema subset: what a writer's write operations take as `targets` items (the fixture writer's manifest uses it exactly). |
+
+How a write goes:
+
+- The pins come back in the write's input, so the operation's native confirmation (which shows
+  the exact input) names the selected path and the file it resolves to. The write resolves the
+  selection again and refuses, asking for a new preview, if the link points elsewhere (or is
+  another link, even with the same text, unless the filesystem gave it the old link's inode
+  number, as ext4 may once the old one is gone), the file was replaced (as editors save, by rename) or
+  modified since the preview. Only the target changes: a link stays the same link with the same
+  text.
+- Each file is written through a handle on its folder (cap-std), never by its path again: a new
+  file beside it, written 0600, checked once more, given the old file's permission bits (setuid,
+  setgid and sticky left out; 0600, or the original's, for a file that did not exist) and renamed
+  over it, the folder flushed, and the file checked to be the one written. The whole operation is
+  checked again at its end. At most 8 files of at most 256 KiB each.
+- The written file is a new file: hard links to the old one keep the old bytes, and its owner,
+  ACLs, extended attributes and security label are not copied.
+- Before the first write, the old bytes go into vault backups and the operation into a vault
+  journal (`journal.begin`, its `intent` naming each file's pin and SHA-256s before and after).
+  A write that fails puts back the files already written, newest first, except one another
+  program changed meanwhile, which stays as that program left it, its original kept for restore;
+  the journal ends rolled back. If putting one back fails, the journal stays open for the next
+  start, and its backups are kept until then.
+- Once all are written, the state file records the set and the journal, then the journal is
+  committed, and backups nothing names any more (no record, kept original or open journal) are
+  deleted.
+- After a crash, the next start's describe names the open journal. `reconcile` looks at each
+  journalled target itself, whatever its selection resolves to now (a link made again counts as
+  the same file), and removes the temporary files a write left beside it. It commits the journal
+  if the state file names it or every file holds its new bytes (saving the set's record), and
+  otherwise puts back, from the backups, each file that holds the new bytes, leaving any file
+  another program changed since (or whose backup is gone), its original kept for restore, and
+  ends it rolled back. It never writes the new bytes again, and repeating it changes nothing more.
+
+Other programs do not take part in these checks: a write between the last check and the rename,
+or after the final check, is not seen, and several files are journalled, not written atomically.
+Saving replaces the file; an edit made in the same instant by another program may be lost. Say
+so where the person confirms: the writers' write operations carry this sentence in their
+descriptions, which their native confirmations show.
+This is cooperative write correctness for a full-access tool, not a confinement.
+
+The example `fixture-writer` (`examples/fixture-writer`, package `pluxy/fixture-writer`) is the
+library's test fixture, never a curated tool: it sets top-level values in JSON files with
+`preview`, `apply`, `clear`, `restore` and `status`, and `crash_after` makes `apply` exit after
+that many files. The desktop app's native test packs it (`next/app/native/transactions.ts`).
 
 ## `usage-codex`
 
@@ -131,6 +197,43 @@ read whole, line by line, when it changes, by the old desktop app's rules:
 Two responses that share a message ID and have no request ID (a gateway that reuses one ID) are
 one message within a file, as they were in the old app.
 
+## `lib/pi-sessions`
+
+What the Pi and Oh My Pi usage parsers share (`pluxy-pi-sessions`): the two tools write the same
+session format, so one library reads it and each parser is a small program of its own. Their session
+files are `*.jsonl` under `~/.<tool>/agent/sessions` and `~/.<tool>/sessions` (the hub's `roots` name
+others), read-only. A file's ID is its path below the root it is under, so a session present under
+both roots is one file and the newer copy is read. Rules, by the tools' own sources:
+
+- an entry of type `message` has its usage in `message.usage`; an entry of type `usage` (Pi),
+  `model_usage` (Oh My Pi), `compaction` or `branch_summary` (Pi) has it in its own `usage`. Nothing
+  else is read: an Oh My Pi `task` result keeps its child's usage in `details.usage`, and the child has
+  a file of its own;
+- `input` is already net of cache reads and writes (the tools' providers take them out), `output`
+  holds the reasoning tokens (`reasoning` in Pi, `reasoningTokens` in Oh My Pi), which are never added
+  again; the total is the entry's `totalTokens`, else input + output + cache read + cache write;
+- the model is the message's `responseModel` (the model that answered), else its `model`; another
+  entry's `model`; none is the empty name;
+- the hour is the entry's `timestamp` (an ISO time), else the message's timestamp (milliseconds); an
+  entry with neither readable is skipped (the old reader used the file's modification time, which a
+  parser is not given);
+- every entry with a usage that holds a count is one sample, also one that adds nothing.
+
+A session a tool forks is a new file that starts with copies of the parent's entries, so the entries
+they share are counted in each file, as the old desktop app counted them: schema 1 keeps rows per file.
+Only counters, a model name and a time are read: no prompt, message, title, folder or key leaves the
+parser.
+
+## `usage-omp`
+
+`pluxy/usage-omp`, the usage hub's parser of Oh My Pi's session files, from `~/.omp/agent/sessions` and
+`~/.omp/sessions` (the `HOME` the app gives). It is `lib/pi-sessions` with Oh My Pi's name and folder.
+
+## `usage-pi`
+
+`pluxy/usage-pi`, the usage hub's parser of Pi's session files, from `~/.pi/agent/sessions` and
+`~/.pi/sessions` (the `HOME` the app gives). It is `lib/pi-sessions` with Pi's name and folder.
+
 ## `usage-opencode`
 
 `pluxy/usage-opencode`, the usage hub's parser of OpenCode's local store, at schema 2. It reads
@@ -167,7 +270,7 @@ writes an OpenCode file.
 - The database is opened read-only and nothing is made beside it, by `codex-sessions`' rules: when
   its `-shm` is missing, it is opened immutable if its `-wal` is missing or empty, and otherwise copied
   with its `-wal` into a private folder in the tool's data folder (`tmp`), read, and removed. A
-  database whose `-wal` or `-shm` is a link is not read.
+  database that is a link, or whose `-wal` or `-shm` is one, is not read.
 
 ## `codex-sessions`
 
@@ -197,7 +300,11 @@ What it reads, as the old desktop app's session manager did:
 - `session_index.jsonl`: a rollout's title and update time, else the file's modification time.
   An index larger than 16 MiB becomes a warning and is not read.
 
-Links to databases, rollouts and the index are skipped (the Codex home itself may be a link).
+Links to databases, rollouts and the index are skipped, and so is a `sqlite/`, `sessions/` or
+`archived_sessions/` folder that is itself a link (a warning names it), and a database whose
+`-wal` or `-shm` file is a link (a warning names it). The Codex home itself may be a link.
+`detail` finds a thread whose database ID is stored with Codex's `local:` prefix by its ID with or
+without the prefix.
 
 The reader adds no file beside a database that no Codex process has open.
 In WAL mode a reader needs SQLite's shared-memory file (`-shm`), which SQLite would create, so

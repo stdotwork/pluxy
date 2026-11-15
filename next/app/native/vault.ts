@@ -7,7 +7,9 @@
 //   and peek (none allowed);
 // - pluxy/exec: run and peek (read; `key` is a secret passed as a reference only), exported;
 //   imports pluxy/consumer's deliver (secret references allowed);
-// - pluxy/consumer: deliver (write; `key` is a secret delivered as a value), exported.
+// - pluxy/consumer: deliver (write; `key` is a secret delivered as a value), exported;
+// - pluxy/agent: serve (read; `key` is a secret delivered as a value), the client-key check's
+//   agent (src-tauri/src/client_key_native.rs): it asks core with the client key it is given.
 //
 // The curated registry lists them, each signed with a publisher key generated for this run.
 // keys.json holds the key the check types into native key entry and the canary it puts in the
@@ -80,6 +82,20 @@ const deliver = {
   output_schema: object,
 };
 
+const serve = {
+  id: "serve",
+  description: "Ask core with a client key",
+  effect: "read",
+  secrets: { key: "value" },
+  input_schema: {
+    type: "object",
+    properties: { ...key, base: str, out: str },
+    required: ["key", "base", "out"],
+    additionalProperties: false,
+  },
+  output_schema: object,
+};
+
 const writer = (version: string) =>
   native(
     "pluxy/writer",
@@ -119,6 +135,7 @@ const PACKAGES: Package[] = [
     operations: [deliver],
     exports: { contract: 1, operations: ["deliver"] },
   }),
+  native("pluxy/agent", "1.0.0", { operations: [serve] }),
 ];
 
 export interface Vault {

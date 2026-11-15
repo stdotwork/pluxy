@@ -1,0 +1,462 @@
+{
+  "manifest_version": 1,
+  "id": "pluxy/fixture-writer",
+  "version": "0.1.0",
+  "app": {
+    "version": 0,
+    "tier": "native",
+    "host_versions": [
+      0
+    ],
+    "programs": {
+      "linux/amd64": "bin/fixture-writer",
+      "linux/arm64": "bin/fixture-writer"
+    },
+    "operations": [
+      {
+        "id": "preview",
+        "description": "Resolve and pin selected JSON config files or files in selected roots",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "set": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "set",
+            "targets"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "set",
+            "targets",
+            "applied",
+            "edited"
+          ]
+        }
+      },
+      {
+        "id": "apply",
+        "description": "Set top-level values in the previewed JSON files. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "effect": "write",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "set": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "selected": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "link": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "identity": {
+                    "type": "object",
+                    "properties": {
+                      "link": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "root": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "parent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "file": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      }
+                    },
+                    "required": [
+                      "link",
+                      "parent",
+                      "file"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "selected",
+                  "link",
+                  "target",
+                  "identity",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "values": {
+              "type": "object"
+            },
+            "crash_after": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8
+            }
+          },
+          "required": [
+            "set",
+            "targets",
+            "values"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "outcome",
+            "changed"
+          ]
+        }
+      },
+      {
+        "id": "clear",
+        "description": "Take the applied values out of the previewed JSON files, keeping later edits. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "effect": "write",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "set": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "selected": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "link": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "identity": {
+                    "type": "object",
+                    "properties": {
+                      "link": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "root": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "parent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "file": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      }
+                    },
+                    "required": [
+                      "link",
+                      "parent",
+                      "file"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "selected",
+                  "link",
+                  "target",
+                  "identity",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "set",
+            "targets"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "outcome",
+            "changed"
+          ]
+        }
+      },
+      {
+        "id": "restore",
+        "description": "Put the previewed files' original bytes back. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "effect": "write",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "set": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "selected": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "link": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "identity": {
+                    "type": "object",
+                    "properties": {
+                      "link": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "root": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "parent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "file": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      }
+                    },
+                    "required": [
+                      "link",
+                      "parent",
+                      "file"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "selected",
+                  "link",
+                  "target",
+                  "identity",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "set",
+            "targets"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "outcome",
+            "changed"
+          ]
+        }
+      },
+      {
+        "id": "status",
+        "description": "Show the applied sets and the latest recovery reports",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "sets",
+            "kept",
+            "recovered"
+          ]
+        }
+      }
+    ],
+    "state": {
+      "version": 0,
+      "readable_versions": [
+        0
+      ]
+    }
+  }
+}

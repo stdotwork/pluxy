@@ -19,9 +19,14 @@
 //!    with `PLUXY_APP_TEST_ADMISSION`, a session checks only signed native-tier admission
 //!    (`admission_native.rs`) and quits; with `PLUXY_APP_TEST_PROGRAM`, only the program host
 //!    (`program_native.rs`, then `swap_native.rs`); with `PLUXY_APP_TEST_VAULT`, only the vault,
-//!    secret delivery and references and journal recovery (`vault_native.rs`); with
+//!    secret delivery and references and journal recovery (`vault_native.rs`), then native
+//!    client-key capture (`client_key_native.rs`); with
+//!    `PLUXY_APP_TEST_SPAWN`, only the host's spawn service, managed runtimes and launch
+//!    environment (`spawn_native.rs`); with
 //!    `PLUXY_APP_TEST_SESSIONS`, only the read-only Codex session reader (`sessions_native.rs`);
-//!    with `PLUXY_APP_TEST_USAGE`, only the usage hub and its fixture parser (`usage_native.rs`);
+//!    with `PLUXY_APP_TEST_TRANSACTIONS`, only the transaction library's fixture writer
+//!    (`transactions_native.rs`); with `PLUXY_APP_TEST_USAGE`, only the usage hub and its
+//!    fixture parser (`usage_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -51,6 +56,9 @@ mod access;
 #[path = "admission_native.rs"]
 mod admission;
 #[cfg(target_os = "linux")]
+#[path = "client_key_native.rs"]
+mod client_key;
+#[cfg(target_os = "linux")]
 #[path = "native_core.rs"]
 mod core_updates;
 #[path = "device_native.rs"]
@@ -70,8 +78,14 @@ mod routing;
 #[path = "sessions_native.rs"]
 mod sessions;
 #[cfg(target_os = "linux")]
+#[path = "spawn_native.rs"]
+mod spawn;
+#[cfg(target_os = "linux")]
 #[path = "swap_native.rs"]
 mod swap;
+#[cfg(target_os = "linux")]
+#[path = "transactions_native.rs"]
+mod transactions;
 #[cfg(target_os = "linux")]
 #[path = "usage_native.rs"]
 mod usage;
@@ -444,7 +458,18 @@ fn run(app: &AppHandle) -> Result<(), String> {
     // session of its own.
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_VAULT") {
-        vault::run(app, &main, dir.into())?;
+        vault::run(app, &main, dir.clone().into())?;
+        // Native one-time client-key capture (client_key_native.rs), with the same tools.
+        client_key::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The host's spawn service, managed runtimes and launch environment (spawn_native.rs), in a
+    // session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_SPAWN") {
+        spawn::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
@@ -453,6 +478,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_SESSIONS") {
         sessions::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The transaction library's fixture writer (transactions_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_TRANSACTIONS") {
+        transactions::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());

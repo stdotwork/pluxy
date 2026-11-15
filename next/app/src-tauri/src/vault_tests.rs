@@ -37,6 +37,45 @@ fn mode(p: &Path) -> u32 {
 }
 
 #[test]
+fn a_client_keys_binding_is_kept_and_listed_without_its_value() {
+    let (d, v) = vault();
+    let binding = ClientKey {
+        core: CoreTarget {
+            mode: crate::conn::Mode::Managed,
+            origin: "http://127.0.0.1:8400".into(),
+        },
+        key_id: Some("0123456789abcdef01234567".into()),
+        masked: "sk******89".into(),
+        client: "pluxy/agent".into(),
+    };
+    let plain = v.add_secret("plain", KEY).unwrap();
+    let id = v.add_client_key("agent", KEY, binding.clone()).unwrap();
+    // Read back by the next app: the binding with it, a plain secret still without one.
+    let again = Vault::open(d.0.join("vault"));
+    assert_eq!(again.secret(&id).unwrap().client_key, Some(binding));
+    assert_eq!(again.secret(&plain).unwrap().client_key, None);
+    let list = serde_json::to_value(again.secrets()).unwrap();
+    assert!(list[0].get("client_key").is_none(), "{list}");
+    assert_eq!(list[1]["client_key"]["core"]["mode"], "managed");
+    assert!(!list.to_string().contains(KEY));
+    assert!(again
+        .add_client_key("", KEY, again.secret(&id).unwrap().client_key.unwrap())
+        .is_err());
+}
+
+#[test]
+fn a_full_or_broken_vault_says_so_before_anything_is_made() {
+    let (d, v) = vault();
+    assert!(v.can_add().is_ok());
+    for i in 0..MAX_SECRETS {
+        v.add_secret(&format!("s{i}"), KEY).unwrap();
+    }
+    assert!(v.can_add().unwrap_err().contains("at most"));
+    fs::write(d.0.join("vault").join("secrets.json"), b"not json").unwrap();
+    assert!(Vault::open(d.0.join("vault")).can_add().is_err());
+}
+
+#[test]
 fn secrets_are_kept_privately_listed_without_values_and_read_back() {
     let (d, v) = vault();
     assert!(v.add_secret("short", "1234567").is_err());
@@ -228,6 +267,69 @@ fn journals_are_begun_ended_once_and_named_until_then() {
             .unwrap()
             .reconciled
     );
+}
+
+#[test]
+fn a_journal_intent_or_backup_label_holding_a_secret_or_reference_is_refused() {
+    let (d, v) = vault();
+    let w = holder("pluxy/w", 1);
+    let s = v.add_secret("client key", KEY).unwrap();
+    let r = v.mint(&s, &w, v.begin_call()).unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(b"bytes");
+    let refused_without_naming = |e: Refused| {
+        assert_eq!(e.code, "invalid_request");
+        assert!(!e.message.contains(KEY) && !e.message.contains(&r), "{e:?}");
+    };
+    for intent in [
+        json!({"note": format!("use {KEY} here")}),
+        json!({"nested": [{"deep": r}]}),
+        json!({KEY: 1}),
+        json!({"ref": format!("<{r}>")}),
+    ] {
+        let e = v
+            .request(
+                &w,
+                "apply",
+                None,
+                &json!({"op": "journal.begin", "intent": intent}),
+            )
+            .unwrap_err();
+        refused_without_naming(e);
+    }
+    for label in [format!("copy of {KEY}"), r.clone()] {
+        let e = v
+            .request(
+                &w,
+                "apply",
+                None,
+                &json!({"op": "backup.put", "label": label, "data": data}),
+            )
+            .unwrap_err();
+        refused_without_naming(e);
+    }
+    // Nothing was kept, on disk either.
+    assert!(v.open_journals("pluxy/w").unwrap().is_empty());
+    let listed = v
+        .request(&w, "apply", None, &json!({"op": "backup.list"}))
+        .unwrap();
+    assert_eq!(listed["backups"], json!([]));
+    let again = Vault::open(d.0.join("vault"));
+    assert!(again.open_journals("pluxy/w").unwrap().is_empty());
+    // Text without either is kept as before.
+    v.request(
+        &w,
+        "apply",
+        None,
+        &json!({"op": "journal.begin", "intent": {"file": "/x"}}),
+    )
+    .unwrap();
+    v.request(
+        &w,
+        "apply",
+        None,
+        &json!({"op": "backup.put", "label": "original", "data": data}),
+    )
+    .unwrap();
 }
 
 #[test]

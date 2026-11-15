@@ -32,13 +32,22 @@
 //! secret's value, or one the window gives a secret to, asks a native confirmation naming each
 //! secret, even for a read. The target then gets, in each secret field, a new reference bound to
 //! the secret, its release and this call; a `value` field's secret also travels in the call's frame,
-//! and nowhere else. The references end with the call.
+//! and nowhere else. The references end with the call. A client key's binding (`client_keys.rs`:
+//! its tool, its core, and that core still taking it) is checked before the confirmation, and
+//! again before the call is made.
+//!
+//! A launch-class call's confirmation opens the executable and cwd it names; the router keeps them
+//! with the call, with the launch's lifetime, environment request and secrets (`spawn.rs`). The
+//! target, while it serves that call, asks the host to spawn it with a `spawn` frame naming nothing
+//! but the call; the host spawns exactly the confirmed launch, once (`spawner`). A tool's `runtime`
+//! frames reach only its own package's managed runtimes.
 //!
 //! Linux only, as the program host.
 
-use crate::confirmation::{self, Gesture};
+use crate::confirmation::{self, Authorized, Gesture};
 use crate::device::{self, Grant, Refused};
 use crate::program::{self, CallError, Cancel, Context, Hop, Outbound};
+use crate::spawn::{self, Lifetime};
 use crate::vault::{Holder, Vault};
 use crate::App;
 use serde_json::{json, Value};
@@ -64,6 +73,9 @@ struct Origin {
     gesture: Arc<Mutex<Option<Gesture>>>,
     /// The vault's token of the call: references given in it are bound to it.
     token: u64,
+    /// The launch the call's confirmation authorized, for its target's release, until the target
+    /// spawns it.
+    launch: Mutex<Option<(Holder, spawn::Launch)>>,
 }
 
 /// Who fills a call's secret fields: the window, with vault secret IDs; a page, never; a tool,
@@ -121,6 +133,7 @@ pub fn call_main(
         packages: vec![device::main_window()],
         gesture: Arc::new(Mutex::new(gesture)),
         token: 0,
+        launch: Mutex::new(None),
     };
     dispatch(
         app,
@@ -178,6 +191,7 @@ fn outbound(app: &AppHandle, o: Outbound) -> Result<Value, CallError> {
         // A call through a tool never uses a gesture: it is an import.
         gesture: Arc::new(Mutex::new(None)),
         token: 0,
+        launch: Mutex::new(None),
     };
     let filler = Filler::Tool {
         holder: Holder {
@@ -274,6 +288,7 @@ fn page_call(app: &AppHandle, label: &str, params: &Value) -> Result<Value, Call
                 packages: vec![requester],
                 gesture: Arc::new(Mutex::new(None)),
                 token: 0,
+                launch: Mutex::new(None),
             };
             let chain = vec![Hop::Page {
                 id: caller.clone(),
@@ -394,7 +409,7 @@ fn dispatch(
     mut input: Value,
     cancel: Cancel,
 ) -> Result<Value, CallError> {
-    let filled = checked(
+    let (filled, launch) = checked(
         app,
         &grant,
         regrant,
@@ -405,6 +420,11 @@ fn dispatch(
         &call.cancelled_by(&cancel),
     )?;
     let vault = Arc::clone(&app.state::<App>().vault);
+    // Each client key again now, its value's core too: the connection, the core or the vault may
+    // have changed meanwhile.
+    for f in &filled {
+        crate::client_keys::admit(app, &f.secret, &f.label, grant.target.id(), false, f.value)?;
+    }
     // Each secret field gets a reference for the target's release, in this call.
     let token = vault.begin_call();
     origin.token = token;
@@ -413,6 +433,7 @@ fn dispatch(
         sha256: grant.target.sha256().into(),
         generation: grant.target.installed_at(),
     };
+    *origin.launch.lock().unwrap() = launch.map(|l| (holder.clone(), l));
     let mut secrets = Vec::new();
     for f in &filled {
         let minted = vault.mint(&f.secret, &holder, token).and_then(|r| {
@@ -454,7 +475,8 @@ fn dispatch(
 
 /// Checks input against grant's operation and the secret fields filler fills in it, has a write,
 /// a launch or a secret's delivery confirmed (a cancel withdraws the confirmation), and grants it
-/// again once confirmed: regrant must give the same release and operation. Gives the fields filled.
+/// again once confirmed: regrant must give the same release and operation. Gives the fields filled,
+/// and a launch's confirmed spawn (`authorize`).
 #[allow(clippy::too_many_arguments)]
 fn checked(
     app: &AppHandle,
@@ -465,7 +487,7 @@ fn checked(
     filler: &Filler,
     input: &Value,
     cancel: &Cancel,
-) -> Result<Vec<Filled>, CallError> {
+) -> Result<(Vec<Filled>, Option<spawn::Launch>), CallError> {
     if serde_json::to_vec(input).map_or(usize::MAX, |b| b.len()) > MAX_INPUT {
         return Err(fail(
             "invalid_request",
@@ -476,12 +498,23 @@ fn checked(
         .map_err(|_| invalid_input(grant))?;
     let vault = Arc::clone(&app.state::<App>().vault);
     let filled = secret_fields(&vault, grant, input, filler)?;
+    for f in &filled {
+        crate::client_keys::admit(
+            app,
+            &f.secret,
+            &f.label,
+            grant.target.id(),
+            matches!(filler, Filler::Window),
+            f.value,
+        )?;
+    }
     // A secret's value delivered, or any secret the window gives, is the person's decision.
     let ask = filled
         .iter()
         .any(|f| f.value || matches!(filler, Filler::Window));
     let preparation = rules::preparation(chain);
-    if authorize(app, grant, origin, preparation, input, &filled, ask, cancel)? {
+    let (asked, launch) = authorize(app, grant, origin, preparation, input, &filled, ask, cancel)?;
+    if asked {
         // Asked: the catalog may have changed while the person answered.
         let now = regrant()?;
         if now.target != grant.target || now.op != grant.op {
@@ -495,7 +528,7 @@ fn checked(
             ));
         }
     }
-    Ok(filled)
+    Ok((filled, launch))
 }
 
 /// Consumer caller's request to the host's job service, as o names it.
@@ -557,45 +590,56 @@ fn start_job(
     // Counted, and reachable by a revocation, before it is granted and confirmed: the bounds hold
     // for the confirmations too, and a change while it starts refuses it.
     let (job, (g, chain, origin, input, lease)) =
-        st.routes.jobs.start(caller.0, producer, &kind, || {
-            let g = grant()?;
-            let chain = rules::extend(&o.context.chain, &o.caller, producer)?;
-            let mut packages = parent.packages.clone();
-            packages.push(g.consumer.package());
-            let origin = Origin {
-                packages,
-                // A job is started by a tool: it never uses a gesture.
-                gesture: Arc::new(Mutex::new(None)),
-                token: 0,
-            };
-            let input = i["input"].clone();
-            // A job's operation has no secret fields (`device::Catalog` refuses them at install),
-            // so a secret or reference anywhere in its input is refused here.
-            let filler = Filler::Tool {
-                holder: Holder {
-                    id: caller.0.into(),
-                    sha256: caller.1.into(),
-                    generation: caller.2,
-                },
-                call: parent.token,
-            };
-            let filled = checked(
-                app,
-                &g.producer,
-                &|| grant().map(|g| g.producer),
-                &chain,
-                &origin,
-                &filler,
-                &input,
-                &o.cancel,
-            )?;
-            if !filled.is_empty() {
-                return Err(fail("permission", "a job's operation takes no secrets"));
-            }
-            // The consumer stays up for the job's deliveries.
-            let lease = st.programs.lease(caller.0)?;
-            Ok((g, chain, origin, input, lease))
-        })?;
+        st.routes
+            .jobs
+            .start(caller.0, producer, &kind, |job_cancel| {
+                let g = grant()?;
+                let chain = rules::extend(&o.context.chain, &o.caller, producer)?;
+                let mut packages = parent.packages.clone();
+                packages.push(g.consumer.package());
+                let origin = Origin {
+                    packages,
+                    // A job is started by a tool: it never uses a gesture.
+                    gesture: Arc::new(Mutex::new(None)),
+                    token: 0,
+                    launch: Mutex::new(None),
+                };
+                let input = i["input"].clone();
+                // A job's operation has no secret fields (`device::Catalog` refuses them at install),
+                // so a secret or reference anywhere in its input is refused here.
+                let filler = Filler::Tool {
+                    holder: Holder {
+                        id: caller.0.into(),
+                        sha256: caller.1.into(),
+                        generation: caller.2,
+                    },
+                    call: parent.token,
+                };
+                // A job's call never spawns: its launch would have no call to be spawned for.
+                if g.producer.op.effect == "launch" {
+                    return Err(fail(
+                        "permission",
+                        "a job's operation cannot be a launch; launch through a call",
+                    ));
+                }
+                let (filled, _) = checked(
+                    app,
+                    &g.producer,
+                    &|| grant().map(|g| g.producer),
+                    &chain,
+                    &origin,
+                    &filler,
+                    &input,
+                    // The parent call's cancel, and the job's: a revocation closes the confirmation.
+                    &o.cancel.with(job_cancel),
+                )?;
+                if !filled.is_empty() {
+                    return Err(fail("permission", "a job's operation takes no secrets"));
+                }
+                // The consumer stays up for the job's deliveries.
+                let lease = st.programs.lease(caller.0)?;
+                Ok((g, chain, origin, input, lease))
+            })?;
     let id = job.id.clone();
     let (a, j) = (app.clone(), Arc::clone(&job));
     let spawned = std::thread::Builder::new()
@@ -698,6 +742,7 @@ fn run_job(
                 packages: delivery_packages.clone(),
                 gesture: Arc::new(Mutex::new(None)),
                 token: 0,
+                launch: Mutex::new(None),
             }),
             feed: None,
             // A consumer busy past the startup limit fails the job rather than hold it.
@@ -774,9 +819,8 @@ fn launch_of(
         argv,
         cwd: path("cwd")?,
         terminal_adapter: executor.clone(),
-        // shortcut: no launch environment is passed yet; P8h1's environment profile replaces
-        // this revision.
-        environment_revision: "none".into(),
+        // The caller sets them from the launch's environment request (`spawn::parse`).
+        environment_revision: String::new(),
         environment_review: vec![],
         secret_uses: vec![],
     })
@@ -812,7 +856,8 @@ fn secret_text(target: &str, filled: &[Filled]) -> String {
 /// of exactly that instead, the same secrets' IDs included (a launch's secrets are references,
 /// never values). A call with a tool hop is prepared as an import (a secret's delivery
 /// to a tool through another included): it always asks, and its dialog offers no Remember. A
-/// cancel while the confirmation is open withdraws it. Whether it asked.
+/// cancel while the confirmation is open withdraws it. Whether it asked, and a launch's confirmed
+/// spawn: what the confirmation opened, with the launch's lifetime, environment and secrets.
 #[allow(clippy::too_many_arguments)]
 fn authorize(
     app: &AppHandle,
@@ -823,13 +868,15 @@ fn authorize(
     filled: &[Filled],
     secret: bool,
     cancel: &Cancel,
-) -> Result<bool, CallError> {
+) -> Result<(bool, Option<spawn::Launch>), CallError> {
     let effect = grant.op.effect.as_str();
     // Only an exact read goes ahead unasked: write, launch, disclose and anything else ask.
     if !crate::device::asks_each_call(effect) && !secret {
-        return Ok(false);
+        return Ok((false, None));
     }
     let executor = grant.target.package();
+    // A launch's lifetime and environment request, from its input: shown and confirmed with it.
+    let mut spawning = None;
     let launch = if effect == "launch" {
         // Manifests refuse it too: a launch hands over no value, so a remembered launch approval
         // (bound to its secrets' IDs below) never stands for a value's delivery.
@@ -840,6 +887,34 @@ fn authorize(
             ));
         }
         let mut l = launch_of(input, &executor)?;
+        let (lifetime, request) = spawn::parse(input, &|f| filled.iter().any(|x| x.field == f))
+            .map_err(|e| fail("invalid_request", e))?;
+        // Names, set values, "inherited", "removed" and secrets' labels: never a secret's value
+        // or an inherited value. A changed request is a changed revision, so a remembered
+        // approval of another one does not stand for it.
+        l.environment_review = request.review(&|field| {
+            filled
+                .iter()
+                .find(|x| x.field == field)
+                .map(|x| format!("{} ({})", x.label, x.secret))
+                .unwrap_or_default()
+        });
+        l.environment_revision = request.revision(lifetime);
+        let secrets = request
+            .secrets
+            .iter()
+            .filter_map(|(name, field)| {
+                let f = filled.iter().find(|x| &x.field == field)?;
+                Some((name.clone(), f.secret.clone()))
+            })
+            .collect();
+        spawning = Some((
+            lifetime,
+            request,
+            secrets,
+            l.executable.clone(),
+            l.argv.clone(),
+        ));
         // A remembered launch is bound to the secrets it uses too.
         l.secret_uses = filled
             .iter()
@@ -853,15 +928,20 @@ fn authorize(
     } else {
         None
     };
+    let lifetime_text = spawning
+        .as_ref()
+        .map(|(l, ..): &Spawning| format!(" {}", l.review()))
+        .unwrap_or_default();
     let action = confirmation::Action {
         what: format!(
-            "{} {}: {} ({}). Input: {}{}",
+            "{} {}: {} ({}). Input: {}{}{}",
             grant.target.id(),
             grant.op.id,
             grant.op.description,
             crate::device::effect_label(effect),
             input,
-            secret_text(grant.target.id(), filled)
+            secret_text(grant.target.id(), filled),
+            lifetime_text
         ),
         chain: origin.packages.clone(),
         executor,
@@ -912,9 +992,8 @@ fn authorize(
             Some(g) => match c.remembered(p, g) {
                 Ok(token) => {
                     let id = c.token_action(&token).unwrap_or_default().to_string();
-                    // shortcut: the confirmed launch's opened executable and cwd (`Authorized`)
-                    // are dropped here; P8h1's spawn takes them over and launches from them.
-                    return c.consume(&id, &token).map(|_| false).map_err(refuse);
+                    let a = c.consume(&id, &token).map_err(refuse)?;
+                    return Ok((false, spawnable(spawning, a)));
                 }
                 Err(p) => *p,
             },
@@ -925,15 +1004,133 @@ fn authorize(
         confirmation::request(app, id.clone()).map_err(refuse)?;
         id
     };
-    confirmed(app, &id, cancel)
-        .map(|_| true)
-        .map_err(|e| fail("cancelled", e))
+    let a = confirmed_authorized(app, &id, cancel).map_err(|e| fail("cancelled", e))?;
+    Ok((true, spawnable(spawning, a)))
+}
+
+/// What a launch's input asked: its lifetime, environment request, secrets (variable name, vault
+/// secret ID), executable as named and argv.
+type Spawning = (
+    Lifetime,
+    spawn::Request,
+    Vec<(String, String)>,
+    PathBuf,
+    Vec<String>,
+);
+
+/// A launch's spawn, from what its confirmation opened (a) and what its input asked.
+fn spawnable(spawning: Option<Spawning>, a: Authorized) -> Option<spawn::Launch> {
+    let (lifetime, request, secrets, named, argv) = spawning?;
+    a.executable()?;
+    a.cwd()?;
+    Some(spawn::Launch {
+        opened: Box::new(a),
+        named,
+        argv,
+        lifetime,
+        request,
+        secrets,
+    })
+}
+
+/// The host's spawn service for tools' `spawn` and `runtime` frames (`program::Host::set_spawner`).
+pub fn spawner(app: AppHandle) -> program::Spawner {
+    Arc::new(move |tool, context, frame, cancel| spawn_frame(&app, tool, context, frame, cancel))
+}
+
+/// Tool's `spawn` frame spawns the launch the call it serves (context) confirmed, once, if that
+/// launch was confirmed for the tool's own release and the call (or the request) was not
+/// cancelled; its `runtime` frame looks at, lists, stops or restarts its own package's managed
+/// runtimes. Either is refused unless the tool still runs its package's admitted release, as its
+/// own calls are.
+fn spawn_frame(
+    app: &AppHandle,
+    tool: &Hop,
+    context: &Arc<Context>,
+    frame: &Value,
+    cancel: &Cancel,
+) -> Result<Value, CallError> {
+    let Hop::Package {
+        id,
+        sha256,
+        generation,
+    } = tool
+    else {
+        return Err(fail("permission", "only a tool's run spawns"));
+    };
+    let st = app.state::<App>();
+    st.device
+        .lock()
+        .unwrap()
+        .current_run((id, sha256, *generation), &roots())
+        .map_err(refused)?;
+    let unavailable = |e: String| fail("unavailable", e);
+    if frame["type"] == "spawn" {
+        let origin = context.extra.downcast_ref::<Origin>().ok_or_else(|| {
+            fail(
+                "permission",
+                "the call it serves was not made by the router",
+            )
+        })?;
+        let (holder, launch) = origin.launch.lock().unwrap().take().ok_or_else(|| {
+            fail(
+                "permission",
+                "the call it serves confirmed no launch, or its launch was spawned already",
+            )
+        })?;
+        if holder.id != *id || holder.sha256 != *sha256 || holder.generation != *generation {
+            return Err(fail(
+                "permission",
+                "the launch was confirmed for another release",
+            ));
+        }
+        // A page closed, a consent revoked, the window closed or the tool's own cancel since the
+        // confirmation: nothing starts.
+        if cancel.is_set() {
+            return Err(fail(
+                "cancelled",
+                "the call it serves, or the request, was cancelled",
+            ));
+        }
+        let vault = Arc::clone(&st.vault);
+        let value = move |s: &str| vault.value(s);
+        return match launch.lifetime {
+            Lifetime::Detached => spawn::detached(&launch, &value)
+                .map(|_| json!({"lifetime": "detached"}))
+                .map_err(unavailable),
+            Lifetime::Managed => st.runtimes.start(id, launch).map_err(unavailable),
+        };
+    }
+    let rt = &st.runtimes;
+    let runtime = frame["runtime"].as_str().unwrap_or_default();
+    let op = frame["op"].as_str().unwrap_or_default();
+    if op == "list" {
+        return Ok(json!({"runtimes": rt.list(id)}));
+    }
+    if !["status", "stop", "restart"].contains(&op) {
+        return Err(fail(
+            "unsupported",
+            format!("a runtime request's op is status, list, stop or restart, not {op:?}"),
+        ));
+    }
+    // Another package's runtime is as unknown as one that never was.
+    let status = rt.status(id, runtime).map_err(|e| fail("not_found", e))?;
+    match op {
+        "stop" => rt.stop(id, runtime).map_err(unavailable),
+        "restart" => rt.restart(id, runtime).map_err(unavailable),
+        _ => Ok(status),
+    }
 }
 
 /// Waits for the person's answer to the native confirmation of prepared action id, which its
 /// dialog's own handler leaves for native code, and spends its single-use token. Once cancel is
 /// set, the confirmation is withdrawn and its dialog closes.
 pub(crate) fn confirmed(app: &AppHandle, id: &str, cancel: &Cancel) -> Result<(), String> {
+    confirmed_authorized(app, id, cancel).map(|_| ())
+}
+
+/// `confirmed`, giving what the confirmation opened.
+fn confirmed_authorized(app: &AppHandle, id: &str, cancel: &Cancel) -> Result<Authorized, String> {
     let st = app.state::<App>();
     let outcome = rules::wait(
         || st.confirmations.lock().unwrap().take_result(id),
@@ -942,14 +1139,7 @@ pub(crate) fn confirmed(app: &AppHandle, id: &str, cancel: &Cancel) -> Result<()
         || st.confirmations.lock().unwrap().withdraw(id),
     )?;
     match outcome {
-        // shortcut: the confirmed launch's opened executable and cwd (`Authorized`) are dropped
-        // here; P8h1's spawn takes them over and launches from them.
-        Ok(Some(token)) => st
-            .confirmations
-            .lock()
-            .unwrap()
-            .consume(id, &token)
-            .map(|_| ()),
+        Ok(Some(token)) => st.confirmations.lock().unwrap().consume(id, &token),
         Ok(None) => Err("the native confirmation was cancelled".into()),
         Err(e) => Err(e),
     }

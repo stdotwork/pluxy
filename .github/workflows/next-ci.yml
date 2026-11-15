@@ -37,8 +37,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # The checkout is mounted read-write into the Playwright container, and no step needs
-          # git credentials, so the job token is not stored in .git/config.
+          # The checkout is mounted into the Playwright container, and no step needs git
+          # credentials, so the job token is not stored in .git/config.
           persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -89,12 +89,24 @@ jobs:
       # image for the installed Playwright version already has all three browsers and their
       # libraries, so the browser tests run in it, with this job's checkout, Go, Bun and Go module
       # cache mounted at the same paths.
+      # The image is pinned by digest, so a replaced tag can't change what runs the tests. To move to
+      # a new Playwright version, update next/ui/package.json and bun.lock, then add that version's
+      # digest here (the Docker-Content-Digest header of
+      # https://mcr.microsoft.com/v2/playwright/manifests/v<version>-resolute, requested with
+      # Accept: application/vnd.oci.image.index.v1+json); the step fails until it is there.
       - name: Pull the Playwright image for the browser tests
         working-directory: next/ui
         timeout-minutes: 10
         run: |
           version="$(jq -r .version node_modules/@playwright/test/package.json)"
-          image="mcr.microsoft.com/playwright:v${version}-resolute"
+          case "$version" in
+            1.65.0) digest=sha256:916c9fb63a8340822589dd5c821dae82e8012106bb8515a72f278d97f277446a ;;
+            *)
+              echo "::error::no pinned digest for the Playwright image of version ${version}; add it to the case in this step of .github/workflows/next-ci.yml" >&2
+              exit 1
+              ;;
+          esac
+          image="mcr.microsoft.com/playwright:v${version}-resolute@${digest}"
           docker pull "$image"
           echo "PLAYWRIGHT_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Browser tests
@@ -108,22 +120,29 @@ jobs:
           # setup-go saves this job's Go caches for later runs (pull-request runs of the release
           # workflow's pack job among them), so the container reads the module cache without writing
           # to it and builds in its own GOCACHE.
+          # Docker would create a missing mount source owned by root, which the test user can't write.
+          mkdir -p "$gomodcache"
           # Unlike the Test step, cgo is off here: the image has no C compiler, and next/ has no cgo code.
           # playwright test runs on the image's own Node (26 in 1.65.0), not on the Node 24 this job sets up.
-          # .git is mounted read-only over the checkout: the checkout's post-step runs git there with
-          # the job token in its environment, so the image must not be able to change git's config.
-          # A submodule's .git file would sit in the writable checkout, outside that read-only mount,
-          # so fail rather than let the image repoint it. The image can write the rest of the
-          # checkout, so keep this the job's last step that runs anything from it.
-          if [ -e "$GITHUB_WORKSPACE/.gitmodules" ]; then echo "::error::a submodule's .git file would sit in the writable checkout, outside the read-only .git mount; mount those read-only too, or mount less of the checkout" >&2; exit 1; fi
-          docker run --rm --init --ipc=host \
+          # The checkout is mounted read-only, with .git read-only again explicitly: the checkout's
+          # post-step runs git there with the job token in its environment, so the image must not be
+          # able to change git's config. The one folder in it that the browser tests write is the panel
+          # build (next/internal/panel/dist), made here so Docker doesn't create it owned by root.
+          # Playwright's output goes to the container's /tmp: it removes and recreates its output
+          # folder, which fails on a mount point.
+          # Submodules aren't supported: fail rather than mount their .git files unreviewed.
+          if [ -e "$GITHUB_WORKSPACE/.gitmodules" ] || [ -L "$GITHUB_WORKSPACE/.gitmodules" ]; then echo "::error::a submodule's .git file would need its own read-only mount" >&2; exit 1; fi
+          dist="$GITHUB_WORKSPACE/next/internal/panel/dist"
+          mkdir -p "$dist"
+          docker run --rm --init --ipc=host --entrypoint "" \
             --user "$(id -u):$(id -g)" \
             -e CI -e HOME=/tmp -e CGO_ENABLED=0 \
             -e PATH="$goroot/bin:$bun_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
             -e GOMODCACHE="$gomodcache" -e GOCACHE=/tmp/go-build \
-            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
             -v "$GITHUB_WORKSPACE/.git:$GITHUB_WORKSPACE/.git:ro" \
+            -v "$dist:$dist" \
             -v "$goroot:$goroot:ro" -v "$bun_dir:$bun_dir:ro" \
             -v "$gomodcache:$gomodcache:ro" \
             -w "$PWD" \
-            "$PLAYWRIGHT_IMAGE" bun run test:browser
+            "$PLAYWRIGHT_IMAGE" bun run test:browser --output /tmp/test-results

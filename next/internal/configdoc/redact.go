@@ -487,7 +487,9 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 			all(val, false, anywhere)
 		case strings.EqualFold(key, "headers"):
 			walk(val, ctx{role: roleHeaders, section: c.section})
-		case headersName(key):
+		case headersName(key) && !secretName(key):
+			// A name that says "headers" and is about a secret (header_token, header_secret) is a
+			// secret, whatever its value is: it falls to the secret rule below.
 			walk(val, ctx{role: roleHeaders})
 		case c.role == roleTop && key == "api-keys" && resolved(val).Kind == yaml.MappingNode:
 			walk(val, ctx{role: roleSections})
