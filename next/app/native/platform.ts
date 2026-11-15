@@ -163,10 +163,55 @@ function makeProfile(id = identifier): Profile {
     dir,
     agents: "",
     remove: () => {
-      rmSync(dir, { recursive: true, force: true });
-      rmSync(webview, { recursive: true, force: true });
+      removeWhenFree(dir, webview);
+      removeWhenFree(webview, webview);
     },
   };
+}
+
+/** How long a profile's folders may stay in use once its app has quit. */
+const FREE_MS = 30_000;
+
+/** The WebView2 processes (msedgewebview2.exe) whose command line names folder, which is where an
+ * app's WebView2 keeps its data: they can outlive the app that started them for a moment. As
+ * "<pid> <name>" each. */
+function webviewHolders(folder: string): string[] {
+  // The folder itself, not a longer name it starts (the test package's id extends the app's).
+  const like = `*${folder.replaceAll("'", "''")}\\*`;
+  const r = powershell(
+    `Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Where-Object { $_.CommandLine -like '${like}' } | ForEach-Object { "$($_.ProcessId) $($_.Name)" }`,
+  );
+  if (r.status !== 0) throw new Error(`listing the WebView2 processes: ${r.out}`);
+  return r.out.split(/\r?\n/).filter(Boolean);
+}
+
+/** Windows: removes path once the WebView2 processes using webview (the app's WebView2 data
+ * folder) have exited, retrying while the folder is busy (EBUSY, EPERM, ENOTEMPTY), for at most
+ * FREE_MS. Then it fails, naming what still holds the folder. */
+function removeWhenFree(path: string, webview: string) {
+  const deadline = Date.now() + FREE_MS;
+  let holders: string[] = [];
+  for (;;) {
+    holders = webviewHolders(webview);
+    if (holders.length === 0) {
+      try {
+        rmSync(path, { recursive: true, force: true });
+        return;
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code ?? "";
+        if (!["EBUSY", "EPERM", "ENOTEMPTY"].includes(code)) throw e;
+        if (Date.now() >= deadline)
+          throw new Error(
+            `${path} is still in use ${FREE_MS / 1000} s after the app quit: ${(e as Error).message}`,
+          );
+      }
+    } else if (Date.now() >= deadline) {
+      throw new Error(
+        `${path} is still in use ${FREE_MS / 1000} s after the app quit, by ${holders.join(", ")}`,
+      );
+    }
+    Bun.sleepSync(250);
+  }
 }
 
 const launches: Launch[] = [];
