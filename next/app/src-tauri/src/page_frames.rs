@@ -25,10 +25,12 @@ pub fn watch(
                         let Some(args) = args else {
                             return Ok(());
                         };
+                        // Cancelled unless its address is read, parses and is allowed.
                         let mut uri = Default::default();
-                        args.Uri(&mut uri)?;
-                        // An address that does not parse goes nowhere.
-                        let allowed = Url::parse(&take_pwstr(uri)).is_ok_and(|u| allow(&u));
+                        let allowed = match args.Uri(&mut uri) {
+                            Ok(()) => Url::parse(&take_pwstr(uri)).is_ok_and(|u| allow(&u)),
+                            Err(_) => false,
+                        };
                         args.SetCancel(!allowed)?;
                         Ok(())
                     })),
