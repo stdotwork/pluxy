@@ -214,6 +214,7 @@ fn merged_tauri_config_matches_build_order() {
 
 /// What goes into a fixture AppImage's image.
 #[derive(Clone, Copy)]
+#[cfg(target_os = "linux")]
 enum Entry<'a> {
     File(&'a [u8]),
     Link(&'a str),
@@ -244,6 +245,7 @@ fn elf(body: &[u8]) -> Vec<u8> {
 
 /// Just an ELF header's first 20 bytes (magic, ELF64, little-endian, e_type 3), then body: no
 /// machine and no program headers, so not a real executable.
+#[cfg(target_os = "linux")]
 fn fabricated_elf(body: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0u8; 20];
     bytes[..4].copy_from_slice(b"\x7fELF");
@@ -257,6 +259,7 @@ fn fabricated_elf(body: &[u8]) -> Vec<u8> {
 
 /// bytes in a zlib stream (RFC 1950): the raw deflate data from gzip, between a zlib header and
 /// its Adler-32.
+#[cfg(target_os = "linux")]
 fn zlib(bytes: &[u8]) -> Vec<u8> {
     let gz = gzip(bytes);
     let (mut a, mut b) = (1u32, 0u32);
@@ -271,6 +274,7 @@ fn zlib(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// bytes compressed by the gzip program.
+#[cfg(target_os = "linux")]
 fn gzip(bytes: &[u8]) -> Vec<u8> {
     use std::io::Write;
     let mut child = std::process::Command::new("gzip")
@@ -289,6 +293,7 @@ fn gzip(bytes: &[u8]) -> Vec<u8> {
 /// 8 and its section header table ending at runtime.len() (no sections), then the runtime bytes
 /// after the header, then a squashfs image of files made by mksquashfs (squashfs-tools). It is
 /// never run: the validator must find the image from the header alone.
+#[cfg(target_os = "linux")]
 fn appimage(path: &std::path::Path, kind: u8, runtime: &[u8], files: &[(&str, Entry)]) {
     use std::os::unix::fs::PermissionsExt;
     let dir = path.with_extension("AppDir");
@@ -344,6 +349,7 @@ fn appimage(path: &std::path::Path, kind: u8, runtime: &[u8], files: &[(&str, En
 }
 
 /// Records a case whose result is not the expected one, so that one run shows every case.
+#[cfg(target_os = "linux")]
 fn expect(wrong: &mut Vec<String>, case: &str, result: Result<(), String>, reason: Option<&str>) {
     match (result, reason) {
         (Ok(()), None) => {}
@@ -353,12 +359,14 @@ fn expect(wrong: &mut Vec<String>, case: &str, result: Result<(), String>, reaso
 }
 
 /// Fixture AppImages built around a clean set of files that passes.
+#[cfg(target_os = "linux")]
 struct Images {
     f: Fixture,
     image: PathBuf,
     /// An app executable carrying this build's receipt.
     app: Vec<u8>,
 }
+#[cfg(target_os = "linux")]
 impl Images {
     /// None when the validator was built with a test feature: it then refuses before any
     /// artifact (release_config_clean_and_contamination_controls).
@@ -415,6 +423,7 @@ impl Images {
 // An AppImage is unpacked and every file in it checked; each refusal has the clean AppImage on
 // the same route as its positive control.
 #[test]
+#[cfg(target_os = "linux")]
 fn release_config_checks_inside_appimages() {
     let Some(t) = Images::new() else { return };
     let mut wrong = Vec::new();
@@ -523,6 +532,7 @@ fn release_config_checks_inside_appimages() {
 // Review finding 2: an artifact must be the app executable or a type-2 AppImage; anything else
 // cannot be looked inside, so it is refused rather than byte-scanned.
 #[test]
+#[cfg(target_os = "linux")]
 fn release_config_refuses_unsupported_artifact_formats() {
     let Some(t) = Images::new() else { return };
     let mut wrong = Vec::new();
@@ -575,6 +585,7 @@ fn release_config_refuses_unsupported_artifact_formats() {
 
 // Review finding 3: a compressed or archive file inside an AppImage cannot be looked inside.
 #[test]
+#[cfg(target_os = "linux")]
 fn release_config_refuses_containers_inside_appimages() {
     let Some(t) = Images::new() else { return };
     let mut wrong = Vec::new();
@@ -624,6 +635,7 @@ fn release_config_refuses_containers_inside_appimages() {
 // Review finding 4: JSON inside an AppImage is decoded before it is checked, trust-shaped JSON
 // must be empty trust whatever its name, and JSON that cannot be checked is refused.
 #[test]
+#[cfg(target_os = "linux")]
 fn release_config_checks_json_inside_appimages() {
     let Some(t) = Images::new() else { return };
     let mut wrong = Vec::new();
@@ -715,6 +727,7 @@ fn release_config_checks_json_inside_appimages() {
 
 // Review finding 5: nothing may follow the squashfs image but its zero padding.
 #[test]
+#[cfg(target_os = "linux")]
 fn release_config_refuses_data_after_the_squashfs_image() {
     let Some(t) = Images::new() else { return };
     let mut wrong = Vec::new();
@@ -744,6 +757,7 @@ fn release_config_refuses_data_after_the_squashfs_image() {
 
 // Review finding 6: a link inside an AppImage must stay inside it and lead to a file there.
 #[test]
+#[cfg(target_os = "linux")]
 fn release_config_refuses_escaping_or_missing_links() {
     let Some(t) = Images::new() else { return };
     let mut wrong = Vec::new();
@@ -845,6 +859,7 @@ fn release_config_refuses_escaping_or_missing_links() {
 // Review finding 7: unpacking is bounded: depth, entries and unpacked size are checked, the
 // size before anything is unpacked.
 #[test]
+#[cfg(target_os = "linux")]
 fn release_config_bounds_unpacking() {
     let Some(t) = Images::new() else { return };
     let mut wrong = Vec::new();
@@ -879,6 +894,7 @@ fn release_config_bounds_unpacking() {
 // Review finding 8: every artifact needs this build's receipt itself, an AppImage in an app
 // executable inside it.
 #[test]
+#[cfg(target_os = "linux")]
 fn release_config_needs_the_receipt_in_every_artifact() {
     let Some(t) = Images::new() else { return };
     let mut wrong = Vec::new();
@@ -970,6 +986,7 @@ fn release_config_needs_the_receipt_in_every_artifact() {
 // Review finding 10: the unpacked folder is removed, read-only folders inside it too. Run in a
 // child with its own TMPDIR, so whatever it leaves there is seen.
 #[test]
+#[cfg(target_os = "linux")]
 fn release_config_removes_its_unpacked_folder() {
     const NAME: &str = "release_config_removes_its_unpacked_folder";
     if cfg!(feature = "artifact-test-trust") || cfg!(feature = "native-test") {

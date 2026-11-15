@@ -4,13 +4,18 @@
 
 use crate::notes::{Doc, Style};
 use crate::release::{self, Channel, Product, View};
-use crate::{trusted, App, Rect, MAIN};
+#[cfg(target_os = "linux")]
+use crate::MAIN;
+use crate::{trusted, App, Rect};
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 use tauri::webview::NewWindowResponse;
 use tauri::{
-    AppHandle, Emitter, EventTarget, LogicalPosition, LogicalSize, Manager, Url, Webview,
-    WebviewBuilder, WebviewUrl, Window,
+    AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder, WebviewUrl,
+    Window,
 };
+#[cfg(target_os = "linux")]
+use tauri::{Emitter, EventTarget};
 
 /// The certificates a feed's https is checked against: the public roots. A native-test build
 /// takes the test feed's own authority from its runner instead; no release build has that code.

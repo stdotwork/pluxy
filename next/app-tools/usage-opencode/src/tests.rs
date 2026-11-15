@@ -3,12 +3,13 @@
 //! untouched (also in WAL mode, with and without its `-shm`), and file IDs and jobs that name no
 //! session, message or folder.
 
-use super::db::{open_read_only, Cache};
+use super::db::Cache;
 use super::message::{self, Out};
-use super::{hash, OpenCode};
+use super::{hash, roots_for, OpenCode};
 use pluxy_program::{
     read_frame, serve, write_frame, Call, Description, Error, Handler, Identity, MAX_INBOUND,
 };
+use pluxy_sqlite_ro::open_read_only;
 use pluxy_usage::{produce, Parser, Tokens, KIND};
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -456,20 +457,45 @@ fn a_wal_database_with_no_shm_is_read_without_making_one() {
 }
 
 #[test]
-fn a_database_with_a_linked_wal_or_shm_is_not_read() {
-    let d = folder("links");
+fn an_error_from_a_database_that_cannot_be_opened_names_no_folder_and_no_uri() {
+    let d = folder("unreadable-CANARY");
     let (db, c) = wal_db(&d);
     drop(c);
-    let elsewhere = d.join("elsewhere");
-    std::fs::write(&elsewhere, b"").unwrap();
-    for side in ["opencode.db-wal", "opencode.db-shm"] {
-        let _ = std::fs::remove_file(d.join(side));
-        std::os::unix::fs::symlink(&elsewhere, d.join(side)).unwrap();
-        assert!(open_read_only(&db).is_err(), "{side} is a link");
-        std::fs::remove_file(d.join(side)).unwrap();
+    // The positive control: readable, it is read.
+    assert!(Cache::default().sessions(&db).is_ok());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o000)).unwrap();
     }
-    // The positive control: with neither, it is read.
-    assert_eq!(Cache::default().sessions(&db).unwrap().len(), 1);
+    #[cfg(windows)]
+    deny_reading(&db, true);
+    if std::fs::File::open(&db).is_err() {
+        // SQLite's own message for an open names the file as a `file:` URI.
+        let e = Cache::default().sessions(&db).err().unwrap();
+        assert!(e.starts_with("could not open the database"), "{e}");
+        assert!(!e.contains("CANARY") && !e.contains("file:"), "{e}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    #[cfg(windows)]
+    deny_reading(&db, false);
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_database_of_no_bytes_with_a_wal_that_holds_bytes_leaves_the_wal_alone() {
+    // SQLite opening such a pair read-only deletes a -wal that holds bytes.
+    let d = folder("empty-db-wal");
+    let db = d.join("opencode.db");
+    std::fs::write(&db, b"").unwrap();
+    std::fs::write(d.join("opencode.db-wal"), [7u8; 64]).unwrap();
+    let before = files(&d);
+    assert!(Cache::default().sessions(&db).unwrap().is_empty());
+    assert_eq!(files(&d), before, "the -wal was deleted or a file was made");
     std::fs::remove_dir_all(d).unwrap();
 }
 
@@ -677,6 +703,9 @@ fn listed(roots: Value) -> (Vec<Value>, Value) {
 
 #[test]
 fn a_database_that_cannot_be_opened_is_listed_as_itself_and_its_read_gives_the_reason() {
+    if !links_allowed() {
+        return;
+    }
     let d = folder("unlisted");
     let root = d.join("opencode");
     std::fs::create_dir_all(&root).unwrap();
@@ -684,7 +713,7 @@ fn a_database_that_cannot_be_opened_is_listed_as_itself_and_its_read_gives_the_r
     drop(c);
     let elsewhere = d.join("elsewhere");
     std::fs::write(&elsewhere, b"").unwrap();
-    std::os::unix::fs::symlink(&elsewhere, root.join("opencode.db-wal")).unwrap();
+    make_link(&elsewhere, root.join("opencode.db-wal")).unwrap();
     // Listed as itself, and the listing cut short, so the hub marks none of its sessions gone.
     let (files, out) = listed(json!([root]));
     assert_eq!(files.len(), 1);
@@ -800,44 +829,6 @@ fn listing_and_reading_a_large_database_stay_well_within_the_hubs_wait() {
 }
 
 #[test]
-fn only_copies_left_by_processes_no_longer_running_are_pruned() {
-    let d = folder("prune");
-    let mut child = std::process::Command::new("true").spawn().unwrap();
-    let dead = child.id();
-    child.wait().unwrap();
-    let names = [
-        format!("wal-{}-9", std::process::id()),
-        format!("wal-{dead}-0"),
-        "wal-1-0".to_string(),
-        "other".to_string(),
-    ];
-    for n in &names {
-        std::fs::create_dir(d.join(n)).unwrap();
-    }
-    super::db::prune(&d);
-    let left: Vec<bool> = names.iter().map(|n| d.join(n).exists()).collect();
-    // This process's copy, a running process's (pid 1) and anything else stay.
-    assert_eq!(left, vec![true, false, true, true]);
-    std::fs::remove_dir_all(d).unwrap();
-}
-
-#[test]
-fn a_linked_database_is_not_opened() {
-    let d = folder("linked-db");
-    let (db, c) = wal_db(&d);
-    drop(c);
-    std::os::unix::fs::symlink(&db, d.join("link.db")).unwrap();
-    let e = open_read_only(&d.join("link.db")).err().unwrap();
-    assert!(
-        e.contains("not a regular file") && !e.contains(d.to_str().unwrap()),
-        "{e}"
-    );
-    // The positive control.
-    assert!(open_read_only(&db).is_ok());
-    std::fs::remove_dir_all(d).unwrap();
-}
-
-#[test]
 fn a_json_message_file_is_keyed_by_its_file_and_folder_names() {
     let d = folder("json-names");
     let root = d.join("opencode");
@@ -861,4 +852,80 @@ fn a_json_message_file_is_keyed_by_its_file_and_folder_names() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["key"], message::key("msg_x", S1));
     std::fs::remove_dir_all(d).unwrap();
+}
+
+/// A symbolic link at link to target: on Windows a folder link when target is a folder.
+fn make_link(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return if target.as_ref().is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+}
+
+/// Windows: an entry in path's access list denying everyone (this user too) its bytes (`deny`), or
+/// that entry taken out again.
+#[cfg(windows)]
+fn deny_reading(path: &Path, deny: bool) {
+    let args: &[&str] = if deny {
+        &["/deny", "*S-1-1-0:(RD)"]
+    } else {
+        &["/remove:d", "*S-1-1-0"]
+    };
+    let out = std::process::Command::new("icacls")
+        .arg(path)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+}
+
+/// Whether this account may make symbolic links (on Windows that takes a privilege or Developer
+/// Mode). When it may not, says so on stderr: a test that needs links is then skipped, and the CI
+/// summary counts the skip.
+fn links_allowed() -> bool {
+    #[cfg(unix)]
+    return true;
+    #[cfg(windows)]
+    {
+        static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let allowed = *ALLOWED.get_or_init(|| {
+            let probe = std::env::temp_dir().join(format!("links-allowed-{}", std::process::id()));
+            let _ = std::fs::remove_file(&probe);
+            let made = std::os::windows::fs::symlink_file("target", &probe).is_ok();
+            let _ = std::fs::remove_file(&probe);
+            made
+        });
+        if !allowed {
+            eprintln!("skipped: this account cannot make a symbolic link");
+        }
+        allowed
+    }
+}
+
+#[test]
+fn on_windows_the_app_data_folders_are_roots_too_when_set_to_a_full_path() {
+    let home = std::env::temp_dir().join("home");
+    let roaming = std::env::temp_dir().join("roaming");
+    let base = vec![
+        home.join(".local").join("share").join("opencode"),
+        home.join(".opencode"),
+    ];
+    let both = |name: &str| match name {
+        "APPDATA" => Some(roaming.clone().into_os_string()),
+        "LOCALAPPDATA" => Some("relative".into()),
+        _ => None,
+    };
+    let mut want = base.clone();
+    want.push(roaming.join("opencode"));
+    assert_eq!(
+        roots_for(&home, true, &both),
+        want,
+        "a relative folder was used"
+    );
+    assert_eq!(roots_for(&home, true, &|_| None), base);
+    assert_eq!(roots_for(&home, false, &both), base, "not on Windows");
 }
