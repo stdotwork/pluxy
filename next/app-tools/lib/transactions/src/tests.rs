@@ -4,7 +4,6 @@
 use super::*;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
-use std::os::unix::fs::MetadataExt;
 
 /// The vault's frames as the host answers them, in memory.
 #[derive(Default)]
@@ -115,8 +114,12 @@ impl Tmp {
         std::fs::create_dir_all(&p).unwrap();
         Tmp(std::fs::canonicalize(p).unwrap())
     }
+    /// rel, `/`-separated, under the folder: part by part, since a long-form Windows path
+    /// (`\\?\…`, as the folder's canonical path is there) takes `/` as a letter.
     fn at(&self, rel: &str) -> PathBuf {
-        self.0.join(rel)
+        let mut p = self.0.clone();
+        p.extend(rel.split('/'));
+        p
     }
     fn put(&self, rel: &str, bytes: &str) -> PathBuf {
         let p = self.at(rel);
@@ -128,6 +131,8 @@ impl Tmp {
 
 impl Drop for Tmp {
     fn drop(&mut self) {
+        // A folder a failed test left unwritable (on Windows a deny entry does not stop removal).
+        #[cfg(unix)]
         let _ = std::process::Command::new("chmod")
             .args(["-R", "u+w"])
             .arg(&self.0)
@@ -140,11 +145,151 @@ fn read(p: &Path) -> Option<String> {
     std::fs::read_to_string(p).ok()
 }
 
-fn link_of(p: &Path) -> (u64, PathBuf) {
+/// A link's own identity and its text.
+fn link_of(p: &Path) -> (pluxy_files::Id, PathBuf) {
     (
-        std::fs::symlink_metadata(p).unwrap().ino(),
+        pluxy_files::id_of_path(p).unwrap(),
         std::fs::read_link(p).unwrap(),
     )
+}
+
+/// The stow layout's link text, in the platform's own separator (Windows does not take `/` in a
+/// link's text as one).
+#[cfg(unix)]
+const REL: &str = "../../dotfiles/x/settings.json";
+#[cfg(windows)]
+const REL: &str = r"..\..\dotfiles\x\settings.json";
+
+/// A symbolic link at `at` to target: on Windows a folder link when target, read from the link's
+/// folder, is a folder.
+fn make_link(target: &Path, at: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, at).unwrap();
+    #[cfg(windows)]
+    if at.parent().unwrap().join(target).is_dir() {
+        std::os::windows::fs::symlink_dir(target, at).unwrap();
+    } else {
+        std::os::windows::fs::symlink_file(target, at).unwrap();
+    }
+}
+
+/// Whether this account may make symbolic links (on Windows that takes a privilege or Developer
+/// Mode). When it may not, says so on stderr: a test that needs links is then skipped, and the CI
+/// summary counts the skip.
+fn links_allowed() -> bool {
+    #[cfg(unix)]
+    return true;
+    #[cfg(windows)]
+    {
+        static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let allowed = *ALLOWED.get_or_init(|| {
+            let probe = std::env::temp_dir()
+                .join(format!("pluxy-tx-links-{}", target::random_hex().unwrap()));
+            let made = std::os::windows::fs::symlink_file("target", &probe).is_ok();
+            let _ = std::fs::remove_file(&probe);
+            made
+        });
+        if !allowed {
+            eprintln!("skipped: this account cannot make a symbolic link");
+        }
+        allowed
+    }
+}
+
+/// Windows: a junction at `at` to the folder target, a folder link any account may make.
+#[cfg(windows)]
+fn junction(target: &Path, at: &Path) {
+    let out = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(plain(at))
+        .arg(plain(target))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+}
+
+/// p without the long-form prefix (`\\?\C:\…` as `C:\…`), as Windows reads a link's absolute
+/// text back; p itself elsewhere.
+fn plain(p: &Path) -> PathBuf {
+    let s = p.to_str().unwrap();
+    let short = s
+        .strip_prefix(r"\\?\")
+        .filter(|r| r.as_bytes().get(1) == Some(&b':'));
+    PathBuf::from(short.unwrap_or(s))
+}
+
+/// Gives p permissions by Unix mode bits. On Windows a file gets a protected access list allowing
+/// this user and SYSTEM everything, and reading to the Users group for the group's read bit and to
+/// Everyone for others'; a folder without the owner's write bit gets an entry denying everyone
+/// adding to it, which a mode with that bit takes away.
+fn chmod(p: &Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        if p.is_dir() {
+            let mut icacls = std::process::Command::new("icacls");
+            icacls.arg(plain(p));
+            if mode & 0o200 == 0 {
+                icacls.args(["/deny", "*S-1-1-0:(WD,AD)"]);
+            } else {
+                icacls.args(["/remove:d", "*S-1-1-0"]);
+            }
+            let out = icacls.output().unwrap();
+            assert!(out.status.success(), "{out:?}");
+            return;
+        }
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Foundation::GENERIC_READ;
+        use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
+        let f = std::fs::OpenOptions::new()
+            .access_mode(GENERIC_READ | WRITE_DAC)
+            .open(p)
+            .unwrap();
+        pluxy_files::make_private_open(&f).unwrap();
+        let mut sddl = pluxy_files::access_list(&f).unwrap();
+        if mode & 0o040 != 0 {
+            sddl.push_str("(A;;FR;;;BU)");
+        }
+        if mode & 0o004 != 0 {
+            sddl.push_str("(A;;FR;;;WD)");
+        }
+        pluxy_files::set_access_list(&f, &sddl).unwrap();
+    }
+}
+
+/// The file p's permissions as Unix mode bits: on Windows read back from an access list [`chmod`]
+/// or the library gave (owner-only is this user's and SYSTEM's entries alone, 0600); any other
+/// list fails the test.
+fn mode_of(p: &Path) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(p).unwrap().mode() & 0o7777
+    }
+    #[cfg(windows)]
+    {
+        let sddl = pluxy_files::access_list(&std::fs::File::open(p).unwrap()).unwrap();
+        let (flags, entries) = sddl
+            .strip_prefix("D:")
+            .and_then(|s| s.split_once('('))
+            .unwrap_or_else(|| panic!("{sddl}"));
+        assert!(flags.contains('P'), "not protected: {sddl}");
+        let mut mode = 0;
+        for entry in entries.trim_end_matches(')').split(")(") {
+            match entry.split(';').collect::<Vec<_>>()[..] {
+                ["A", "", "FA", "", "", "SY"] => {}
+                ["A", "", "FA", "", "", _] => mode |= 0o600,
+                ["A", "", "FR", "", "", "BU"] => mode |= 0o040,
+                ["A", "", "FR", "", "", "WD"] => mode |= 0o004,
+                _ => panic!("an entry these tests do not give: {sddl}"),
+            }
+        }
+        mode
+    }
 }
 
 /// A writer's image: before (an object, or {}) with values set.
@@ -164,10 +309,10 @@ fn values(v: Value) -> Box<Image<'static>> {
 /// The stow layout: home/.config/x/settings.json, a relative link into home/dotfiles.
 fn stow(t: &Tmp) -> (PathBuf, PathBuf) {
     let target = t.put("dotfiles/x/settings.json", "{\"theme\": \"light\"}\n");
-    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+    chmod(&target, 0o640);
     let link = t.at(".config/x/settings.json");
     std::fs::create_dir_all(link.parent().unwrap()).unwrap();
-    std::os::unix::fs::symlink("../../dotfiles/x/settings.json", &link).unwrap();
+    make_link(Path::new(REL), &link);
     (link, target)
 }
 
@@ -223,6 +368,9 @@ fn merge_keeps_the_persons_edits() {
 
 #[test]
 fn apply_writes_only_the_link_target_and_keeps_the_link() {
+    if !links_allowed() {
+        return;
+    }
     let t = Tmp::new();
     let (link, target) = stow(&t);
     let other = t.put("dotfiles/x/other.json", "{}\n");
@@ -231,7 +379,7 @@ fn apply_writes_only_the_link_target_and_keeps_the_link() {
     let tx = Transactions::new(&mem, &data);
     let before = link_of(&link);
     let p = tx.preview("s", &[Selection::File(link.clone())]).unwrap();
-    assert_eq!(p["targets"][0]["link"], "../../dotfiles/x/settings.json");
+    assert_eq!(p["targets"][0]["link"], REL);
     assert_eq!(p["targets"][0]["target"], json!(target));
     let pins: Vec<Pin> = vec![Pin::from_json(&p["targets"][0]).unwrap()];
     let o = tx
@@ -243,7 +391,7 @@ fn apply_writes_only_the_link_target_and_keeps_the_link() {
         "{\n  \"theme\": \"light\",\n  \"model\": \"m\"\n}\n"
     );
     // An apply's file is owner-only: the group's read bit goes.
-    assert_eq!(std::fs::metadata(&target).unwrap().mode() & 0o7777, 0o600);
+    assert_eq!(mode_of(&target), 0o600);
     assert_eq!(link_of(&link), before);
     assert_eq!(read(&other).unwrap(), "{}\n");
     let names: Vec<_> = std::fs::read_dir(target.parent().unwrap())
@@ -276,6 +424,22 @@ fn apply_writes_only_the_link_target_and_keeps_the_link() {
 
 #[test]
 fn a_root_link_is_followed_but_links_and_parts_inside_it_are_refused() {
+    if links_allowed() {
+        root_link(make_link, true);
+    }
+}
+
+/// Windows: the same with junctions, the folder links any account may make, for the root and the
+/// folder link inside it (a file link inside it only where this account may make one).
+#[cfg(windows)]
+#[test]
+fn a_root_junction_is_followed_but_junctions_inside_it_are_refused() {
+    root_link(junction, links_allowed());
+}
+
+/// A root that is a folder link made by dir_link, with a folder link inside it, and a file link
+/// too when file_link.
+fn root_link(dir_link: fn(&Path, &Path), file_link: bool) {
     let t = Tmp::new();
     let real = t
         .put("share/root/a.json", "{}\n")
@@ -283,11 +447,13 @@ fn a_root_link_is_followed_but_links_and_parts_inside_it_are_refused() {
         .unwrap()
         .to_path_buf();
     let outside = t.put("outside.json", "{\"o\": 1}\n");
-    std::os::unix::fs::symlink(&outside, real.join("inner.json")).unwrap();
+    if file_link {
+        make_link(&outside, &real.join("inner.json"));
+    }
     std::fs::create_dir(real.join("sub")).unwrap();
-    std::os::unix::fs::symlink(t.at("share"), real.join("sub/up")).unwrap();
+    dir_link(&t.at("share"), &real.join("sub").join("up"));
     let root = t.at("root-link");
-    std::os::unix::fs::symlink(&real, &root).unwrap();
+    dir_link(&real, &root);
     let (mem, data) = (Mem::default(), t.at("data"));
     std::fs::create_dir(&data).unwrap();
     let tx = Transactions::new(&mem, &data);
@@ -302,28 +468,32 @@ fn a_root_link_is_followed_but_links_and_parts_inside_it_are_refused() {
         ("", "path"),
         ("a//b", "path"),
     ] {
+        if p == "inner.json" && !file_link {
+            continue;
+        }
         let e = tx.preview("r", &[sel(p)]).unwrap_err();
         assert!(e.message.contains(says), "{p}: {e}");
     }
     let pins = pins(&tx, "r", &[sel("a.json"), sel("sub/b.json")]);
-    assert_eq!(pins[0].link.as_deref(), real.to_str());
+    assert_eq!(
+        pins[0].link.as_deref().map(|l| plain(Path::new(l))),
+        Some(plain(&real))
+    );
     tx.apply("r", &pins, &values(json!({"m": true})), &Json, &mut none)
         .unwrap();
+    let b = real.join("sub").join("b.json");
     assert_eq!(read(&real.join("a.json")).unwrap(), "{\n  \"m\": true\n}\n");
-    assert_eq!(
-        read(&real.join("sub/b.json")).unwrap(),
-        "{\n  \"m\": true\n}\n"
-    );
-    assert_eq!(
-        std::fs::metadata(real.join("sub/b.json")).unwrap().mode() & 0o7777,
-        0o600
-    );
+    assert_eq!(read(&b).unwrap(), "{\n  \"m\": true\n}\n");
+    assert_eq!(mode_of(&b), 0o600);
     assert_eq!(read(&outside).unwrap(), "{\"o\": 1}\n");
-    assert_eq!(std::fs::read_link(&root).unwrap(), real);
+    assert_eq!(plain(&std::fs::read_link(&root).unwrap()), plain(&real));
 }
 
 #[test]
 fn retargeted_replaced_or_modified_targets_are_refused() {
+    if !links_allowed() {
+        return;
+    }
     let t = Tmp::new();
     let (link, target) = stow(&t);
     let alt = t.put("dotfiles/alt.json", "{}\n");
@@ -333,23 +503,28 @@ fn retargeted_replaced_or_modified_targets_are_refused() {
     let v = values(json!({"x": 1}));
     let relink = |to: &Path| {
         let tmp = link.with_extension("new");
-        std::os::unix::fs::symlink(to, &tmp).unwrap();
+        make_link(to, &tmp);
         std::fs::rename(&tmp, &link).unwrap();
     };
     // Pointed elsewhere.
     let p = pins(&tx, "s", &[Selection::File(link.clone())]);
+    let original = link_of(&link).0;
+    #[cfg(unix)]
     std::fs::hard_link(&link, t.at("held-original")).unwrap();
     relink(&alt);
     let e = tx.apply("s", &p, &v, &Json, &mut none).unwrap_err();
     assert!(e.message.contains("changed"), "{e}");
-    // Back to the same text, but another link: still refused (its identity is pinned). The earlier
-    // links' inodes are kept in use (hard links to them), so the new link cannot get their numbers:
-    // a filesystem that reuses a freed inode number (ext4 does) could otherwise give the new link
-    // the old identity, and then nothing tells the two apart (same text, same target, same bytes).
+    // Back to the same text, but another link: still refused (its identity is pinned). On Linux and
+    // macOS the earlier links' inodes are kept in use (hard links to them), so the new link cannot
+    // get their numbers: a filesystem that reuses a freed inode number (ext4 does) could otherwise
+    // give the new link the old identity, and then nothing tells the two apart (same text, same
+    // target, same bytes). On Windows (NTFS) a file ID carries a sequence number that changes when
+    // the ID's record is used again.
+    let alt_link = link_of(&link).0;
+    #[cfg(unix)]
     std::fs::hard_link(&link, t.at("held-alt")).unwrap();
-    relink(Path::new("../../dotfiles/x/settings.json"));
-    let ino = |p: &str| std::fs::symlink_metadata(t.at(p)).unwrap().ino();
-    assert!(![ino("held-original"), ino("held-alt")].contains(&link_of(&link).0));
+    relink(Path::new(REL));
+    assert!(![original, alt_link].contains(&link_of(&link).0));
     let e = tx.apply("s", &p, &v, &Json, &mut none).unwrap_err();
     assert!(e.message.contains("changed"), "{e}");
     // Replaced by rename with the same bytes.
@@ -381,6 +556,9 @@ fn retargeted_replaced_or_modified_targets_are_refused() {
 
 #[test]
 fn clear_keeps_later_edits_and_restore_puts_the_original_back() {
+    if !links_allowed() {
+        return;
+    }
     let t = Tmp::new();
     let (link, target) = stow(&t);
     let created = t.at("dotfiles/x/new.json");
@@ -456,9 +634,7 @@ fn a_failed_write_rolls_back_but_never_over_a_competing_edit() {
     std::fs::create_dir(&data).unwrap();
     let tx = Transactions::new(&mem, &data);
     let sel = [Selection::File(a.clone()), Selection::File(b.clone())];
-    let ro = |mode| {
-        std::fs::set_permissions(t.at("two"), std::fs::Permissions::from_mode(mode)).unwrap()
-    };
+    let ro = |mode| chmod(&t.at("two"), mode);
     // The second file's folder cannot be written: the first is put back.
     let p = pins(&tx, "s", &sel);
     ro(0o555);
@@ -600,14 +776,6 @@ fn two(t: &Tmp) -> (PathBuf, PathBuf, Mem, PathBuf) {
     (a, b, Mem::default(), data)
 }
 
-fn chmod(p: &Path, mode: u32) {
-    std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
-}
-
-fn mode_of(p: &Path) -> u32 {
-    std::fs::metadata(p).unwrap().mode() & 0o7777
-}
-
 /// Finding 1: a conflict's original survives the next operation's sweep and restore puts it back.
 #[test]
 fn a_conflicts_original_survives_and_restore_returns_it() {
@@ -721,19 +889,24 @@ fn a_failed_put_back_keeps_its_backups_for_reconcile() {
 /// writer's own bytes into a conflict: reconcile looks at the pinned target itself.
 #[test]
 fn reconcile_looks_at_the_pinned_target_when_the_link_was_made_again() {
+    if !links_allowed() {
+        return;
+    }
     let t = Tmp::new();
     let (link, target) = stow(&t);
     let (mem, data) = (Mem::default(), t.at("data"));
     std::fs::create_dir(&data).unwrap();
     let tx = Transactions::new(&mem, &data);
     let remake = || {
+        // The old link held, so the new one gets another identity (see the test above).
+        #[cfg(unix)]
         std::fs::hard_link(
             &link,
             t.at(&format!("held-{}", target::random_hex().unwrap())),
         )
         .unwrap();
         let tmp = link.with_extension("new");
-        std::os::unix::fs::symlink("../../dotfiles/x/settings.json", &tmp).unwrap();
+        make_link(Path::new(REL), &tmp);
         std::fs::rename(&tmp, &link).unwrap();
     };
     let sel = [Selection::File(link.clone())];
@@ -770,6 +943,9 @@ fn reconcile_looks_at_the_pinned_target_when_the_link_was_made_again() {
 /// recorded target itself, or apply again through the link (the old originals kept).
 #[test]
 fn a_retargeted_link_leaves_a_way_back() {
+    if !links_allowed() {
+        return;
+    }
     let t = Tmp::new();
     let (link, target) = stow(&t);
     let alt = t.put("dotfiles/alt.json", "{\"alt\": true}\n");
@@ -778,7 +954,7 @@ fn a_retargeted_link_leaves_a_way_back() {
     let tx = Transactions::new(&mem, &data);
     let relink = |to: &Path| {
         let tmp = link.with_extension("new");
-        std::os::unix::fs::symlink(to, &tmp).unwrap();
+        make_link(to, &tmp);
         std::fs::rename(&tmp, &link).unwrap();
     };
     let p = pins(&tx, "s", &[Selection::File(link.clone())]);
@@ -792,7 +968,7 @@ fn a_retargeted_link_leaves_a_way_back() {
     assert_eq!(read(&target).unwrap(), "{\"theme\": \"light\"}\n");
     // Apply through the link again, then retarget it: a new apply replaces the stale record and
     // keeps its original, which restore of the old target then puts back.
-    relink(Path::new("../../dotfiles/x/settings.json"));
+    relink(Path::new(REL));
     let p = pins(&tx, "s", &[Selection::File(link.clone())]);
     tx.apply("s", &p, &values(json!({"m": 2})), &Json, &mut none)
         .unwrap();
@@ -879,7 +1055,8 @@ fn key_order_and_number_digits_are_kept() {
     );
 }
 
-/// Finding 7: setuid and setgid are not copied, and a removed file comes back with its own mode.
+/// Finding 7: setuid and setgid are not copied, and a removed file comes back with its own mode
+/// (on Windows its access list; the execute bits have no twin there).
 #[test]
 fn modes_are_masked_and_kept_through_removal() {
     let t = Tmp::new();
@@ -889,7 +1066,7 @@ fn modes_are_masked_and_kept_through_removal() {
     let p = pins(&tx, "s", &[Selection::File(a.clone())]);
     tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
         .unwrap();
-    assert_eq!(mode_of(&a), 0o700);
+    assert_eq!(mode_of(&a), if cfg!(unix) { 0o700 } else { 0o600 });
     // x did not exist: apply creates it (0600), the person makes it 0644; a restore that removes
     // it, then fails on b, puts it back 0644.
     let x = t.at("one/x.json");
@@ -1352,9 +1529,9 @@ fn a_backup_whose_record_cannot_be_saved_leaves_nothing_in_the_vault() {
     let data = tx_in(&t, &mem);
     let tx = Transactions::new(&mem, &data);
     let p = pins(&tx, "s", &[Selection::File(f.clone())]);
-    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o500)).unwrap();
+    chmod(&data, 0o500);
     let r = tx.backup_create("s", &p);
-    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+    chmod(&data, 0o700);
     assert!(r.is_err(), "{r:?}");
     assert!(mem.backups.borrow().is_empty());
 }
@@ -1451,6 +1628,9 @@ fn restore_of_a_kept_original_already_in_place_forgets_it() {
 /// a link now and so cannot be opened for reconciling.
 #[test]
 fn reconcile_removes_temporary_files_beside_a_target_that_became_a_link() {
+    if !links_allowed() {
+        return;
+    }
     let t = Tmp::new();
     let (a, b, mem, data) = two(&t);
     let tx = Transactions::new(&mem, &data);
@@ -1459,7 +1639,7 @@ fn reconcile_removes_temporary_files_beside_a_target_that_became_a_link() {
     let tmp = t.put("one/.a.json.pluxy-0123456789abcdef.tmp", "{\"secret\": 1}");
     let elsewhere = t.put("elsewhere.json", "{}\n");
     std::fs::remove_file(&a).unwrap();
-    std::os::unix::fs::symlink(&elsewhere, &a).unwrap();
+    make_link(&elsewhere, &a);
     let r = tx.reconcile(&[j]).unwrap();
     assert_eq!(r[0]["conflicts"], json!([a]));
     assert!(!tmp.exists(), "the temporary file was left");
@@ -1520,4 +1700,77 @@ fn a_failed_operations_sweep_keeps_the_manual_backups() {
             .len(),
         1
     );
+}
+
+/// Windows reaches a WSL distribution's files as `\\wsl.localhost\<distribution>\…`: the Windows
+/// program refuses those (the package's Linux program serves them, inside the distribution).
+#[test]
+fn wsl_localhost_paths_are_inside_a_distribution() {
+    for p in [
+        r"\\wsl.localhost\Ubuntu\home\me\.claude\settings.json",
+        r"\\WSL.LocalHost\Ubuntu\home",
+        "//wsl.localhost/Ubuntu/home",
+        r"\\?\UNC\wsl.localhost\Ubuntu\home",
+        r"\\?\unc\Wsl.Localhost\Ubuntu",
+        r"\\.\UNC\wsl.localhost\Ubuntu\home",
+    ] {
+        assert!(target::in_wsl(p), "{p}");
+    }
+    for p in [
+        r"\\wsl.localhost.example\share\x",
+        r"\\server\wsl.localhost\x",
+        r"\\?\UNC\server\wsl.localhost\x",
+        r"C:\wsl.localhost\x",
+        r"\\?\C:\wsl.localhost\x",
+        "/home/me/wsl.localhost/x",
+    ] {
+        assert!(!target::in_wsl(p), "{p}");
+    }
+}
+
+/// The older spelling, `\\wsl$\<distribution>\…`, is refused the same way.
+#[test]
+fn wsl_dollar_paths_are_inside_a_distribution() {
+    for p in [
+        r"\\wsl$\Ubuntu\home\me\.claude\settings.json",
+        r"\\WSL$\Ubuntu\home",
+        "//wsl$/Ubuntu/home",
+        r"\\?\UNC\wsl$\Ubuntu\home",
+        r"\\?\unc\WSL$\Ubuntu",
+        r"\\.\UNC\wsl$\Ubuntu\home",
+    ] {
+        assert!(target::in_wsl(p), "{p}");
+    }
+    for p in [
+        r"\\wsl\Ubuntu\x",
+        r"\\wsl$x\Ubuntu\x",
+        r"\\server\wsl$\x",
+        r"\\?\UNC\server\wsl$\x",
+        r"\\?\C:\wsl$\x",
+        "/home/me/wsl$/x",
+    ] {
+        assert!(!target::in_wsl(p), "{p}");
+    }
+}
+
+/// Windows: a selected file or root in a WSL distribution is refused before anything is opened.
+#[cfg(windows)]
+#[test]
+fn a_selection_in_a_wsl_distribution_is_refused() {
+    for p in [
+        r"\\wsl.localhost\Ubuntu\home\me\.claude\settings.json",
+        r"\\wsl$\Ubuntu\home\me\.claude\settings.json",
+        r"\\?\UNC\WSL.LOCALHOST\Ubuntu\home\me\.claude\settings.json",
+    ] {
+        let file = Target::resolve(&Selection::File(PathBuf::from(p)))
+            .err()
+            .unwrap();
+        assert!(file.message.contains("WSL distribution"), "{p}: {file}");
+        let root = Selection::Root {
+            root: PathBuf::from(p).parent().unwrap().to_path_buf(),
+            path: "settings.json".into(),
+        };
+        let root = Target::resolve(&root).err().unwrap();
+        assert!(root.message.contains("WSL distribution"), "{p}: {root}");
+    }
 }

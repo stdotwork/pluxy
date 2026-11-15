@@ -14,11 +14,12 @@ cargo build --locked -p pluxy-transactions --example fixture-writer   # the nati
 cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup and execution
 ```
 
-Platforms: every tool runs on Linux. The usage hub, the usage parsers and `codex-sessions` also
-build and are tested on Windows and macOS (`.github/workflows/next-app-tools-platforms.yml`), and
-their manifests name programs for `darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does
-not run native tools on those systems yet. `lib/transactions`, `claude-code`, `claude-desktop` and `codex-setup` are
-Linux only for now, and `execution` refuses every operation outside Linux.
+Platforms: every tool runs on Linux. The usage hub, the usage parsers, `codex-sessions`,
+`lib/transactions` with its `fixture-writer`, `claude-code` and `codex-setup` also build and are
+tested on Windows and macOS (`.github/workflows/next-app-tools-platforms.yml`), and their manifests
+name programs for `darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does not run native
+tools on those systems yet. `claude-desktop` is Linux only for now, and `execution` refuses every
+operation outside Linux.
 
 ## `lib/files`
 
@@ -39,7 +40,14 @@ platform code of its own for them:
   of what they make), Windows refuses that, so making a private file or folder there fails with
   `PermissionDenied`. `make_private` changes a file through
   a handle to the file itself, not a link (on Linux and macOS with `fchmod`), and refuses anything
-  but a file or folder, and a file of another owner (never taking it over).
+  but a file or folder, and a file of another owner (never taking it over); `make_private_open`
+  does the same through a handle the caller holds, for what it has just made.
+- On Windows, `access_list` reads a file's access list through its handle in the system's text
+  form (SDDL: `D:P(…)` when protected, `D:AI(…)` with entries marked `ID` when it takes up its
+  folder's), and `set_access_list` gives one back as it was written, protected or not (a NULL list,
+  which would allow everyone, is refused). `rename_open` renames a file through its own handle into
+  a folder open as another handle, replacing what is there, with POSIX semantics where the file
+  system has them (the name is replaced even while another program has the old file open).
 - `open_regular` opens a file for reading only if it is a regular file, checked on the open handle,
   without following a link: on Linux and macOS with `O_NOFOLLOW` and `O_NONBLOCK` (a FIFO is
   refused, never waited on); on Windows the link itself is opened and refused, as is anything that
@@ -155,13 +163,13 @@ cancel a job between two parts of one file.
 
 Link-preserving, journalled config writes for any writer tool (`pluxy-transactions`), a client of
 the host's vault (backups and journals) through the contract's `vault` frames; it keeps no
-journal store of its own. Linux.
+journal store of its own. Linux, macOS and Windows (below for what differs on Windows).
 
 | Item | What it does |
 | --- | --- |
 | `Selection` | What the person selected: `File(path)`, a config file that may be a link (as stow makes), or `Root { root, path }`, a file inside a root folder that may be a link (as chezmoi can make), `path` being slash-separated parts inside it. |
-| `Transactions::new(vault, data)` | The operations for one call: `vault` is the `Call` (or any `Vault`), `data` the tool's data folder (`data_dir()`, `PLUXY_TOOL_DATA_DIR`), where the state file `transactions.json` (0600) keeps each set's targets and backup IDs, the originals kept for restore, and the journals left open. |
-| `preview(set, selections)` | Resolves and pins each selection: `{"set", "targets": [<pin>], "applied", "edited"}`. A pin names the selected path, its link's text, the file it resolves to, the identities (device and inode) of the link, the root, the file's folder and the file, and the file's SHA-256. A link inside a selected root, a part that leaves it (`..`, `.`, empty) and anything but a regular file are refused. A read: it asks nothing, and it reports a file's existence and SHA-256 for any path, so a writer must not export it to other packages. |
+| `Transactions::new(vault, data)` | The operations for one call: `vault` is the `Call` (or any `Vault`), `data` the tool's data folder (`data_dir()`, `PLUXY_TOOL_DATA_DIR`), where the state file `transactions.json` (private) keeps each set's targets and backup IDs, the originals kept for restore, and the journals left open. |
+| `preview(set, selections)` | Resolves and pins each selection: `{"set", "targets": [<pin>], "applied", "edited"}`. A pin names the selected path, its link's text, the file it resolves to, the identities (device and inode; on Windows the volume serial number and 64-bit file index) of the link, the root, the file's folder and the file, and the file's SHA-256. A link inside a selected root, a part that leaves it (`..`, `.`, empty) and anything but a regular file are refused. A read: it asks nothing, and it reports a file's existence and SHA-256 for any path, so a writer must not export it to other packages. |
 | `apply(set, pins, image, merge, written)` | Writes each pinned target with what `image` makes of its bytes now, and records `set` as applied: its original images (with the person's edits since the last apply promoted into them by `merge`) and its applied images, as vault backups. A record none of whose selections still resolves to its target (a link pointed elsewhere) is replaced, its originals kept for restore. |
 | `clear(set, pins, merge, written)` | Each target becomes what `merge` makes of its original, its applied image and its bytes now: the writer's untouched values go, the person's edits stay. A pin of the recorded target file itself (named directly) reaches a record made through a link that now points elsewhere. |
 | `restore(set, pins, written)` | Puts the original bytes back (removing a file that did not exist), keeping the mode the file has; a file that is gone comes back with the original's mode. With no record for these targets, it puts back the originals kept for them: after a conflict, or after a new apply replaced a retargeted record. |
@@ -221,6 +229,25 @@ Saving replaces the file; an edit made in the same instant by another program ma
 so where the person confirms: the writers' write operations carry this sentence in their
 descriptions, which their native confirmations show.
 This is cooperative write correctness for a full-access tool, not a confinement.
+
+On Windows:
+
+- A file's permissions are its access list: records keep it as SDDL text where Linux and macOS keep
+  the permission bits. The new file is private from the moment it is made (a protected list
+  allowing only this user and SYSTEM) and open to no other handle until it is renamed and closed.
+  Clear and restore give it the old file's list (protected or taking up its folder's, as it was);
+  an apply leaves it private, the twin of owner-only; a file that did not exist stays private, or
+  gets the list recorded for it.
+- The rename goes through the new file's own handle into the folder's handle (`rename_open`), with
+  POSIX semantics where the file system has them. The folder is not flushed: Windows has no flush
+  of a folder's entries through a handle opened to read it, and NTFS logs them itself.
+- Links are symbolic links and junctions alike: a selected file or root may be either, and either
+  inside a selected root is refused. A file's or folder's identity is the volume serial number and
+  the 64-bit file index (NTFS gives a reused index a new sequence number, so a link made again is
+  another link).
+- A path inside a WSL distribution (`\\wsl.localhost\…` or `\\wsl$\…`, in any case, either
+  slash, also after `\\?\UNC\`), selected or reached through a link, is refused: the package's
+  Linux program serves those files, inside the distribution.
 
 Manual backups and retention:
 

@@ -113,6 +113,36 @@ pub fn is_private(path: &Path) -> io::Result<bool> {
     imp::is_private(path)
 }
 
+/// Makes the file or folder open as file private, as [`make_private`] does, through that handle
+/// (which must have been opened with the right to change its permissions or access list). Meant for
+/// what this process has just made itself.
+pub fn make_private_open(file: &File) -> io::Result<()> {
+    imp::make_private_open(file)
+}
+
+/// Windows: the access list of the file open as file, in the system's text form (SDDL), with
+/// whether it is protected (`D:P(…)`) or takes up its folder's (`D:AI(…)`, inherited entries
+/// marked `ID`).
+#[cfg(windows)]
+pub fn access_list(file: &File) -> io::Result<String> {
+    imp::access_list(file)
+}
+
+/// Windows: gives the file open as file the access list sddl (as [`access_list`] writes it):
+/// protected if it says so; else it takes up its folder's inheritable entries besides its own.
+#[cfg(windows)]
+pub fn set_access_list(file: &File, sddl: &str) -> io::Result<()> {
+    imp::set_access_list(file, sddl)
+}
+
+/// Windows: renames the file open as file to name in the folder open as folder, replacing a file
+/// there, through the handles (no path is looked up again). The file must have been opened with
+/// the right to delete it.
+#[cfg(windows)]
+pub fn rename_open(file: &File, folder: &File, name: &std::ffi::OsStr) -> io::Result<()> {
+    imp::rename_open(file, folder, name)
+}
+
 /// A lock file this process holds (macOS and Windows): no other process can take it while this
 /// lives. Dropping it releases and removes it.
 #[cfg(any(windows, target_os = "macos"))]
@@ -224,6 +254,24 @@ mod imp {
         f.set_permissions(fs::Permissions::from_mode(mode))
     }
 
+    pub fn make_private_open(f: &File) -> io::Result<()> {
+        let m = f.metadata()?;
+        if m.uid() != unsafe { libc::geteuid() } {
+            return Err(another_owner());
+        }
+        let mode = if m.is_dir() {
+            0o700
+        } else if m.is_file() {
+            0o600
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a file or folder",
+            ));
+        };
+        f.set_permissions(fs::Permissions::from_mode(mode))
+    }
+
     pub fn is_private(path: &Path) -> io::Result<bool> {
         let m = fs::symlink_metadata(path)?;
         Ok(m.uid() == unsafe { libc::geteuid() } && m.permissions().mode() & 0o077 == 0)
@@ -270,30 +318,34 @@ mod imp {
     use std::os::windows::io::{AsRawHandle, FromRawHandle};
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::Foundation::{
-        CloseHandle, LocalFree, ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_SUCCESS,
+        CloseHandle, LocalFree, ERROR_ACCESS_DENIED, ERROR_INVALID_FUNCTION,
+        ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, ERROR_SHARING_VIOLATION, ERROR_SUCCESS,
         GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
     };
     use windows_sys::Win32::Security::Authorization::{
-        GetSecurityInfo, SetEntriesInAclW, SetSecurityInfo, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE,
-        SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_IS_WELL_KNOWN_GROUP,
-        TRUSTEE_W,
+        ConvertSecurityDescriptorToStringSecurityDescriptorW,
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SetEntriesInAclW,
+        SetSecurityInfo, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SDDL_REVISION_1, SET_ACCESS,
+        SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
     };
     use windows_sys::Win32::Security::{
-        CreateWellKnownSid, EqualSid, GetAce, GetSecurityDescriptorControl, GetTokenInformation,
-        InitializeSecurityDescriptor, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
-        TokenOwner, TokenUser, WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
-        DACL_SECURITY_INFORMATION, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
-        PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
-        SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE, SE_DACL_PROTECTED,
-        SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_INFORMATION_CLASS, TOKEN_QUERY,
+        CreateWellKnownSid, EqualSid, GetAce, GetSecurityDescriptorControl,
+        GetSecurityDescriptorDacl, GetTokenInformation, InitializeSecurityDescriptor,
+        SetSecurityDescriptorControl, SetSecurityDescriptorDacl, TokenOwner, TokenUser,
+        WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION,
+        NO_INHERITANCE, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+        PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
+        SECURITY_MAX_SID_SIZE, SE_DACL_PROTECTED, SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        TOKEN_INFORMATION_CLASS, TOKEN_QUERY, UNPROTECTED_DACL_SECURITY_INFORMATION,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateDirectoryW, CreateFileW, FileIdInfo, GetFileInformationByHandle,
-        GetFileInformationByHandleEx, GetFileType, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, DELETE,
+        CreateDirectoryW, CreateFileW, FileIdInfo, FileRenameInfo, FileRenameInfoEx,
+        GetFileInformationByHandle, GetFileInformationByHandleEx, GetFileType,
+        SetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, DELETE,
         FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        FILE_TYPE_DISK, OPEN_EXISTING, READ_CONTROL, WRITE_DAC,
+        FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, FILE_TYPE_DISK, OPEN_EXISTING, READ_CONTROL, WRITE_DAC,
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -481,20 +533,30 @@ mod imp {
 
     pub fn make_private(path: &Path) -> io::Result<()> {
         let f = open_itself(path, FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)?;
+        refuse_link(&f.metadata()?)?;
+        make_private_open(&f)
+    }
+
+    pub fn make_private_open(f: &File) -> io::Result<()> {
         let m = f.metadata()?;
-        refuse_link(&m)?;
+        if !(m.is_dir() || m.is_file()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a file or folder",
+            ));
+        }
         let user = TokenSid::user()?;
         let default_owner = TokenSid::default_owner()?;
         let system = System::sid()?;
         // Another account's file is refused, never taken over, as on Linux and macOS.
-        let (owner, _sd) = owner_of(&f)?;
+        let (owner, _sd) = owner_of(f)?;
         if !owner_accepted(owner, &user, &default_owner, &system) {
             return Err(another_owner());
         }
         let acl = private_acl(&user, &system, m.is_dir())?;
         win32(unsafe {
             SetSecurityInfo(
-                handle(&f),
+                handle(f),
                 SE_FILE_OBJECT,
                 DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                 null_mut(),
@@ -503,6 +565,133 @@ mod imp {
                 null(),
             )
         })
+    }
+
+    pub fn access_list(f: &File) -> io::Result<String> {
+        let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+        win32(unsafe {
+            GetSecurityInfo(
+                handle(f),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                &mut sd,
+            )
+        })?;
+        let sd = Local(sd);
+        let mut text: *mut u16 = null_mut();
+        let mut len = 0u32;
+        ok(unsafe {
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                sd.0,
+                SDDL_REVISION_1,
+                DACL_SECURITY_INFORMATION,
+                &mut text,
+                &mut len,
+            )
+        })?;
+        let text = Local(text);
+        let wide = unsafe { std::slice::from_raw_parts(text.0, len as usize) };
+        let wide = wide.strip_suffix(&[0]).unwrap_or(wide);
+        String::from_utf16(wide)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "an access list not in UTF-16"))
+    }
+
+    pub fn set_access_list(f: &File, sddl: &str) -> io::Result<()> {
+        let bad = || io::Error::new(io::ErrorKind::InvalidInput, "not an access list");
+        let text: Vec<u16> = sddl.encode_utf16().chain([0]).collect();
+        if text[..text.len() - 1].contains(&0) {
+            return Err(bad());
+        }
+        let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+        ok(unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                text.as_ptr(),
+                SDDL_REVISION_1,
+                &mut sd,
+                null_mut(),
+            )
+        })?;
+        let sd = Local(sd);
+        let (mut present, mut defaulted) = (0, 0);
+        let mut dacl: *mut ACL = null_mut();
+        ok(unsafe { GetSecurityDescriptorDacl(sd.0, &mut present, &mut dacl, &mut defaulted) })?;
+        // No list, or a NULL one (which allows everyone), is not one this gives.
+        if present == 0 || dacl.is_null() {
+            return Err(bad());
+        }
+        let mut control = 0u16;
+        let mut revision = 0u32;
+        ok(unsafe { GetSecurityDescriptorControl(sd.0, &mut control, &mut revision) })?;
+        let protection = if control & SE_DACL_PROTECTED != 0 {
+            PROTECTED_DACL_SECURITY_INFORMATION
+        } else {
+            UNPROTECTED_DACL_SECURITY_INFORMATION
+        };
+        win32(unsafe {
+            SetSecurityInfo(
+                handle(f),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | protection,
+                null_mut(),
+                null_mut(),
+                dacl,
+                null(),
+            )
+        })
+    }
+
+    /// `FILE_RENAME_FLAG_REPLACE_IF_EXISTS` and `FILE_RENAME_FLAG_POSIX_SEMANTICS` (winbase.h).
+    const REPLACE_IF_EXISTS: u32 = 1;
+    const POSIX_SEMANTICS: u32 = 2;
+
+    pub fn rename_open(f: &File, folder: &File, name: &std::ffi::OsStr) -> io::Result<()> {
+        let name: Vec<u16> = name.encode_wide().collect();
+        if name.is_empty()
+            || name.contains(&0)
+            || name.iter().any(|c| *c == b'\\' as u16 || *c == b'/' as u16)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a file name",
+            ));
+        }
+        let head = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+        let bytes = head + name.len() * 2;
+        // u64s keep the structure's handle field aligned.
+        let mut buf = vec![0u64; bytes.div_ceil(8) + 1];
+        let info = buf.as_mut_ptr() as *mut FILE_RENAME_INFO;
+        let rename = |class, flags: u32| unsafe {
+            (*info).Anonymous.Flags = flags;
+            (*info).RootDirectory = handle(folder);
+            (*info).FileNameLength = (name.len() * 2) as u32;
+            std::ptr::copy_nonoverlapping(
+                name.as_ptr(),
+                std::ptr::addr_of_mut!((*info).FileName) as *mut u16,
+                name.len(),
+            );
+            ok(SetFileInformationByHandle(
+                handle(f),
+                class,
+                info as *const core::ffi::c_void,
+                bytes as u32,
+            ))
+        };
+        // POSIX semantics (the name is replaced even while another program has the old file
+        // open) where the file system has them; else the classic rename, which replaces too.
+        match rename(FileRenameInfoEx, REPLACE_IF_EXISTS | POSIX_SEMANTICS) {
+            Err(e)
+                if e.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32)
+                    || e.raw_os_error() == Some(ERROR_NOT_SUPPORTED as i32)
+                    || e.raw_os_error() == Some(ERROR_INVALID_FUNCTION as i32) =>
+            {
+                rename(FileRenameInfo, REPLACE_IF_EXISTS)
+            }
+            r => r,
+        }
     }
 
     /// A SID this process's token names, in the buffer that holds it: its user, or its default

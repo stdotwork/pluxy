@@ -35,15 +35,14 @@ mod tests;
 pub use backups::{backup_call, backup_operations, json_leaves, Leaves, KEEP_BACKUPS};
 pub use merge::{merge_value, Json, Merge};
 pub use target::{
-    pin_schema, sha256, sha256_of, Failed, Id, Pin, Selection, Target, WriteMode, MAX_FILE,
+    pin_schema, sha256, sha256_of, Failed, Id, Mode, Pin, Selection, Target, WriteMode, MAX_FILE,
 };
 
 use cap_std::ambient_authority;
-use cap_std::fs::{Dir, OpenOptions};
+use cap_std::fs::Dir;
 use pluxy_program::{Call, Error};
 use serde_json::{json, Map, Value};
-use std::io::{ErrorKind, Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
 /// The `kind` of the journals this library begins.
@@ -111,14 +110,14 @@ fn check_set(set: &str) -> Result<(), Error> {
     }
 }
 
-/// One file of an operation: its target, its bytes and permission bits now, the bytes it gets,
-/// and the permission bits a file it creates gets (else 0600).
+/// One file of an operation: its target, its bytes and permissions now, the bytes it gets, and the
+/// permissions a file it creates gets (else a new file's, see [`Mode`]).
 struct Change {
     target: Target,
     before: Option<Vec<u8>>,
-    mode: Option<u32>,
+    mode: Option<Mode>,
     after: Option<Vec<u8>>,
-    after_mode: Option<u32>,
+    after_mode: Option<Mode>,
 }
 
 /// Where a pin is, as records name it: the selection and the target.
@@ -135,13 +134,13 @@ fn place(pin: &Pin) -> Value {
 fn record(
     pin: &Pin,
     original: Option<String>,
-    original_mode: Option<u32>,
+    original_mode: Option<&Mode>,
     applied: Option<String>,
     applied_sha: Option<String>,
 ) -> Value {
     let mut r = place(pin);
     r["original"] = json!(original);
-    r["original_mode"] = json!(original_mode);
+    r["original_mode"] = json!(original_mode.map(Mode::to_json));
     r["applied"] = json!(applied);
     r["applied_sha256"] = json!(applied_sha);
     r
@@ -237,14 +236,9 @@ impl<'a> Transactions<'a> {
         let tmp = format!(".{STATE}.{}.tmp", target::random_hex()?);
         let bytes = serde_json::to_vec(state).map_err(|e| Error::internal(e.to_string()))?;
         let r = (|| -> std::io::Result<()> {
-            let mut f = d
-                .open_with(&tmp, OpenOptions::new().write(true).create_new(true))?
-                .into_std();
-            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-            f.write_all(&bytes)?;
-            f.sync_all()?;
-            d.rename(&tmp, &d, STATE)?;
-            d.open(".")?.sync_all()
+            let f = target::write_private_temp(&d, Path::new(&tmp), &bytes)?;
+            target::rename_temp(f, &d, Path::new(&tmp), Path::new(STATE))?;
+            target::sync_dir(&d)
         })();
         r.map_err(|e| {
             let _ = d.remove_file(&tmp);
@@ -397,7 +391,7 @@ impl<'a> Transactions<'a> {
         for (i, c) in changes.into_iter().enumerate() {
             let after = image(i, &c.target.pin, c.before.as_deref())?;
             let (original, original_mode) = if rec.is_null() {
-                (c.before.clone(), c.mode)
+                (c.before.clone(), c.mode.clone())
             } else {
                 let t = &rec["targets"][i];
                 let o = merge.merge(
@@ -405,7 +399,7 @@ impl<'a> Transactions<'a> {
                     self.get(&t["applied"])?.as_deref(),
                     c.before.as_deref(),
                 )?;
-                (o, t["original_mode"].as_u64().map(|m| m as u32))
+                (o, Mode::from_json(&t["original_mode"]))
             };
             out.push((original, original_mode, Change { after, ..c }));
         }
@@ -428,7 +422,7 @@ impl<'a> Transactions<'a> {
             targets.push(record(
                 &c.target.pin,
                 o,
-                *mode,
+                mode.as_ref(),
                 a,
                 sha256_of(c.after.as_deref()),
             ));
@@ -487,7 +481,7 @@ impl<'a> Transactions<'a> {
             for (i, c) in changes.iter_mut().enumerate() {
                 let t = &rec["targets"][i];
                 let original = self.get(&t["original"])?;
-                c.after_mode = t["original_mode"].as_u64().map(|m| m as u32);
+                c.after_mode = Mode::from_json(&t["original_mode"]);
                 c.after = match merge {
                     Some(m) => m.merge(
                         original.as_deref(),
@@ -518,7 +512,7 @@ impl<'a> Transactions<'a> {
         };
         for (c, k) in changes.iter_mut().zip(found) {
             c.after = self.get(&k["original"])?;
-            c.after_mode = k["original_mode"].as_u64().map(|m| m as u32);
+            c.after_mode = Mode::from_json(&k["original_mode"]);
         }
         // The set's own record, for other targets, stays as it is.
         self.run(op, set, changes, None, written)
@@ -598,7 +592,7 @@ impl<'a> Transactions<'a> {
                 Some(c.target.pin.file_id),
                 &from,
                 c.after.as_deref(),
-                c.after_mode,
+                c.after_mode.as_ref(),
                 // An apply writes the writer's values, a key among them: owner-only.
                 if op == "apply" {
                     WriteMode::OwnerOnly
@@ -674,7 +668,7 @@ impl<'a> Transactions<'a> {
                 "pin": c.target.pin.to_json(),
                 "before": sha256_of(c.before.as_deref()),
                 "after": sha256_of(c.after.as_deref()),
-                "mode": c.mode,
+                "mode": c.mode.as_ref().map(Mode::to_json),
                 "backup": self.put_image("before", c.before.as_deref())?,
                 "intended": self.put_image("intended", c.after.as_deref())?,
             }));
@@ -736,7 +730,7 @@ impl<'a> Transactions<'a> {
                 Some(*id),
                 &after,
                 c.before.as_deref(),
-                c.mode,
+                c.mode.as_ref(),
                 WriteMode::Exact,
             ) {
                 failed.push(format!(
@@ -873,12 +867,12 @@ impl<'a> Transactions<'a> {
                         }
                         Err(e) => return Err(e),
                     };
-                    let mode = f["mode"].as_u64().map(|m| m as u32);
+                    let mode = Mode::from_json(&f["mode"]);
                     t.replace(
                         None,
                         &t.pin.sha256,
                         before.as_deref(),
-                        mode,
+                        mode.as_ref(),
                         WriteMode::Exact,
                     )
                     .map_err(|f| f.error)?;

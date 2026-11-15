@@ -182,6 +182,29 @@ fn an_open_folder_or_file_is_made_private() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// A file this process has just made is made private through its handle (as the transactions
+/// library makes its temporary files before writing a byte).
+#[test]
+fn a_file_just_made_is_made_private_through_its_handle() {
+    let dir = temp("private-open");
+    let path = dir.join("f");
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+        use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
+        opts.access_mode(GENERIC_READ | GENERIC_WRITE | WRITE_DAC);
+    }
+    let f = opts.open(&path).unwrap();
+    assert!(!is_private(&path).unwrap());
+    make_private_open(&f).unwrap();
+    assert!(is_private(&path).unwrap());
+    drop(f);
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn make_private_refuses_a_link() {
     let dir = temp("private-link");
@@ -289,6 +312,93 @@ fn an_inherited_list_or_another_owner_is_not_private() {
     } else {
         eprintln!("skipped: this account cannot hand a file to the Users group");
     }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Windows: a file's access list is read as SDDL and given back as it was: a protected one (the
+/// file is then private), or its folder's again (inherited entries, not private). Anything that is
+/// not a list, or a NULL one (which allows everyone), is refused and the list kept.
+#[cfg(windows)]
+#[test]
+fn an_access_list_is_read_and_given_back() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Foundation::GENERIC_READ;
+    use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
+    let dir = temp("access-list");
+    let (plain, private) = (dir.join("plain"), dir.join("private"));
+    fs::write(&plain, b"x").unwrap();
+    drop(create_new_private(&private).unwrap());
+    let open = |p: &Path| {
+        fs::OpenOptions::new()
+            .access_mode(GENERIC_READ | WRITE_DAC)
+            .open(p)
+            .unwrap()
+    };
+    let inherited = access_list(&open(&plain)).unwrap();
+    let protected = access_list(&open(&private)).unwrap();
+    assert!(
+        inherited.starts_with("D:") && !inherited.starts_with("D:P") && inherited.contains(";ID;"),
+        "{inherited}"
+    );
+    assert!(
+        protected.starts_with("D:P") && !protected.contains(";ID;"),
+        "{protected}"
+    );
+    set_access_list(&open(&plain), &protected).unwrap();
+    assert!(is_private(&plain).unwrap());
+    assert_eq!(access_list(&open(&plain)).unwrap(), protected);
+    set_access_list(&open(&plain), &inherited).unwrap();
+    assert!(!is_private(&plain).unwrap());
+    assert_eq!(access_list(&open(&plain)).unwrap(), inherited);
+    for bad in ["not an access list", "D:NO_ACCESS_CONTROL", "O:SY", "D:P\0"] {
+        assert!(set_access_list(&open(&plain), bad).is_err(), "{bad}");
+    }
+    assert_eq!(access_list(&open(&plain)).unwrap(), inherited);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Windows: rename_open renames a file through its own handle (one shared with no one) into the
+/// folder open as folder, over a file another handle still has open; a name that is a path, or
+/// empty, is refused.
+#[cfg(windows)]
+#[test]
+fn rename_open_replaces_a_file_through_the_handles() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+    use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_FLAG_BACKUP_SEMANTICS};
+    let dir = temp("rename-open");
+    let target = dir.join("target");
+    fs::write(&target, b"old").unwrap();
+    let mut held = File::open(&target).unwrap();
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .access_mode(GENERIC_READ | GENERIC_WRITE | DELETE)
+        .share_mode(0)
+        .open(dir.join("tmp"))
+        .unwrap();
+    f.write_all(b"new").unwrap();
+    let folder = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(&dir)
+        .unwrap();
+    for bad in ["", r"sub\target", "sub/target"] {
+        assert_eq!(
+            rename_open(&f, &folder, bad.as_ref()).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput,
+            "{bad:?}"
+        );
+    }
+    rename_open(&f, &folder, "target".as_ref()).unwrap();
+    drop(f);
+    assert_eq!(fs::read(&target).unwrap(), b"new");
+    assert!(!dir.join("tmp").exists());
+    // The handle open on the replaced file still reads it.
+    let mut old = String::new();
+    held.read_to_string(&mut old).unwrap();
+    assert_eq!(old, "old");
+    drop(held);
     fs::remove_dir_all(dir).unwrap();
 }
 

@@ -1,8 +1,8 @@
 name: Next app tools platforms
 
 # Builds, lints and unit-tests the app tools (next/app-tools, the native programs the desktop app
-# runs on demand) on Windows and macOS. Linux runs them in next-app.yml. The writer tools
-# (pluxy-transactions and the tools built on it) are not ported yet and are left out here.
+# runs on demand) on Windows and macOS. Linux runs them in next-app.yml. claude-desktop is not
+# ported yet and is left out here.
 
 on:
   workflow_dispatch:
@@ -30,7 +30,7 @@ defaults:
     working-directory: next/app-tools
 
 env:
-  # The writer tools and their library, ported in a later change.
+  # Claude Desktop's setup, Linux only for now (its files are elsewhere on Windows and macOS).
   NOT_PORTED: --exclude claude-desktop
 
 jobs:

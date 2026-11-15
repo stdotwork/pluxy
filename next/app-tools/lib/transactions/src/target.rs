@@ -2,33 +2,59 @@
 //! a link, as stow and chezmoi make), pinning what it resolves to, checking it again, and reading
 //! and writing the file through a handle on its folder (cap-std), never by a path again.
 
+#[cfg(windows)]
+use cap_fs_ext::MetadataExt;
 use cap_std::ambient_authority;
-use cap_std::fs::{Dir, MetadataExt, OpenOptions, OpenOptionsExt as _, PermissionsExt as _};
+#[cfg(unix)]
+use cap_std::fs::MetadataExt;
+use cap_std::fs::{Dir, OpenOptions};
 use pluxy_program::Error;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::io::{ErrorKind, Read, Write};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
 /// The largest file the library reads or writes: its backups must fit the vault's 512 KiB of
 /// base64.
 pub const MAX_FILE: usize = 256 << 10;
 
-/// The mode of a file the library creates (config files may hold keys).
+/// The mode of a file the library creates on Linux and macOS (config files may hold keys); on
+/// Windows such a file is private (owned by this user, a protected access list allowing only this
+/// user and SYSTEM, as `pluxy-files` makes it).
+#[cfg(unix)]
 const NEW_FILE_MODE: u32 = 0o600;
 
-/// The permission bits [`Target::replace`] gives the file it writes, from the file's own bits now,
-/// or the `mode` it is given (else 0600) when there is no file.
+/// A file's permissions as the library records and gives them back: on Linux and macOS its
+/// permission bits (setuid, setgid and sticky left out), a JSON number; on Windows its access list
+/// in the system's text form (SDDL, protected or not), a JSON string.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mode(#[cfg(unix)] u32, #[cfg(windows)] String);
+
+impl Mode {
+    pub fn to_json(&self) -> Value {
+        json!(self.0)
+    }
+
+    /// The mode a record holds, None for null or one of another system's kind.
+    pub fn from_json(v: &Value) -> Option<Mode> {
+        #[cfg(unix)]
+        return v.as_u64().map(|m| Mode((m & 0o777) as u32));
+        #[cfg(windows)]
+        return v.as_str().map(|s| Mode(s.to_string()));
+    }
+}
+
+/// The permissions [`Target::replace`] gives the file it writes, from the file's own now, or the
+/// `mode` it is given when there is no file (else a new file's: 0600, private on Windows).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WriteMode {
-    /// The file's own bits (clear, restore).
+    /// The file's own permissions (clear, restore).
     Keep,
-    /// As `Keep`, with the group's and others' bits taken away (apply: it writes a writer's
-    /// values, a key among them).
+    /// As `Keep`, with the group's and others' bits taken away; on Windows the file is made
+    /// private (apply: it writes a writer's values, a key among them).
     OwnerOnly,
-    /// The `mode` given, whatever the file's bits now (a rollback: the bits the file had before
-    /// the write it undoes); as `Keep` when none is given.
+    /// The `mode` given, whatever the file's permissions now (a rollback: those the file had
+    /// before the write it undoes); as `Keep` when none is given.
     Exact,
 }
 
@@ -272,22 +298,53 @@ fn changed(target: &Path, what: &str) -> Error {
     ))
 }
 
-/// An absolute path with no `.` or `..` parts, as UTF-8.
+/// An absolute path with no `.` or `..` parts, as UTF-8 (on Windows, not in a WSL distribution:
+/// see [`in_wsl`]).
 fn absolute(p: &Path, what: &str) -> Result<(), Error> {
     let ok = p.is_absolute()
         && p.to_str().is_some()
         && p.components()
-            .skip(1)
+            .skip_while(|c| matches!(c, Component::Prefix(_) | Component::RootDir))
             .all(|c| matches!(c, Component::Normal(_)))
         && p.file_name().is_some();
-    if ok {
-        Ok(())
-    } else {
-        Err(Error::invalid_request(format!(
+    if !ok {
+        return Err(Error::invalid_request(format!(
             "the {what} path must be absolute, in UTF-8, with no . or .. parts: {}",
             p.display()
-        )))
+        )));
     }
+    not_in_wsl(p)
+}
+
+/// Whether path is inside a WSL distribution as Windows reaches it (`\\wsl.localhost\…` or
+/// `\\wsl$\…`, in any case, either slash, also after `\\?\UNC\`).
+pub(crate) fn in_wsl(path: &str) -> bool {
+    let p = path.replace('/', "\\").to_ascii_lowercase();
+    let share = p
+        .strip_prefix(r"\\?\unc\")
+        .or_else(|| p.strip_prefix(r"\\.\unc\"))
+        .or_else(|| p.strip_prefix(r"\\"));
+    share.is_some_and(|s| {
+        let host = s.split('\\').next().unwrap_or_default();
+        host == "wsl$" || host == "wsl.localhost"
+    })
+}
+
+/// On Windows, refuses a path inside a WSL distribution: the package's Linux program serves those,
+/// inside the distribution, never Windows writes over its network share.
+fn not_in_wsl(p: &Path) -> Result<(), Error> {
+    if cfg!(windows) && in_wsl(&p.to_string_lossy()) {
+        return Err(Error::invalid_request(format!(
+            "{} is inside a WSL distribution, which this program does not write",
+            p.display()
+        )));
+    }
+    Ok(())
+}
+
+/// The folder holding p, or p itself for a root.
+fn folder_of(p: &Path) -> &Path {
+    p.parent().unwrap_or(p)
 }
 
 /// Opens folder by its (resolved) path.
@@ -335,6 +392,7 @@ fn canonical(p: &Path) -> Result<PathBuf, Error> {
             p.display()
         ))
     })?;
+    not_in_wsl(&c)?;
     Ok(c)
 }
 
@@ -355,10 +413,7 @@ impl Target {
         match selection {
             Selection::File(f) => {
                 absolute(f, "selected file")?;
-                let (parent, name) = (
-                    f.parent().unwrap_or(Path::new("/")),
-                    f.file_name().unwrap_or_default(),
-                );
+                let (parent, name) = (folder_of(f), f.file_name().unwrap_or_default());
                 let pdir = open_dir(parent)?;
                 let link = link_at(&pdir, Path::new(name), f)?;
                 let target = if link.is_some() {
@@ -366,7 +421,7 @@ impl Target {
                 } else {
                     canonical(parent)?.join(name)
                 };
-                let tparent = target.parent().unwrap_or(Path::new("/"));
+                let tparent = folder_of(&target);
                 let dir = open_dir(tparent)?;
                 let parent_id = dir_id(&dir, tparent)?;
                 let name = PathBuf::from(target.file_name().unwrap_or_default());
@@ -385,10 +440,7 @@ impl Target {
                         "the path must stay inside the selected root, as parts with no . or ..: {path:?}"
                     )));
                 }
-                let (rparent, rname) = (
-                    root.parent().unwrap_or(Path::new("/")),
-                    root.file_name().unwrap_or_default(),
-                );
+                let (rparent, rname) = (folder_of(root), root.file_name().unwrap_or_default());
                 let link = link_at(&open_dir(rparent)?, Path::new(rname), root)?;
                 let croot = canonical(root)?;
                 let mut dir = open_dir(&croot)?;
@@ -421,7 +473,9 @@ impl Target {
                 }
                 let parent_id = dir_id(&dir, &at)?;
                 let last = parts[parts.len() - 1];
-                let target = croot.join(path);
+                // Part by part: a long-form Windows path (`\\?\…`) takes `/` as a letter.
+                let mut target = croot.clone();
+                target.extend(&parts);
                 Target::finish(
                     selection,
                     link,
@@ -498,7 +552,7 @@ impl Target {
     /// now: for reconciling what a journal wrote there. The target's folder must still be the
     /// pinned one.
     pub fn pinned(pin: &Pin) -> Result<Target, Error> {
-        let folder = pin.target.parent().unwrap_or(Path::new("/"));
+        let folder = folder_of(&pin.target);
         let dir = open_dir(folder)?;
         if dir_id(&dir, folder)? != pin.parent_id {
             return Err(changed(&pin.target, "its folder was replaced"));
@@ -521,7 +575,7 @@ impl Target {
     /// folder path still opens the pinned folder.
     pub fn check_place(&self) -> Result<(), Error> {
         if self.pinned {
-            let folder = self.pin.target.parent().unwrap_or(Path::new("/"));
+            let folder = folder_of(&self.pin.target);
             if dir_id(&open_dir(folder)?, folder)? != self.pin.parent_id {
                 return Err(changed(&self.pin.target, "its folder was replaced"));
             }
@@ -582,12 +636,41 @@ impl Target {
         Ok((Some(Id::of(&m)), Some(bytes)))
     }
 
-    /// The file's permission bits now (setuid, setgid and sticky left out), None when missing.
-    pub fn mode_now(&self) -> Result<Option<u32>, Error> {
-        match self.dir.symlink_metadata(&self.name) {
-            Ok(m) => Ok(Some(m.permissions().mode() & 0o777)),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(io(&format!("{}", self.pin.target.display()), e)),
+    /// The file's permissions now (see [`Mode`]), None when missing.
+    pub fn mode_now(&self) -> Result<Option<Mode>, Error> {
+        let at = &self.pin.target;
+        let m = match self.dir.symlink_metadata(&self.name) {
+            Ok(m) => m,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(io(&format!("{}", at.display()), e)),
+        };
+        #[cfg(unix)]
+        {
+            use cap_std::fs::PermissionsExt as _;
+            Ok(Some(Mode(m.permissions().mode() & 0o777)))
+        }
+        // The access list is read on the file itself, checked to be the one just looked at.
+        #[cfg(windows)]
+        {
+            if m.file_type().is_symlink() || !m.is_file() {
+                return Err(Error::invalid_request(format!(
+                    "{} is a link or not a regular file",
+                    at.display()
+                )));
+            }
+            let f = self
+                .dir
+                .open(&self.name)
+                .map_err(|e| io(&format!("{}", at.display()), e))?;
+            let fm = f
+                .metadata()
+                .map_err(|e| io(&format!("{}", at.display()), e))?;
+            if Id::of(&fm) != Id::of(&m) {
+                return Err(changed(at, "the file was replaced while it was read"));
+            }
+            pluxy_files::access_list(&f.into_std())
+                .map(|sddl| Some(Mode(sddl)))
+                .map_err(|e| io(&format!("{}", at.display()), e))
         }
     }
 
@@ -602,7 +685,7 @@ impl Target {
     /// or grew past the size limit): through the pinned folder, never reading the file. The
     /// folder must still be the pinned one.
     pub fn remove_temps_of(pin: &Pin) -> Result<Vec<String>, Error> {
-        let folder = pin.target.parent().unwrap_or(Path::new("/"));
+        let folder = folder_of(&pin.target);
         let dir = open_dir(folder)?;
         if dir_id(&dir, folder)? != pin.parent_id {
             return Err(changed(&pin.target, "its folder was replaced"));
@@ -630,7 +713,7 @@ impl Target {
         from_id: Option<Option<Id>>,
         from: &Option<String>,
         bytes: Option<&[u8]>,
-        mode: Option<u32>,
+        mode: Option<&Mode>,
         rule: WriteMode,
     ) -> Result<Option<Id>, Failed> {
         let at = &self.pin.target;
@@ -670,16 +753,7 @@ impl Target {
                 MAX_FILE >> 10
             ))));
         }
-        let mode = match (rule, mode, self.mode_now()) {
-            (WriteMode::Exact, Some(m), _) => m & 0o777,
-            (_, _, Ok(Some(m))) => m,
-            _ => mode.unwrap_or(NEW_FILE_MODE) & 0o777,
-        };
-        let mode = if rule == WriteMode::OwnerOnly {
-            mode & !0o077
-        } else {
-            mode
-        };
+        let give = protection(rule, mode, self.mode_now().ok().flatten());
         let tmp = PathBuf::from(format!(
             ".{}.pluxy-{}.tmp",
             self.name.to_string_lossy(),
@@ -691,18 +765,17 @@ impl Target {
             if !self.is(from_id, from)? {
                 return Err(modified());
             }
-            f.set_permissions(std::fs::Permissions::from_mode(mode))
-                .map_err(beside)?;
-            Ok(id)
+            protect(&f, &give).map_err(beside)?;
+            Ok((id, f))
         });
-        let new_id = match written {
-            Ok(id) => id,
+        let (new_id, f) = match written {
+            Ok(w) => w,
             Err(e) => {
                 let _ = self.dir.remove_file(&tmp);
                 return Err(before(e));
             }
         };
-        if let Err(e) = self.dir.rename(&tmp, &self.dir, &self.name) {
+        if let Err(e) = rename_temp(f, &self.dir, &tmp, &self.name) {
             let _ = self.dir.remove_file(&tmp);
             return Err(before(io(&format!("replacing {}", at.display()), e)));
         }
@@ -721,30 +794,16 @@ impl Target {
         Ok(Some(new_id))
     }
 
-    /// Writes bytes to a new file tmp beside the target, readable only by this user (0600) until
-    /// the caller gives it the target's mode just before renaming it: its identity and handle.
+    /// Writes bytes to a new file tmp beside the target, readable only by this user (0600; on
+    /// Windows private, and open to no other handle) until the caller gives it the target's
+    /// permissions just before renaming it: its identity and handle.
     pub(crate) fn write_temp(
         &self,
         tmp: &Path,
         bytes: &[u8],
     ) -> Result<(Id, std::fs::File), Error> {
         let beside = |e| io(&format!("writing beside {}", self.pin.target.display()), e);
-        let mut f = self
-            .dir
-            .open_with(
-                tmp,
-                OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .mode(NEW_FILE_MODE),
-            )
-            .map_err(beside)?
-            .into_std();
-        f.set_permissions(std::fs::Permissions::from_mode(NEW_FILE_MODE))
-            .map_err(beside)?;
-        f.write_all(bytes)
-            .and_then(|_| f.sync_all())
-            .map_err(beside)?;
+        let f = write_private_temp(&self.dir, tmp, bytes).map_err(beside)?;
         let f = cap_std::fs::File::from_std(f);
         let m = f.metadata().map_err(beside)?;
         Ok((Id::of(&m), f.into_std()))
@@ -752,10 +811,123 @@ impl Target {
 
     /// Flushes the folder, so a rename or removal in it lasts.
     fn sync(&self) -> Result<(), Error> {
-        self.dir
-            .open(".")
-            .and_then(|f| f.sync_all())
-            .map_err(|e| io(&format!("{}", self.pin.target.display()), e))
+        sync_dir(&self.dir).map_err(|e| io(&format!("{}", self.pin.target.display()), e))
+    }
+}
+
+/// The permissions a written file gets (see [`WriteMode`]): on Linux and macOS its bits.
+#[cfg(unix)]
+type Give = u32;
+
+/// On Windows an access list in SDDL, or None to keep it private (as the temporary file is made).
+#[cfg(windows)]
+type Give = Option<String>;
+
+#[cfg(unix)]
+fn protection(rule: WriteMode, given: Option<&Mode>, now: Option<Mode>) -> Give {
+    let bits = match (rule, given, now) {
+        (WriteMode::Exact, Some(m), _) => m.0 & 0o777,
+        (_, _, Some(m)) => m.0,
+        (_, given, None) => given.map_or(NEW_FILE_MODE, |m| m.0) & 0o777,
+    };
+    if rule == WriteMode::OwnerOnly {
+        bits & !0o077
+    } else {
+        bits
+    }
+}
+
+#[cfg(windows)]
+fn protection(rule: WriteMode, given: Option<&Mode>, now: Option<Mode>) -> Give {
+    match (rule, given, now) {
+        (WriteMode::OwnerOnly, _, _) => None,
+        (WriteMode::Exact, Some(m), _) => Some(m.0.clone()),
+        (_, _, Some(m)) => Some(m.0),
+        (_, given, None) => given.map(|m| m.0.clone()),
+    }
+}
+
+/// Gives the written file f its permissions.
+fn protect(f: &std::fs::File, give: &Give) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(*give))
+    }
+    #[cfg(windows)]
+    match give {
+        Some(sddl) => pluxy_files::set_access_list(f, sddl),
+        None => Ok(()),
+    }
+}
+
+/// Writes bytes to a new file tmp in dir, private from the start (0600; on Windows private, and
+/// shared with no other handle, so nothing else can open it until it is renamed and closed), and
+/// flushes it: its handle, which on Windows the rename goes through ([`rename_temp`]).
+pub(crate) fn write_private_temp(
+    dir: &Dir,
+    tmp: &Path,
+    bytes: &[u8],
+) -> std::io::Result<std::fs::File> {
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        opts.mode(NEW_FILE_MODE);
+    }
+    #[cfg(windows)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+        use windows_sys::Win32::Storage::FileSystem::{DELETE, WRITE_DAC};
+        opts.access_mode(GENERIC_READ | GENERIC_WRITE | WRITE_DAC | DELETE)
+            .share_mode(0);
+    }
+    let mut f = dir.open_with(tmp, &opts)?.into_std();
+    // Private before it holds a byte.
+    pluxy_files::make_private_open(&f)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    Ok(f)
+}
+
+/// Renames the temporary file tmp in dir, open as f, to name, replacing what is there: on Linux
+/// and macOS through dir's handle, on Windows through f's own handle (no other could open it).
+pub(crate) fn rename_temp(
+    f: std::fs::File,
+    dir: &Dir,
+    tmp: &Path,
+    name: &Path,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        drop(f);
+        dir.rename(tmp, dir, name)
+    }
+    #[cfg(windows)]
+    {
+        let _ = tmp;
+        use std::os::windows::io::{AsRawHandle, FromRawHandle};
+        // The folder's handle, borrowed: the ManuallyDrop never closes it.
+        let folder = std::mem::ManuallyDrop::new(unsafe {
+            std::fs::File::from_raw_handle(dir.as_raw_handle())
+        });
+        let r = pluxy_files::rename_open(&f, &folder, name.as_os_str());
+        drop(f);
+        r
+    }
+}
+
+/// Flushes dir, so a rename or removal in it lasts. Windows flushes a folder's entries with the
+/// file system's own log; a folder cannot be flushed through a handle opened to read it.
+pub(crate) fn sync_dir(dir: &Dir) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return dir.open(".").and_then(|f| f.sync_all());
+    #[cfg(windows)]
+    {
+        let _ = dir;
+        Ok(())
     }
 }
 
