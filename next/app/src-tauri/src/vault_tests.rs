@@ -184,6 +184,20 @@ fn a_vault_folder_others_may_use_is_made_private_again() {
 }
 
 #[test]
+fn a_name_too_long_is_refused_never_cut_to_another() {
+    let (d, _v) = vault();
+    let root = Folder::root(&d.0.join("vault"), true).unwrap().unwrap();
+    root.write("a", b"short").unwrap();
+    // 32769 characters: 65538 bytes, which a 16-bit count would wrap to 2, the name "a".
+    let long = "a".repeat(32769);
+    assert!(root.read(&long).is_err());
+    assert!(root.write(&long, b"other").is_err());
+    assert!(root.remove(&long).is_err());
+    assert!(root.folder(&long, true).is_err());
+    assert_eq!(root.read("a").unwrap().as_deref(), Some(&b"short"[..]));
+}
+
+#[test]
 fn only_plain_names_are_vault_names() {
     for name in ["", ".", "..", "a/b", "a\0b"] {
         assert!(check_name(name).is_err(), "{name:?}");

@@ -82,7 +82,10 @@ fn at(
     create: Option<&Private>,
 ) -> io::Result<File> {
     let mut name = wide(name.as_ref());
-    let bytes = (name.len() * 2) as u16;
+    // A counted string holds at most 32767 characters: a longer name is refused, never cut short
+    // to another one.
+    let bytes = u16::try_from(name.len() * 2)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "the name is too long"))?;
     let us = UNICODE_STRING {
         Length: bytes,
         MaximumLength: bytes,
