@@ -707,7 +707,8 @@ Prompt) and `console` (Console window). A terminal launch runs `<execution> term
 default terminal app (Windows Terminal, or the console host). The execution program runs the
 program there in the launch's folder and environment, leaving Ctrl+C to it, says how it ended,
 and then waits for Enter (`console`) or stays at a `cmd.exe /D` or `powershell.exe -NoLogo
--NoProfile` prompt, both from `%SystemRoot%\System32`. There is no Windows Terminal kind:
+-NoProfile` prompt, both from the System32 folder Windows reports (never the launch's
+`SystemRoot`). There is no Windows Terminal kind:
 `wt.exe` splits its command line its own way, so the arguments confirmed would not be the ones
 it runs.
 
@@ -717,7 +718,9 @@ or Yarn command shim the execution program can read: it becomes what the shim ru
 (`node.exe` beside the shim, else on the search path) with the shim's script and arguments, or
 the shim's own program; any other batch file is refused, since `cmd.exe` would read the
 arguments its own way. For the same reason `cmd.exe`, `wt.exe`, `conhost.exe` and the other
-programs that read their command line their own way start only with no arguments. Paths are shown
+programs that read their command line their own way start only with no arguments. The program (for a
+shim, what it runs) and the working folder are judged and confirmed by their final paths, links
+and short names resolved, so a link to `cmd.exe` is `cmd.exe`. Paths are shown
 and confirmed in their plain form (`C:\…`, not `\\?\C:\…`), and a path whose plain form would
 name another file (a name ending in a dot or a blank, a device name such as `NUL`) is refused.
 
@@ -726,9 +729,10 @@ app), with no arguments: `<execution> app -- <AppUserModelID>` starts it through
 open launch runs `<execution> open -- <file>`, which opens the file with the app Windows has for
 its extension (`ShellExecuteExW`, verb `open`, the extension as its class, no dialog). The file
 must be `.txt`, `.json`, `.jsonl`, `.ndjson`, `.md` or `.log`, on a local drive, with no
-alternate data stream and a path shorter than 260 characters, and some app must open its type:
-`prepare` checks that (the shell would report success and open nothing). Its folders must be
-writable by no one but the user, SYSTEM and Administrators.
+alternate data stream and a path shorter than 260 UTF-16 units, and some app must open its type:
+`prepare` checks that (the shell would report success and open nothing). Its folders must be real
+folders (no link, junction or other reparse point) writable by no one but the user, SYSTEM and
+Administrators.
 
 **macOS.** The terminal is Terminal (iTerm2 and Ghostty are not offered yet). A terminal launch
 runs `<execution> terminal --with terminal --app <Terminal.app> -- <program> <args>`. It makes a
@@ -739,7 +743,8 @@ environment over the socket to the first connection from this user; the file onl
 In the window, the program runs with the launch's environment and the window's own `TERM…`,
 `LC_TERMINAL…` and `PATH`. When macOS holds `open` back for 20 seconds (a quarantine or a
 permission prompt), the launch fails as blocked; when no window takes it within 60 seconds, as
-expired.
+expired. A launch whose hand-over would be over 1 MiB (the program, arguments, folder and
+environment) is refused before Terminal opens.
 
 A direct launch may name an application bundle (`….app`) in `/Applications`, `~/Applications` or
 `/System/Applications`, with no arguments: it runs `/usr/bin/open -a <bundle>`. An open launch
