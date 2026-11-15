@@ -9,7 +9,7 @@ reference: this folder implements it, it does not change it.
 
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
-cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-omp)
+cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
 cargo build --release --locked -p claude-code   # likewise execution
 ```
@@ -39,14 +39,18 @@ waits for its own job inside a call.
 
 ## `lib/usage`
 
-Schema 1 of the usage hub's ingest API and what a usage parser shares (`pluxy-usage`): a parser
+Schemas 1 and 2 of the usage hub's ingest API and what a usage parser shares (`pluxy-usage`): a parser
 implements `Parser` (its label, default roots, which files are its, how a file's bytes become
 rows) and answers its produces operation with `produce`, which lists files (`scan`: no links, at
 most 8 folders deep, newest first, at most 20,000), finds a named file again only under the roots
 (`locate`), reads it and sends its rows in parts within the batch limit (`Sink`). A parser of a
 format read whole (`parse`) gets a file of at most 16 MiB; a parser of a line-based format sets
 `streamed` and gets the file's lines one at a time (`parse_lines`, `LineReader`) whatever its size,
-a line over 16 MiB being skipped and counted. The schema is in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
+a line over 16 MiB being skipped and counted: the reader holds one line, and what the parser keeps
+of a file meanwhile is its own (usage-claude keeps one small record per message). A parser at schema 2 sends a record that more than one
+file can hold as one keyed event (`Sink::event`). `fields` reads the fields usage records share, by
+the old desktop app's rules: token counters under the names agents use, a model name and a time.
+The schemas are in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
 
 ## `agent-usage`
 
@@ -155,13 +159,50 @@ changes, by the old desktop app's rules:
 
 The rollout is read line by line, whatever its size; a line over 16 MiB is skipped, as the old reader did.
 
+## `usage-claude`
+
+`pluxy/usage-claude`, the usage hub's parser of Claude Code's session transcripts, at schema 2. It
+reads the transcripts (`*.jsonl`) under `~/.claude/projects` (from the `HOME` the app gives; the
+hub's `roots` name others) and sends the hub token counts per message, and nothing else: no prompt,
+reply, folder name or raw message, request or session ID leaves the parser. It never writes a
+Claude Code file.
+
+A transcript's file ID is its path below the root with the first folder, Claude Code's project
+folder (named after the project's working folder), replaced by a hash of its name. A custom root
+should name a `projects` folder (as `~/.claude/projects` is), so that the hashed folder is the
+project's: under a root above it, the project folder's name would be kept in the file ID in the
+hub's store (never in a report). Each file is
+read whole, line by line, when it changes, by the old desktop app's rules:
+
+- a line's usage is its `message.usage` (with no `message` object, its own `usage`), its model the
+  message's `model`; `<synthetic>`, Claude Code's own placeholder, is no model;
+- Claude Code writes one line per content block of a response, each repeating the response's
+  `message.id` and usage, so the lines of one message ID are one message: the last one wins, at its
+  own time;
+- the lines of one message ID and request ID (or one message ID, when a line has no request ID)
+  are one message; an empty message ID is none;
+- a message is a keyed event: its key is a hash of its message ID and `requestId`, else of its
+  message ID and `sessionId`, so a response that `/branch` or `--fork-session` copies into another
+  transcript counts once; with neither ID it counts in its file only;
+- a line with usage but no message ID counts as it is, as does each record of a line that is a
+  list (or holds a `messages` list);
+- the total is input + output + cache write + cache read unless the usage gives its own; every
+  message is one sample; a line with no readable `timestamp` is skipped (the old reader used the
+  file's modification time);
+- the parser holds one small record per message of a file until the file is read: a file of more
+  than 100,000 messages (more rows than the hub keeps of one file) fails, and keeps its old rows.
+
+Two responses that share a message ID and have no request ID (a gateway that reuses one ID) are
+one message within a file, as they were in the old app.
 ## `lib/pi-sessions`
 
 What the Pi and Oh My Pi usage parsers share (`pluxy-pi-sessions`): the two tools write the same
 session format, so one library reads it and each parser is a small program of its own. Their session
 files are `*.jsonl` under `~/.<tool>/agent/sessions` and `~/.<tool>/sessions` (the hub's `roots` name
-others), read-only. A file's ID is its path below the root it is under, so a session present under
-both roots is one file and the newer copy is read. Rules, by the tools' own sources:
+others), read-only. A file's ID is its path below the root it is under, with the first folder (the
+tool names it after the session's working folder) replaced by a hash of its name, so an ID names no
+folder of the person's; a session present under both roots is one file and the newer copy is read.
+Rules, by the tools' own sources:
 
 - an entry of type `message` has its usage in `message.usage`; an entry of type `usage` (Pi),
   `model_usage` (Oh My Pi), `compaction` or `branch_summary` (Pi) has it in its own `usage`. Nothing
@@ -175,17 +216,27 @@ both roots is one file and the newer copy is read. Rules, by the tools' own sour
 - the hour is the entry's `timestamp` (an ISO time), else the message's timestamp (milliseconds); an
   entry with neither readable is skipped (the old reader used the file's modification time, which a
   parser is not given);
-- every entry with a usage that holds a count is one sample, also one that adds nothing.
+- every entry with a usage that holds a count is one sample, also one that adds nothing;
+- an entry with an `id` and a `timestamp` is an event of [schema 2](agent-usage/README.md#schema-2),
+  its key a hash of the two, counted once by the hub whichever files hold it. A session a tool forks
+  or branches (Pi's and Oh My Pi's `forkFrom` and `createBranchedSession`) is a new file that starts
+  with copies of the parent's entries, `id` and `timestamp` unchanged, so a copied entry is the same
+  event in both files. The `id` alone is eight random hex digits, unique within one session only,
+  which is why the time is part of the key. An entry without either is a plain row, counted in each
+  file that has it, as at schema 1.
 
-A session a tool forks is a new file that starts with copies of the parent's entries, so the entries
-they share are counted in each file, as the old desktop app counted them: schema 1 keeps rows per file.
-Only counters, a model name and a time are read: no prompt, message, title, folder or key leaves the
-parser.
+Only counters, a model name, a time and the hashed key are read: no prompt, message, title, folder or
+raw entry ID leaves the parser.
 
 ## `usage-omp`
 
 `pluxy/usage-omp`, the usage hub's parser of Oh My Pi's session files, from `~/.omp/agent/sessions` and
 `~/.omp/sessions` (the `HOME` the app gives). It is `lib/pi-sessions` with Oh My Pi's name and folder.
+
+## `usage-pi`
+
+`pluxy/usage-pi`, the usage hub's parser of Pi's session files, from `~/.pi/agent/sessions` and
+`~/.pi/sessions` (the `HOME` the app gives). It is `lib/pi-sessions` with Pi's name and folder.
 
 ## `codex-sessions`
 
@@ -215,7 +266,11 @@ What it reads, as the old desktop app's session manager did:
 - `session_index.jsonl`: a rollout's title and update time, else the file's modification time.
   An index larger than 16 MiB becomes a warning and is not read.
 
-Links to databases, rollouts and the index are skipped (the Codex home itself may be a link).
+Links to databases, rollouts and the index are skipped, and so is a `sqlite/`, `sessions/` or
+`archived_sessions/` folder that is itself a link (a warning names it), and a database whose
+`-wal` or `-shm` file is a link (a warning names it). The Codex home itself may be a link.
+`detail` finds a thread whose database ID is stored with Codex's `local:` prefix by its ID with or
+without the prefix.
 
 The reader adds no file beside a database that no Codex process has open.
 In WAL mode a reader needs SQLite's shared-memory file (`-shm`), which SQLite would create, so

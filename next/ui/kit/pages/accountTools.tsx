@@ -251,7 +251,9 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
       <p class="hint" data-part="account-test-hint">
         {t("testHint")}
       </p>
-      {modelsOpen && <AccountModels accountId={a.id} model={model} onModel={setModel} busy={busy} />}
+      {modelsOpen && (
+        <AccountModels accountId={a.id} ids={ids} model={model} onModel={setModel} busy={busy} />
+      )}
       {result && (
         <section class="stack" data-part="account-test-result" aria-label={t("result")} aria-live="polite">
           <h3>{t("result")}</h3>
@@ -272,7 +274,7 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
           )}
         </section>
       )}
-      {loginOpen && <AccountSignIn account={a} onChanged={props.onChanged} />}
+      {loginOpen && <AccountSignIn account={a} ids={ids} onChanged={props.onChanged} />}
     </div>
   );
 }
@@ -283,11 +285,13 @@ function errorText(error: { code: string; message: string }): string {
 
 function AccountModels(props: {
   accountId: string;
+  ids: readonly string[];
   model: string;
   onModel(model: string): void;
   busy: boolean;
 }) {
   const { api } = useKit();
+  const p = usePrivacy();
   const models = useLoad(() => api.accountModels(props.accountId));
   return (
     <section class="stack" data-part="account-models" aria-label={t("supported")}>
@@ -295,7 +299,7 @@ function AccountModels(props: {
       {models.loading && <Notice tone="muted">{t("loading")}</Notice>}
       {models.error && (
         <>
-          <Notice tone="danger">{models.error}</Notice>
+          <Notice tone="danger">{p.text(models.error, props.ids)}</Notice>
           <div>
             <Button onClick={models.reload}>{t("retry")}</Button>
           </div>
@@ -346,8 +350,9 @@ function AccountModels(props: {
   );
 }
 
-function AccountSignIn(props: { account: Account; onChanged(): void }) {
+function AccountSignIn(props: { account: Account; ids: readonly string[]; onChanged(): void }) {
   const { api } = useKit();
+  const p = usePrivacy();
   const methods = useLoad(api.loginMethods);
   const [selected, setSelected] = useState<string>();
   const [attempt, setAttempt] = useState(0);
@@ -359,7 +364,7 @@ function AccountSignIn(props: { account: Account; onChanged(): void }) {
       {methods.loading && <Notice tone="muted">{t("loading")}</Notice>}
       {methods.error && (
         <>
-          <Notice tone="danger">{methods.error}</Notice>
+          <Notice tone="danger">{p.text(methods.error, props.ids)}</Notice>
           <div>
             <Button onClick={methods.reload}>{t("retry")}</Button>
           </div>
