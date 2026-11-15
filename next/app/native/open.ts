@@ -70,15 +70,13 @@ export function buildOpenFixtures(
     // The check installs the release its manifest names.
     writeFileSync(join(root, "execution-version"), m.version);
   }
-  // `launch` is required; `prepare` optional, so the tool is enabled whether or not the execution
-  // program exports it (calls of it then fail).
+  // One import of both operations (a package is imported once), optional: the tool is enabled
+  // whether or not the execution program exports `prepare`; when it does not, each call through
+  // the import is refused.
   packages.push([
     native("pluxy/open-relay", "1.0.0", {
       operations: [relay],
-      imports: [
-        { package: EXECUTION, contract: [1], operations: ["launch"], required: true },
-        { package: EXECUTION, contract: [1], operations: ["prepare"], required: false },
-      ],
+      imports: [{ package: EXECUTION, contract: [1], operations: ["prepare", "launch"], required: false }],
     }),
     program,
   ]);
