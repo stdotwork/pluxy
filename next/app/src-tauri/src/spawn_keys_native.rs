@@ -459,6 +459,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             dialog_with(app, &["pluxy/other relay", LABEL])?;
             press("alt+o")?;
             dialog_with(app, &["pluxy/launcher start", "managed", LABEL])?;
+            // An import's Confirm is enabled a second after its dialog shows.
+            std::thread::sleep(Duration::from_millis(1100));
             press("alt+o")?;
             let r = settle(main, &slot)?;
             let spawned = &r["value"]["answer"]["output"]["answer"];
