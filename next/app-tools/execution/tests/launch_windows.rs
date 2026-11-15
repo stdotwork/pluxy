@@ -44,6 +44,45 @@ fn a_console_launch_runs_the_program_with_its_arguments_then_says_how_it_ended()
 }
 
 #[test]
+fn the_shell_a_window_stays_at_is_system32s_whatever_the_launchs_system_root() {
+    // A launch environment whose SystemRoot names a folder with a System32\cmd.exe of its own
+    // (the execution program again, which would say "not a launch this program makes").
+    let me = env!("CARGO_BIN_EXE_execution");
+    let root = std::env::temp_dir().join(format!("pluxy-system-root-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("System32")).unwrap();
+    std::fs::copy(me, root.join(r"System32\cmd.exe")).unwrap();
+    let mut c = Command::new(me)
+        .args([
+            "terminal", "--with", "cmd", "--", me, "terminal", "--with", "nope", "--", "x",
+        ])
+        .env("SystemRoot", &root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    c.stdin
+        .take()
+        .unwrap()
+        .write_all(b"echo pluxy-shell-ran\r\nexit\r\n")
+        .unwrap();
+    let out = c.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("not a launch this program makes"),
+        "{stderr}"
+    );
+    assert!(
+        stdout.contains("[execution.exe exited with code 2]"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("pluxy-shell-ran"), "{stdout}{stderr}");
+    assert_eq!(out.status.code(), Some(2));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn the_open_and_app_modes_refuse_what_they_do_not_open() {
     for (args, why) in [
         (

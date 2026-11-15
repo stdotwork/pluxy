@@ -12,7 +12,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// A Windows terminal kind: the console window the program runs in, then (after it ends) the
-/// shell the window stays at, if any, from `%SystemRoot%\System32`.
+/// shell the window stays at, if any, from Windows' System32 folder.
 struct Kind {
     id: &'static str,
     label: &'static str,
@@ -186,14 +186,18 @@ pub fn own_parser(program: &Path, args: &[String]) -> Result<(), Error> {
     Ok(())
 }
 
-/// `%SystemRoot%\System32`, from the environment the app gives its tools, when it is a full local
-/// path whose System32 folder exists.
+/// Windows' System32 folder, as Windows reports it (`GetSystemDirectoryW`): never from the
+/// environment, which for a launch is the launch's own (its `SystemRoot` could name any folder).
 fn system32() -> Option<PathBuf> {
-    let root = PathBuf::from(std::env::var_os("SystemRoot")?);
-    let s = root.to_str()?;
-    let local = s.len() >= 3 && s.as_bytes()[1] == b':' && root.is_absolute();
-    let d = root.join("System32");
-    (local && d.is_dir()).then_some(d)
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+    let mut buf = [0u16; 261];
+    // SAFETY: buf holds buf.len() characters.
+    let n = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    if n == 0 || n >= buf.len() {
+        return None;
+    }
+    let d = PathBuf::from(String::from_utf16(&buf[..n]).ok()?);
+    (d.is_absolute() && d.is_dir()).then_some(d)
 }
 
 fn shell(k: &Kind) -> Option<PathBuf> {
