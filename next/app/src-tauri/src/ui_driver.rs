@@ -28,6 +28,8 @@ mod platform;
 #[path = "ui_driver_windows.rs"]
 mod platform;
 
+#[cfg(not(target_os = "linux"))]
+pub(crate) use platform::close_box;
 #[cfg(windows)]
 pub(crate) use platform::uia_canary;
 pub(crate) use platform::{

@@ -81,6 +81,15 @@ pub(crate) fn type_text(app: &AppHandle, title: &str, text: &str) -> Result<(), 
     .map(|_| ())
 }
 
+/// Closes the dialog titled title with its close box, as a click on it does (`performClose:`).
+pub(crate) fn close_box(app: &AppHandle, title: &str) -> Result<(), String> {
+    let d = one(app, title)?;
+    on_main(app, move || inspect::perform_close(d))
+        .ok_or("the main thread did not answer")?
+        .then_some(())
+        .ok_or_else(|| "the dialog has gone".into())
+}
+
 pub(crate) fn texts(app: &AppHandle, title: &str) -> Result<Vec<String>, String> {
     let title = title.to_string();
     on_main(app, move || {

@@ -8,13 +8,13 @@
 use crate::dialog::{After, Controls, Id, Spec};
 use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSBackingStoreType, NSButton, NSControlStateValueOn, NSEvent,
-    NSEventModifierFlags, NSEventType, NSFont, NSPanel, NSPasteboard, NSPasteboardTypeString,
-    NSResponder, NSScrollView, NSSecureTextField, NSTextField, NSTextView, NSView, NSWindow,
-    NSWindowStyleMask,
+    NSEventModifierFlags, NSEventType, NSFont, NSModalResponse, NSPanel, NSPasteboard,
+    NSPasteboardTypeString, NSResponder, NSScrollView, NSSecureTextField, NSTextField, NSTextView,
+    NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer,
@@ -44,13 +44,6 @@ define_class!(
             #[cfg(feature = "native-test")]
             inspect::PRESSED.with(|p| p.set(p.get() + 1));
             press(serial, sender.tag() as Id);
-        }
-
-        /// The close box: the cancel answer, never a plain close.
-        #[unsafe(method(windowShouldClose:))]
-        fn window_should_close(&self, _sender: &AnyObject) -> bool {
-            cancel(self.ivars().serial.get());
-            false
         }
 
         /// Escape, when it reaches the window through the responder chain.
@@ -89,6 +82,23 @@ define_class!(
     }
 
     unsafe impl NSObjectProtocol for DialogPanel {}
+
+    // The panel is its own delegate (`show`).
+    unsafe impl NSWindowDelegate for DialogPanel {
+        /// The close box: the cancel answer, never a plain close.
+        #[unsafe(method(windowShouldClose:))]
+        fn window_should_close(&self, _sender: &NSWindow) -> bool {
+            cancel(self.ivars().serial.get());
+            false
+        }
+
+        /// The panel closes by some other way than `finish` (the system closing it, say): the
+        /// cancel answer, so whoever waits on the dialog hears it.
+        #[unsafe(method(windowWillClose:))]
+        fn window_will_close(&self, _notification: &AnyObject) {
+            ended(self.ivars().serial.get());
+        }
+    }
 );
 
 define_class!(
@@ -137,6 +147,8 @@ struct State {
     texts: Vec<String>,
     timers: Vec<Retained<NSTimer>>,
     done: bool,
+    /// The panel is closing, or its sheet has ended, already: `finish` leaves it be.
+    ended: bool,
 }
 
 thread_local! {
@@ -402,10 +414,16 @@ pub(crate) fn show(
         texts,
         timers: Vec::new(),
         done: false,
+        ended: false,
     }));
     OPEN.with(|o| o.borrow_mut().insert(serial, state.clone()));
+    panel.setDelegate(Some(ProtocolObject::from_ref(&*panel)));
     match &owner {
-        Some(o) => o.beginSheet_completionHandler(&panel, None),
+        // A sheet ends through `finish`, or when its window goes: then the cancel answer.
+        Some(o) => {
+            let done = RcBlock::new(move |_: NSModalResponse| ended(serial));
+            o.beginSheet_completionHandler(&panel, Some(&done));
+        }
         None => {
             // Above the app's ordinary windows, as a modal panel would be.
             panel.setLevel(8); // kCGModalPanelWindowLevel
@@ -539,11 +557,29 @@ fn cancel(serial: u64) {
     }
 }
 
+/// The panel closed, or its sheet ended, other than through `finish`: the cancel answer, so
+/// whoever waits on the dialog hears it, and the dialog's state goes.
+fn ended(serial: u64) {
+    let Some(st) = get(serial) else {
+        return;
+    };
+    {
+        let mut s = st.borrow_mut();
+        if s.done {
+            return;
+        }
+        s.ended = true;
+    }
+    cancel(serial);
+    // The cancel answer may keep a dialog open; this one is gone all the same.
+    finish(serial);
+}
+
 fn finish(serial: u64) {
     let Some(st) = OPEN.with(|o| o.borrow_mut().remove(&serial)) else {
         return;
     };
-    let (panel, owner, timers) = {
+    let (panel, owner, timers, ended) = {
         let mut s = st.borrow_mut();
         if s.done {
             return;
@@ -553,10 +589,14 @@ fn finish(serial: u64) {
             s.panel.clone(),
             s.owner.take(),
             std::mem::take(&mut s.timers),
+            s.ended,
         )
     };
     for t in timers {
         t.invalidate();
+    }
+    if ended {
+        return;
     }
     match owner {
         Some(o) => o.endSheet(&panel),
@@ -599,6 +639,15 @@ pub(crate) mod inspect {
                 .map(|(k, _)| *k)
                 .collect()
         })
+    }
+
+    /// Clicks dialog d's close box (`performClose:`); whether d was open.
+    pub(crate) fn perform_close(d: u64) -> bool {
+        let Some(panel) = get(d).map(|s| s.borrow().panel.clone()) else {
+            return false;
+        };
+        panel.performClose(None);
+        true
     }
 
     /// How many characters dialog d's hidden entry holds.

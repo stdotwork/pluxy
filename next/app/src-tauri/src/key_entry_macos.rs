@@ -59,6 +59,17 @@ pub(crate) fn request_as(
         spec.buttons = vec![(CANCEL, text::CANCEL.into()), (OK, text::OK.into())];
         spec.default = Some(OK);
         spec.cancel = Some(CANCEL);
+        // The cancel answer once the window it is a sheet on is gone (closed to the tray, say):
+        // AppKit may close a window without ending its sheet.
+        let shown_on = objc2::rc::Retained::as_ptr(&owner) as usize;
+        let window_app = handle.clone();
+        spec.watch = Some(Box::new(move || {
+            window_app
+                .get_window(crate::WINDOW)
+                .and_then(|w| w.ns_window().ok())
+                .map(|p| p as usize)
+                != Some(shown_on)
+        }));
         if let Err(e) = dw::show(mtm, spec, Some(owner)) {
             // The handler, and with it the sender, is gone: the caller hears the entry closed.
             eprintln!("pluxy-app: {e}");

@@ -326,6 +326,11 @@ async function main(): Promise<number> {
       steps.get("confirmations")?.passed === true,
       "native confirmation checks did not complete",
     );
+    check(
+      "confirmation close box",
+      steps.get("confirmations")?.close_box === true,
+      "the confirmation's close box was not checked",
+    );
 
     const entry = steps.get("keyentry");
     for (const field of [

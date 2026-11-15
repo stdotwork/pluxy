@@ -15,7 +15,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetQueueStatus, GetWindowTextLengthW, IsChild, PostMessageW,
-    SetForegroundWindow, QS_INPUT, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_SYSCHAR,
+    SetForegroundWindow, QS_INPUT, SC_CLOSE, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_SYSCHAR,
+    WM_SYSCOMMAND,
 };
 
 /// A window handle as it crosses threads (`HWND` is not `Send`).
@@ -149,6 +150,17 @@ pub(crate) fn press(app: &AppHandle, title: &str, key: Key) -> Result<(), String
     .ok_or("the main thread did not answer")??;
     went(way);
     settle(app, way == "sendinput");
+    Ok(())
+}
+
+/// Closes the dialog titled title with its close box, as a click on it does: `SC_CLOSE`.
+pub(crate) fn close_box(app: &AppHandle, title: &str) -> Result<(), String> {
+    let d = one(app, title)?;
+    on_main(app, move || {
+        post(hwnd(d), WM_SYSCOMMAND, SC_CLOSE as usize, 0)
+    })
+    .ok_or("the main thread did not answer")??;
+    settle(app, false);
     Ok(())
 }
 

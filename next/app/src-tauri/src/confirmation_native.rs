@@ -292,6 +292,17 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         )?;
         ui::press(app, text::CONFIRM_TITLE, access(text::CANCEL))?;
         require(result(app, &id)?.is_none(), "cancel issued token")?;
+        // The close box gives the cancel answer at once, not the end of the lifetime.
+        #[cfg(not(target_os = "linux"))]
+        {
+            let id = ask(app, main, &a)?;
+            let asked = std::time::Instant::now();
+            ui::close_box(app, text::CONFIRM_TITLE)?;
+            require(
+                result(app, &id)?.is_none() && asked.elapsed() < LIFETIME / 2,
+                "the close box gave no cancel answer",
+            )?;
+        }
         let id = ask(app, main, &a)?;
         let t = confirm(app, &id, true)?;
         consume(app, &t)?;
@@ -388,7 +399,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         consume(app, &token)?;
         crate::native_test::log(
             "confirmations",
-            serde_json::json!({"passed": true, "checks": ["confirm", "cancel", "page-spoof", "exact-native-gesture", "different-chain", "metadata", "replacement", "revoke", "page-flood-notice"]}),
+            serde_json::json!({"passed": true, "close_box": cfg!(not(target_os = "linux")), "checks": ["confirm", "cancel", "page-spoof", "exact-native-gesture", "different-chain", "metadata", "replacement", "revoke", "page-flood-notice"]}),
         );
         Ok(())
     })();
