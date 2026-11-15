@@ -61,19 +61,13 @@ fn codex_home() -> Result<(PathBuf, bool), Error> {
 /// Sets (or, with "", clears) the custom Codex home: written whole, readable only by this user.
 fn set_home(data: &Path, home: &str) -> Result<(), Error> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     if !home.is_empty() && !Path::new(home).is_absolute() {
         return Err(Error::invalid_request("the Codex home must be a full path"));
     }
     let tmp = data.join(format!(".{SETTINGS}.tmp"));
     let _ = std::fs::remove_file(&tmp);
     let fail = |e: std::io::Error| Error::unavailable(format!("could not save the settings: {e}"));
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)
-        .map_err(fail)?;
+    let mut f = pluxy_files::create_new_private(&tmp).map_err(fail)?;
     f.write_all(json!({"codex_home": home}).to_string().as_bytes())
         .and_then(|_| f.sync_all())
         .map_err(fail)?;

@@ -1,0 +1,82 @@
+name: Next app tools platforms
+
+# Builds, lints and unit-tests the app tools (next/app-tools, the native programs the desktop app
+# runs on demand) on Windows and macOS. Linux runs them in next-app.yml. The writer tools
+# (pluxy-transactions and the tools built on it) are not ported yet and are left out here.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'next/app-tools/**'
+      - '.github/workflows/next-app-tools-platforms.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'next/app-tools/**'
+      - '.github/workflows/next-app-tools-platforms.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: next/app-tools
+
+env:
+  # The writer tools and their library, ported in a later change.
+  NOT_PORTED: --exclude pluxy-transactions --exclude claude-code --exclude codex-setup
+
+jobs:
+  tools:
+    name: app tools (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          components: clippy
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: next/app-tools -> target
+          key: ${{ matrix.os }}
+      - name: Clippy
+        run: cargo clippy --locked --workspace $NOT_PORTED --all-targets -- -D warnings
+      # Unit tests with an empty temporary home, so no test can reach the runner's own.
+      - name: Tests
+        run: |
+          export RUSTUP_HOME="${RUSTUP_HOME:-$(cygpath -u "${USERPROFILE:-$HOME}" 2>/dev/null || echo "$HOME")/.rustup}"
+          export CARGO_HOME="${CARGO_HOME:-$(cygpath -u "${USERPROFILE:-$HOME}" 2>/dev/null || echo "$HOME")/.cargo}"
+          test_env="$(mktemp -d)"
+          export HOME="$test_env/home"
+          mkdir -p "$HOME"
+          if [ "$RUNNER_OS" = Windows ]; then
+            export USERPROFILE="$(cygpath -w "$HOME")"
+            export APPDATA="$(cygpath -w "$test_env/appdata")" LOCALAPPDATA="$(cygpath -w "$test_env/localappdata")"
+            mkdir -p "$test_env/appdata" "$test_env/localappdata"
+          fi
+          status=0
+          # --show-output prints what passing tests said, so a test's own skip line is seen.
+          cargo test --locked --no-fail-fast --workspace $NOT_PORTED -- --show-output 2>&1 | tee "$RUNNER_TEMP/cargo-test.log" || status=$?
+          # Record the counts, with the tests that skipped a part this account may not do (such as
+          # making a symbolic link), and refuse a run that ran nothing.
+          awk '/^test result:/ { p += $4; f += $6; i += $8 } /^skipped: / { s++ } END {
+            printf "passed %d, failed %d, ignored %d, skipped parts %d\n", p, f, i, s
+            if (p == 0) exit 1
+          }' "$RUNNER_TEMP/cargo-test.log" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$status"
