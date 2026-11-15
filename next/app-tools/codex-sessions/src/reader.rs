@@ -955,7 +955,7 @@ fn rollout_for(codex_home: &Path, id: &str) -> Option<PathBuf> {
 }
 
 /// The rollout of session id (as `validate_id` gives it) that `open` opens in the person's own
-/// app, and the folder it must be inside, both resolved: the rollout is found as `export` finds
+/// app, and the folder it must be inside, both resolved: the rollout is found as `detail` finds
 /// it, and must be a regular file named `rollout-*.jsonl` (`validated_rollout` alone takes any
 /// `.jsonl`); the folder is the Codex home's `sessions/` or `archived_sessions/`, whichever holds
 /// it, never the Codex home. The file's bytes are not read, and no error names a path.
