@@ -669,7 +669,14 @@ Granting takes three things, each in native UI the window can only start:
    grants.
 3. **A grant.** **Grant…** next to a resource opens the native file chooser (the desktop portal's
    when GTK uses portals) for a file or a folder. A folder that is or holds the root folder,
-   your home folder or the document portal's store is refused. A native confirmation then shows the package with its source, digest and signer, the
+   your home folder or the document portal's store is refused. So is anything that is, holds or
+   lies inside one of the app's own folders: its settings folder (`connection.json`,
+   `access.json`), its data folder (the vault, the extension store, native tools' data), and its
+   cache folder; one not made yet counts from the folder that would hold it, so a folder above
+   it is refused too. The root folder, your home folder and the app's folders are recognised by their
+   identity (device and inode), not their path, so another path to them, such as a bind mount
+   or a link, is refused too; a bind mount of a folder *inside* one of the app's folders, on its
+   own, is not recognised. A native confirmation then shows the package with its source, digest and signer, the
    resource and its operations, what you chose and what it resolves to, and says the package's
    pages can send what they read anywhere they can reach. Cancelling the chooser or the
    confirmation grants nothing.
@@ -682,7 +689,10 @@ release from another source is not granted what the first was; granting again re
 grant. A link that points elsewhere, or a target replaced (as editors save, by rename), refuses
 reads with `changed` until you grant it again, even if it is put back. An error that may pass
 (permissions, an I/O error, too many open files) answers `unavailable` and ends nothing.
-Removing the package removes its grants.
+Removing the package removes its grants. A grant whose target has come to be, hold or lie inside
+one of the app's own folders since it was granted (such as a folder granted before the app's
+data folder was moved into it) refuses reads with `refused`: this is checked before every read and
+listing, also one a handle opened earlier would serve.
 
 Pages read with three channel methods, answered by native code, never by the window, so the
 bytes never reach the window: `resources.status`, `resources.read` and `resources.list`

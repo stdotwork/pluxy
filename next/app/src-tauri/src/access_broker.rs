@@ -148,6 +148,104 @@ pub fn is_portal(target: &Path) -> bool {
     target.starts_with(&mount) || fs::canonicalize(&mount).is_ok_and(|m| target.starts_with(m))
 }
 
+/// A file's or folder's identity: its device and inode.
+type Ident = (u64, u64);
+
+fn ident(p: &Path) -> Option<Ident> {
+    fs::metadata(p).ok().map(|m| (m.dev(), m.ino()))
+}
+
+/// The identities of path (resolved) and of every folder above it, nearest first; empty when
+/// path cannot be resolved.
+fn lineage(path: &Path) -> Vec<Ident> {
+    fs::canonicalize(path)
+        .map(|p| p.ancestors().filter_map(ident).collect())
+        .unwrap_or_default()
+}
+
+/// This user's home folder, resolved.
+fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME").and_then(|h| fs::canonicalize(h).ok())
+}
+
+/// What no grant may reach, each folder known by its identity, so another path to the same
+/// folder (a bind mount, a link) is refused as the folder itself is.
+///
+/// shortcut: a folder or file inside one of the app's folders, reached through a bind mount of
+/// that inner folder alone, is not recognised (only the app's folders and the folders above them
+/// are known by identity); finding it would mean walking the app's folders on every check.
+pub(crate) struct Fence {
+    /// The root folder, and this user's home folder and each folder above it: a folder grant
+    /// that is one of them holds all of home.
+    whole: Vec<Ident>,
+    /// The app's own folders (settings, data, vault, packages, caches): each one, its identity
+    /// when it exists, and the identities of the nearest existing folder at or above it and of
+    /// every folder above that. No grant may be, hold or lie in one; one not made yet still
+    /// fences the folders that would hold it. Built anew for each check, so a folder made later
+    /// in the run counts from then on.
+    own: Vec<(PathBuf, Option<Ident>, Vec<Ident>)>,
+}
+
+/// What the fence says of a target.
+enum Fenced {
+    Clear,
+    /// It is, holds or lies inside one of the app's own folders: why.
+    Own(String),
+    /// Its identity cannot be read now: why.
+    Unreadable(String),
+}
+
+impl Fence {
+    pub(crate) fn new(home: Option<&Path>, own: &[PathBuf]) -> Fence {
+        let mut whole = home.map(lineage).unwrap_or_default();
+        whole.extend(ident(Path::new("/")));
+        let own = own
+            .iter()
+            .map(|o| {
+                let line = lineage(o);
+                match line.first() {
+                    Some(id) => (o.clone(), Some(*id), line),
+                    None => {
+                        let above = o
+                            .ancestors()
+                            .skip(1)
+                            .map(lineage)
+                            .find(|l| !l.is_empty())
+                            .unwrap_or_default();
+                        (o.clone(), None, above)
+                    }
+                }
+            })
+            .collect();
+        Fence { whole, own }
+    }
+
+    /// Whether folder is the root folder or holds all of home.
+    fn whole(&self, folder: &Path) -> bool {
+        ident(folder).is_some_and(|i| self.whole.contains(&i))
+    }
+
+    /// Whether target is, holds or lies inside one of the app's own folders, or cannot be told.
+    fn own(&self, target: &Path) -> Fenced {
+        let line = lineage(target);
+        let Some(me) = line.first() else {
+            return Fenced::Unreadable(format!("{}: it cannot be read", target.display()));
+        };
+        match self
+            .own
+            .iter()
+            .find(|(_, id, above)| id.is_some_and(|id| line.contains(&id)) || above.contains(me))
+        {
+            Some((o, _, _)) => Fenced::Own(format!(
+                "{} is, holds or is inside the app's own folder {}: the app's settings, data and vault cannot be granted",
+                target.display(),
+                o.display()
+            )),
+            None => Fenced::Clear,
+        }
+    }
+}
+
 /// The mount an open file or folder is on: Linux's `statx` mount ID, which tells bind mounts of
 /// one filesystem apart (the device number does not).
 #[cfg(target_os = "linux")]
@@ -205,17 +303,22 @@ fn link_of(selected: &Path) -> Result<Option<Link>, String> {
 
 /// Resolves what the person chose for a resource of kind: an absolute UTF-8 path to a regular
 /// file (`file`) or a folder (`subtree`), following a link once. A folder that is or holds the
-/// root folder, this user's home folder or the document portal's store is refused.
-pub fn resolve(selected: &Path, kind: &str) -> Result<Resolved, String> {
-    let home = std::env::var_os("HOME").and_then(|h| fs::canonicalize(h).ok());
-    resolve_with(selected, kind, home.as_deref(), &portal_mount())
+/// root folder, this user's home folder or the document portal's store is refused, and so is
+/// anything that is, holds or lies inside one of own, the app's own folders (`Fence`).
+pub fn resolve(selected: &Path, kind: &str, own: &[PathBuf]) -> Result<Resolved, String> {
+    resolve_with(
+        selected,
+        kind,
+        &Fence::new(home().as_deref(), own),
+        &portal_mount(),
+    )
 }
 
-/// `resolve`, with this user's home folder and the document portal's mount given.
+/// `resolve`, with what no grant may reach and the document portal's mount given.
 fn resolve_with(
     selected: &Path,
     kind: &str,
-    home: Option<&Path>,
+    fence: &Fence,
     portal: &Path,
 ) -> Result<Resolved, String> {
     if !selected.is_absolute() || selected.to_str().is_none() {
@@ -232,10 +335,7 @@ fn resolve_with(
         "file" => return Err(format!("{} is not a regular file", target.display())),
         "subtree" if m.is_dir() => {
             let portal = fs::canonicalize(portal).unwrap_or_else(|_| portal.to_path_buf());
-            if target == Path::new("/")
-                || home.is_some_and(|h| h.starts_with(&target))
-                || portal.starts_with(&target)
-            {
+            if fence.whole(&target) || portal.starts_with(&target) {
                 return Err(
                     "a folder holding a whole home folder, the root folder or the document portal's store cannot be granted: choose a folder inside it"
                         .into(),
@@ -244,6 +344,10 @@ fn resolve_with(
         }
         "subtree" => return Err(format!("{} is not a folder", target.display())),
         _ => return Err(format!("resources of kind {kind} cannot be granted")),
+    }
+    match fence.own(&target) {
+        Fenced::Clear => {}
+        Fenced::Own(why) | Fenced::Unreadable(why) => return Err(why),
     }
     #[cfg(target_os = "linux")]
     let mount = Some(
@@ -321,6 +425,23 @@ fn log_open(f: &impl std::os::fd::AsRawFd) {
 }
 
 const NO_BLOCK: i32 = libc::O_NONBLOCK | libc::O_NOCTTY;
+
+/// Whether g's target is still none of what no grant may reach, checked before every call, also
+/// one a handle opened earlier serves: one of own, the app's own folders, may have been made or
+/// moved in since. Refused when it is, holds or lies inside one, or (a folder) is the root folder
+/// or holds all of home; unavailable when its identity cannot be read now, an error that may
+/// pass.
+fn fenced(g: &Grant, own: &[PathBuf]) -> Result<(), Denial> {
+    let fence = Fence::new(home().as_deref(), own);
+    if g.kind == "subtree" && fence.whole(&g.target) {
+        return Err(Denial::Refused);
+    }
+    match fence.own(&g.target) {
+        Fenced::Clear => Ok(()),
+        Fenced::Own(_) => Err(Denial::Refused),
+        Fenced::Unreadable(_) => Err(Denial::Unavailable),
+    }
+}
 
 /// Opens g's target and checks it is the one reviewed.
 fn open(g: &Grant) -> Result<Handle, Denial> {
@@ -415,12 +536,14 @@ pub struct Begun {
     pub grant: Grant,
     pub op: Op,
     pub handle: Option<Arc<Handle>>,
+    /// The app's own folders, which its target is checked against before the call's I/O.
+    pub own: Arc<Vec<PathBuf>>,
 }
 
 /// Does the I/O of a begun call, outside the store's lock. Returns the result and the handle
 /// it opened, if it had none.
 pub fn run(b: &Begun) -> (Result<Value, Denial>, Option<Arc<Handle>>) {
-    if let Err(d) = current(&b.grant) {
+    if let Err(d) = current(&b.grant).and_then(|_| fenced(&b.grant, &b.own)) {
         return (Err(d), None);
     }
     let (handle, opened) = match &b.handle {
@@ -561,11 +684,13 @@ pub struct Store {
     pub warning: Option<String>,
     /// Why nothing can be saved: a damaged file that could not be moved aside.
     locked: Option<String>,
+    /// The app's own folders: no grant may be, hold or lie inside one (`Fence`).
+    own: Arc<Vec<PathBuf>>,
 }
 
 impl Store {
-    /// Opens the store in folder dir (the app's config folder).
-    pub fn open(dir: &Path) -> Store {
+    /// Opens the store in folder dir (the app's config folder), with own, the app's own folders.
+    pub fn open(dir: &Path, own: Vec<PathBuf>) -> Store {
         let path = dir.join(FILE);
         let mut s = Store {
             path: path.clone(),
@@ -575,6 +700,7 @@ impl Store {
             inflight: HashMap::new(),
             warning: None,
             locked: None,
+            own: Arc::new(own),
         };
         let bytes = match fs::symlink_metadata(&path) {
             Err(e) if e.kind() == ErrorKind::NotFound => return s,
@@ -663,6 +789,11 @@ impl Store {
             Some(why) => Err(why.clone()),
             None => Ok(()),
         }
+    }
+
+    /// The app's own folders, for `resolve`.
+    pub fn own(&self) -> Arc<Vec<PathBuf>> {
+        self.own.clone()
     }
 
     pub fn signers(&self) -> &[Signer] {
@@ -933,6 +1064,7 @@ impl Store {
             grant: g.clone(),
             op,
             handle: self.handles.get(&g.id).cloned(),
+            own: self.own.clone(),
         };
         *self.inflight.entry(b.grant.id.clone()).or_default() += 1;
         Ok(b)

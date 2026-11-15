@@ -155,13 +155,16 @@ inside the granted folder; for `resources.list`, empty or absent means the folde
 | --- | --- |
 | `bad_request` | Parameters of the wrong shape or unknown, an undeclared resource or operation, a `path` with a `file` resource |
 | `not_granted` | No grant for this package, release, source and signer, or the operation is not granted |
-| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, a file or folder on another mount than the granted folder (such as one mounted inside it), or not a regular file |
+| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, a file or folder on another mount than the granted folder (such as one mounted inside it), not a regular file, or a grant whose target has come to be, hold or lie inside one of the app's own folders (the app README's Access section) |
 | `changed` | The chosen link, where it resolves, or the target (its identity or its mount) changed since it was granted; it stays refused until granted again |
 | `unavailable` | The file is gone, cannot be reached for now (permissions, an I/O error, too many open files), or the document portal no longer offers it; the grant stays, and a later call may read |
 | `revoked` | The grant was revoked while the call was in flight |
 
 The native ingress limits of every page channel call apply to these too. Grants are bound to the
-package's source, release digest and approved signer: a new release asks again.
+package's source, release digest and approved signer: a new release asks again. No grant reaches
+the app's own folders (its settings, data, vault, packages and caches): the app refuses to grant
+one, anything inside one or a folder holding one, so the vault below stays out of every page's
+reach.
 
 ## App program contract v0
 
@@ -349,7 +352,9 @@ Each operation has an effect: `read` (runs with no question asked), `write` (ask
 confirmation each call), `launch` (asks a native confirmation of the exact launch) or `disclose`
 (shows content the tool reads, such as a session's messages: asks a native confirmation each
 call, as `write` does; dialogs and the Device page say it "shows content"). Every effect but an
-exact `read` asks, and only a launch's confirmation can be remembered. A launch operation's input
+exact `read` asks, and only a launch's confirmation can be remembered. A `disclose` call may also
+hand the person one file of what it shows, through the host's save dialog
+([Saving files](#saving-files)). A launch operation's input
 schema must require `executable`, `argv` and `cwd`.
 
 ### Enabling a native tool with imports
@@ -730,6 +735,66 @@ limit of 0 the kernel writes no core file, but still runs a `|` core dump handle
 (systemd-coredump keeps no core then, and records the app's environment in the journal). Unlike a
 launch given a secret, the app keeps the vault's secrets in its memory, not in its environment, so
 that record holds no secret.
+
+## Saving files
+
+A native tool saves a file for the person only through the host, and only where the person
+chooses it in a native save dialog: neither a page nor a tool ever names the path. The tool asks
+while it serves a call of one of its `disclose` operations, which the person confirmed for that
+call (from the window, a page or another tool); the file's bytes go from the tool's pipe to the
+host and the chosen file, never through a page. That is how a page offers an export: it calls its
+tool's `disclose` operation, and the tool hands over what it read. A call of any other effect, a
+job and a delivery cannot save. There is no page channel method for it.
+
+The tool sends `files` frames for the call it serves, as it sends `spawn` frames, and the host
+answers each on its stdin with a `result` or `error` frame of that ID:
+
+```json
+{"type":"files","id":"f-1","for":"c-2","op":"append","input":{"offset":0,"data":"<base64>"}}
+{"type":"files","id":"f-2","for":"c-2","op":"save","input":{"name":"session-019a.jsonl"}}
+```
+
+- `append` adds bytes (`data`, standard base64) at `offset`, which must be the number of bytes
+  so far; it answers `{"size": <bytes so far>}`. A frame is at most 1 MiB, so a larger file takes
+  several. At most 64 MiB in all: the append that would pass it is refused with
+  `invalid_request`, and the bytes so far are dropped.
+- `save` names the file name to suggest, nothing else; the host shows the native save dialog,
+  titled `Save a file from <package>` and holding the suggested name, and answers
+  `{"outcome": "saved", "size": <bytes>}` or `{"outcome": "cancelled"}`. A name holding `/`, `\`
+  or NUL (a path) and an input with any other field are refused with `invalid_request`; control
+  and format characters (such as U+202E) become `_`, leading dots and spaces are dropped and the
+  name is cut to 255 bytes. One save per call: once a `save` passes those checks, whatever the
+  answer, every later `append` or `save` for the call is refused with `permission`, and so is a
+  `files` frame for a call whose operation is not `disclose`.
+
+The dialog is GTK's file chooser in save mode, as the Access chooser (the desktop portal's with
+`GTK_USE_PORTAL=1` or inside a sandbox), with its own overwrite question: an existing file is
+replaced only after the person answers Replace. One save dialog shows at a time; a `save` while
+another shows is refused with `unavailable`. Cancelling it writes nothing; so does the call it
+serves ending (cancelled, its page closing, the window closing), which closes the dialog.
+
+The host opens the chosen folder once, as the dialog answers, and writes into that opened folder.
+The folder must be one no other user can change: owned by the person (the app's effective user)
+or root, and not writable by group or others unless it is sticky (as `/tmp`). Otherwise another
+user could put a file at the chosen name after GTK's question, and the host cannot tell what GTK
+asked. The chosen name must hold nothing or a regular file of the person's: a link, a folder,
+another user's file or anything else there is refused (`unavailable`), since writing through a
+link would write a file the dialog did not show.
+
+The host writes the file atomically beside the chosen one: a temporary file in the same folder,
+opened relative to that folder without following a link, mode 0600, the bytes and an fsync. Then it
+checks that the tool still runs its package's admitted release (a release disabled, removed or
+swapped out while the dialog was open saves nothing), that the opened folder is still the one at the
+chosen path and still the person's, and that the name is still what the dialog answered (an
+existing file by its device, inode, size and modification and change times). A link, another or a
+changed file or a folder now at the name, a file that appeared where there was none, or a moved or
+replaced folder is refused with `permission`, and the temporary file is removed. Then a replaced
+file's permission bits are set on the new one, and it is renamed over the chosen name, and the
+folder is synced. A new file never replaces anything: it is renamed with `RENAME_NOREPLACE`, or on
+a file system without it, hard-linked at the name (which fails if something is there) and the
+temporary file removed; on a file system with neither, the save is refused (`unavailable`). For an
+overwrite, the check and the rename are two steps, and a change between them is not caught. Nothing
+of the bytes or the chosen path is logged, and the answers carry neither.
 
 ## Secrets, references and the vault
 
