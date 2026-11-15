@@ -41,8 +41,9 @@ const MIN_VALUE: usize = 8;
 const MAX_VALUE: usize = 4096;
 /// One backup image, in bytes (it travels base64-encoded in a frame of at most 1 MiB).
 const MAX_IMAGE: usize = 512 << 10;
-/// Backups a package keeps. shortcut: no retention yet: a full vault refuses new backups until
-/// some are removed; P8f2's backup browser adds retention and removal.
+/// Backups a package keeps: a backstop; a full vault refuses new backups until some are removed.
+/// Retention is the tool's, which alone knows what its records name: the app tools' transaction
+/// library keeps 10 manual backups of a set and removes the backups nothing names.
 const MAX_BACKUPS: usize = 256;
 /// A journal's intent, as JSON.
 const MAX_INTENT: usize = 16 << 10;
