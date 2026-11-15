@@ -414,7 +414,8 @@ export function buildSessionsFixtures(
   );
   const { codex, t1Rollout, t1Bytes, t1Size, canaries } = codexHome(home, join(root, "outside"));
   const exportFolder = join(root, "export-out");
-  mkdirSync(exportFolder);
+  // The save service takes only a folder no other user can change.
+  mkdirSync(exportFolder, { mode: 0o700 });
   // The stand-in opener: the app takes an opener from this folder only in a native-test build
   // (PLUXY_APP_TEST_OPENERS), and the reader's native-test build sends it as its prepare's search path.
   const openers = join(root, "opener", "bin");
