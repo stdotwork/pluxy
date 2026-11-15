@@ -25,7 +25,7 @@ const TAIL: usize = 20;
 /// How often a start is tried while the program's file is busy, and the pause after the nth
 /// try (n times this): about 0.9 s in all.
 const BUSY_TRIES: u32 = 10;
-const BUSY_PAUSE: Duration = Duration::from_millis(20);
+pub(crate) const BUSY_PAUSE: Duration = Duration::from_millis(20);
 
 /// Whether e says the program's file is open for writing (ETXTBSY).
 fn is_busy(e: &io::Error) -> bool {
@@ -43,7 +43,10 @@ fn is_busy(e: &io::Error) -> bool {
 /// app has just written can be busy for a moment although the app closed it: a process forked
 /// by another thread meanwhile holds a copy of the write handle until it execs. Any other
 /// error is returned at once.
-fn start_when_free<T>(pause: Duration, mut start: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+pub(crate) fn start_when_free<T>(
+    pause: Duration,
+    mut start: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
     let mut tried = 1;
     loop {
         match start() {
