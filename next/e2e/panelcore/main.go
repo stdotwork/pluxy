@@ -53,6 +53,14 @@ const (
 	stopTimeout  = 10 * time.Second
 )
 
+// exe is the suffix of a program's file name: Windows runs only files named .exe.
+var exe = func() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+	return ""
+}()
+
 func main() {
 	prepare := flag.String("prepare", "", "only build core and its bundled test packages into this folder, then exit")
 	withTLS := flag.Bool("tls", false, "reach core's API through an https proxy with a certificate from a new authority")
@@ -85,8 +93,8 @@ func prepareOnly(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	pluxy := filepath.Join(dir, "pluxy")
-	testext := filepath.Join(dir, "testext")
+	pluxy := filepath.Join(dir, "pluxy"+exe)
+	testext := filepath.Join(dir, "testext"+exe)
 	if err := buildBinary(root, pluxy, "./cmd/pluxy"); err != nil {
 		return err
 	}
@@ -121,8 +129,8 @@ func serve(withTLS bool) error {
 	}
 	defer os.RemoveAll(dir)
 
-	pluxy := filepath.Join(dir, "pluxy")
-	testext := filepath.Join(dir, "testext")
+	pluxy := filepath.Join(dir, "pluxy"+exe)
+	testext := filepath.Join(dir, "testext"+exe)
 	if err := buildBinary(root, pluxy, "./cmd/pluxy"); err != nil {
 		return err
 	}
@@ -298,12 +306,12 @@ func writeLocal(dir, testext string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(local, "testext"), prog, 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(local, "testext"+exe), prog, 0o755); err != nil {
 		return "", err
 	}
 	m, err := json.Marshal(manifest{
 		ID: "test/local", Version: "0.1.0", Protocol: []int{0},
-		Programs: map[string]string{platform: "testext"},
+		Programs: map[string]string{platform: "testext" + exe},
 	})
 	if err != nil {
 		return "", err
@@ -389,7 +397,7 @@ func pageFiles(uiRoot, fixture string) (map[string][]byte, error) {
 func packageArchive(p pkg, prog []byte, ui map[string][]byte) ([]byte, error) {
 	m, err := json.Marshal(manifest{
 		ID: p.id, Version: p.version, Protocol: []int{0},
-		Programs: map[string]string{platform: "bin/testext"},
+		Programs: map[string]string{platform: "bin/testext" + exe},
 		UI:       p.ui, Config: p.config,
 	})
 	if err != nil {
@@ -403,7 +411,7 @@ func packageArchive(p pkg, prog []byte, ui map[string][]byte) ([]byte, error) {
 		mode int64
 		body []byte
 	}
-	entries := []entry{{"pluxy-extension.json", 0o644, m}, {"bin/", 0o755, nil}, {"bin/testext", 0o755, prog}}
+	entries := []entry{{"pluxy-extension.json", 0o644, m}, {"bin/", 0o755, nil}, {"bin/testext" + exe, 0o755, prog}}
 	if len(ui) > 0 {
 		entries = append(entries, entry{"ui/", 0o755, nil})
 		for _, name := range slices.Sorted(maps.Keys(ui)) {
