@@ -254,6 +254,36 @@ fn a_managed_terminal_launch_is_refused_and_a_managed_direct_launch_is_not() {
     }
 }
 
+/// A name is the same name whatever its case where the environment ignores case (Windows): named
+/// twice, in one list or across set, inherit and secrets, the launch is refused, so its review
+/// shows each variable it gets once. Elsewhere `Path` and `PATH` are two variables.
+#[test]
+fn a_name_given_twice_as_the_environment_compares_names_is_refused() {
+    let secret_field = |f: &str| f == "key";
+    for twice in [
+        json!({"environment": {"set": {"Path": "a", "PATH": "b"}}}),
+        json!({"environment": {"set": {"Path": "a"}, "inherit": ["PATH"]}}),
+        json!({"environment": {"set": {"Path": "a"}, "secrets": {"PATH": "key"}}}),
+        json!({"environment": {"inherit": ["Path", "PATH"]}}),
+        json!({"environment": {"unset": ["Path", "PATH"]}}),
+    ] {
+        let r = parse(&twice, &secret_field);
+        if cfg!(windows) {
+            let e = r.unwrap_err();
+            assert!(e.contains("more than once"), "{twice}: {e}");
+        } else {
+            assert!(r.is_ok(), "{twice}: {r:?}");
+        }
+    }
+    // The same name twice is refused everywhere.
+    let e = parse(
+        &json!({"environment": {"set": {"PATH": "a"}, "inherit": ["PATH"]}}),
+        &secret_field,
+    )
+    .unwrap_err();
+    assert!(e.contains("more than once"), "{e}");
+}
+
 #[test]
 fn a_launch_request_is_checked_and_its_review_shows_no_value_it_must_not() {
     let secret_field = |f: &str| f == "key";

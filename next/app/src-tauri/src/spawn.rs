@@ -551,9 +551,15 @@ pub fn parse(
             ));
         }
     }
+    // Each name once, compared as the launch's environment compares them (`key`: ignoring case on
+    // Windows), so the confirmation shows every variable the launch gets, and only once.
+    let mut unset = std::collections::BTreeSet::new();
+    if let Some(n) = r.unset.iter().find(|n| !unset.insert(key(n))) {
+        return Err(format!("environment unset names {n} more than once"));
+    }
     let mut seen = std::collections::BTreeSet::new();
     for n in r.inherit.iter().chain(r.set.keys()).chain(r.secrets.keys()) {
-        if !seen.insert(n) {
+        if !seen.insert(key(n)) {
             return Err(format!(
                 "environment names {n} more than once in set, inherit and secrets"
             ));
