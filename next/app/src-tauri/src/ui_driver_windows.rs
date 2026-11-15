@@ -273,22 +273,30 @@ pub(crate) fn uia_canary(title: &str, canary: &str) -> Result<serde_json::Value,
     use base64::Engine;
     use std::io::Write;
     use std::process::{Command, Stdio};
+    let pid = std::process::id();
     let script = format!(
         r#"$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $canary = [Console]::In.ReadLine()
 $A = [System.Windows.Automation.AutomationElement]
 $scope = [System.Windows.Automation.TreeScope]
-$named = New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, '{title}')
+# The app's own top-level window with this title: a search of the whole desktop can find the
+# taskbar's button for it first.
+$named = New-Object System.Windows.Automation.AndCondition(
+  (New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, '{title}')),
+  (New-Object System.Windows.Automation.PropertyCondition($A::ProcessIdProperty, {pid})),
+  (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)))
 $win = $null
 for ($i = 0; $i -lt 100 -and -not $win; $i++) {{
-  $win = $A::RootElement.FindFirst($scope::Descendants, $named)
+  $win = $A::RootElement.FindFirst($scope::Children, $named)
   if (-not $win) {{ Start-Sleep -Milliseconds 100 }}
 }}
-$out = @{{ found = [bool]$win; is_password = $false; readable = $false; leaked = $false }}
+$out = @{{ found = [bool]$win; edits = 0; is_password = $false; readable = $false; leaked = $false }}
 if ($win) {{
   $edit = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
-  foreach ($e in $win.FindAll($scope::Descendants, $edit)) {{
+  $all = $win.FindAll($scope::Descendants, $edit)
+  $out.edits = $all.Count
+  foreach ($e in $all) {{
     if ($e.Current.IsPassword) {{
       $out.is_password = $true
       try {{
