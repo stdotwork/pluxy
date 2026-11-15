@@ -29,6 +29,7 @@ fn fixture_in(root: &Path) -> (PathBuf, Confirmations, Action) {
             argv: vec!["tool".into(), "--flag".into()],
             cwd: dir.clone(),
             program: None,
+            opens: None,
             terminal_adapter: package,
             environment_revision: "1".into(),
             environment_review: vec![],
@@ -675,5 +676,85 @@ fn the_remember_text_names_the_secrets_a_launch_uses() {
         p.remember_text(),
         "_Remember this exact executable, argv, cwd and secrets: s-0123 for fixture/tool's api__key"
     );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Action a opening file f, which its argv names, inside folder w.
+fn opening(a: &Action, f: &Path, w: &Path) -> Action {
+    let mut a = a.clone();
+    let l = a.launch.as_mut().unwrap();
+    l.argv = vec![f.to_string_lossy().into_owned()];
+    l.opens = Some((f.into(), w.into()));
+    a
+}
+
+#[test]
+fn a_launch_opens_only_a_plain_file_inside_its_folder_and_binds_both() {
+    let (dir, mut c, a) = fixture();
+    let within = dir.join("codex");
+    let sessions = within.join("sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let file = sessions.join("rollout.jsonl");
+    fs::write(&file, b"{}\n").unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    let outside = dir.join("private.txt");
+    fs::write(&outside, b"not the tool's\n").unwrap();
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o600)).unwrap();
+    std::os::unix::fs::symlink(&outside, sessions.join("link.jsonl")).unwrap();
+    let script = sessions.join("run.sh");
+    fs::write(&script, b"#!/bin/sh\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Inside: its review names the file and the folder, resolved.
+    let ok = opening(&a, &file, &within);
+    let review = c
+        .prepare(ok.clone(), Origin::Import)
+        .unwrap()
+        .review()
+        .unwrap();
+    assert!(review.contains("\"opens\""), "{review}");
+    assert!(review.contains(file.to_str().unwrap()), "{review}");
+    assert!(review.contains(within.to_str().unwrap()), "{review}");
+    let dotted = within.join("../private.txt");
+    for (f, w, says) in [
+        (&outside, &within, "inside its within folder"),
+        (&dotted, &within, "inside its within folder"),
+        (
+            &sessions.join("link.jsonl"),
+            &within,
+            "inside its within folder",
+        ),
+        (&script, &within, "must not be executable"),
+        (&sessions, &within, "regular file"),
+        (&file, &PathBuf::from("/"), "cannot be / or the home folder"),
+        (&file, &file, "not a folder"),
+    ] {
+        let e = c
+            .prepare(opening(&a, f, w), Origin::Import)
+            .err()
+            .unwrap_or_else(|| panic!("{} inside {} was accepted", f.display(), w.display()));
+        assert!(e.contains(says), "{}: {e}", f.display());
+    }
+    if let Some(home) = std::env::var_os("HOME").filter(|h| Path::new(h).is_dir()) {
+        let e = c
+            .prepare(opening(&a, &file, Path::new(&home)), Origin::Import)
+            .err()
+            .unwrap();
+        assert!(e.contains("cannot be / or the home folder"), "{e}");
+    }
+
+    // Bound: another file at the name after the confirmation refuses its token, and so does a
+    // folder replaced by a link to another.
+    let (id, t) = approve(&mut c, ok.clone(), false);
+    fs::remove_file(&file).unwrap();
+    fs::write(&file, b"{}\n").unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(c.consume(&id, &t).is_err());
+    let (id, t) = approve(&mut c, ok.clone(), false);
+    c.consume(&id, &t).unwrap();
+    let (id, t) = approve(&mut c, ok, false);
+    fs::rename(&within, dir.join("moved")).unwrap();
+    std::os::unix::fs::symlink(dir.join("moved"), &within).unwrap();
+    assert!(c.consume(&id, &t).is_err());
     let _ = fs::remove_dir_all(dir);
 }

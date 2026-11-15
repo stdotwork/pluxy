@@ -853,11 +853,44 @@ fn launch_of(
             Some(PathBuf::from(p))
         }
     };
+    // The file it opens, which must be what argv names, and the folder it must be inside: the
+    // confirmation resolves, shows and binds both.
+    let opens = match (input.get("file"), input.get("within")) {
+        (None, None) => None,
+        (Some(f), Some(w)) => {
+            let (Some(f), Some(w)) = (f.as_str(), w.as_str()) else {
+                return Err(fail(
+                    "invalid_request",
+                    "a launch's file and within folder are paths",
+                ));
+            };
+            if !argv.iter().any(|a| a == f) {
+                return Err(fail(
+                    "invalid_request",
+                    "a launch's file must be one of its argv",
+                ));
+            }
+            Some((PathBuf::from(f), PathBuf::from(w)))
+        }
+        (Some(_), None) => {
+            return Err(fail(
+                "invalid_request",
+                "a launch that opens a file names its within folder",
+            ))
+        }
+        (None, Some(_)) => {
+            return Err(fail(
+                "invalid_request",
+                "a launch names a within folder only with the file it opens",
+            ))
+        }
+    };
     Ok(confirmation::Launch {
         executable: path("executable")?,
         argv,
         cwd: path("cwd")?,
         program,
+        opens,
         terminal_adapter: executor.clone(),
         // The caller sets them from the launch's environment request (`spawn::parse`).
         environment_revision: String::new(),
@@ -979,13 +1012,27 @@ fn authorize(
         .as_ref()
         .map(|(l, ..): &Spawning| format!(" {}", l.review()))
         .unwrap_or_default();
+    // What a launch that opens a file opens, and with which program, in words.
+    let opens_text = launch
+        .as_ref()
+        .and_then(|l| {
+            let (file, within) = l.opens.as_ref()?;
+            Some(format!(
+                " Opens the file {} (inside {}) with {}.",
+                file.display(),
+                within.display(),
+                l.executable.display()
+            ))
+        })
+        .unwrap_or_default();
     let action = confirmation::Action {
         what: format!(
-            "{} {}: {} ({}). Input: {}{}{}",
+            "{} {}: {} ({}).{} Input: {}{}{}",
             grant.target.id(),
             grant.op.id,
             grant.op.description,
             crate::device::effect_label(effect),
+            opens_text,
             input,
             secret_text(grant.target.id(), filled),
             lifetime_text

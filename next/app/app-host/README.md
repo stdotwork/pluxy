@@ -544,6 +544,15 @@ program's name) and `cwd`, and may name:
 - `program`: the program a terminal runs, which must be one of `argv`. The confirmation opens and
   hashes it as it does the executable, so a remembered approval does not stand for a replaced
   program (a self-update) either, and the spawn refuses one changed since it was confirmed;
+- `file` and `within`: the file the launch opens, which must be one of `argv`, and the folder it
+  must be inside, named together. The confirmation resolves both (links followed once) and refuses,
+  before any dialog, a file that is not a regular file, has an execute bit (a desktop may run an
+  executable or a trusted `.desktop` file it is asked to open) or does not resolve inside the
+  folder, and a folder that is `/` or the home folder. It says "Opens the file … (inside …) with
+  <executable>" and shows both, as named and resolved, and binds their identities: the spawn
+  refuses either one replaced, or reached through a different link, since it was confirmed. The
+  executing tool, not the host, decides which folder is its own ([the execution program's `open`
+  launch](../../app-tools/README.md#execution));
 - `stdin`: one of the launch's secret fields, whose secret the host writes to the launch's
   standard input and then closes: the private channel to a credential bridge, never argv, its
   environment or a file. The confirmation names it; it is part of the environment revision;

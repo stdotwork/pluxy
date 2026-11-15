@@ -15,11 +15,25 @@ fn operation(id: &str) -> Value {
 }
 
 #[test]
-fn only_launch_is_exported_so_importers_never_reach_runtimes() {
+fn only_prepare_and_launch_are_exported_so_importers_never_reach_runtimes() {
     assert_eq!(
         manifest()["app"]["exports"],
-        json!({"contract": 1, "operations": ["launch"]})
+        json!({"contract": 1, "operations": ["prepare", "launch"]})
     );
+    assert_eq!(operation("prepare")["effect"], "read");
+}
+
+#[test]
+fn a_launch_may_name_the_file_it_opens_and_its_folder() {
+    let props = &operation("launch")["input_schema"]["properties"];
+    assert_eq!(props["file"]["type"], "string");
+    assert_eq!(props["within"]["type"], "string");
+    let prepare = operation("prepare");
+    assert_eq!(
+        prepare["input_schema"]["properties"]["kind"]["enum"],
+        json!(["terminal", "direct", "open"])
+    );
+    assert_eq!(prepare["input_schema"]["required"], json!(["kind"]));
 }
 
 #[test]

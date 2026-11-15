@@ -109,3 +109,99 @@ fn programs_and_folders_that_do_not_fit_are_refused() {
     assert_eq!(prepare(&i).unwrap_err().code, "not_found");
     std::fs::remove_dir_all(d).unwrap();
 }
+
+/// A folder to open files in, with a session file, an executable file and a link to a file
+/// outside it; and that file outside.
+fn files() -> (PathBuf, PathBuf, PathBuf) {
+    let root = std::fs::canonicalize(bin(&[])).unwrap();
+    let within = root.join("codex");
+    let sessions = within.join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let file = sessions.join("rollout-a.jsonl");
+    std::fs::write(&file, b"{}\n").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(sessions.join("run.sh"), b"#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(
+        sessions.join("run.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let outside = root.join("private.txt");
+    std::fs::write(&outside, b"x\n").unwrap();
+    std::os::unix::fs::symlink(&outside, sessions.join("link.jsonl")).unwrap();
+    (root, within, file)
+}
+
+#[test]
+fn an_open_launch_runs_the_opener_with_the_resolved_file_in_its_folder() {
+    let (root, within, file) = files();
+    let openers = bin(&["xdg-open", "gio"]);
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    // Named through `..`: the resolved file is the argument.
+    let named = within.join("sessions/../sessions/rollout-a.jsonl");
+    let i =
+        json!({"kind": "open", "file": s(&named), "within": s(&within), "search_path": [openers]});
+    assert_eq!(
+        prepare(&i).unwrap(),
+        json!({
+            "executable": s(&openers.join("xdg-open")), "argv": [s(&file)],
+            "cwd": s(&within.join("sessions")), "file": s(&file), "within": s(&within),
+        })
+    );
+    // With no xdg-open, gio's `open`.
+    let gio = bin(&["gio"]);
+    let mut g = i.clone();
+    g["search_path"] = json!([gio]);
+    let r = prepare(&g).unwrap();
+    assert_eq!(r["executable"], json!(s(&gio.join("gio"))));
+    assert_eq!(r["argv"], json!(["open", s(&file)]));
+    // Neither: not found.
+    g["search_path"] = json!([root]);
+    assert_eq!(prepare(&g).unwrap_err().code, "not_found");
+    for d in [root, openers, gio] {
+        std::fs::remove_dir_all(d).unwrap();
+    }
+}
+
+#[test]
+fn an_open_launch_names_only_a_plain_file_inside_its_folder() {
+    let (root, within, file) = files();
+    let openers = bin(&["xdg-open"]);
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let ok =
+        json!({"kind": "open", "file": s(&file), "within": s(&within), "search_path": [openers]});
+    assert!(prepare(&ok).is_ok());
+    let sessions = within.join("sessions");
+    for (k, v, says) in [
+        ("file", json!(s(&root.join("private.txt"))), "inside"),
+        ("file", json!(s(&sessions.join("link.jsonl"))), "inside"),
+        ("file", json!(s(&within.join("../private.txt"))), "inside"),
+        ("file", json!(s(&sessions.join("run.sh"))), "executable"),
+        ("file", json!(s(&sessions)), "regular file"),
+        ("file", json!("rollout-a.jsonl"), "absolute"),
+        ("within", json!("/"), "cannot be /"),
+        ("within", json!(s(&file)), "not a folder"),
+        ("program", json!("agent"), "not program"),
+    ] {
+        let mut i = ok.clone();
+        i[k] = v;
+        let e = prepare(&i).unwrap_err();
+        assert!(e.message.contains(says), "{k}: {}", e.message);
+    }
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(openers).unwrap();
+}
+
+#[test]
+fn a_terminal_or_direct_launch_still_names_its_program_cwd_and_search_path() {
+    let d = bin(&["agent"]);
+    let cwd = d.to_string_lossy().into_owned();
+    let ok = json!({"kind": "direct", "program": "agent", "cwd": cwd, "search_path": [d]});
+    assert!(prepare(&ok).is_ok());
+    for k in ["program", "cwd", "search_path"] {
+        let mut i = ok.clone();
+        i.as_object_mut().unwrap().remove(k);
+        assert_eq!(prepare(&i).unwrap_err().code, "invalid_request", "{k}");
+    }
+    std::fs::remove_dir_all(d).unwrap();
+}

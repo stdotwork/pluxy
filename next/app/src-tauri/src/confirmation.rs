@@ -37,6 +37,9 @@ pub struct Launch {
     /// The program a terminal runs (one of argv): opened, hashed and bound as the executable is,
     /// so its replacement (a self-update) asks again too.
     pub program: Option<PathBuf>,
+    /// The file the launch opens (one of argv) and the folder it must be inside: both opened and
+    /// resolved, shown and bound, so a link to or a replacement by another file is refused.
+    pub opens: Option<(PathBuf, PathBuf)>,
     pub terminal_adapter: Package,
     pub environment_revision: String,
     /// Names and non-secret changed values only; no secret bytes.
@@ -176,6 +179,12 @@ struct ExactProgram {
     metadata: Metadata,
     sha256: String,
 }
+/// The file a launch opens and the folder it is inside, as confirmed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct ExactOpen {
+    file: Target,
+    within: Target,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct ExactLaunch {
     executable: Target,
@@ -185,6 +194,8 @@ struct ExactLaunch {
     cwd: Target,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     program: Option<ExactProgram>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    opens: Option<ExactOpen>,
     terminal_adapter: Package,
     environment_revision: String,
     environment_review: Vec<(String, Option<String>)>,
@@ -242,11 +253,17 @@ pub struct Prepared {
     executable: Option<OpenTarget>,
     cwd: Option<OpenTarget>,
     program: Option<OpenTarget>,
+    /// The file a launch opens and its folder, held open.
+    opens: Option<(OpenTarget, OpenTarget)>,
 }
 impl Prepared {
     fn check(&self) -> Result<(), String> {
         for f in &self.files {
             f.check()?;
+        }
+        if let Some((file, within)) = &self.opens {
+            file.check()?;
+            within.check()?;
         }
         if let (Some(e), Some(l)) = (&self.executable, &self.exact.launch) {
             e.check()?;
@@ -323,6 +340,31 @@ impl Prepared {
         }
         Ok(s)
     }
+}
+/// A launch's file to open and the folder it must be inside, both opened and resolved: the folder
+/// a folder other than `/` and the home folder, the file a regular file with no execute bit (a
+/// desktop may run an executable or a trusted .desktop file it is asked to open) inside it.
+fn open_within(file: &Path, within: &Path) -> Result<(OpenTarget, OpenTarget), String> {
+    let w = OpenTarget::open(within)?;
+    if !w.file.metadata().map_err(|e| e.to_string())?.is_dir() {
+        return Err("a launch's within folder is not a folder".into());
+    }
+    let home = std::env::var_os("HOME").and_then(|h| fs::canonicalize(h).ok());
+    if w.identity.canonical == Path::new("/") || Some(&w.identity.canonical) == home.as_ref() {
+        return Err("a launch's within folder cannot be / or the home folder".into());
+    }
+    let f = OpenTarget::open(file)?;
+    let m = f.file.metadata().map_err(|e| e.to_string())?;
+    if !m.is_file() {
+        return Err("the file a launch opens must be a regular file".into());
+    }
+    if m.mode() & 0o111 != 0 {
+        return Err("the file a launch opens must not be executable".into());
+    }
+    if !f.identity.canonical.starts_with(&w.identity.canonical) {
+        return Err("the file a launch opens must be inside its within folder".into());
+    }
+    Ok((f, w))
 }
 pub(crate) fn escape_format_characters(text: &str) -> String {
     use gtk::glib::Unichar;
@@ -672,6 +714,7 @@ impl Confirmations {
         let mut executable = None;
         let mut cwd = None;
         let mut program = None;
+        let mut opens = None;
         let launch = if let Some(l) = action.launch {
             let mut e = OpenTarget::open(&l.executable)?;
             if !e.file.metadata().map_err(|e| e.to_string())?.is_file() {
@@ -711,6 +754,18 @@ impl Confirmations {
                 }
                 None => None,
             };
+            let exact_opens = match &l.opens {
+                Some((file, within)) => {
+                    let (f, w) = open_within(file, within)?;
+                    let x = ExactOpen {
+                        file: f.identity.clone(),
+                        within: w.identity.clone(),
+                    };
+                    opens = Some((f, w));
+                    Some(x)
+                }
+                None => None,
+            };
             let exact = ExactLaunch {
                 executable: e.identity.clone(),
                 metadata: m,
@@ -718,6 +773,7 @@ impl Confirmations {
                 argv: l.argv,
                 cwd: c.identity.clone(),
                 program: exact_program,
+                opens: exact_opens,
                 terminal_adapter: l.terminal_adapter,
                 environment_revision: l.environment_revision,
                 environment_review: l.environment_review,
@@ -744,6 +800,7 @@ impl Confirmations {
             executable,
             cwd,
             program,
+            opens,
         };
         p.check()?;
         Ok(p)
