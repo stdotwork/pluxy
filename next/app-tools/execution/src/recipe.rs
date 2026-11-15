@@ -1,5 +1,6 @@
-//! Launch recipes: the terminals pluxy knows on Linux and how a typed launch becomes the
-//! executable, argv and cwd the person confirms. Nothing here starts a process.
+//! Launch recipes: the terminals pluxy knows on Linux, the openers that open a file in the
+//! person's own app, and how a typed launch becomes the executable, argv and cwd the person
+//! confirms. Nothing here starts a process.
 
 use pluxy_program::Error;
 use serde_json::{json, Value};
@@ -65,6 +66,20 @@ pub const TERMINALS: &[Terminal] = &[
 
 /// The ID of Automatic: the first terminal of `TERMINALS` found.
 pub const AUTOMATIC: &str = "automatic";
+
+/// The programs that open a file in the app the desktop opens its type with, and the arguments
+/// before the file, in the order tried: the old desktop app's first two (its opener library tries
+/// `xdg-open`, then `gio open`).
+pub const OPENERS: &[(&str, &[&str])] = &[("xdg-open", &[]), ("gio", &["open"])];
+
+/// Where an open launch takes its opener from: the system's program folders, the only ones the
+/// app accepts an opener from (a caller's search path could name any program `xdg-open`).
+pub const SYSTEM_PATH: &[&str] = &[
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+    "/run/current-system/sw/bin",
+];
 
 /// Whether p is an executable regular file.
 fn executable(p: &Path) -> bool {
@@ -133,9 +148,119 @@ fn program(input: &Value, folders: &[PathBuf]) -> Result<PathBuf, Error> {
     find(name, folders).ok_or_else(|| Error::not_found(format!("{name} is not on the PATH")))
 }
 
+/// A path's text, refused when it is not UTF-8: the host confirms UTF-8 paths only.
+fn text(what: &str, p: &Path) -> Result<String, Error> {
+    p.to_str()
+        .map(String::from)
+        .ok_or_else(|| Error::invalid_request(format!("{what} is not a UTF-8 path")))
+}
+
+/// An open launch, with its opener from `SYSTEM_PATH`. A native-test build also takes the
+/// opener from the input's `search_path`, for the native test's stand-in; a release build refuses
+/// it.
+fn open(input: &Value) -> Result<Value, Error> {
+    #[allow(unused_mut)]
+    let mut fields = vec!["kind", "file", "within"];
+    #[allow(unused_mut)]
+    let mut folders: Vec<PathBuf> = SYSTEM_PATH.iter().map(PathBuf::from).collect();
+    #[cfg(feature = "native-test")]
+    if input.get("search_path").is_some() {
+        fields.push("search_path");
+        folders = self::folders(input);
+    }
+    open_from(input, &fields, &folders)
+}
+
+/// An open launch: `<opener> <file>` (or `gio open <file>`) in the file's folder, the opener the
+/// first of `OPENERS` found in folders. It names the file (the resolved path, which is its
+/// argument) and the folder it must be inside (`within`, resolved), which the host checks, shows
+/// and binds again. The file must be a regular file with no execute bit inside that folder; the
+/// folder must not be `/`, the home folder or a folder above it. The input holds only fields.
+fn open_from(input: &Value, fields: &[&str], folders: &[PathBuf]) -> Result<Value, Error> {
+    if let Some((k, _)) = input
+        .as_object()
+        .into_iter()
+        .flatten()
+        .find(|(k, _)| !fields.contains(&k.as_str()))
+    {
+        return Err(Error::invalid_request(format!(
+            "an open launch takes {}, not {k}",
+            fields.join(", ")
+        )));
+    }
+    let resolve = |what: &str, k: &str| -> Result<PathBuf, Error> {
+        let p = input[k].as_str().unwrap_or_default();
+        if !p.starts_with('/') {
+            return Err(Error::invalid_request(format!(
+                "{what} must be an absolute path"
+            )));
+        }
+        std::fs::canonicalize(p).map_err(|e| Error::not_found(format!("{what} {p}: {e}")))
+    };
+    let within = resolve("the within folder", "within")?;
+    if !within.is_dir() {
+        return Err(Error::invalid_request(format!(
+            "the within folder {} is not a folder",
+            within.display()
+        )));
+    }
+    let home = std::env::var_os("HOME").and_then(|h| std::fs::canonicalize(h).ok());
+    if within == Path::new("/") || home.as_ref().is_some_and(|h| h.starts_with(&within)) {
+        return Err(Error::invalid_request(
+            "the within folder cannot be /, the home folder or a folder above it",
+        ));
+    }
+    let file = resolve("the file to open", "file")?;
+    let meta = std::fs::metadata(&file).map_err(|e| Error::not_found(e.to_string()))?;
+    if !meta.is_file() {
+        return Err(Error::invalid_request(
+            "the file to open must be a regular file",
+        ));
+    }
+    if meta.permissions().mode() & 0o111 != 0 {
+        return Err(Error::invalid_request(
+            "the file to open must not be executable",
+        ));
+    }
+    if !file.starts_with(&within) {
+        return Err(Error::invalid_request(
+            "the file to open must be inside its within folder",
+        ));
+    }
+    let (path, flags) = OPENERS
+        .iter()
+        .find_map(|(name, flags)| find(name, folders).map(|p| (p, *flags)))
+        .ok_or_else(|| Error::not_found("no opener (xdg-open or gio) found"))?;
+    let file = text("the file to open", &file)?;
+    let cwd = text(
+        "the file's folder",
+        Path::new(&file).parent().unwrap_or(Path::new("/")),
+    )?;
+    let mut argv: Vec<String> = flags.iter().map(|f| f.to_string()).collect();
+    argv.push(file.clone());
+    Ok(json!({
+        "executable": text("the opener", &path)?,
+        "argv": argv,
+        "cwd": cwd,
+        "file": file,
+        "within": text("the within folder", &within)?,
+    }))
+}
+
 /// `prepare`: a terminal launch runs `<terminal> <flags> <program> <args>`, naming the program it
-/// runs (`program`) so the host binds it too; a direct launch runs `<program> <args>`.
+/// runs (`program`) so the host binds it too; a direct launch runs `<program> <args>`; an open
+/// launch runs an opener with the file it opens (`open`).
 pub fn prepare(input: &Value) -> Result<Value, Error> {
+    if input["kind"] == "open" {
+        return open(input);
+    }
+    for k in ["program", "cwd", "search_path"] {
+        if input.get(k).is_none() {
+            return Err(Error::invalid_request(format!(
+                "a terminal or direct launch names its {k}"
+            )));
+        }
+    }
     let folders = folders(input);
     let program = program(input, &folders)?;
     let args: Vec<String> = input["args"]
@@ -181,7 +306,7 @@ pub fn prepare(input: &Value) -> Result<Value, Error> {
             Ok(json!({"executable": path, "argv": argv, "cwd": cwd, "program": program_text}))
         }
         _ => Err(Error::invalid_request(
-            "a launch's kind is terminal or direct",
+            "a launch's kind is terminal, direct or open",
         )),
     }
 }
