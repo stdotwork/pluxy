@@ -244,8 +244,10 @@ pub(crate) fn pin_file(held: &File) -> Result<Pinned, String> {
 pub(crate) fn pin_other(held: &File) -> Result<Pinned, String> {
     let path = final_path(held)?;
     let f = open_pinned(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let (a, b) = (file_id(&f), file_id(held));
-    if a.is_err() || a.ok() != b.ok() || state(&f).ok() != state(held).ok() {
+    // Both read, and equal: a file whose identity or state cannot be read is refused.
+    let same = matches!((file_id(&f), file_id(held)), (Ok(a), Ok(b)) if a == b)
+        && matches!((state(&f), state(held)), (Ok(a), Ok(b)) if a == b);
+    if !same {
         return Err(format!(
             "{} is no longer the file that was opened",
             path.display()
