@@ -288,4 +288,154 @@ mod tests {
         let e = judged("O:BAD:P(A;;FA;;;ME)", None, Others::None).unwrap_err();
         assert!(e.contains("not owned"), "{e}");
     }
+
+    // Each of judge's branches, with a passing descriptor beside each refusal.
+    #[test]
+    fn judge_takes_only_this_users_own() {
+        let mut wrong = Vec::new();
+        let mut expect =
+            |case: &str, got: Result<(), String>, want: Option<&str>| match (&got, want) {
+                (Ok(()), None) => {}
+                (Err(e), Some(w)) if e.contains(w) => {}
+                _ => wrong.push(format!("{case}: expected {want:?}, got {got:?}")),
+            };
+        let private = "O:MED:P(A;;FA;;;ME)(A;;FA;;;SY)(A;;FA;;;BA)";
+        expect("private", judged(private, Some(ME), Others::None), None);
+        expect(
+            "owned by another user",
+            judged("O:OTHERD:P(A;;FA;;;ME)", Some(ME), Others::None),
+            Some("not owned"),
+        );
+        expect(
+            "owned by the default owner",
+            judged("O:BAD:P(A;;FA;;;ME)", Some("S-1-5-32-544"), Others::None),
+            None,
+        );
+        expect(
+            "owned by Administrators, not the default owner",
+            judged("O:BAD:P(A;;FA;;;ME)", Some(ME), Others::None),
+            Some("not owned"),
+        );
+        expect(
+            "no access list",
+            judged("O:MED:NO_ACCESS_CONTROL", Some(ME), Others::None),
+            Some("no access list"),
+        );
+        expect(
+            "a deny entry for another user",
+            judged(&format!("{private}(D;;FA;;;OTHER)"), Some(ME), Others::None),
+            None,
+        );
+        expect(
+            "an inherit-only entry for another user",
+            judged(
+                &format!("{private}(A;OICIIO;FA;;;OTHER)"),
+                Some(ME),
+                Others::None,
+            ),
+            None,
+        );
+        expect(
+            "an object entry",
+            judged(
+                &format!("{private}(OA;;CC;bf967aba-0de6-11d0-a285-00aa003049e2;;ME)"),
+                Some(ME),
+                Others::None,
+            ),
+            Some("not checked here"),
+        );
+        let read = format!("{private}(A;;FR;;;OTHER)");
+        expect(
+            "another user reads, readers allowed",
+            judged(&read, Some(ME), Others::Read),
+            None,
+        );
+        expect(
+            "another user reads, no one allowed",
+            judged(&read, Some(ME), Others::None),
+            Some("lets another user in"),
+        );
+        for (case, entry) in [
+            ("another user writes", "(A;;FW;;;OTHER)"),
+            ("Everyone may change it", "(A;;0x10000;;;WD)"),
+            ("another user may change its access list", "(A;;WD;;;OTHER)"),
+            ("another user has generic all", "(A;;GA;;;OTHER)"),
+        ] {
+            expect(
+                case,
+                judged(&format!("{private}{entry}"), Some(ME), Others::Read),
+                Some("lets another user in"),
+            );
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A new folder under the temporary folder whose access list is only this user's, SYSTEM's
+    /// and Administrators', inherited by what is made in it.
+    fn private_folder(name: &str) -> std::path::PathBuf {
+        let mut random = [0; 8];
+        getrandom::fill(&mut random).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "pluxy-acl-{name}-{}",
+            crate::artifact::hex(&random)
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let user = std::process::Command::new("whoami").output().unwrap();
+        let user = String::from_utf8_lossy(&user.stdout).trim().to_string();
+        let set = std::process::Command::new("icacls")
+            .arg(&dir)
+            .args(["/inheritance:r", "/grant:r"])
+            .arg(format!("{user}:(OI)(CI)F"))
+            .args(["*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"])
+            .output()
+            .unwrap();
+        assert!(
+            set.status.success(),
+            "icacls: {}",
+            String::from_utf8_lossy(&set.stdout)
+        );
+        dir
+    }
+
+    // check on real files: the folder and a file in it pass; the wrong kind, a junction and an
+    // entry letting Everyone change them are refused.
+    #[test]
+    fn check_reads_real_files() {
+        let dir = private_folder("check");
+        let file = dir.join("file");
+        std::fs::write(&file, b"x").unwrap();
+        check(&dir, true, Others::None).unwrap();
+        check(&file, false, Others::Read).unwrap();
+        let e = check(&dir, false, Others::None).unwrap_err();
+        assert!(e.contains("not a plain file"), "{e}");
+        let e = check(&file, true, Others::None).unwrap_err();
+        assert!(e.contains("not a folder"), "{e}");
+        let link = dir.join("link");
+        let made = std::process::Command::new("cmd")
+            .arg("/c")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&link)
+            .arg(&dir)
+            .output()
+            .unwrap();
+        assert!(
+            made.status.success(),
+            "mklink: {}",
+            String::from_utf8_lossy(&made.stdout)
+        );
+        let e = check(&link, true, Others::None).unwrap_err();
+        assert!(e.contains("not a folder"), "{e}");
+        std::fs::remove_dir(&link).unwrap();
+        let opened = std::process::Command::new("icacls")
+            .arg(&file)
+            .arg("/grant")
+            .arg("*S-1-1-0:M")
+            .output()
+            .unwrap();
+        assert!(opened.status.success());
+        let e = check(&file, false, Others::Read).unwrap_err();
+        assert!(e.contains("lets another user in"), "{e}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

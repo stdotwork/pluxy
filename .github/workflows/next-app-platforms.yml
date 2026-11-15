@@ -105,6 +105,16 @@ jobs:
             printf "passed %d, failed %d, ignored %d\n", p, f, i
             if (p == 0) exit 1
           }' "$RUNNER_TEMP/cargo-test.log" | tee -a "$GITHUB_STEP_SUMMARY"
+      # The test trust built in: the trust profile and the updater gate, the release gate (which
+      # must refuse a test build), and on Windows the access-list check of the profile
+      # (src/win_acl.rs).
+      - name: Artifact signature and test trust controls
+        working-directory: next/app/src-tauri
+        run: |
+          cargo test --locked --features artifact-test-trust --test artifact_trust --test release_config
+          if [ "$RUNNER_OS" = Windows ]; then
+            cargo test --locked --features artifact-test-trust --lib win_acl::
+          fi
 
   # The real app on a hosted Windows and macOS runner, as a person would use it, with the system's
   # own tools reading back what it leaves in the registry or the LaunchAgents folder. The runner's
