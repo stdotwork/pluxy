@@ -344,8 +344,20 @@ fn page_scheme_url() -> Url {
     Url::parse(&s).expect("the page scheme's URL")
 }
 
+/// Whether the app shows in the Dock: only while it has a window, as the old app did. In the
+/// tray alone it is a menu bar item. Only macOS has a Dock.
+fn show_in_dock(app: &AppHandle, shown: bool) {
+    #[cfg(target_os = "macos")]
+    if let Err(e) = app.set_dock_visibility(shown) {
+        eprintln!("pluxy-app: dock icon: {e}");
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, shown);
+}
+
 /// Shows the window, making a new one if it was closed.
 fn open_window(app: &AppHandle) -> tauri::Result<()> {
+    show_in_dock(app, true);
     if let Some(w) = app.get_window(WINDOW) {
         let _ = w.unminimize();
         w.show()?;
@@ -518,6 +530,7 @@ fn close_to_tray(app: &AppHandle) {
     if let Some(w) = app.get_window(WINDOW) {
         let _ = w.destroy();
     }
+    show_in_dock(app, false);
 }
 
 /// The person closed the window: do what they chose. Off the window's thread, since asking the
@@ -2883,9 +2896,15 @@ pub fn run() {
             #[cfg(feature = "native-test")]
             native_test::updater_gate(app.handle());
             let config = app.path().app_config_dir()?;
+            // The folder the login item's own folder is in: the XDG config folder on Linux, the
+            // user's `Library` on macOS. (On Windows it is a registry value.)
+            #[cfg(target_os = "macos")]
+            let autostart_base = app.path().home_dir()?.join("Library");
+            #[cfg(not(target_os = "macos"))]
+            let autostart_base = app.path().config_dir()?;
             let startup_store = startup::Store::new(
                 config.clone(),
-                app.path().config_dir()?,
+                autostart_base,
                 app.config().identifier.clone(),
             );
             let preferences = startup_store.load();
@@ -3087,6 +3106,8 @@ pub fn run() {
                 };
             if !silent || !usable_tray {
                 open_window(&handle)?;
+            } else {
+                show_in_dock(&handle, false);
             }
             // A version an update installed accepts itself, which the earlier one waits for.
             #[cfg(unix)]
@@ -3143,6 +3164,14 @@ pub fn run() {
             // The window closed: stay in the tray.
             if st.has_tray.load(Ordering::SeqCst) && !st.quitting.load(Ordering::SeqCst) {
                 api.prevent_exit();
+            }
+        }
+        // The Dock icon (or Finder opening the app again) while it is in the tray only: the
+        // window comes back. A second program launch is the instance lock's business (`instance`).
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => {
+            if tray_item_acts("open", app.state::<App>().quitting.load(Ordering::SeqCst)) {
+                let _ = open_window(app);
             }
         }
         RunEvent::Exit => {

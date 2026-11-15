@@ -58,10 +58,27 @@ pulldown-cmark-escape = "0.11"
 # core (src/cores.rs): gzip-compressed tar.
 flate2 = "=1.1.11"
 tar = { version = "=0.4.46", default-features = false }
+# The macOS login item, a LaunchAgent property list (src/startup.rs). Already in the tree through
+# tauri-utils.
+plist = "1"
 # Access (src/access.rs): reads relative to a folder the person granted, never leaving it.
 cap-std = "=4.0.3"
 # Bytes a page reads through Access travel as base64 in its channel's JSON.
 base64 = "=0.23.1"
+
+# The single-instance pipe and the Run key (src/instance/win.rs, src/startup/registry.rs). Already
+# in the tree through cap-std and tauri's dirs; the version is the locked one.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
