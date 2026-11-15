@@ -13,7 +13,9 @@
 //! the core it belongs to, which is checked before anything is sent anywhere; and before its
 //! value is delivered, that core must still take it (`Caller::client_key_status`: a key deleted
 //! on core is refused there). The value then travels only in the tool's call frame, as any vault
-//! secret's does.
+//! secret's does. A launch's key given to the process it starts is a delivery to the tool whose
+//! launch it is: checked so at the call, and again by `launch_value` whenever the host resolves
+//! it (the spawn, a managed runtime's start and each restart).
 //!
 //! Linux only, as the vault and native key entry.
 
@@ -348,6 +350,19 @@ pub fn admit(
             unknown: false,
         }),
     }
+}
+
+/// Vault secret secret's value for a launch of recipient's (the tool whose launch it is), at the
+/// moment the host gives it to the launched process (its spawn, a runtime's start or restart):
+/// checked first as a delivery is (`admit`, deliver), so it is refused, with no earlier value to
+/// fall back on, once the secret is gone, and a client key once it is another tool's, of a core
+/// the app is not connected to now, or no longer taken by that core.
+pub fn launch_value(app: &AppHandle, secret: &str, recipient: &str) -> Result<String, String> {
+    let vault = &app.state::<App>().vault;
+    let gone = || "a secret of the launch was removed from the vault".to_string();
+    let label = vault.secret(secret).ok_or_else(gone)?.label;
+    admit(app, secret, &label, recipient, false, true).map_err(|e| e.message)?;
+    vault.value(secret).ok_or_else(gone)
 }
 
 #[cfg(test)]

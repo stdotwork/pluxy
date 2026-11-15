@@ -2836,8 +2836,10 @@ pub fn run() {
                 runtimes: spawn::Runtimes::open(
                     Some(app.path().app_data_dir()?.join("runtimes.json")),
                     {
-                        let vault = std::sync::Arc::clone(&vault);
-                        Box::new(move |id| vault.value(id))
+                        // Checked as a delivery to the runtime's package at each start and
+                        // restart: a client key revoked or unbound since is refused.
+                        let app = app.handle().clone();
+                        Box::new(move |package, id| client_keys::launch_value(&app, id, package))
                     },
                 ),
                 status: Mutex::new(None),

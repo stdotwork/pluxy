@@ -98,8 +98,13 @@ fn pid(r: &Value, k: &str) -> u64 {
     r[k].as_u64().unwrap_or(0)
 }
 
-fn no_secret(_: &str) -> Option<String> {
-    None
+fn no_secret(_: &str) -> Result<String, String> {
+    Err("no secret".into())
+}
+
+/// A runtime registry's resolver that knows no secret.
+fn none(_: &str, _: &str) -> Result<String, String> {
+    Err("no secret".into())
 }
 
 fn limit(v: libc::rlim_t) -> Value {
@@ -244,7 +249,11 @@ fn a_detached_launch_leaves_the_app_with_only_what_it_was_given() {
     l.request.set.insert("FIXTURE_SET".into(), "set".into());
     l.request.secrets.insert("FIXTURE_KEY".into(), "key".into());
     l.secrets = vec![("FIXTURE_KEY".into(), "s-1".into())];
-    let value = |id: &str| (id == "s-1").then(|| CANARY.to_string());
+    let value = |id: &str| {
+        (id == "s-1")
+            .then(|| CANARY.to_string())
+            .ok_or_else(|| "it was removed from the vault".to_string())
+    };
     detached(&l, &value).unwrap();
     let r = record(&rec, 0);
     let (p, child) = (pid(&r, "pid"), pid(&r, "child"));
@@ -315,7 +324,7 @@ fn a_detached_launch_leaves_the_app_with_only_what_it_was_given() {
 fn a_managed_runtime_is_the_registrys_and_only_its_package_controls_it() {
     let dir = folder("managed");
     let file = dir.join("runtimes.json");
-    let rt = Runtimes::open(Some(file.clone()), Box::new(no_secret));
+    let rt = Runtimes::open(Some(file.clone()), Box::new(none));
     let (ra, rb) = (dir.join("a"), dir.join("b"));
     let a = rt
         .start("pluxy/one", agent(&dir, &ra, &[], Lifetime::Managed))
@@ -387,10 +396,73 @@ fn a_managed_runtime_is_the_registrys_and_only_its_package_controls_it() {
     }
 }
 
+#[test]
+fn a_restart_resolves_its_secrets_again_for_its_package_and_a_refusal_refuses_it() {
+    let dir = folder("revoked");
+    let revoked = Arc::new(AtomicBool::new(false));
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let rt = {
+        let (revoked, asked) = (Arc::clone(&revoked), Arc::clone(&asked));
+        Runtimes::open(
+            None,
+            Box::new(move |package: &str, id: &str| {
+                asked
+                    .lock()
+                    .unwrap()
+                    .push((package.to_string(), id.to_string()));
+                if revoked.load(Ordering::SeqCst) {
+                    return Err("the client key was deleted on core".into());
+                }
+                Ok(CANARY.to_string())
+            }),
+        )
+    };
+    let rec = dir.join("a");
+    let mut l = agent(&dir, &rec, &[], Lifetime::Managed);
+    l.request.secrets.insert("FIXTURE_KEY".into(), "key".into());
+    l.secrets = vec![("FIXTURE_KEY".into(), "s-1".into())];
+    let a = rt.start("pluxy/one", l).unwrap();
+    let id = a["runtime"].as_str().unwrap().to_string();
+    let x = record(&rec, 0);
+    let mut all = vec![pid(&x, "pid"), pid(&x, "child")];
+    let checks = || {
+        assert_eq!(x["env"]["FIXTURE_KEY"], CANARY);
+        // A restart with the secret still given: resolved again, for the runtime's package.
+        rt.restart("pluxy/one", &id).unwrap();
+        let y = record(&rec, pid(&x, "pid"));
+        all.extend([pid(&y, "pid"), pid(&y, "child")]);
+        assert_eq!(y["env"]["FIXTURE_KEY"], CANARY);
+        // Refused now: the restart is refused, and nothing earlier stands for the secret.
+        revoked.store(true, Ordering::SeqCst);
+        let e = rt.restart("pluxy/one", &id).unwrap_err();
+        assert!(
+            e.contains("FIXTURE_KEY") && e.contains("deleted on core"),
+            "{e}"
+        );
+        assert!(ended(pid(&y, "pid"), &rec) && ended(pid(&y, "child"), &rec));
+        std::thread::sleep(Duration::from_millis(300));
+        let now: Value = serde_json::from_slice(&std::fs::read(&rec).unwrap()).unwrap();
+        assert_eq!(now["pid"], y["pid"], "the refused restart started it again");
+        assert_eq!(rt.status("pluxy/one", &id).unwrap()["state"], "exited");
+        let want = ("pluxy/one".to_string(), "s-1".to_string());
+        assert_eq!(
+            *asked.lock().unwrap(),
+            vec![want.clone(), want.clone(), want]
+        );
+    };
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(checks));
+    rt.stop_all();
+    clean(&all, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Err(e) = r {
+        std::panic::resume_unwind(e);
+    }
+}
+
 /// The host-crash check's host: starts a managed runtime whose leader leaves an orphan, and a
 /// detached agent, says so, and waits to be killed.
 fn crash_host(dir: &Path) -> ! {
-    let rt = Runtimes::open(Some(dir.join("runtimes.json")), Box::new(no_secret));
+    let rt = Runtimes::open(Some(dir.join("runtimes.json")), Box::new(none));
     let leader = dir.join("leader");
     rt.start(
         "pluxy/one",
@@ -456,7 +528,7 @@ fn a_crashed_host_leaves_the_documented_orphans_and_its_next_start_does_not_sign
             "the detached agent did not outlive the host"
         );
         // The next start reports the runtime as unknown and never signals it.
-        let rt = Runtimes::open(Some(dir.join("runtimes.json")), Box::new(no_secret));
+        let rt = Runtimes::open(Some(dir.join("runtimes.json")), Box::new(none));
         let list = rt.list("pluxy/one");
         assert_eq!(list.len(), 1, "{list:?}");
         assert_eq!(list[0]["state"], "unknown");
@@ -522,7 +594,7 @@ impl Opened for Gated {
 #[test]
 fn a_disabled_or_removed_packages_runtimes_are_retired_and_never_start_again() {
     let dir = folder("closed");
-    let rt = Arc::new(Runtimes::open(None, Box::new(no_secret)));
+    let rt = Arc::new(Runtimes::open(None, Box::new(none)));
     let (ra, rb) = (dir.join("a"), dir.join("b"));
     let a = rt
         .start("pluxy/one", agent(&dir, &ra, &[], Lifetime::Managed))
@@ -616,7 +688,7 @@ fn unknown_runtimes_do_not_fill_a_packages_room() {
         })
         .collect();
     std::fs::write(&file, json!(left).to_string()).unwrap();
-    let rt = Runtimes::open(Some(file), Box::new(no_secret));
+    let rt = Runtimes::open(Some(file), Box::new(none));
     assert_eq!(rt.list("pluxy/one").len(), MAX_RUNTIMES);
     let rec = dir.join("a");
     let r = rt.start("pluxy/one", agent(&dir, &rec, &[], Lifetime::Managed));

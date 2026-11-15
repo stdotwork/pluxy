@@ -7,7 +7,9 @@
 //! `argv[0]`, /dev/null on stdin, stdout and stderr, and no other descriptor of the app's (no
 //! tool pipe, vault file or socket). Its environment is the launch environment (`environment`):
 //! selected values of the app's own environment as it started (`Snapshot`), the variables the
-//! confirmed launch set, inherited by name or removed, and the secrets the host resolved for it.
+//! confirmed launch set, inherited by name or removed, and the secrets the host resolved for it,
+//! each resolved at the moment it is given (the spawn, a runtime's start or restart) by a resolver
+//! that checks it as a delivery to the launch's package (`client_keys::launch_value`).
 //! A process given a secret's value has core file size limits of 1, so the kernel neither writes
 //! its core nor runs a core dump handler for it, nor for its descendants.
 //!
@@ -23,10 +25,10 @@
 //! tied to the app and not to a short-lived thread. Only the package that started it controls it,
 //! at any release or generation, through `runtime` frames: status, list, stop and restart. Stop
 //! sends SIGTERM to its group and SIGKILL after five seconds, then reaps it; restart starts the
-//! same confirmed launch again, unless its executable changed since it was confirmed. The app's
-//! quit stops its runtimes; the package's disable or removal retires them (stopped, their
-//! launches dropped, none started until it is enabled again); a tool's idle stop, crash or swap
-//! does neither.
+//! same confirmed launch again, unless its executable changed since it was confirmed or a secret
+//! it gets is refused now. The app's quit stops its runtimes; the package's disable or removal
+//! retires them (stopped, their launches dropped, none started until it is enabled again); a
+//! tool's idle stop, crash or swap does neither.
 //!
 //! If the app itself dies, the runtime's leader gets SIGTERM, but a descendant that ignores it or
 //! started a session of its own lives on as an orphan: a process group and a parent-death signal
@@ -391,6 +393,11 @@ pub fn parse(
 }
 
 impl Request {
+    /// Whether the launch gives the secret of its secret field field to the process it starts.
+    pub fn delivers(&self, field: &str) -> bool {
+        self.secrets.values().any(|f| f == field)
+    }
+
     /// What the native confirmation shows of it: each variable's name, and the value only of
     /// those set (the confirmed input's own text); never an inherited value or a secret's.
     /// secret names a secret field's secret (its label and ID).
@@ -602,24 +609,25 @@ fn command(l: &Launch, env: Vec<(String, OsString)>, holds_secrets: bool) -> Com
     cmd
 }
 
-/// Resolves l's secrets with value (a vault secret ID's value), refused when one is gone.
+/// Resolves l's secrets with value (a vault secret ID's value, or why it is refused now): the
+/// launch is refused when one is.
 fn resolve(
     l: &Launch,
-    value: &dyn Fn(&str) -> Option<String>,
+    value: &dyn Fn(&str) -> Result<String, String>,
 ) -> Result<Vec<(String, String)>, String> {
     l.secrets
         .iter()
         .map(|(name, id)| {
             value(id)
                 .map(|v| (name.clone(), v))
-                .ok_or(format!("the secret for {name} was removed from the vault"))
+                .map_err(|e| format!("the secret for {name} is refused: {e}"))
         })
         .collect()
 }
 
-/// Starts detached launch l, with its secrets' values resolved by value; returns once its
+/// Starts detached launch l, with its secrets' values resolved by value now; returns once its
 /// wrapper has been reaped.
-pub fn detached(l: &Launch, value: &dyn Fn(&str) -> Option<String>) -> Result<(), String> {
+pub fn detached(l: &Launch, value: &dyn Fn(&str) -> Result<String, String>) -> Result<(), String> {
     l.opened.recheck()?;
     let secrets = resolve(l, value)?;
     let env = environment(snapshot(), &l.request, &secrets);
@@ -702,7 +710,8 @@ impl Entry {
     }
 }
 
-type SecretValue = dyn Fn(&str) -> Option<String> + Send + Sync;
+/// A vault secret's value for a package's launch (package, secret ID), or why it is refused now.
+type SecretValue = dyn Fn(&str, &str) -> Result<String, String> + Send + Sync;
 
 /// The runtimes, and the packages closed to them: disabled (false) or removed (true). A closed
 /// package's runtimes are stopped and their launches dropped, and none starts for it until it is
@@ -744,7 +753,8 @@ fn missing(package: &str, id: &str) -> String {
 
 impl Runtimes {
     /// The registry, its record of running runtimes in file; those a previous run left are
-    /// reported as unknown. value resolves a vault secret ID.
+    /// reported as unknown. value resolves a vault secret ID for a package's launch, at each start
+    /// and restart, and refuses one the package may not be given now.
     pub fn open(file: Option<PathBuf>, value: Box<SecretValue>) -> Runtimes {
         let mut list = Vec::new();
         if let Some(f) = &file {
@@ -865,7 +875,7 @@ impl Runtimes {
             format!("{e}; its executable or cwd changed since it was confirmed: launch it again")
         })?;
         self.0.open(&self.0.list.lock().unwrap(), package)?;
-        let secrets = resolve(l, &*self.0.value)?;
+        let secrets = resolve(l, &|id| (self.0.value)(package, id))?;
         let env = environment(snapshot(), &l.request, &secrets);
         let token = {
             let mut t = self.0.tokens.lock().unwrap();
@@ -982,7 +992,8 @@ impl Runtimes {
     }
 
     /// Stops runtime id of package, then starts its confirmed launch again, unless its executable
-    /// or cwd changed since it was confirmed or a secret it gets was removed; its status.
+    /// or cwd changed since it was confirmed or a secret it gets is refused now (removed, or a
+    /// client key that no longer passes its checks); its status.
     pub fn restart(&self, package: &str, id: &str) -> Result<Value, String> {
         let launch = {
             let mut list = self.0.list.lock().unwrap();
