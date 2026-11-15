@@ -201,3 +201,36 @@ fn a_folder_that_forbids_setting_access_lists_refuses_private_folders() {
     create_private_dir_all(&open.0.join("x").join("y")).unwrap();
     assert!(private(&open.0.join("x")) && private(&open.0.join("x").join("y")));
 }
+
+/// A folder someone else makes between the walk and the making is checked before anything is
+/// made in it: a link there is refused and nothing is made through it; a folder of ours that is
+/// not private is made private, and the rest made in it.
+#[test]
+fn a_folder_made_by_someone_else_meanwhile_is_checked_before_use() {
+    let t = temp();
+    let elsewhere = t.0.join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    let raced = t.0.join("x");
+    let set = |f: Box<dyn FnMut(&Path)>| BEFORE_CREATE.with(|h| *h.borrow_mut() = Some(f));
+    let (r, e) = (raced.clone(), elsewhere.clone());
+    set(Box::new(move |dir| {
+        if dir == r {
+            junction(&e, &r);
+        }
+    }));
+    let err = create_private_dir_all(&raced.join("y")).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
+    assert!(fs::read_dir(&elsewhere).unwrap().next().is_none());
+    assert!(!private(&elsewhere));
+    fs::remove_dir(&raced).unwrap();
+    // A plain folder of ours, open to what its parent passes down.
+    let r = raced.clone();
+    set(Box::new(move |dir| {
+        if dir == r {
+            fs::create_dir(&r).unwrap();
+        }
+    }));
+    create_private_dir_all(&raced.join("y")).unwrap();
+    BEFORE_CREATE.with(|h| *h.borrow_mut() = None);
+    assert!(private(&raced) && private(&raced.join("y")));
+}

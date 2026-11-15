@@ -351,6 +351,12 @@ pub(crate) fn create_private_dir_all(path: &std::path::Path) -> io::Result<()> {
         bInheritHandle: 0,
     };
     for dir in missing.iter().rev() {
+        #[cfg(test)]
+        BEFORE_CREATE.with(|h| {
+            if let Some(h) = h.borrow_mut().as_mut() {
+                h(dir)
+            }
+        });
         let name: Vec<u16> = dir.as_os_str().encode_wide().chain([0]).collect();
         // SAFETY: name is NUL-terminated; sa and its descriptor live through the call.
         if unsafe { CreateDirectoryW(name.as_ptr(), &sa) } == 0 {
@@ -358,9 +364,26 @@ pub(crate) fn create_private_dir_all(path: &std::path::Path) -> io::Result<()> {
             if e.kind() != io::ErrorKind::AlreadyExists {
                 return Err(e);
             }
+            // Made by someone else since the walk: checked before anything is made in it, as
+            // the leaf is (a link, a file or another owner's folder is refused, ours made
+            // private).
+            if *dir != path {
+                make_private_dir(dir)?;
+            }
         }
     }
     make_private_dir(path)
+}
+
+/// For the tests: called with each folder `create_private_dir_all` is about to make, to make it
+/// first, as another program could between the walk and the making.
+#[cfg(test)]
+pub(crate) type BeforeCreate = Box<dyn FnMut(&std::path::Path)>;
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BEFORE_CREATE: std::cell::RefCell<Option<BeforeCreate>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Opens the folder path itself (never a link it names: a link is refused) for checking and
