@@ -1021,6 +1021,32 @@ pub fn export_name(id: &str, unix_secs: u64) -> String {
     format!("session-{id}-{year:04}-{month:02}-{day:02}.jsonl")
 }
 
+/// The rollout of session id (as `validate_id` gives it) that `open` opens in the person's own
+/// app, and the folder it must be inside, both resolved: the rollout is found as `export` finds
+/// it, and must be a regular file named `rollout-*.jsonl` (`validated_rollout` alone takes any
+/// `.jsonl`); the folder is the Codex home's `sessions/` or `archived_sessions/`, whichever holds
+/// it, never the Codex home. The file's bytes are not read, and no error names a path.
+pub fn open_target(codex_home: &Path, raw_id: &str) -> Result<(PathBuf, PathBuf), DetailError> {
+    let id = validate_id(raw_id).map_err(DetailError::Invalid)?;
+    let none = || DetailError::NotFound("the session has no rollout file to open".into());
+    let file = rollout_for(codex_home, &id).ok_or_else(none)?;
+    let name = file.file_name().and_then(OsStr::to_str).unwrap_or_default();
+    if !(name.starts_with("rollout-") && name.ends_with(".jsonl"))
+        || !fs::symlink_metadata(&file).is_ok_and(|m| m.is_file())
+    {
+        return Err(DetailError::NotFound(
+            "the session's file is not a rollout file (rollout-*.jsonl)".into(),
+        ));
+    }
+    let home = fs::canonicalize(codex_home).map_err(|_| none())?;
+    let within = SESSION_DIRS
+        .iter()
+        .filter_map(|d| fs::canonicalize(codex_home.join(d)).ok())
+        .find(|root| root.starts_with(&home) && file.starts_with(root))
+        .ok_or_else(none)?;
+    Ok((file, within))
+}
+
 /// One message of a session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Message {

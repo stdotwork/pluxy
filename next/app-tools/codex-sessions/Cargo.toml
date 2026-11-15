@@ -10,3 +10,9 @@ publish.workspace = true
 pluxy-program = { path = "../lib/program" }
 rusqlite = { version = "=0.41.1", features = ["bundled"] }
 serde_json = "1"
+
+[features]
+# For the native test only (next/app/native/run.ts): `open` also sends the folder named by the file
+# `opener-folder` in the tool's data folder as the search path of its prepare call, for the test's
+# stand-in opener. Never in a release build.
+native-test = []
