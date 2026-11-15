@@ -47,6 +47,13 @@ enum Part {
 /// list says so.
 const ALLOWED: &[(&str, Part, &str, usize, &str)] = &[
     (
+        "instance/win.rs",
+        Part::Code,
+        "OpenProcess",
+        2,
+        "single instance (Windows): opens the pipe's server process with QUERY_LIMITED_INFORMATION only, to compare its user with this one; that right cannot end it",
+    ),
+    (
         "launcher_native.rs",
         Part::Code,
         "libc::kill",
