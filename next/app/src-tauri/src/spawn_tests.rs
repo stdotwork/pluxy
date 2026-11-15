@@ -1316,3 +1316,96 @@ fn an_open_launch_gets_only_the_absolute_path_entries() {
     r.absolute_path = true;
     assert_eq!(path(&r).as_deref(), Some(absolute));
 }
+
+/// A launch's files as the confirmation opened them, which records at each check whether its
+/// executable could be renamed then (what a pin forbids: an open or running program can be
+/// renamed otherwise) and refuses from its second check on.
+#[cfg(windows)]
+struct Probed {
+    plain: Plain,
+    path: PathBuf,
+    pinned: Mutex<Vec<bool>>,
+}
+
+#[cfg(windows)]
+impl Opened for Probed {
+    fn executable(&self) -> &File {
+        &self.plain.executable
+    }
+    fn cwd(&self) -> &File {
+        &self.plain.cwd
+    }
+    fn recheck(&self) -> Result<(), String> {
+        let moved = self.path.with_extension("moved");
+        let renamed = std::fs::rename(&self.path, &moved).is_ok();
+        if renamed {
+            std::fs::rename(&moved, &self.path).unwrap();
+        }
+        let mut pinned = self.pinned.lock().unwrap();
+        pinned.push(!renamed);
+        if pinned.len() > 1 {
+            return Err("changed since it was confirmed".into());
+        }
+        Ok(())
+    }
+}
+
+/// On Windows a launch is checked once more after its executable and cwd are pinned, when
+/// nothing can change them any more: a change made after the first check is seen then, and
+/// nothing starts.
+#[cfg(windows)]
+#[test]
+fn on_windows_a_launch_is_checked_again_once_its_files_are_pinned() {
+    let rt = Runtimes::open(None, Box::new(By(none)));
+    for lifetime in [Lifetime::Detached, Lifetime::Managed] {
+        let dir = folder("pinned");
+        let exe = dir.join("agent.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+        let rec = dir.join("agent");
+        let mut l = agent(&dir, &rec, &[], lifetime);
+        l.named = exe.clone();
+        let probed = Arc::new(Probed {
+            plain: Plain {
+                executable: File::open(&exe).unwrap(),
+                cwd: open_dir(&dir),
+            },
+            path: exe.clone(),
+            pinned: Mutex::default(),
+        });
+        struct Shared(Arc<Probed>);
+        impl Opened for Shared {
+            fn executable(&self) -> &File {
+                self.0.executable()
+            }
+            fn cwd(&self) -> &File {
+                self.0.cwd()
+            }
+            fn recheck(&self) -> Result<(), String> {
+                self.0.recheck()
+            }
+        }
+        l.opened = Box::new(Shared(Arc::clone(&probed)));
+        let e = if lifetime == Lifetime::Detached {
+            detached(&l, "p", &By(none)).unwrap_err()
+        } else {
+            rt.start("p", l).unwrap_err()
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        let started = rec.exists();
+        assert!(
+            e.contains("changed since it was confirmed"),
+            "{lifetime:?}: {e}"
+        );
+        assert!(
+            !started,
+            "{lifetime:?}: a launch refused at its second check started"
+        );
+        assert_eq!(
+            *probed.pinned.lock().unwrap(),
+            vec![false, true],
+            "{lifetime:?}: checked before and after its executable was pinned"
+        );
+        assert!(rt.list("p").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

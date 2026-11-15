@@ -992,6 +992,9 @@ pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), St
     let r = resolve(l, package, values)?;
     let env = environment(snapshot(), &l.request, &r.env);
     let mut cmd = command(l, env, r.holds())?;
+    // Checked again now its executable and cwd are pinned (`command`): nothing can change them
+    // after this, and a change made since the check above is seen here.
+    l.opened.recheck()?;
     values.still(&r.given)?;
     let stdin = cmd
         .spawn_detached()
@@ -1483,8 +1486,15 @@ impl Runtimes {
                 }
                 #[cfg(unix)]
                 let cmd = command(&launch, env, holds, None);
+                // On Windows checked again once its executable and cwd are pinned (`command`):
+                // nothing can change them after this.
                 #[cfg(windows)]
-                let cmd = command(&launch, env, holds);
+                let cmd = command(&launch, env, holds).and_then(|c| {
+                    launch.opened.recheck().map_err(|e| {
+                        format!("{e}; its executable or cwd changed since it was confirmed: launch it again")
+                    })?;
+                    Ok(c)
+                });
                 let child = cmd.and_then(|mut cmd| cmd.spawn().map_err(|e| e.to_string()));
                 match child {
                     Ok(mut c) => {
