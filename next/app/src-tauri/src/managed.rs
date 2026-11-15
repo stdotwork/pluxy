@@ -60,7 +60,8 @@ pub fn random_key() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// Writes `path` readable only by this user, replacing it in one step.
+/// Writes `path` readable only by this user, replacing it in one step: on Windows with a protected
+/// access list allowing only this user and SYSTEM.
 pub fn write_private(path: &Path, data: &[u8]) -> io::Result<()> {
     write_private_with_nonce(path, data, random_key)
 }
@@ -83,14 +84,21 @@ fn write_private_with_nonce(
         let mut name = name.to_os_string();
         name.push(format!(".{}.tmp", nonce()));
         let tmp = parent.join(name);
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create_new(true);
         #[cfg(unix)]
-        {
+        let made = {
             use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-        }
-        match opts.open(&tmp) {
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&tmp)
+        };
+        // Windows: with a protected access list allowing only this user and SYSTEM, given as it
+        // is made (`files_windows.rs`).
+        #[cfg(windows)]
+        let made = crate::files_windows::create_new_private(&tmp);
+        match made {
             Ok(f) => break (tmp, f),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
@@ -711,6 +719,23 @@ mod tests {
             victim.as_os_str().as_bytes()
         );
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 4);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn private_write_is_private_on_windows() {
+        let dir = std::env::temp_dir().join(format!("pluxy-private-{}", super::random_key()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("connection.json");
+        // The control: what the temporary folder passes down is not private.
+        std::fs::write(&path, b"{}").unwrap();
+        assert!(!crate::files_windows::is_private(&path).unwrap());
+        let key = super::random_key();
+        super::write_private(&path, key.as_bytes()).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), key.as_bytes());
+        assert!(crate::files_windows::is_private(&path).unwrap());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
