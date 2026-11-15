@@ -904,7 +904,15 @@ async function bundleReleaseGate() {
         const copied = run("ditto", [made.bundle, renamed]);
         if (copied.status !== 0) throw new Error(`ditto: ${copied.out}`);
       }
-      gate("the test package, renamed", [renamed], windows ? /candidate!/ : /candidate\.app!/);
+      // Refused for what is in it, not its name: the test program's name (Windows), or the test
+      // identity in its Info.plist, which the gate reads first (macOS).
+      gate(
+        "the test package, renamed",
+        [renamed],
+        windows
+          ? /candidate!pluxy-app-test\.exe: test file name in package/
+          : /candidate\.app!Contents\/Info\.plist: test build marker\/identity in artifact/,
+      );
       gate("the test package", [made.bundle], /test\/private release input or artifact path/);
     }
   } finally {
