@@ -25,10 +25,110 @@ defaults:
     working-directory: next/app
 
 jobs:
-  app:
+  # The checks other than the native test: type check, lint, unit tests, the window's build, Rust
+  # format, clippy and tests, and the app tools.
+  checks:
+    # Pinned: the package names below are Ubuntu 24.04's.
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check the runner is Ubuntu 24.04
+        working-directory: .
+        run: |
+          . /etc/os-release
+          if [ "$VERSION_ID" != "24.04" ]; then
+            echo "::error::the packages and paths here are Ubuntu 24.04's; this runner is $PRETTY_NAME"
+            exit 1
+          fi
+          echo "$PRETTY_NAME"
+      # The same packages as the native job below, which says what each is for.
+      - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools and xdotool
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
+            xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          components: rustfmt, clippy
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            next/app/src-tauri -> target
+            next/app-tools -> target
+          # The native job's cache (the key the single job before the split used), read only: the
+          # release shard saves it.
+          shared-key: app
+          save-if: false
+      # The app builds the UI kit from next/ui, with its copy of preact.
+      - name: UI kit install
+        working-directory: next/ui
+        run: bun install --frozen-lockfile
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Type check
+        run: bun run check
+      - name: Lint
+        run: bun run lint
+      - name: Unit tests
+        run: bun run test
+      - name: Build the window
+        run: bun run build
+      - name: Rust format
+        working-directory: next/app/src-tauri
+        run: cargo fmt --check
+      - name: Clippy
+        working-directory: next/app/src-tauri
+        run: cargo clippy --locked --all-targets --features native-test,artifact-test-trust -- -D warnings
+      # Unit tests, and each connection mode against a real core with fake extensions, with an
+      # empty HOME and XDG folders.
+      - name: Rust tests
+        working-directory: next/app/src-tauri
+        run: |
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export GOCACHE="$(go env GOCACHE)" GOMODCACHE="$(go env GOMODCACHE)" GOPATH="$(go env GOPATH)"
+          test_env="$(mktemp -d)"
+          export HOME="$test_env/home" XDG_CONFIG_HOME="$test_env/config" XDG_DATA_HOME="$test_env/data" XDG_CACHE_HOME="$test_env/cache"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
+          cargo test --locked
+      - name: Artifact signature and test trust controls
+        working-directory: next/app/src-tauri
+        run: cargo test --locked --features artifact-test-trust --test artifact_trust --test release_config
+      # The app tools (native programs the app runs on demand), a cargo workspace of their own.
+      - name: App tools format, clippy and tests
+        working-directory: next/app-tools
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
+  # The real app on Xvfb in each mode (next/app/native/run.ts): extension page webviews cannot
+  # call app commands. Each shard builds everything the test builds, the test AppImage and the
+  # release gate's release builds included, then runs its own sessions (native/shards.ts, which
+  # lists these shards in this order). On main before the split the whole test took 35 minutes; a
+  # shard takes about 7 minutes of builds and up to 9 of sessions, so the step allows about three
+  # times that for the sessions still being added.
+  native:
     # Pinned: the package names below are Ubuntu 24.04's, and so are the file paths the native
     # test starts services from (next/app/native/services.ts).
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [usage, tools, app, release]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,52 +172,37 @@ jobs:
           workspaces: |
             next/app/src-tauri -> target
             next/app-tools -> target
+          # One cache for every shard, under the key the single job before the split used. The
+          # release shard builds everything the others do and the release app too, so it alone
+          # saves it.
+          shared-key: app
+          save-if: ${{ matrix.shard == 'release' }}
       # The app builds the UI kit from next/ui, with its copy of preact.
       - name: UI kit install
         working-directory: next/ui
         run: bun install --frozen-lockfile
       - name: Install
         run: bun install --frozen-lockfile
-      - name: Type check
-        run: bun run check
-      - name: Lint
-        run: bun run lint
-      - name: Unit tests
-        run: bun run test
-      - name: Build the window
-        run: bun run build
-      - name: Rust format
-        working-directory: next/app/src-tauri
-        run: cargo fmt --check
-      - name: Clippy
-        working-directory: next/app/src-tauri
-        run: cargo clippy --locked --all-targets --features native-test,artifact-test-trust -- -D warnings
-      # Unit tests, and each connection mode against a real core with fake extensions, with an
-      # empty HOME and XDG folders.
-      - name: Rust tests
-        working-directory: next/app/src-tauri
-        run: |
-          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
-          export GOCACHE="$(go env GOCACHE)" GOMODCACHE="$(go env GOMODCACHE)" GOPATH="$(go env GOPATH)"
-          test_env="$(mktemp -d)"
-          export HOME="$test_env/home" XDG_CONFIG_HOME="$test_env/config" XDG_DATA_HOME="$test_env/data" XDG_CACHE_HOME="$test_env/cache"
-          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
-          cargo test --locked
-      - name: Artifact signature and test trust controls
-        working-directory: next/app/src-tauri
-        run: cargo test --locked --features artifact-test-trust --test artifact_trust --test release_config
-      # The app tools (native programs the app runs on demand), a cargo workspace of their own.
-      - name: App tools format, clippy and tests
-        working-directory: next/app-tools
-        run: |
-          cargo fmt --check
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked
-      # The real app on Xvfb in each mode: extension page webviews cannot call app commands.
-      # It also builds the test AppImage and a release build for the release gate's checks. It
-      # took 21 minutes on main after the program host, routing and access suites landed, and 23
-      # to 24 minutes with the vault suite, so this allows about twice that for the suites still
-      # being added.
       - name: Native test
         timeout-minutes: 45
+        env:
+          PLUXY_APP_NATIVE_SHARD: ${{ matrix.shard }}
+          PLUXY_APP_NATIVE_SHARD_INDEX: ${{ strategy.job-index }}
+          PLUXY_APP_NATIVE_SHARD_TOTAL: ${{ strategy.job-total }}
         run: bun run test:native
+
+  # The workflow's one result, under the name of the single job before the split: it fails when
+  # the checks or any native shard did not pass.
+  app:
+    if: ${{ !cancelled() }}
+    needs: [checks, native]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every job passed
+        working-directory: .
+        env:
+          CHECKS: ${{ needs.checks.result }}
+          NATIVE: ${{ needs.native.result }}
+        run: |
+          echo "checks: $CHECKS; native shards: $NATIVE"
+          [ "$CHECKS" = success ] && [ "$NATIVE" = success ]

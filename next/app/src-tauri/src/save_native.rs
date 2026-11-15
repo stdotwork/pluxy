@@ -9,7 +9,8 @@
 //! - sneak: a read operation's bytes are refused at the first append; no save dialog shows;
 //! - path: after the confirmation, a save naming a path (`a/b.jsonl`) is refused, and so is one
 //!   with a field beside `name` (`path`); no save dialog shows;
-//! - limit: one byte over the limit is refused at the append that passes it; no dialog shows;
+//! - limit: one byte over the limit is refused at the append that passes it, and a save after it
+//!   is refused as well (the bytes so far were dropped); no dialog shows;
 //! - cancel: the save dialog, titled with the package, suggests the caller's name; cancelled, the
 //!   tool hears `cancelled` and the folder stays empty;
 //! - saved: a name with control and format characters is suggested with them replaced; the file the
@@ -30,7 +31,7 @@
 
 use super::admission::{dialog_text, press, require, settle, start, x};
 use super::routing::{enable, install, showing, Page};
-use super::{eval, log, wait_for};
+use super::{eval, log, on_main, wait_for};
 use serde_json::{json, Value};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -76,18 +77,6 @@ fn suggested(app: &AppHandle) -> Result<String, String> {
     })
 }
 
-/// The app's visible X windows.
-fn windows() -> Vec<String> {
-    x(&[
-        "search",
-        "--onlyvisible",
-        "--pid",
-        &std::process::id().to_string(),
-    ])
-    .map(|s| s.lines().map(String::from).collect())
-    .unwrap_or_default()
-}
-
 /// Types path into the save dialog's name field and presses Return.
 fn choose(path: &Path) -> Result<(), String> {
     let id = chooser()?;
@@ -113,30 +102,81 @@ fn chooser_key(keys: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// GTK's overwrite question, once it shows (a visible message dialog of the app's saying the file
-/// already exists, in a window that was not there before): its X window.
-fn question(app: &AppHandle, before: &[String]) -> Result<String, String> {
-    use gtk::prelude::*;
-    wait_for("the save dialog's overwrite question", || {
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.run_on_main_thread(move || {
-            let mut text = String::new();
+/// The title the check gives GTK's overwrite question, which has none, to find its X window.
+const QUESTION: &str = "pluxy save overwrite question";
+
+/// What the check's GTK watcher last saw showing, for a timeout's message.
+type Seen = std::sync::Arc<std::sync::Mutex<String>>;
+
+/// Starts a GTK timer that titles GTK's overwrite question `QUESTION` once it shows (a visible
+/// message dialog of the app's saying the file already exists) and keeps the list of the visible
+/// toplevel windows. GTK runs the question in a main loop of its own until it is answered, where
+/// the app's run_on_main_thread calls wait (the check cannot ask GTK then); a GLib timer still runs
+/// there. It runs until the app quits.
+fn watch_questions(app: &AppHandle) -> Result<Seen, String> {
+    let seen = Seen::default();
+    let shown = seen.clone();
+    on_main(app, move || {
+        use gtk::prelude::*;
+        gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
+            let mut showing = Vec::new();
             for w in gtk::Window::list_toplevels() {
-                if let Some(d) = w.downcast_ref::<gtk::MessageDialog>() {
-                    if d.is_visible() {
-                        text.push_str(&d.text().map(|t| t.to_string()).unwrap_or_default());
-                    }
+                let Some(win) = w.downcast_ref::<gtk::Window>() else {
+                    continue;
+                };
+                if !win.is_visible() {
+                    continue;
                 }
+                let text = w
+                    .downcast_ref::<gtk::MessageDialog>()
+                    .and_then(|d| d.text())
+                    .map(|t| t.to_string());
+                if text
+                    .as_deref()
+                    .is_some_and(|t| t.contains("already exists"))
+                    && win.title().as_deref() != Some(QUESTION)
+                {
+                    win.set_title(QUESTION);
+                }
+                showing.push(format!(
+                    "{} {:?} {:?}",
+                    w.type_().name(),
+                    win.title().map(|t| t.to_string()),
+                    text
+                ));
             }
-            let _ = tx.send(text);
-        })
-        .ok()?;
-        let text = rx.recv_timeout(Duration::from_secs(5)).ok()?;
-        if !text.contains("already exists") {
-            return None;
-        }
-        windows().into_iter().find(|w| !before.contains(w))
+            *shown.lock().unwrap() = showing.join("; ");
+            gtk::glib::ControlFlow::Continue
+        });
     })
+    .ok_or("the main thread did not answer")?;
+    Ok(seen)
+}
+
+/// GTK's overwrite question's X window, once it shows (titled by `watch_questions`). On a
+/// timeout, says which toplevel windows were showing.
+fn question(seen: &Seen) -> Result<String, String> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some(id) = x(&[
+            "search",
+            "--onlyvisible",
+            "--name",
+            &format!("^{QUESTION}$"),
+        ])
+        .ok()
+        .and_then(|s| s.lines().last().map(String::from))
+        {
+            return Ok(id);
+        }
+        if Instant::now() > deadline {
+            return Err(format!(
+                "no overwrite question showed within a minute; showing: {}",
+                seen.lock().unwrap()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 fn question_key(id: &str, keys: &str) -> Result<(), String> {
@@ -264,7 +304,15 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     let out = fixtures.join("out");
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     let out = std::fs::canonicalize(&out).map_err(|e| e.to_string())?;
-    let step = |name: &str, r: Result<(), String>| r.map_err(|e| format!("{name}: {e}"));
+    // Each step that passed, as it passes: a session that runs out of time still says how far it got.
+    let passed = std::cell::RefCell::new(Vec::<String>::new());
+    let step = |name: &str, r: Result<(), String>| -> Result<(), String> {
+        r.map_err(|e| format!("{name}: {e}"))?;
+        passed.borrow_mut().push(name.into());
+        log("save_progress", json!({"passed": *passed.borrow()}));
+        Ok(())
+    };
+    let seen = watch_questions(app)?;
     // A saved file's answer, and the content's canaries nowhere in what the tool heard.
     let saved = |r: &Value, what: &str| -> Result<(), String> {
         require(
@@ -371,7 +419,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 app,
                 main,
                 "export",
-                json!({"source": big, "name": "big.bin"}),
+                json!({"source": big, "name": "big.bin", "save_anyway": true}),
             )?;
             let r = undialogued(main, &slot, "the export over the limit")?;
             let appended = r["appended"].as_array().cloned().unwrap_or_default();
@@ -382,10 +430,11 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     && appended[..appended.len() - 1]
                         .iter()
                         .all(|x| x.get("output").is_some())
-                    && r.get("answer").is_none(),
+                    && code(&r["answer"]) == "permission",
                 format!(
-                    "the append past the limit should be refused, and only it: {} appends, last {last}",
-                    appended.len()
+                    "the append past the limit, and the save after it, should be refused: {} appends, last {last}, save {}",
+                    appended.len(),
+                    r["answer"]
                 ),
             )?;
             require(
@@ -468,18 +517,10 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 json!({"source": source, "name": "old.txt"}),
             )?;
             chooser()?;
-            let before = windows();
             choose(&path)?;
-            let q = question(app, &before)?;
-            std::thread::sleep(Duration::from_millis(500));
-            require(
-                eval(
-                    main,
-                    &format!("window.__pluxyAdmission?.[{}] ?? null", json!(slot)),
-                )
-                .is_some_and(|v| v.is_null()),
-                "the save answered while the overwrite question showed",
-            )?;
+            // While the question shows, GTK holds the main thread, so the window cannot be asked
+            // whether the call answered; the old bytes, and "cancelled" below, say it did not save.
+            let q = question(&seen)?;
             holds(&path, b"the old bytes\n", 0o644)?;
             question_key(&q, "Escape")?;
             std::thread::sleep(Duration::from_millis(500));
@@ -498,9 +539,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 json!({"source": source, "name": "old.txt"}),
             )?;
             chooser()?;
-            let before = windows();
             choose(&path)?;
-            let q = question(app, &before)?;
+            let q = question(&seen)?;
             question_key(&q, "alt+r")?;
             let r = output(main, &slot)?;
             saved(&r, "the confirmed overwrite")?;
@@ -536,10 +576,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 let _ = std::fs::remove_file(&held);
                 let slot = exported(app, main, "export", json!({"source": source, "name": name}))?;
                 chooser()?;
-                let before = windows();
                 choose(&path)?;
                 if existing {
-                    let q = question(app, &before)?;
+                    let q = question(&seen)?;
                     question_key(&q, "alt+r")?;
                 }
                 wait_for("the save service's hold", || held.exists().then_some(()))?;

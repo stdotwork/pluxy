@@ -7,7 +7,10 @@
 //! `argv[0]`, /dev/null on stdin, stdout and stderr, and no other descriptor of the app's (no
 //! tool pipe, vault file or socket). Its environment is the launch environment (`environment`):
 //! selected values of the app's own environment as it started (`Snapshot`), the variables the
-//! confirmed launch set, inherited by name or removed, and the secrets the host resolved for it.
+//! confirmed launch set, inherited by name or removed, and the secrets the host resolved for it,
+//! each resolved at the moment it is given (the spawn, a runtime's start or restart) by the
+//! host's `Values`, which checks it as a delivery to the launch's package
+//! (`client_keys::launch_value`), and checks them all once more right before the spawn.
 //! A process given a secret's value has core file size limits of 1, so the kernel neither writes
 //! its core nor runs a core dump handler for it, nor for its descendants.
 //!
@@ -23,10 +26,10 @@
 //! tied to the app and not to a short-lived thread. Only the package that started it controls it,
 //! at any release or generation, through `runtime` frames: status, list, stop and restart. Stop
 //! sends SIGTERM to its group and SIGKILL after five seconds, then reaps it; restart starts the
-//! same confirmed launch again, unless its executable changed since it was confirmed. The app's
-//! quit stops its runtimes; the package's disable or removal retires them (stopped, their
-//! launches dropped, none started until it is enabled again); a tool's idle stop, crash or swap
-//! does neither.
+//! same confirmed launch again, unless its executable changed since it was confirmed or a secret
+//! it gets is refused now. The app's quit stops its runtimes; the package's disable or removal
+//! retires them (stopped, their launches dropped, none started until it is enabled again); a
+//! tool's idle stop, crash or swap does neither.
 //!
 //! If the app itself dies, the runtime's leader gets SIGTERM, but a descendant that ignores it or
 //! started a session of its own lives on as an orphan: a process group and a parent-death signal
@@ -238,6 +241,9 @@ pub struct Request {
     /// The input's secret field whose secret the launch gets on its stdin (`stdin`), the private
     /// channel to a credential bridge: written, then closed.
     pub stdin: Option<String>,
+    /// Only the absolute entries of `PATH` (a launch that opens a file): a relative entry would
+    /// find programs in its working folder.
+    pub absolute_path: bool,
 }
 
 fn valid_name(n: &str) -> Result<(), String> {
@@ -403,6 +409,12 @@ pub fn parse(
 }
 
 impl Request {
+    /// Whether the launch gives the secret of its secret field field to the process it starts: in
+    /// its environment, or on its stdin.
+    pub fn delivers(&self, field: &str) -> bool {
+        self.secrets.values().any(|f| f == field) || self.stdin.as_deref() == Some(field)
+    }
+
     /// What the native confirmation shows of it: each variable's name, and the value only of
     /// those set (the confirmed input's own text); never an inherited value or a secret's.
     /// secret names a secret field's secret (its label and ID).
@@ -499,6 +511,17 @@ pub fn environment(
     }
     for (n, v) in secrets {
         env.insert(n.clone(), OsString::from(v));
+    }
+    if request.absolute_path {
+        if let Some(v) = env.get_mut("PATH") {
+            let kept: Vec<String> = v
+                .to_string_lossy()
+                .split(':')
+                .filter(|e| e.starts_with('/'))
+                .map(String::from)
+                .collect();
+            *v = OsString::from(kept.join(":"));
+        }
     }
     env.into_iter().collect()
 }
@@ -655,30 +678,58 @@ fn command(
     cmd
 }
 
-/// Resolves l's secrets with value (a vault secret ID's value), refused when one is gone.
-fn resolve(
-    l: &Launch,
-    value: &dyn Fn(&str) -> Option<String>,
-) -> Result<Vec<(String, String)>, String> {
-    l.secrets
-        .iter()
-        .map(|(name, id)| {
-            value(id)
-                .map(|v| (name.clone(), v))
-                .ok_or(format!("the secret for {name} was removed from the vault"))
-        })
-        .collect()
+/// A launch's secret as the host gave it: its vault secret ID, and the connection revision its
+/// check held on (a client key's; none for a plain secret).
+pub type Given = (String, Option<u64>);
+
+/// How the host gives a launch's process its secrets (`client_keys::Launches`).
+pub trait Values: Send + Sync {
+    /// Vault secret id's value for package's launch, checked now, and the connection revision its
+    /// check held on; or why it is refused.
+    fn value(&self, package: &str, id: &str) -> Result<(String, Option<u64>), String>;
+    /// Checked once more right before the spawn, after every secret of the launch resolved
+    /// (given): refused once one left the vault, or the connection changed since a client key's
+    /// check.
+    fn still(&self, given: &[Given]) -> Result<(), String>;
 }
 
-/// The value of l's stdin secret, refused when it is gone.
-fn resolve_stdin(
-    l: &Launch,
-    value: &dyn Fn(&str) -> Option<String>,
-) -> Result<Option<String>, String> {
-    l.stdin
-        .as_ref()
-        .map(|id| value(id).ok_or("the secret for its stdin was removed from the vault".into()))
-        .transpose()
+/// A launch's secrets, resolved: each variable's value, its stdin's, and what `Values::still`
+/// checks again.
+struct Resolved {
+    env: Vec<(String, String)>,
+    stdin: Option<String>,
+    given: Vec<Given>,
+}
+
+impl Resolved {
+    /// Whether the process gets a secret's value.
+    fn holds(&self) -> bool {
+        !self.env.is_empty() || self.stdin.is_some()
+    }
+}
+
+/// Resolves l's secrets, its environment's and its stdin's, for package with values now: the
+/// launch is refused when one is.
+fn resolve(l: &Launch, package: &str, values: &dyn Values) -> Result<Resolved, String> {
+    let mut given = Vec::new();
+    let mut one = |id: &str, what: &str| {
+        let (v, revision) = values
+            .value(package, id)
+            .map_err(|e| format!("the secret for {what} is refused: {e}"))?;
+        given.push((id.to_string(), revision));
+        Ok::<_, String>(v)
+    };
+    let env = l
+        .secrets
+        .iter()
+        .map(|(name, id)| one(id, name).map(|v| (name.clone(), v)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let stdin = l
+        .stdin
+        .as_deref()
+        .map(|id| one(id, "its stdin"))
+        .transpose()?;
+    Ok(Resolved { env, stdin, given })
 }
 
 /// Writes a launch's stdin secret to its stdin pipe and closes it. The value fits the pipe's
@@ -690,31 +741,29 @@ fn feed(stdin: Option<std::process::ChildStdin>, value: Option<String>) {
     }
 }
 
-/// Starts detached launch l, with its secrets' values resolved by value; returns once its
-/// wrapper has been reaped. With a systemd user manager on the session bus, the launch runs in a
-/// transient scope of its own (`scope`).
-pub fn detached(l: &Launch, value: &dyn Fn(&str) -> Option<String>) -> Result<(), String> {
+/// Starts package's detached launch l, with its secrets' values resolved by values now and
+/// checked once more right before the spawn; returns once its wrapper has been reaped. With a
+/// systemd user manager on the session bus, the launch runs in a transient scope of its own
+/// (`scope`).
+pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), String> {
     l.opened.recheck()?;
-    let secrets = resolve(l, value)?;
-    let stdin = resolve_stdin(l, value)?;
-    let env = environment(snapshot(), &l.request, &secrets);
+    let r = resolve(l, package, values)?;
+    let env = environment(snapshot(), &l.request, &r.env);
     let hold = Hold::new().ok();
-    let mut cmd = command(
-        l,
-        env,
-        !secrets.is_empty() || stdin.is_some(),
-        hold.as_ref().map(Hold::fds),
-    );
+    let mut cmd = command(l, env, r.holds(), hold.as_ref().map(Hold::fds));
     let mover = hold.as_ref().map(Hold::mover).transpose()?;
-    let spawned = cmd.spawn();
+    let spawned = values.still(&r.given).and_then(|()| {
+        cmd.spawn()
+            .map_err(|e| format!("the launch did not start: {e}"))
+    });
     drop(cmd);
     // The wrapper has its copies (or never started): without the app's, the mover sees the end.
     drop(hold);
     if let Some(m) = mover {
         let _ = m.join();
     }
-    let mut wrapper = spawned.map_err(|e| format!("the launch did not start: {e}"))?;
-    feed(wrapper.stdin.take(), stdin);
+    let mut wrapper = spawned?;
+    feed(wrapper.stdin.take(), r.stdin);
     wrapper.wait().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -990,8 +1039,6 @@ impl Entry {
     }
 }
 
-type SecretValue = dyn Fn(&str) -> Option<String> + Send + Sync;
-
 /// The runtimes, and the packages closed to them: disabled (false) or removed (true). A closed
 /// package's runtimes are stopped and their launches dropped, and none starts for it until it is
 /// enabled again (`Runtimes::reopen`).
@@ -1018,7 +1065,7 @@ struct Shared {
     list: Mutex<Registry>,
     changed: Condvar,
     file: Option<PathBuf>,
-    value: Box<SecretValue>,
+    values: Box<dyn Values>,
     quitting: AtomicBool,
     tokens: Mutex<u64>,
 }
@@ -1032,8 +1079,10 @@ fn missing(package: &str, id: &str) -> String {
 
 impl Runtimes {
     /// The registry, its record of running runtimes in file; those a previous run left are
-    /// reported as unknown. value resolves a vault secret ID.
-    pub fn open(file: Option<PathBuf>, value: Box<SecretValue>) -> Runtimes {
+    /// reported as unknown. values resolves a package's launch's secrets at each start and
+    /// restart, refusing one the package may not be given now, and checks them again right
+    /// before the spawn.
+    pub fn open(file: Option<PathBuf>, values: Box<dyn Values>) -> Runtimes {
         let mut list = Vec::new();
         if let Some(f) = &file {
             if let Some(left) = std::fs::read(f)
@@ -1067,7 +1116,7 @@ impl Runtimes {
             }),
             changed: Condvar::new(),
             file,
-            value,
+            values,
             quitting: AtomicBool::new(false),
             tokens: Mutex::new(0),
         }));
@@ -1147,15 +1196,15 @@ impl Runtimes {
     /// Starts runtime id's launch on a supervisor thread of its own, which stays until it has
     /// been reaped; returns once it runs (the entry is Running with its process ID).
     /// It is refused when package is closed or the app is quitting, both before it starts and as
-    /// it runs (then it is stopped at once).
+    /// it runs (then it is stopped at once), and when a secret it gets is refused, as it resolves
+    /// or right before the spawn (`Values::still`).
     fn run(&self, package: &str, id: &str, l: &Arc<Launch>) -> Result<(), String> {
         l.opened.recheck().map_err(|e| {
             format!("{e}; its executable or cwd changed since it was confirmed: launch it again")
         })?;
         self.0.open(&self.0.list.lock().unwrap(), package)?;
-        let secrets = resolve(l, &*self.0.value)?;
-        let stdin = resolve_stdin(l, &*self.0.value)?;
-        let env = environment(snapshot(), &l.request, &secrets);
+        let r = resolve(l, package, &*self.0.values)?;
+        let env = environment(snapshot(), &l.request, &r.env);
         let token = {
             let mut t = self.0.tokens.lock().unwrap();
             *t += 1;
@@ -1164,12 +1213,17 @@ impl Runtimes {
         let (tx, rx) = std::sync::mpsc::channel();
         let (shared, launch, rid) = (Arc::clone(&self.0), Arc::clone(l), id.to_string());
         let package = package.to_string();
-        let holds = !secrets.is_empty() || stdin.is_some();
-        drop(secrets);
+        let holds = r.holds();
+        let (given, stdin) = (r.given, r.stdin);
+        drop(r.env);
         std::thread::Builder::new()
             .name("pluxy-runtime".into())
             .spawn(move || {
                 let mut cmd = command(&launch, env, holds, None);
+                if let Err(e) = shared.values.still(&given) {
+                    let _ = tx.send(Err(e));
+                    return;
+                }
                 let child = cmd.spawn();
                 drop(cmd);
                 match child {
@@ -1276,7 +1330,8 @@ impl Runtimes {
     }
 
     /// Stops runtime id of package, then starts its confirmed launch again, unless its executable
-    /// or cwd changed since it was confirmed or a secret it gets was removed; its status.
+    /// or cwd changed since it was confirmed or a secret it gets is refused now (removed, or a
+    /// client key that no longer passes its checks); its status.
     pub fn restart(&self, package: &str, id: &str) -> Result<Value, String> {
         let launch = {
             let mut list = self.0.list.lock().unwrap();

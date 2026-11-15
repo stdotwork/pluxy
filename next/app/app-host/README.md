@@ -546,6 +546,34 @@ program's name) and `cwd`, and may name:
 - `program`: the program a terminal runs, which must be one of `argv`. The confirmation opens and
   hashes it as it does the executable, so a remembered approval does not stand for a replaced
   program (a self-update) either, and the spawn refuses one changed since it was confirmed;
+- `file` and `within`: the file the launch opens, which must be one of `argv`, and the folder it
+  must be inside, named together, each by its resolved path. The confirmation resolves both and
+  refuses, before any dialog:
+  - a file that is not a regular file, has an execute bit, is named `.desktop`, or does not
+    resolve inside the folder;
+  - a file or folder that is not the person's own or that someone else may write (group or
+    world write bits): another user could replace it before the opener reads it;
+  - a folder that is `/`, the home folder or a folder above it;
+  - a file whose content type is not plain text (`text/plain`, `application/json`,
+    `application/x-ndjson`, `application/jsonl`, `text/markdown` or `text/x-log`). The type is
+    the one GIO guesses from the file's name and first bytes, with the shared-mime-info rules
+    the desktop's opener uses: an HTML, SVG, script or archive file named `.jsonl` is refused,
+    since the desktop would open it in an app that may run it;
+  - a launch of any other shape: the executable must be `xdg-open` (argv exactly the file) or
+    `gio` (argv `open` and the file) from `/usr/local/bin`, `/usr/bin`, `/bin` or
+    `/run/current-system/sw/bin`, the cwd the file's folder, detached, with no `program`,
+    `environment`, `stdin` or secret. A native-test build also takes an opener from the folder
+    `PLUXY_APP_TEST_OPENERS` names, for the native test's stand-in.
+
+  The dialog's first line says "Opens the file <file> (<type>, inside <folder>) with <opener>.",
+  with the resolved paths. Both identities, the file's metadata (mode, size, times) and its type
+  are bound: the spawn refuses the launch if either was replaced, reached through a different
+  link, written or changed mode since it was confirmed. The launch gets the launch environment
+  with only the absolute entries of `PATH`. The executing tool, not the host, decides which
+  folder is its own ([the execution program's `open`
+  launch](../../app-tools/README.md#execution)). A desktop whose opener guesses types otherwise
+  than GIO (KDE's `kde-open`, which xdg-open runs there) may still pick another app for a file
+  the check let through;
 - `stdin`: one of the launch's secret fields, whose secret the host writes to the launch's
   standard input and then closes: the private channel to a credential bridge, never argv, its
   environment or a file. The confirmation names it; it is part of the environment revision;
@@ -584,8 +612,9 @@ The frame names nothing else: the host spawns exactly the launch it confirmed fo
 that tool's release, once, and answers `{"lifetime":"detached"}` or
 `{"lifetime":"managed","runtime":"rt-<hex>","pid":1234}`. A second spawn for the call, a spawn for
 a call that confirmed no launch, and one for a call the tool is not serving are refused with
-`permission`; a launch whose executable or cwd changed since its confirmation, or whose secret was
-removed from the vault, fails with `unavailable`. The call the spawn served may then end: what it
+`permission`; a launch whose executable or cwd changed since its confirmation, or whose secret is
+refused now (removed from the vault, or a client key that no longer passes its checks, see
+[Client keys](#client-keys)), fails with `unavailable`. The call the spawn served may then end: what it
 started does not end with it.
 
 ### What a launch gets
@@ -606,7 +635,8 @@ started does not end with it.
   but those the launch removes. When the app runs as an AppImage, entries inside its own folder
   are taken out of `PATH`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. Then come the variables the launch
   inherits by name, those it sets, and its secrets, which the host resolves from the vault at the
-  spawn: the tool that asked holds references only. No shell is run to read a login environment.
+  spawn, each checked then as a delivery to the tool whose launch it is: the tool that asked holds
+  references only. No shell is run to read a login environment.
 - A process given a secret's value has its core file size limits set to 1, soft and hard, and so
   does every process it starts: the kernel writes no core file for it and runs no core dump
   handler. A limit of 0 would not do: with 0 the kernel still runs a `|` handler from
@@ -637,7 +667,7 @@ update controls the runtimes its package started. While serving a call, a tool s
 | `list` | `{"runtimes": [<status>...]}`: its package's runtimes |
 | `status` | `{"runtime", "package", "state", "pid", "started", "restarts", "executable", "argv"}`, with `exit` once it ended; `state` is `running`, `stopping`, `exited` or `unknown` |
 | `stop` | the status once it has been reaped: SIGTERM to its process group, SIGKILL to the group after five seconds, or as soon as its leader exits |
-| `restart` | the status once it runs again: stopped as above, then the same confirmed launch started again, unless its executable or cwd changed since it was confirmed (launch it again) or a secret it gets was removed |
+| `restart` | the status once it runs again: stopped as above, then the same confirmed launch started again, unless its executable or cwd changed since it was confirmed (launch it again) or a secret it gets is refused now (removed, or a client key that no longer passes its checks) |
 
 Another package's runtime is `not_found`, as one that never was. A package keeps at most eight
 runtimes, running or ended (those reported `unknown` do not count); the oldest ended one that is
@@ -727,19 +757,30 @@ The dialog is GTK's file chooser in save mode, as the Access chooser (the deskto
 `GTK_USE_PORTAL=1` or inside a sandbox), with its own overwrite question: an existing file is
 replaced only after the person answers Replace. One save dialog shows at a time; a `save` while
 another shows is refused with `unavailable`. Cancelling it writes nothing; so does the call it
-serves ending (cancelled, its page closing, the window closing), which closes the dialog. The
-chosen name must be a regular file or nothing: a link or a folder there is refused
-(`unavailable`), since writing through a link would write a file the dialog did not show.
+serves ending (cancelled, its page closing, the window closing), which closes the dialog.
+
+The host opens the chosen folder once, as the dialog answers, and writes into that opened folder.
+The folder must be one no other user can change: owned by the person (the app's effective user)
+or root, and not writable by group or others unless it is sticky (as `/tmp`). Otherwise another
+user could put a file at the chosen name after GTK's question, and the host cannot tell what GTK
+asked. The chosen name must hold nothing or a regular file of the person's: a link, a folder,
+another user's file or anything else there is refused (`unavailable`), since writing through a
+link would write a file the dialog did not show.
 
 The host writes the file atomically beside the chosen one: a temporary file in the same folder,
-opened relative to that folder without following a link, mode 0600 (a replaced file keeps its
-permission bits), the bytes, fsync, then a rename over the chosen name (for a new file, one that
-replaces nothing) and an fsync of the folder. Before the rename it checks that the folder and the
-name are still what the dialog answered (an existing file by its device, inode, size and
-modification and change times): a link, another or a changed file or a folder now at the name, a
-file that appeared where there was none, or a replaced folder is refused with `permission`, and the
-temporary file is removed. The check and the rename are two steps; a change between them is not
-caught. Nothing of the bytes or the chosen path is logged, and the answers carry neither.
+opened relative to that folder without following a link, mode 0600, the bytes and an fsync. Then it
+checks that the tool still runs its package's admitted release (a release disabled, removed or
+swapped out while the dialog was open saves nothing), that the opened folder is still the one at the
+chosen path and still the person's, and that the name is still what the dialog answered (an
+existing file by its device, inode, size and modification and change times). A link, another or a
+changed file or a folder now at the name, a file that appeared where there was none, or a moved or
+replaced folder is refused with `permission`, and the temporary file is removed. Then a replaced
+file's permission bits are set on the new one, and it is renamed over the chosen name, and the
+folder is synced. A new file never replaces anything: it is renamed with `RENAME_NOREPLACE`, or on
+a file system without it, hard-linked at the name (which fails if something is there) and the
+temporary file removed; on a file system with neither, the save is refused (`unavailable`). For an
+overwrite, the check and the rename are two steps, and a change between them is not caught. Nothing
+of the bytes or the chosen path is logged, and the answers carry neither.
 
 ## Secrets, references and the vault
 
@@ -819,7 +860,19 @@ it is put in the call frame:
 - The app must be connected to the core the key belongs to. This is checked before anything is
   sent, so the key never goes to another core.
 - Before its value is delivered, that core must still take it: the app asks core's client API
-  (`GET /v1/models`) with the key, and a key core no longer has (deleted on core) is refused.
+  (`GET /v1/models`) with the key, and a key core no longer has (deleted on core) is refused. Once
+  core has answered, the app checks again that its connection has not changed meanwhile (no
+  switch, sign-out or key change) and that the secret is still in the vault.
+
+A launch's secret that its `environment` or `stdin` gives to the process it starts is a value
+delivered to the tool whose launch it is, though that tool holds only a reference. Its checks are made before the
+native confirmation and before the call, like any delivery's, and again each time the host turns
+the reference into a value: at the spawn, and at a managed runtime's start and every restart. A
+key deleted on core, bound to a core the app is not connected to then, or bound to another tool
+refuses that spawn, start or restart; no value from an earlier check stands for it. Once all of a
+launch's secrets have values, right before the process is started, the host checks once more that
+each is still in the vault and that the connection is the one each client key was checked on. A
+key deleted on core in the moment between core's answer and the start is not seen.
 
 ```json
 {"id":"s-<hex>","label":"Claude Code","client_key":{"core":{"mode":"managed","origin":"http://127.0.0.1:8400"},
@@ -849,7 +902,8 @@ too, only to read backups (`backup.get`, `backup.list`) and to end the journals 
 | `journal.end` | `journal`, `outcome` (`committed` or `rolled_back`) | `{"journal", "outcome"}` |
 
 Backups and journals belong to the package, whatever its release, and stay when it is removed; a
-package keeps at most 256 backups. In a call, a tool commits or ends only a journal its own release
+package keeps at most 256 backups, a backstop: retention is the tool's, which alone knows which of
+its backups its records still name (the transaction library keeps 10 manual backups per set). In a call, a tool commits or ends only a journal its own release
 began; in describe, any journal that describe named. The vault's folders are opened without
 following links, and files in a package's folder that its records do not name (a write cut
 short, a removal that failed) are removed the next time they are read. Errors, which never name

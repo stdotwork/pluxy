@@ -34,7 +34,10 @@
 //! the secret, its release and this call; a `value` field's secret also travels in the call's frame,
 //! and nowhere else. The references end with the call. A client key's binding (`client_keys.rs`:
 //! its tool, its core, and that core still taking it) is checked before the confirmation, and
-//! again before the call is made.
+//! again before the call is made. A launch's secret that its environment gives to the process it
+//! starts is a delivery to the target too: checked so before the confirmation and the call, and
+//! again whenever the host resolves it (`client_keys::launch_value`), with nothing older standing
+//! for it, and all of a launch's secrets once more right before its spawn (`client_keys::Launches`).
 //!
 //! A launch-class call's confirmation opens the executable and cwd it names; the router keeps them
 //! with the call, with the launch's lifetime, environment request and secrets (`spawn.rs`). The
@@ -348,6 +351,12 @@ fn release_of(caller: &str, folder: &str) -> Option<String> {
     (device::asset_url(caller, digest, "") == folder).then(|| digest.to_string())
 }
 
+/// Whether the target gets f's secret itself: a `value` field's, or a launch's secret field whose
+/// secret its environment request gives to the process it starts.
+fn delivered(f: &Filled, request: Option<&spawn::Request>) -> bool {
+    f.value || request.is_some_and(|r| r.delivers(&f.field))
+}
+
 /// The one refusal of an input that is not valid for grant's operation, whatever is wrong with it:
 /// it does not say whether a string was a secret's value or a reference.
 fn invalid_input(grant: &Grant) -> CallError {
@@ -449,8 +458,10 @@ fn dispatch(
     let vault = Arc::clone(&app.state::<App>().vault);
     // Each client key again now, its value's core too: the connection, the core or the vault may
     // have changed meanwhile.
+    let request = launch.as_ref().map(|l| &l.request);
     for f in &filled {
-        crate::client_keys::admit(app, &f.secret, &f.label, grant.target.id(), false, f.value)?;
+        let deliver = delivered(f, request);
+        crate::client_keys::admit(app, &f.secret, &f.label, grant.target.id(), false, deliver)?;
     }
     // Each secret field gets a reference for the target's release, in this call.
     let token = vault.begin_call();
@@ -529,6 +540,14 @@ fn checked(
         .map_err(|_| invalid_input(grant))?;
     let vault = Arc::clone(&app.state::<App>().vault);
     let filled = secret_fields(&vault, grant, input, filler)?;
+    // A launch gives the secrets its environment names to the process it starts.
+    let request = if grant.op.effect == "launch" {
+        let (_, r) = spawn::parse(input, &|f| filled.iter().any(|x| x.field == f))
+            .map_err(|e| fail("invalid_request", e))?;
+        Some(r)
+    } else {
+        None
+    };
     for f in &filled {
         crate::client_keys::admit(
             app,
@@ -536,7 +555,7 @@ fn checked(
             &f.label,
             grant.target.id(),
             matches!(filler, Filler::Window),
-            f.value,
+            delivered(f, request.as_ref()),
         )?;
     }
     // A secret's value delivered, or any secret the window gives, is the person's decision.
@@ -865,11 +884,44 @@ fn launch_of(
             Some(PathBuf::from(p))
         }
     };
+    // The file it opens, which must be what argv names, and the folder it must be inside: the
+    // confirmation resolves, shows and binds both.
+    let opens = match (input.get("file"), input.get("within")) {
+        (None, None) => None,
+        (Some(f), Some(w)) => {
+            let (Some(f), Some(w)) = (f.as_str(), w.as_str()) else {
+                return Err(fail(
+                    "invalid_request",
+                    "a launch's file and within folder are paths",
+                ));
+            };
+            if !argv.iter().any(|a| a == f) {
+                return Err(fail(
+                    "invalid_request",
+                    "a launch's file must be one of its argv",
+                ));
+            }
+            Some((PathBuf::from(f), PathBuf::from(w)))
+        }
+        (Some(_), None) => {
+            return Err(fail(
+                "invalid_request",
+                "a launch that opens a file names its within folder",
+            ))
+        }
+        (None, Some(_)) => {
+            return Err(fail(
+                "invalid_request",
+                "a launch names a within folder only with the file it opens",
+            ))
+        }
+    };
     Ok(confirmation::Launch {
         executable: path("executable")?,
         argv,
         cwd: path("cwd")?,
         program,
+        opens,
         terminal_adapter: executor.clone(),
         // The caller sets them from the launch's environment request (`spawn::parse`).
         environment_revision: String::new(),
@@ -939,8 +991,23 @@ fn authorize(
             ));
         }
         let mut l = launch_of(input, &executor)?;
-        let (lifetime, request) = spawn::parse(input, &|f| filled.iter().any(|x| x.field == f))
+        let (lifetime, mut request) = spawn::parse(input, &|f| filled.iter().any(|x| x.field == f))
             .map_err(|e| fail("invalid_request", e))?;
+        // A launch that opens a file has a fixed shape (the confirmation checks the rest): the
+        // launch environment as it is, with only absolute PATH entries, detached, nothing on its
+        // stdin and no secrets, so no variable can steer the opener to another program.
+        if l.opens.is_some() {
+            if request != spawn::Request::default()
+                || !filled.is_empty()
+                || lifetime != Lifetime::Detached
+            {
+                return Err(fail(
+                    "invalid_request",
+                    "an open launch takes no environment, stdin, secrets or managed lifetime",
+                ));
+            }
+            request.absolute_path = true;
+        }
         // Names, set values, "inherited", "removed" and secrets' labels: never a secret's value
         // or an inherited value. A changed request is a changed revision, so a remembered
         // approval of another one does not stand for it.
@@ -1161,10 +1228,11 @@ fn spawn_frame(
                 "the call it serves, or the request, was cancelled",
             ));
         }
-        let vault = Arc::clone(&st.vault);
-        let value = move |s: &str| vault.value(s);
+        // Each secret checked as a delivery to this tool now, as the host gives it to the process,
+        // and all of them once more right before the spawn.
+        let values = crate::client_keys::Launches(app.clone());
         return match launch.lifetime {
-            Lifetime::Detached => spawn::detached(&launch, &value)
+            Lifetime::Detached => spawn::detached(&launch, id, &values)
                 .map(|_| json!({"lifetime": "detached"}))
                 .map_err(unavailable),
             Lifetime::Managed => st.runtimes.start(id, launch).map_err(unavailable),
@@ -1312,17 +1380,25 @@ fn save_frame(
                 cancel.is_set()
             })
             .map_err(|e| fail("unavailable", e))?;
-            let Some(chosen) = chosen else {
-                return Ok(json!({"outcome": "cancelled"}));
+            // The tool must still run its package's admitted release once the person answered: a
+            // release disabled, removed or swapped out meanwhile saves nothing.
+            let current = || {
+                app.state::<App>()
+                    .device
+                    .lock()
+                    .unwrap()
+                    .current_run((id, sha256, *generation), &roots())
+                    .map_err(|r| r.message)
             };
-            if cancel.is_set() {
-                return Ok(json!({"outcome": "cancelled"}));
-            }
-            crate::savefile::write(&chosen, &bytes).map_err(|r| match r {
-                crate::savefile::Refusal::Changed(m) => fail("permission", m),
-                crate::savefile::Refusal::Failed(m) => fail("unavailable", m),
-            })?;
-            Ok(json!({"outcome": "saved", "size": size}))
+            let outcome = crate::savefile::finish(chosen, &bytes, &|| cancel.is_set(), &current)
+                .map_err(|r| match r {
+                    crate::savefile::Refusal::Changed(m) => fail("permission", m),
+                    crate::savefile::Refusal::Failed(m) => fail("unavailable", m),
+                })?;
+            Ok(match outcome {
+                crate::savefile::Outcome::Saved => json!({"outcome": "saved", "size": size}),
+                crate::savefile::Outcome::Cancelled => json!({"outcome": "cancelled"}),
+            })
         }
         _ => Err(fail(
             "unsupported",
@@ -1351,5 +1427,34 @@ fn confirmed_authorized(app: &AppHandle, id: &str, cancel: &Cancel) -> Result<Au
         Ok(Some(token)) => st.confirmations.lock().unwrap().consume(id, &token),
         Ok(None) => Err("the native confirmation was cancelled".into()),
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_launch_delivers_the_secrets_its_environment_gives_the_process() {
+        let input = json!({"executable": "/bin/true", "argv": [], "cwd": "/",
+            "key": "r-1", "other": "r-2", "bridge": "r-3", "stdin": "bridge",
+            "environment": {"secrets": {"API_KEY": "key"}}});
+        let fields = ["key", "other", "bridge"];
+        let (_, request) = spawn::parse(&input, &|f| fields.contains(&f)).unwrap();
+        let filled = |field: &str, value| Filled {
+            field: field.into(),
+            secret: "s-1".into(),
+            label: "a key".into(),
+            value,
+        };
+        // Given to the process, in its environment or on its stdin: a delivery, checked as one at
+        // the call and at the spawn.
+        assert!(delivered(&filled("key", false), Some(&request)));
+        assert!(delivered(&filled("bridge", false), Some(&request)));
+        // A reference the tool only holds, and any field of a call that is not a launch.
+        assert!(!delivered(&filled("other", false), Some(&request)));
+        assert!(!delivered(&filled("key", false), None));
+        // A value field's secret is always delivered.
+        assert!(delivered(&filled("key", true), None));
     }
 }

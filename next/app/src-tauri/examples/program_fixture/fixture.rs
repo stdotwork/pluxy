@@ -13,7 +13,8 @@
 //! - `store` and `launch` with what they were given, doing nothing else: the routing check's
 //!   write- and launch-class operations;
 //! - `relay` by calling another package's operation through the host, as the input says, and
-//!   answering with the host's answer to that;
+//!   answering with the host's answer to that (with `key_as`, the reference it got in `key` goes
+//!   into that field of the input it passes on);
 //! - `slow` after `ms` milliseconds, with its version, process and when it answered;
 //! - `crash` never: it exits at once with status 3;
 //! - `flood` never: it sends 2000 call frames the host refuses, and reads nothing more;
@@ -35,7 +36,8 @@
 //! - `start`, the spawn check's launcher (`src/spawn_native.rs`): appends the frame it got to
 //!   `record`, then asks the host to spawn the launch the call confirmed (a `spawn` frame naming
 //!   nothing but the call) and answers with the host's answer (with `again`, it asks a second
-//!   time for the same call, and answers that answer as `again` too);
+//!   time for the same call, and answers that answer as `again` too; with `hold`, a path, it
+//!   first writes `<hold>.ready` and waits, at most a minute, until `hold` exists);
 //! - `runtime` by sending a `runtime` frame with the input's `op` and `runtime` for the call (or,
 //!   for op `spawn`, a spawn request for that call), and answering with the host's answer;
 //! - `serve`, the client-key check's agent (`src/client_key_native.rs`): sends `GET /v1/models` to
@@ -46,12 +48,14 @@
 //!   most `chunk` bytes (default 700,000) at their offsets, then one `save` with `name` and the
 //!   input's `extra` fields; with `again`, a second `save` for the same call. It answers with the
 //!   host's answers: `{"appended": [...], "answer": ..., "again": ...}`, stopping at the first
-//!   refused append.
+//!   refused append (with `save_anyway`, it still asks the `save` after it).
 //!
 //! Started with `AGENT` as its first argument it is the spawn check's agent instead (`agent`).
 //! Started as `x-terminal-emulator` (the launcher check's stand-in terminal, `terminal`) it writes
 //! its arguments, folder and environment to the file `FIXTURE_TERMINAL_RECORD` names and runs the
-//! command after its `-e`, as a terminal would.
+//! command after its `-e`, as a terminal would. Started as `xdg-open` (the open check's stand-in
+//! opener, `opener`) it appends its arguments and folder to `opened.jsonl` beside itself and
+//! exits.
 //!
 //! In describe, it reconciles each open vault journal the host names, never redoing it: it ends it
 //! as `committed` when the file holds the bytes the journal names, `rolled_back` otherwise, and
@@ -233,6 +237,9 @@ fn relay(input: &mut impl Read, output: &mut impl Write, f: &Value, n: u64) -> V
         "op": f["input"]["op"],
         "input": f["input"]["input"],
     });
+    if let Some(field) = f["input"]["key_as"].as_str() {
+        call["input"][field] = f["input"]["key"].clone();
+    }
     if let (Some(extra), Some(frame)) = (f["input"]["extra"].as_object(), call.as_object_mut()) {
         for (k, v) in extra {
             frame.insert(k.clone(), v.clone());
@@ -280,8 +287,11 @@ fn export(input: &mut impl Read, output: &mut impl Write, f: &Value, asked: &mut
         );
         let refused = a.get("error").is_some();
         appended.push(a);
-        if refused {
+        if refused && i["save_anyway"] != true {
             return json!({"appended": appended});
+        }
+        if refused {
+            break;
         }
     }
     let mut save = json!({"name": i["name"]});
@@ -739,9 +749,33 @@ fn terminal(args: &[String]) -> ! {
     std::process::exit(127);
 }
 
+/// The open check's stand-in opener, started as `xdg-open <file>` (an open launch gets no
+/// environment of its own): it appends one line of what it was started with (process ID,
+/// arguments, folder) to `opened.jsonl` in its own folder and exits, as an opener that has handed
+/// the file to an app does.
+#[cfg(target_os = "linux")]
+fn opener(args: &[String]) -> ! {
+    use std::io::Write as _;
+    let seen = json!({
+        "pid": std::process::id(),
+        "argv": args,
+        "cwd": std::env::current_dir().ok(),
+    });
+    if let Some(dir) = args.first().and_then(|a| std::path::Path::new(a).parent()) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("opened.jsonl"))
+        {
+            let _ = writeln!(f, "{seen}");
+        }
+    }
+    std::process::exit(0);
+}
+
 /// Runs the fixture: as its child when started with `CHILD`, as the spawn check's agent when
 /// started with `AGENT`, as the launcher check's terminal when started as `x-terminal-emulator`,
-/// else as the tool.
+/// as the open check's opener when started as `xdg-open`, else as the tool.
 pub fn main() -> ! {
     if std::env::var_os(CHILD).is_some() {
         sleep_forever();
@@ -755,6 +789,13 @@ pub fn main() -> ! {
             .is_some_and(|n| n == "x-terminal-emulator")
         {
             terminal(&args);
+        }
+        if args
+            .first()
+            .and_then(|a| std::path::Path::new(a).file_name())
+            .is_some_and(|n| n == "xdg-open")
+        {
+            opener(&args);
         }
         if args.get(1).is_some_and(|a| a.starts_with(AGENT)) {
             agent(&args);
@@ -1070,6 +1111,16 @@ pub fn main() -> ! {
                                 .open(record)
                             {
                                 let _ = writeln!(file, "{f}");
+                            }
+                        }
+                        // With `hold`, the spawn waits until the check lets it go.
+                        if let Some(hold) = f["input"]["hold"].as_str() {
+                            let _ = std::fs::write(format!("{hold}.ready"), "");
+                            let until = std::time::Instant::now() + Duration::from_secs(60);
+                            while !std::path::Path::new(hold).exists()
+                                && std::time::Instant::now() < until
+                            {
+                                std::thread::sleep(Duration::from_millis(50));
                             }
                         }
                         asked += 1;

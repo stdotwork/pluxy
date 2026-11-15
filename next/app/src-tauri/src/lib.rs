@@ -2986,10 +2986,10 @@ pub fn run() {
                 #[cfg(target_os = "linux")]
                 runtimes: spawn::Runtimes::open(
                     Some(app.path().app_data_dir()?.join("runtimes.json")),
-                    {
-                        let vault = std::sync::Arc::clone(&vault);
-                        Box::new(move |id| vault.value(id))
-                    },
+                    // Checked as a delivery to the runtime's package at each start and restart,
+                    // and again right before its spawn: a client key revoked or unbound since is
+                    // refused.
+                    Box::new(client_keys::Launches(app.handle().clone())),
                 ),
                 #[cfg(target_os = "linux")]
                 launcher: Mutex::new(launcher::Launcher::open(launcher_file)),

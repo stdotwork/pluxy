@@ -8,16 +8,24 @@
 //! the dialog answers with an existing file only once the person chose to replace it. Cancelling, or
 //! the call it serves ending, writes nothing.
 //!
-//! What the dialog answered is looked at as it answers (`Chosen`): its folder, and whether the name
-//! is a regular file (which, by device, inode, size and times) or nothing. A link, a folder or anything else at the name is
-//! refused: the dialog showed a name, and writing through a link would write a file it did not show.
+//! What the dialog answered is looked at as it answers (`chosen`): its folder is opened once, and
+//! that opened folder is the one written to. The folder must be one only this user (or root)
+//! controls: owned by this user or root, and not writable by group or others unless sticky (as
+//! `/tmp`). Otherwise another user could put a file at the chosen name after GTK's question, and the
+//! host cannot tell which question GTK asked. The name must hold nothing or a regular file of this
+//! user's (which one: device, inode, size and times). A link, a folder or anything else at the name
+//! is refused: the dialog showed a name, and writing through a link would write a file it did not
+//! show.
+//!
 //! `write` then saves atomically beside it: a new file `.pluxy-save-<random>` in that folder, opened
-//! relative to the folder it opened (no link followed), mode 0600 (a replaced file keeps its
-//! permission bits), the bytes, fsync; then, if the folder and the name are still what the dialog
-//! answered, a rename over the name (for a new file, one that refuses to replace anything), and an
-//! fsync of the folder. Anything else (the name became a link, another file or a folder, a file
-//! appeared where there was none) is refused and the temporary file removed. The check and the
-//! rename are two steps: a change between them is not caught, as with any writer that does not lock.
+//! relative to it (no link followed), mode 0600, the bytes, fsync; then, if the folder is still the
+//! one at the chosen path and the name is still what the dialog answered, the replaced file's
+//! permission bits, and a rename over the name, and an fsync of the folder. A new file replaces
+//! nothing: `RENAME_NOREPLACE`, or where a file system lacks it a hard link that fails on an
+//! existing name; with neither, it is refused. Anything else (the name became a link, another or a
+//! changed file or a folder, a file appeared where there was none) is refused and the temporary file
+//! removed. For an overwrite, the check and the rename are two steps: a change between them is not
+//! caught, as with any writer that does not lock.
 //!
 //! Nothing here logs: not the bytes, not the chosen path.
 
@@ -25,7 +33,6 @@ use std::ffi::{CString, OsStr, OsString};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// The most bytes one save holds.
@@ -35,8 +42,8 @@ const MAX_NAME: usize = 255;
 
 /// The name a dialog suggests for caller's name: refused when it names a path (a `/` or `\`, or a
 /// NUL); otherwise control and format characters (such as U+202E) become `_`, leading dots and
-/// spaces are dropped (no hidden file, no `..`), and it is cut to 255 bytes. An empty name is
-/// `file`.
+/// white space and trailing white space are dropped (no hidden file, no `..`), and it is cut to 255
+/// bytes (and its end trimmed again). An empty name is `file`.
 pub fn file_name(name: &str) -> Result<String, String> {
     if name.contains(['/', '\\', '\0']) {
         return Err("name is a file name, not a path: it may not hold '/' or '\\'".into());
@@ -46,12 +53,13 @@ pub fn file_name(name: &str) -> Result<String, String> {
         .map(|c| if forbidden(c) { '_' } else { c })
         .collect();
     let mut out = replaced
-        .trim_start_matches(['.', ' '])
+        .trim_start_matches(|c: char| c == '.' || c.is_whitespace())
         .trim_end()
         .to_string();
     while out.len() > MAX_NAME {
         out.pop();
     }
+    out.truncate(out.trim_end().len());
     if out.is_empty() {
         out = "file".into();
     }
@@ -65,13 +73,32 @@ fn forbidden(c: char) -> bool {
         || c.unicode_type() == gtk::glib::UnicodeType::Format
 }
 
-/// The file a save dialog answered with, as it was when it answered.
+/// Why a folder (its mode and owner) may not take a save by user euid, if it may not: only a folder
+/// no other user can change, owned by euid or root, not writable by group or others unless sticky.
+fn folder_refusal(mode: u32, uid: u32, euid: u32) -> Option<&'static str> {
+    if uid != euid && uid != 0 {
+        return Some("the chosen folder belongs to another user: choose a folder of your own");
+    }
+    if mode & 0o022 != 0 && mode & libc::S_ISVTX == 0 {
+        return Some(
+            "other users can change the chosen folder: choose a folder only you can change",
+        );
+    }
+    None
+}
+
+/// Why a file of user uid at the chosen name may not be replaced by user euid, if it may not.
+fn file_refusal(uid: u32, euid: u32) -> Option<&'static str> {
+    (uid != euid).then_some("the chosen file belongs to another user: choose another name")
+}
+
+/// The file a save dialog answered with, as it was when it answered: its folder, opened.
 #[derive(Debug)]
 pub struct Chosen {
-    dir: PathBuf,
+    /// The chosen path's folder, as it was opened, and its path, to see it is still there.
+    dir: OwnedFd,
+    dir_path: PathBuf,
     name: OsString,
-    /// The folder's device and inode.
-    dir_id: (u64, u64),
     /// The regular file at the name (`Stamp`, and its permission bits), or None for no file.
     existing: Option<(Stamp, u32)>,
 }
@@ -81,45 +108,68 @@ pub struct Chosen {
 /// again may get the same inode number.
 type Stamp = (u64, u64, u64, i64, i64, i64, i64);
 
-/// Looks at path, which a save dialog just answered with: refused unless it is a name in a folder,
-/// with a regular file or nothing at it.
+fn euid() -> u32 {
+    unsafe { libc::geteuid() }
+}
+
+fn open_dir(path: &Path) -> io::Result<OwnedFd> {
+    let p = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    let fd = unsafe {
+        libc::open(
+            p.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+fn fstat(fd: &OwnedFd) -> io::Result<libc::stat> {
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd.as_raw_fd(), &mut st) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(st)
+}
+
+/// Looks at path, which a save dialog just answered with: refused unless it is a name in a folder
+/// only this user controls, with a regular file of this user's or nothing at it.
 pub fn chosen(path: &Path) -> Result<Chosen, String> {
-    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+    let (Some(dir_path), Some(name)) = (path.parent(), path.file_name()) else {
         return Err("the dialog answered with no file name".into());
     };
     if !path.is_absolute() {
         return Err("the dialog answered with a relative path".into());
     }
-    let d = std::fs::metadata(dir).map_err(|e| format!("the chosen folder: {e}"))?;
-    if !d.is_dir() {
-        return Err("the chosen folder is not a folder".into());
+    let dir = open_dir(dir_path).map_err(|e| format!("the chosen folder: {e}"))?;
+    let d = fstat(&dir).map_err(|e| format!("the chosen folder: {e}"))?;
+    if let Some(why) = folder_refusal(d.st_mode, d.st_uid, euid()) {
+        return Err(why.into());
     }
-    let existing = match std::fs::symlink_metadata(path) {
-        Ok(m) if m.file_type().is_symlink() => {
+    let c_name = CString::new(name.as_bytes()).map_err(|_| "a name holds a NUL".to_string())?;
+    let existing = match stat_at(&dir, &c_name) {
+        Ok(s) if s.st_mode & libc::S_IFMT == libc::S_IFLNK => {
             return Err(
                 "the chosen file is a link: choose the file it points to, or another name".into(),
             )
         }
-        Ok(m) if m.is_file() => Some((
-            (
-                m.dev(),
-                m.ino(),
-                m.size(),
-                m.mtime(),
-                m.mtime_nsec(),
-                m.ctime(),
-                m.ctime_nsec(),
-            ),
-            m.mode() & 0o777,
-        )),
+        Ok(s) if s.st_mode & libc::S_IFMT == libc::S_IFREG => {
+            if let Some(why) = file_refusal(s.st_uid, euid()) {
+                return Err(why.into());
+            }
+            Some((stamp(&s), s.st_mode & 0o777))
+        }
         Ok(_) => return Err("the chosen name is not a file".into()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("the chosen file: {e}")),
     };
     Ok(Chosen {
-        dir: dir.to_path_buf(),
+        dir,
+        dir_path: dir_path.to_path_buf(),
         name: name.to_os_string(),
-        dir_id: (d.dev(), d.ino()),
         existing,
     })
 }
@@ -127,10 +177,37 @@ pub fn chosen(path: &Path) -> Result<Chosen, String> {
 /// Why `write` saved nothing.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Refusal {
-    /// The folder or the name is no longer what the dialog answered.
+    /// The folder or the name is no longer what the dialog answered, or the caller may no longer
+    /// save.
     Changed(String),
     /// Writing failed.
     Failed(String),
+}
+
+/// What a save came to.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Saved,
+    Cancelled,
+}
+
+/// After the dialog: nothing when the person cancelled (chosen None) or cancelled() says the call
+/// ended; refused when current() says the caller may no longer save (its release was disabled,
+/// removed or replaced meanwhile); otherwise bytes are written as chosen says.
+pub fn finish(
+    chosen: Option<Chosen>,
+    bytes: &[u8],
+    cancelled: &dyn Fn() -> bool,
+    current: &dyn Fn() -> Result<(), String>,
+) -> Result<Outcome, Refusal> {
+    let Some(chosen) = chosen else {
+        return Ok(Outcome::Cancelled);
+    };
+    if cancelled() {
+        return Ok(Outcome::Cancelled);
+    }
+    current().map_err(Refusal::Changed)?;
+    write(&chosen, bytes).map(|_| Outcome::Saved)
 }
 
 fn cstr(s: &OsStr) -> Result<CString, Refusal> {
@@ -179,8 +256,17 @@ fn stamp(st: &libc::stat) -> Stamp {
     )
 }
 
-fn rename_at(dir: &OwnedFd, from: &CString, to: &CString, flags: libc::c_uint) -> libc::c_int {
-    unsafe {
+fn result(r: libc::c_int) -> io::Result<()> {
+    if r == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// renameat2 from to to in dir with flags.
+fn rename_at(dir: &OwnedFd, from: &CString, to: &CString, flags: libc::c_uint) -> io::Result<()> {
+    result(unsafe {
         libc::renameat2(
             dir.as_raw_fd(),
             from.as_ptr(),
@@ -188,31 +274,82 @@ fn rename_at(dir: &OwnedFd, from: &CString, to: &CString, flags: libc::c_uint) -
             to.as_ptr(),
             flags,
         )
+    })
+}
+
+fn rename_noreplace(dir: &OwnedFd, from: &CString, to: &CString) -> io::Result<()> {
+    rename_at(dir, from, to, libc::RENAME_NOREPLACE)
+}
+
+/// A hard link to from at to in dir: fails on an existing to.
+fn link_at(dir: &OwnedFd, from: &CString, to: &CString) -> io::Result<()> {
+    result(unsafe {
+        libc::linkat(
+            dir.as_raw_fd(),
+            from.as_ptr(),
+            dir.as_raw_fd(),
+            to.as_ptr(),
+            0,
+        )
+    })
+}
+
+type Place = dyn Fn(&OwnedFd, &CString, &CString) -> io::Result<()>;
+
+/// Puts the new file tmp at name in dir without ever replacing what is there: noreplace (a rename
+/// that refuses an existing name), or where the file system lacks it (EINVAL), link (a hard link,
+/// which fails on an existing name) and then removing tmp. With neither, refused.
+fn place_new(
+    dir: &OwnedFd,
+    tmp: &CString,
+    name: &CString,
+    noreplace: &Place,
+    link: &Place,
+) -> Result<(), Refusal> {
+    let appeared = || {
+        Refusal::Changed(
+            "a file appeared at the chosen name after you chose it: nothing was saved".into(),
+        )
+    };
+    match noreplace(dir, tmp, name) {
+        Ok(()) => return Ok(()),
+        Err(e) if e.raw_os_error() == Some(libc::EEXIST) => return Err(appeared()),
+        Err(e) if e.raw_os_error() != Some(libc::EINVAL) => {
+            return Err(Refusal::Failed(format!("saving the file: {e}")))
+        }
+        Err(_) => {}
+    }
+    match link(dir, tmp, name) {
+        Ok(()) => {
+            unsafe { libc::unlinkat(dir.as_raw_fd(), tmp.as_ptr(), 0) };
+            Ok(())
+        }
+        Err(e) if e.raw_os_error() == Some(libc::EEXIST) => Err(appeared()),
+        Err(e) => Err(Refusal::Failed(format!(
+            "this folder's file system can save a new file only by risking replacing another ({e}): choose another folder"
+        ))),
     }
 }
 
 /// Saves bytes as chosen says, atomically (see the module's notes).
 pub fn write(c: &Chosen, bytes: &[u8]) -> Result<(), Refusal> {
-    let dir_path = CString::new(c.dir.as_os_str().as_bytes())
-        .map_err(|_| Refusal::Failed("the folder's path holds a NUL".into()))?;
-    let fd = unsafe {
-        libc::open(
-            dir_path.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-        )
-    };
-    if fd < 0 {
-        return Err(last("opening the chosen folder"));
-    }
-    let dir = unsafe { OwnedFd::from_raw_fd(fd) };
-    let mut st: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstat(dir.as_raw_fd(), &mut st) } != 0 {
-        return Err(last("the chosen folder"));
-    }
-    if identity(&st) != c.dir_id {
+    write_with(c, bytes, &rename_noreplace, &link_at)
+}
+
+fn write_with(c: &Chosen, bytes: &[u8], noreplace: &Place, link: &Place) -> Result<(), Refusal> {
+    let dir = &c.dir;
+    // The folder opened is still the one at the chosen path, and still only this user's.
+    let opened = fstat(dir).map_err(|e| Refusal::Failed(format!("the chosen folder: {e}")))?;
+    let at_path = open_dir(&c.dir_path)
+        .and_then(|d| fstat(&d))
+        .map(|s| identity(&s));
+    if at_path.ok() != Some(identity(&opened)) {
         return Err(Refusal::Changed(
-            "the chosen folder was replaced after you chose it: nothing was saved".into(),
+            "the chosen folder was moved or replaced after you chose it: nothing was saved".into(),
         ));
+    }
+    if let Some(why) = folder_refusal(opened.st_mode, opened.st_uid, euid()) {
+        return Err(Refusal::Changed(why.into()));
     }
     let mut random = [0u8; 8];
     getrandom::fill(&mut random).map_err(|e| Refusal::Failed(e.to_string()))?;
@@ -225,7 +362,6 @@ pub fn write(c: &Chosen, bytes: &[u8]) -> Result<(), Refusal> {
     );
     let tmp = cstr(OsStr::new(&tmp_name))?;
     let name = cstr(&c.name)?;
-    let mode = c.existing.map_or(0o600, |(_, m)| m);
     let f = unsafe {
         libc::openat(
             dir.as_raw_fd(),
@@ -240,8 +376,8 @@ pub fn write(c: &Chosen, bytes: &[u8]) -> Result<(), Refusal> {
     let file = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(f) });
     let written = (|| {
         use std::io::Write;
-        // The umask may have narrowed it; a replaced file's bits are set exactly.
-        if unsafe { libc::fchmod(file.as_raw_fd(), mode as libc::mode_t) } != 0 {
+        // The umask may have narrowed 0600; it is set exactly.
+        if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
             return Err(last("setting the file's mode"));
         }
         (&file)
@@ -249,14 +385,14 @@ pub fn write(c: &Chosen, bytes: &[u8]) -> Result<(), Refusal> {
             .map_err(|e| Refusal::Failed(format!("writing the file: {e}")))?;
         file.sync_all()
             .map_err(|e| Refusal::Failed(format!("writing the file: {e}")))?;
-        hold();
+        hold(dir, &tmp);
         // The name as the dialog answered: nothing, or the same regular file.
         let changed = || {
             Refusal::Changed(
                 "the chosen file changed after you chose it (it is now a link, another file or gone): nothing was saved".into(),
             )
         };
-        match (stat_at(&dir, &name), c.existing) {
+        match (stat_at(dir, &name), c.existing) {
             (Err(e), None) if e.kind() == io::ErrorKind::NotFound => {}
             (Ok(s), Some((was, _)))
                 if s.st_mode & libc::S_IFMT == libc::S_IFREG && stamp(&s) == was => {}
@@ -265,27 +401,18 @@ pub fn write(c: &Chosen, bytes: &[u8]) -> Result<(), Refusal> {
             }
             _ => return Err(changed()),
         }
-        let renamed = match c.existing {
+        match c.existing {
             // A new file replaces nothing, even what appeared since the check.
-            None => {
-                let r = rename_at(&dir, &tmp, &name, libc::RENAME_NOREPLACE);
-                if r != 0 && io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL) {
-                    // A file system without RENAME_NOREPLACE: the check above stands.
-                    rename_at(&dir, &tmp, &name, 0)
-                } else {
-                    r
+            None => place_new(dir, &tmp, &name, noreplace, link),
+            Some((_, mode)) => {
+                // Only now, once the name checked out, the replaced file's permission bits.
+                if unsafe { libc::fchmod(file.as_raw_fd(), mode as libc::mode_t) } != 0 {
+                    return Err(last("setting the file's mode"));
                 }
+                rename_at(dir, &tmp, &name, 0)
+                    .map_err(|e| Refusal::Failed(format!("saving the file: {e}")))
             }
-            Some(_) => rename_at(&dir, &tmp, &name, 0),
-        };
-        if renamed != 0 {
-            let e = io::Error::last_os_error();
-            if e.raw_os_error() == Some(libc::EEXIST) {
-                return Err(changed());
-            }
-            return Err(Refusal::Failed(format!("saving the file: {e}")));
         }
-        Ok(())
     })();
     if written.is_err() {
         unsafe { libc::unlinkat(dir.as_raw_fd(), tmp.as_ptr(), 0) };
@@ -298,8 +425,8 @@ pub fn write(c: &Chosen, bytes: &[u8]) -> Result<(), Refusal> {
 
 /// For the native test: holds the save before its last check while `<PLUXY_APP_TEST_SAVE>/hold`
 /// exists, saying so with `hold.held` beside it.
-#[cfg(feature = "native-test")]
-fn hold() {
+#[cfg(all(feature = "native-test", not(test)))]
+fn hold(_dir: &OwnedFd, _tmp: &CString) {
     let Ok(dir) = std::env::var("PLUXY_APP_TEST_SAVE") else {
         return;
     };
@@ -314,8 +441,27 @@ fn hold() {
     }
 }
 
-#[cfg(not(feature = "native-test"))]
-fn hold() {}
+#[cfg(all(not(feature = "native-test"), not(test)))]
+fn hold(_dir: &OwnedFd, _tmp: &CString) {}
+
+/// The unit tests' look at the temporary file (its folder and name) before the last check.
+#[cfg(test)]
+type Hook = Box<dyn FnMut(&OwnedFd, &CString)>;
+
+#[cfg(test)]
+thread_local! {
+    static HOOK: std::cell::RefCell<Option<Hook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn hold(dir: &OwnedFd, tmp: &CString) {
+    HOOK.with(|h| {
+        if let Some(f) = h.borrow_mut().as_mut() {
+            f(dir, tmp)
+        }
+    });
+}
 
 /// Whether a save dialog is showing: one at a time.
 static SHOWING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -398,7 +544,7 @@ pub fn ask(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     struct Tmp(PathBuf);
     impl Drop for Tmp {
@@ -443,6 +589,13 @@ mod tests {
         assert_eq!(file_name("").unwrap(), "file");
         assert_eq!(file_name("  ..hidden ").unwrap(), "hidden");
         assert_eq!(file_name("usage-é.csv").unwrap(), "usage-é.csv");
+        // Unicode white space at both ends, and the end trimmed again after the cut.
+        assert_eq!(
+            file_name("\u{3000}\u{a0}name.csv\u{3000}").unwrap(),
+            "name.csv"
+        );
+        let cut = file_name(&format!("{} b", "a".repeat(254))).unwrap();
+        assert_eq!(cut, "a".repeat(254));
         let cut = file_name(&"é".repeat(200)).unwrap();
         assert!(cut.len() <= 255 && cut.len() >= 254 && cut.chars().all(|c| c == 'é'));
     }
@@ -555,5 +708,123 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         assert!(matches!(write(&c, b"bytes"), Err(Refusal::Changed(_))));
         assert!(names(&dir).is_empty() && names(&t.0.join("moved")).is_empty());
+    }
+
+    #[test]
+    fn only_a_folder_no_other_user_can_change_takes_a_save() {
+        // Owned by this user or root; not writable by group or others unless sticky.
+        assert_eq!(folder_refusal(0o40755, 1000, 1000), None);
+        assert_eq!(folder_refusal(0o40700, 0, 1000), None);
+        assert_eq!(folder_refusal(0o41777, 0, 1000), None);
+        assert!(folder_refusal(0o40755, 1001, 1000).is_some());
+        assert!(folder_refusal(0o40775, 1000, 1000).is_some());
+        assert!(folder_refusal(0o40757, 1000, 1000).is_some());
+        assert!(folder_refusal(0o40777, 0, 1000).is_some());
+        assert!(folder_refusal(0o41775, 1001, 1000).is_some());
+        // A file of another user's is never replaced.
+        assert_eq!(file_refusal(1000, 1000), None);
+        assert!(file_refusal(0, 1000).is_some());
+        assert!(file_refusal(1001, 1000).is_some());
+        // On disk: a group-writable folder is refused, a sticky one is not.
+        let t = tmp();
+        let open = t.0.join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o775)).unwrap();
+        assert!(chosen(&open.join("new"))
+            .unwrap_err()
+            .contains("other users"));
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o1775)).unwrap();
+        let c = chosen(&open.join("new")).unwrap();
+        // And a folder opened to other users after the choice is refused at the write.
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(matches!(write(&c, b"bytes"), Err(Refusal::Changed(_))));
+        assert!(names(&open).is_empty());
+    }
+
+    fn einval(_: &OwnedFd, _: &CString, _: &CString) -> io::Result<()> {
+        Err(io::Error::from_raw_os_error(libc::EINVAL))
+    }
+
+    fn eperm(_: &OwnedFd, _: &CString, _: &CString) -> io::Result<()> {
+        Err(io::Error::from_raw_os_error(libc::EPERM))
+    }
+
+    #[test]
+    fn without_rename_noreplace_a_new_file_is_linked_in_and_never_replaces_one() {
+        let t = tmp();
+        let path = t.0.join("new");
+        // Saved through the hard link, with nothing else left.
+        let c = chosen(&path).unwrap();
+        write_with(&c, b"bytes", &einval, &link_at).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"bytes");
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(names(&t.0), ["new"]);
+        // No hard links either: refused, nothing left.
+        let third = t.0.join("third");
+        let c = chosen(&third).unwrap();
+        assert!(matches!(
+            write_with(&c, b"bytes", &einval, &eperm),
+            Err(Refusal::Failed(_))
+        ));
+        assert_eq!(names(&t.0), ["new"]);
+    }
+
+    #[test]
+    fn a_new_file_never_falls_back_to_a_rename_that_replaces() {
+        let t = tmp();
+        let dir = open_dir(&t.0).unwrap();
+        std::fs::write(t.0.join("tmp"), b"new").unwrap();
+        std::fs::write(t.0.join("name"), b"there").unwrap();
+        let (tmpc, namec) = (CString::new("tmp").unwrap(), CString::new("name").unwrap());
+        assert!(matches!(
+            place_new(&dir, &tmpc, &namec, &einval, &link_at),
+            Err(Refusal::Changed(_))
+        ));
+        assert_eq!(std::fs::read(t.0.join("name")).unwrap(), b"there");
+    }
+
+    #[test]
+    fn a_replaced_files_permission_bits_come_only_after_the_last_check() {
+        let t = tmp();
+        let path = t.0.join("old");
+        std::fs::write(&path, b"old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let c = chosen(&path).unwrap();
+        let seen = std::rc::Rc::new(std::cell::Cell::new(0));
+        let s = std::rc::Rc::clone(&seen);
+        HOOK.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move |d, tmp| {
+                s.set(stat_at(d, tmp).unwrap().st_mode & 0o7777);
+            }))
+        });
+        let r = write(&c, b"new");
+        HOOK.with(|h| *h.borrow_mut() = None);
+        r.unwrap();
+        assert_eq!(seen.get(), 0o600);
+        assert_eq!(mode(&path), 0o644);
+    }
+
+    #[test]
+    fn nothing_is_written_once_the_caller_may_no_longer_save() {
+        let t = tmp();
+        let path = t.0.join("new");
+        let ok = || Ok(());
+        let gone = || Err("pluxy/exporter was disabled".to_string());
+        let (no, yes) = (|| false, || true);
+        assert_eq!(finish(None, b"x", &no, &ok), Ok(Outcome::Cancelled));
+        assert_eq!(
+            finish(Some(chosen(&path).unwrap()), b"x", &yes, &ok),
+            Ok(Outcome::Cancelled)
+        );
+        assert!(matches!(
+            finish(Some(chosen(&path).unwrap()), b"x", &no, &gone),
+            Err(Refusal::Changed(m)) if m.contains("disabled")
+        ));
+        assert!(names(&t.0).is_empty());
+        assert_eq!(
+            finish(Some(chosen(&path).unwrap()), b"x", &no, &ok),
+            Ok(Outcome::Saved)
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"x");
     }
 }

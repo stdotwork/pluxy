@@ -60,6 +60,18 @@
         "output_schema": { "type": "object", "required": ["outcome"] }
       },
       {
+        "id": "open",
+        "description": "Open one Codex session's rollout, its raw JSONL, in the app the desktop opens its type with, after the person confirms the launch",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 134 } },
+          "required": ["id"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object", "required": ["outcome"] }
+      },
+      {
         "id": "settings",
         "description": "Set the Codex home folder the reader reads (empty: the default, ~/.codex)",
         "effect": "write",
@@ -71,6 +83,9 @@
         },
         "output_schema": { "type": "object", "required": ["codex_home", "custom"] }
       }
+    ],
+    "imports": [
+      { "package": "pluxy/execution", "contract": [1], "operations": ["prepare", "launch"], "required": false }
     ],
     "state": { "version": 0, "readable_versions": [0] },
     "ui": {

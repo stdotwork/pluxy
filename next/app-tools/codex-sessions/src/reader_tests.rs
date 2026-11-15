@@ -43,6 +43,13 @@ fn never() -> bool {
     false
 }
 
+/// The `-wal` or `-shm` file beside a database.
+fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
 fn write(path: &Path, text: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, text).unwrap();
@@ -443,7 +450,8 @@ fn reading_a_wal_database_leaves_nothing_beside_it() {
         )
         .unwrap();
     }
-    assert!(is_wal(&db));
+    // The database is in WAL mode (byte 18 of its header is 2).
+    assert_eq!(fs::read(&db).unwrap()[18], 2);
     assert!(!sidecar(&db, "-wal").exists() && !sidecar(&db, "-shm").exists());
     let before = fs::read(&db).unwrap();
     let page = list(&root, 0, 50);
@@ -508,6 +516,7 @@ fn wal_with_uncheckpointed_rows(dest: &Path) {
 
 #[test]
 fn committed_rows_still_in_the_wal_are_read_and_nothing_is_written_beside_it() {
+    let _lock = COPY_ROOT.lock().unwrap_or_else(|e| e.into_inner());
     let root = Root::new("wal-rows");
     let db = root.join("sqlite/live.db");
     wal_with_uncheckpointed_rows(&db);
@@ -531,6 +540,113 @@ fn committed_rows_still_in_the_wal_are_read_and_nothing_is_written_beside_it() {
         .unwrap()
         .flatten()
         .any(|e| e.file_name().to_string_lossy().starts_with(&prefix)));
+}
+
+/// Tests that set `PLUXY_TOOL_DATA_DIR`, or read a -wal that needs a private copy, take this lock:
+/// the variable is the process's, and a copy's folder is under it while it is set.
+static COPY_ROOT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn a_database_that_cannot_be_opened_is_a_warning_that_names_it_once_and_not_sqlites_uri() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = Root::new("unreadable");
+    let db = root.join("state_5.sqlite");
+    sql(
+        &db,
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT); INSERT INTO threads VALUES ('x', 'Readable');",
+    );
+    // The positive control: readable, it is listed with no warning.
+    let page = list(&root, 0, 50);
+    assert_eq!(page.sessions.len(), 1);
+    assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+    fs::set_permissions(&db, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::File::open(&db).is_ok() {
+        return; // running as root: nothing is unreadable
+    }
+    let page = list(&root, 0, 50);
+    fs::set_permissions(&db, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(page.sessions.is_empty());
+    let shown = db.to_string_lossy().into_owned();
+    assert_eq!(page.warnings.len(), 1, "{:?}", page.warnings);
+    let w = &page.warnings[0];
+    assert!(w.starts_with("Failed to open database "), "{w}");
+    // SQLite's own message repeats the file as a `file:` URI; only the page's name for it is shown.
+    assert_eq!(w.matches(&shown).count(), 1, "{w}");
+    assert!(!w.contains("file:"), "{w}");
+}
+
+#[test]
+fn a_database_of_no_bytes_with_a_wal_that_holds_bytes_leaves_the_wal_alone() {
+    // SQLite opening such a pair read-only deletes a -wal that holds bytes; a candidate is opened to see its tables.
+    let root = Root::new("empty-db-wal");
+    let dir = root.join("sqlite");
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("empty.db");
+    fs::write(&db, b"").unwrap();
+    fs::write(sidecar(&db, "-wal"), [7u8; 64]).unwrap();
+    let page = list(&root, 0, 50);
+    assert!(
+        page.databases.is_empty() && page.warnings.is_empty(),
+        "{:?}",
+        page.warnings
+    );
+    assert_eq!(
+        fs::read(sidecar(&db, "-wal")).ok(),
+        Some(vec![7u8; 64]),
+        "the -wal was deleted or changed"
+    );
+    assert!(!sidecar(&db, "-shm").exists(), "a -shm appeared");
+}
+
+#[test]
+fn the_opener_refuses_a_database_that_is_not_a_regular_file() {
+    let root = Root::new("opener-link");
+    let db = root.join("real.db");
+    sql(
+        &db,
+        "CREATE TABLE threads (id TEXT PRIMARY KEY); INSERT INTO threads VALUES ('x');",
+    );
+    let link = root.join("link.db");
+    std::os::unix::fs::symlink(&db, &link).unwrap();
+    // The positive control: the file itself opens.
+    assert!(open_read_only(&db).is_ok());
+    let e = open_read_only(&link)
+        .err()
+        .expect("a linked database opened");
+    assert!(
+        e.starts_with("Skipped database ") && e.contains(&*link.to_string_lossy()),
+        "{e}"
+    );
+}
+
+#[test]
+fn only_private_copies_of_processes_no_longer_running_are_removed() {
+    let _lock = COPY_ROOT.lock().unwrap_or_else(|e| e.into_inner());
+    let root = Root::new("prune-root");
+    let data = Root::new("prune-data");
+    let db = root.join("sqlite/live.db");
+    wal_with_uncheckpointed_rows(&db);
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead = child.id();
+    child.wait().unwrap();
+    let tmp = data.join("tmp");
+    // A process that is running (pid 1) and one that is not, each with a copy left in the folder.
+    for left in ["wal-1-0".to_string(), format!("wal-{dead}-0")] {
+        fs::create_dir_all(tmp.join(left)).unwrap();
+    }
+    std::env::set_var("PLUXY_TOOL_DATA_DIR", &*data);
+    let page = list(&root, 0, 50);
+    std::env::remove_var("PLUXY_TOOL_DATA_DIR");
+    let ids: Vec<&str> = page.sessions.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, ["b", "a"], "{:?}", page.warnings);
+    assert!(
+        tmp.join("wal-1-0").exists(),
+        "a running process's copy was removed"
+    );
+    assert!(
+        !tmp.join(format!("wal-{dead}-0")).exists(),
+        "a stopped process's copy stayed"
+    );
 }
 
 #[test]
@@ -693,6 +809,7 @@ fn linked_session_folders_are_skipped_with_a_warning_each_and_real_ones_are_read
 
 #[test]
 fn a_database_with_a_linked_wal_or_shm_is_skipped_with_a_warning() {
+    let _lock = COPY_ROOT.lock().unwrap_or_else(|e| e.into_inner());
     let outside = Root::new("linked-wal-outside");
     // A real -wal beside the database is read (the control).
     let real = Root::new("real-wal");

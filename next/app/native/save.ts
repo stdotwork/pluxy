@@ -29,6 +29,7 @@ const exportInput = {
     name: { type: "string" },
     extra: { type: "object" },
     again: { type: "boolean" },
+    save_anyway: { type: "boolean" },
     chunk: { type: "integer", minimum: 1 },
   },
   required: ["source", "name"],

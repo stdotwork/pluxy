@@ -25,14 +25,18 @@
 //! after the final one, is not seen. Several files are journalled, not written atomically.
 
 mod b64;
+mod backups;
 mod merge;
 mod target;
 
 #[cfg(test)]
 mod tests;
 
+pub use backups::{backup_call, backup_operations, json_leaves, Leaves, KEEP_BACKUPS};
 pub use merge::{merge_value, Json, Merge};
-pub use target::{pin_schema, sha256, sha256_of, Failed, Id, Pin, Selection, Target, MAX_FILE};
+pub use target::{
+    pin_schema, sha256, sha256_of, Failed, Id, Pin, Selection, Target, WriteMode, MAX_FILE,
+};
 
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
@@ -53,6 +57,9 @@ const STATE: &str = "transactions.json";
 
 /// The backups this library keeps are labelled with this prefix.
 const LABEL: &str = "tx ";
+
+/// The op of a journal that restores a manual backup ([`Transactions::backup_restore`]).
+const RESTORE_BACKUP: &str = "restore-backup";
 
 /// The journal IDs whose writes committed (kept for reconciliation), and the recovery reports
 /// `status` shows: at most this many of each.
@@ -159,14 +166,8 @@ fn matches(rec: &Value, pins: &[Pin]) -> bool {
 /// pointed elsewhere, a root or file gone).
 fn stale(rec: &Value) -> bool {
     rec["targets"].as_array().into_iter().flatten().all(|t| {
-        let file = t["selected"].as_str().map(PathBuf::from);
-        let selection = match (file, t["path"].as_str()) {
-            (Some(root), Some(path)) => Selection::Root {
-                root,
-                path: path.into(),
-            },
-            (Some(f), None) => Selection::File(f),
-            _ => return true,
+        let Some(selection) = backups::selection_of(t) else {
+            return true;
         };
         Target::resolve(&selection).map_or(true, |now| json!(now.pin.target) != t["target"])
     })
@@ -286,7 +287,7 @@ impl<'a> Transactions<'a> {
     }
 
     /// Deletes this library's backups that nothing names any more: no set's record, no kept
-    /// image and no journal left open after a failed put-back.
+    /// image, no journal left open after a failed put-back and no manual backup.
     fn sweep(&self, state: &Value) {
         let mut keep = Vec::new();
         for rec in state["sets"].as_object().into_iter().flat_map(Map::values) {
@@ -300,11 +301,18 @@ impl<'a> Transactions<'a> {
         for j in state["open"].as_array().into_iter().flatten() {
             keep.extend(j["backups"].as_array().into_iter().flatten().cloned());
         }
+        for b in state["backups"].as_array().into_iter().flatten() {
+            for f in b["files"].as_array().into_iter().flatten() {
+                keep.push(f["backup"].clone());
+            }
+        }
         let Ok(list) = self.vault.vault("backup.list", Map::new()) else {
             return;
         };
         for b in list["backups"].as_array().into_iter().flatten() {
-            let ours = b["label"].as_str().is_some_and(|l| l.starts_with(LABEL));
+            let ours = b["label"]
+                .as_str()
+                .is_some_and(|l| l.starts_with(LABEL) || l.starts_with(backups::MANUAL));
             if ours && !keep.contains(&b["backup"]) {
                 let _ = self
                     .vault
@@ -591,6 +599,12 @@ impl<'a> Transactions<'a> {
                 &from,
                 c.after.as_deref(),
                 c.after_mode,
+                // An apply writes the writer's values, a key among them: owner-only.
+                if op == "apply" {
+                    WriteMode::OwnerOnly
+                } else {
+                    WriteMode::Keep
+                },
             ) {
                 Ok(id) => {
                     done.push((i, id));
@@ -718,10 +732,13 @@ impl<'a> Transactions<'a> {
                     );
                     remember_kept(state, k);
                 }
-            } else if let Err(f) = c
-                .target
-                .replace(Some(*id), &after, c.before.as_deref(), c.mode)
-            {
+            } else if let Err(f) = c.target.replace(
+                Some(*id),
+                &after,
+                c.before.as_deref(),
+                c.mode,
+                WriteMode::Exact,
+            ) {
                 failed.push(format!(
                     "{}: {}",
                     c.target.pin.target.display(),
@@ -857,8 +874,14 @@ impl<'a> Transactions<'a> {
                         Err(e) => return Err(e),
                     };
                     let mode = f["mode"].as_u64().map(|m| m as u32);
-                    t.replace(None, &t.pin.sha256, before.as_deref(), mode)
-                        .map_err(|f| f.error)?;
+                    t.replace(
+                        None,
+                        &t.pin.sha256,
+                        before.as_deref(),
+                        mode,
+                        WriteMode::Exact,
+                    )
+                    .map_err(|f| f.error)?;
                     restored.push(at);
                 }
                 "rolled_back"
@@ -919,8 +942,9 @@ fn distinct(pins: &[Pin]) -> Result<(), Error> {
 }
 
 /// A finished operation in state: its set's record saved, removed (`record` null) or left as it
-/// is (no `record`), the images kept for the targets it wrote in that set dropped, and its
-/// journal remembered as committed.
+/// is (no `record`), the images kept for the targets it wrote in that set dropped (not by a
+/// manual backup's restore: they stay restore's way back), and its journal remembered as
+/// committed.
 fn finish(state: &mut Value, intent: &Value, journal: &Value) {
     let set = intent["set"].as_str().unwrap_or_default();
     if let Some(rec) = intent.get("record") {
@@ -932,7 +956,10 @@ fn finish(state: &mut Value, intent: &Value, journal: &Value) {
         .flatten()
         .map(|f| f["pin"]["target"].clone())
         .collect();
-    drop_kept(state, set, &written);
+    // A manual backup's restore keeps them: they stay restore's way back.
+    if intent["op"] != RESTORE_BACKUP {
+        drop_kept(state, set, &written);
+    }
     remember(state, "committed", journal.clone());
 }
 

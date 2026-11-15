@@ -806,6 +806,52 @@ page lists the managed runtimes the execution program started, with **Stop** and
 confirmed natively, never remembered); disabling or removing a package with managed runtimes running
 asks first, and cancelling leaves both as they are.
 
+## Claude Code
+
+The Claude Code page sets up and starts Claude Code with this core (`src/claudeCode.tsx`). It needs
+the curated native tool `pluxy/claude-code` ([app tools](../app-tools/README.md#claude-code)) and,
+for **Start CLI**, the execution program, both installed and enabled on the Device extensions page.
+It is the window's own page, not an extension page: **Apply** gives the tool the client key, and
+only the window can name a vault secret for an operation (an extension page cannot pass secrets).
+
+**Read settings** previews the settings file: Claude Code's user settings
+(`~/.claude/settings.json`), a selected file (a link, as stow makes, is followed and kept) or a file
+in a selected folder; it shows whether pluxy's integration is applied, the file it writes to and
+whether a key is in it, never the key, and fills the form from the file. A file Claude Code would
+not take (not strict JSON, or another `$schema`) shows why instead of the form: Apply and Close
+configuration stay off, and Restore Backup stays reachable. Choosing another file drops the last
+preview, so read it again before a write. The form keeps the old
+app's controls: **Claude Code Model → Upstream Model** (Sonnet, Opus, Fable, Haiku, each with a
+**1M** switch; Fable follows Sonnet when empty), **Default model**, **Subagent model**, and under
+**Context and auto-compaction (advanced)** the **Auto-compact window**, **Auto-compact trigger**
+and **Disable auto-compaction**. Model fields suggest Claude Code's own models and aliases until the
+model picker lists the core's; Opus, Sonnet and Haiku each need one (not only `[1m]`), and the
+window and percentage are whole numbers. The **Authentication Key** is one of the vault's plain
+secrets or client keys captured for this tool (`src/claudeCodeForm.ts`), or a new one through native
+key entry (**Add key…**).
+
+**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
+**Close configuration** (Clear) and **Restore Backup** each call the tool with the file the last
+preview pinned (refused if the file changed since); the tool's native confirmation names the file it resolves to, the key's label for Apply, and that
+an edit made in the same instant by another program may be lost. **Start CLI** asks the tool for its
+recipe (`claude` in a terminal, no arguments) and starts it through the launcher in the chosen
+working directory (recently used ones offered), terminal and optional program path; the launcher's
+confirmation shows it in full. The key is not part of the launch: Claude Code reads it from its
+settings.
+
+**Backup and restore** (`src/backups.tsx`, the backup browser every writer's page shows) keeps
+manual backups of the previewed file in the app's vault through the tool's standard backup
+operations ([app tools](../app-tools/README.md#libtransactions)). It shows once the file has been
+read, a file Claude Code would not take included, and acts on the file that read pinned.
+**Manual Backup** saves the file as it is on disk (or that it does not exist) and selects the new
+backup, leaving the form as it is; the newest 10 are kept, and saving another deletes the oldest,
+which its confirmation says. **Backup versions** lists each by date; selecting one
+shows its ID, whether the file was present and its size, and the settings restoring it would add,
+change or remove, by name only: this page never gets a value or the backup's bytes. **Restore this
+version** puts it back over whatever the file holds now (a file absent in the backup is removed;
+no automatic backup is made) and **Delete this version** deletes only that backup, each in the
+tool's native confirmation.
+
 ## Build and check
 
 Bun `1.4.3`, a stable Rust toolchain (CI uses 1.97.0), and on Linux the WebKitGTK 4.1 and
@@ -1128,9 +1174,10 @@ The app's updater ([Application update](#application-update)) calls it.
   operation, and the app starts nothing itself yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
 - Vault: Linux only. Secrets are kept in a 0600 file in the app's data folder, not in the system
-  keyring, and only exact values are redacted. The window has no vault page yet; no secret is
-  bound to a core or client yet, and no agent is started with one: secrets reach only native
-  tools' pipes. Backups have no retention: a package keeps at most 256.
+  keyring, and only exact values are redacted. The window has no vault page yet. Secrets reach
+  native tools' pipes and the environment of a process a confirmed launch starts (the launching
+  tool holds only a reference); a client key is checked at each use, also at a launch's spawn and
+  each restart. Backups have no retention: a package keeps at most 256.
 - Access: Linux only (5.8 or later: grants record the `statx` mount ID); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.

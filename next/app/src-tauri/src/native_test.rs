@@ -22,13 +22,16 @@
 //!    secret delivery and references and journal recovery (`vault_native.rs`), then native
 //!    client-key capture (`client_key_native.rs`); with
 //!    `PLUXY_APP_TEST_SPAWN`, only the host's spawn service, managed runtimes and launch
-//!    environment (`spawn_native.rs`); with
+//!    environment (`spawn_native.rs`), then a launch's client keys (`spawn_keys_native.rs`); with
 //!    `PLUXY_APP_TEST_SESSIONS`, only the read-only Codex session reader (`sessions_native.rs`);
 //!    with `PLUXY_APP_TEST_TRANSACTIONS`, only the transaction library's fixture writer
 //!    (`transactions_native.rs`); with `PLUXY_APP_TEST_USAGE`, only the usage hub and its
 //!    fixture parser (`usage_native.rs`); with `PLUXY_APP_TEST_LAUNCHER`, only the execution
-//!    program and the launcher (`launcher_native.rs`); with `PLUXY_APP_TEST_SAVE`, only the host's
-//!    save-file service (`save_native.rs`);
+//!    program and the launcher (`launcher_native.rs`); with `PLUXY_APP_TEST_OPEN`, only a tool's
+//!    opening of a file in the person's own app (`open_native.rs`); with
+//!    `PLUXY_APP_TEST_CLAUDE_CODE`, only the Claude Code setup and launcher
+//!    (`claude_code_native.rs`), with its backup browser (`backups_native.rs`); with
+//!    `PLUXY_APP_TEST_SAVE`, only the host's save-file service (`save_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -58,6 +61,11 @@ mod access;
 #[path = "admission_native.rs"]
 mod admission;
 #[cfg(target_os = "linux")]
+#[path = "backups_native.rs"]
+mod backups;
+#[cfg(target_os = "linux")]
+#[path = "claude_code_native.rs"]
+mod claude_code;
 #[path = "client_key_native.rs"]
 mod client_key;
 #[cfg(target_os = "linux")]
@@ -74,6 +82,9 @@ mod jobs;
 #[path = "launcher_native.rs"]
 mod launcher;
 #[cfg(target_os = "linux")]
+#[path = "open_native.rs"]
+mod open;
+#[cfg(target_os = "linux")]
 #[path = "program_native.rs"]
 mod program;
 #[cfg(target_os = "linux")]
@@ -88,6 +99,9 @@ mod sessions;
 #[cfg(target_os = "linux")]
 #[path = "spawn_native.rs"]
 mod spawn;
+#[cfg(target_os = "linux")]
+#[path = "spawn_keys_native.rs"]
+mod spawn_keys;
 #[cfg(target_os = "linux")]
 #[path = "swap_native.rs"]
 mod swap;
@@ -477,7 +491,10 @@ fn run(app: &AppHandle) -> Result<(), String> {
     // session of its own.
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_SPAWN") {
-        spawn::run(app, &main, dir.into())?;
+        spawn::run(app, &main, dir.clone().into())?;
+        // A launch's client keys, checked at the call, the spawn and each restart
+        // (spawn_keys_native.rs), with the same tools.
+        spawn_keys::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
@@ -486,6 +503,22 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_LAUNCHER") {
         launcher::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // A tool's opening of a file in the person's own app (open_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_OPEN") {
+        open::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The Claude Code setup and launcher (claude_code_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_CLAUDE_CODE") {
+        claude_code::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());

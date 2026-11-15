@@ -9,8 +9,9 @@ reference: this folder implements it, it does not change it.
 
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
-cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi)
+cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi, usage-opencode)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
+cargo build --release --locked -p claude-code   # likewise execution
 ```
 
 ## `lib/program`
@@ -48,9 +49,49 @@ format read whole (`parse`) gets a file of at most 16 MiB; a parser of a line-ba
 `streamed` and gets the file's lines one at a time (`parse_lines`, `LineReader`) whatever its size,
 a line over 16 MiB being skipped and counted: the reader holds one line, and what the parser keeps
 of a file meanwhile is its own (usage-claude keeps one small record per message). A parser at schema 2 sends a record that more than one
-file can hold as one keyed event (`Sink::event`). `fields` reads the fields usage records share, by
+file can hold as one keyed event (`Sink::event`). A file that holds many records, such as a
+database of sessions, can list as several entries (`Parser::entries`, `Listing::Parts`), each a file
+of the hub's with its own ID and revision, which the parser reads itself (`Parser::read_entry`,
+`Sink::revise`). An entry listed by more than one file (the same ID under two roots) is listed once,
+at its newest revision; one with an ID over 4,096 bytes is left out; a file whose entries cannot be
+listed now (`Listing::Failed`) is listed as itself, so its read reports why. Either of the last two
+makes the listing count as cut short, so the hub marks no file gone. The listing is sorted newest
+first and cut at 20,000 entries after that. `fields` reads the fields usage records share, by
 the old desktop app's rules: token counters under the names agents use, a model name and a time.
 The schemas are in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
+
+## `lib/sqlite-ro`
+
+Opens another program's SQLite database strictly read-only and creates no file beside it
+(`pluxy-sqlite-ro`: `open_read_only(path)` gives a `Db`, which derefs to a `rusqlite::Connection`).
+`codex-sessions` and `usage-opencode` read Codex's and OpenCode's databases with it. The rules:
+
+- The database path must be a regular file: a link, a FIFO, a folder or a missing file is refused
+  without being opened. A `-wal`, `-shm` or `-journal` beside it that exists must be a regular file
+  too (SQLite opens a `-journal` to look for a hot one, and a FIFO there would hang it). The database
+  and a `-wal` that is copied are opened without following a link or waiting on a FIFO, and checked
+  to be regular files on the open handle.
+- A database whose `-shm` exists (a process has it open) is opened in place with `mode=ro`: it uses
+  that `-shm` as any SQLite reader does (it writes to that shared-memory file and takes SQLite's
+  shared read locks) and never changes the database or its `-wal`.
+- With no `-shm` and a `-wal`, the database is never opened in place, whatever its header says
+  (SQLite deletes a `-wal` that holds bytes beside a database of 0 bytes, and creates a `-shm` beside
+  one whose header is not WAL's). With the `-wal` empty it is opened `immutable`. With the `-wal`
+  holding bytes it is copied, with its `-wal`, into a private folder (0700, `wal-<pid>-<n>`) under
+  `$PLUXY_TOOL_DATA_DIR/tmp` (the system's temporary folder when that is not set), read there, and
+  the folder is removed when the `Db` is dropped.
+- With no `-shm` and no `-wal`, a database with a WAL header is opened `immutable`, and any other
+  in place.
+- The tool's own `tmp` must be a real folder, not a link; one open to group or others is tightened
+  to 0700. Before a copy is made there, the copies of processes no longer running (folders named
+  exactly `wal-<pid>-<n>`, directories only) are removed; those of this process and of every process
+  still running stay. Nothing is pruned in the system's temporary folder.
+- An `Error` names no path, and carries SQLite's error code, not its message (which names the file).
+  A tool that shows a path to its user adds it around the error itself.
+
+A process that starts between the check for `-shm` and the open can make one read see a torn
+state; a later read is right. A per-call cache of open databases is not in the library: only
+`usage-opencode` needs one.
 
 ## `agent-usage`
 
@@ -77,12 +118,19 @@ journal store of its own. Linux.
 | `preview(set, selections)` | Resolves and pins each selection: `{"set", "targets": [<pin>], "applied", "edited"}`. A pin names the selected path, its link's text, the file it resolves to, the identities (device and inode) of the link, the root, the file's folder and the file, and the file's SHA-256. A link inside a selected root, a part that leaves it (`..`, `.`, empty) and anything but a regular file are refused. A read: it asks nothing, and it reports a file's existence and SHA-256 for any path, so a writer must not export it to other packages. |
 | `apply(set, pins, image, merge, written)` | Writes each pinned target with what `image` makes of its bytes now, and records `set` as applied: its original images (with the person's edits since the last apply promoted into them by `merge`) and its applied images, as vault backups. A record none of whose selections still resolves to its target (a link pointed elsewhere) is replaced, its originals kept for restore. |
 | `clear(set, pins, merge, written)` | Each target becomes what `merge` makes of its original, its applied image and its bytes now: the writer's untouched values go, the person's edits stay. A pin of the recorded target file itself (named directly) reaches a record made through a link that now points elsewhere. |
-| `restore(set, pins, written)` | Puts the original bytes back with the original's mode (removing a file that did not exist). With no record for these targets, it puts back the originals kept for them: after a conflict, or after a new apply replaced a retargeted record. |
+| `restore(set, pins, written)` | Puts the original bytes back (removing a file that did not exist), keeping the mode the file has; a file that is gone comes back with the original's mode. With no record for these targets, it puts back the originals kept for them: after a conflict, or after a new apply replaced a retargeted record. |
 | `reconcile(journals)` | For `Handler::reconcile`: each open journal the host names, reconciled from what is on disk (below). |
 | `status()` | The applied sets, the originals kept for restore and the latest recovery reports. |
 | `Merge`, `Json`, `merge_value` | The three-way merge, and the one for JSON files (written with two-space indentation, keys in the file's order and numbers with their exact digits, through serde_json's `preserve_order` and `arbitrary_precision`; other formatting and comments are not kept, so a format that must keep them brings its own `Merge`). |
 | `Target`, `Pin` | Resolving and pinning, and the checked reads and writes, for a writer that needs them directly. `Pin::from_json` refuses any field `Pin::to_json` does not write. |
 | `pin_schema()` | The JSON Schema of a pin, in the host's schema subset: what a writer's write operations take as `targets` items (the fixture writer's manifest uses it exactly). |
+| `backup_create(set, pins)` | Manual Backup: keeps the pinned files as they are now (an empty image and `exists: false` for one that does not exist) as one version of `set`, vault backups labelled `bk <set>`; then deletes the oldest versions over `KEEP_BACKUPS` (10): `{"backup", "deleted"}`. |
+| `backup_list(set)` | The versions, newest first: `{"backups": [{"id", "created", "files": [{"selected", "path", "target", "exists", "size"}]}], "keep"}`. |
+| `backup_diff(set, id, leaves)` | For each file of version `id`, as its selection resolves now: `exists`, `now_exists`, `same`, `readable` and `changes`, each changed setting's `path` (its keys) and what a restore does to it (`adds`, `changes`, `removes`), at most 200 and the rest counted in `more`. Never a value. A selection that resolves to another file is refused. |
+| `backup_restore(set, pins, id, written)` | Puts version `id` back in its files (the pins must be of exactly its targets, in order), removing one it did not have, through a journal like every write. A file there keeps its permission bits, as with clear and restore; one made again gets the backed-up bits. No automatic backup is made; the set's record and the originals kept for restore stay. |
+| `backup_delete(set, id)` | Deletes version `id` from the state file and the vault. |
+| `backup_call(call, tx, set, leaves)`, `backup_operations(files)` | The backup browser's standard operations, which every writer exports with exactly these manifest entries (`files` targets per version) and serves with `backup_call`: `backup-list`, `backup-diff` (reads), `backup-create`, `backup-restore`, `backup-delete` (writes, each confirmed). The app's shared backup browser (`../app/src/backups.tsx`) calls them. |
+| `Leaves`, `json_leaves` | A writer's reading of its file into settings for a diff (path and value, in file order; None when it cannot read it), and the one for JSON files: objects by key, arrays and other values as one setting each. |
 
 How a write goes:
 
@@ -96,8 +144,12 @@ How a write goes:
 - Each file is written through a handle on its folder (cap-std), never by its path again: a new
   file beside it, written 0600, checked once more, given the old file's permission bits (setuid,
   setgid and sticky left out; 0600, or the original's, for a file that did not exist) and renamed
-  over it, the folder flushed, and the file checked to be the one written. The whole operation is
-  checked again at its end. At most 8 files of at most 256 KiB each.
+  over it, the folder flushed, and the file checked to be the one written. An apply writes a
+  writer's values, a key among them, so the file it writes is owner-only: the group's and others'
+  bits are taken away (an existing 0644 file becomes 0600); clear and restore keep the mode the
+  file has. A rolled-back write, in the call or by recovery, puts back the mode the file had
+  before it as well as its bytes: the file is left exactly as it was. The whole operation is checked again at its end. At most 8 files of at most
+  256 KiB each.
 - The written file is a new file: hard links to the old one keep the old bytes, and its owner,
   ACLs, extended attributes and security label are not copied.
 - Before the first write, the old bytes go into vault backups and the operation into a vault
@@ -123,6 +175,20 @@ Saving replaces the file; an edit made in the same instant by another program ma
 so where the person confirms: the writers' write operations carry this sentence in their
 descriptions, which their native confirmations show.
 This is cooperative write correctness for a full-access tool, not a confinement.
+
+Manual backups and retention:
+
+- A manual backup's bytes are only in the vault; the state file records each version's vault IDs,
+  selections, targets, presence, sizes and permission bits, never the bytes or a hash of them, and
+  pages get only the IDs, the paths and a diff of setting names. Values are compared inside the
+  tool. A setting whose name is itself a secret would show as that name; the host's redaction of
+  the vault's secrets applies to every answer as well.
+- Retention counts only: 10 versions per set, the oldest deleted when another is saved (the
+  operation's confirmation says so). Nothing is deleted by age. Retention and the backup
+  operations never touch the library's own backups (`tx `), which stay while a set's record, an
+  original kept after a conflict or a replaced record, or an open journal names them; `sweep`
+  deletes only backups nothing names, manual ones whose delete failed among them. The vault's
+  limit of 256 backups per package stays a backstop.
 
 The example `fixture-writer` (`examples/fixture-writer`, package `pluxy/fixture-writer`) is the
 library's test fixture, never a curated tool: it sets top-level values in JSON files with
@@ -234,18 +300,56 @@ raw entry ID leaves the parser.
 `pluxy/usage-pi`, the usage hub's parser of Pi's session files, from `~/.pi/agent/sessions` and
 `~/.pi/sessions` (the `HOME` the app gives). It is `lib/pi-sessions` with Pi's name and folder.
 
+## `usage-opencode`
+
+`pluxy/usage-opencode`, the usage hub's parser of OpenCode's local store, at schema 2. It reads
+OpenCode's database (`opencode.db`, or `opencode-<channel>.db` from a build of another channel) and
+its older JSON message files (`storage/message/<session>/<message>.json`) under
+`~/.local/share/opencode` and `~/.opencode` (from the `HOME` the app gives; the hub's `roots` name
+others, such as `$XDG_DATA_HOME/opencode`), and sends the hub token counts per message, and nothing
+else: no prompt, reply, title, folder name or raw session or message ID leaves the parser. It never
+writes an OpenCode file.
+
+- Each session in a database is a file of the hub's of its own, `<database path below the
+  root>#<hash of the session ID>`, so the hub reads again only the sessions that changed, and a
+  database of many sessions never passes the 100,000 rows the hub keeps of one file. A session's
+  revision is its message rows' count and data length and their latest update time, read through
+  SQLite, so a change still in the database's `-wal` counts. The same session in databases under
+  two roots is read from the one where it is newest. A database that cannot be opened (a linked
+  `-wal`, say) is listed as itself, its read fails with the reason, and none of its sessions is
+  marked gone. A JSON message file's ID is its path below the root with the session folder and file
+  name replaced by their hashes.
+- The database's current table, `session_message`, is read (its `assistant` rows, and `compaction`
+  rows that carry the compaction request's own tokens), and so is the `message` table of a database
+  OpenCode made before it, which OpenCode's migration copies into `session_message` and leaves in
+  place. A message is a keyed event, the key a hash of its message and session IDs, which OpenCode's
+  migrations (JSON store to database, `message` to `session_message`) keep; a JSON message file's
+  IDs are its file's and folder's names, where OpenCode's migration took them: a message stored in more
+  than one of these ways counts once. A fork copies its parent's history under new message IDs
+  (`<fork event>_<seq>`); a copy takes its original's key, so it counts once too. Forks from before
+  `session_message` cannot be told from new messages and count again.
+- OpenCode's output is the visible output, reasoning apart: the hub's output is output + reasoning,
+  and the total is input + output + reasoning + cache read + cache write (OpenCode's own total; a
+  provider total some older messages carry is not used, so every copy of a message counts the same).
+  A message's time is its `time.created`. Title and other side requests OpenCode records only as
+  session totals are not counted.
+- The database is opened by [`lib/sqlite-ro`](#libsqlite-ro): read-only, nothing made beside it, a
+  link, or a `-wal`, `-shm` or `-journal` that is not a regular file, not read.
+
 ## `codex-sessions`
 
 `pluxy/codex-sessions` reads Codex's local sessions, read-only, and shows them on its page
 (*Codex sessions*). It never writes a Codex file, never reads `config.toml` or `auth.json`, and
 has no repair, delete or editor. Its one write outside its data folder is a file the person saves
-from `export`, in the host's save dialog.
+from `export`, in the host's save dialog. `open` starts the person's own app on a rollout, after
+the person confirms the launch (below); the reader itself spawns nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
 | `list` | `read` | `offset` (default 0), `limit` (1 to 100, default 50) | The Codex home, the databases read, a page of sessions (ID, title, folder, provider, archived, update time, database), the total, whether there are more, the page's active and archived counts, and warnings |
 | `detail` | `disclose`: each call asks the person | `id`, `offset`, `limit` (messages) | The session's title, folder, provider, model, archived, update time, rollout file and database; its statistics; a page of its messages, each cut at 8 KiB (`truncated`), at most 512 KiB in all, and `next_offset` |
 | `export` | `disclose`: each call asks the person | `id` | Whether the person `saved` the session's rollout (and its `size`) or `cancelled` the save dialog; never the rollout's bytes |
+| `open` | `read`; the launch it asks for is confirmed | `id` | `{"outcome": "opened"}` once the launch was started; the call's error (a refused or declined launch, a session with no rollout file, `pluxy/execution` not enabled); never a path or a byte of the file |
 | `settings` | `write` | `codex_home`: a full path, or empty for the default | The Codex home now read, and whether it is custom |
 
 `export` finds a session's rollout as `detail` does (same ID checks; a link to a file outside the
@@ -257,6 +361,25 @@ the outcome as text and never holds the bytes. Like the old app it saves only a 
 most 10 MiB that is UTF-8 text (the host takes up to 64 MiB): the whole file is read to be sent,
 so this also bounds the reader's memory. No error names the rollout's path or holds a byte of
 it.
+
+`open` is the old app's *Edit with local app*, as a launch the person confirms: the session's
+rollout is opened by the desktop's own opener (`xdg-open`, else `gio open`), which starts whatever
+app the desktop has for JSON Lines files. It reads no byte of the file. It finds the rollout as
+`detail` does, and opens only a regular file named `rollout-*.jsonl` inside the Codex home's
+`sessions/` or `archived_sessions/` (whichever holds it, never the Codex home itself: the host
+refuses a folder that is the home folder or above it); a rollout reached through a link is opened
+as the file the link resolves to. It then calls
+[`pluxy/execution`](#execution) (an optional import of its `prepare` and `launch`): `prepare` with
+`{"kind": "open", "file", "within"}`, the two resolved paths and nothing else, so the opener is
+found only in the system's program folders, and then `launch` with exactly what `prepare` gave, plus
+`"lifetime": "detached"`: no environment, standard input, secret or program. The call that starts
+the launch is execution's, so the person's confirmation is the host's: it names this tool and
+`pluxy/execution`, the file, its content type, the folder and the opener, is asked every time, and
+offers no *Remember* (`../app/app-host/README.md`, "Launches and managed runtimes"). Without
+`pluxy/execution` enabled, `open` fails with the host's `extension_unavailable` and the reader
+works as before. A native-test build (feature `native-test`, the app's native test only) also
+sends `search_path` with the folder named in `opener-folder` in the tool's data folder, for the
+test's stand-in opener.
 
 The Codex home is `~/.codex` (from the `HOME` the app gives), or the folder set with `settings`,
 kept in the tool's data folder (`PLUXY_TOOL_DATA_DIR`). `list` and `detail` take no paths, so a
@@ -280,16 +403,12 @@ Links to databases, rollouts and the index are skipped, and so is a `sqlite/`, `
 `detail` finds a thread whose database ID is stored with Codex's `local:` prefix by its ID with or
 without the prefix.
 
-The reader adds no file beside a database that no Codex process has open.
-In WAL mode a reader needs SQLite's shared-memory file (`-shm`), which SQLite would create, so
-when it is missing: a database with no `-wal`, or an empty one, is opened as immutable; one whose
-`-wal` still holds committed changes (Codex stopped before copying them back) is copied with its
-`-wal` into a private folder in the tool's data folder (`tmp`), and the copy is read and then
-removed. If the copy fails, that database is a warning, named, and skipped. A Codex process that
-starts at the same moment, between the check for `-shm` and the open, can make one read see a
-torn state; Refresh reads again. While Codex has a database open, the reader uses its `-shm` as
-any SQLite reader does: it writes to that shared-memory file and takes SQLite's shared read locks,
-and never changes the database or its `-wal`.
+Databases are opened by [`lib/sqlite-ro`](#libsqlite-ro), which adds no file beside one that no
+Codex process has open (a WAL database whose `-wal` holds committed changes Codex stopped before
+copying back is read from a private copy in the tool's data folder, removed after). A database it
+refuses or cannot open, or whose copy fails, is one warning that names the database, and is
+skipped; the library's own errors name no path, and the warning adds it. A Codex process that
+starts at the same moment can make one read see a torn state; Refresh reads again.
 
 Every string a reply takes from a database or a rollout is capped: titles, folders, providers,
 models and paths at 4 KiB, IDs at 128 bytes, roles, timestamps and call IDs at 256 bytes, each
@@ -306,27 +425,94 @@ the database's, else the last `turn_context`'s.
 
 The page renders every session's text as text, never as HTML.
 
+## `claude-code`
+
+`pluxy/claude-code` sets up Claude Code to use pluxy's core and says how to start it, for the
+desktop app's Claude Code page (`../app/README.md`, "Claude Code"). It writes one settings file
+through `lib/transactions` (set `claude-code`): link-preserving, journalled, the original and
+applied images in the host's vault, and its manual backups (the backup browser). It exports
+nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default `~/.claude/settings.json` in the app's `HOME` (refused, with no folder made, while `~/.claude` does not exist: Claude Code makes it when it first runs); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `settings`: `state` (`not-configured`, `configured`, `needs-update`, or `refused` with a `reason` for a file Claude Code would not take), `base_url`, `key_set`, each role's model and 1M switch, `startup_model`, `subagent_model`, `max_context_tokens`, `auto_compact_pct`, `disable_auto_compact`; never the key |
+| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `opus`, `sonnet`, `haiku`, `fable` (empty: follows Sonnet) with `<role>_1m`, `startup_model`, `subagent_model` (empty: removed), `max_context_tokens` (100000 to 1000000), `auto_compact_pct` (1 to 100), `disable_auto_compact` | The library's outcome |
+| `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Claude Code", "kind": "terminal", "program": "claude", "args": []}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed with `json_leaves` | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+What `apply` writes, keeping everything else in the file (keys in its order, numbers with their
+digits), with Claude Code's own names
+([settings](https://code.claude.com/docs/en/settings), [environment variables](https://code.claude.com/docs/en/env-vars),
+[model configuration](https://code.claude.com/docs/en/model-config), read 2026-11-14):
+
+- in `env`: `ANTHROPIC_BASE_URL` (the core) and `ANTHROPIC_AUTH_TOKEN` (the client key, sent as a
+  bearer token); `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL`, each with `[1m]` when its 1M
+  switch is on (a model typed with `[1m]` counts as the switch); the `/model` picker's
+  `ANTHROPIC_DEFAULT_*_MODEL_NAME` and `_DESCRIPTION` ("Opus · <model>", "Auto-compact window: 1M",
+  "1M enabled · …"), and `ANTHROPIC_CUSTOM_MODEL_OPTION` with its name and description for the
+  Sonnet model, as the old app wrote them; `CLAUDE_CODE_SUBAGENT_MODEL`;
+  `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` (the picker lists the core's models);
+  `CLAUDE_CODE_AUTO_MODE_SERVER=0` (auto mode uses Claude Code's own classifier requests instead
+  of asking the server to review its actions, as the old app set it); `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (the
+  window, which beats every other window setting), `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` and
+  `DISABLE_AUTO_COMPACT` (`1` or `0`). `ANTHROPIC_API_KEY` is removed (it would win over the bearer
+  token) and so is `ANTHROPIC_MODEL` (it would win over `model`);
+- at the top level: `model` (the startup model, so `/model` can still change it; removed when
+  empty), `autoCompactWindow` and `autoCompactEnabled`.
+
+Clear's three-way merge brings back what Apply removed or replaced, unless the person changed it
+since. `CLAUDE_CODE_EFFORT_LEVEL` and per-model `modelSettings` are left alone. `apply` and `clear`
+refuse, before writing, a file Claude Code would not take as its own settings: not strict JSON (a
+comment, a trailing comma), not an object, an `env` that is not an object of strings, or a
+`$schema` other than `https://json.schemastore.org/claude-code-settings.json`. `preview` pins such
+a file all the same and reports it as `refused`, so Restore Backup can be reached: it puts the
+original back whatever the file holds now. A missing or empty file is an empty one. `preview`
+reads the file twice (the pins, then the values); when another program wrote it in between, it
+reads again once, then refuses, so the values shown are always those of the file pinned.
+
 ## `execution`
 
-`pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, or a
-program run directly. The app's Launcher page and its tray's Start… menu use it, and so will client
-recipes. It never starts a process itself and never holds a secret's value: the host confirms each
+`pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, a program
+run directly, or a file opened in the person's own app. The app's Launcher page and its tray's
+Start… menu use it, and so will client recipes and tools that open one of their files. It never starts a process itself and never holds a secret's value: the host confirms each
 launch natively, spawns exactly what was confirmed when the program asks, and resolves secrets from
 its vault at the spawn (`../app/app-host/README.md`, "Launches and managed runtimes").
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
 | `terminals` | `read` | `search_path`: the launch environment's PATH entries | `terminals`: Automatic first, then each terminal found, with its label and path |
-| `prepare` | `read` | `kind` (`terminal` or `direct`), `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path` | A launch's `executable`, `argv` and `cwd`, and for a terminal the `program` it runs |
+| `prepare` | `read` | `kind` (`terminal`, `direct` or `open`). For `terminal` and `direct`: `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path`. For `open`: `file`, `within` (the folder it must be inside), and optionally `search_path` | A launch's `executable`, `argv` and `cwd`; for a terminal the `program` it runs; for an open launch the `file` and `within` folder, resolved |
 | `launch` | `launch` | What `prepare` gave, with `lifetime`, `environment`, `stdin` and the secret field `key` (a reference only) | The host's answer to its spawn request: `lifetime`, and a managed runtime's `runtime` and `pid` |
 | `runtime` | `read` | `op` (`status`, `list`), `runtime` | The host's answer |
 | `control` | `write` | `op` (`stop`, `restart`), `runtime` | The host's answer |
 
-It exports only `launch`, under export contract 1: another package never looks at, stops or restarts
-its runtimes, and the app asks before each `control` call. Terminals, in Automatic's order (the old
+It exports `prepare` and `launch`, under export contract 1: another package prepares and starts
+launches, but never looks at, stops or restarts its runtimes, and the app asks before each
+`control` call. Terminals, in Automatic's order (the old
 desktop app's list): `x-terminal-emulator` (System terminal), `gnome-terminal` (`--`), `konsole`,
 `xfce4-terminal` (`-x`), `mate-terminal` (`-x`), `kitty`, `alacritty`, `ghostty` and `xterm`, each
 running the program after `-e` unless noted. A terminal launch runs `<terminal> <flag> <program>
 <args>`; a direct one `<program> <args>`. The program must be an executable file, the working folder
 an existing absolute folder.
+
+An **open** launch opens a file in the app the desktop opens its type with, as the old desktop
+app's "Edit with local app" did: it runs `xdg-open <file>`, or `gio open <file>` when there is no
+`xdg-open`, in the file's folder. The opener is taken only from `/usr/local/bin`, `/usr/bin`,
+`/bin` and `/run/current-system/sw/bin`: an open launch takes no `search_path` (only a
+native-test build of the program does, for the native test's stand-in opener). The caller names
+the file and the folder it may open files in (`within`), for the Codex session reader its
+sessions folder: both are resolved, links followed, and the file must be a regular file with no
+execute bit inside that folder, which must not be `/`, the home folder or a folder above it. The
+resolved file is the opener's argument. The app checks all of this again, and more (the file's
+content type, who owns and may write the file and folder, the launch's exact shape), shows the
+file, its type and the folder in its confirmation and binds them
+(`../app/app-host/README.md`, "Launches and managed runtimes"). Which app the opener then starts
+is the desktop's choice for the file's type: the confirmation names the opener, not that app.
+
+A call from another package (a tool's import, or a page's) may prepare only an open launch: a
+terminal or direct preparation answers whether programs and folders exist, so only the app's own
+window asks for those.
 
