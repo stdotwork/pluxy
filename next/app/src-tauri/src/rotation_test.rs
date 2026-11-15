@@ -230,7 +230,17 @@ fn sign_in(app: &AppHandle, main: &Webview, key: &str, keep: bool) -> Result<(),
     require(
         r["status"] == "signed_in" && view.signed_in && view.remembered == keep,
         "native sign-in with the rotated key failed",
-    )
+    )?;
+    // The window learns of a sign-in from its own key-entry call, which this one bypasses, and
+    // may have shown the signed-out state meanwhile: tell it the connection changed, as the app
+    // does, and wait for its signed-in shell.
+    use tauri::Emitter;
+    app.emit_to(tauri::EventTarget::webview(MAIN), "pluxy-connection", ())
+        .map_err(|e| e.to_string())?;
+    wait_for("the window's signed-in shell", || {
+        eval(main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
+    })
+    .map(|_| ())
 }
 
 /// Makes the folder of connection.json read-only until dropped, so saving the settings fails.
