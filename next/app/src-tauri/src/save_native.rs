@@ -76,18 +76,6 @@ fn suggested(app: &AppHandle) -> Result<String, String> {
     })
 }
 
-/// The app's visible X windows.
-fn windows() -> Vec<String> {
-    x(&[
-        "search",
-        "--onlyvisible",
-        "--pid",
-        &std::process::id().to_string(),
-    ])
-    .map(|s| s.lines().map(String::from).collect())
-    .unwrap_or_default()
-}
-
 /// Types path into the save dialog's name field and presses Return.
 fn choose(path: &Path) -> Result<(), String> {
     let id = chooser()?;
@@ -113,30 +101,69 @@ fn chooser_key(keys: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The title the check gives GTK's overwrite question, which has none, to find its X window.
+const QUESTION: &str = "pluxy save overwrite question";
+
 /// GTK's overwrite question, once it shows (a visible message dialog of the app's saying the file
-/// already exists, in a window that was not there before): its X window.
-fn question(app: &AppHandle, before: &[String]) -> Result<String, String> {
+/// already exists): the check titles it `QUESTION` and gives its X window. On a timeout, says
+/// which toplevel windows were showing.
+fn question(app: &AppHandle) -> Result<String, String> {
     use gtk::prelude::*;
-    wait_for("the save dialog's overwrite question", || {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut seen = String::new();
+    loop {
         let (tx, rx) = std::sync::mpsc::channel();
         app.run_on_main_thread(move || {
-            let mut text = String::new();
+            let mut found = false;
+            let mut showing = Vec::new();
             for w in gtk::Window::list_toplevels() {
-                if let Some(d) = w.downcast_ref::<gtk::MessageDialog>() {
-                    if d.is_visible() {
-                        text.push_str(&d.text().map(|t| t.to_string()).unwrap_or_default());
-                    }
+                let Some(win) = w.downcast_ref::<gtk::Window>() else {
+                    continue;
+                };
+                if !win.is_visible() {
+                    continue;
+                }
+                let text = w
+                    .downcast_ref::<gtk::MessageDialog>()
+                    .and_then(|d| d.text())
+                    .map(|t| t.to_string());
+                showing.push(format!(
+                    "{} {:?} {:?}",
+                    w.type_().name(),
+                    win.title().map(|t| t.to_string()),
+                    text
+                ));
+                if text.is_some_and(|t| t.contains("already exists")) {
+                    win.set_title(QUESTION);
+                    found = true;
                 }
             }
-            let _ = tx.send(text);
+            let _ = tx.send((found, showing.join("; ")));
         })
-        .ok()?;
-        let text = rx.recv_timeout(Duration::from_secs(5)).ok()?;
-        if !text.contains("already exists") {
-            return None;
+        .map_err(|e| e.to_string())?;
+        if let Ok((found, showing)) = rx.recv_timeout(Duration::from_secs(5)) {
+            seen = showing;
+            if found {
+                if let Some(id) = x(&[
+                    "search",
+                    "--onlyvisible",
+                    "--name",
+                    &format!("^{QUESTION}$"),
+                ])
+                .ok()
+                .and_then(|s| s.lines().last().map(String::from))
+                {
+                    return Ok(id);
+                }
+            }
         }
-        windows().into_iter().find(|w| !before.contains(w))
-    })
+        if Instant::now() > deadline {
+            return Err(format!(
+                "no overwrite question showed within a minute; showing: {seen}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 fn question_key(id: &str, keys: &str) -> Result<(), String> {
@@ -468,9 +495,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 json!({"source": source, "name": "old.txt"}),
             )?;
             chooser()?;
-            let before = windows();
             choose(&path)?;
-            let q = question(app, &before)?;
+            let q = question(app)?;
             std::thread::sleep(Duration::from_millis(500));
             require(
                 eval(
@@ -498,9 +524,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 json!({"source": source, "name": "old.txt"}),
             )?;
             chooser()?;
-            let before = windows();
             choose(&path)?;
-            let q = question(app, &before)?;
+            let q = question(app)?;
             question_key(&q, "alt+r")?;
             let r = output(main, &slot)?;
             saved(&r, "the confirmed overwrite")?;
@@ -536,10 +561,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 let _ = std::fs::remove_file(&held);
                 let slot = exported(app, main, "export", json!({"source": source, "name": name}))?;
                 chooser()?;
-                let before = windows();
                 choose(&path)?;
                 if existing {
-                    let q = question(app, &before)?;
+                    let q = question(app)?;
                     question_key(&q, "alt+r")?;
                 }
                 wait_for("the save service's hold", || held.exists().then_some(()))?;
