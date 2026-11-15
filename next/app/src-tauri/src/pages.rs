@@ -102,6 +102,15 @@ struct Document {
     theme_pending: Option<Value>,
     frame_url: Option<Url>,
 }
+impl Document {
+    /// No more calls or answers: the page's document is gone.
+    fn close(&mut self) {
+        self.closed = true;
+        self.waiting.clear();
+        self.answering.clear();
+        self.theme_pending = None;
+    }
+}
 #[derive(Default)]
 struct Package {
     recent: VecDeque<Instant>,
@@ -253,7 +262,9 @@ impl Pages {
     /// navigation handler, WebView2 as FrameNavigationStarting. Ignore fragment-only changes (a same-document
     /// navigation: the new address has a fragment and differs only in it), but close on a
     /// second document, including one that drops the fragment, or a nested frame loading another
-    /// pages-site document.
+    /// pages-site document. Close too when the app's own document comes after the frame's: on
+    /// Linux and macOS the webview does not say whether the top or the frame navigates, and the
+    /// page's document is gone either way.
     pub fn frame_navigation(&mut self, label: &str, url: &Url) {
         let Some(w) = self.open.get_mut(label) else {
             return;
@@ -263,6 +274,9 @@ impl Pages {
         #[cfg(not(feature = "native-test"))]
         let test_frame = false;
         if !w.binding.on_site(url) && !test_frame {
+            if *url == app_url() && w.document.frame_url.is_some() {
+                w.document.close();
+            }
             return;
         }
         if let Some(previous) = &w.document.frame_url {
@@ -282,10 +296,7 @@ impl Pages {
         {
             w.document.frame_url = Some(url.clone());
         } else {
-            w.document.closed = true;
-            w.document.waiting.clear();
-            w.document.answering.clear();
-            w.document.theme_pending = None;
+            w.document.close();
         }
     }
     fn refusal(&self, label: &str, sent: Sent, now: Instant) -> Result<ToWindow, Refusal> {
@@ -1604,6 +1615,24 @@ mod tests {
             204
         );
     }
+    #[test]
+    fn the_app_document_after_the_frame_closes_the_channel() {
+        let mut p = Pages::default();
+        let label = p.bind(binding("test/alpha")).unwrap();
+        // The top's first document is the app's own: nothing to close yet.
+        p.frame_navigation(&label, &app_url());
+        p.begin_document(&label);
+        p.frame_navigation(&label, &app_url());
+        assert!(!p.document_closed(&label));
+        let url = p.get(&label).unwrap().url.clone();
+        p.frame_navigation(&label, &url);
+        hello(&mut p, &label, Instant::now());
+        assert!(!p.document_closed(&label));
+        // Then the app's address again, in the frame or at the top: the page's document is gone.
+        p.frame_navigation(&label, &app_url());
+        assert!(p.document_closed(&label));
+    }
+
     #[test]
     fn frame_address_waits_until_frame_navigations_are_watched() {
         let mut p = Pages::default();

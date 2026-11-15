@@ -1148,10 +1148,17 @@ fn open_page(webview: &Webview, binding: Binding, rect: Rect) -> Result<String, 
     add_page(webview, label, site, rect)
 }
 
-/// A navigation in page label's webview, at the top or in a frame: closes the page's channel
-/// when its frame loads a second document, and allows the app's document and the page's own
-/// site only.
-fn page_navigation(app: &AppHandle, label: &str, site: &Binding, u: &Url) -> bool {
+/// A navigation in page label's webview: closes the page's channel when its frame loads a second
+/// document, and allows the page's own site, and the app's document where app_document (the top's
+/// navigations; WebKitGTK and WKWebView do not say whether the top or the frame navigates, on
+/// Windows the frame's come apart).
+fn page_navigation(
+    app: &AppHandle,
+    label: &str,
+    site: &Binding,
+    u: &Url,
+    app_document: bool,
+) -> bool {
     app.state::<App>()
         .pages
         .lock()
@@ -1162,7 +1169,7 @@ fn page_navigation(app: &AppHandle, label: &str, site: &Binding, u: &Url) -> boo
     if pages::is_ingress(u) {
         return true;
     }
-    *u == pages::app_url() || site.on_site(u)
+    (app_document && *u == pages::app_url()) || site.on_site(u)
 }
 
 /// Makes the webview for page label, bound to site.
@@ -1178,7 +1185,7 @@ fn add_page(webview: &Webview, label: String, site: Binding, rect: Rect) -> Resu
         .data_directory(state.pages_dir.clone())
         .devtools(false)
         // The app's document at the top, the page's site in its frame; nowhere else.
-        .on_navigation(move |u| page_navigation(&navigation_app, &navigation_label, &site, u))
+        .on_navigation(move |u| page_navigation(&navigation_app, &navigation_label, &site, u, true))
         .on_new_window(|_, _| NewWindowResponse::Deny)
         .on_page_load(|wv, p| {
             if p.event() == PageLoadEvent::Started {
@@ -1208,7 +1215,7 @@ fn add_page(webview: &Webview, label: String, site: Binding, rect: Rect) -> Resu
                 let app = _page.app_handle().clone();
                 let frame_label = label.clone();
                 page_frames::watch(&_page, move |u| {
-                    page_navigation(&app, &frame_label, &frame_site, u)
+                    page_navigation(&app, &frame_label, &frame_site, u, false)
                 })?;
                 state.pages.lock().unwrap().watch_frames(&label);
             }
