@@ -11,7 +11,7 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi, usage-opencode)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
-cargo build --release --locked -p claude-code   # likewise codex-setup and execution
+cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup and execution
 ```
 
 ## `lib/program`
@@ -26,6 +26,7 @@ The program side of the contract, for any tool (`pluxy-program`):
 | `Handler::reconcile(&Call, unknown, journals)` | Before `describe` is answered: the calls of unknown outcome and the open journals the host names. By default nothing. |
 | `Call` | `id`, `op`, `input`, `chain`, `secrets`, `job`; `cancelled()` and `check()`; `progress(value)`; `call(package, op, input)` (an import, through the host; cancelled with its call); `vault(op, fields)` (backups and journals); `jobs(op, input)` (a consumer's `registrations`, `start` or `cancel`); `batch(value)` (a producer's next batch, once the job's window has room) and `acked()`; `spawn()` (asks the host to spawn the launch this call confirmed, naming nothing of it; cancelled with its call); `runtime(op, runtime)` (status, list, stop or restart of its package's managed runtimes). |
 | `Job` | The job a producer's call runs: `id`, `kind`, `window`. |
+| `Call::save_file(name, bytes)`, `SaveOutcome` | For a call of a `disclose` operation: hands the host `bytes` as `append` frames of at most `APPEND_BYTES` (783,000 bytes, base64 under the frame limit) and one `save` suggesting `name` (the host's save service, [`../app/app-host/README.md`](../app/app-host/README.md) "Saving files"). The person chooses the place in the host's dialog; the answer is `Saved { size }` or `Cancelled`, or the host's error (not a `disclose` call, a name holding a path, more than 64 MiB, a second save, no dialog). One save per call. |
 | `Error` | The contract's error object: `invalid_request`, `unsupported`, `not_found`, `unavailable`, `internal`, `cancelled`, or any code. |
 | `read_frame`, `write_frame` | The framing: a four-byte big-endian length and UTF-8 JSON; a program's frames are at most `MAX_FRAME` (1 MiB). |
 | `MAX_BATCH` | The largest batch a producer may send, 48 KiB of JSON. |
@@ -339,15 +340,27 @@ writes an OpenCode file.
 
 `pluxy/codex-sessions` reads Codex's local sessions, read-only, and shows them on its page
 (*Codex sessions*). It never writes a Codex file, never reads `config.toml` or `auth.json`, and
-has no repair, delete, export or editor. `open` starts the person's own app on a rollout, after
+has no repair, delete or editor. Its one write outside its data folder is a file the person saves
+from `export`, in the host's save dialog. `open` starts the person's own app on a rollout, after
 the person confirms the launch (below); the reader itself spawns nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
 | `list` | `read` | `offset` (default 0), `limit` (1 to 100, default 50) | The Codex home, the databases read, a page of sessions (ID, title, folder, provider, archived, update time, database), the total, whether there are more, the page's active and archived counts, and warnings |
 | `detail` | `disclose`: each call asks the person | `id`, `offset`, `limit` (messages) | The session's title, folder, provider, model, archived, update time, rollout file and database; its statistics; a page of its messages, each cut at 8 KiB (`truncated`), at most 512 KiB in all, and `next_offset` |
+| `export` | `disclose`: each call asks the person | `id` | Whether the person `saved` the session's rollout (and its `size`) or `cancelled` the save dialog; never the rollout's bytes |
 | `open` | `read`; the launch it asks for is confirmed | `id` | `{"outcome": "opened"}` once the launch was started; the call's error (a refused or declined launch, a session with no rollout file, `pluxy/execution` not enabled); never a path or a byte of the file |
 | `settings` | `write` | `codex_home`: a full path, or empty for the default | The Codex home now read, and whether it is custom |
+
+`export` finds a session's rollout as `detail` does (same ID checks; a link to a file outside the
+Codex home is refused) and saves its bytes exactly as they are on disk, with
+[`Call::save_file`](lib/program/src/lib.rs): the host asks where in its native save dialog,
+titled *Save a file from pluxy/codex-sessions*, which suggests `session-<id>-<YYYY-MM-DD>.jsonl`
+(the ID without `local:`, the date in UTC), as the old app's *Export JSONL* did. The page shows
+the outcome as text and never holds the bytes. Like the old app it saves only a rollout of at
+most 10 MiB that is UTF-8 text (the host takes up to 64 MiB): the whole file is read to be sent,
+so this also bounds the reader's memory. No error names the rollout's path or holds a byte of
+it.
 
 `open` is the old app's *Edit with local app*, as a launch the person confirms: the session's
 rollout is opened by the desktop's own opener (`xdg-open`, else `gio open`), which starts whatever
@@ -517,6 +530,66 @@ list of entries with a `slug`. `preview` pins both files all the same and report
 whatever the files hold now. `preview` reads the files twice (the pins, then the values); when
 another program wrote one in between, it reads again once, then refuses, so the values shown are
 always those of the files pinned. Codex's files carry no version, and none is assumed.
+
+## `claude-desktop`
+
+`pluxy/claude-desktop` sets up Claude Desktop to use pluxy's core as its third-party inference
+gateway and says how to start it, for the desktop app's Claude Desktop page (`../app/README.md`,
+"Claude Desktop"). It writes three files through `lib/transactions` (set `claude-desktop`, in this
+order), link-preserving and journalled like `claude-code`, with manual backups of all three. It
+exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: three selections (`file`, or `root` and `path`), by default `claude_desktop_config.json`, `configLibrary/00000000-0000-4000-8000-000000831700.json` and `configLibrary/_meta.json` in `~/.config/Claude-3p` (the app's `HOME`); `base_url` (optional): the core the state is checked against | The library's preview and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, `deployment_mode`, `applied_id`, `hybrid_pointer` and the model rows (`model`, `alias`, `one_m`); never the key. Files Claude Desktop would not take are pinned all the same, with `settings` `{"state": "refused", "reason"}`, so Restore Backup still reaches them. With no `targets` and nothing at `~/.config/Claude-3p/configLibrary`, refused with "Claude Desktop's configuration library does not exist yet" (what `folders` creates) |
+| `folders` | `write` | — | Creates `~/.config/Claude-3p/configLibrary` (mode 0700) when it does not exist: `created`, `folder` |
+| `apply` | `write`; secret `key` (value) | Three pins, `base_url`, `key`, `models`: 1 to 16 rows of `model` (what the core serves), `alias` (the name Claude Desktop uses; empty: the model's own) and `one_m` | The library's outcome |
+| `clear` | `write` | Three pins | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | Three pins | The library's outcome: the original bytes back, files that did not exist removed (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Claude Desktop", "kind": "direct", "program": "claude-desktop", "args": [], "cwd": <HOME>}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations, three files per version, diffed with `json_leaves` | The library's answers |
+
+The files and keys are Claude Desktop's own, as Anthropic's third-party documentation
+([configuration](https://claude.com/docs/third-party/claude-desktop/configuration),
+[where it reads it](https://claude.com/docs/third-party/claude-desktop/configuration-format),
+[gateway](https://claude.com/docs/third-party/claude-desktop/gateway),
+[Linux](https://code.claude.com/docs/en/desktop-linux), read 2026-11-14) and the code of its Linux
+package (`claude-desktop` 5.11492.5, the official apt repository) name them. What `apply` writes,
+keeping everything else in each file (keys in their order, numbers with their digits):
+
+- `claude_desktop_config.json`: `deploymentMode` `3p`, the sign-in choice Claude Desktop's own
+  chooser saves there. Claude Desktop reads it only from this third-party folder, so the standard
+  app's `~/.config/Claude/claude_desktop_config.json` (its MCP servers) is not touched;
+- the gateway profile: `inferenceProvider` `gateway`, `inferenceGatewayBaseUrl` (the core; Claude
+  Desktop calls `/v1/messages` below it), `inferenceGatewayApiKey` (the client key),
+  `inferenceGatewayAuthScheme` `bearer`, `inferenceCredentialKind` `static`,
+  `modelDiscoveryEnabled` and `bootstrapEnabled` `false`, `disableDeploymentModeChooser` `true`
+  and `inferenceModels`; `selfHostedUrl` (a session host, which would take inference elsewhere) is
+  removed. Each row becomes `{"name": <alias, else model>, "labelOverride": <model, when an alias
+  differs>, "anthropicFamilyTier", "isFamilyDefault", "supports1m", "prefer1m"}`: the first is
+  Claude Desktop's default model, the tier comes from the name (the first of each tier is its
+  default) and both 1M keys are set when the row's 1M switch is on;
+- `_meta.json`: `appliedId` names pluxy's profile (the old desktop app's ID, so its entry is
+  updated, not duplicated), `entries` gains `{"id", "name": "pluxy"}` and `hybridPointer`, which
+  would win over `appliedId`, is removed; the person's other configurations stay.
+
+Claude Desktop drops a gateway model whose name does not look like an Anthropic model (it must
+hold `claude`, `anthropic` or a family name such as `sonnet`, and no other family's, such as `gpt`
+or `gemini`), so `apply` refuses such a row: a non-Claude model needs an alias, and the core must
+serve the model under it (an account's or extension's `model_alias`; this package does not change
+the core's config). Clear's three-way merge brings back what Apply removed or replaced unless the
+person changed it since, with two rules of Claude Desktop's own: it seals the key in place with
+the device's keystore at its next launch, which is not the person's edit, so Clear still removes
+the key; and pluxy's entry leaves `_meta.json` unless the original had it. Every operation but
+`restore` refuses, before writing, a file Claude Desktop would not take: not strict JSON, not an
+object, a profile whose `inferenceModels` is not a list, or an index whose `entries` is not a list
+of configurations or whose `appliedId` is not a string. A missing file, or one of only white space,
+is an empty one, in Clear's merge too; a missing folder refuses the whole operation, before any
+file is written. The merge tells the three files apart by the whole set of values Apply wrote into
+each. A profile with `selfHostedUrl` set does not read back as configured. Apply writes each file
+owner-only (the library's rule: a key is in the profile, and the files sit beside it). None of these files has a
+version, and no minimum Claude Desktop version is assumed.
 
 ## `execution`
 
