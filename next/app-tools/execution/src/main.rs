@@ -1,5 +1,5 @@
-//! pluxy/execution: prepares terminal and direct launches for pluxy's desktop app, which spawns
-//! them (README.md). Its operations: `terminals` and `prepare` (read: no process is started),
+//! pluxy/execution: prepares terminal, direct and open launches for pluxy's desktop app, which
+//! spawns them (README.md). Its operations: `terminals` and `prepare` (read: no process is started),
 //! `launch` (launch: the host confirms the exact executable, argv, cwd, program, lifetime and
 //! environment, then spawns it when asked; this program holds secret references only, never a
 //! secret's value), `runtime` (read: its package's managed runtimes, through the host) and
