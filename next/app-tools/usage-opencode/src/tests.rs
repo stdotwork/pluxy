@@ -3,12 +3,13 @@
 //! untouched (also in WAL mode, with and without its `-shm`), and file IDs and jobs that name no
 //! session, message or folder.
 
-use super::db::{open_read_only, Cache};
+use super::db::Cache;
 use super::message::{self, Out};
 use super::{hash, OpenCode};
 use pluxy_program::{
     read_frame, serve, write_frame, Call, Description, Error, Handler, Identity, MAX_INBOUND,
 };
+use pluxy_sqlite_ro::open_read_only;
 use pluxy_usage::{produce, Parser, Tokens, KIND};
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -456,20 +457,34 @@ fn a_wal_database_with_no_shm_is_read_without_making_one() {
 }
 
 #[test]
-fn a_database_with_a_linked_wal_or_shm_is_not_read() {
-    let d = folder("links");
+fn an_error_from_a_database_that_cannot_be_opened_names_no_folder_and_no_uri() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = folder("unreadable-CANARY");
     let (db, c) = wal_db(&d);
     drop(c);
-    let elsewhere = d.join("elsewhere");
-    std::fs::write(&elsewhere, b"").unwrap();
-    for side in ["opencode.db-wal", "opencode.db-shm"] {
-        let _ = std::fs::remove_file(d.join(side));
-        std::os::unix::fs::symlink(&elsewhere, d.join(side)).unwrap();
-        assert!(open_read_only(&db).is_err(), "{side} is a link");
-        std::fs::remove_file(d.join(side)).unwrap();
+    // The positive control: readable, it is read.
+    assert!(Cache::default().sessions(&db).is_ok());
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&db).is_err() {
+        // SQLite's own message for an open names the file as a `file:` URI.
+        let e = Cache::default().sessions(&db).err().unwrap();
+        assert!(e.starts_with("could not open the database"), "{e}");
+        assert!(!e.contains("CANARY") && !e.contains("file:"), "{e}");
     }
-    // The positive control: with neither, it is read.
-    assert_eq!(Cache::default().sessions(&db).unwrap().len(), 1);
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_database_of_no_bytes_with_a_wal_that_holds_bytes_leaves_the_wal_alone() {
+    // SQLite opening such a pair read-only deletes a -wal that holds bytes.
+    let d = folder("empty-db-wal");
+    let db = d.join("opencode.db");
+    std::fs::write(&db, b"").unwrap();
+    std::fs::write(d.join("opencode.db-wal"), [7u8; 64]).unwrap();
+    let before = files(&d);
+    assert!(Cache::default().sessions(&db).unwrap().is_empty());
+    assert_eq!(files(&d), before, "the -wal was deleted or a file was made");
     std::fs::remove_dir_all(d).unwrap();
 }
 
@@ -796,44 +811,6 @@ fn listing_and_reading_a_large_database_stay_well_within_the_hubs_wait() {
         listing.as_secs() < 20 && reading.as_secs() < 20,
         "{listing:?} {reading:?}"
     );
-    std::fs::remove_dir_all(d).unwrap();
-}
-
-#[test]
-fn only_copies_left_by_processes_no_longer_running_are_pruned() {
-    let d = folder("prune");
-    let mut child = std::process::Command::new("true").spawn().unwrap();
-    let dead = child.id();
-    child.wait().unwrap();
-    let names = [
-        format!("wal-{}-9", std::process::id()),
-        format!("wal-{dead}-0"),
-        "wal-1-0".to_string(),
-        "other".to_string(),
-    ];
-    for n in &names {
-        std::fs::create_dir(d.join(n)).unwrap();
-    }
-    super::db::prune(&d);
-    let left: Vec<bool> = names.iter().map(|n| d.join(n).exists()).collect();
-    // This process's copy, a running process's (pid 1) and anything else stay.
-    assert_eq!(left, vec![true, false, true, true]);
-    std::fs::remove_dir_all(d).unwrap();
-}
-
-#[test]
-fn a_linked_database_is_not_opened() {
-    let d = folder("linked-db");
-    let (db, c) = wal_db(&d);
-    drop(c);
-    std::os::unix::fs::symlink(&db, d.join("link.db")).unwrap();
-    let e = open_read_only(&d.join("link.db")).err().unwrap();
-    assert!(
-        e.contains("not a regular file") && !e.contains(d.to_str().unwrap()),
-        "{e}"
-    );
-    // The positive control.
-    assert!(open_read_only(&db).is_ok());
     std::fs::remove_dir_all(d).unwrap();
 }
 

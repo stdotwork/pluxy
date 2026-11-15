@@ -99,8 +99,22 @@ fn pid(r: &Value, k: &str) -> u64 {
     r[k].as_u64().unwrap_or(0)
 }
 
-fn no_secret(_: &str) -> Option<String> {
-    None
+/// A test's `Values`: each secret's value from its function (package, secret ID), with no
+/// revision, and never refused right before the spawn.
+struct By<F>(F);
+
+impl<F: Fn(&str, &str) -> Result<String, String> + Send + Sync> Values for By<F> {
+    fn value(&self, package: &str, id: &str) -> Result<(String, Option<u64>), String> {
+        (self.0)(package, id).map(|v| (v, None))
+    }
+    fn still(&self, _: &[Given]) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Knows no secret.
+fn none(_: &str, _: &str) -> Result<String, String> {
+    Err("no secret".into())
 }
 
 fn limit(v: libc::rlim_t) -> Value {
@@ -154,6 +168,43 @@ fn a_launch_request_is_checked_and_its_review_shows_no_value_it_must_not() {
     ] {
         assert!(parse(&bad, &secret_field).is_err(), "{bad} was taken");
     }
+    // Each name below is tried on its own. A failed assert would stop at the first name a launch
+    // takes, so every name a launch takes is collected and reported together.
+    let mut taken = Vec::new();
+    for bad in [
+        // .NET's startup hook and profiler variables: code loaded into a .NET program at start.
+        json!({"environment": {"set": {"DOTNET_STARTUP_HOOKS": "/x.dll"}}}),
+        json!({"environment": {"set": {"COR_PROFILER": "{x}"}}}),
+        json!({"environment": {"inherit": ["CORECLR_PROFILER_PATH_64"]}}),
+        json!({"environment": {"set": {"COR_PROFILER_PATH_64": "/x.so"}}}),
+        json!({"environment": {"set": {"DOTNET_PROFILER": "{x}"}}}),
+        json!({"environment": {"inherit": ["DOTNET_PROFILER_PATH_64"]}}),
+        json!({"environment": {"set": {"DOTNET_ADDITIONAL_DEPS": "/x"}}}),
+        // The module search paths of Python, Node.js and Ruby.
+        json!({"environment": {"inherit": ["PYTHONPATH"]}}),
+        json!({"environment": {"set": {"pythonpath": "/x"}}}),
+        json!({"environment": {"set": {"PYTHONHOME": "/x"}}}),
+        json!({"environment": {"set": {"NODE_PATH": "/x"}}}),
+        json!({"environment": {"set": {"RUBYLIB": "/x"}}}),
+        // The legacy COMPlus_ spelling of the runtime's settings, in any case.
+        json!({"environment": {"set": {"COMPlus_ENABLE_PROFILING": "1"}}}),
+        json!({"environment": {"inherit": ["compLUS_PROFILER"]}}),
+    ] {
+        if parse(&bad, &secret_field).is_ok() {
+            taken.push(bad.to_string());
+        }
+    }
+    assert!(taken.is_empty(), "taken: {}", taken.join(", "));
+    // The prefixes are not wider than their families: ordinary names of these runtimes pass.
+    let (_, names) = parse(
+        &json!({"environment": {"inherit": ["DOTNET_ROOT", "NODE_ENV", "PYTHON_VERSION"]}}),
+        &secret_field,
+    )
+    .unwrap();
+    assert_eq!(
+        names.inherit,
+        vec!["DOTNET_ROOT", "NODE_ENV", "PYTHON_VERSION"]
+    );
     // A socket path agents need for git is inherited by name; so is a client's config folder.
     let (_, ok_names) = parse(
         &json!({"environment": {"inherit": ["SSH_AUTH_SOCK", "CODEX_HOME"]}}),
@@ -245,8 +296,12 @@ fn a_detached_launch_leaves_the_app_with_only_what_it_was_given() {
     l.request.set.insert("FIXTURE_SET".into(), "set".into());
     l.request.secrets.insert("FIXTURE_KEY".into(), "key".into());
     l.secrets = vec![("FIXTURE_KEY".into(), "s-1".into())];
-    let value = |id: &str| (id == "s-1").then(|| CANARY.to_string());
-    detached(&l, &value).unwrap();
+    let value = By(|_: &str, id: &str| {
+        (id == "s-1")
+            .then(|| CANARY.to_string())
+            .ok_or_else(|| "it was removed from the vault".to_string())
+    });
+    detached(&l, "p", &value).unwrap();
     let r = record(&rec, 0);
     let (p, child) = (pid(&r, "pid"), pid(&r, "child"));
     unsafe {
@@ -290,12 +345,17 @@ fn a_detached_launch_leaves_the_app_with_only_what_it_was_given() {
         let gone = dir.join("gone");
         let mut g = agent(&dir, &gone, &[], Lifetime::Detached);
         g.secrets = vec![("FIXTURE_KEY".into(), "s-2".into())];
-        assert!(detached(&g, &value).unwrap_err().contains("removed"));
+        assert!(detached(&g, "p", &value).unwrap_err().contains("removed"));
         std::thread::sleep(Duration::from_millis(300));
         assert!(!gone.exists());
         // Without a secret, the launch keeps the limits the app started with.
         let plain = dir.join("plain");
-        detached(&agent(&dir, &plain, &[], Lifetime::Detached), &no_secret).unwrap();
+        detached(
+            &agent(&dir, &plain, &[], Lifetime::Detached),
+            "p",
+            &By(none),
+        )
+        .unwrap();
         let q = record(&plain, 0);
         let start = snapshot().core;
         assert_eq!(
@@ -316,7 +376,7 @@ fn a_detached_launch_leaves_the_app_with_only_what_it_was_given() {
 fn a_managed_runtime_is_the_registrys_and_only_its_package_controls_it() {
     let dir = folder("managed");
     let file = dir.join("runtimes.json");
-    let rt = Runtimes::open(Some(file.clone()), Box::new(no_secret));
+    let rt = Runtimes::open(Some(file.clone()), Box::new(By(none)));
     let (ra, rb) = (dir.join("a"), dir.join("b"));
     let a = rt
         .start("pluxy/one", agent(&dir, &ra, &[], Lifetime::Managed))
@@ -388,10 +448,73 @@ fn a_managed_runtime_is_the_registrys_and_only_its_package_controls_it() {
     }
 }
 
+#[test]
+fn a_restart_resolves_its_secrets_again_for_its_package_and_a_refusal_refuses_it() {
+    let dir = folder("revoked");
+    let revoked = Arc::new(AtomicBool::new(false));
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let rt = {
+        let (revoked, asked) = (Arc::clone(&revoked), Arc::clone(&asked));
+        Runtimes::open(
+            None,
+            Box::new(By(move |package: &str, id: &str| {
+                asked
+                    .lock()
+                    .unwrap()
+                    .push((package.to_string(), id.to_string()));
+                if revoked.load(Ordering::SeqCst) {
+                    return Err("the client key was deleted on core".into());
+                }
+                Ok(CANARY.to_string())
+            })),
+        )
+    };
+    let rec = dir.join("a");
+    let mut l = agent(&dir, &rec, &[], Lifetime::Managed);
+    l.request.secrets.insert("FIXTURE_KEY".into(), "key".into());
+    l.secrets = vec![("FIXTURE_KEY".into(), "s-1".into())];
+    let a = rt.start("pluxy/one", l).unwrap();
+    let id = a["runtime"].as_str().unwrap().to_string();
+    let x = record(&rec, 0);
+    let mut all = vec![pid(&x, "pid"), pid(&x, "child")];
+    let checks = || {
+        assert_eq!(x["env"]["FIXTURE_KEY"], CANARY);
+        // A restart with the secret still given: resolved again, for the runtime's package.
+        rt.restart("pluxy/one", &id).unwrap();
+        let y = record(&rec, pid(&x, "pid"));
+        all.extend([pid(&y, "pid"), pid(&y, "child")]);
+        assert_eq!(y["env"]["FIXTURE_KEY"], CANARY);
+        // Refused now: the restart is refused, and nothing earlier stands for the secret.
+        revoked.store(true, Ordering::SeqCst);
+        let e = rt.restart("pluxy/one", &id).unwrap_err();
+        assert!(
+            e.contains("FIXTURE_KEY") && e.contains("deleted on core"),
+            "{e}"
+        );
+        assert!(ended(pid(&y, "pid"), &rec) && ended(pid(&y, "child"), &rec));
+        std::thread::sleep(Duration::from_millis(300));
+        let now: Value = serde_json::from_slice(&std::fs::read(&rec).unwrap()).unwrap();
+        assert_eq!(now["pid"], y["pid"], "the refused restart started it again");
+        assert_eq!(rt.status("pluxy/one", &id).unwrap()["state"], "exited");
+        let want = ("pluxy/one".to_string(), "s-1".to_string());
+        assert_eq!(
+            *asked.lock().unwrap(),
+            vec![want.clone(), want.clone(), want]
+        );
+    };
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(checks));
+    rt.stop_all();
+    clean(&all, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Err(e) = r {
+        std::panic::resume_unwind(e);
+    }
+}
+
 /// The host-crash check's host: starts a managed runtime whose leader leaves an orphan, and a
 /// detached agent, says so, and waits to be killed.
 fn crash_host(dir: &Path) -> ! {
-    let rt = Runtimes::open(Some(dir.join("runtimes.json")), Box::new(no_secret));
+    let rt = Runtimes::open(Some(dir.join("runtimes.json")), Box::new(By(none)));
     let leader = dir.join("leader");
     rt.start(
         "pluxy/one",
@@ -400,7 +523,8 @@ fn crash_host(dir: &Path) -> ! {
     .expect("the runtime");
     detached(
         &agent(dir, &dir.join("detached"), &[], Lifetime::Detached),
-        &no_secret,
+        "pluxy/one",
+        &By(none),
     )
     .expect("the agent");
     let _ = std::fs::write(dir.join("ready"), "");
@@ -457,7 +581,7 @@ fn a_crashed_host_leaves_the_documented_orphans_and_its_next_start_does_not_sign
             "the detached agent did not outlive the host"
         );
         // The next start reports the runtime as unknown and never signals it.
-        let rt = Runtimes::open(Some(dir.join("runtimes.json")), Box::new(no_secret));
+        let rt = Runtimes::open(Some(dir.join("runtimes.json")), Box::new(By(none)));
         let list = rt.list("pluxy/one");
         assert_eq!(list.len(), 1, "{list:?}");
         assert_eq!(list[0]["state"], "unknown");
@@ -523,7 +647,7 @@ impl Opened for Gated {
 #[test]
 fn a_disabled_or_removed_packages_runtimes_are_retired_and_never_start_again() {
     let dir = folder("closed");
-    let rt = Arc::new(Runtimes::open(None, Box::new(no_secret)));
+    let rt = Arc::new(Runtimes::open(None, Box::new(By(none))));
     let (ra, rb) = (dir.join("a"), dir.join("b"));
     let a = rt
         .start("pluxy/one", agent(&dir, &ra, &[], Lifetime::Managed))
@@ -617,7 +741,7 @@ fn unknown_runtimes_do_not_fill_a_packages_room() {
         })
         .collect();
     std::fs::write(&file, json!(left).to_string()).unwrap();
-    let rt = Runtimes::open(Some(file), Box::new(no_secret));
+    let rt = Runtimes::open(Some(file), Box::new(By(none)));
     assert_eq!(rt.list("pluxy/one").len(), MAX_RUNTIMES);
     let rec = dir.join("a");
     let r = rt.start("pluxy/one", agent(&dir, &rec, &[], Lifetime::Managed));
@@ -630,6 +754,121 @@ fn unknown_runtimes_do_not_fill_a_packages_room() {
     clean(&pids, &dir);
     let _ = std::fs::remove_dir_all(&dir);
     assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn the_apps_quit_leaves_no_start_under_way_to_spawn_after_it() {
+    let dir = folder("quit");
+    // A resolver held until the test lets it go: a start past its first checks, not spawned yet.
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    let (held, holding) = std::sync::mpsc::channel::<()>();
+    let gate = Mutex::new(gate);
+    let rt = Arc::new(Runtimes::open(
+        None,
+        Box::new(By(move |_: &str, _: &str| {
+            let _ = held.send(());
+            let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(10));
+            Ok(CANARY.to_string())
+        })),
+    ));
+    let rec = dir.join("a");
+    let mut l = agent(&dir, &rec, &[], Lifetime::Managed);
+    l.request.secrets.insert("FIXTURE_KEY".into(), "key".into());
+    l.secrets = vec![("FIXTURE_KEY".into(), "s-1".into())];
+    let starting = {
+        let rt = Arc::clone(&rt);
+        std::thread::spawn(move || rt.start("pluxy/one", l))
+    };
+    holding.recv().unwrap();
+    rt.stop_all();
+    let _ = release.send(());
+    let r = starting.join().unwrap();
+    // Nothing of it may run once the quit's stop has returned: it never spawned.
+    let left = rt.list("pluxy/one");
+    std::thread::sleep(Duration::from_millis(500));
+    let spawned = std::fs::read(&rec)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    if let Some(x) = &spawned {
+        clean(&[pid(x, "pid"), pid(x, "child")], &dir);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(r.is_err(), "a start after the quit's stop: {r:?}");
+    assert!(
+        left.is_empty(),
+        "a start spawned after the quit's stop: {left:?}"
+    );
+    assert!(spawned.is_none(), "a start spawned after the quit's stop");
+}
+
+#[test]
+fn a_restart_racing_a_removal_leaves_nothing_and_never_starts_the_dropped_launch() {
+    let dir = folder("raced");
+    let rt = Arc::new(Runtimes::open(None, Box::new(By(none))));
+    let mut all = vec![];
+    let checks = |package: &str, reinstall: bool, all: &mut Vec<u64>| {
+        let rec = dir.join(package.replace('/', "-"));
+        // A restart held between its stop and its new start.
+        let (release, gate) = std::sync::mpsc::channel();
+        let (held, holding) = std::sync::mpsc::channel();
+        let mut gated = agent(&dir, &rec, &[], Lifetime::Managed);
+        gated.opened = Box::new(Gated {
+            plain: Plain {
+                executable: File::open(std::env::current_exe().unwrap()).unwrap(),
+                cwd: File::open(&dir).unwrap(),
+            },
+            gate: Mutex::new(gate),
+            held,
+        });
+        let _ = release.send(());
+        let a = rt.start(package, gated).unwrap();
+        let id = a["runtime"].as_str().unwrap().to_string();
+        holding.recv().unwrap();
+        let x = record(&rec, 0);
+        all.extend([pid(&x, "pid"), pid(&x, "child")]);
+        let racer = {
+            let (rt, package, id) = (Arc::clone(&rt), package.to_string(), id.clone());
+            std::thread::spawn(move || rt.restart(&package, &id))
+        };
+        holding.recv().unwrap();
+        // Removed while it restarts (and, with reinstall, installed and enabled again at once).
+        rt.close(package, true);
+        if reinstall {
+            rt.reopen(package);
+        }
+        let _ = release.send(());
+        let r = racer.join().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let again: Value = std::fs::read(&rec)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or(Value::Null);
+        all.extend([pid(&again, "pid"), pid(&again, "child")]);
+        assert!(
+            r.is_err(),
+            "{package}: the raced restart started again: {r:?}"
+        );
+        assert_eq!(
+            again["pid"], x["pid"],
+            "{package}: the dropped launch ran again"
+        );
+        assert!(ended(pid(&x, "pid"), &rec) && ended(pid(&x, "child"), &rec));
+        assert!(
+            rt.list(package).is_empty(),
+            "{package}: the removed package keeps {:?}",
+            rt.list(package)
+        );
+    };
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        checks("pluxy/one", false, &mut all);
+        checks("pluxy/two", true, &mut all);
+    }));
+    rt.stop_all();
+    clean(&all, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Err(e) = r {
+        std::panic::resume_unwind(e);
+    }
 }
 
 #[test]
@@ -656,10 +895,14 @@ fn a_launchs_stdin_secret_reaches_it_on_its_stdin_only() {
             .insert("FIXTURE_READ_STDIN".into(), "1".into());
         l.request.stdin = Some("key".into());
         l.stdin = Some("s-1".into());
-        let value = |id: &str| (id == "s-1").then(|| CANARY.to_string());
-        let rt = Runtimes::open(None, Box::new(value));
+        let value = |_: &str, id: &str| {
+            (id == "s-1")
+                .then(|| CANARY.to_string())
+                .ok_or_else(|| "it was removed from the vault".to_string())
+        };
+        let rt = Runtimes::open(None, Box::new(By(value)));
         if lifetime == Lifetime::Detached {
-            detached(&l, &value).unwrap();
+            detached(&l, "p", &By(value)).unwrap();
         } else {
             rt.start("p", l).unwrap();
         }
@@ -678,11 +921,141 @@ fn a_launchs_stdin_secret_reaches_it_on_its_stdin_only() {
 }
 
 #[test]
+fn a_refused_stdin_secret_refuses_the_launch_and_nothing_starts() {
+    let refused =
+        |_: &str, _: &str| Err::<String, String>("the client key was deleted on core".into());
+    for lifetime in [Lifetime::Detached, Lifetime::Managed] {
+        let dir = folder("stdin-refused");
+        let rec = dir.join("agent");
+        let mut l = agent(&dir, &rec, &[], lifetime);
+        l.request.stdin = Some("key".into());
+        l.stdin = Some("s-1".into());
+        let rt = Runtimes::open(None, Box::new(By(refused)));
+        let e = if lifetime == Lifetime::Detached {
+            detached(&l, "p", &By(refused)).unwrap_err()
+        } else {
+            rt.start("p", l).unwrap_err()
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        let started = rec.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(e.contains("stdin") && e.contains("deleted on core"), "{e}");
+        assert!(!started, "a launch whose stdin secret was refused started");
+        assert!(rt.list("p").is_empty());
+    }
+}
+
+/// A test's `Values`: every secret given, its check held on revision 7, and what it is asked
+/// recorded; right before the spawn it refuses while refuse is set.
+#[derive(Default)]
+struct Checked {
+    refuse: AtomicBool,
+    asked: Mutex<Vec<String>>,
+}
+
+impl Values for Arc<Checked> {
+    fn value(&self, package: &str, id: &str) -> Result<(String, Option<u64>), String> {
+        self.asked
+            .lock()
+            .unwrap()
+            .push(format!("value {package} {id}"));
+        Ok((CANARY.to_string(), Some(7)))
+    }
+    fn still(&self, given: &[Given]) -> Result<(), String> {
+        self.asked.lock().unwrap().push(format!("still {given:?}"));
+        if self.refuse.load(Ordering::SeqCst) {
+            return Err(
+                "the app's connection changed after the launch's client keys were checked".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_launch_is_checked_once_more_right_before_its_spawn_and_nothing_starts_when_refused() {
+    let checked = Arc::new(Checked::default());
+    let rt = Runtimes::open(None, Box::new(Arc::clone(&checked)));
+    // A secret in its environment and one on its stdin.
+    let launch = |dir: &Path, rec: &Path, lifetime| {
+        let mut l = agent(dir, rec, &[], lifetime);
+        l.request.secrets.insert("FIXTURE_KEY".into(), "key".into());
+        l.request
+            .set
+            .insert("FIXTURE_READ_STDIN".into(), "1".into());
+        l.request.stdin = Some("bridge".into());
+        l.secrets = vec![("FIXTURE_KEY".into(), "s-1".into())];
+        l.stdin = Some("s-2".into());
+        l
+    };
+    let given = [
+        ("s-1".to_string(), Some(7u64)),
+        ("s-2".to_string(), Some(7)),
+    ];
+    let want = vec![
+        "value p s-1".to_string(),
+        "value p s-2".to_string(),
+        format!("still {given:?}"),
+    ];
+    for lifetime in [Lifetime::Detached, Lifetime::Managed] {
+        let dir = folder("still");
+        let rec = dir.join("agent");
+        checked.refuse.store(true, Ordering::SeqCst);
+        checked.asked.lock().unwrap().clear();
+        let l = launch(&dir, &rec, lifetime);
+        let e = if lifetime == Lifetime::Detached {
+            detached(&l, "p", &checked).unwrap_err()
+        } else {
+            rt.start("p", l).unwrap_err()
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        let started = rec.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(e.contains("connection changed"), "{lifetime:?}: {e}");
+        assert!(
+            !started,
+            "{lifetime:?}: a launch refused before its spawn started"
+        );
+        assert!(rt.list("p").is_empty());
+        // Checked once all of its secrets were resolved, each with its check's revision.
+        assert_eq!(*checked.asked.lock().unwrap(), want, "{lifetime:?}");
+    }
+    // A runtime's restart is checked so too: refused, it does not start again.
+    let dir = folder("still-restart");
+    let rec = dir.join("agent");
+    checked.refuse.store(false, Ordering::SeqCst);
+    let a = rt
+        .start("p", launch(&dir, &rec, Lifetime::Managed))
+        .unwrap();
+    let id = a["runtime"].as_str().unwrap().to_string();
+    let x = record(&rec, 0);
+    let checks = || {
+        assert_eq!(x["stdin"], CANARY, "{x}");
+        assert_eq!(x["env"]["FIXTURE_KEY"], CANARY, "{x}");
+        checked.refuse.store(true, Ordering::SeqCst);
+        let e = rt.restart("p", &id).unwrap_err();
+        assert!(e.contains("connection changed"), "{e}");
+        assert!(ended(pid(&x, "pid"), &rec) && ended(pid(&x, "child"), &rec));
+        std::thread::sleep(Duration::from_millis(300));
+        let now: Value = serde_json::from_slice(&std::fs::read(&rec).unwrap()).unwrap();
+        assert_eq!(now["pid"], x["pid"], "the refused restart started it again");
+        assert_eq!(rt.status("p", &id).unwrap()["state"], "exited");
+    };
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(checks));
+    rt.stop_all();
+    clean(&[pid(&x, "pid"), pid(&x, "child")], &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Err(e) = r {
+        std::panic::resume_unwind(e);
+    }
+}
+
+#[test]
 fn a_detached_launch_runs_in_a_scope_of_its_own_under_a_user_manager() {
     let dir = folder("scope");
     let rec = dir.join("agent");
     let l = agent(&dir, &rec, &[], Lifetime::Detached);
-    detached(&l, &no_secret).unwrap();
+    detached(&l, "p", &By(none)).unwrap();
     let r = record(&rec, 0);
     let all = [pid(&r, "pid"), pid(&r, "child")];
     let cgroup = |p: u64| std::fs::read_to_string(format!("/proc/{p}/cgroup")).unwrap_or_default();

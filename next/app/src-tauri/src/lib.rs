@@ -49,6 +49,8 @@ mod release_native;
 #[cfg(target_os = "linux")]
 pub mod route;
 #[cfg(target_os = "linux")]
+pub mod savefile;
+#[cfg(target_os = "linux")]
 pub mod spawn;
 mod startup;
 pub mod trust;
@@ -3009,10 +3011,10 @@ pub fn run() {
                 #[cfg(target_os = "linux")]
                 runtimes: spawn::Runtimes::open(
                     Some(app.path().app_data_dir()?.join("runtimes.json")),
-                    {
-                        let vault = std::sync::Arc::clone(&vault);
-                        Box::new(move |id| vault.value(id))
-                    },
+                    // Checked as a delivery to the runtime's package at each start and restart,
+                    // and again right before its spawn: a client key revoked or unbound since is
+                    // refused.
+                    Box::new(client_keys::Launches(app.handle().clone())),
                 ),
                 #[cfg(target_os = "linux")]
                 launcher: Mutex::new(launcher::Launcher::open(launcher_file)),
@@ -3048,6 +3050,12 @@ pub fn run() {
                 .state::<App>()
                 .programs
                 .set_spawner(route::spawner(handle.clone()));
+            // And their files frames, to the host's save service.
+            #[cfg(target_os = "linux")]
+            handle
+                .state::<App>()
+                .programs
+                .set_saver(route::saver(handle.clone()));
             // Tools get the app's home and a data folder of their own, beside the vault.
             #[cfg(target_os = "linux")]
             handle

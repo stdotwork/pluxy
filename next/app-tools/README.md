@@ -59,6 +59,39 @@ first and cut at 20,000 entries after that. `fields` reads the fields usage reco
 the old desktop app's rules: token counters under the names agents use, a model name and a time.
 The schemas are in [`agent-usage/README.md`](agent-usage/README.md#schema-1).
 
+## `lib/sqlite-ro`
+
+Opens another program's SQLite database strictly read-only and creates no file beside it
+(`pluxy-sqlite-ro`: `open_read_only(path)` gives a `Db`, which derefs to a `rusqlite::Connection`).
+`codex-sessions` and `usage-opencode` read Codex's and OpenCode's databases with it. The rules:
+
+- The database path must be a regular file: a link, a FIFO, a folder or a missing file is refused
+  without being opened. A `-wal`, `-shm` or `-journal` beside it that exists must be a regular file
+  too (SQLite opens a `-journal` to look for a hot one, and a FIFO there would hang it). The database
+  and a `-wal` that is copied are opened without following a link or waiting on a FIFO, and checked
+  to be regular files on the open handle.
+- A database whose `-shm` exists (a process has it open) is opened in place with `mode=ro`: it uses
+  that `-shm` as any SQLite reader does (it writes to that shared-memory file and takes SQLite's
+  shared read locks) and never changes the database or its `-wal`.
+- With no `-shm` and a `-wal`, the database is never opened in place, whatever its header says
+  (SQLite deletes a `-wal` that holds bytes beside a database of 0 bytes, and creates a `-shm` beside
+  one whose header is not WAL's). With the `-wal` empty it is opened `immutable`. With the `-wal`
+  holding bytes it is copied, with its `-wal`, into a private folder (0700, `wal-<pid>-<n>`) under
+  `$PLUXY_TOOL_DATA_DIR/tmp` (the system's temporary folder when that is not set), read there, and
+  the folder is removed when the `Db` is dropped.
+- With no `-shm` and no `-wal`, a database with a WAL header is opened `immutable`, and any other
+  in place.
+- The tool's own `tmp` must be a real folder, not a link; one open to group or others is tightened
+  to 0700. Before a copy is made there, the copies of processes no longer running (folders named
+  exactly `wal-<pid>-<n>`, directories only) are removed; those of this process and of every process
+  still running stay. Nothing is pruned in the system's temporary folder.
+- An `Error` names no path, and carries SQLite's error code, not its message (which names the file).
+  A tool that shows a path to its user adds it around the error itself.
+
+A process that starts between the check for `-shm` and the open can make one read see a torn
+state; a later read is right. A per-call cache of open databases is not in the library: only
+`usage-opencode` needs one.
+
 ## `agent-usage`
 
 `pluxy/agent-usage`, the usage hub: the one store of agents' token usage and its *Agent usage*
@@ -299,22 +332,41 @@ writes an OpenCode file.
   provider total some older messages carry is not used, so every copy of a message counts the same).
   A message's time is its `time.created`. Title and other side requests OpenCode records only as
   session totals are not counted.
-- The database is opened read-only and nothing is made beside it, by `codex-sessions`' rules: when
-  its `-shm` is missing, it is opened immutable if its `-wal` is missing or empty, and otherwise copied
-  with its `-wal` into a private folder in the tool's data folder (`tmp`), read, and removed. A
-  database that is a link, or whose `-wal` or `-shm` is one, is not read.
+- The database is opened by [`lib/sqlite-ro`](#libsqlite-ro): read-only, nothing made beside it, a
+  link, or a `-wal`, `-shm` or `-journal` that is not a regular file, not read.
 
 ## `codex-sessions`
 
 `pluxy/codex-sessions` reads Codex's local sessions, read-only, and shows them on its page
 (*Codex sessions*). It never writes a Codex file, never reads `config.toml` or `auth.json`, and
-has no repair, delete, export or editor.
+has no repair, delete, export or editor. `open` starts the person's own app on a rollout, after
+the person confirms the launch (below); the reader itself spawns nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
 | `list` | `read` | `offset` (default 0), `limit` (1 to 100, default 50) | The Codex home, the databases read, a page of sessions (ID, title, folder, provider, archived, update time, database), the total, whether there are more, the page's active and archived counts, and warnings |
 | `detail` | `disclose`: each call asks the person | `id`, `offset`, `limit` (messages) | The session's title, folder, provider, model, archived, update time, rollout file and database; its statistics; a page of its messages, each cut at 8 KiB (`truncated`), at most 512 KiB in all, and `next_offset` |
+| `open` | `read`; the launch it asks for is confirmed | `id` | `{"outcome": "opened"}` once the launch was started; the call's error (a refused or declined launch, a session with no rollout file, `pluxy/execution` not enabled); never a path or a byte of the file |
 | `settings` | `write` | `codex_home`: a full path, or empty for the default | The Codex home now read, and whether it is custom |
+
+`open` is the old app's *Edit with local app*, as a launch the person confirms: the session's
+rollout is opened by the desktop's own opener (`xdg-open`, else `gio open`), which starts whatever
+app the desktop has for JSON Lines files. It reads no byte of the file. It finds the rollout as
+`detail` does, and opens only a regular file named `rollout-*.jsonl` inside the Codex home's
+`sessions/` or `archived_sessions/` (whichever holds it, never the Codex home itself: the host
+refuses a folder that is the home folder or above it); a rollout reached through a link is opened
+as the file the link resolves to. It then calls
+[`pluxy/execution`](#execution) (an optional import of its `prepare` and `launch`): `prepare` with
+`{"kind": "open", "file", "within"}`, the two resolved paths and nothing else, so the opener is
+found only in the system's program folders, and then `launch` with exactly what `prepare` gave, plus
+`"lifetime": "detached"`: no environment, standard input, secret or program. The call that starts
+the launch is execution's, so the person's confirmation is the host's: it names this tool and
+`pluxy/execution`, the file, its content type, the folder and the opener, is asked every time, and
+offers no *Remember* (`../app/app-host/README.md`, "Launches and managed runtimes"). Without
+`pluxy/execution` enabled, `open` fails with the host's `extension_unavailable` and the reader
+works as before. A native-test build (feature `native-test`, the app's native test only) also
+sends `search_path` with the folder named in `opener-folder` in the tool's data folder, for the
+test's stand-in opener.
 
 The Codex home is `~/.codex` (from the `HOME` the app gives), or the folder set with `settings`,
 kept in the tool's data folder (`PLUXY_TOOL_DATA_DIR`). `list` and `detail` take no paths, so a
@@ -338,16 +390,12 @@ Links to databases, rollouts and the index are skipped, and so is a `sqlite/`, `
 `detail` finds a thread whose database ID is stored with Codex's `local:` prefix by its ID with or
 without the prefix.
 
-The reader adds no file beside a database that no Codex process has open.
-In WAL mode a reader needs SQLite's shared-memory file (`-shm`), which SQLite would create, so
-when it is missing: a database with no `-wal`, or an empty one, is opened as immutable; one whose
-`-wal` still holds committed changes (Codex stopped before copying them back) is copied with its
-`-wal` into a private folder in the tool's data folder (`tmp`), and the copy is read and then
-removed. If the copy fails, that database is a warning, named, and skipped. A Codex process that
-starts at the same moment, between the check for `-shm` and the open, can make one read see a
-torn state; Refresh reads again. While Codex has a database open, the reader uses its `-shm` as
-any SQLite reader does: it writes to that shared-memory file and takes SQLite's shared read locks,
-and never changes the database or its `-wal`.
+Databases are opened by [`lib/sqlite-ro`](#libsqlite-ro), which adds no file beside one that no
+Codex process has open (a WAL database whose `-wal` holds committed changes Codex stopped before
+copying back is read from a private copy in the tool's data folder, removed after). A database it
+refuses or cannot open, or whose copy fails, is one warning that names the database, and is
+skipped; the library's own errors name no path, and the warning adds it. A Codex process that
+starts at the same moment can make one read see a torn state; Refresh reads again.
 
 Every string a reply takes from a database or a rollout is capped: titles, folders, providers,
 models and paths at 4 KiB, IDs at 128 bytes, roles, timestamps and call IDs at 256 bytes, each

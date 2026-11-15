@@ -80,8 +80,11 @@
 // runtimes, each with exactly the confirmed argv and cwd and the filtered launch environment, the
 // key only in the final process's environment; the agent outlives the tool's crash and idle stop
 // and the app; the runtimes stay controlled across the tool's restart, and Stop and Restart reach
-// only the registered group. After the app quits, the runner checks the detached agent still runs
-// and the runtimes do not, then ends every process the check named.
+// only the registered group. Then, in that session, a launch's client keys (spawn_keys_native.rs):
+// a key deleted on core, bound to another core or another tool's is refused at the call, at the
+// spawn and at a runtime's restart, and never shows in a webview or the app's output. After the
+// app quits, the runner checks the detached agent still runs and the runtimes do not, then ends
+// every process the check named.
 // The launcher check (launcher.ts, launcher_native.rs) runs in one more session with that build:
 // the execution program prepares a terminal launch (Automatic, a program found on PATH) and
 // direct ones, the host spawns them after native confirmation; a remembered launch starts again in
@@ -101,7 +104,10 @@
 // exactly as a hand-written expect file says, shows a session only after a native confirmation of
 // each detail call, leaves the Codex home's bytes and modification times as they were, keeps the
 // config.toml and auth.json canaries out of pages, webviews and the app's output, and leaves no
-// reader process when idle or disabled.
+// reader process when idle or disabled. Its open operation starts the stand-in opener on a
+// session's rollout only through execution's launch (next/app-tools/execution) after a native
+// confirmation naming the file, its type, the folder and the opener: cancelled, nothing runs; a
+// session with no rollout file or a bad ID is refused before any confirmation.
 // The usage hub check (usage.ts, usage_native.rs) runs in one more session with that build: the hub
 // and the test-only fixture parser (next/app-tools/agent-usage and usage-fixture, built here) sync a
 // fixture root through the host's jobs, driven from the hub's page, and its report equals a
@@ -143,6 +149,14 @@
 // through the launcher, with no key in argv or environment and an unrelated task left running;
 // the key and a login canary stay out of every window answer, confirmation and the app's output,
 // and removing the package leaves no process.
+// The save-file check (save.ts, save_native.rs) runs in one more session with that build: a signed
+// fixture tool hands bytes to the host's save service from a disclose operation, after its native
+// confirmation; GTK's own save dialog names the package and suggests the tool's name with control
+// and format characters replaced; cancel writes nothing; a confirmed save writes exactly the bytes,
+// 0600; an existing file is replaced only after GTK's overwrite question; a read operation's bytes,
+// a caller-named path, more than the limit, a second save for one call and a link swapped in for the
+// chosen file are refused, each beside a save that works on the same route; and the content's
+// canaries never show in the app's output.
 // The Claude Desktop check (claude-desktop.ts, claude_desktop_native.rs) runs in one more session
 // with that build: pluxy/claude-desktop (next/app-tools/claude-desktop, built here) with the
 // execution program creates Claude Desktop's missing configuration library after a native
@@ -164,6 +178,10 @@
 // APPIMAGE_EXTRACT_AND_RUN=1; a missing or broken service fails the run at setup (services.ts
 // names the packages). Run from next/app: bun native/run.ts (needs dbus-run-session, xvfb-run,
 // Go, cargo and those services).
+//
+// Each session has a name in native/shards.ts, which puts it in one of the shards CI runs as
+// parallel jobs. With PLUXY_APP_NATIVE_SHARD=<shard>, a run builds everything above and runs only
+// that shard's sessions, and fails if one of them never started; without it, it runs them all.
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, type KeyObject, randomBytes, randomUUID, sign } from "node:crypto";
@@ -199,8 +217,10 @@ import { buildOpenFixtures } from "./open";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
+import { buildSaveFixtures } from "./save";
 import { missingPrerequisites } from "./services";
 import { buildSessionsFixtures } from "./sessions";
+import { SESSIONS, selectShard } from "./shards";
 import { buildSpawnFixtures } from "./spawn";
 import { buildTransactionsFixtures } from "./transactions";
 import { runUpdate } from "./update";
@@ -642,6 +662,7 @@ interface Rotation {
  * installed and selected. spawnCheck: only the spawn check. launcherCheck: only the launcher check.
  * claudeCode: only the Claude Code setup and launcher check. openCheck: only the check of a tool
  * opening a file in the person's own app. codex: only the Codex setup and launcher check.
+ * save: only the save-file check.
  * claudeDesktop: only the Claude Desktop setup and launcher check.
  */
 async function runApp(
@@ -670,8 +691,13 @@ async function runApp(
   claudeCode = false,
   openCheck = false,
   codex = false,
+  save = false,
   claudeDesktop = false,
 ): Promise<string[]> {
+  if (currentSession === undefined)
+    throw new Error(
+      "runApp ran outside a session this run runs: name it in native/shards.ts and ask runsSession first",
+    );
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
   const problems: string[] = [];
@@ -758,6 +784,7 @@ async function runApp(
       !codex &&
       !claudeDesktop &&
       !usage &&
+      !save &&
       suite !== "access"
         ? join(root, "device")
         : undefined;
@@ -878,7 +905,11 @@ async function runApp(
     const sessionsDir = reader ? join(root, "sessions") : undefined;
     if (sessionsDir) {
       mkdirSync(sessionsDir);
-      const f = buildSessionsFixtures(sessionsDir, dirs.home, appTools, sessionsReader);
+      const f = buildSessionsFixtures(sessionsDir, dirs.home, appTools, sessionsReader, {
+        execution: executionProgram,
+        manifest: executionManifest,
+        opener: programFixture,
+      });
       nonce = f.nonce;
       canaries = f.canaries;
       roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
@@ -913,6 +944,20 @@ async function runApp(
       mkdirSync(transactionsDir);
       const f = buildTransactionsFixtures(transactionsDir, dirs.home, appTools, fixtureWriter);
       nonce = f.nonce;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
+    // The save-file check's signed exporter, its registry and trust profile, the bytes it saves and
+    // their canaries.
+    const saveDir = save ? join(root, "save") : undefined;
+    if (saveDir) {
+      mkdirSync(saveDir);
+      const f = buildSaveFixtures(saveDir, dirs.home, programFixture);
+      nonce = f.nonce;
+      canaries = f.canaries;
       roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
       writeFileSync(
         join(dirs.config, artifact.identifier, "device-registries.json"),
@@ -1016,6 +1061,7 @@ async function runApp(
       !openDir &&
       !usageDir &&
       !transactionsDir &&
+      !saveDir &&
       !claudeCodeDir &&
       !codexDir &&
       !claudeDesktopDir
@@ -1080,12 +1126,15 @@ async function runApp(
       ...(launcherDir ? { PLUXY_APP_TEST_LAUNCHER: launcherDir, PLUXY_APP_TEST_PROBE: probe } : {}),
       // The only folder besides the system's a native-test build takes an opener from.
       ...(openDir ? { PLUXY_APP_TEST_OPEN: openDir, PLUXY_APP_TEST_OPENERS: join(openDir, "bin") } : {}),
-      ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
+      ...(sessionsDir
+        ? { PLUXY_APP_TEST_SESSIONS: sessionsDir, PLUXY_APP_TEST_OPENERS: join(sessionsDir, "opener", "bin") }
+        : {}),
       ...(transactionsDir ? { PLUXY_APP_TEST_TRANSACTIONS: transactionsDir } : {}),
       ...(claudeCodeDir ? { PLUXY_APP_TEST_CLAUDE_CODE: claudeCodeDir } : {}),
       ...(codexDir ? { PLUXY_APP_TEST_CODEX: codexDir } : {}),
       ...(claudeDesktopDir ? { PLUXY_APP_TEST_CLAUDE_DESKTOP: claudeDesktopDir } : {}),
       ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
+      ...(saveDir ? { PLUXY_APP_TEST_SAVE: saveDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
@@ -1158,7 +1207,9 @@ async function runApp(
             ? "the session reader check's canary appeared on stdout/stderr"
             : usage
               ? "the usage check's Codex, Claude Code, Oh My Pi, Pi or OpenCode canary appeared on stdout/stderr"
-              : "the vault or spawn check's key or a canary appeared on stdout/stderr",
+              : save
+                ? "the save-file check's content appeared on stdout/stderr"
+                : "the vault or spawn check's key or a canary appeared on stdout/stderr",
         );
         return;
       }
@@ -1210,6 +1261,7 @@ async function runApp(
         writeFileSync(trustReady, "");
       }
       if (step.startsWith("core_")) console.log(`  ${label} | ${step} ${json}`);
+      if (step === "save_progress") console.log(`  ${label} | save steps passed: ${value.passed.join(", ")}`);
       if (step === "confirmations")
         console.log(`  ${label} | native confirmations: ${JSON.stringify(value)}`);
       if (step === "frame") before = webProcesses(pid);
@@ -1253,8 +1305,10 @@ async function runApp(
       !output.some((line) => rotated.some((k) => line.includes(k))),
       "a management key from the rotation check appeared on stdout/stderr",
     );
-    // The client keys the client-key check captured (client_key_native.rs), as it learned them.
-    const clientKeysFile = vaultDir ? join(vaultDir, "client-keys") : undefined;
+    // The client keys the client-key checks captured (client_key_native.rs, spawn_keys_native.rs),
+    // as they learned them.
+    const keysDir = vaultDir ?? spawnDir;
+    const clientKeysFile = keysDir ? join(keysDir, "client-keys") : undefined;
     const clientKeys =
       clientKeysFile && existsSync(clientKeysFile)
         ? readFileSync(clientKeysFile, "utf8")
@@ -1358,6 +1412,8 @@ async function runApp(
       const r = steps.get("spawn") as { passed?: boolean } | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
       check(r?.passed === true, `the spawn check did not complete: ${failure}`);
+      const k = steps.get("spawn_keys") as { passed?: boolean } | undefined;
+      check(k?.passed === true, `the launch client-key check did not complete: ${failure}`);
       // After the app quit: its detached agent runs on, its managed runtimes do not.
       await Bun.sleep(1000);
       const known = readKnown(spawnDir);
@@ -1371,6 +1427,7 @@ async function runApp(
       }
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} spawn ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode} spawn_keys ${JSON.stringify(k ?? {})}`);
       console.log(`${mode}: spawn ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
@@ -1449,6 +1506,20 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} transactions ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: transactions ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (save) {
+      const r = steps.get("save") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      const passed = (steps.get("save_progress") as { passed?: string[] } | undefined)?.passed ?? [];
+      check(
+        r?.passed === true,
+        `the save-file check did not complete: ${failure} (steps passed: ${passed.join(", ") || "none"})`,
+      );
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} save ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: save ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1953,6 +2024,32 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
+/** The sessions this run runs (native/shards.ts): every one, or one CI shard's. */
+const shard = process.env.PLUXY_APP_NATIVE_SHARD || undefined;
+let selected: ReadonlySet<string>;
+try {
+  selected = selectShard(
+    shard,
+    process.env.PLUXY_APP_NATIVE_SHARD_INDEX,
+    process.env.PLUXY_APP_NATIVE_SHARD_TOTAL,
+  );
+} catch (e) {
+  console.error(`native test setup failed: ${(e as Error).message}`);
+  process.exit(1);
+}
+if (shard) console.log(`native test shard ${shard}: ${[...selected].join(", ")}`);
+/** The sessions this run started, and the one it is in; runApp runs only inside a session. */
+const started = new Set<string>();
+let currentSession: string | undefined;
+/** Whether this run runs the session called name, which every session asks before it starts. */
+function runsSession(name: string): boolean {
+  if (!SESSIONS.has(name))
+    throw new Error(`the native test session ${name} is in no shard of native/shards.ts`);
+  currentSession = selected.has(name) ? name : undefined;
+  if (currentSession) started.add(name);
+  return currentSession !== undefined;
+}
+
 const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
 /** The probe the session uses to check the desktop services. */
 const probe = join(targetDir, "debug", "examples", "session_probe");
@@ -2095,7 +2192,21 @@ async function main(): Promise<number> {
   // The Codex session reader, from the app tools' workspace, when it is there; and the usage hub
   // and its fixture parser, each when its folder is there.
   if (existsSync(join(appTools, "Cargo.toml"))) {
-    run("cargo", ["build", "--locked", "-p", "codex-sessions", "--target-dir", appToolsTarget], appTools);
+    // Its native-test feature lets `open` send the stand-in opener's folder to execution.
+    run(
+      "cargo",
+      [
+        "build",
+        "--locked",
+        "-p",
+        "codex-sessions",
+        "--features",
+        "native-test",
+        "--target-dir",
+        appToolsTarget,
+      ],
+      appTools,
+    );
     const usageTools = [
       "agent-usage",
       "usage-fixture",
@@ -2156,40 +2267,42 @@ async function main(): Promise<number> {
       const source = coreSource(releases, prepared);
       // The core steps, on the build with artifact-test-trust, in a session of their own. A core
       // the app did not start must outlive it, its config and program untouched.
-      const sentinel = await startSentinel(join(prepared, "sentinel"), join(releases, "core-1.0.0"));
-      try {
-        const c = await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          { mode: "managed", core_source: source.index },
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          false,
-          false,
-          false,
-          false,
-          false,
-          source,
-        );
-        const status = await managementStatus(sentinel.base, sentinel.key);
-        const kept = readFileSync(sentinel.config).equals(sentinel.before);
-        console.log(
-          `managed sentinel ${JSON.stringify({ alive: alive(sentinel.proc.pid ?? 0), status, config_kept: kept })}`,
-        );
-        if (!alive(sentinel.proc.pid ?? 0) || status !== 200)
-          c.push("the sentinel core did not survive the app");
-        if (!kept) c.push("the sentinel core's config changed");
-        if (statSync(join(prepared, "sentinel", "pluxy")).ino !== sentinel.exe)
-          c.push("the sentinel core's program changed");
-        problems.push(...c.map((x) => `managed, core steps: ${x}`));
-      } finally {
-        sentinel.proc.kill("SIGTERM");
-        await new Promise((r) => sentinel.proc.once("exit", r));
+      if (runsSession("core steps")) {
+        const sentinel = await startSentinel(join(prepared, "sentinel"), join(releases, "core-1.0.0"));
+        try {
+          const c = await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            { mode: "managed", core_source: source.index },
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            source,
+          );
+          const status = await managementStatus(sentinel.base, sentinel.key);
+          const kept = readFileSync(sentinel.config).equals(sentinel.before);
+          console.log(
+            `managed sentinel ${JSON.stringify({ alive: alive(sentinel.proc.pid ?? 0), status, config_kept: kept })}`,
+          );
+          if (!alive(sentinel.proc.pid ?? 0) || status !== 200)
+            c.push("the sentinel core did not survive the app");
+          if (!kept) c.push("the sentinel core's config changed");
+          if (statSync(join(prepared, "sentinel", "pluxy")).ino !== sentinel.exe)
+            c.push("the sentinel core's program changed");
+          problems.push(...c.map((x) => `managed, core steps: ${x}`));
+        } finally {
+          sentinel.proc.kill("SIGTERM");
+          await new Promise((r) => sentinel.proc.once("exit", r));
+        }
       }
       // The other runs need a core in the app's own store. The startup runs adopt the core_path
       // program before each run, as the window's Adopt would. The rest use the bundled test
@@ -2198,359 +2311,8 @@ async function main(): Promise<number> {
       const adopted = { mode: "managed", core_path: core };
       const managed = { mode: "managed", core_source: source.index };
       const release: Release = { from: source, version: "2.0.0" };
-      const p = await runApp(
-        "managed",
-        dev("managed"),
-        updaterKey,
-        managed,
-        undefined,
-        false,
-        false,
-        undefined,
-        undefined,
-        {},
-        false,
-        false,
-        false,
-        false,
-        false,
-        undefined,
-        release,
-      );
-      p.push(...(await runApp("managed", dev("managed"), updaterKey, adopted, undefined, true)));
-      p.push(...(await runApp("managed", dev("managed"), updaterKey, adopted, undefined, true, true)));
-      // The signed native-tier admission check, then the program host check and the routing
-      // check, on the build with artifact-test-trust.
-      p.push(
-        ...(await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          managed,
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          true,
-          false,
-          false,
-          false,
-          false,
-          undefined,
-          release,
-        )),
-      );
-      p.push(
-        ...(await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          managed,
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          false,
-          true,
-          false,
-          false,
-          false,
-          undefined,
-          release,
-        )),
-      );
-      // The cross-package routing check, on the same build.
-      p.push(
-        ...(await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          managed,
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          false,
-          false,
-          false,
-          true,
-          false,
-          undefined,
-          release,
-        )),
-      );
-      // The vault check, on the same build.
-      p.push(
-        ...(await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          managed,
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          false,
-          false,
-          false,
-          false,
-          true,
-          undefined,
-          release,
-        )),
-      );
-      // The spawn check, on the same build.
-      p.push(
-        ...(await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          managed,
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          false,
-          false,
-          false,
-          false,
-          false,
-          undefined,
-          release,
-          true,
-        )),
-      );
-      // The Codex session reader check, on the same build.
-      p.push(
-        ...(await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          managed,
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          false,
-          false,
-          false,
-          false,
-          false,
-          undefined,
-          release,
-          false,
-          true,
-        )),
-      );
-      // The transaction library check, on the same build.
-      p.push(
-        ...(await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          managed,
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          false,
-          false,
-          false,
-          false,
-          false,
-          undefined,
-          release,
-          false,
-          false,
-          false,
-          false,
-          true,
-        )),
-      );
-      // The usage hub check, on the same build.
-      p.push(
-        ...(await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          managed,
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          false,
-          false,
-          false,
-          false,
-          false,
-          undefined,
-          release,
-          false,
-          false,
-          true,
-        )),
-      );
-      // The launcher check, on the same build.
-      p.push(
-        ...(await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          managed,
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          false,
-          false,
-          false,
-          false,
-          false,
-          undefined,
-          release,
-          false,
-          false,
-          false,
-          true,
-        )),
-      );
-      // The Claude Code setup and launcher check, on the same build.
-      p.push(
-        ...(await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          managed,
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          false,
-          false,
-          false,
-          false,
-          false,
-          undefined,
-          release,
-          false,
-          false,
-          false,
-          false,
-          false,
-          true,
-        )),
-      );
-      // The open check, on the same build.
-      p.push(
-        ...(await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          managed,
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          false,
-          false,
-          false,
-          false,
-          false,
-          undefined,
-          release,
-          false,
-          false,
-          false,
-          false,
-          false,
-          false,
-          true,
-        )),
-      );
-      // The Codex setup and launcher check, on the same build.
-      p.push(
-        ...(await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          managed,
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          false,
-          false,
-          false,
-          false,
-          false,
-          undefined,
-          release,
-          false,
-          false,
-          false,
-          false,
-          false,
-          false,
-          false,
-          true,
-        )),
-      );
-      // The Claude Desktop setup and launcher check, on the same build.
-      p.push(
-        ...(await runApp(
-          "managed",
-          trusted,
-          updaterKey,
-          managed,
-          undefined,
-          false,
-          false,
-          undefined,
-          undefined,
-          {},
-          false,
-          false,
-          false,
-          false,
-          false,
-          undefined,
-          release,
-          false,
-          false,
-          false,
-          false,
-          false,
-          false,
-          false,
-          false,
-          true,
-        )),
-      );
-      for (const suite of ["window", "window-no-tray", "privacy", "access"] as const)
+      const p: string[] = [];
+      if (runsSession("managed"))
         p.push(
           ...(await runApp(
             "managed",
@@ -2559,9 +2321,9 @@ async function main(): Promise<number> {
             managed,
             undefined,
             false,
-            suite === "window-no-tray",
+            false,
             undefined,
-            suite,
+            undefined,
             {},
             false,
             false,
@@ -2572,17 +2334,422 @@ async function main(): Promise<number> {
             release,
           )),
         );
+      if (runsSession("startup")) {
+        p.push(...(await runApp("managed", dev("managed"), updaterKey, adopted, undefined, true)));
+        p.push(...(await runApp("managed", dev("managed"), updaterKey, adopted, undefined, true, true)));
+      }
+      // The signed native-tier admission check, then the program host check and the routing
+      // check, on the build with artifact-test-trust.
+      if (runsSession("admission"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            true,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+          )),
+        );
+      if (runsSession("program"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            true,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+          )),
+        );
+      // The cross-package routing check, on the same build.
+      if (runsSession("routing"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            true,
+            false,
+            undefined,
+            release,
+          )),
+        );
+      // The vault check, on the same build.
+      if (runsSession("vault"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            true,
+            undefined,
+            release,
+          )),
+        );
+      // The spawn check, on the same build.
+      if (runsSession("spawn"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            true,
+          )),
+        );
+      // The Codex session reader check, on the same build.
+      if (runsSession("sessions"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            true,
+          )),
+        );
+      // The transaction library check, on the same build.
+      if (runsSession("transactions"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
+      // The usage hub check, on the same build.
+      if (runsSession("usage"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
+            true,
+          )),
+        );
+      // The launcher check, on the same build.
+      if (runsSession("launcher"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
+      // The Claude Code setup and launcher check, on the same build.
+      if (runsSession("claude-code"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
+      // The open check, on the same build.
+      if (runsSession("open"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
+      // The Codex setup and launcher check, on the same build.
+      if (runsSession("codex"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
+      // The save-file check, on the same build.
+      if (runsSession("save"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
+      // The Claude Desktop setup and launcher check, on the same build.
+      if (runsSession("claude-desktop"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
+      for (const suite of ["window", "window-no-tray", "privacy", "access"] as const)
+        if (runsSession(suite))
+          p.push(
+            ...(await runApp(
+              "managed",
+              dev("managed"),
+              updaterKey,
+              managed,
+              undefined,
+              false,
+              suite === "window-no-tray",
+              undefined,
+              suite,
+              {},
+              false,
+              false,
+              false,
+              false,
+              false,
+              undefined,
+              release,
+            )),
+          );
       problems.push(...p.map((x) => `managed: ${x}`));
       // The first start runs a stand-in that serves on the socket the app hands it (-listen-fd),
       // says where it listens, answers the app's readiness check (conn.rs ready), then exits; the
       // next start, recovery's, runs the real core. The app runs the adopted copy of this script
       // from an open file, so its mark is not beside $0.
-      const early = join(prepared, "early-exit.sh");
-      const standInSource = join(prepared, "early-exit.go");
-      const standIn = join(prepared, "early-exit");
-      writeFileSync(
-        standInSource,
-        `package main
+      if (runsSession("early exit")) {
+        const early = join(prepared, "early-exit.sh");
+        const standInSource = join(prepared, "early-exit.go");
+        const standIn = join(prepared, "early-exit");
+        writeFileSync(
+          standInSource,
+          `package main
 
 import (
 \t"fmt"
@@ -2613,70 +2780,76 @@ func main() {
 \t}))
 }
 `,
-      );
-      run("go", ["build", "-o", standIn, standInSource], prepared);
-      writeFileSync(
-        early,
-        `#!/bin/sh\nif [ ! -e '${early}.ran' ]; then\n  : > '${early}.ran'\n  exec '${standIn}' "$@"\nfi\nexec '${core}' "$@"\n`,
-        { mode: 0o755 },
-      );
-      const e = await runApp(
-        "managed",
-        dev("managed"),
-        updaterKey,
-        { mode: "managed", core_path: early },
-        undefined,
-        false,
-        false,
-        undefined,
-        undefined,
-        {},
-        false,
-        false,
-        true,
-      );
-      problems.push(...e.map((x) => `managed, early exit: ${x}`));
+        );
+        run("go", ["build", "-o", standIn, standInSource], prepared);
+        writeFileSync(
+          early,
+          `#!/bin/sh\nif [ ! -e '${early}.ran' ]; then\n  : > '${early}.ran'\n  exec '${standIn}' "$@"\nfi\nexec '${core}' "$@"\n`,
+          { mode: 0o755 },
+        );
+        const e = await runApp(
+          "managed",
+          dev("managed"),
+          updaterKey,
+          { mode: "managed", core_path: early },
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          true,
+        );
+        problems.push(...e.map((x) => `managed, early exit: ${x}`));
+      }
 
       // Two launches of the app on one profile: one app, one core, the first one's window raised.
-      const inst = await runInstances({
-        bin,
-        probe,
-        appImage,
-        core,
-        identifier,
-        timeoutMs: TIMEOUT,
-        sessions,
-        stopSession,
-        removeRun,
-      });
-      if (inst.setup !== undefined) throw new SetupError(inst.setup);
-      problems.push(...inst.problems.map((x) => `instances: ${x}`));
-
-      // The signed application update (update.ts, update-session.ts, update_native.rs): the
-      // test package updates itself to its signed newer version and back, and refuses the rest.
-      if (testPackage) {
-        const upd = await runUpdate({
-          packageJson: join(packageDir, "test-package.json"),
-          pubkey: testPackage.updater_pubkey,
+      if (runsSession("instances")) {
+        const inst = await runInstances({
+          bin,
           probe,
           appImage,
           core,
-          identifier: TEST_ID,
-          timeoutMs: 900_000,
+          identifier,
+          timeoutMs: TIMEOUT,
           sessions,
           stopSession,
           removeRun,
         });
-        if (upd.setup !== undefined) throw new SetupError(upd.setup);
-        problems.push(...upd.problems.map((x) => `update: ${x}`));
-      } else {
-        problems.push("update: there is no test package to update");
+        if (inst.setup !== undefined) throw new SetupError(inst.setup);
+        problems.push(...inst.problems.map((x) => `instances: ${x}`));
+      }
+
+      // The signed application update (update.ts, update-session.ts, update_native.rs): the
+      // test package updates itself to its signed newer version and back, and refuses the rest.
+      if (runsSession("update")) {
+        if (testPackage) {
+          const upd = await runUpdate({
+            packageJson: join(packageDir, "test-package.json"),
+            pubkey: testPackage.updater_pubkey,
+            probe,
+            appImage,
+            core,
+            identifier: TEST_ID,
+            timeoutMs: 900_000,
+            sessions,
+            stopSession,
+            removeRun,
+          });
+          if (upd.setup !== undefined) throw new SetupError(upd.setup);
+          problems.push(...upd.problems.map((x) => `update: ${x}`));
+        } else {
+          problems.push("update: there is no test package to update");
+        }
       }
     } finally {
       rmSync(prepared, { recursive: true, force: true });
     }
 
     for (const mode of ["local", "remote"] as const) {
+      if (!runsSession(mode)) continue;
       const c = await startCore(mode === "remote");
       const kept = mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
       try {
@@ -2716,30 +2889,43 @@ func main() {
     }
 
     // The packaged app: the AppImage itself, against a test core of the runner's.
-    if (testPackage) {
-      const packaged: Artifact = {
-        label: "packaged",
-        bin: testPackage.appimage,
-        identifier: TEST_ID,
-        gate: "passes",
-      };
-      const c = await startCore(false);
-      try {
-        const conn = { mode: "local", url: c.base, key: c.key };
-        // The same checks as the dev app's local run, including the key rotation, which needs
-        // the core's config file; the key it rotated to is the one that must still work.
-        const p = await runApp("local", packaged, updaterKey, conn, c.base, false, false, c.key, undefined, {
-          coreConfig: c.config,
-        });
-        if ((await managementStatus(c.base, managementKey(c.config))) !== 200)
-          p.push("the core stopped when the app quit");
-        problems.push(...p.map((x) => `packaged: ${x}`));
-      } finally {
-        c.proc.stdin?.end();
-        await new Promise((r) => c.proc.once("exit", r));
+    if (runsSession("packaged")) {
+      if (testPackage) {
+        const packaged: Artifact = {
+          label: "packaged",
+          bin: testPackage.appimage,
+          identifier: TEST_ID,
+          gate: "passes",
+        };
+        const c = await startCore(false);
+        try {
+          const conn = { mode: "local", url: c.base, key: c.key };
+          // The same checks as the dev app's local run, including the key rotation, which needs
+          // the core's config file; the key it rotated to is the one that must still work.
+          const p = await runApp(
+            "local",
+            packaged,
+            updaterKey,
+            conn,
+            c.base,
+            false,
+            false,
+            c.key,
+            undefined,
+            {
+              coreConfig: c.config,
+            },
+          );
+          if ((await managementStatus(c.base, managementKey(c.config))) !== 200)
+            p.push("the core stopped when the app quit");
+          problems.push(...p.map((x) => `packaged: ${x}`));
+        } finally {
+          c.proc.stdin?.end();
+          await new Promise((r) => c.proc.once("exit", r));
+        }
+      } else {
+        problems.push("packaged: there is no test package to run");
       }
-    } else {
-      problems.push("packaged: there is no test package to run");
     }
   } catch (e) {
     if (!(e instanceof SetupError)) throw e;
@@ -2754,8 +2940,8 @@ func main() {
   // The release gate (package.ts release): it builds the release app and checks it with every
   // AppImage given, unpacking each, never running it. Each refusal has a passing case on the same
   // route: an AppImage packed the same way around a clean binary.
-  const releaseDir = tempDir("pluxy-app-native-release-");
-  {
+  if (runsSession("release gate")) {
+    const releaseDir = tempDir("pluxy-app-native-release-");
     const releaseGate = (what: string, images: string[], want: "valid" | RegExp) => {
       const r = spawnSync("bun", ["run", "package:release", ...images], {
         cwd: app,
@@ -2798,12 +2984,15 @@ func main() {
     }
   }
 
+  for (const name of selected) if (!started.has(name)) problems.push(`${name}: the session never started`);
   if (problems.length > 0) {
     console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
     return 1;
   }
-  console.log(
-    "native test passed in all three modes, the single-instance scenario, as the packaged app, and at the release gate",
-  );
+  if (shard) console.log(`native test shard ${shard} passed: ${[...started].join(", ")}`);
+  else
+    console.log(
+      "native test passed in all three modes, the single-instance scenario, as the packaged app, and at the release gate",
+    );
   return 0;
 }
