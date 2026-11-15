@@ -134,6 +134,10 @@ fn run_line(line: &str, dp0: &str, prefix: &str) -> Option<String> {
 /// (no quote, `%` or cmd metacharacter), as a shebang's would be.
 fn node_line(line: &str, dp0: &str) -> Option<(Vec<String>, String)> {
     let at = line.find(&format!("\"{dp0}\\"))?;
+    // The script starts a word of its own: cmd.exe would give Node an argument glued to it as one.
+    if at > 0 && !line[..at].ends_with(' ') {
+        return None;
+    }
     let args: Vec<String> = line[..at].split_whitespace().map(String::from).collect();
     let word = |a: &String| {
         a.chars()

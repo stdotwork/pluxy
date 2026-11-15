@@ -72,6 +72,9 @@ fn any_other_batch_file_is_not_a_shim() {
         NPM9_NATIVE.replace(r"%dp0%\node_modules", r"C:\x"),
         NPM9_NATIVE.replace("claude.exe", "claude%PATH%.exe"),
         NPM9_ARGS.replace("--expose_gc", "--a&calc"),
+        // An argument glued to the script: cmd.exe would pass them to Node as one.
+        NPM9_ARGS.replace("--expose_gc \"", "--expose_gc\""),
+        PNPM_NODE.replace("node.exe\"  \"", "node.exe\"--x\""),
         // Arguments after %*, or no %*.
         NPM9_NATIVE.replace("%*", "%* & calc"),
         NPM9_NATIVE.replace("   %*", ""),
