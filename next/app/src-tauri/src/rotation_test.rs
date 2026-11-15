@@ -27,6 +27,13 @@ fn require(ok: bool, what: &str) -> Result<(), String> {
     }
 }
 
+/// Presses key in the window titled title once exactly one is shown, so that a key never answers
+/// another window with the same title.
+fn press(app: &AppHandle, title: &str, key: Key) -> Result<(), String> {
+    wait_for(title, || (ui::count(app, title) == 1).then_some(()))?;
+    ui::press(app, title, key)
+}
+
 /// The texts of the one shown native window titled title (empty when none is).
 fn labels(app: &AppHandle, title: &str) -> Result<String, String> {
     Ok(ui::texts(app, title)?.join("\n"))
@@ -144,7 +151,7 @@ fn answer(app: &AppHandle, target: &str, says: &str, key: Key) -> Result<(), Str
             .any(|f| text.contains(f)),
         "the native confirmation showed launch fields",
     )?;
-    ui::press(app, CONFIRM, key)
+    press(app, CONFIRM, key)
 }
 
 /// No launch notice tells of a rotation: one is the app's own action, not a launch.
@@ -184,7 +191,7 @@ fn new_key_window(
 /// Copies the key with the key window's Copy button. Where the platform has a marker for a
 /// concealed copy (Windows, macOS), the copy carries it.
 fn copy(app: &AppHandle, key: &str) -> Result<(), String> {
-    ui::press(app, REVEAL, access(text::COPY))?;
+    press(app, REVEAL, access(text::COPY))?;
     let concealed = wait_for("the copied key", || {
         let (text, concealed) = ui::clipboard(app);
         text.filter(|t| t == key).map(|_| concealed)
@@ -200,7 +207,7 @@ fn copy(app: &AppHandle, key: &str) -> Result<(), String> {
 fn revealed(app: &AppHandle, core: &Core, before: &str, says: &str) -> Result<String, String> {
     let key = new_key_window(app, core, before, says)?;
     copy(app, &key)?;
-    ui::press(app, REVEAL, access(text::CLOSE))?;
+    press(app, REVEAL, access(text::CLOSE))?;
     wait_for("the key window to close", || {
         (!ui::shown(app, REVEAL)).then_some(())
     })?;

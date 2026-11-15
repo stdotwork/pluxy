@@ -36,12 +36,10 @@ pub(crate) fn count(_app: &AppHandle, title: &str) -> usize {
     found(title).len()
 }
 
-/// Focuses the one shown window titled title, once there is exactly one.
+/// Focuses the last shown window titled title that xdotool lists, once there is one (as the
+/// native tests did before the driver: GTK may leave a window it closed listed for a moment).
 fn focus(title: &str) -> Result<(), String> {
-    let id = wait_for(title, || {
-        let ids = found(title);
-        (ids.len() == 1).then(|| ids[0].clone())
-    })?;
+    let id = wait_for(title, || found(title).pop())?;
     xdotool(&["windowfocus", "--sync", &id]).map(|_| ())
 }
 
