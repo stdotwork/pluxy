@@ -727,19 +727,30 @@ The dialog is GTK's file chooser in save mode, as the Access chooser (the deskto
 `GTK_USE_PORTAL=1` or inside a sandbox), with its own overwrite question: an existing file is
 replaced only after the person answers Replace. One save dialog shows at a time; a `save` while
 another shows is refused with `unavailable`. Cancelling it writes nothing; so does the call it
-serves ending (cancelled, its page closing, the window closing), which closes the dialog. The
-chosen name must be a regular file or nothing: a link or a folder there is refused
-(`unavailable`), since writing through a link would write a file the dialog did not show.
+serves ending (cancelled, its page closing, the window closing), which closes the dialog.
+
+The host opens the chosen folder once, as the dialog answers, and writes into that opened folder.
+The folder must be one no other user can change: owned by the person (the app's effective user)
+or root, and not writable by group or others unless it is sticky (as `/tmp`). Otherwise another
+user could put a file at the chosen name after GTK's question, and the host cannot tell what GTK
+asked. The chosen name must hold nothing or a regular file of the person's: a link, a folder,
+another user's file or anything else there is refused (`unavailable`), since writing through a
+link would write a file the dialog did not show.
 
 The host writes the file atomically beside the chosen one: a temporary file in the same folder,
-opened relative to that folder without following a link, mode 0600 (a replaced file keeps its
-permission bits), the bytes, fsync, then a rename over the chosen name (for a new file, one that
-replaces nothing) and an fsync of the folder. Before the rename it checks that the folder and the
-name are still what the dialog answered (an existing file by its device, inode, size and
-modification and change times): a link, another or a changed file or a folder now at the name, a
-file that appeared where there was none, or a replaced folder is refused with `permission`, and the
-temporary file is removed. The check and the rename are two steps; a change between them is not
-caught. Nothing of the bytes or the chosen path is logged, and the answers carry neither.
+opened relative to that folder without following a link, mode 0600, the bytes and an fsync. Then it
+checks that the tool still runs its package's admitted release (a release disabled, removed or
+swapped out while the dialog was open saves nothing), that the opened folder is still the one at the
+chosen path and still the person's, and that the name is still what the dialog answered (an
+existing file by its device, inode, size and modification and change times). A link, another or a
+changed file or a folder now at the name, a file that appeared where there was none, or a moved or
+replaced folder is refused with `permission`, and the temporary file is removed. Then a replaced
+file's permission bits are set on the new one, and it is renamed over the chosen name, and the
+folder is synced. A new file never replaces anything: it is renamed with `RENAME_NOREPLACE`, or on
+a file system without it, hard-linked at the name (which fails if something is there) and the
+temporary file removed; on a file system with neither, the save is refused (`unavailable`). For an
+overwrite, the check and the rename are two steps, and a change between them is not caught. Nothing
+of the bytes or the chosen path is logged, and the answers carry neither.
 
 ## Secrets, references and the vault
 

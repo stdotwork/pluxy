@@ -9,7 +9,8 @@
 //! - sneak: a read operation's bytes are refused at the first append; no save dialog shows;
 //! - path: after the confirmation, a save naming a path (`a/b.jsonl`) is refused, and so is one
 //!   with a field beside `name` (`path`); no save dialog shows;
-//! - limit: one byte over the limit is refused at the append that passes it; no dialog shows;
+//! - limit: one byte over the limit is refused at the append that passes it, and a save after it
+//!   is refused as well (the bytes so far were dropped); no dialog shows;
 //! - cancel: the save dialog, titled with the package, suggests the caller's name; cancelled, the
 //!   tool hears `cancelled` and the folder stays empty;
 //! - saved: a name with control and format characters is suggested with them replaced; the file the
@@ -398,7 +399,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 app,
                 main,
                 "export",
-                json!({"source": big, "name": "big.bin"}),
+                json!({"source": big, "name": "big.bin", "save_anyway": true}),
             )?;
             let r = undialogued(main, &slot, "the export over the limit")?;
             let appended = r["appended"].as_array().cloned().unwrap_or_default();
@@ -409,10 +410,11 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     && appended[..appended.len() - 1]
                         .iter()
                         .all(|x| x.get("output").is_some())
-                    && r.get("answer").is_none(),
+                    && code(&r["answer"]) == "permission",
                 format!(
-                    "the append past the limit should be refused, and only it: {} appends, last {last}",
-                    appended.len()
+                    "the append past the limit, and the save after it, should be refused: {} appends, last {last}, save {}",
+                    appended.len(),
+                    r["answer"]
                 ),
             )?;
             require(
