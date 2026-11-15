@@ -1714,27 +1714,12 @@ mod windows_files;
 #[cfg(target_os = "linux")]
 #[path = "confirmation_ui.rs"]
 mod ui;
-// Not wired yet: the native dialogs session first runs without them.
 #[cfg(windows)]
 #[path = "confirmation_ui_windows.rs"]
-#[allow(dead_code)]
-mod platform_ui;
+mod ui;
 #[cfg(target_os = "macos")]
 #[path = "confirmation_ui_macos.rs"]
-#[allow(dead_code)]
-mod platform_ui;
-#[cfg(any(windows, target_os = "macos"))]
-mod ui {
-    pub(crate) fn notice(_: &tauri::AppHandle, text: String) {
-        eprintln!("pluxy-app: {text}");
-    }
-    pub(crate) fn request(_: &tauri::AppHandle, _: String) -> Result<(), String> {
-        Err("native confirmations are supported on Linux only".into())
-    }
-    pub(crate) fn settings(_: &tauri::AppHandle) -> Result<(), String> {
-        Err("native confirmations are supported on Linux only".into())
-    }
-}
+mod ui;
 pub(crate) use ui::{notice, notice as ui_notice, request, settings};
 
 #[cfg(test)]

@@ -24,26 +24,14 @@ pub(crate) mod text {
     pub(crate) const CLOSE: &str = "_Close";
 }
 
-// Not wired yet: the native dialogs session first runs without them.
 #[cfg(windows)]
 #[path = "key_entry_windows.rs"]
-#[allow(dead_code)]
 mod platform;
 #[cfg(target_os = "macos")]
 #[path = "key_entry_macos.rs"]
-#[allow(dead_code)]
 mod platform;
 #[cfg(any(windows, target_os = "macos"))]
-pub(crate) fn request_as(
-    _: &AppHandle,
-    _: &'static str,
-    _: String,
-    _: bool,
-) -> Result<Option<Input>, &'static str> {
-    Err("native key entry is currently supported on Linux only")
-}
-#[cfg(any(windows, target_os = "macos"))]
-pub(crate) fn reveal(_: &AppHandle, _: String, _: String) {}
+pub(crate) use platform::{request_as, reveal};
 
 /// The management key's entry, with its choice to keep the key on this device.
 pub(crate) fn request(app: &AppHandle, summary: String) -> Result<Option<Input>, &'static str> {
