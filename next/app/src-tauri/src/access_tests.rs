@@ -785,7 +785,7 @@ fn home_and_own_folders_are_known_by_identity() {
     assert!(resolve_with(&view.join("inner"), "subtree", &fence, &doc).is_ok());
     // view/inner, as if it were a bind mount of an own folder.
     let inner = ident(&view.join("inner")).unwrap();
-    fence.own.push((t.0.join("own"), inner, vec![inner]));
+    fence.own.push((t.0.join("own"), Some(inner), vec![inner]));
     assert!(
         resolve_with(&view.join("inner").join("file"), "file", &fence, &doc)
             .unwrap_err()
@@ -795,16 +795,21 @@ fn home_and_own_folders_are_known_by_identity() {
 
 /// A real bind mount, in a user and mount namespace of its own (`unshare`): the test binary runs
 /// itself there, mounts real onto view and checks that view, which holds home, and a file of an
-/// own folder seen through view are refused. Where the system does not let an unprivileged user
-/// make such a namespace, it says so and checks nothing (the forged case above still runs).
+/// own folder seen through view are refused. The child marks that it started inside the
+/// namespace before anything else, so a failure after that (the mount, a check) fails this test;
+/// only `unshare` itself failing (the system does not let an unprivileged user make the
+/// namespace) skips it, with a `SKIPPED` line written straight to stderr, which the test harness
+/// does not capture. With `PLUXY_REQUIRE_BIND_MOUNT=1`, a skip fails instead.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_bind_mount_is_refused() {
     const CHILD: &str = "PLUXY_ACCESS_BIND_TEST";
     if let Some(dir) = std::env::var_os(CHILD) {
         let dir = PathBuf::from(dir);
+        fs::write(dir.join("entered"), "").unwrap();
         let (real, view) = (dir.join("real"), dir.join("view"));
         let c = |p: &Path| std::ffi::CString::new(p.to_str().unwrap()).unwrap();
+        // SAFETY: both paths are valid C strings for the call; no fstype or data.
         let rc = unsafe {
             libc::mount(
                 c(&real).as_ptr(),
@@ -815,7 +820,6 @@ fn a_bind_mount_is_refused() {
             )
         };
         assert_eq!(rc, 0, "mount: {}", std::io::Error::last_os_error());
-        fs::write(dir.join("mounted"), "").unwrap();
         let home = real.join("home");
         let fence = Fence::new(Some(&home), &[home.join("app")]);
         let doc = dir.join("no-portal");
@@ -852,19 +856,133 @@ fn a_bind_mount_is_refused() {
         .args(["--nocapture", "--test-threads=1"])
         .env(CHILD, &t.0)
         .output();
-    if !t.0.join("mounted").exists() {
-        eprintln!(
-            "a_bind_mount_is_refused: no bind mount here (an unprivileged user namespace is not allowed: {}); the forged case covers it",
-            out.map(|o| String::from_utf8_lossy(&o.stderr).trim().to_string())
-                .unwrap_or_else(|e| e.to_string())
+    if !t.0.join("entered").exists() {
+        let why = out
+            .map(|o| String::from_utf8_lossy(&o.stderr).trim().to_string())
+            .unwrap_or_else(|e| e.to_string());
+        assert!(
+            std::env::var_os("PLUXY_REQUIRE_BIND_MOUNT").is_none(),
+            "PLUXY_REQUIRE_BIND_MOUNT is set, but no user and mount namespace could be made: {why}"
+        );
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "SKIPPED a_bind_mount_is_refused: unshare could not make a user and mount namespace ({why}); home_and_own_folders_are_known_by_identity covers it with forged identities"
         );
         return;
     }
     let out = out.unwrap();
     assert!(
         out.status.success() && String::from_utf8_lossy(&out.stdout).contains("1 passed"),
-        "the bind-mounted run: {}\n{}",
+        "the run inside the namespace failed: {}\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// A store in dir/app with the fixture signer approved and own as the app's folders.
+fn store_owning(dir: &Path, own: Vec<PathBuf>) -> Store {
+    let mut s = Store::open(&dir.join("app"), own);
+    s.approve(&signed()).unwrap();
+    s
+}
+
+#[test]
+fn an_app_folder_not_made_yet_still_fences_the_folders_that_would_hold_it() {
+    let t = tmp();
+    fs::create_dir_all(t.0.join("c").join("sibling")).unwrap();
+    fs::create_dir_all(t.0.join("other")).unwrap();
+    // t/cache does not exist either: t is the nearest folder that does.
+    let own = [t.0.join("cache").join("app"), t.0.join("c").join("app")];
+    let doc = Path::new("/nonexistent/doc");
+    for (target, refused) in [
+        (t.0.join("other"), false),
+        (t.0.join("c").join("sibling"), false),
+        (t.0.join("c"), true),
+        (t.0.clone(), true),
+    ] {
+        let r = resolve_with(&target, "subtree", &Fence::new(None, &own), doc);
+        assert_eq!(r.is_err(), refused, "{}: {r:?}", target.display());
+    }
+    // Made later in the run: a file inside it is refused at the next check.
+    fs::create_dir_all(&own[0]).unwrap();
+    fs::write(own[0].join("feed"), "x").unwrap();
+    assert!(
+        resolve_with(&own[0].join("feed"), "file", &Fence::new(None, &own), doc)
+            .unwrap_err()
+            .contains("the app's own folder")
+    );
+}
+
+#[test]
+fn a_cached_folder_handle_stops_serving_once_an_app_folder_comes_inside_its_grant() {
+    let t = tmp();
+    fs::create_dir_all(t.0.join("work")).unwrap();
+    fs::write(t.0.join("work").join("notes"), "x").unwrap();
+    // The app's data folder is t/data/app, not made yet.
+    let mut s = store_owning(&t.0, vec![t.0.join("app"), t.0.join("data").join("app")]);
+    let f = facts();
+    grant(&mut s, &f, "tree", &t.0.join("work"));
+    let read = json!({"resource": "tree", "path": "notes"});
+    for _ in 0..2 {
+        assert_eq!(
+            text(&call(&mut s, &f, "resources.read", read.clone()).unwrap()),
+            "x"
+        );
+    }
+    assert_eq!(s.handles.len(), 1, "the folder's handle is kept");
+    // Now t/data is a link to the granted folder, and the app's data folder is inside it.
+    fs::create_dir_all(t.0.join("work").join("app")).unwrap();
+    symlink(t.0.join("work"), t.0.join("data")).unwrap();
+    assert_eq!(
+        call(&mut s, &f, "resources.read", read.clone()),
+        Err(Denial::Refused)
+    );
+    assert_eq!(
+        call(&mut s, &f, "resources.list", json!({"resource": "tree"})),
+        Err(Denial::Refused)
+    );
+}
+
+/// A grant of home or of the root folder (made before the identity check, or by hand) is refused
+/// when it is used.
+#[test]
+fn a_saved_grant_of_home_or_the_root_folder_is_refused_when_used() {
+    let t = tmp();
+    let home = home().expect("HOME");
+    for target in [home, PathBuf::from("/")] {
+        let mut s = store(&t.0);
+        let f = facts();
+        let d = s.may_grant(&f, "tree").unwrap();
+        let m = fs::metadata(&target).unwrap();
+        let r = Resolved {
+            selected: target.clone(),
+            target: target.clone(),
+            dev: m.dev(),
+            ino: m.ino(),
+            mount: None,
+            link: None,
+            portal: false,
+        };
+        s.add(&f, &d, &r).unwrap();
+        assert_eq!(
+            call(&mut s, &f, "resources.list", json!({"resource": "tree"})),
+            Err(Denial::Refused),
+            "{}",
+            target.display()
+        );
+    }
+}
+
+/// A target whose identity cannot be read when the fence is checked answers `unavailable`, an
+/// error that may pass, not `refused`.
+#[test]
+fn a_target_that_cannot_be_read_is_unavailable_not_refused() {
+    let t = tmp();
+    let mut s = store(&t.0);
+    let f = facts();
+    fs::write(t.0.join("gone"), "x").unwrap();
+    let g = grant(&mut s, &f, "config", &t.0.join("gone"));
+    fs::remove_file(t.0.join("gone")).unwrap();
+    assert_eq!(fenced(&g, &[t.0.join("app")]), Err(Denial::Unavailable));
 }

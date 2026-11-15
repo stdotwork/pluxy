@@ -178,9 +178,21 @@ pub(crate) struct Fence {
     /// The root folder, and this user's home folder and each folder above it: a folder grant
     /// that is one of them holds all of home.
     whole: Vec<Ident>,
-    /// The app's own folders (settings, data, vault, packages, caches): each one, its identity,
-    /// and the identities of it and of every folder above it. No grant may be, hold or lie in one.
-    own: Vec<(PathBuf, Ident, Vec<Ident>)>,
+    /// The app's own folders (settings, data, vault, packages, caches): each one, its identity
+    /// when it exists, and the identities of the nearest existing folder at or above it and of
+    /// every folder above that. No grant may be, hold or lie in one; one not made yet still
+    /// fences the folders that would hold it. Built anew for each check, so a folder made later
+    /// in the run counts from then on.
+    own: Vec<(PathBuf, Option<Ident>, Vec<Ident>)>,
+}
+
+/// What the fence says of a target.
+enum Fenced {
+    Clear,
+    /// It is, holds or lies inside one of the app's own folders: why.
+    Own(String),
+    /// Its identity cannot be read now: why.
+    Unreadable(String),
 }
 
 impl Fence {
@@ -189,9 +201,20 @@ impl Fence {
         whole.extend(ident(Path::new("/")));
         let own = own
             .iter()
-            .filter_map(|o| {
+            .map(|o| {
                 let line = lineage(o);
-                Some((o.clone(), *line.first()?, line))
+                match line.first() {
+                    Some(id) => (o.clone(), Some(*id), line),
+                    None => {
+                        let above = o
+                            .ancestors()
+                            .skip(1)
+                            .map(lineage)
+                            .find(|l| !l.is_empty())
+                            .unwrap_or_default();
+                        (o.clone(), None, above)
+                    }
+                }
             })
             .collect();
         Fence { whole, own }
@@ -202,23 +225,24 @@ impl Fence {
         ident(folder).is_some_and(|i| self.whole.contains(&i))
     }
 
-    /// Why target may not be granted for the app's own folders, if it may not: it is one, holds
-    /// one or lies inside one. A target whose identity cannot be read is refused too.
-    fn own(&self, target: &Path) -> Option<String> {
+    /// Whether target is, holds or lies inside one of the app's own folders, or cannot be told.
+    fn own(&self, target: &Path) -> Fenced {
         let line = lineage(target);
         let Some(me) = line.first() else {
-            return Some(format!("{}: it cannot be read", target.display()));
+            return Fenced::Unreadable(format!("{}: it cannot be read", target.display()));
         };
-        self.own
+        match self
+            .own
             .iter()
-            .find(|(_, id, above)| line.contains(id) || above.contains(me))
-            .map(|(o, _, _)| {
-                format!(
-                    "{} is, holds or is inside the app's own folder {}: the app's settings, data and vault cannot be granted",
-                    target.display(),
-                    o.display()
-                )
-            })
+            .find(|(_, id, above)| id.is_some_and(|id| line.contains(&id)) || above.contains(me))
+        {
+            Some((o, _, _)) => Fenced::Own(format!(
+                "{} is, holds or is inside the app's own folder {}: the app's settings, data and vault cannot be granted",
+                target.display(),
+                o.display()
+            )),
+            None => Fenced::Clear,
+        }
     }
 }
 
@@ -321,8 +345,9 @@ fn resolve_with(
         "subtree" => return Err(format!("{} is not a folder", target.display())),
         _ => return Err(format!("resources of kind {kind} cannot be granted")),
     }
-    if let Some(why) = fence.own(&target) {
-        return Err(why);
+    match fence.own(&target) {
+        Fenced::Clear => {}
+        Fenced::Own(why) | Fenced::Unreadable(why) => return Err(why),
     }
     #[cfg(target_os = "linux")]
     let mount = Some(
@@ -401,13 +426,25 @@ fn log_open(f: &impl std::os::fd::AsRawFd) {
 
 const NO_BLOCK: i32 = libc::O_NONBLOCK | libc::O_NOCTTY;
 
-/// Opens g's target and checks it is the one reviewed, and that it is still none of what no
-/// grant may reach (own, the app's own folders, may have come to lie inside it since).
-fn open(g: &Grant, own: &[PathBuf]) -> Result<Handle, Denial> {
+/// Whether g's target is still none of what no grant may reach, checked before every call, also
+/// one a handle opened earlier serves: one of own, the app's own folders, may have been made or
+/// moved in since. Refused when it is, holds or lies inside one, or (a folder) is the root folder
+/// or holds all of home; unavailable when its identity cannot be read now, an error that may
+/// pass.
+fn fenced(g: &Grant, own: &[PathBuf]) -> Result<(), Denial> {
     let fence = Fence::new(home().as_deref(), own);
-    if fence.own(&g.target).is_some() || (g.kind == "subtree" && fence.whole(&g.target)) {
+    if g.kind == "subtree" && fence.whole(&g.target) {
         return Err(Denial::Refused);
     }
+    match fence.own(&g.target) {
+        Fenced::Clear => Ok(()),
+        Fenced::Own(_) => Err(Denial::Refused),
+        Fenced::Unreadable(_) => Err(Denial::Unavailable),
+    }
+}
+
+/// Opens g's target and checks it is the one reviewed.
+fn open(g: &Grant) -> Result<Handle, Denial> {
     let map = |_| Denial::Unavailable;
     if g.kind == "subtree" {
         let d = Dir::open_ambient_dir(&g.target, cap_std::ambient_authority()).map_err(map)?;
@@ -499,19 +536,19 @@ pub struct Begun {
     pub grant: Grant,
     pub op: Op,
     pub handle: Option<Arc<Handle>>,
-    /// The app's own folders, which its target is checked against when it is opened.
+    /// The app's own folders, which its target is checked against before the call's I/O.
     pub own: Arc<Vec<PathBuf>>,
 }
 
 /// Does the I/O of a begun call, outside the store's lock. Returns the result and the handle
 /// it opened, if it had none.
 pub fn run(b: &Begun) -> (Result<Value, Denial>, Option<Arc<Handle>>) {
-    if let Err(d) = current(&b.grant) {
+    if let Err(d) = current(&b.grant).and_then(|_| fenced(&b.grant, &b.own)) {
         return (Err(d), None);
     }
     let (handle, opened) = match &b.handle {
         Some(h) => (h.clone(), None),
-        None => match open(&b.grant, &b.own) {
+        None => match open(&b.grant) {
             Ok(h) => {
                 let h = Arc::new(h);
                 (h.clone(), Some(h))

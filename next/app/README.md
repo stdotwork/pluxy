@@ -672,7 +672,8 @@ Granting takes three things, each in native UI the window can only start:
    your home folder or the document portal's store is refused. So is anything that is, holds or
    lies inside one of the app's own folders: its settings folder (`connection.json`,
    `access.json`), its data folder (the vault, the extension store, native tools' data), and its
-   cache folder. The root folder, your home folder and the app's folders are recognised by their
+   cache folder; one not made yet counts from the folder that would hold it, so a folder above
+   it is refused too. The root folder, your home folder and the app's folders are recognised by their
    identity (device and inode), not their path, so another path to them, such as a bind mount
    or a link, is refused too; a bind mount of a folder *inside* one of the app's folders, on its
    own, is not recognised. A native confirmation then shows the package with its source, digest and signer, the
@@ -690,7 +691,8 @@ reads with `changed` until you grant it again, even if it is put back. An error 
 (permissions, an I/O error, too many open files) answers `unavailable` and ends nothing.
 Removing the package removes its grants. A grant whose target has come to be, hold or lie inside
 one of the app's own folders since it was granted (such as a folder granted before the app's
-data folder was moved into it) refuses reads with `refused`.
+data folder was moved into it) refuses reads with `refused`: this is checked before every read and
+listing, also one a handle opened earlier would serve.
 
 Pages read with three channel methods, answered by native code, never by the window, so the
 bytes never reach the window: `resources.status`, `resources.read` and `resources.list`
