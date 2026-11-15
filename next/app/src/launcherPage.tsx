@@ -24,6 +24,7 @@ import {
   useLoad,
   when,
 } from "../../ui/kit/ui";
+import { lifetimeFor } from "./launcherForm";
 
 const t = strings("launcher", {
   title: "Launcher",
@@ -60,6 +61,8 @@ const t = strings("launcher", {
   detachedNote: "keeps running after the app quits",
   managed: "Managed",
   managedNote: "the app stops it",
+  terminalDetached:
+    "A launch in a terminal is detached: it keeps running after the app quits. Many terminals hand their windows to a server process and exit at once, so the app could not stop it. Launch directly to have the app stop it.",
   launch: "Start…",
   runtimes: "Managed runtimes",
   noRuntimes: "No managed runtimes.",
@@ -178,7 +181,7 @@ function NewLaunch(props: { state: State; done: () => void }) {
         args: args.split("\n").filter((a) => a !== ""),
         cwd: cwd.trim(),
         ...(kind === "terminal" ? { terminal } : {}),
-        lifetime,
+        lifetime: lifetimeFor(kind, lifetime),
       }),
     );
   return (
@@ -213,15 +216,19 @@ function NewLaunch(props: { state: State; done: () => void }) {
           onChange={setTerminal}
         />
       )}
-      <Choices
-        label={t("lifetime")}
-        value={lifetime}
-        choices={[
-          { value: "detached", label: t("detached"), note: t("detachedNote") },
-          { value: "managed", label: t("managed"), note: t("managedNote") },
-        ]}
-        onChange={setLifetime}
-      />
+      {kind === "direct" ? (
+        <Choices
+          label={t("lifetime")}
+          value={lifetime}
+          choices={[
+            { value: "detached", label: t("detached"), note: t("detachedNote") },
+            { value: "managed", label: t("managed"), note: t("managedNote") },
+          ]}
+          onChange={setLifetime}
+        />
+      ) : (
+        <Notice tone="muted">{t("terminalDetached")}</Notice>
+      )}
       {action.error && <Notice tone="danger">{action.error}</Notice>}
       <Button variant="primary" onClick={submit} disabled={action.busy || !program.trim() || !cwd.trim()}>
         {t("launch")}
