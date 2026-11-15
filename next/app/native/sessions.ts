@@ -15,14 +15,20 @@
 //   one with neither (its modification time), one with a database thread's ID behind `local:`, and a
 //   symbolic link (skipped);
 // - session_index.jsonl, with a broken line;
-// - config.toml and auth.json holding canary strings no page and no log may show.
+// - config.toml and auth.json holding canary strings no page and no log may show;
+// - the person's own app, for the open check: pluxy/execution (the real execution program, built with
+//   its native-test feature) in the registry beside the reader, and a stand-in opener,
+//   opener/bin/xdg-open (the fixture program), which appends what it was started with to
+//   opener/bin/opened.jsonl and exits. T1's rollout and the sessions folder are private (0600, 0700):
+//   the host opens only a file and folder no one else may write.
 //
 // The test archive adds one page to the reader's manifest: routing.ts's relay page (`page`), which
 // sends the calls the check posts it on its channel, as the routing and vault checks do. The reader's
 // own page stays as it is.
 //
 // expect.json holds what the check compares with, written out by hand here, never worked out by
-// the reader's code: each list page, each detail page and the canaries. When the reader has not
+// the reader's code: each list page, each detail page, what the open of T1 must launch (the resolved
+// rollout, its folder, the sessions folder and the opener) and the canaries. When the reader has not
 // been built (its program is missing), the registry lists nothing and the check fails at its
 // first step, installing the reader.
 
@@ -43,11 +49,12 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { artifact, type Fixture, platform, writeTrustProfile } from "./admission";
-import { PAGE_SCRIPT } from "./routing";
+import { PAGE_SCRIPT, pack } from "./routing";
 
 export const SESSIONS_ID = "pluxy/codex-sessions";
+export const EXECUTION_ID = "pluxy/execution";
 
 const T1 = "019a0000-0000-7000-8000-000000000001";
 const T2 = "019a0000-0000-7000-8000-000000000002";
@@ -151,6 +158,9 @@ function codexHome(home: string, outside: string) {
   const t1Rollout = join(codex, "sessions/2026/08/04", `rollout-2026-08-04T10-00-00-${T1}.jsonl`);
   const t1Bytes = `${rolloutLines().join("\n")}\n`;
   writeFileSync(t1Rollout, t1Bytes);
+  // The host opens only a file and folder no one else may write.
+  chmodSync(t1Rollout, 0o600);
+  chmodSync(join(codex, "sessions"), 0o700);
   writeFileSync(
     join(codex, "sessions/2026/08/05", `rollout-2026-08-05T09-00-00-${R1}.jsonl`),
     "not parsed\n",
@@ -338,26 +348,67 @@ function packReader(
   return { version: manifest.version as string, bin, ...artifact(root, f.file, f, publicKey, privateKey) };
 }
 
+/** The programs of the open check: the built execution program and its manifest, and the fixture
+ * program that serves as the stand-in opener. */
+export interface Opening {
+  execution: string;
+  manifest: string;
+  opener: string;
+}
+
+/** Packs and signs the execution program, when it was built; undefined otherwise. */
+function packExecution(root: string, o: Opening, publicKey: KeyObject, privateKey: KeyObject) {
+  if (!existsSync(o.execution) || !existsSync(o.manifest)) return undefined;
+  const m = JSON.parse(readFileSync(o.manifest, "utf8"));
+  const file = pack(
+    root,
+    {
+      id: m.id,
+      version: m.version,
+      tier: "native",
+      app: { ...m.app, programs: { [platform()]: "bin/tool" } },
+    },
+    o.execution,
+  );
+  const f: Fixture = { file, id: m.id, version: m.version, tier: "native" };
+  return { version: m.version as string, bin: "bin/tool", ...artifact(root, file, f, publicKey, privateKey) };
+}
+
 /** Builds the fixtures in root, the Codex home and the test trust profile in home (the app's
- * HOME), with program (the built reader) from tools (next/app-tools). */
-export function buildSessionsFixtures(root: string, home: string, tools: string, program: string): Sessions {
+ * HOME), with program (the built reader) from tools (next/app-tools), and opening's programs for the
+ * open check. */
+export function buildSessionsFixtures(
+  root: string,
+  home: string,
+  tools: string,
+  program: string,
+  opening: Opening,
+): Sessions {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const reader = packReader(root, tools, program, publicKey, privateKey);
+  const execution = packExecution(root, opening, publicKey, privateKey);
   const curated = join(root, "curated.json");
+  const releases = (r: { version: string; entry: Record<string, unknown> }) => ({
+    releases: [{ version: r.version, artifacts: { [platform()]: r.entry } }],
+  });
   writeFileSync(
     curated,
     JSON.stringify({
       registry_version: 0,
-      packages: reader
-        ? {
-            [SESSIONS_ID]: {
-              releases: [{ version: reader.version, artifacts: { [platform()]: reader.entry } }],
-            },
-          }
-        : {},
+      packages: {
+        ...(reader ? { [SESSIONS_ID]: releases(reader) } : {}),
+        ...(execution ? { [EXECUTION_ID]: releases(execution) } : {}),
+      },
     }),
   );
   const { codex, t1Rollout, t1Size, canaries } = codexHome(home, join(root, "outside"));
+  // The stand-in opener: the app takes an opener from this folder only in a native-test build
+  // (PLUXY_APP_TEST_OPENERS), and the reader's native-test build sends it as its prepare's search path.
+  const openers = join(root, "opener", "bin");
+  mkdirSync(openers, { recursive: true });
+  copyFileSync(opening.opener, join(openers, "xdg-open"));
+  chmodSync(join(openers, "xdg-open"), 0o755);
+  const rollout = realpathSync(t1Rollout);
   writeFileSync(
     join(root, "expect.json"),
     JSON.stringify({
@@ -367,6 +418,26 @@ export function buildSessionsFixtures(root: string, home: string, tools: string,
       bin: reader?.bin ?? "bin/codex-sessions",
       codex,
       canaries,
+      execution: {
+        id: EXECUTION_ID,
+        version: execution?.version ?? "0.1.0",
+        sha256: execution?.sha256 ?? null,
+        bin: execution?.bin ?? "bin/tool",
+      },
+      open: {
+        id: T1,
+        file: rollout,
+        folder: dirname(rollout),
+        within: realpathSync(join(codex, "sessions")),
+        opener: realpathSync(join(openers, "xdg-open")),
+        record: join(realpathSync(openers), "opened.jsonl"),
+        // Refused before any confirmation: sessions with no rollout file, and an ID that is a path.
+        refused: [
+          { id: "thread-db-only", code: "unavailable" },
+          { id: "legacy-1", code: "unavailable" },
+          { id: "../etc/passwd", code: "bad_request" },
+        ],
+      },
       ...expected(codex, t1Rollout, t1Size),
     }),
   );

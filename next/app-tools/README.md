@@ -339,13 +339,34 @@ writes an OpenCode file.
 
 `pluxy/codex-sessions` reads Codex's local sessions, read-only, and shows them on its page
 (*Codex sessions*). It never writes a Codex file, never reads `config.toml` or `auth.json`, and
-has no repair, delete, export or editor.
+has no repair, delete, export or editor. `open` starts the person's own app on a rollout, after
+the person confirms the launch (below); the reader itself spawns nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
 | `list` | `read` | `offset` (default 0), `limit` (1 to 100, default 50) | The Codex home, the databases read, a page of sessions (ID, title, folder, provider, archived, update time, database), the total, whether there are more, the page's active and archived counts, and warnings |
 | `detail` | `disclose`: each call asks the person | `id`, `offset`, `limit` (messages) | The session's title, folder, provider, model, archived, update time, rollout file and database; its statistics; a page of its messages, each cut at 8 KiB (`truncated`), at most 512 KiB in all, and `next_offset` |
+| `open` | `read`; the launch it asks for is confirmed | `id` | `{"outcome": "opened"}` once the launch was started; the call's error (a refused or declined launch, a session with no rollout file, `pluxy/execution` not enabled); never a path or a byte of the file |
 | `settings` | `write` | `codex_home`: a full path, or empty for the default | The Codex home now read, and whether it is custom |
+
+`open` is the old app's *Edit with local app*, as a launch the person confirms: the session's
+rollout is opened by the desktop's own opener (`xdg-open`, else `gio open`), which starts whatever
+app the desktop has for JSON Lines files. It reads no byte of the file. It finds the rollout as
+`detail` does, and opens only a regular file named `rollout-*.jsonl` inside the Codex home's
+`sessions/` or `archived_sessions/` (whichever holds it, never the Codex home itself: the host
+refuses a folder that is the home folder or above it); a rollout reached through a link is opened
+as the file the link resolves to. It then calls
+[`pluxy/execution`](#execution) (an optional import of its `prepare` and `launch`): `prepare` with
+`{"kind": "open", "file", "within"}`, the two resolved paths and nothing else, so the opener is
+found only in the system's program folders, and then `launch` with exactly what `prepare` gave, plus
+`"lifetime": "detached"`: no environment, standard input, secret or program. The call that starts
+the launch is execution's, so the person's confirmation is the host's: it names this tool and
+`pluxy/execution`, the file, its content type, the folder and the opener, is asked every time, and
+offers no *Remember* (`../app/app-host/README.md`, "Launches and managed runtimes"). Without
+`pluxy/execution` enabled, `open` fails with the host's `extension_unavailable` and the reader
+works as before. A native-test build (feature `native-test`, the app's native test only) also
+sends `search_path` with the folder named in `opener-folder` in the tool's data folder, for the
+test's stand-in opener.
 
 The Codex home is `~/.codex` (from the `HOME` the app gives), or the folder set with `settings`,
 kept in the tool's data folder (`PLUXY_TOOL_DATA_DIR`). `list` and `detail` take no paths, so a
