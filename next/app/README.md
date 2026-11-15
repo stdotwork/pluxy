@@ -174,8 +174,8 @@ tray's Quit does. Minimize to Tray destroys the window and its webviews, so they
 while the app sits in the tray. A window that does not answer the question within three seconds
 (its page still loading, or busy) closes to the tray.
 
-The tray menu shows what the app is connected to, and has "Open pluxy" (a new window) and "Quit
-pluxy". In managed mode, "Start core", "Stop core" and "Restart core" control only the core the
+The tray menu shows what the app is connected to, and has "Open pluxy" (a new window), "Start…"
+(remembered launches, [The launcher](#the-launcher)) and "Quit pluxy". In managed mode, "Start core", "Stop core" and "Restart core" control only the core the
 app started. They work with the window closed and no renderer running. "Restart core" is
 enabled only while the core runs. While one of them runs, the tray says "Core working…",
 disables all three and refuses another click. They are disabled in local and remote modes, and
@@ -766,11 +766,45 @@ Confirm disabled for one second after mapping. Non-UTF-8 paths are refused befor
 Unicode format characters (including bidi and zero-width characters), control characters and
 Pango line separators (U+2028/U+2029) are displayed as escaped Unicode.
 
-Real launchers are added separately; this module contains no launcher. Host
+The launcher ([The launcher](#the-launcher)) is a caller of this module. Host
 callers must invalidate pending preparations/tokens when package, contract, environment or secret
 policy records change, and prepare a new action. Tokens and pending reviews expire after 60
 seconds, work once for their preparation, and fail on changed file identity or executable metadata.
 Revoking a remembered approval also invalidates its outstanding tokens.
+
+## The launcher
+
+The Launcher page and the tray's **Start…** menu start agents and terminals, drawn from host data
+(`src-tauri/src/launcher.rs`, `src/launcherPage.tsx`). They need the curated execution program
+`pluxy/execution` ([app tools](../app-tools/README.md#execution)), installed and enabled on the
+Device extensions page; without it the page says so.
+
+A **new launch** names a client label, a kind (in a terminal or directly), a program (a name found
+on the launch environment's `PATH`, or a full path), an optional executable override, arguments,
+a working folder (the page offers the client's eight most recently used), a terminal (**Automatic**
+or one found on `PATH`) and a lifetime (detached or managed). The execution program prepares the
+executable, argv and cwd; the app's native confirmation shows them in full, with the program a
+terminal runs, the lifetime and the environment, and offers **Remember this exact executable,
+argv and cwd**. A remembered launch joins the page's list (client, command, folder, the execution
+program's release that runs it) and the tray's Start… menu.
+
+**Start** on the page, or a click in the tray's Start… menu, starts a remembered launch again in
+one click, with no dialog, while it is exactly the launch remembered: the same executable and
+program (path, file identity and contents), argv, folder, environment, secrets and execution
+program release, from the same window. Anything changed asks again, and remembering it again
+replaces the old approval; a page's Start or a launch through another package always asks. One
+start of a launch per second; after each the app shows its launch notice ("Started …" or why it
+did not), unless **Show a notice after a one-click start** is off. **Forget** revokes the
+approval; so does revoking it in the tray's **Remembered launches…**, which also takes it out of
+the menu. The list, the recent folders and the notice setting are in `launcher.json` beside
+`connection.json`, readable only by your user; it holds no secret (a secret field holds a vault
+secret's ID), and a damaged file is moved aside as `launcher.json.corrupt-<time>`.
+
+Detached launches keep running after the app quits, each in a transient systemd scope of its own
+when a systemd user manager runs ([Launches](app-host/README.md#launches-and-managed-runtimes)). The
+page lists the managed runtimes the execution program started, with **Stop** and **Restart** (each
+confirmed natively, never remembered); disabling or removing a package with managed runtimes running
+asks first, and cancelling leaves both as they are.
 
 ## Build and check
 

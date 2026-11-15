@@ -267,7 +267,7 @@ impl Page {
 
 /// Starts the window's call of op of package with input from a native button's click, which
 /// makes a native gesture; the answer comes on the receiver.
-fn clicked(
+pub(super) fn clicked(
     app: &AppHandle,
     package: &str,
     op: &str,
@@ -290,7 +290,7 @@ fn clicked(
     Ok(rx)
 }
 
-fn answer(
+pub(super) fn answer(
     rx: &mpsc::Receiver<Result<Value, crate::program::CallError>>,
 ) -> Result<Result<Value, crate::program::CallError>, String> {
     rx.recv_timeout(Duration::from_secs(90))

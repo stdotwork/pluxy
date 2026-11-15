@@ -235,6 +235,9 @@ pub struct Request {
     pub inherit: Vec<String>,
     /// Variable name → the input's secret field whose secret it gets.
     pub secrets: BTreeMap<String, String>,
+    /// The input's secret field whose secret the launch gets on its stdin (`stdin`), the private
+    /// channel to a credential bridge: written, then closed.
+    pub stdin: Option<String>,
 }
 
 fn valid_name(n: &str) -> Result<(), String> {
@@ -296,6 +299,15 @@ pub fn parse(
         }
     };
     let mut r = Request::default();
+    if let Some(v) = input.get("stdin") {
+        let field = v.as_str().ok_or("a launch's stdin names a secret field")?;
+        if !secret_field(field) {
+            return Err(format!(
+                "stdin names {field}, which is not a secret field this launch fills"
+            ));
+        }
+        r.stdin = Some(field.to_string());
+    }
     let Some(env) = input.get("environment") else {
         return Ok((lifetime, r));
     };
@@ -411,6 +423,15 @@ impl Request {
         for (n, field) in &self.secrets {
             out.push((n.clone(), Some(format!("the secret {}", secret(field)))));
         }
+        if let Some(field) = &self.stdin {
+            out.push((
+                "(stdin)".into(),
+                Some(format!(
+                    "the secret {}, written to its standard input",
+                    secret(field)
+                )),
+            ));
+        }
         out
     }
 
@@ -422,6 +443,11 @@ impl Request {
             "policy": POLICY, "base": BASE, "lifetime": lifetime.name(),
             "set": self.set, "unset": self.unset, "inherit": self.inherit, "secrets": self.secrets,
         });
+        // Only when asked, so a launch without it keeps the revision it had before stdin existed.
+        let mut v = v;
+        if let Some(field) = &self.stdin {
+            v["stdin"] = json!(field);
+        }
         Sha256::digest(v.to_string().as_bytes())
             .iter()
             .map(|b| format!("{b:02x}"))
@@ -508,6 +534,8 @@ pub struct Launch {
     pub lifetime: Lifetime,
     pub request: Request,
     pub secrets: Vec<(String, String)>,
+    /// The vault secret ID whose value it gets on its stdin (`Request::stdin`).
+    pub stdin: Option<String>,
 }
 
 /// Whether f is a script (`#!`): its interpreter opens it again by its descriptor's path, so the
@@ -522,7 +550,14 @@ fn is_script(f: &File) -> bool {
 /// and exits). With secrets given, its core file size limits are 1 (soft and hard), inherited by
 /// its descendants: no core file and no core dump handler; otherwise it gets the app's starting
 /// limits back.
-fn command(l: &Launch, env: Vec<(String, OsString)>, holds_secrets: bool) -> Command {
+/// hold, for a detached launch: the pipes that hold its wrapper before it forks the launch, until
+/// the app has moved it into a scope of its own (`Hold`).
+fn command(
+    l: &Launch,
+    env: Vec<(String, OsString)>,
+    holds_secrets: bool,
+    hold: Option<[i32; 4]>,
+) -> Command {
     let exe = l.opened.executable();
     let exe_fd = exe.as_raw_fd();
     let cwd_fd = l.opened.cwd().as_raw_fd();
@@ -544,7 +579,11 @@ fn command(l: &Launch, env: Vec<(String, OsString)>, holds_secrets: bool) -> Com
         .args(&l.argv)
         .env_clear()
         .envs(env)
-        .stdin(Stdio::null())
+        .stdin(if l.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     if !detached {
@@ -558,6 +597,20 @@ fn command(l: &Launch, env: Vec<(String, OsString)>, holds_secrets: bool) -> Com
                 return Err(err());
             }
             if detached {
+                // Held until the app moved the wrapper into a scope of its own (or gave up), so
+                // the launch and everything it starts is in that scope from its fork on.
+                if let Some([pid_r, pid_w, go_r, go_w]) = hold {
+                    libc::close(pid_r);
+                    libc::close(go_w);
+                    let me = libc::getpid().to_ne_bytes();
+                    libc::write(pid_w, me.as_ptr().cast(), me.len());
+                    libc::close(pid_w);
+                    let mut b = 0u8;
+                    while libc::read(go_r, (&mut b as *mut u8).cast(), 1) == -1
+                        && *libc::__errno_location() == libc::EINTR
+                    {}
+                    libc::close(go_r);
+                }
                 // The wrapper exits at once, for the app to reap; the launch goes on without it,
                 // never the app's child, in a session of its own.
                 match libc::fork() {
@@ -617,19 +670,254 @@ fn resolve(
         .collect()
 }
 
+/// The value of l's stdin secret, refused when it is gone.
+fn resolve_stdin(
+    l: &Launch,
+    value: &dyn Fn(&str) -> Option<String>,
+) -> Result<Option<String>, String> {
+    l.stdin
+        .as_ref()
+        .map(|id| value(id).ok_or("the secret for its stdin was removed from the vault".into()))
+        .transpose()
+}
+
+/// Writes a launch's stdin secret to its stdin pipe and closes it. The value fits the pipe's
+/// buffer (at most `MAX_VALUE`), so this never waits for the launch to read it.
+fn feed(stdin: Option<std::process::ChildStdin>, value: Option<String>) {
+    if let (Some(mut pipe), Some(v)) = (stdin, value) {
+        use std::io::Write;
+        let _ = pipe.write_all(v.as_bytes());
+    }
+}
+
 /// Starts detached launch l, with its secrets' values resolved by value; returns once its
-/// wrapper has been reaped.
+/// wrapper has been reaped. With a systemd user manager on the session bus, the launch runs in a
+/// transient scope of its own (`scope`).
 pub fn detached(l: &Launch, value: &dyn Fn(&str) -> Option<String>) -> Result<(), String> {
     l.opened.recheck()?;
     let secrets = resolve(l, value)?;
+    let stdin = resolve_stdin(l, value)?;
     let env = environment(snapshot(), &l.request, &secrets);
-    let mut cmd = command(l, env, !secrets.is_empty());
-    let mut wrapper = cmd
-        .spawn()
-        .map_err(|e| format!("the launch did not start: {e}"))?;
+    let hold = Hold::new().ok();
+    let mut cmd = command(
+        l,
+        env,
+        !secrets.is_empty() || stdin.is_some(),
+        hold.as_ref().map(Hold::fds),
+    );
+    let mover = hold.as_ref().map(Hold::mover).transpose()?;
+    let spawned = cmd.spawn();
     drop(cmd);
+    // The wrapper has its copies (or never started): without the app's, the mover sees the end.
+    drop(hold);
+    if let Some(m) = mover {
+        let _ = m.join();
+    }
+    let mut wrapper = spawned.map_err(|e| format!("the launch did not start: {e}"))?;
+    feed(wrapper.stdin.take(), stdin);
     wrapper.wait().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// The pipes that hold a detached launch's wrapper (`command`): it writes its process ID to the
+/// first, then waits on the second until the app has moved it into a scope of its own (`scope`)
+/// or given up. Every end is close-on-exec; the wrapper closes those it does not use.
+struct Hold {
+    pid: (std::os::fd::OwnedFd, std::os::fd::OwnedFd),
+    go: (std::os::fd::OwnedFd, Option<std::os::fd::OwnedFd>),
+}
+
+fn pipe() -> io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
+    use std::os::fd::FromRawFd;
+    let mut fds = [0i32; 2];
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe {
+        (
+            std::os::fd::OwnedFd::from_raw_fd(fds[0]),
+            std::os::fd::OwnedFd::from_raw_fd(fds[1]),
+        )
+    })
+}
+
+impl Hold {
+    fn new() -> io::Result<Hold> {
+        let pid = pipe()?;
+        let (go_r, go_w) = pipe()?;
+        Ok(Hold {
+            pid,
+            go: (go_r, Some(go_w)),
+        })
+    }
+
+    /// pid read, pid write, go read, go write.
+    fn fds(&self) -> [i32; 4] {
+        [
+            self.pid.0.as_raw_fd(),
+            self.pid.1.as_raw_fd(),
+            self.go.0.as_raw_fd(),
+            self.go.1.as_ref().map_or(-1, |f| f.as_raw_fd()),
+        ]
+    }
+
+    /// The thread that reads the wrapper's process ID, moves it into a scope and lets it go on.
+    fn mover(&self) -> Result<std::thread::JoinHandle<()>, String> {
+        let dup = |f: &std::os::fd::OwnedFd| f.try_clone().map_err(|e| e.to_string());
+        let pid_r = File::from(dup(&self.pid.0)?);
+        let go_w = File::from(dup(self.go.1.as_ref().ok_or("no go pipe")?)?);
+        std::thread::Builder::new()
+            .name("pluxy-launch-scope".into())
+            .spawn(move || {
+                use std::io::{Read, Write};
+                let (mut pid_r, mut go_w) = (pid_r, go_w);
+                let mut b = [0u8; 4];
+                if pid_r.read_exact(&mut b).is_ok() {
+                    let pid = i32::from_ne_bytes(b);
+                    if let Err(e) = scope::enter(pid as u32) {
+                        scope::report(&e);
+                    }
+                    let _ = go_w.write_all(&[1]);
+                }
+            })
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Transient systemd scopes for detached launches. `setsid` leaves a launch in the app's cgroup,
+/// where stopping a unit that runs the app (its default `KillMode`, `ExitType=cgroup`) or
+/// `systemd-oomd` acting on it would end it too. With a systemd user manager on the session bus,
+/// the host asks it (`StartTransientUnit`) for a scope `app-pluxy-launch-<hex>.scope` holding
+/// the launch's wrapper before it forks the launch, and waits until the wrapper's cgroup is that
+/// scope. With no user manager, or a refusal (the app runs in a cgroup the user manager does not
+/// own), the launch runs in the app's cgroup as before.
+mod scope {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// How long the host waits for the user manager, and then for the move.
+    const WAIT: Duration = Duration::from_secs(2);
+
+    pub enum Failed {
+        /// No user manager on the session bus (or no session bus).
+        Absent(String),
+        Refused(String),
+    }
+
+    /// f with a cancellable that is cancelled once wait passes: a session bus that accepts but
+    /// never answers holds a launch no longer than that.
+    pub fn within<T>(
+        wait: Duration,
+        f: impl FnOnce(&gtk::gio::Cancellable) -> Result<T, gtk::glib::Error>,
+    ) -> Result<T, gtk::glib::Error> {
+        use gtk::gio::prelude::CancellableExt;
+        let cancel = gtk::gio::Cancellable::new();
+        let (done, rx) = std::sync::mpsc::channel::<()>();
+        let c = cancel.clone();
+        std::thread::spawn(move || {
+            if rx.recv_timeout(wait) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                c.cancel();
+            }
+        });
+        let r = f(&cancel);
+        let _ = done.send(());
+        r
+    }
+
+    /// Moves process pid into a new transient scope of its own; the scope's name.
+    pub fn enter(pid: u32) -> Result<String, Failed> {
+        use gtk::gio;
+        use gtk::glib::{ToVariant, Variant, VariantTy};
+        let conn = within(WAIT, |c| gio::bus_get_sync(gio::BusType::Session, Some(c)))
+            .map_err(|e| Failed::Absent(e.to_string()))?;
+        let mut b = [0u8; 8];
+        getrandom::fill(&mut b).map_err(|e| Failed::Refused(e.to_string()))?;
+        let name = format!(
+            "app-pluxy-launch-{}.scope",
+            b.iter().map(|x| format!("{x:02x}")).collect::<String>()
+        );
+        let props: Vec<(String, Variant)> = vec![
+            ("PIDs".into(), vec![pid].to_variant()),
+            ("CollectMode".into(), "inactive-or-failed".to_variant()),
+            ("Description".into(), "pluxy launch".to_variant()),
+        ];
+        let aux: Vec<(String, Vec<(String, Variant)>)> = Vec::new();
+        let params = (name.as_str(), "fail", props, aux).to_variant();
+        let reply = VariantTy::new("(o)").map_err(|e| Failed::Refused(e.to_string()))?;
+        conn.call_sync(
+            Some("org.freedesktop.systemd1"),
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+            "StartTransientUnit",
+            Some(&params),
+            Some(reply),
+            gio::DBusCallFlags::NO_AUTO_START,
+            WAIT.as_millis() as i32,
+            gio::Cancellable::NONE,
+        )
+        .map_err(|e| {
+            let text = e.to_string();
+            if text.contains("ServiceUnknown") || text.contains("NameHasNoOwner") {
+                Failed::Absent(text)
+            } else {
+                Failed::Refused(text)
+            }
+        })?;
+        let deadline = Instant::now() + WAIT;
+        loop {
+            if std::fs::read_to_string(format!("/proc/{pid}/cgroup"))
+                .is_ok_and(|c| c.lines().any(|l| l.ends_with(&format!("/{name}"))))
+            {
+                return Ok(name);
+            }
+            if Instant::now() > deadline {
+                return Err(Failed::Refused(format!(
+                    "{name} was started but the launch is not in it"
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Whether the session bus has a systemd user manager (for the tests).
+    #[cfg(test)]
+    pub fn available() -> bool {
+        use gtk::gio;
+        use gtk::glib::ToVariant;
+        within(WAIT, |c| gio::bus_get_sync(gio::BusType::Session, Some(c)))
+            .and_then(|c| {
+                c.call_sync(
+                    Some("org.freedesktop.DBus"),
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.DBus",
+                    "NameHasOwner",
+                    Some(&("org.freedesktop.systemd1",).to_variant()),
+                    None,
+                    gio::DBusCallFlags::NONE,
+                    2000,
+                    gio::Cancellable::NONE,
+                )
+            })
+            .ok()
+            .and_then(|v| v.child_value(0).get::<bool>())
+            .unwrap_or(false)
+    }
+
+    /// Logs why a launch runs in the app's cgroup: a missing user manager once, a refusal each
+    /// time.
+    pub fn report(e: &Failed) {
+        static ABSENT: AtomicBool = AtomicBool::new(false);
+        match e {
+            Failed::Absent(why) => {
+                if !ABSENT.swap(true, Ordering::SeqCst) {
+                    eprintln!("pluxy-app: no systemd user manager ({why}): detached launches run in the app's cgroup");
+                }
+            }
+            Failed::Refused(why) => {
+                eprintln!("pluxy-app: a detached launch runs in the app's cgroup: {why}")
+            }
+        }
+    }
 }
 
 fn now_ms() -> u64 {
@@ -866,6 +1154,7 @@ impl Runtimes {
         })?;
         self.0.open(&self.0.list.lock().unwrap(), package)?;
         let secrets = resolve(l, &*self.0.value)?;
+        let stdin = resolve_stdin(l, &*self.0.value)?;
         let env = environment(snapshot(), &l.request, &secrets);
         let token = {
             let mut t = self.0.tokens.lock().unwrap();
@@ -875,16 +1164,17 @@ impl Runtimes {
         let (tx, rx) = std::sync::mpsc::channel();
         let (shared, launch, rid) = (Arc::clone(&self.0), Arc::clone(l), id.to_string());
         let package = package.to_string();
-        let holds = !secrets.is_empty();
+        let holds = !secrets.is_empty() || stdin.is_some();
         drop(secrets);
         std::thread::Builder::new()
             .name("pluxy-runtime".into())
             .spawn(move || {
-                let mut cmd = command(&launch, env, holds);
+                let mut cmd = command(&launch, env, holds, None);
                 let child = cmd.spawn();
                 drop(cmd);
                 match child {
-                    Ok(c) => {
+                    Ok(mut c) => {
+                        let pipe = c.stdin.take();
                         let pid = c.id();
                         let refused = {
                             let mut list = shared.list.lock().unwrap();
@@ -904,6 +1194,10 @@ impl Runtimes {
                             shared.save(&list);
                             refused
                         };
+                        // Its stdin secret only once it may run; refused, the pipe just closes.
+                        if refused.is_none() {
+                            feed(pipe, stdin);
+                        }
                         let _ = tx.send(refused.map_or(Ok(()), Err));
                         supervise(&shared, &rid, token, c);
                     }
