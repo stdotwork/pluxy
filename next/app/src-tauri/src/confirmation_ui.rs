@@ -192,21 +192,40 @@ pub(crate) fn confirm_app(
         let prepared = c.prepare_app(what, generation)?;
         c.queue(prepared)?
     };
-    request(app, id.clone())?;
+    let st = app.state::<crate::App>();
+    // Withdrawn on every way out that is not an answer, so a dialog that never showed does not
+    // keep one of the pending places until its lifetime ends.
+    if let Err(e) = request(app, id.clone()) {
+        st.confirmations.lock().unwrap().withdraw(&id);
+        return Err(e);
+    }
     // The dialog cancels itself when its lifetime ends; this is only a backstop.
-    let deadline = Instant::now() + LIFETIME + Duration::from_secs(10);
+    wait_app(
+        &st.confirmations,
+        &id,
+        Instant::now() + LIFETIME + Duration::from_secs(10),
+    )
+}
+
+/// Waits for the result of app confirmation id until deadline: true after Confirm, with its
+/// single-use token spent. One that does not finish by then is withdrawn.
+pub(super) fn wait_app(
+    confirmations: &std::sync::Mutex<Confirmations>,
+    id: &str,
+    deadline: Instant,
+) -> Result<bool, String> {
     loop {
-        let st = app.state::<crate::App>();
-        let mut c = st.confirmations.lock().unwrap();
-        match c.take_result(&id) {
+        let mut c = confirmations.lock().unwrap();
+        match c.take_result(id) {
             Some(Ok(Some(token))) => {
-                c.consume(&id, &token)?;
+                c.consume(id, &token)?;
                 return Ok(true);
             }
             Some(Ok(None)) => return Ok(false),
             Some(Err(e)) => return Err(e),
             None if Instant::now() > deadline => {
-                return Err("the confirmation did not finish".into())
+                c.withdraw(id);
+                return Err("the confirmation did not finish".into());
             }
             None => {}
         }

@@ -14,6 +14,10 @@ struct Mem {
     next: Cell<u64>,
     /// Answers backup.get without the bytes (a broken vault).
     no_data: Cell<bool>,
+    /// backup.put fails once this many have worked (None: never).
+    puts_left: Cell<Option<usize>>,
+    /// journal.end fails (the vault cannot be reached once the state was saved).
+    fail_end: Cell<bool>,
 }
 
 impl Mem {
@@ -42,6 +46,12 @@ impl Vault for Mem {
         let s = |k: &str| f[k].as_str().unwrap_or_default().to_string();
         match op {
             "backup.put" => {
+                if let Some(n) = self.puts_left.get() {
+                    if n == 0 {
+                        return Err(Error::unavailable("the vault is full"));
+                    }
+                    self.puts_left.set(Some(n - 1));
+                }
                 let id = self.id("b");
                 self.backups
                     .borrow_mut()
@@ -74,6 +84,7 @@ impl Vault for Mem {
                     .insert(id.clone(), (f["intent"].clone(), None));
                 Ok(json!({"journal": id}))
             }
+            "journal.end" if self.fail_end.get() => Err(Error::unavailable("no vault")),
             "journal.commit" | "journal.end" => {
                 let outcome = if op == "journal.commit" {
                     "committed".into()
@@ -1376,5 +1387,137 @@ fn restoring_a_manual_backup_keeps_the_files_mode_and_remakes_a_file_with_its_ow
     assert_eq!(
         (read(&f).unwrap(), mode_of(&f)),
         ("{\"a\": 1}\n".into(), 0o640)
+    );
+}
+
+/// Reaudit 6, #278 finding 1: backups put for an operation that then fails are not left to count
+/// against the vault's limit.
+#[test]
+fn a_failed_operation_leaves_no_backups_behind() {
+    let t = Tmp::new();
+    let (a, b, mem, data) = two(&t);
+    let tx = Transactions::new(&mem, &data);
+    let sel = [Selection::File(a.clone()), Selection::File(b.clone())];
+    // The fourth backup of apply's images (two per file) cannot be put.
+    let p = pins(&tx, "s", &sel);
+    mem.puts_left.set(Some(3));
+    tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap_err();
+    mem.puts_left.set(None);
+    assert!(mem.backups.borrow().is_empty(), "{:?}", mem.backups);
+    assert_eq!(
+        (read(&a).unwrap(), read(&b).unwrap()),
+        ("{}\n".into(), "{}\n".into())
+    );
+    // A journal that cannot begin (one is open): the journal's backups go too.
+    mem.journals
+        .borrow_mut()
+        .insert("j-open".into(), (json!({}), None));
+    let e = tx
+        .apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap_err();
+    assert!(e.message.contains("journal is open"), "{e}");
+    assert!(mem.backups.borrow().is_empty(), "{:?}", mem.backups);
+}
+
+/// Reaudit 6, #278 finding 2: restoring a kept original over a file that already has it forgets
+/// the kept entry and its backups.
+#[test]
+fn restore_of_a_kept_original_already_in_place_forgets_it() {
+    let t = Tmp::new();
+    let (_, b, mem, data) = two(&t);
+    let tx = Transactions::new(&mem, &data);
+    let j = crash(
+        &tx,
+        &mem,
+        "r",
+        &[Selection::File(b.clone())],
+        0,
+        json!({"y": 1}),
+    );
+    std::fs::write(&b, "{\"theirs\": 2}\n").unwrap();
+    assert_eq!(tx.reconcile(&[j]).unwrap()[0]["conflicts"], json!([b]));
+    assert_eq!(tx.status().unwrap()["kept"].as_array().unwrap().len(), 1);
+    // The person put the original back by hand.
+    std::fs::write(&b, "{}\n").unwrap();
+    let p = pins(&tx, "r", &[Selection::File(b.clone())]);
+    let r = tx.restore("r", &p, &mut none).unwrap();
+    assert_eq!(r["changed"], json!([]));
+    assert_eq!(tx.status().unwrap()["kept"], json!([]));
+    assert!(mem.backups.borrow().is_empty(), "{:?}", mem.backups);
+}
+
+/// Reaudit 6, #278 finding 3a: a temporary file a crash left is removed even when its target is
+/// a link now and so cannot be opened for reconciling.
+#[test]
+fn reconcile_removes_temporary_files_beside_a_target_that_became_a_link() {
+    let t = Tmp::new();
+    let (a, b, mem, data) = two(&t);
+    let tx = Transactions::new(&mem, &data);
+    let sel = [Selection::File(a.clone()), Selection::File(b.clone())];
+    let j = crash(&tx, &mem, "s", &sel, 0, json!({"x": 1}));
+    let tmp = t.put("one/.a.json.pluxy-0123456789abcdef.tmp", "{\"secret\": 1}");
+    let elsewhere = t.put("elsewhere.json", "{}\n");
+    std::fs::remove_file(&a).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &a).unwrap();
+    let r = tx.reconcile(&[j]).unwrap();
+    assert_eq!(r[0]["conflicts"], json!([a]));
+    assert!(!tmp.exists(), "the temporary file was left");
+    assert_eq!(read(&elsewhere).unwrap(), "{}\n");
+}
+
+/// Reaudit 6, #278 finding 3b: a reconcile delivered again, because its journal could not be
+/// ended, does not keep an original twice.
+#[test]
+fn a_reconcile_delivered_again_keeps_each_original_once() {
+    let t = Tmp::new();
+    let (a, b, mem, data) = two(&t);
+    let tx = Transactions::new(&mem, &data);
+    let sel = [Selection::File(a.clone()), Selection::File(b.clone())];
+    let j = crash(&tx, &mem, "s", &sel, 0, json!({"x": 1}));
+    std::fs::write(&a, "{\"theirs\": 1}\n").unwrap();
+    mem.fail_end.set(true);
+    tx.reconcile(std::slice::from_ref(&j)).unwrap_err();
+    mem.fail_end.set(false);
+    tx.reconcile(std::slice::from_ref(&j)).unwrap();
+    assert_eq!(tx.status().unwrap()["kept"].as_array().unwrap().len(), 1);
+}
+
+/// The sweeps of a failed operation (#309) delete only what the operation put: a manual backup
+/// the state file names stays, and a Manual Backup that cannot put all its files leaves none.
+#[test]
+fn a_failed_operations_sweep_keeps_the_manual_backups() {
+    let t = Tmp::new();
+    let (a, b, mem, data) = two(&t);
+    let tx = Transactions::new(&mem, &data);
+    let sel = [Selection::File(a.clone()), Selection::File(b.clone())];
+    let p = pins(&tx, "s", &sel);
+    let id = tx.backup_create("s", &p).unwrap()["backup"].clone();
+    let manual_ids = manual(&mem);
+    assert_eq!(manual_ids.len(), 2);
+    mem.puts_left.set(Some(3));
+    tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap_err();
+    mem.puts_left.set(None);
+    assert_eq!(manual(&mem), manual_ids);
+    assert_eq!(mem.backups.borrow().len(), 2);
+    mem.journals
+        .borrow_mut()
+        .insert("j-open".into(), (json!({}), None));
+    tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap_err();
+    assert_eq!(manual(&mem), manual_ids);
+    assert_eq!(tx.backup_list("s").unwrap()["backups"][0]["id"], id);
+    // A Manual Backup whose second file cannot be put leaves no backup of the first.
+    mem.puts_left.set(Some(1));
+    tx.backup_create("s", &p).unwrap_err();
+    mem.puts_left.set(None);
+    assert_eq!(manual(&mem), manual_ids);
+    assert_eq!(
+        tx.backup_list("s").unwrap()["backups"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
     );
 }
