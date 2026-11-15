@@ -18,8 +18,17 @@ impl Drop for Temp {
     }
 }
 
+/// Where the test's folders go. A socket path must fit in about 100 bytes, which macOS's
+/// temporary folder (`/var/folders/..`, a link into `/private`) is too long for.
+fn temp_base() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    return PathBuf::from("/private/tmp");
+    #[cfg(not(target_os = "macos"))]
+    std::env::temp_dir()
+}
+
 fn temp() -> Temp {
-    let d = std::env::temp_dir().join(format!(
+    let d = temp_base().join(format!(
         "pluxy-app-inst-{}",
         &pluxy_app::managed::random_key()[..12]
     ));

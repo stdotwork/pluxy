@@ -574,7 +574,7 @@ its vault at the spawn (`../app/app-host/README.md`, "Launches and managed runti
 | --- | --- | --- | --- |
 | `terminals` | `read` | `search_path`: the launch environment's PATH entries | `terminals`: Automatic first, then each terminal found, with its label and path |
 | `prepare` | `read` | `kind` (`terminal`, `direct` or `open`). For `terminal` and `direct`: `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path`. For `open`: `file`, `within` (the folder it must be inside), and optionally `search_path` | A launch's `executable`, `argv` and `cwd`; for a terminal the `program` it runs; for an open launch the `file` and `within` folder, resolved |
-| `launch` | `launch` | What `prepare` gave, with `lifetime`, `environment`, `stdin` and the secret field `key` (a reference only) | The host's answer to its spawn request: `lifetime`, and a managed runtime's `runtime` and `pid` |
+| `launch` | `launch` | What `prepare` gave, with `lifetime` (`detached`, the default, or `managed`: for a direct launch only, see below), `environment`, `stdin` and the secret field `key` (a reference only) | The host's answer to its spawn request: `lifetime`, and a managed runtime's `runtime` and `pid` |
 | `runtime` | `read` | `op` (`status`, `list`), `runtime` | The host's answer |
 | `control` | `write` | `op` (`stop`, `restart`), `runtime` | The host's answer |
 
@@ -587,6 +587,16 @@ running the program after `-e` unless noted. A terminal launch runs `<terminal> 
 <args>`; a direct one `<program> <args>`. The program must be an executable file, the working folder
 an existing absolute folder.
 
+A launch's `lifetime` is `detached` or `managed`, and **`managed` applies to direct launches only**.
+The host keeps and stops a managed runtime through the process it started, and for a terminal
+launch that is the terminal's own launcher, which many terminals end at once after handing the
+work to a server process (gnome-terminal's client hands off to `gnome-terminal-server`; konsole
+and kitty may in single-instance mode). Stop and status would track a process that is gone, not
+the agent. The host therefore refuses a `launch` that names a terminal's `program` with
+`lifetime: "managed"` (`invalid_request`, before the confirmation), whoever asks; a terminal
+launch is detached. To have the app stop an agent, launch it directly
+(`../app/app-host/README.md`, "Detached and managed").
+
 An **open** launch opens a file in the app the desktop opens its type with, as the old desktop
 app's "Edit with local app" did: it runs `xdg-open <file>`, or `gio open <file>` when there is no
 `xdg-open`, in the file's folder. The opener is taken only from `/usr/local/bin`, `/usr/bin`,
@@ -594,9 +604,11 @@ app's "Edit with local app" did: it runs `xdg-open <file>`, or `gio open <file>`
 native-test build of the program does, for the native test's stand-in opener). The caller names
 the file and the folder it may open files in (`within`), for the Codex session reader its
 sessions folder: both are resolved, links followed, and the file must be a regular file with no
-execute bit inside that folder, which must not be `/`, the home folder or a folder above it. The
-resolved file is the opener's argument. The app checks all of this again, and more (the file's
-content type, who owns and may write the file and folder, the launch's exact shape), shows the
+execute bit inside that folder, which must not be `/`, the home folder or a folder above it. That
+folder and every folder between it and the file must be the user's own and writable by neither
+group nor others (`prepare` refuses the call otherwise, so the caller learns before the person
+is asked). The resolved file is the opener's argument. The app checks all of this again, and more
+(the file's content type, who owns and may write the file, the launch's exact shape), shows the
 file, its type and the folder in its confirmation and binds them
 (`../app/app-host/README.md`, "Launches and managed runtimes"). Which app the opener then starts
 is the desktop's choice for the file's type: the confirmation names the opener, not that app.

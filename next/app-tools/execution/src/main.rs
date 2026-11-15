@@ -2,7 +2,9 @@
 //! spawns them (README.md). Its operations: `terminals` and `prepare` (read: no process is started),
 //! `launch` (launch: the host confirms the exact executable, argv, cwd, program, lifetime and
 //! environment, then spawns it when asked; this program holds secret references only, never a
-//! secret's value), `runtime` (read: its package's managed runtimes, through the host) and
+//! secret's value; `managed` applies to direct launches only: the host refuses a managed
+//! terminal launch, since many terminals hand their session to a server process and exit),
+//! `runtime` (read: its package's managed runtimes, through the host) and
 //! `control` (write: stops or restarts one of them). Only `prepare` and `launch` are exported:
 //! another tool prepares and launches, such as opening one of its files in the person's own app.
 //!

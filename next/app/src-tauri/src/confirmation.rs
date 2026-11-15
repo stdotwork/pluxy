@@ -408,10 +408,31 @@ fn own(m: &fs::Metadata, what: &str) -> Result<(), String> {
     }
     Ok(())
 }
+/// Refused unless every folder from file's parent up to and including within (both resolved, file
+/// inside within) is a real folder (not a link, which may have appeared since the path was
+/// resolved) that is the effective user's and writable by neither group nor others: another user
+/// could otherwise rename a different file into place between the last check and the opener's
+/// read.
+fn folders_own(file: &Path, within: &Path) -> Result<(), String> {
+    for d in file.ancestors().skip(1) {
+        let m = fs::symlink_metadata(d).map_err(|e| format!("{}: {e}", d.display()))?;
+        if !m.is_dir() {
+            return Err(format!("{} is no longer a folder", d.display()));
+        }
+        own(
+            &m,
+            &format!("the folder {} of the file a launch opens", d.display()),
+        )?;
+        if d == within {
+            return Ok(());
+        }
+    }
+    Err("the file a launch opens must be inside its within folder".into())
+}
 /// The rules for a file a launch opens, held in f, inside folder w, both held open: a regular file
 /// with no execute bit (a desktop may run an executable it is asked to open), not a `.desktop`
-/// file, inside w, both the effective user's and writable by no one else, of a plain-text type.
-/// Its content type.
+/// file, inside w, the file and w and every folder between them the effective user's and writable
+/// by no one else, of a plain-text type. Its content type.
 fn open_file_rules(f: &OpenTarget, w: &OpenTarget) -> Result<String, String> {
     let m = f.file.metadata().map_err(|e| e.to_string())?;
     if !m.is_file() {
@@ -435,6 +456,7 @@ fn open_file_rules(f: &OpenTarget, w: &OpenTarget) -> Result<String, String> {
         &w.file.metadata().map_err(|e| e.to_string())?,
         "a launch's within folder",
     )?;
+    folders_own(&f.identity.canonical, &w.identity.canonical)?;
     let t = content_type(f)?;
     if !OPEN_TYPES.contains(&t.as_str()) {
         return Err(format!(

@@ -1515,6 +1515,7 @@ fn unpack(archive: &[u8], dest: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             private_dir(parent)?;
         }
+        #[cfg(unix)]
         let exec = e.header().mode().map(|m| m & 0o111 != 0).unwrap_or(false);
         let mut o = fs::OpenOptions::new();
         o.write(true).create_new(true);
