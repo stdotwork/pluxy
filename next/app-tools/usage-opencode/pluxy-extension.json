@@ -1,0 +1,34 @@
+{
+  "manifest_version": 1,
+  "id": "pluxy/usage-opencode",
+  "version": "0.1.0",
+  "app": {
+    "version": 0,
+    "tier": "native",
+    "host_versions": [0],
+    "programs": {
+      "linux/amd64": "bin/usage-opencode",
+      "linux/arm64": "bin/usage-opencode"
+    },
+    "operations": [
+      {
+        "id": "scan",
+        "description": "List or read OpenCode's database and JSON message files for token usage, as the usage hub's job asks",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["files", "read"] },
+            "roots": { "type": "array", "maxItems": 16, "items": { "type": "string", "minLength": 1, "maxLength": 4096 } },
+            "files": { "type": "array", "maxItems": 2000, "items": { "type": "string", "minLength": 1, "maxLength": 4096 } }
+          },
+          "required": ["mode"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object" }
+      }
+    ],
+    "produces": [{ "kind": "pluxy/agent-usage/usage", "schema": 2, "operation": "scan" }],
+    "state": { "version": 0, "readable_versions": [0] }
+  }
+}
