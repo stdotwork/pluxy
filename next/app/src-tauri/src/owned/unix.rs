@@ -14,7 +14,8 @@ pub(crate) use std::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 /// How long a pipe reader waits before it looks again whether its process was reaped.
 const TICK: Duration = Duration::from_millis(100);
 
-/// The state of child, without reaping it.
+/// The state of child, without reaping it. Never after this host reaped child itself (`wait`):
+/// its process ID may then be another child's, whose state this would give.
 pub(crate) fn leader(child: &Child) -> Leader {
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     let r = unsafe {
