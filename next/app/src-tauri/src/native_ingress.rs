@@ -213,7 +213,12 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         log(
             "ingress_navigation",
-            json!({"native_closed": false, "error": e, "status": nav["navigated"]["status"]}),
+            json!({
+                "native_closed": false,
+                "error": e,
+                "status": nav["navigated"]["status"],
+                "navigations": crate::pages::navigations(),
+            }),
         );
     } else {
         log(

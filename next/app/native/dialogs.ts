@@ -54,8 +54,15 @@ const platform =
 const FRAME_NAVIGATION =
   "WebView2 does not report a navigation inside the page's frame (wry hooks only the top-level " +
   "NavigationStarting), so the app does not close the page's channel when its frame navigates";
+const FRAGMENT =
+  "a fragment change inside the page's frame closes the page's channel, which on Linux stays open " +
+  "(the navigations the webview reported are in the evidence; the HTTP navigation check is then not run)";
 const EXPECTED: Record<string, { platforms: string[]; owner: string; why: string }> = {
-  http_navigation: { platforms: ["windows"], owner: "P8p7", why: FRAME_NAVIGATION },
+  http_navigation: {
+    platforms: ["windows", "macos"],
+    owner: "P8p7",
+    why: platform === "macos" ? FRAGMENT : FRAME_NAVIGATION,
+  },
   ingress_navigation: { platforms: ["windows"], owner: "P8p7", why: FRAME_NAVIGATION },
   "frame own tauri internals": {
     platforms: ["windows"],
