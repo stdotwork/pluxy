@@ -16,7 +16,6 @@ mod tests;
 use pluxy_program::{Call, Error};
 use pluxy_usage::{produce, LineReader, Parser, Sink, MAX_PATH};
 use serde_json::Value;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 /// FNV-1a, 128 bits, of parts joined by the byte 0xff (never in UTF-8), as 32 hex digits: a hash that
@@ -146,11 +145,7 @@ impl Parser for Sessions {
             .into_iter()
             .filter_map(|path| {
                 let m = std::fs::symlink_metadata(&path).ok()?;
-                let ns = m
-                    .mtime()
-                    .saturating_mul(1_000_000_000)
-                    .saturating_add(m.mtime_nsec());
-                Some((ns, path))
+                Some((pluxy_files::mtime_ns(&m), path))
             })
             .collect();
         found.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
