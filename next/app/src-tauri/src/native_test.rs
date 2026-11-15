@@ -170,6 +170,9 @@ const ACTING: &[&str] = &[
 mod key_entry_test;
 #[path = "rotation_test.rs"]
 mod rotation_test;
+/// How the native tests find, read and work the native dialogs on each platform.
+#[path = "ui_driver.rs"]
+pub(crate) mod ui;
 
 /// Reports the updater gate (`trust::updater_gate`) with what it read: the compiled test marker,
 /// identifier and product name. The app calls this first among the test's steps, right after the
@@ -254,7 +257,7 @@ const AREA: &str = "(() => { const r = document.querySelector('[data-part=extens
      return {x: r.left, y: r.top, width: r.width, height: r.height}; })()";
 
 /// f's result, run on the main thread (GTK widgets live there).
-fn on_main<T: Send + 'static>(
+pub(crate) fn on_main<T: Send + 'static>(
     app: &AppHandle,
     f: impl FnOnce() -> T + Send + 'static,
 ) -> Option<T> {
@@ -612,7 +615,6 @@ fn run(app: &AppHandle) -> Result<(), String> {
         log("page", r);
         #[cfg(target_os = "linux")]
         log("page_allocation", shrunk_page(app, &main, &label));
-        #[cfg(target_os = "linux")]
         crate::confirmation::native::run(app, &main, &wv)?;
 
         // The page's own report, written through the channel into its settings.
@@ -678,6 +680,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
     key_entry_test::check(app, &main)?;
     // In local and remote mode the window closes to the tray and opens again meanwhile.
     let main = rotation_test::check(app, &main)?;
+    // Which way each native input went (`ui_driver.rs`).
+    log("input", ui::input_counts());
     ingress::run(app, &main)?;
     #[cfg(target_os = "linux")]
     {

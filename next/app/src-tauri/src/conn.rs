@@ -34,7 +34,8 @@ pub enum Mode {
     Remote,
 }
 
-/// What the app keeps in its config folder, `connection.json`, readable only by this user.
+/// What the app keeps in `connection.json`, readable only by this user: in its config folder, on
+/// Windows in its local application data folder (lib.rs).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]

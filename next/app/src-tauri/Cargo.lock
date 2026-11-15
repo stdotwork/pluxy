@@ -2470,6 +2470,7 @@ name = "pluxy-app"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "block2",
  "cap-std",
  "ed25519-dalek",
  "flate2",
@@ -2478,6 +2479,9 @@ dependencies = [
  "gtk",
  "json-patch",
  "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "pulldown-cmark",
  "pulldown-cmark-escape",
  "semver",
@@ -2492,6 +2496,8 @@ dependencies = [
  "ureq",
  "url",
  "webkit2gtk",
+ "windows",
+ "zeroize",
 ]
 
 [[package]]

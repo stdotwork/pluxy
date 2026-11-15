@@ -20,12 +20,19 @@ pub mod client;
 #[cfg(target_os = "linux")]
 mod client_keys;
 mod command_names;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 pub mod confirmation;
 pub mod conn;
 mod core_updates;
 pub mod cores;
 pub mod device;
+#[cfg(any(windows, target_os = "macos"))]
+mod dialog;
+#[cfg(target_os = "macos")]
+mod dialog_macos;
+#[cfg(windows)]
+mod dialog_windows;
+pub(crate) mod format_chars;
 pub mod instance;
 mod key_entry;
 #[cfg(target_os = "linux")]
@@ -90,7 +97,7 @@ struct App {
     /// A change of the app's own core waiting for its native confirmation (`core_updates.rs`).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     core_change: Mutex<Option<core_updates::Pending>>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     confirmations: Mutex<confirmation::Confirmations>,
     /// The page webviews' own web context's folder: nothing shared with the window's.
     pages_dir: std::path::PathBuf,
@@ -474,7 +481,7 @@ fn quit(app: &AppHandle) {
         return;
     }
     remember_window(app);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     st.confirmations.lock().unwrap().invalidate();
     // Off the calling thread, which may be the main one: a recovery or a tray action can hold
     // the connection for seconds while a core starts or stops. Tray actions refuse to start now.
@@ -571,7 +578,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         app,
         "launch-settings",
         "Remembered launches…",
-        cfg!(target_os = "linux"),
+        cfg!(any(target_os = "linux", windows, target_os = "macos")),
         None::<&str>,
     )?;
     let sep = PredefinedMenuItem::separator(app)?;
@@ -629,7 +636,7 @@ fn tray_menu(app: &AppHandle, id: &str) {
         }
         "core-start" | "core-stop" | "core-restart" => tray_action(app, id),
         "quit" => quit(app),
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
         "launch-settings" => {
             let _ = confirmation::settings(app);
         }
@@ -979,7 +986,7 @@ async fn management_key_rotate(webview: Webview) -> Result<client::Reply, String
     .map_err(|_| "native rotation failed".into())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 fn rotate(app: &AppHandle) -> client::Reply {
     let st = app.state::<App>();
     let prepared = st.conn.lock().unwrap().prepare_rotation();
@@ -1024,12 +1031,12 @@ fn rotate(app: &AppHandle) -> client::Reply {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 fn rotate(_: &AppHandle) -> client::Reply {
     client::Reply::failed(
         501,
         "unsupported",
-        "native key rotation is currently supported on Linux only",
+        "native key rotation is supported on Linux, Windows and macOS only",
     )
 }
 
@@ -1309,26 +1316,26 @@ fn notify_page_closed(app: &AppHandle, label: &str) {
 #[tauri::command]
 fn confirmation_request(webview: Webview, action: String) -> Result<(), String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     {
         confirmation::request(webview.app_handle(), action)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
         let _ = action;
-        Err("native confirmations are supported on Linux only".into())
+        Err("native confirmations are supported on Linux, Windows and macOS only".into())
     }
 }
 #[tauri::command]
 fn confirmation_settings(webview: Webview) -> Result<(), String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     {
         confirmation::settings(webview.app_handle())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
-        Err("native confirmations are supported on Linux only".into())
+        Err("native confirmations are supported on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2703,7 +2710,10 @@ fn page_scheme(
         None
     });
     if let Some(m) = msg {
-        #[cfg(all(target_os = "linux", feature = "native-test"))]
+        #[cfg(all(
+            any(target_os = "linux", windows, target_os = "macos"),
+            feature = "native-test"
+        ))]
         if m.kind == "call" && m.data.get("id").and_then(Value::as_str) == Some("spoof-confirm") {
             confirmation::native::PAGE_CLAIMS.fetch_add(1, Ordering::SeqCst);
         }
@@ -2889,7 +2899,7 @@ pub fn run() {
                 app.config().identifier.clone(),
             );
             let preferences = startup_store.load();
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
             let confirmations =
                 confirmation::Confirmations::open(config.join("remembered-launches.json"))?;
             #[cfg(target_os = "linux")]
@@ -2916,6 +2926,18 @@ pub fn run() {
                 eprintln!("pluxy-app: {w}");
             }
             let data = app.path().app_data_dir()?;
+            // The files that hold secrets: connection.json (a kept management key) and the app's
+            // own core's folder (its config holds the core's management key, and the core keeps
+            // its credentials there). On Windows they go in the local application data, which
+            // stays on this machine: the config and data folders are in the roaming one, which a
+            // roaming profile copies to its server and the person's other machines.
+            #[cfg(windows)]
+            let secrets = app.path().app_local_data_dir()?;
+            #[cfg(not(windows))]
+            let secrets = config.clone();
+            #[cfg(windows)]
+            let core = secrets.join("core");
+            #[cfg(not(windows))]
             let core = data.join("core");
             let cores = data.join("cores");
             // When the app's core exits, the tray and the window show it. Off this thread: the
@@ -2940,7 +2962,7 @@ pub fn run() {
             let window_prefs = window::Store::open(config.join("window.json"));
             let conn = Connection::open_at_startup(
                 Dirs {
-                    config,
+                    config: secrets,
                     core,
                     cores,
                 },
@@ -2969,7 +2991,7 @@ pub fn run() {
                 startup: Mutex::new((startup_store, preferences)),
                 conn: Mutex::new(conn),
                 core_change: Mutex::new(None),
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
                 confirmations: Mutex::new(confirmations),
                 pages_dir,
                 pages: Mutex::new(Pages::default()),
@@ -3043,7 +3065,7 @@ pub fn run() {
                     home: app.path().home_dir()?,
                     tools: app.path().app_data_dir()?.join("tools"),
                 });
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
             if let Some(message) = handle
                 .state::<App>()
                 .confirmations
@@ -3115,7 +3137,7 @@ pub fn run() {
                     }
                 }
                 WindowEvent::Destroyed => {
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
                     app.state::<App>()
                         .confirmations
                         .lock()
