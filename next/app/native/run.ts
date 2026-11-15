@@ -106,7 +106,9 @@
 // report, the hub's store and the app's output; and the Claude Code parser (next/app-tools/usage-claude)
 // reads a hand-written Claude Code home in the run's HOME beside it, with the same canary checks; the Oh My Pi
 // parser (next/app-tools/usage-omp) does the same on an Oh My Pi home and the Pi parser (next/app-tools/usage-pi)
-// on a Pi home, and a disabled parser scans nothing.
+// on a Pi home, and a disabled parser scans nothing; the OpenCode parser
+// (next/app-tools/usage-opencode) reads a hand-written OpenCode home (a database and JSON message files)
+// the same way, leaving the database unchanged.
 // The transaction library check (transactions.ts, transactions_native.rs) runs in one more
 // session with that build: the library's fixture writer (next/app-tools/lib/transactions, example
 // fixture-writer, built here) writes selected stow and chezmoi link targets after a native
@@ -202,6 +204,9 @@ const PAGE = "ext/test/probe/probe";
 /** Tauri's command check refusing a call (debug builds say where; release builds "by ACL"). */
 const REFUSED = /not allowed( on window|\. Permissions associated| by ACL)/;
 const TIMEOUT = 240_000;
+/** The usage hub's session runs every usage parser's step in turn, each waiting for its parser to stop
+ * when idle (it took 183 s with three parsers and 224 s with four), so it gets a limit of its own. */
+const USAGE_TIMEOUT = 480_000;
 
 type Mode = "managed" | "local" | "remote";
 /** What package.ts test wrote into its folder's test-package.json. */
@@ -1087,7 +1092,7 @@ async function runApp(
           reader
             ? "the session reader check's canary appeared on stdout/stderr"
             : usage
-              ? "the usage check's Codex, Claude Code, Oh My Pi or Pi canary appeared on stdout/stderr"
+              ? "the usage check's Codex, Claude Code, Oh My Pi, Pi or OpenCode canary appeared on stdout/stderr"
               : "the vault or spawn check's key or a canary appeared on stdout/stderr",
         );
         return;
@@ -1153,10 +1158,11 @@ async function runApp(
     for (const stream of [proc.stdout, proc.stderr]) createInterface({ input: stream }).on("line", onLine);
     let stopping: Promise<void> | undefined;
     const code = await new Promise<number | null>((resolve) => {
+      const limit = usage ? USAGE_TIMEOUT : TIMEOUT;
       const timer = setTimeout(() => {
-        problems.push(`the app did not finish within ${TIMEOUT / 1000}s`);
+        problems.push(`the app did not finish within ${limit / 1000}s`);
         stopping = stopSession(pid);
-      }, TIMEOUT);
+      }, limit);
       // "close", not "exit": it comes after the output is read, so the "ready" line is not missed.
       proc.on("close", (c) => {
         clearTimeout(timer);
@@ -1992,6 +1998,7 @@ async function main(): Promise<number> {
       "usage-claude",
       "usage-omp",
       "usage-pi",
+      "usage-opencode",
     ].filter((t) => existsSync(join(appTools, t, "Cargo.toml")));
     if (usageTools.length > 0) {
       run(
