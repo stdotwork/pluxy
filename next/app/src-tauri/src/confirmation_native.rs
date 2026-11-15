@@ -363,6 +363,24 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
             state == (true, true),
             "page dialog did not delay Confirm and focus Cancel",
         )?;
+        // Windows: a click message posted to the dialog during the delay, not made on the
+        // disabled button, answers nothing either.
+        #[cfg(windows)]
+        {
+            let enabled = ui::post_click(app, text::CONFIRM_TITLE, text::CONFIRM)?;
+            std::thread::sleep(Duration::from_millis(300));
+            let answered = app
+                .state::<crate::App>()
+                .confirmations
+                .lock()
+                .unwrap()
+                .results
+                .contains_key(&id);
+            require(
+                !enabled && !answered && ui::shown(app, text::CONFIRM_TITLE),
+                "a posted click answered the delayed Confirm",
+            )?;
+        }
         require(
             app.state::<crate::App>()
                 .confirmations

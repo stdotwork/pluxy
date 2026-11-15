@@ -30,11 +30,11 @@ mod platform;
 
 #[cfg(not(target_os = "linux"))]
 pub(crate) use platform::close_box;
-#[cfg(windows)]
-pub(crate) use platform::uia_canary;
 pub(crate) use platform::{
     cancel_focused, clipboard, count, fixture_button, press, secret_hidden, texts, type_text,
 };
+#[cfg(windows)]
+pub(crate) use platform::{post_click, uia_canary};
 
 /// A key a person presses in a dialog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

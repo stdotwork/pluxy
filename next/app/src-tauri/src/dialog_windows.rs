@@ -864,12 +864,16 @@ unsafe extern "system" fn dialog_proc(
             if code != BN_CLICKED {
                 return 0;
             }
-            let id = get(hwnd).and_then(|s| {
+            let button = get(hwnd).and_then(|s| {
                 let s = s.borrow();
-                s.buttons.iter().find(|b| b.0 == ctl).map(|b| b.1)
+                s.buttons.iter().find(|b| b.0 == ctl).map(|b| (b.1, b.2))
             });
-            if let Some(id) = id {
-                press(hwnd, id);
+            // A disabled button (Confirm during its delay) answers nothing, even to a click
+            // message posted to the dialog rather than made on the button.
+            if let Some((id, b)) = button {
+                if unsafe { IsWindowEnabled(b) }.as_bool() {
+                    press(hwnd, id);
+                }
             }
             1
         }

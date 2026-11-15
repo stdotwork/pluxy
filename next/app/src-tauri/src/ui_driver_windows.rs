@@ -164,6 +164,42 @@ pub(crate) fn close_box(app: &AppHandle, title: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Posts to the dialog titled title the click message of its button labelled label (GTK mnemonic
+/// form), as a click on it sends, without asking the button: whether the button was enabled
+/// when the message went.
+pub(crate) fn post_click(app: &AppHandle, title: &str, label: &str) -> Result<bool, String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetDlgCtrlID, GetWindow, GetWindowTextW, BN_CLICKED, GW_CHILD, GW_HWNDNEXT, WM_COMMAND,
+    };
+    let d = one(app, title)?;
+    let want = crate::confirmation::text::win32(label);
+    let enabled = on_main(app, move || -> Result<bool, String> {
+        let d = hwnd(d);
+        let mut child = unsafe { GetWindow(d, GW_CHILD) }.ok();
+        while let Some(c) = child {
+            let mut b = [0u16; 256];
+            let n = unsafe { GetWindowTextW(c, &mut b) }.max(0) as usize;
+            if String::from_utf16_lossy(&b[..n]) == want {
+                let enabled = unsafe { IsWindowEnabled(c) }.as_bool();
+                let id = unsafe { GetDlgCtrlID(c) } as usize & 0xFFFF;
+                post(
+                    d,
+                    WM_COMMAND,
+                    id | (BN_CLICKED as usize) << 16,
+                    c.0 as isize,
+                )?;
+                return Ok(enabled);
+            }
+            child = unsafe { GetWindow(c, GW_HWNDNEXT) }.ok();
+        }
+        Err(format!("no button {want:?}"))
+    })
+    .ok_or("the main thread did not answer")??;
+    settle(app, false);
+    Ok(enabled)
+}
+
 /// The hidden entry of dialog d and how many UTF-16 units it holds, on the main thread.
 fn entry(d: HWND) -> Option<(HWND, i32)> {
     let e = inspect::secret(d)?;
