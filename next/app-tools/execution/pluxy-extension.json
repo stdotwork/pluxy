@@ -27,20 +27,22 @@
       },
       {
         "id": "prepare",
-        "description": "Prepare a terminal or direct launch: the executable, argv and cwd to confirm",
+        "description": "Prepare a terminal, direct or open launch: the executable, argv and cwd to confirm",
         "effect": "read",
         "input_schema": {
           "type": "object",
           "properties": {
-            "kind": { "enum": ["terminal", "direct"] },
+            "kind": { "enum": ["terminal", "direct", "open"] },
             "program": { "type": "string", "minLength": 1, "maxLength": 4096 },
             "override": { "type": "string", "minLength": 1, "maxLength": 4096 },
             "args": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 32768 } },
             "cwd": { "type": "string", "minLength": 1, "maxLength": 4096 },
             "terminal": { "type": "string", "minLength": 1, "maxLength": 64 },
-            "search_path": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 4096 } }
+            "search_path": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 4096 } },
+            "file": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "within": { "type": "string", "minLength": 1, "maxLength": 4096 }
           },
-          "required": ["kind", "program", "cwd", "search_path"],
+          "required": ["kind"],
           "additionalProperties": false
         },
         "output_schema": { "type": "object", "required": ["executable", "argv", "cwd"] }
@@ -57,6 +59,8 @@
             "argv": { "type": "array", "items": { "type": "string" } },
             "cwd": { "type": "string" },
             "program": { "type": "string" },
+            "file": { "type": "string" },
+            "within": { "type": "string" },
             "lifetime": { "enum": ["detached", "managed"] },
             "environment": { "type": "object" },
             "stdin": { "type": "string" },
@@ -98,7 +102,7 @@
         "output_schema": { "type": "object" }
       }
     ],
-    "exports": { "contract": 1, "operations": ["launch"] },
+    "exports": { "contract": 1, "operations": ["prepare", "launch"] },
     "state": { "version": 0, "readable_versions": [0] }
   }
 }

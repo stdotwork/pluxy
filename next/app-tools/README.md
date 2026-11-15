@@ -11,7 +11,7 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi, usage-opencode)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
-cargo build --release --locked -p claude-code   # likewise execution and pi-setup
+cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup, execution, omp-setup, opencode, grok-setup, hermes-setup and pi-setup
 ```
 
 ## `lib/program`
@@ -412,6 +412,355 @@ original back whatever the file holds now. A missing or empty file is an empty o
 reads the file twice (the pins, then the values); when another program wrote it in between, it
 reads again once, then refuses, so the values shown are always those of the file pinned.
 
+## `codex`
+
+`pluxy/codex-setup` (crate `codex-setup`; `pluxy/codex` is the core's Codex extension) sets up
+Codex to use pluxy's core and says how to start it, for the desktop app's Codex page
+(`../app/README.md`, "Codex"). It writes two files through `lib/transactions` (set `codex`, in this
+order): Codex's `config.toml` and the model catalog Codex reads from `model_catalog_json`,
+`pluxy-model-catalog.json` beside it by default. Both are link-preserving, journalled and backed up
+together; the original and applied images stay in the host's vault. It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: two selections (`file`, or `root` and `path`), config.toml then the catalog, by default `~/.codex/config.toml` and `~/.codex/pluxy-model-catalog.json` in the app's `HOME` (the tool sees no `CODEX_HOME`: select that folder as a root); `base_url` (optional) | The library's preview and `settings`: `state` (`not-configured`, `configured`, `needs-update`, or `refused` with a `reason` when Codex would not take either file), `base_url`, `key_set`, `provider` (the `model_provider` now), `model`, `profile`, `catalog`, `remote_compaction`, `agents`, `approval_model` and each catalog model's editable settings (`system_prompt_chars`, never a prompt); never the key |
+| `import` | `read` | `models`: the core's served models (`slug`, `upstream`, `display_name`, `non_codex`) | The editable settings of the entries they would get, and `missing`: those pluxy has no Codex template for. Nothing is written |
+| `apply` | `write`; secret `key` (value) | Two pins, `base_url`, `key`, `model` (one of the catalog's), `approval_model` (empty: Codex default), `remote_compaction`, `agents` (`enabled`, `max_threads`, `model`, `effort`, `interrupt`), `models` (1 to 64: `slug`, for a new entry `upstream` and `non_codex`, `display_name`, `description`, `context_window`, `max_context_window`, `effective_context_window_percent`, `auto_compact_token_limit`, `reasoning`, `default_reasoning`, `input_modalities`, `visible`, `tool_search`, optional `system_prompt`) | The library's outcome |
+| `clear` | `write` | Two pins | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | Two pins | The library's outcome: both originals back (a file that did not exist is removed) |
+| `backup-*` | as the library's | as the library's, two pins | Manual backups of both files; config.toml is diffed by TOML setting path |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | `target`: `cli` (default), `app` or `service`; for `app`, `program`: the full path of the program | `codex` in a terminal with no arguments; Codex App as a direct launch of that program (Codex has no Linux app; refused without a full path); `codex app-server daemon restart` as a direct launch in `HOME` |
+
+What `apply` writes in config.toml, edited in place with `toml_edit` (comments, formatting and
+everything else stay), with Codex's own names (source `openai/codex` at `b1573f102`, read
+2026-11-14: `codex-rs/config/src/config_toml.rs`, `codex-rs/model-provider-info`,
+`codex-rs/core/config.schema.json`):
+
+- at the top level: `model_provider = "pluxy"`, `model`, and `model_catalog_json` (the catalog's
+  file name when it is in config.toml's selected folder, which Codex resolves relative paths
+  against; else its full path);
+- `[model_providers.pluxy]`: `name = "pluxy"`, `base_url` (the core's address with `/v1`),
+  `wire_api = "responses"` (the only one Codex speaks) and `experimental_bearer_token` (the client
+  key, as the old app wrote it); `env_key` and `requires_openai_auth` are removed from that table;
+- **Remote compaction (experimental)**: `capabilities.remote_compaction = "v2"` in that table, or
+  removed (Codex's default for a custom provider is local compaction);
+- `[agents]` (`enabled`, `interrupt_message`, `max_concurrent_threads_per_session`,
+  `default_subagent_model`, `default_subagent_reasoning_effort`; empty ones removed), only when the
+  file has the table or the settings differ from Codex's defaults. Codex also reads `max_threads`
+  as the thread limit: the preview shows it when the other is not set, and Apply removes it.
+
+`auth.json` (the person's ChatGPT login) is never written. The catalog is Codex's `{"models": [...]}`.
+A new entry is made from pluxy's Codex client template for its upstream name
+(`../extensions/codex/client_models.json`, embedded at build time: the file the core serves Codex),
+keeping only the fields Codex requires and those that shape how it drives the model, with
+`model_messages.instructions_template` (Codex refuses a model without instructions); a full
+template is about 88 KB and a file at most 256 KiB, so about ten models fit. A model served by
+another provider gets the core's non-Codex values. Entries already in the file keep every field
+the form does not edit; each gets the form's settings, its place as `priority` and the approval
+model as `auto_review_model_override`. Clear's merge is TOML for config.toml (the current file
+edited in place; a key coming back from the original goes at its table's end) and JSON for the
+catalog, told apart by the file Apply wrote; a file holding only white space counts as none.
+`apply` and `clear` refuse, before writing, a config.toml that is not TOML, or whose
+`model_providers`, `model_providers.pluxy`, its `capabilities` or `agents` is not a table, or whose
+pluxy provider asks for another wire API; and a catalog that is not a JSON object with a `models`
+list of entries with a `slug`. `preview` pins both files all the same and reports them as
+`refused`, so Restore Backup and the backups can be reached: Restore puts both originals back
+whatever the files hold now. `preview` reads the files twice (the pins, then the values); when
+another program wrote one in between, it reads again once, then refuses, so the values shown are
+always those of the files pinned. Codex's files carry no version, and none is assumed.
+
+## `claude-desktop`
+
+`pluxy/claude-desktop` sets up Claude Desktop to use pluxy's core as its third-party inference
+gateway and says how to start it, for the desktop app's Claude Desktop page (`../app/README.md`,
+"Claude Desktop"). It writes three files through `lib/transactions` (set `claude-desktop`, in this
+order), link-preserving and journalled like `claude-code`, with manual backups of all three. It
+exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: three selections (`file`, or `root` and `path`), by default `claude_desktop_config.json`, `configLibrary/00000000-0000-4000-8000-000000831700.json` and `configLibrary/_meta.json` in `~/.config/Claude-3p` (the app's `HOME`); `base_url` (optional): the core the state is checked against | The library's preview and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, `deployment_mode`, `applied_id`, `hybrid_pointer` and the model rows (`model`, `alias`, `one_m`); never the key. Files Claude Desktop would not take are pinned all the same, with `settings` `{"state": "refused", "reason"}`, so Restore Backup still reaches them. With no `targets` and nothing at `~/.config/Claude-3p/configLibrary`, refused with "Claude Desktop's configuration library does not exist yet" (what `folders` creates) |
+| `folders` | `write` | — | Creates `~/.config/Claude-3p/configLibrary` (mode 0700) when it does not exist: `created`, `folder` |
+| `apply` | `write`; secret `key` (value) | Three pins, `base_url`, `key`, `models`: 1 to 16 rows of `model` (what the core serves), `alias` (the name Claude Desktop uses; empty: the model's own) and `one_m` | The library's outcome |
+| `clear` | `write` | Three pins | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | Three pins | The library's outcome: the original bytes back, files that did not exist removed (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Claude Desktop", "kind": "direct", "program": "claude-desktop", "args": [], "cwd": <HOME>}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations, three files per version, diffed with `json_leaves` | The library's answers |
+
+The files and keys are Claude Desktop's own, as Anthropic's third-party documentation
+([configuration](https://claude.com/docs/third-party/claude-desktop/configuration),
+[where it reads it](https://claude.com/docs/third-party/claude-desktop/configuration-format),
+[gateway](https://claude.com/docs/third-party/claude-desktop/gateway),
+[Linux](https://code.claude.com/docs/en/desktop-linux), read 2026-11-14) and the code of its Linux
+package (`claude-desktop` 5.11492.5, the official apt repository) name them. What `apply` writes,
+keeping everything else in each file (keys in their order, numbers with their digits):
+
+- `claude_desktop_config.json`: `deploymentMode` `3p`, the sign-in choice Claude Desktop's own
+  chooser saves there. Claude Desktop reads it only from this third-party folder, so the standard
+  app's `~/.config/Claude/claude_desktop_config.json` (its MCP servers) is not touched;
+- the gateway profile: `inferenceProvider` `gateway`, `inferenceGatewayBaseUrl` (the core; Claude
+  Desktop calls `/v1/messages` below it), `inferenceGatewayApiKey` (the client key),
+  `inferenceGatewayAuthScheme` `bearer`, `inferenceCredentialKind` `static`,
+  `modelDiscoveryEnabled` and `bootstrapEnabled` `false`, `disableDeploymentModeChooser` `true`
+  and `inferenceModels`; `selfHostedUrl` (a session host, which would take inference elsewhere) is
+  removed. Each row becomes `{"name": <alias, else model>, "labelOverride": <model, when an alias
+  differs>, "anthropicFamilyTier", "isFamilyDefault", "supports1m", "prefer1m"}`: the first is
+  Claude Desktop's default model, the tier comes from the name (the first of each tier is its
+  default) and both 1M keys are set when the row's 1M switch is on;
+- `_meta.json`: `appliedId` names pluxy's profile (the old desktop app's ID, so its entry is
+  updated, not duplicated), `entries` gains `{"id", "name": "pluxy"}` and `hybridPointer`, which
+  would win over `appliedId`, is removed; the person's other configurations stay.
+
+Claude Desktop drops a gateway model whose name does not look like an Anthropic model (it must
+hold `claude`, `anthropic` or a family name such as `sonnet`, and no other family's, such as `gpt`
+or `gemini`), so `apply` refuses such a row: a non-Claude model needs an alias, and the core must
+serve the model under it (an account's or extension's `model_alias`). This package does not change
+the core; the window's Claude Desktop page can add the alias through the management API, and the
+package's Clear and Restore Backup leave it. Clear's three-way merge brings back what Apply removed or replaced unless the
+person changed it since, with two rules of Claude Desktop's own: it seals the key in place with
+the device's keystore at its next launch, which is not the person's edit, so Clear still removes
+the key; and pluxy's entry leaves `_meta.json` unless the original had it. Every operation but
+`restore` refuses, before writing, a file Claude Desktop would not take: not strict JSON, not an
+object, a profile whose `inferenceModels` is not a list, or an index whose `entries` is not a list
+of configurations or whose `appliedId` is not a string. A missing file, or one of only white space,
+is an empty one, in Clear's merge too; a missing folder refuses the whole operation, before any
+file is written. The merge tells the three files apart by the whole set of values Apply wrote into
+each. A profile with `selfHostedUrl` set does not read back as configured. Apply writes each file
+owner-only (the library's rule: a key is in the profile, and the files sit beside it). None of these files has a
+version, and no minimum Claude Desktop version is assumed.
+
+## `opencode`
+
+`pluxy/opencode` sets up OpenCode to use pluxy's core and says how to start its CLI or desktop
+app, for the desktop app's OpenCode page (`../app/README.md`, "OpenCode"). It writes one config
+file through `lib/transactions` (set `opencode`): link-preserving, journalled, the original and
+applied images in the host's vault, and its manual backups (the backup browser). It exports
+nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default OpenCode's global config in the app's `HOME` (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`, or `refused` with `reason` for a file OpenCode would not take, which is pinned all the same), `base_url` (the provider's), `key_set`, `model` (the default, when it is one of pluxy's), `default_model` (the file's `model` as `provider/model`), `models` (`id`, `name`, `attachment`), `old_provider` (the old desktop app's `cpa-gui` provider is there), `v2_provider` (OpenCode 2's `providers.pluxy` is there); never the key. The file is read again once if it changed between the pin and the read, then refused |
+| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `models` (1 to 256: `id`, `name` (empty: the ID), `attachment`), `model` (one of them) | The library's outcome |
+| `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | `target`: `cli` (the default) or `app` | `{"client": "OpenCode", "kind": "terminal", "program": <~/.opencode/bin/opencode when it is an executable file there, else "opencode">, "args": []}`, or `{"client": "OpenCode Desktop", "kind": "direct", "program": "/opt/OpenCode/ai.opencode" (or `/opt/OpenCode/ai.opencode.desktop`, OpenCode 1's, when only that exists), "args": [], "cwd": <HOME>}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed by setting name as `json_leaves` reads JSON | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+OpenCode reads its global config from `~/.config/opencode/` (`$XDG_CONFIG_HOME/opencode`, or
+`$OPENCODE_CONFIG_DIR`): `opencode.json` and then `opencode.jsonc`, so the latter's values win
+(OpenCode 1.x also reads an older `config.json` first). The default file is the one OpenCode itself
+writes: `opencode.jsonc` if it exists, else `opencode.json` if it exists, else a new
+`opencode.jsonc`. The tool's environment holds no `XDG_CONFIG_HOME` or `OPENCODE_CONFIG*`, so a
+person who uses them selects that file or folder; project configs and `OPENCODE_CONFIG_CONTENT`
+still win over the global file, as in OpenCode. Read at source (anomalyco/opencode, tags v1.19.5
+and v2.3.0, 2026-11-14): `packages/opencode/src/config/config.ts` (1.x) and
+`packages/core/src/config.ts`, `config/discovery.ts`, `config/normalize.ts` (2.x).
+
+What `apply` writes, in the form both OpenCode 1.x reads and 2.x migrates when it loads it (2.x's
+own form, `providers`, is unknown to 1.x):
+
+- `provider.pluxy`: `npm` `@ai-sdk/openai-compatible`, `name` `pluxy`, `options.baseURL` (the
+  core's address with `/v1`) and `options.apiKey` (the client key), its other members kept;
+  `models` holds exactly the listed models, each with `name` and, with attachments,
+  `"attachment": true` and `modalities` input text, image and pdf, else input text only (output
+  text), an existing entry's other members kept;
+- `model`: `pluxy/<model>` (replacing a `{providerID, model}` default, which Clear brings back);
+- `$schema`: `https://opencode.ai/config.json`, first, only when the file names none.
+
+The file is edited in place through a JSONC syntax tree (jsonc-parser): comments, formatting,
+trailing commas and every other setting stay where they are, and new members follow the file's
+own style. Clear's three-way merge brings back what Apply replaced unless the person changed it
+since, and edits only what differs. An old desktop app's `cpa-gui` provider is left alone. A file
+with OpenCode 2's own `providers.pluxy` is never reported configured and `apply` refuses it, since
+OpenCode would use that entry instead; the person removes it. `configured` also needs `npm`
+`@ai-sdk/openai-compatible`, the base URL, the key and the default among pluxy's models. Every
+operation but `restore` refuses, before writing, a file OpenCode would not take as its own config
+(the preview reports it `refused`): not JSON or JSONC by OpenCode's parser rules (comments and
+trailing commas are fine; single quotes, bare keys, hexadecimal numbers or missing commas are not),
+a leading byte order mark, a key named twice in any object (arrays included), not an object, a
+`$schema` other than `https://opencode.ai/config.json`, a `provider`, `provider.pluxy`, its
+`options` or `models` (or a model entry) that is not an object, or a `model` that is neither
+`provider/model` text nor `{providerID, model}`.
+A missing or empty file is an empty one. Restore Backup puts the original back whatever the file
+holds now.
+
+## `omp-setup`
+
+`pluxy/omp-setup` sets up Oh My Pi to use pluxy's core and says how to start it, for the desktop
+app's Oh My Pi page (`../app/README.md`, "Oh My Pi"). It writes Oh My Pi's two files through
+`lib/transactions` (set `omp`, targets in this order: the models file, then the settings file):
+link-preserving, journalled, the original and applied images in the host's vault, and its manual
+backups (the backup browser). It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: two selections (`file`, or `root` and `path`); or `folder`: an agent folder (it may be a link), whose two files are used; by default the two files in `~/.omp/agent` in the app's `HOME` (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`), `base_url` (the provider's), `key_set`, `model` (the default role's, when it is pluxy's), `default_role` (the settings file's `modelRoles.default`), `legacy` (the old desktop app's `easy-cliproxyapi` provider is there); or, for files Oh My Pi would not take, `state` `refused` and `reason`; never the key |
+| `apply` | `write`; secret `key` (value) | Two pins, `base_url`, `key`, `model` (one model ID) | The library's outcome |
+| `clear` | `write` | Two pins | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | Two pins | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Oh My Pi", "kind": "terminal", "program": <~/.bun/bin/omp, else ~/.local/bin/omp, when an executable file is there, else "omp">, "args": []}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), both files per version, diffed by setting name (each file's YAML read as its value) | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+Oh My Pi keeps its files in its agent folder, `~/.omp/agent` (`PI_CODING_AGENT_DIR` moves it;
+`PI_CONFIG_DIR` renames `.omp`; a profile, `OMP_PROFILE` or `--profile`, uses
+`~/.omp/profiles/<name>/agent`): `models.yml` (or an existing `models.yaml`) holds custom
+providers and models, `config.yml` (or an existing `config.yaml`) the settings, both YAML. The
+tool's environment holds none of those variables, so a person who uses them selects that folder or
+those files. Read at source (can1357/oh-my-pi at af8e4c142b2b, release v18.20.0, 2026-11-14):
+`packages/utils/src/dirs.ts`, `packages/coding-agent/src/config/config-file.ts`,
+`models-config-schema-bundle.ts`, `settings.ts` and `docs/models.md`, `docs/settings.md`.
+
+What `apply` writes:
+
+- in the models file, `providers.pluxy`: `baseUrl` (the core's address with `/v1`), `apiKey` (the
+  client key), `api` `openai-responses` and `discovery.type` `openai-models-list` (Oh My Pi lists
+  the core's models from its `/v1/models`); its other members, such as the person's own `models`,
+  `modelOverrides` or `headers`, and every other provider stay;
+- in the settings file, `modelRoles.default`: `pluxy/<model>`; the other roles and settings stay.
+
+Both files are edited in place through a lossless YAML tree (yaml-edit): comments, key order,
+quoting and indentation stay, and only keys whose values change are touched. Each file is read as
+YAML 1.2 (saphyr), as Oh My Pi's parser reads it, and every edited file is read again and must hold
+exactly the intended value, else nothing is written. Clear's three-way merge brings back what Apply
+replaced unless the person changed it since, and edits only what differs; a file Apply created that
+holds nothing else is removed. An old desktop app's `easy-cliproxyapi` provider is left alone. `apply`
+and `clear` refuse, before writing, files Oh My Pi would not take; `preview` pins them all the same
+and reports them `refused` with the reason, so Restore Backup and the backups still reach them: not
+UTF-8, not YAML (a repeated key too), more than one document, a top level that is not a mapping, a
+tag, a key that is not text or a number that is not finite, `providers`, `providers.pluxy` or its
+`discovery` not a mapping, `modelRoles` not a mapping, or `modelRoles.default` neither text nor a
+list of text. A missing or empty file, or one whose document is only `null`, is an empty one (apply
+gives it a mapping); a `null` mapping is an absent one, as Oh My Pi reads it. A list of default
+selectors (fallbacks in order) is the person's default, never pluxy's: apply replaces it with
+pluxy's model and Clear puts the list back. A preview reads the files once more if one changed
+between its pin and its read, and refuses if it changed again. Neither file has a version field, so
+none is checked. With neither YAML name in the folder, a legacy `models.json` or `settings.json`
+there refuses them too: Oh My Pi moves it into a
+new YAML file when it next starts, which a file made here would stop (settings Oh My Pi still holds
+in `agent.db` from an old version are not seen). The key may not start with `!` (Oh My Pi runs such
+a value as a command) or hold spaces; Oh My Pi first reads `apiKey` as an environment variable's
+name, so a key equal to a set variable's name would be replaced. The model is one ID: no spaces or
+commas (a role's fallbacks), not starting with `@` (a role) or `*`. Restore Backup puts the
+originals back whatever the files hold now.
+
+## `grok-setup`
+
+`pluxy/grok-setup` sets up Grok Build (xAI's coding CLI, `grok`) to use pluxy's core and says how to
+start it, for the desktop app's Grok Build page (`../app/README.md`, "Grok Build"). It writes one
+file, Grok Build's user config, through `lib/transactions` (set `grok`): link-preserving,
+journalled, the original and applied images in the host's vault, and its manual backups. It exports
+nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default `~/.grok/config.toml` in the app's `HOME`; `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, `default` (`models.default` as the file has it), `model` (the default's model when it is pluxy's entry), `models` (pluxy's entries: `model`, else the one the entry's name says, `name`, `context_window`), `legacy` (how many `cpa-gui/` entries an older app left); for a file Grok Build would not take, `{state: "refused", reason}`, the file still pinned; never the key |
+| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key` (refused when it holds a `$`: Grok Build expands `$NAME` in its strings), `model` (the default: one of `models`), `models`: 1 to 256 of `{model, name, context_window}` (`name` empty: the model) | The library's outcome |
+| `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Grok Build", "kind": "terminal", "program": …, "args": []}`, for the launcher: `program` is `~/.grok/bin/grok` when that is an executable file (where Grok Build's install script puts it, often not on a desktop session's PATH), else `grok` |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed by TOML setting path | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+What `apply` writes, editing the file in place with `toml_edit` (comments, formatting, order and
+everything else kept), with Grok Build's own keys (its configuration reference,
+`docs/user-guide/26-config-reference.md` in xai-org/grok-build, and Grok Build 1.0.77 run offline
+on a temporary home, read 2026-11-14):
+
+- `models.default` = `pluxy/<model>`;
+- one table `[model."pluxy/<model>"]` per listed model, setting `model`, `base_url` (the core's
+  address with `/v1`), `name` (shown in Grok Build's model picker), `api_key` (the client key; a
+  model's own key wins over a signed-in session and `XAI_API_KEY`, so the person's login stays), `api_backend =
+  "chat_completions"` (the OpenAI Chat Completions API, as the old app wrote) and `context_window`
+  (it drives auto-compaction; the page offers 200000, the old app's default). Other keys the person
+  added to such a table stay; pluxy's tables for models no longer listed are removed. Entries of
+  the person's own and an older app's `cpa-gui/` entries are left as they are.
+
+Clear's three-way merge (TOML, values compared whatever their formatting) brings back the person's
+default model, unless they changed it since, and removes the untouched entries; a value the person
+changed in a pluxy entry stays. A file Apply created and nothing else changed is removed. Apply
+leaves the file owner-only (0600: it holds the key); Clear and Restore Backup keep the mode it has.
+The state is `configured` only when every pluxy entry is whole (a `model`, `api_backend =
+"chat_completions"`, a key and the default's `base_url`); an entry missing any of them reads as
+`needs-update`, so the page offers Repair Connection. A preview reads the file again once if it
+changed between the pin and the read, and refuses if it changed again. Apply and Clear refuse,
+before writing, a file Grok Build would not take or Apply cannot edit (a preview still pins it and
+reports it refused, so Restore Backup reaches it): not UTF-8 or not TOML (Grok Build itself refuses such a file), `models` or `model` not a
+table, `models.default` not a string, or a `model."pluxy/…"` entry not a table. Grok Build has no
+version or schema field, and no version bound is assumed. A missing or empty file is an empty one.
+The tool's environment has no `GROK_HOME`: a person who moved Grok Build's folder selects the file
+or folder. A project's `.grok/config.toml` cannot hold models (Grok Build reads only MCP, plugin
+and permission settings there), so only the user config is written.
+
+## `hermes-setup`
+
+`pluxy/hermes-setup` sets up Hermes Agent to use pluxy's core and says how to start it, for the
+desktop app's Hermes Agent page (`../app/README.md`, "Hermes Agent"). It writes Hermes Agent's
+`config.yaml` through `lib/transactions` (set `hermes`, one target): link-preserving, journalled,
+the original and applied images in the host's vault, and its manual backups (the backup browser).
+It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`); or `folder`: a Hermes home folder (what `HERMES_HOME` names; it may be a link), whose `config.yaml` is used; by default `config.yaml` in the home Hermes uses (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`), `base_url` (the provider's `api`), `key_set`, `provider` (`model.provider`), `model` (`model.default`, when the provider is pluxy's), `legacy` (the old desktop app's `cpa-gui` provider is there); or, for a file Hermes would not take, `state` `refused` and `reason`; never the key |
+| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `model` (one model ID) | The library's outcome |
+| `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Hermes Agent", "kind": "terminal", "program": <~/.local/bin/hermes when an executable file is there, else "hermes">, "args": []}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed by setting name (the file's YAML read as its value) | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+Hermes Agent keeps its settings in `config.yaml` in its home folder: `HERMES_HOME`, else
+`~/.hermes`; with no `--profile` flag, a profile named in `~/.hermes/active_profile` (other than
+`default`) makes the home `~/.hermes/profiles/<name>`. The tool's environment has no
+`HERMES_HOME`, so by default it uses `~/.hermes/config.yaml`, or the active profile's
+`config.yaml` (a name that is not a profile ID, or a profile folder that is not there, refuses: the
+person selects the folder); a person who sets `HERMES_HOME` selects that folder. Hermes's own checks
+that a profile folder is a live profile are not repeated. Read at source (NousResearch/hermes-agent
+at tag v0.23.1, 3b4215785882, 2026-11-09): `hermes_constants.py`, `hermes_yaml.py`,
+`hermes_cli/config.py`, `config_providers.py`, `config_version_stamp.py`, `runtime_provider_custom.py`,
+`providers.py`, `model_setup_flows_custom.py`, `main.py` (profiles), `setup-hermes.sh` and
+`website/docs/user-guide/configuring-models.md`.
+
+What `apply` writes, as `hermes model` does for a provider of the `providers:` map:
+
+- `providers.pluxy`: `api` (the core's address with `/v1`), `api_key` (the client key),
+  `transport` `chat_completions` and `default_model` (the model). Keys there that Hermes would read
+  before these, or in their place, are removed: `api_mode`, `key_env`, `api_key_env`, `key_cmd`,
+  the address as `base_url` or `url`, `model`, the camelCase spellings `baseUrl`, `apiKey`,
+  `apiMode`, `keyEnv`, `apiKeyEnv` and `defaultModel`, and `enabled` when it is not `true`; a
+  preview shows such a file as needing an update. Its other members, such as the person's per-model `models` metadata or
+  `extra_headers`, and every other provider stay. Hermes lists the core's models from its
+  `/v1/models` itself, so no `models` map is written.
+- `model`: `provider` `custom:pluxy` (Hermes's name for that entry), `default` (the model) and
+  `api_mode` `chat_completions`; an earlier endpoint's `base_url`, `api_key`, `key_env` and
+  `api_key_env` there are removed (`key_env` would win over the entry's key). A `model:` written as
+  plain text, the default model, becomes a mapping, as Hermes itself does. Everything else stays.
+
+The file is edited in place through a lossless YAML tree (yaml-edit; the same code as
+`omp-setup`): comments, key order, quoting and indentation stay, and only keys whose values change
+are touched. It is read as YAML 1.2 (saphyr) and every edited file is read again and must hold
+exactly the intended value, else nothing is written. Hermes reads it with YAML 1.1 rules (ruamel),
+which take some plain words and numbers differently, so the key and the model pluxy writes are
+refused when a YAML 1.1 reader takes them for anything but text (a boolean such as `yes`, `on` or
+`n` in YAML 1.1's spellings, a null, `=`, an integer in decimal, binary, octal, hex or sexagesimal
+form, a float, `.inf`, `.nan` or a timestamp; a hex key or a UUID is text), when they hold `${`
+(Hermes expands it from the environment) or spaces. Clear's three-way merge brings back what Apply replaced unless the
+person changed it since, and edits only what differs; a file Apply created that holds nothing else
+is removed. An old desktop app's `custom_providers` entry named `cpa-gui` (or a `providers.cpa-gui`)
+is left alone. `apply` and `clear` refuse, before writing, a file Hermes would not take, or would
+not take pluxy's values in; `preview` pins it all the same and reports it `refused` with the reason,
+so Restore Backup and the backups still reach it: not UTF-8, not YAML (a repeated key too), more than one document, a
+top level that is not a mapping, a tag, `providers` or `providers.pluxy` not a mapping, `model` not
+a mapping or text, `model.provider` or `model.default` not text. A missing or empty file, or one
+whose document is only `null`, is an empty one (apply gives it a mapping); a `null`
+`providers.pluxy` is an absent one. A preview reads the file once more if it changed between its pin
+and its read, and refuses if it changed again. `_config_version` is not checked: Hermes reads every version's `providers:` and treats a
+file without one as current. Restore Backup puts the original back whatever the file holds now.
+
 ## `pi-setup`
 
 `pluxy/pi-setup` sets up Pi to use pluxy's core, installs, updates and uninstalls the CLIProxyAPI
@@ -491,25 +840,44 @@ version field, so none is checked. The key may not hold spaces; the model is one
 
 ## `execution`
 
-`pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, or a
-program run directly. The app's Launcher page and its tray's Start… menu use it, and so will client
-recipes. It never starts a process itself and never holds a secret's value: the host confirms each
+`pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, a program
+run directly, or a file opened in the person's own app. The app's Launcher page and its tray's
+Start… menu use it, and so will client recipes and tools that open one of their files. It never starts a process itself and never holds a secret's value: the host confirms each
 launch natively, spawns exactly what was confirmed when the program asks, and resolves secrets from
 its vault at the spawn (`../app/app-host/README.md`, "Launches and managed runtimes").
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
 | `terminals` | `read` | `search_path`: the launch environment's PATH entries | `terminals`: Automatic first, then each terminal found, with its label and path |
-| `prepare` | `read` | `kind` (`terminal` or `direct`), `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path` | A launch's `executable`, `argv` and `cwd`, and for a terminal the `program` it runs |
+| `prepare` | `read` | `kind` (`terminal`, `direct` or `open`). For `terminal` and `direct`: `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path`. For `open`: `file`, `within` (the folder it must be inside), and optionally `search_path` | A launch's `executable`, `argv` and `cwd`; for a terminal the `program` it runs; for an open launch the `file` and `within` folder, resolved |
 | `launch` | `launch` | What `prepare` gave, with `lifetime`, `environment`, `stdin` and the secret field `key` (a reference only) | The host's answer to its spawn request: `lifetime`, and a managed runtime's `runtime` and `pid` |
 | `runtime` | `read` | `op` (`status`, `list`), `runtime` | The host's answer |
 | `control` | `write` | `op` (`stop`, `restart`), `runtime` | The host's answer |
 
-It exports only `launch`, under export contract 1: another package never looks at, stops or restarts
-its runtimes, and the app asks before each `control` call. Terminals, in Automatic's order (the old
+It exports `prepare` and `launch`, under export contract 1: another package prepares and starts
+launches, but never looks at, stops or restarts its runtimes, and the app asks before each
+`control` call. Terminals, in Automatic's order (the old
 desktop app's list): `x-terminal-emulator` (System terminal), `gnome-terminal` (`--`), `konsole`,
 `xfce4-terminal` (`-x`), `mate-terminal` (`-x`), `kitty`, `alacritty`, `ghostty` and `xterm`, each
 running the program after `-e` unless noted. A terminal launch runs `<terminal> <flag> <program>
 <args>`; a direct one `<program> <args>`. The program must be an executable file, the working folder
 an existing absolute folder.
+
+An **open** launch opens a file in the app the desktop opens its type with, as the old desktop
+app's "Edit with local app" did: it runs `xdg-open <file>`, or `gio open <file>` when there is no
+`xdg-open`, in the file's folder. The opener is taken only from `/usr/local/bin`, `/usr/bin`,
+`/bin` and `/run/current-system/sw/bin`: an open launch takes no `search_path` (only a
+native-test build of the program does, for the native test's stand-in opener). The caller names
+the file and the folder it may open files in (`within`), for the Codex session reader its
+sessions folder: both are resolved, links followed, and the file must be a regular file with no
+execute bit inside that folder, which must not be `/`, the home folder or a folder above it. The
+resolved file is the opener's argument. The app checks all of this again, and more (the file's
+content type, who owns and may write the file and folder, the launch's exact shape), shows the
+file, its type and the folder in its confirmation and binds them
+(`../app/app-host/README.md`, "Launches and managed runtimes"). Which app the opener then starts
+is the desktop's choice for the file's type: the confirmation names the opener, not that app.
+
+A call from another package (a tool's import, or a page's) may prepare only an open launch: a
+terminal or direct preparation answers whether programs and folders exist, so only the app's own
+window asks for those.
 

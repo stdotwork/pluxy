@@ -68,6 +68,7 @@
     "allow-vault-secret-remove",
     "allow-client-key-capture",
     "allow-client-key-enter",
+    "allow-core-alias-create",
     "allow-window-get",
     "allow-window-set",
     "allow-window-close",
