@@ -16,9 +16,12 @@ serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision
 sha2 = "=0.10.9"
 
 # Windows: a file's identity from its handle (volume serial number and file index, which cap-std
-# gives only through cap-fs-ext there), and the access rights a temporary file is opened with.
+# gives only through cap-fs-ext there).
 [target.'cfg(windows)'.dependencies]
 cap-fs-ext = "=4.0.3"
+
+# Windows: the access rights the tests open files with to change their access lists.
+[target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [[example]]

@@ -362,6 +362,53 @@ fn an_access_list_is_read_and_given_back() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// Windows: create_private_in makes a file in a folder's handle that is private from the start and
+/// that no other handle can open while it is held; an existing name or a name that is a path is
+/// refused, and in a folder that forbids setting access lists, so is the creation.
+#[cfg(windows)]
+#[test]
+fn a_private_file_is_made_in_a_folders_handle() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    let dir = temp("private-in");
+    let open_dir = |d: &Path| {
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(d)
+            .unwrap()
+    };
+    let folder = open_dir(&dir);
+    let mut f = create_private_in(&folder, "tmp".as_ref()).unwrap();
+    f.write_all(b"secret").unwrap();
+    assert!(is_private(&dir.join("tmp")).unwrap());
+    let shared = File::open(dir.join("tmp")).unwrap_err();
+    assert_eq!(shared.raw_os_error(), Some(32), "{shared}"); // ERROR_SHARING_VIOLATION
+    assert_eq!(
+        create_private_in(&folder, "tmp".as_ref())
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    for bad in ["", ".", "..", r"sub\x", "sub/x"] {
+        assert_eq!(
+            create_private_in(&folder, bad.as_ref()).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput,
+            "{bad:?}"
+        );
+    }
+    drop(f);
+    assert_eq!(fs::read(dir.join("tmp")).unwrap(), b"secret");
+    // A folder that forbids setting access lists: refused, nothing left.
+    let forbids = dir.join("forbids");
+    fs::create_dir(&forbids).unwrap();
+    assert!(icacls(&forbids, &["/deny", "*S-1-3-4:(OI)(CI)(IO)(WDAC)"]));
+    let e = create_private_in(&open_dir(&forbids), "tmp".as_ref()).unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::PermissionDenied, "{e}");
+    assert!(fs::symlink_metadata(forbids.join("tmp")).is_err());
+    fs::remove_dir_all(dir).unwrap();
+}
+
 /// Windows: rename_open renames a file through its own handle (one shared with no one) into the
 /// folder open as folder, over a file another handle still has open; a name that is a path, or
 /// empty, is refused.

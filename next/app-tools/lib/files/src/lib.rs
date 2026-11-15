@@ -135,6 +135,17 @@ pub fn set_access_list(file: &File, sddl: &str) -> io::Result<()> {
     imp::set_access_list(file, sddl)
 }
 
+/// Windows: creates the file name, which must not exist, in the folder open as folder (no path is
+/// looked up again), private from the moment it is made (its protected list given at creation, as
+/// [`create_new_private`] does), open to read, write, delete and change its list, and shared with
+/// no other handle: a temporary file nothing else can open until it is renamed and closed. A name
+/// that is a path, empty, `.` or `..` is refused; in a folder that forbids setting access lists
+/// (see [`create_new_private`]) the creation is refused with `PermissionDenied`.
+#[cfg(windows)]
+pub fn create_private_in(folder: &File, name: &std::ffi::OsStr) -> io::Result<File> {
+    imp::create_private_in(folder, name)
+}
+
 /// Windows: renames the file open as file to name in the folder open as folder, replacing a file
 /// there, through the handles (no path is looked up again). The file must have been opened with
 /// the right to delete it.
@@ -317,15 +328,17 @@ mod imp {
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     use std::os::windows::io::{AsRawHandle, FromRawHandle};
     use std::ptr::{null, null_mut};
+    use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
     use windows_sys::Wdk::Storage::FileSystem::{
-        FileRenameInformation, FileRenameInformationEx, NtSetInformationFile,
-        FILE_RENAME_INFORMATION, FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS,
+        FileRenameInformation, FileRenameInformationEx, NtCreateFile, NtSetInformationFile,
+        FILE_CREATE, FILE_NON_DIRECTORY_FILE, FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION,
+        FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS, FILE_SYNCHRONOUS_IO_NONALERT,
     };
     use windows_sys::Win32::Foundation::{
         CloseHandle, LocalFree, RtlNtStatusToDosError, ERROR_ACCESS_DENIED,
         ERROR_SHARING_VIOLATION, ERROR_SUCCESS, GENERIC_READ, GENERIC_WRITE, HANDLE,
-        INVALID_HANDLE_VALUE, NTSTATUS, STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER,
-        STATUS_NOT_IMPLEMENTED, STATUS_NOT_SUPPORTED,
+        INVALID_HANDLE_VALUE, NTSTATUS, OBJ_CASE_INSENSITIVE, STATUS_INVALID_INFO_CLASS,
+        STATUS_INVALID_PARAMETER, STATUS_NOT_IMPLEMENTED, STATUS_NOT_SUPPORTED, UNICODE_STRING,
     };
     use windows_sys::Win32::Security::Authorization::{
         ConvertSecurityDescriptorToStringSecurityDescriptorW,
@@ -349,7 +362,7 @@ mod imp {
         FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_REPARSE_POINT,
         FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        FILE_TYPE_DISK, OPEN_EXISTING, READ_CONTROL, WRITE_DAC,
+        FILE_TYPE_DISK, OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE, WRITE_DAC,
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
@@ -678,6 +691,49 @@ mod imp {
             ));
         }
         Ok(wide)
+    }
+
+    pub fn create_private_in(folder: &File, name: &std::ffi::OsStr) -> io::Result<File> {
+        let name = single_name(name)?;
+        let len = u16::try_from(name.len() * 2)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "a name too long"))?;
+        let object = UNICODE_STRING {
+            Length: len,
+            MaximumLength: len,
+            Buffer: name.as_ptr() as *mut u16,
+        };
+        // The native call: it makes the file relative to the folder's handle, with the private
+        // descriptor, in one step.
+        with_private(false, |sa| {
+            let attributes = OBJECT_ATTRIBUTES {
+                Length: std::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
+                RootDirectory: handle(folder),
+                ObjectName: &object,
+                Attributes: OBJ_CASE_INSENSITIVE,
+                SecurityDescriptor: unsafe { (*sa).lpSecurityDescriptor } as *const _,
+                SecurityQualityOfService: null(),
+            };
+            let mut h: HANDLE = null_mut();
+            let mut status = IO_STATUS_BLOCK::default();
+            nt(unsafe {
+                NtCreateFile(
+                    &mut h,
+                    GENERIC_READ | GENERIC_WRITE | DELETE | WRITE_DAC | SYNCHRONIZE,
+                    &attributes,
+                    &mut status,
+                    null(),
+                    FILE_ATTRIBUTE_NORMAL,
+                    0,
+                    FILE_CREATE,
+                    FILE_NON_DIRECTORY_FILE
+                        | FILE_SYNCHRONOUS_IO_NONALERT
+                        | FILE_OPEN_REPARSE_POINT,
+                    null(),
+                    0,
+                )
+            })?;
+            Ok(unsafe { File::from_raw_handle(h as _) })
+        })
     }
 
     pub fn rename_open(f: &File, folder: &File, name: &std::ffi::OsStr) -> io::Result<()> {

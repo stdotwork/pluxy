@@ -5,9 +5,11 @@
 #[cfg(windows)]
 use cap_fs_ext::MetadataExt;
 use cap_std::ambient_authority;
+use cap_std::fs::Dir;
 #[cfg(unix)]
 use cap_std::fs::MetadataExt;
-use cap_std::fs::{Dir, OpenOptions};
+#[cfg(unix)]
+use cap_std::fs::OpenOptions;
 use pluxy_program::Error;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -861,35 +863,43 @@ fn protect(f: &std::fs::File, give: &Give) -> std::io::Result<()> {
     }
 }
 
-/// Writes bytes to a new file tmp in dir, private from the start (0600; on Windows private, and
-/// shared with no other handle, so nothing else can open it until it is renamed and closed), and
-/// flushes it: its handle, which on Windows the rename goes through ([`rename_temp`]).
+/// Writes bytes to a new file tmp in dir, private from the moment it is made (on Linux and macOS
+/// created 0600; on Windows created with its protected list in one step, relative to dir's handle,
+/// and shared with no other handle, so nothing else can open it until it is renamed and closed),
+/// and flushes it: its handle, which on Windows the rename goes through ([`rename_temp`]).
 pub(crate) fn write_private_temp(
     dir: &Dir,
     tmp: &Path,
     bytes: &[u8],
 ) -> std::io::Result<std::fs::File> {
-    let mut opts = OpenOptions::new();
-    opts.write(true).create_new(true);
     #[cfg(unix)]
-    {
+    let mut f = {
         use cap_std::fs::OpenOptionsExt as _;
-        opts.mode(NEW_FILE_MODE);
-    }
+        let f = dir
+            .open_with(
+                tmp,
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(NEW_FILE_MODE),
+            )?
+            .into_std();
+        // 0600 whatever the umask left.
+        pluxy_files::make_private_open(&f)?;
+        f
+    };
     #[cfg(windows)]
-    {
-        use cap_std::fs::OpenOptionsExt as _;
-        use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
-        use windows_sys::Win32::Storage::FileSystem::{DELETE, WRITE_DAC};
-        opts.access_mode(GENERIC_READ | GENERIC_WRITE | WRITE_DAC | DELETE)
-            .share_mode(0);
-    }
-    let mut f = dir.open_with(tmp, &opts)?.into_std();
-    // Private before it holds a byte.
-    pluxy_files::make_private_open(&f)?;
+    let mut f = pluxy_files::create_private_in(&borrowed(dir), tmp.as_os_str())?;
     f.write_all(bytes)?;
     f.sync_all()?;
     Ok(f)
+}
+
+/// Windows: dir's handle as a File, borrowed (the ManuallyDrop never closes it).
+#[cfg(windows)]
+fn borrowed(dir: &Dir) -> std::mem::ManuallyDrop<std::fs::File> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle};
+    std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_handle(dir.as_raw_handle()) })
 }
 
 /// Renames the temporary file tmp in dir, open as f, to name, replacing what is there: on Linux
@@ -908,12 +918,7 @@ pub(crate) fn rename_temp(
     #[cfg(windows)]
     {
         let _ = tmp;
-        use std::os::windows::io::{AsRawHandle, FromRawHandle};
-        // The folder's handle, borrowed: the ManuallyDrop never closes it.
-        let folder = std::mem::ManuallyDrop::new(unsafe {
-            std::fs::File::from_raw_handle(dir.as_raw_handle())
-        });
-        let r = pluxy_files::rename_open(&f, &folder, name.as_os_str());
+        let r = pluxy_files::rename_open(&f, &borrowed(dir), name.as_os_str());
         drop(f);
         r
     }
