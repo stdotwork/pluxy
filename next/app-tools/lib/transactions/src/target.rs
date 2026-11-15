@@ -2,8 +2,6 @@
 //! a link, as stow and chezmoi make), pinning what it resolves to, checking it again, and reading
 //! and writing the file through a handle on its folder (cap-std), never by a path again.
 
-#[cfg(windows)]
-use cap_fs_ext::MetadataExt;
 use cap_std::ambient_authority;
 use cap_std::fs::Dir;
 #[cfg(unix)]
@@ -99,10 +97,26 @@ pub struct Id {
 }
 
 impl Id {
-    fn of(m: &cap_std::fs::Metadata) -> Id {
-        Id {
+    /// The identity in m: on Windows the volume serial number and file index, which a metadata
+    /// read through a handle has (an error, never a panic, when one does not).
+    fn of(m: &cap_std::fs::Metadata) -> Result<Id, Error> {
+        #[cfg(unix)]
+        return Ok(Id {
             dev: m.dev(),
             ino: m.ino(),
+        });
+        #[cfg(windows)]
+        {
+            use cap_primitives::fs::_WindowsByHandle;
+            match (m.volume_serial_number(), m.file_index()) {
+                (Some(dev), Some(ino)) => Ok(Id {
+                    dev: dev.into(),
+                    ino,
+                }),
+                _ => Err(Error::internal(
+                    "the system gave no volume serial number or file index for a file",
+                )),
+            }
         }
     }
 
@@ -327,7 +341,12 @@ pub(crate) fn in_wsl(path: &str) -> bool {
         .or_else(|| p.strip_prefix(r"\\.\unc\"))
         .or_else(|| p.strip_prefix(r"\\"));
     share.is_some_and(|s| {
-        let host = s.split('\\').next().unwrap_or_default();
+        // Windows drops a host name's trailing dots and blanks (`\\wsl.localhost.\`).
+        let host = s
+            .split('\\')
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(['.', ' ']);
         host == "wsl$" || host == "wsl.localhost"
     })
 }
@@ -356,9 +375,10 @@ fn open_dir(folder: &Path) -> Result<Dir, Error> {
 }
 
 fn dir_id(d: &Dir, at: &Path) -> Result<Id, Error> {
-    d.dir_metadata()
-        .map(|m| Id::of(&m))
-        .map_err(|e| io(&format!("{}", at.display()), e))
+    let m = d
+        .dir_metadata()
+        .map_err(|e| io(&format!("{}", at.display()), e))?;
+    Id::of(&m)
 }
 
 /// The link at name in d: its text and identity, or None when name is not a link (or missing).
@@ -371,7 +391,7 @@ fn link_at(d: &Dir, name: &Path, at: &Path) -> Result<Option<(String, Id)>, Erro
             let text = text.to_str().map(String::from).ok_or_else(|| {
                 Error::invalid_request(format!("{}: the link's text is not UTF-8", at.display()))
             })?;
-            Ok(Some((text, Id::of(&m))))
+            Ok(Some((text, Id::of(&m)?)))
         }
         Ok(_) => Ok(None),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
@@ -468,7 +488,7 @@ impl Target {
                     let next = dir
                         .open_dir(part)
                         .map_err(|e| io(&format!("{}", at.display()), e))?;
-                    if dir_id(&next, &at)? != Id::of(&m) {
+                    if dir_id(&next, &at)? != Id::of(&m)? {
                         return Err(changed(&at, "a folder was replaced"));
                     }
                     dir = next;
@@ -620,7 +640,7 @@ impl Target {
         let fm = f
             .metadata()
             .map_err(|e| io(&format!("{}", at.display()), e))?;
-        if Id::of(&fm) != Id::of(&m) || !fm.is_file() {
+        if Id::of(&fm)? != Id::of(&m)? || !fm.is_file() {
             return Err(changed(at, "the file was replaced while it was read"));
         }
         let mut bytes = Vec::new();
@@ -635,7 +655,7 @@ impl Target {
                 MAX_FILE >> 10
             )));
         }
-        Ok((Some(Id::of(&m)), Some(bytes)))
+        Ok((Some(Id::of(&m)?), Some(bytes)))
     }
 
     /// The file's permissions now (see [`Mode`]), None when missing.
@@ -667,7 +687,7 @@ impl Target {
             let fm = f
                 .metadata()
                 .map_err(|e| io(&format!("{}", at.display()), e))?;
-            if Id::of(&fm) != Id::of(&m) {
+            if Id::of(&fm)? != Id::of(&m)? {
                 return Err(changed(at, "the file was replaced while it was read"));
             }
             pluxy_files::access_list(&f.into_std())
@@ -810,7 +830,7 @@ impl Target {
         let f = write_private_temp(&self.dir, tmp, bytes).map_err(beside)?;
         let f = cap_std::fs::File::from_std(f);
         let m = f.metadata().map_err(beside)?;
-        Ok((Id::of(&m), f.into_std()))
+        Ok((Id::of(&m)?, f.into_std()))
     }
 
     /// Flushes the folder, so a rename or removal in it lasts.

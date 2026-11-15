@@ -15,10 +15,10 @@ pluxy-program = { path = "../program" }
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 sha2 = "=0.10.9"
 
-# Windows: a file's identity from its handle (volume serial number and file index, which cap-std
-# gives only through cap-fs-ext there).
+# Windows: a file's identity from its handle (volume serial number and file index), which cap-std
+# keeps in cap-primitives' metadata there.
 [target.'cfg(windows)'.dependencies]
-cap-fs-ext = "=4.0.3"
+cap-primitives = "=4.0.3"
 
 # Windows: the access rights the tests open files with to change their access lists.
 [target.'cfg(windows)'.dev-dependencies]

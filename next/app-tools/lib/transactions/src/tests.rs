@@ -1713,6 +1713,9 @@ fn wsl_localhost_paths_are_inside_a_distribution() {
         r"\\?\UNC\wsl.localhost\Ubuntu\home",
         r"\\?\unc\Wsl.Localhost\Ubuntu",
         r"\\.\UNC\wsl.localhost\Ubuntu\home",
+        // Windows drops a host name's trailing dots and blanks.
+        r"\\wsl.localhost.\Ubuntu\home",
+        r"\\?\UNC\wsl.localhost. .\Ubuntu\home",
     ] {
         assert!(target::in_wsl(p), "{p}");
     }
@@ -1738,6 +1741,8 @@ fn wsl_dollar_paths_are_inside_a_distribution() {
         r"\\?\UNC\wsl$\Ubuntu\home",
         r"\\?\unc\WSL$\Ubuntu",
         r"\\.\UNC\wsl$\Ubuntu\home",
+        r"\\wsl$.\Ubuntu\home",
+        r"\\?\UNC\WSL$ \Ubuntu\home",
     ] {
         assert!(target::in_wsl(p), "{p}");
     }
