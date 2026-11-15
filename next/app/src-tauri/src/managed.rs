@@ -213,13 +213,19 @@ impl ManagedCore {
     /// its caller checked, not from its path again. On Unix the app binds core's `listen` address
     /// itself and hands core the socket (`-listen-fd`), keeping its own copy; core must say it
     /// listens there. Core's log goes to the app's stderr, each line prefixed `core: `. on_exit
-    /// runs once core has exited.
+    /// runs once core has exited. Off Unix it refuses: the open program cannot be started from.
+    #[cfg_attr(
+        not(unix),
+        allow(unreachable_code, unused_variables, unused_mut, unused_assignments)
+    )]
     pub fn start(
         program: File,
         name: &Path,
         dir: &Path,
         on_exit: Option<OnExit>,
     ) -> Result<ManagedCore, String> {
+        #[cfg(not(unix))]
+        return Err("starting the app's own core is supported on Linux only".into());
         let cfg = ensure_config(dir)?;
         let key = management_key(&cfg)?;
         #[cfg(unix)]
@@ -231,7 +237,11 @@ impl ManagedCore {
             use std::os::fd::AsRawFd;
             program.as_raw_fd()
         };
+        #[cfg(unix)]
         let mut cmd = Command::new(format!("/proc/self/fd/{fd}"));
+        // Never run: `start` refused above.
+        #[cfg(not(unix))]
+        let mut cmd = Command::new(name);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;

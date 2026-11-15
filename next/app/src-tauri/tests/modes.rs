@@ -6,7 +6,10 @@
 mod releases;
 
 use pluxy_app::client::{certificates, Client};
-use pluxy_app::conn::{Change, Connection, CoreChange, Dirs, Kept, Mode, Settings};
+#[cfg(target_os = "linux")]
+use pluxy_app::conn::CoreChange;
+use pluxy_app::conn::{Change, Connection, Dirs, Kept, Mode, Settings};
+#[cfg(target_os = "linux")]
 use pluxy_app::managed::OnExit;
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
@@ -138,6 +141,7 @@ fn page_extensions(c: &Connection) -> Vec<String> {
         .collect()
 }
 
+#[cfg(target_os = "linux")]
 fn alive(pid: u32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
         .map(|s| !s.rsplit(") ").next().unwrap_or("").starts_with('Z'))
@@ -145,6 +149,7 @@ fn alive(pid: u32) -> bool {
 }
 
 #[test]
+#[cfg(target_os = "linux")] // starts the core from /proc/self/fd
 fn managed_runs_its_own_core_and_stops_it() {
     let root = temp("managed");
     let out = Command::new("go")
@@ -373,7 +378,9 @@ fn local_rotation_keeps_the_new_key_as_the_old_one_was_kept() {
     // A failed save: the app works on the new key, the old kept key stays on disk, and the
     // connection says what to do; doing it recovers.
     c.sign_in(&second.key, true).unwrap();
+    #[cfg(unix)] // it makes the config read-only with Unix permission bits
     let config = dirs(&root).config;
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o500)).unwrap();
@@ -407,6 +414,7 @@ fn local_rotation_keeps_the_new_key_as_the_old_one_was_kept() {
 /// The app's own core saves the rotated key in its config file, where the app reads it when it
 /// starts the core again.
 #[test]
+#[cfg(target_os = "linux")] // starts the core from /proc/self/fd
 fn managed_rotation_survives_restarting_the_core() {
     let root = temp("rotate-managed");
     let out = Command::new("go")
@@ -442,6 +450,7 @@ fn managed_rotation_survives_restarting_the_core() {
 
 /// Sets managed mode with program as the core program, and adopts it as the window's Adopt
 /// would: the app runs only a core in its own store.
+#[cfg(target_os = "linux")]
 fn adopt(c: &mut Connection, program: &str) {
     c.change(Change {
         mode: Some(Mode::Managed),
@@ -454,6 +463,7 @@ fn adopt(c: &mut Connection, program: &str) {
 }
 
 /// panelcore's prepared core program, in root.
+#[cfg(target_os = "linux")]
 fn prepared_core(root: &Path) -> String {
     let out = Command::new("go")
         .args(["run", "./e2e/panelcore", "-prepare"])
@@ -470,6 +480,7 @@ fn prepared_core(root: &Path) -> String {
 /// Start leaves a running core alone and Restart replaces it. The window's Start and the
 /// tray's use Start, so a click that races a recovery keeps the recovered core.
 #[test]
+#[cfg(target_os = "linux")] // starts the core from /proc/self/fd
 fn start_leaves_a_live_core_alone_and_restart_replaces_it() {
     let root = temp("start");
     let program = prepared_core(&root);
@@ -489,6 +500,7 @@ fn start_leaves_a_live_core_alone_and_restart_replaces_it() {
 /// A core can exit while the app is still starting, before anything can act on its exit
 /// callback. Asking the connection afterwards, as the app's setup does, schedules recovery.
 #[test]
+#[cfg(target_os = "linux")] // starts the core from /proc/self/fd
 fn a_core_that_exits_before_anyone_watches_is_recovered() {
     use std::time::{Duration, Instant};
     let root = temp("early");

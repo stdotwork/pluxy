@@ -90,6 +90,7 @@ use std::time::Duration;
 pub const CHILD: &str = "PLUXY_FIXTURE_CHILD";
 /// The first argument that makes it the spawn check's agent (`agent`); its group member and its
 /// orphan get this with `-child` and `-orphan` added.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub const AGENT: &str = "pluxy-fixture-agent";
 
 /// How the unit tests make it misbehave, from `fixture.json`. Absent: it behaves.
@@ -112,6 +113,7 @@ struct Mode {
     /// Answers `summary` with this output instead.
     output: Option<Value>,
     /// Leaves its process group for the app's, once its child has started.
+    #[cfg_attr(not(unix), allow(dead_code))]
     leave_group: bool,
     /// Adds this many bytes to `summary`'s output.
     pad: Option<usize>,

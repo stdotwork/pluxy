@@ -1181,8 +1181,11 @@ The app's updater ([Application update](#application-update)) calls it.
 - Access: Linux only (5.8 or later: grants record the `statx` mount ID); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- Tested on Linux only. On Windows the page document's address is
-  `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
+- The native test runs on Linux only. On Windows and macOS, CI builds the app's crate, runs
+  clippy and the Rust tests (`.github/workflows/next-app-platforms.yml`); the native features
+  (confirmations, key entry, process ownership, starting the app's own core) stay Linux only
+  and refuse at run time. On Windows the page document's address is
+  `http://pluxy-page.localhost/`.
 - No installer or bundled core yet: the only package is the test AppImage, which is not for release.
   The app updates only itself, only as an AppImage, on Linux x86_64, and only with test updater
   trust until release keys exist. Rollback keeps the last three versions that ran on this
