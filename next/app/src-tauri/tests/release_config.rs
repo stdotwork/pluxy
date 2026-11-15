@@ -1426,7 +1426,6 @@ fn release_config_checks_executable_headers() {
     let mut small = pe(receipt);
     small[0x94..0x96].copy_from_slice(&2u16.to_le_bytes()); // SizeOfOptionalHeader
     case("an optional header too short for its fields", small, false);
-    drop(case);
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
@@ -1493,6 +1492,5 @@ fn release_config_checks_app_bundle_info_plist() {
         Some("Info.plist: test build marker/identity"),
     );
     case("the clean bundle again", Some(PLIST.as_bytes()), None);
-    drop(case);
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
