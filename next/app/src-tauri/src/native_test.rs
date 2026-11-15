@@ -93,6 +93,7 @@ mod jobs;
 #[cfg(target_os = "linux")]
 #[path = "launcher_native.rs"]
 mod launcher;
+#[cfg(target_os = "linux")]
 #[path = "omp_native.rs"]
 mod omp;
 #[cfg(target_os = "linux")]
