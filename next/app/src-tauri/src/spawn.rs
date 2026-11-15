@@ -91,8 +91,17 @@ pub const BASE: &[&str] = &[
     "ALL_PROXY",
 ];
 /// Names a launch may never set, inherit or receive a secret in: the app's own and its tests'
-/// (`PLUXY_`), the dynamic loader's (`LD_`) and the AppImage runtime's.
-const NEVER_PREFIX: &[&str] = &["PLUXY_", "LD_", "MALLOC_", "CORECLR_", "COR_PROFILER_PATH"];
+/// (`PLUXY_`), the dynamic loader's (`LD_`) and the AppImage runtime's, and the .NET runtime's
+/// profiler and the legacy `COMPlus_` settings. Prefixes are upper case, as names are compared.
+const NEVER_PREFIX: &[&str] = &[
+    "PLUXY_",
+    "LD_",
+    "MALLOC_",
+    "CORECLR_",
+    "COR_PROFILER_PATH",
+    "DOTNET_PROFILER",
+    "COMPLUS_",
+];
 /// And names that make the dynamic loader, the C library or an interpreter load or run code of
 /// their own, like `LD_*`.
 const NEVER: &[&str] = &[
@@ -124,6 +133,11 @@ const NEVER: &[&str] = &[
     "JDK_JAVA_OPTIONS",
     "DOTNET_STARTUP_HOOKS",
     "COR_PROFILER",
+    "DOTNET_ADDITIONAL_DEPS",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "NODE_PATH",
+    "RUBYLIB",
 ];
 /// At most this many names in each of set, unset, inherit and secrets.
 const MAX_NAMES: usize = 64;
