@@ -1,17 +1,21 @@
 //! pluxy/codex-sessions: reads Codex's local sessions for pluxy's desktop app, read-only. Its
-//! operations (README.md): `list` (read), `detail` (disclose: each call asks the person) and
-//! `settings` (write: the Codex home folder, kept in the tool's data folder).
+//! operations (README.md): `list` (read), `detail` and `export` (disclose: each call asks the
+//! person) and `settings` (write: the Codex home folder, kept in the tool's data folder).
 
 mod reader;
 
-use pluxy_program::{run, Call, Error, Handler};
+use pluxy_program::{run, Call, Error, Handler, SaveOutcome};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The settings file in the tool's data folder.
 const SETTINGS: &str = "settings.json";
 
-struct Sessions;
+struct Sessions {
+    /// The Codex home to read instead of the one the app's environment gives, for tests.
+    home: Option<PathBuf>,
+}
 
 /// The tool's data folder, which the host gives it.
 fn data_dir() -> Result<PathBuf, Error> {
@@ -82,11 +86,31 @@ fn count(input: &Value, key: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+/// The error a call of `detail` or `export` ends with.
+fn failure(e: reader::DetailError) -> Error {
+    match e {
+        reader::DetailError::Invalid(m) => Error::invalid_request(m),
+        reader::DetailError::NotFound(m) => Error::not_found(m),
+        reader::DetailError::Unavailable(m) => Error::unavailable(m),
+        reader::DetailError::Cancelled => Error::cancelled(),
+    }
+}
+
+impl Sessions {
+    /// The Codex home to read, and whether it is custom.
+    fn home(&self) -> Result<(PathBuf, bool), Error> {
+        match &self.home {
+            Some(home) => Ok((home.clone(), false)),
+            None => codex_home(),
+        }
+    }
+}
+
 impl Handler for Sessions {
     fn call(&self, call: &Call) -> Result<Value, Error> {
         match call.op.as_str() {
             "list" => {
-                let (home, _) = codex_home()?;
+                let (home, _) = self.home()?;
                 Ok(reader::list(
                     &home,
                     count(&call.input, "offset", 0),
@@ -95,7 +119,7 @@ impl Handler for Sessions {
                 .to_json())
             }
             "detail" => {
-                let (home, _) = codex_home()?;
+                let (home, _) = self.home()?;
                 let id = call.input["id"].as_str().unwrap_or_default();
                 reader::detail(
                     &home,
@@ -104,12 +128,23 @@ impl Handler for Sessions {
                     count(&call.input, "limit", reader::DEFAULT_PAGE_SIZE),
                     &|| call.cancelled(),
                 )
-                .map_err(|e| match e {
-                    reader::DetailError::Invalid(m) => Error::invalid_request(m),
-                    reader::DetailError::NotFound(m) => Error::not_found(m),
-                    reader::DetailError::Unavailable(m) => Error::unavailable(m),
-                    reader::DetailError::Cancelled => Error::cancelled(),
-                })
+                .map_err(failure)
+            }
+            // The rollout's bytes go to the host's save dialog and never into the answer, which
+            // says only whether the person saved the file.
+            "export" => {
+                let (home, _) = self.home()?;
+                let id = call.input["id"].as_str().unwrap_or_default();
+                let (id, bytes) = reader::export_bytes(&home, id).map_err(failure)?;
+                let today = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                Ok(
+                    match call.save_file(&reader::export_name(&id, today), &bytes)? {
+                        SaveOutcome::Saved { size } => json!({"outcome": "saved", "size": size}),
+                        SaveOutcome::Cancelled => json!({"outcome": "cancelled"}),
+                    },
+                )
             }
             "settings" => {
                 let data = data_dir()?;
@@ -123,8 +158,11 @@ impl Handler for Sessions {
 }
 
 fn main() {
-    if let Err(e) = run(Sessions) {
+    if let Err(e) = run(Sessions { home: None }) {
         eprintln!("codex-sessions: {e}");
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod export_tests;

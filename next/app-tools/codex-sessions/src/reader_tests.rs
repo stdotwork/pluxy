@@ -763,3 +763,183 @@ fn a_thread_stored_as_local_uuid_is_found_by_either_form_of_its_id() {
         );
     }
 }
+
+const EXPORT_ID: &str = "019f1234-abcd-7000-8000-0000000000e1";
+
+/// A rollout for EXPORT_ID in the usual place, holding bytes; its path.
+fn exported_rollout(root: &Path, bytes: &[u8]) -> PathBuf {
+    let path = root.join(format!(
+        "sessions/2026/08/04/rollout-2026-08-04T10-00-00-{EXPORT_ID}.jsonl"
+    ));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, bytes).unwrap();
+    path
+}
+
+#[test]
+fn export_name_is_the_old_apps_with_the_utc_date() {
+    assert_eq!(export_name("abc", 0), "session-abc-1970-01-01.jsonl");
+    assert_eq!(export_name("abc", 86_399), "session-abc-1970-01-01.jsonl");
+    assert_eq!(export_name("abc", 86_400), "session-abc-1970-01-02.jsonl");
+    // 2000-02-29 and 2024-02-29 (leap days), 2023-11-14 22:13:20, the end of 1999 and 2100-03-01.
+    assert_eq!(export_name("x", 951_782_400), "session-x-2000-02-29.jsonl");
+    assert_eq!(
+        export_name("x", 1_709_164_800),
+        "session-x-2024-02-29.jsonl"
+    );
+    assert_eq!(
+        export_name("x", 1_700_000_000),
+        "session-x-2023-11-14.jsonl"
+    );
+    assert_eq!(export_name("x", 946_684_799), "session-x-1999-12-31.jsonl");
+    assert_eq!(
+        export_name("x", 4_107_542_400),
+        "session-x-2100-03-01.jsonl"
+    );
+}
+
+#[test]
+fn export_gives_the_rollouts_bytes_exactly_as_they_are_on_disk() {
+    let root = Root::new("export-bytes");
+    // No final newline, a CRLF, a NUL, multi-byte text and a line that is not JSON: nothing is
+    // parsed or normalised.
+    let bytes = "{\"a\":\"é€😀\"}\r\n\0not json\n{\"b\":1}"
+        .as_bytes()
+        .to_vec();
+    exported_rollout(&root, &bytes);
+    assert_eq!(
+        export_bytes(&root, EXPORT_ID),
+        Ok((EXPORT_ID.to_string(), bytes.clone()))
+    );
+    // `local:` is how a database may name it; the ID that comes back is without it.
+    assert_eq!(
+        export_bytes(&root, &format!("local:{EXPORT_ID}"))
+            .unwrap()
+            .0,
+        EXPORT_ID
+    );
+    // An empty rollout is an empty export.
+    exported_rollout(&root, b"");
+    assert_eq!(
+        export_bytes(&root, EXPORT_ID),
+        Ok((EXPORT_ID.into(), vec![]))
+    );
+}
+
+#[test]
+fn export_takes_a_rollout_of_exactly_the_limit_and_refuses_one_byte_more_or_not_utf8() {
+    let root = Root::new("export-limit");
+    let path = exported_rollout(&root, &vec![b'x'; MAX_EXPORT as usize]);
+    assert_eq!(
+        export_bytes(&root, EXPORT_ID).unwrap().1.len() as u64,
+        MAX_EXPORT
+    );
+    fs::write(&path, vec![b'x'; MAX_EXPORT as usize + 1]).unwrap();
+    let Err(DetailError::Unavailable(m)) = export_bytes(&root, EXPORT_ID) else {
+        panic!("a rollout over the limit is unavailable");
+    };
+    assert!(m.contains("larger than 10 MiB"), "{m}");
+    assert!(!m.contains(&*root.to_string_lossy()), "{m}");
+    // Not UTF-8: the old app had no raw JSONL for it either.
+    fs::write(&path, b"{\"a\":1}\n\xff\xfe\n").unwrap();
+    let Err(DetailError::Unavailable(m)) = export_bytes(&root, EXPORT_ID) else {
+        panic!("a rollout that is not UTF-8 is unavailable");
+    };
+    assert!(m.contains("not UTF-8"), "{m}");
+    assert!(!m.contains(&*root.to_string_lossy()), "{m}");
+}
+
+#[test]
+fn export_finds_the_rollout_as_detail_does_and_refuses_what_detail_would_not_read() {
+    let root = Root::new("export-resolve");
+    let outside = Root::new("export-resolve-outside");
+    let canary = "canary-outside-file-text";
+    // A database names a rollout whose file name holds no session ID.
+    let named = root.join("sessions/chosen.jsonl");
+    write(&named, "{\"chosen\":true}\n");
+    sql(
+        &root.join("state_5.sqlite"),
+        &format!(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, title TEXT);
+             INSERT INTO threads VALUES ('by-database', '{}', 'Named');
+             INSERT INTO threads VALUES ('local:{EXPORT_ID}', '{}', 'Outside');
+             INSERT INTO threads VALUES ('linked', '{}', 'Linked');",
+            named.display(),
+            outside.join("outside.jsonl").display(),
+            root.join("sessions/link.jsonl").display(),
+        ),
+    );
+    let d = detail(&root, "by-database", 0, 50, &never).unwrap();
+    assert_eq!(
+        d["rollout"],
+        json!(fs::canonicalize(&named).unwrap().to_string_lossy())
+    );
+    assert_eq!(
+        export_bytes(&root, "by-database"),
+        Ok(("by-database".to_string(), b"{\"chosen\":true}\n".to_vec()))
+    );
+
+    // The database's path leaves the Codex home: not read, as detail does not read it; the
+    // rollout that is in the home by its name is, as for detail.
+    write(&outside.join("outside.jsonl"), canary);
+    assert_eq!(
+        detail(&root, EXPORT_ID, 0, 50, &never).unwrap()["rollout"],
+        Value::Null
+    );
+    assert!(matches!(
+        export_bytes(&root, EXPORT_ID),
+        Err(DetailError::NotFound(_))
+    ));
+    exported_rollout(&root, b"{\"inside\":true}\n");
+    assert_eq!(
+        export_bytes(&root, EXPORT_ID).unwrap().1,
+        b"{\"inside\":true}\n"
+    );
+
+    // A link in the home that points outside is not read, by a database's path or by name.
+    std::os::unix::fs::symlink(
+        outside.join("outside.jsonl"),
+        root.join("sessions/link.jsonl"),
+    )
+    .unwrap();
+    assert_eq!(
+        detail(&root, "linked", 0, 50, &never).unwrap()["rollout"],
+        Value::Null
+    );
+    let Err(DetailError::NotFound(m)) = export_bytes(&root, "linked") else {
+        panic!("a link out of the Codex home is not exported");
+    };
+    assert!(
+        !m.contains(canary) && !m.contains(&*outside.to_string_lossy()),
+        "{m}"
+    );
+    let other = "019f1234-abcd-7000-8000-0000000000e2";
+    std::os::unix::fs::symlink(
+        outside.join("outside.jsonl"),
+        root.join(format!("sessions/rollout-{other}.jsonl")),
+    )
+    .unwrap();
+    assert!(matches!(
+        export_bytes(&root, other),
+        Err(DetailError::NotFound(_))
+    ));
+}
+
+#[test]
+fn export_skips_session_folders_that_are_links_and_refuses_bad_ids() {
+    let root = Root::new("export-folders");
+    let outside = Root::new("export-folders-outside");
+    let file = outside.join(format!("a/rollout-{EXPORT_ID}.jsonl"));
+    write(&file, "outside\n");
+    std::os::unix::fs::symlink(outside.join("a"), root.join("sessions")).unwrap();
+    assert!(matches!(
+        export_bytes(&root, EXPORT_ID),
+        Err(DetailError::NotFound(_))
+    ));
+    for bad in ["../etc/passwd", "a/b", "", "a.b", &"a".repeat(129)] {
+        assert!(
+            matches!(export_bytes(&root, bad), Err(DetailError::Invalid(_))),
+            "{bad}"
+        );
+    }
+}
