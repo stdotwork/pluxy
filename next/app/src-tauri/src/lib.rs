@@ -34,6 +34,8 @@ pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
 pub mod notes;
+#[cfg(windows)]
+mod page_frames;
 pub mod pages;
 mod place;
 mod privacy;
@@ -336,14 +338,6 @@ fn tray_refused(action: &str, mode: Option<Mode>, reason: &str) {
 fn is_app_url(u: &Url) -> bool {
     (u.scheme() == "tauri" && u.host_str() == Some("localhost"))
         || (matches!(u.scheme(), "http" | "https") && u.host_str() == Some("tauri.localhost"))
-}
-
-fn page_scheme_url() -> Url {
-    #[cfg(any(windows, target_os = "android"))]
-    let s = format!("http://{}.localhost/", pages::SCHEME);
-    #[cfg(not(any(windows, target_os = "android")))]
-    let s = format!("{}://localhost/", pages::SCHEME);
-    Url::parse(&s).expect("the page scheme's URL")
 }
 
 /// Shows the window, making a new one if it was closed.
@@ -1120,35 +1114,37 @@ fn open_page(webview: &Webview, binding: Binding, rect: Rect) -> Result<String, 
     add_page(webview, label, site, rect)
 }
 
+/// A navigation in page label's webview, at the top or in a frame: closes the page's channel
+/// when its frame loads a second document, and allows the app's document and the page's own
+/// site only.
+fn page_navigation(app: &AppHandle, label: &str, site: &Binding, u: &Url) -> bool {
+    app.state::<App>()
+        .pages
+        .lock()
+        .unwrap()
+        .frame_navigation(label, u);
+    notify_page_closed(app, label);
+    #[cfg(feature = "native-test")]
+    if pages::is_ingress(u) {
+        return true;
+    }
+    *u == pages::app_url() || site.on_site(u)
+}
+
 /// Makes the webview for page label, bound to site.
 fn add_page(webview: &Webview, label: String, site: Binding, rect: Rect) -> Result<String, String> {
     let state = webview.state::<App>();
-    let app_doc = page_scheme_url();
     let navigation_app = webview.app_handle().clone();
     let navigation_label = label.clone();
-    let builder = WebviewBuilder::new(&label, WebviewUrl::CustomProtocol(app_doc.clone()))
+    #[cfg(windows)]
+    let frame_site = site.clone();
+    let builder = WebviewBuilder::new(&label, WebviewUrl::CustomProtocol(pages::app_url()))
         // A web context of their own, apart from the window's storage and cookies. Not
         // `incognito`: on Linux, Tauri then gives the webview no custom schemes at all.
         .data_directory(state.pages_dir.clone())
         .devtools(false)
         // The app's document at the top, the page's site in its frame; nowhere else.
-        .on_navigation(move |u| {
-            navigation_app
-                .state::<App>()
-                .pages
-                .lock()
-                .unwrap()
-                .frame_navigation(&navigation_label, u);
-            notify_page_closed(&navigation_app, &navigation_label);
-            #[cfg(feature = "native-test")]
-            if u.scheme() == pages::SCHEME
-                && u.host_str() == Some("localhost")
-                && u.path() == "/ingress-test"
-            {
-                return true;
-            }
-            *u == app_doc || site.on_site(u)
-        })
+        .on_navigation(move |u| page_navigation(&navigation_app, &navigation_label, &site, u))
         .on_new_window(|_, _| NewWindowResponse::Deny)
         .on_page_load(|wv, p| {
             if p.event() == PageLoadEvent::Started {
@@ -1170,7 +1166,20 @@ fn add_page(webview: &Webview, label: String, site: Binding, rect: Rect) -> Resu
             LogicalSize::new(b.width.max(1.0), b.height.max(1.0)),
         )
         .map_err(|e| e.to_string())
-        .and_then(|_| place::adopt(&window, &label, Some(b)));
+        .and_then(|_page| {
+            // WebView2 tells wry's navigation handler of the top document only: the page's
+            // frame is watched apart, and shown only once it is (pages.rs `/frame`).
+            #[cfg(windows)]
+            {
+                let app = _page.app_handle().clone();
+                let frame_label = label.clone();
+                page_frames::watch(&_page, move |u| {
+                    page_navigation(&app, &frame_label, &frame_site, u)
+                })?;
+                state.pages.lock().unwrap().watch_frames(&label);
+            }
+            place::adopt(&window, &label, Some(b))
+        });
     // Unbound while it was made (its package changed, or the window closed its pages): the
     // webview must not stay.
     let placed = placed.and_then(|_| {

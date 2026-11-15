@@ -673,6 +673,18 @@ fn run(app: &AppHandle) -> Result<(), String> {
         {
             return Err("fragment navigation closed admission".into());
         }
+        // The frame calls every command through a Tauri bridge of its own, where it has one.
+        wv.eval(format!(
+            "window.__frameInvoked = null; window.addEventListener('message', e => {{ if (e.data?.nativeInvoked) window.__frameInvoked = e.data.nativeInvoked; }}); document.querySelector('iframe').contentWindow.postMessage({{nativeInvoke: {}}}, '*')",
+            json!(all)
+        ))
+        .map_err(|e| e.to_string())?;
+        log(
+            "frame_invoke",
+            wait_for("the frame's calls", || {
+                eval(&wv, "window.__frameInvoked ?? null").filter(|v| !v.is_null())
+            })?,
+        );
         // The real HTTP pages-site frame navigates while wrapper closed is deliberately lost.
         // The native navigation callback must invalidate admission before its new document loads.
         wv.eval("{ const original=window.fetch; window.fetch=(u,o)=>o?.body && JSON.parse(o.body).type==='closed' ? Promise.resolve(new Response('',{status:204})) : original(u,o); const frame=document.querySelector('iframe');const next=new URL(frame.src);next.hash='';next.search='?native-second';frame.src=next.href; }").map_err(|e|e.to_string())?;

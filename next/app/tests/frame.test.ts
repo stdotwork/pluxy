@@ -16,7 +16,7 @@ function wrapper() {
       new Promise((resolve) => requests.push({ body: JSON.parse(options.body), resolve })),
   };
   const code = readFileSync(new URL("../page/frame.js", import.meta.url), "utf8").split(
-    'const r = await fetch("/frame");',
+    'let r = await fetch("/frame");',
   )[0];
   Object.assign(context, { replies: messages });
   runInNewContext(`${code ?? ""}\nport = { postMessage: value => replies.push(value) };`, context);
@@ -73,4 +73,47 @@ test("an oversized transport refusal uses the original call id", async () => {
       error: { code: "too_large", message: "native page transport refused the call" },
     },
   ]);
+});
+
+/** Runs the whole wrapper with /frame answered by replies, in order; the last one repeats. */
+async function shown(replies: { status: number; info?: unknown }[]) {
+  const frame: Record<string, unknown> & { addEventListener(): void } = { addEventListener() {} };
+  let asked = 0;
+  let appended = false;
+  const context = {
+    document: { createElement: () => frame, body: { append: () => (appended = true) } },
+    window: { addEventListener() {} },
+    setTimeout: (f: () => void) => setTimeout(f, 0),
+    fetch: async (url: string) => {
+      expect(url).toBe("/frame");
+      const reply = replies[Math.min(asked++, replies.length - 1)] as { status: number; info?: unknown };
+      return { status: reply.status, ok: reply.status === 200, json: async () => reply.info };
+    },
+  };
+  const code = readFileSync(new URL("../page/frame.js", import.meta.url), "utf8");
+  const error = await (runInNewContext(`(async () => {\n${code}\n})()`, context) as Promise<void>).then(
+    () => undefined,
+    (e: unknown) => String(e),
+  );
+  return { asked, appended, src: frame.src, error };
+}
+
+test("the wrapper waits while the app is not yet watching the frame's navigations", async () => {
+  const info = {
+    url: "http://localhost:8401/p/",
+    title: "Page",
+    generation: "1",
+    native_frame_navigation: true,
+  };
+  const r = await shown([{ status: 503 }, { status: 503 }, { status: 200, info }]);
+  expect(r).toEqual({ asked: 3, appended: true, src: "http://localhost:8401/p/", error: undefined });
+});
+
+test("the wrapper shows no frame when the app never gives its address", async () => {
+  const r = await shown([{ status: 503 }]);
+  expect(r.asked).toBe(51);
+  expect(r.appended).toBe(false);
+  expect(r.src).toBeUndefined();
+  expect(r.error).toContain("unavailable (503)");
+  expect((await shown([{ status: 403 }])).asked).toBe(1);
 });

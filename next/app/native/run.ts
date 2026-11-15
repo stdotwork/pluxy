@@ -1721,6 +1721,13 @@ async function runApp(
       check(fine, `from the page's frame, "${what}" ${r.status}: ${r.detail}`);
     }
 
+    // The frame's calls through a Tauri bridge of its own: it has none, and none succeeds.
+    const invoked = steps.get("frame_invoke") as Probe | undefined;
+    check(invoked?.internals === false, `the page's frame has a Tauri bridge: ${JSON.stringify(invoked)}`);
+    for (const cmd of commands) check(invoked?.calls?.[cmd], `the page's frame did not try ${cmd}`);
+    for (const [cmd, c] of Object.entries(invoked?.calls ?? {}))
+      check(!c.ok, `${cmd} from the page's frame: ${JSON.stringify(c)}`);
+
     for (const [step, expected] of [
       ["ingress_site", { attempts: 1, arrivals: 0, blocked: true }],
       ["ingress_recovery", { error: "unavailable", control: true }],

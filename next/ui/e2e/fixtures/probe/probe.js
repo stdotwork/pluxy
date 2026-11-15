@@ -82,3 +82,26 @@ window.addEventListener("message", (e) => {
     parent.postMessage({ nativeHashChanged: true }, "*");
   }
 });
+
+// The native test also asks the frame to call every app command through a Tauri bridge of its
+// own, if it has one (WebView2 runs Tauri's scripts in frames too): none may succeed.
+window.addEventListener("message", async (e) => {
+  if (e.source !== parent || !Array.isArray(e.data?.nativeInvoke)) return;
+  const inv = window.__TAURI_INTERNALS__?.invoke;
+  const calls = {};
+  await Promise.all(
+    e.data.nativeInvoke.map(async (cmd) => {
+      try {
+        if (typeof inv !== "function") throw new Error("absent");
+        const v = await Promise.race([
+          inv(cmd, {}),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("timed out")), 5000)),
+        ]);
+        calls[cmd] = { ok: true, detail: short(JSON.stringify(v) ?? v) };
+      } catch (err) {
+        calls[cmd] = { ok: false, detail: short(err) };
+      }
+    }),
+  );
+  parent.postMessage({ nativeInvoked: { internals: typeof inv === "function", calls } }, "*");
+});

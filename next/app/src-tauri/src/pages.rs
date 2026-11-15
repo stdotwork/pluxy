@@ -7,6 +7,9 @@ use url::Url;
 
 pub const SCHEME: &str = "pluxy-page";
 pub const MAX_SEND: usize = 256 << 10;
+/// The app closes a page's channel when its frame navigates on every platform, so the wrapper
+/// document need not report a second frame document itself (page/frame.js).
+const NATIVE_FRAME_NAVIGATION: bool = true;
 pub const MAX_CALL: usize = 64 << 10;
 pub const MAX_OPEN: usize = 16;
 pub const MAX_PACKAGE_PAGES: usize = 4;
@@ -20,6 +23,30 @@ const MAX_REPLY: usize = 2 << 20;
 const INDEX: &str = include_str!("../../page/index.html");
 const SCRIPT: &str = include_str!("../../page/frame.js");
 const STYLE: &str = include_str!("../../page/frame.css");
+
+/// The page webviews' app document. Windows serves a custom scheme as `http://<scheme>.localhost`.
+pub fn app_url() -> Url {
+    #[cfg(any(windows, target_os = "android"))]
+    let s = format!("http://{SCHEME}.localhost/");
+    #[cfg(not(any(windows, target_os = "android")))]
+    let s = format!("{SCHEME}://localhost/");
+    Url::parse(&s).expect("the page scheme's URL")
+}
+
+/// The native test's ingress fixture, a document of the page scheme shown in the page's frame.
+#[cfg(feature = "native-test")]
+pub fn ingress_url() -> Url {
+    app_url()
+        .join("ingress-test")
+        .expect("the ingress fixture's URL")
+}
+
+/// Whether url is the ingress fixture, with any query (its second document is `?second`).
+#[cfg(feature = "native-test")]
+pub fn is_ingress(url: &Url) -> bool {
+    let base = ingress_url();
+    url.scheme() == base.scheme() && url.host_str() == base.host_str() && url.path() == base.path()
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Binding {
@@ -86,6 +113,10 @@ struct Page {
     binding: Binding,
     document: Document,
     previous_closed: Option<ToWindow>,
+    /// Whether the app is told of the page's frame navigations (`frame_navigation`). WebKitGTK
+    /// and WKWebView report them to the webview's navigation handler from the start; on Windows
+    /// the app hooks WebView2's frame navigations once the webview exists (lib.rs `add_page`).
+    frames_watched: bool,
 }
 #[derive(Default)]
 pub struct Pages {
@@ -137,9 +168,16 @@ impl Pages {
                 binding,
                 document: Document::default(),
                 previous_closed: None,
+                frames_watched: !cfg!(windows),
             },
         );
         Ok(label)
+    }
+    /// The app now sees page label's frame navigations: its frame may be shown.
+    pub fn watch_frames(&mut self, label: &str) {
+        if let Some(w) = self.open.get_mut(label) {
+            w.frames_watched = true;
+        }
     }
     pub fn get(&self, label: &str) -> Option<&Binding> {
         self.open.get(label).map(|w| &w.binding)
@@ -214,7 +252,8 @@ impl Pages {
     pub fn document_closed(&self, label: &str) -> bool {
         self.open.get(label).is_none_or(|w| w.document.closed)
     }
-    /// WebKit reports subframe navigation. Ignore fragment-only changes (a same-document
+    /// Every platform reports subframe navigation: WebKitGTK and WKWebView to the webview's
+    /// navigation handler, WebView2 as FrameNavigationStarting. Ignore fragment-only changes (a same-document
     /// navigation: the new address has a fragment and differs only in it), but close on a
     /// second document, including one that drops the fragment, or a nested frame loading another
     /// pages-site document.
@@ -223,8 +262,7 @@ impl Pages {
             return;
         };
         #[cfg(feature = "native-test")]
-        let test_frame =
-            self.ingress_fixture && url.scheme() == SCHEME && url.path() == "/ingress-test";
+        let test_frame = self.ingress_fixture && is_ingress(url);
         #[cfg(not(feature = "native-test"))]
         let test_frame = false;
         if !w.binding.on_site(url) && !test_frame {
@@ -375,7 +413,7 @@ impl Pages {
                 if w.document.frame_url.is_none() {
                     #[cfg(feature = "native-test")]
                     let url = if self.ingress_fixture {
-                        Url::parse("pluxy-page://localhost/ingress-test").unwrap()
+                        ingress_url()
                     } else {
                         w.binding.url.clone()
                     };
@@ -698,9 +736,14 @@ fn serve_at(
     let csp = format!("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src {}; base-uri 'none'; form-action 'none'", w.binding.frame_source());
     #[cfg(feature = "native-test")]
     let csp = if pages.ingress_fixture {
-        csp.replace("frame-src ", "frame-src pluxy-page: ")
-            .replace("script-src 'self'", "script-src pluxy-page:")
-            .replace("connect-src 'self'", "connect-src pluxy-page:")
+        // The page scheme as a source: by scheme, or on Windows by its http origin.
+        #[cfg(not(windows))]
+        let own = format!("{SCHEME}:");
+        #[cfg(windows)]
+        let own = app_url().origin().ascii_serialization();
+        csp.replace("frame-src ", &format!("frame-src {own} "))
+            .replace("script-src 'self'", &format!("script-src {own}"))
+            .replace("connect-src 'self'", &format!("connect-src {own}"))
     } else {
         csp
     };
@@ -723,10 +766,14 @@ fn serve_at(
         ),
         ("GET", "/frame.css") => (served(200, "text/css; charset=utf-8", STYLE, csp), None),
         ("GET", "/frame") => {
-            let info = json!({"url": w.binding.url.as_str(), "title": w.binding.title, "generation": w.document.generation, "native_frame_navigation": cfg!(target_os = "linux")});
+            // The frame's address only once the app sees the frame's navigations (frame.js waits).
+            if !w.frames_watched {
+                return fail(503, "unavailable");
+            }
+            let info = json!({"url": w.binding.url.as_str(), "title": w.binding.title, "generation": w.document.generation, "native_frame_navigation": NATIVE_FRAME_NAVIGATION});
             #[cfg(feature = "native-test")]
             let info = if pages.ingress_fixture {
-                json!({"url":"pluxy-page://localhost/ingress-test", "title":w.binding.title, "generation":w.document.generation, "native_frame_navigation": cfg!(target_os = "linux")})
+                json!({"url":ingress_url().as_str(), "title":w.binding.title, "generation":w.document.generation, "native_frame_navigation": NATIVE_FRAME_NAVIGATION})
             } else {
                 info
             };
@@ -1560,6 +1607,30 @@ mod tests {
             204
         );
     }
+    #[test]
+    fn frame_address_waits_until_frame_navigations_are_watched() {
+        let mut p = Pages::default();
+        let label = p.bind(binding("test/alpha")).unwrap();
+        p.begin_document(&label);
+        // Windows: the app hooks the frame's navigations after the webview exists.
+        if cfg!(windows) {
+            let (s, _) = serve(&mut p, &label, "GET", "/frame", b"");
+            assert_eq!(s.status, 503);
+            let body: Value = serde_json::from_slice(&s.body).unwrap();
+            assert_eq!(body["error"]["code"], "unavailable");
+            assert!(!String::from_utf8_lossy(&s.body).contains("localhost:8401"));
+            p.watch_frames(&label);
+        }
+        let (s, _) = serve(&mut p, &label, "GET", "/frame", b"");
+        assert_eq!(s.status, 200);
+        let info: Value = serde_json::from_slice(&s.body).unwrap();
+        assert_eq!(
+            info["url"],
+            "http://localhost:8401/test/alpha/hash/index.html"
+        );
+        assert_eq!(info["native_frame_navigation"], true);
+    }
+
     #[test]
     fn native_frame_navigation_closes_before_load_and_nested_navigation_fails_closed() {
         let mut p = Pages::default();

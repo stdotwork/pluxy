@@ -121,7 +121,14 @@ frame.addEventListener("load", () => {
   }
 });
 
-const r = await fetch("/frame");
+// On Windows the app answers 503 until it watches the frame's navigations, which takes a moment
+// after this webview is made.
+let r = await fetch("/frame");
+for (let i = 0; r.status === 503 && i < 50; i++) {
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  r = await fetch("/frame");
+}
+if (!r.ok) throw new Error(`the page's frame is unavailable (${r.status})`);
 const { url, title, generation: documentGeneration, native_frame_navigation } = await r.json();
 nativeFrameNavigation = native_frame_navigation === true;
 generation = documentGeneration;
