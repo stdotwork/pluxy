@@ -1751,37 +1751,39 @@ async function runApp(
     for (const [cmd, c] of Object.entries(invoked?.calls ?? {}))
       check(!c.ok, `${cmd} from the page's frame: ${JSON.stringify(c)}`);
 
-    // The frame's navigations off its site: each stopped where the evidence shows, refused by the
-    // app's navigation handler or first by the app document's frame-src (native_test.rs
-    // frame_offsite); none allowed, the frame still there, the channel open.
-    const offsite = steps.get("frame_offsite") as
-      | {
-          tried?: { url: string; stayed: boolean; error?: unknown; stopped?: string | null }[];
-          allowed?: unknown[];
-          refused?: string[];
-          open?: boolean;
-        }
-      | undefined;
+    // The frame's navigations off its site, each from a page of its own (native_test.rs
+    // frame_offsite): each stopped where the evidence shows, refused by the app's navigation
+    // handler or first by the app document's frame-src; none allowed, nothing reaching the page
+    // scheme's probe address, the frame still there and the channel open.
+    type OffsiteTry = {
+      url: string;
+      error?: unknown;
+      stopped?: string | null;
+      refused?: boolean;
+      allowed?: unknown[];
+      replaced?: unknown[];
+      stayed?: boolean;
+      open?: boolean;
+    };
+    const offsite = steps.get("frame_offsite") as { tried?: OffsiteTry[]; probe_hits?: number } | undefined;
     check(
-      offsite?.tried?.length === 3,
+      offsite?.tried?.length === 4,
       `the page's frame did not try to leave its site: ${JSON.stringify(offsite)}`,
     );
+    check(offsite?.probe_hits === 0, `an off-site try reached the page scheme: ${JSON.stringify(offsite)}`);
     for (const t of offsite?.tried ?? []) {
-      check(t.error == null, `the page's frame could not try ${t.url}: ${JSON.stringify(offsite)}`);
-      check(t.stayed, `the page's frame left for ${t.url}: ${JSON.stringify(offsite)}`);
+      const seen = JSON.stringify(t);
+      check(t.error == null, `the page's frame could not try ${t.url}: ${seen}`);
       check(
-        (t.stopped === "hook" && offsite?.refused?.includes(t.url)) || t.stopped === "frame-src",
-        `nothing shows where ${t.url} stopped: ${JSON.stringify(offsite)}`,
+        (t.stopped === "hook" && t.refused === true) || t.stopped === "frame-src",
+        `nothing shows where ${t.url} stopped: ${seen}`,
+      );
+      check(t.allowed?.length === 0, `the app allowed the frame to ${t.url}: ${seen}`);
+      check(
+        t.stayed === true && t.open === true,
+        `the page's frame or channel did not hold for ${t.url}: ${seen}`,
       );
     }
-    check(
-      offsite?.allowed?.length === 0,
-      `the app allowed the frame off its site: ${JSON.stringify(offsite)}`,
-    );
-    check(
-      offsite?.open === true,
-      `a cancelled navigation closed the page's channel: ${JSON.stringify(offsite)}`,
-    );
     console.log(`${label} frame_offsite ${JSON.stringify(offsite)}`);
 
     for (const [step, expected] of [

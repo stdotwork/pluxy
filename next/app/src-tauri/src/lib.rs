@@ -1230,9 +1230,23 @@ fn add_page(webview: &Webview, label: String, site: Binding, rect: Rect) -> Resu
             {
                 let app = _page.app_handle().clone();
                 let frame_label = label.clone();
-                page_frames::watch(&_page, move |u| {
-                    page_navigation(&app, &frame_label, &frame_site, u, false)
-                })?;
+                let replaced_app = app.clone();
+                let replaced_label = label.clone();
+                page_frames::watch(
+                    &_page,
+                    move |u| page_navigation(&app, &frame_label, &frame_site, u, false),
+                    move |_status| {
+                        replaced_app
+                            .state::<App>()
+                            .pages
+                            .lock()
+                            .unwrap()
+                            .frame_replaced(&replaced_label);
+                        notify_page_closed(&replaced_app, &replaced_label);
+                        #[cfg(feature = "native-test")]
+                        native_test::frame_replaced(&replaced_label, _status);
+                    },
+                )?;
                 state.pages.lock().unwrap().watch_frames(&label);
             }
             place::adopt(&window, &label, Some(b))

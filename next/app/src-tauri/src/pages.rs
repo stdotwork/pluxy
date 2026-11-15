@@ -299,6 +299,14 @@ impl Pages {
             w.document.close();
         }
     }
+    /// The engine replaced page label's frame document with an error page of its own (Windows,
+    /// page_frames.rs): the page's document is gone.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn frame_replaced(&mut self, label: &str) {
+        if let Some(w) = self.open.get_mut(label) {
+            w.document.close();
+        }
+    }
     fn refusal(&self, label: &str, sent: Sent, now: Instant) -> Result<ToWindow, Refusal> {
         let w = self
             .open
@@ -1631,6 +1639,22 @@ mod tests {
         // Then the app's address again, in the frame or at the top: the page's document is gone.
         p.frame_navigation(&label, &app_url());
         assert!(p.document_closed(&label));
+    }
+
+    #[test]
+    fn a_replaced_frame_document_closes_the_channel() {
+        let mut p = Pages::default();
+        let label = p.bind(binding("test/alpha")).unwrap();
+        p.begin_document(&label);
+        let url = p.get(&label).unwrap().url.clone();
+        p.frame_navigation(&label, &url);
+        hello(&mut p, &label, Instant::now());
+        assert!(!p.document_closed(&label));
+        p.frame_replaced(&label);
+        assert!(p.document_closed(&label));
+        // A page no longer open is left alone.
+        p.unbind(&label);
+        p.frame_replaced(&label);
     }
 
     #[test]

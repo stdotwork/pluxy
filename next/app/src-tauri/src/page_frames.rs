@@ -3,16 +3,24 @@
 //! `NavigationStarting`), so the app hooks it here and holds the frame to the same rule as the
 //! top: what the rule refuses is cancelled. WebKitGTK and WKWebView give frame navigations to
 //! the webview's navigation handler already.
+//!
+//! A cancel does not always keep the frame's document: when the page's app document's policy
+//! (`frame-src`) blocks the address too, WebView2 replaces the frame's document with its own error
+//! page, and the navigation ends unsuccessfully without being cancelled. The page's document is
+//! then gone, so the app is told (`replaced`), as of any frame navigation that ends that way.
 use std::sync::mpsc;
 use std::time::Duration;
 use tauri::{Url, Webview};
-use webview2_com::{take_pwstr, NavigationStartingEventHandler};
+use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED;
+use webview2_com::{take_pwstr, NavigationCompletedEventHandler, NavigationStartingEventHandler};
 
-/// Sends every frame navigation of webview to allow, and cancels those it refuses. Returns once
-/// the hook is in place, or why it could not be placed.
+/// Sends every frame navigation of webview to allow, and cancels those it refuses; calls replaced
+/// with WebView2's error status when a frame navigation ends unsuccessfully but not cancelled.
+/// Returns once both hooks are in place, or why they could not be placed.
 pub fn watch(
     webview: &Webview,
     allow: impl Fn(&Url) -> bool + Send + 'static,
+    replaced: impl Fn(i32) + Send + 'static,
 ) -> Result<(), String> {
     let (tx, rx) = mpsc::channel();
     webview
@@ -32,6 +40,26 @@ pub fn watch(
                             Err(_) => false,
                         };
                         args.SetCancel(!allowed)?;
+                        Ok(())
+                    })),
+                    &mut token,
+                )?;
+                let mut token = Default::default();
+                core.add_FrameNavigationCompleted(
+                    &NavigationCompletedEventHandler::create(Box::new(move |_, args| {
+                        let Some(args) = args else {
+                            return Ok(());
+                        };
+                        // Replaced unless it is shown to have succeeded, or to have been cancelled.
+                        let mut success = Default::default();
+                        let succeeded = args.IsSuccess(&mut success).is_ok() && success.as_bool();
+                        let mut status = Default::default();
+                        let read = args.WebErrorStatus(&mut status).is_ok();
+                        if !succeeded
+                            && !(read && status == COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED)
+                        {
+                            replaced(status.0);
+                        }
                         Ok(())
                     })),
                     &mut token,
