@@ -1822,10 +1822,16 @@ fn a_file_selected_by_its_short_name_keeps_its_long_name() {
     assert!(e.message.contains("named twice"), "{e}");
 }
 
-/// Windows: a file's access list as SDDL.
+/// Windows: a file's access list as SDDL, without the `AI` flag, which Windows sets on a list given
+/// through SetSecurityInfo (`D:(…)` reads back `D:AI(…)`) and which changes no entry, inheritance
+/// or protection.
 #[cfg(windows)]
 fn acl(p: &Path) -> String {
-    pluxy_files::access_list(&std::fs::File::open(p).unwrap()).unwrap()
+    let sddl = pluxy_files::access_list(&std::fs::File::open(p).unwrap()).unwrap();
+    match sddl.strip_prefix("D:").and_then(|s| s.split_once('(')) {
+        Some((flags, rest)) => format!("D:{}({rest}", flags.replace("AI", "")),
+        None => sddl,
+    }
 }
 
 /// Windows: a file whose access list is its folder's (inherited, not protected) gets that list back

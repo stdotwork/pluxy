@@ -357,6 +357,17 @@ fn an_inherited_list_or_another_owner_is_not_private() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// Windows: an access list's text without the `AI` flag, which Windows sets on a list given
+/// through SetSecurityInfo (`D:P(…)` reads back `D:PAI(…)`, `D:(…)` as `D:AI(…)`) and which changes no
+/// entry, inheritance or protection.
+#[cfg(windows)]
+fn without_ai(sddl: &str) -> String {
+    match sddl.strip_prefix("D:").and_then(|s| s.split_once('(')) {
+        Some((flags, rest)) => format!("D:{}({rest}", flags.replace("AI", "")),
+        None => sddl.to_string(),
+    }
+}
+
 /// Windows: a file's access list is read as SDDL and given back as it was: a protected one (the
 /// file is then private), or its folder's again (inherited entries, not private). Anything that is
 /// not a list, or a NULL one (which allows everyone), is refused and the list kept.
@@ -393,14 +404,23 @@ fn an_access_list_is_read_and_given_back() {
     );
     set_access_list(&open(&plain), &protected).unwrap();
     assert!(is_private(&plain).unwrap());
-    assert_eq!(access_list(&open(&plain)).unwrap(), protected);
+    assert_eq!(
+        without_ai(&access_list(&open(&plain)).unwrap()),
+        without_ai(&protected)
+    );
     set_access_list(&open(&plain), &inherited).unwrap();
     assert!(!is_private(&plain).unwrap());
-    assert_eq!(access_list(&open(&plain)).unwrap(), inherited);
+    assert_eq!(
+        without_ai(&access_list(&open(&plain)).unwrap()),
+        without_ai(&inherited)
+    );
     for bad in ["not an access list", "D:NO_ACCESS_CONTROL", "O:SY", "D:P\0"] {
         assert!(set_access_list(&open(&plain), bad).is_err(), "{bad}");
     }
-    assert_eq!(access_list(&open(&plain)).unwrap(), inherited);
+    assert_eq!(
+        without_ai(&access_list(&open(&plain)).unwrap()),
+        without_ai(&inherited)
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
