@@ -860,6 +860,12 @@ pub(crate) fn term_group(child: &Child) -> bool {
     sent
 }
 
+/// Asks child to stop, as `term_group`: on Windows a process the host starts always leads a
+/// process group of its own, which a CTRL_BREAK reaches as a whole.
+pub(crate) fn term_process(child: &Child) -> bool {
+    term_group(child)
+}
+
 /// Ends child and everything in its job.
 pub(crate) fn kill_group(child: &mut Child) {
     let _ = child.kill();

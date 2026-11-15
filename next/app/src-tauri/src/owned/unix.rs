@@ -41,6 +41,15 @@ pub(crate) fn term_group(child: &Child) -> bool {
     true
 }
 
+/// Asks child alone to stop (SIGTERM), while it runs: for a child left in the app's own process
+/// group (the app's core), which `term_group` would reach with the app. True once asked.
+pub(crate) fn term_process(child: &Child) -> bool {
+    if leader(child) == Leader::Running {
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    }
+    true
+}
+
 /// Ends child's whole process group (SIGKILL), and child itself should it have left its group.
 /// Never once it has been reaped, when its group's number could be another's.
 pub(crate) fn kill_group(child: &mut Child) {

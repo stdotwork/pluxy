@@ -34,6 +34,9 @@ pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
 pub mod notes;
+// The processes the app starts and holds; used on Windows and macOS by `program` and `spawn`,
+// which the app wires up on Linux only for now.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod owned;
 pub mod pages;
 mod place;

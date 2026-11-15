@@ -208,7 +208,9 @@ fn tool_env(inner: &Inner, spec: &Spec) -> Result<Vec<(&'static str, PathBuf)>, 
     let Some(env) = inner.env.get() else {
         return Ok(Vec::new());
     };
-    // The vault, which makes the folder, is Linux's only for now.
+    // The vault, which makes the folder, is Linux's only until its Windows and macOS port (P8p3b)
+    // lands; until then a tool with a data folder is refused there, as before this module was
+    // built on those platforms.
     #[cfg(not(target_os = "linux"))]
     {
         Err(format!(

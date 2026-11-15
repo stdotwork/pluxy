@@ -18,7 +18,10 @@ pub(crate) use unix::*;
 #[cfg(windows)]
 pub(crate) mod windows;
 #[cfg(windows)]
-pub(crate) use windows::{kill_group, leader, read_some, term_group, Child, ChildStderr, ChildStdin, ChildStdout};
+pub(crate) use windows::{
+    kill_group, leader, read_some, term_group, term_process, Child, ChildStderr, ChildStdin,
+    ChildStdout,
+};
 
 #[cfg(test)]
 #[path = "../owned_tests.rs"]
