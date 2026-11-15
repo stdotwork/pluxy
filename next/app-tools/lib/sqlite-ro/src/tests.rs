@@ -305,13 +305,13 @@ fn make_irregular(kind: &str, path: &Path, target: &Path) {
 }
 
 #[test]
-fn a_wal_or_shm_that_is_not_a_regular_file_is_not_read() {
+fn a_wal_shm_or_journal_that_is_not_a_regular_file_is_not_read() {
     let d = Dir::new("sidecars");
     let db = d.join("a.db");
     wal_db(&db);
     let elsewhere = d.join("elsewhere");
     fs::write(&elsewhere, b"").unwrap();
-    for name in ["-wal", "-shm"] {
+    for name in ["-wal", "-shm", "-journal"] {
         let path = sidecar(&db, name);
         for kind in ["link", "folder", "fifo"] {
             make_irregular(kind, &path, &elsewhere);
@@ -450,4 +450,191 @@ fn a_path_with_uri_characters_opens() {
     wal_db(&db);
     let o = open_read_only(&db).unwrap();
     assert_eq!(ids(&o), ["a"]);
+}
+
+/// Runs f where a hang is a failure: its result, or a panic after ten seconds.
+fn within_ten_seconds<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap_or_else(|_| panic!("{what}: it hung"))
+}
+
+/// A rollback-journal database (no WAL header) at path with row 'p'.
+fn rollback_db(path: &Path) {
+    Connection::open(path)
+        .unwrap()
+        .execute_batch("CREATE TABLE t (id TEXT); INSERT INTO t VALUES ('p');")
+        .unwrap();
+    assert!(!is_wal(path));
+}
+
+#[test]
+fn a_wal_beside_a_database_is_never_opened_in_place_whatever_the_databases_header() {
+    // SQLite opening such a pair read-only deletes the -wal (a database of no pages) or creates a
+    // -shm (a header that is not WAL's): both are writes beside the database.
+    let tool = Dir::new("header-tool");
+    // A database of 0 bytes with a -wal, empty or not: SQLite deletes one that holds bytes.
+    for (kind, wal_bytes) in [("empty", vec![]), ("with bytes", vec![7u8; 64])] {
+        let d = Dir::new("header-empty");
+        let db = d.join("a.db");
+        fs::write(&db, b"").unwrap();
+        fs::write(sidecar(&db, "-wal"), &wal_bytes).unwrap();
+        let before = files(&d);
+        let o = open(&db, &own_root(&tool)).unwrap();
+        let n: i64 = o
+            .query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+        drop(o);
+        assert_eq!(
+            files(&d),
+            before,
+            "{kind}: the -wal was deleted or a file was made"
+        );
+    }
+    // A rollback-journal database with an empty -wal.
+    let d = Dir::new("header-rollback");
+    let db = d.join("a.db");
+    rollback_db(&db);
+    fs::write(sidecar(&db, "-wal"), b"").unwrap();
+    let before = files(&d);
+    let o = open(&db, &own_root(&tool)).unwrap();
+    assert_eq!(
+        o.query_row("SELECT id FROM t", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "p"
+    );
+    drop(o);
+    assert_eq!(files(&d), before, "a -shm appeared or a file changed");
+    // The same with a -wal that holds bytes: read from a private copy.
+    let d = Dir::new("header-rollback-wal");
+    let db = d.join("a.db");
+    rollback_db(&db);
+    fs::write(sidecar(&db, "-wal"), [7u8; 64]).unwrap();
+    let before = files(&d);
+    let root = own_root(&tool);
+    let o = open(&db, &root).unwrap();
+    assert_eq!(
+        o.query_row("SELECT id FROM t", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "p"
+    );
+    drop(o);
+    assert_eq!(files(&d), before, "a -shm appeared or a file changed");
+    assert!(names(&root.dir).is_empty(), "the private copy stayed");
+    // The positive control: with no -wal, a rollback-journal database is read in place.
+    fs::remove_file(sidecar(&db, "-wal")).unwrap();
+    assert!(open(&db, &root).is_ok());
+}
+
+#[test]
+fn a_tmp_folder_that_is_a_link_is_refused_and_nothing_is_made_or_pruned_through_it() {
+    let d = Dir::new("tmp-link");
+    let tool = Dir::new("tmp-link-tool");
+    let elsewhere = Dir::new("tmp-link-elsewhere");
+    let db = d.join("live.db");
+    wal_with_rows_in_the_wal(&db);
+    let dead = dead_pid();
+    fs::create_dir(elsewhere.join(format!("wal-{dead}-0"))).unwrap();
+    let before = names(&elsewhere);
+    std::os::unix::fs::symlink(&*elsewhere, tool.join("tmp")).unwrap();
+    let e = open(&db, &own_root(&tool))
+        .err()
+        .expect("a linked tmp was used");
+    assert!(matches!(e, Error::Copy(_)), "{e:?}");
+    assert_eq!(names(&elsewhere), before, "the link's target was written");
+    // The positive control: with a real folder, the copy is made.
+    fs::remove_file(tool.join("tmp")).unwrap();
+    assert_eq!(ids(&open(&db, &own_root(&tool)).unwrap()), ["a", "b"]);
+}
+
+#[test]
+fn a_tmp_folder_open_to_group_and_others_is_tightened_to_0700() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = Dir::new("tmp-mode");
+    let tool = Dir::new("tmp-mode-tool");
+    let db = d.join("live.db");
+    wal_with_rows_in_the_wal(&db);
+    let tmp = tool.join("tmp");
+    fs::create_dir(&tmp).unwrap();
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755)).unwrap();
+    let o = open(&db, &own_root(&tool)).unwrap();
+    assert_eq!(ids(&o), ["a", "b"]);
+    let mode = fs::metadata(&tmp).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700);
+}
+
+#[test]
+fn a_fifo_or_link_in_place_of_the_database_is_caught_when_it_is_opened_and_never_waited_on() {
+    let d = Dir::new("swapped");
+    let tool = Dir::new("swapped-tool");
+    let db = d.join("a.db");
+    wal_db(&db);
+    let fifo = d.join("fifo.db");
+    assert!(std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap()
+        .success());
+    std::os::unix::fs::symlink(&db, d.join("link.db")).unwrap();
+    // The header is read through a handle that does not follow links or wait for a writer.
+    assert!(is_wal(&db), "the positive control");
+    let (f, l) = (fifo.clone(), d.join("link.db"));
+    assert!(!within_ten_seconds("reading a FIFO's header", move || {
+        is_wal(&f)
+    }));
+    assert!(!is_wal(&l), "a link was followed");
+    // So is the copy, which reads the database and its -wal from handles opened that way.
+    let live = d.join("live.db");
+    wal_with_rows_in_the_wal(&live);
+    let root = own_root(&tool);
+    let (f, w, r) = (fifo.clone(), sidecar(&live, "-wal"), own_root(&tool));
+    let copied = within_ten_seconds("copying a FIFO", move || private_copy(&f, &w, &r).is_err());
+    assert!(copied, "a FIFO was copied");
+    let (f, r) = (fifo, own_root(&tool));
+    let live2 = live.clone();
+    let copied = within_ten_seconds("copying a FIFO as the -wal", move || {
+        private_copy(&live2, &f, &r).is_err()
+    });
+    assert!(copied, "a FIFO was copied as the -wal");
+    assert!(names(&root.dir).is_empty(), "a partial copy stayed");
+}
+
+#[test]
+fn prune_removes_only_directories_named_wal_pid_counter_of_a_stopped_process() {
+    let d = Dir::new("prune-names");
+    let dead = dead_pid();
+    let gone = format!("wal-{dead}-0");
+    fs::create_dir(d.join(&gone)).unwrap();
+    // Names that are not a copy's, though a pid is in them; and non-directories.
+    let kept = [
+        format!("wal-{dead}"),
+        format!("wal-+{dead}-0"),
+        format!("wal-{dead}-x"),
+        format!("wal-{dead}-"),
+        format!("wal-{dead}-1-2"),
+        "wal-0-0".to_string(),
+        "wal--0".to_string(),
+    ];
+    for n in &kept {
+        fs::create_dir(d.join(n)).unwrap();
+    }
+    fs::write(d.join(format!("wal-{dead}-2")), b"").unwrap();
+    std::os::unix::fs::symlink(&*d, d.join(format!("wal-{dead}-3"))).unwrap();
+    prune(&d);
+    assert!(!d.join(&gone).exists(), "the stopped process's copy stayed");
+    for n in &kept {
+        assert!(d.join(n).exists(), "{n} was removed");
+    }
+    assert!(
+        d.join(format!("wal-{dead}-2")).is_file(),
+        "a file was removed"
+    );
+    assert!(
+        fs::symlink_metadata(d.join(format!("wal-{dead}-3"))).is_ok(),
+        "a link was removed"
+    );
 }

@@ -65,18 +65,25 @@ Opens another program's SQLite database strictly read-only and creates no file b
 `codex-sessions` and `usage-opencode` read Codex's and OpenCode's databases with it. The rules:
 
 - The database path must be a regular file: a link, a FIFO, a folder or a missing file is refused
-  without being opened. A `-wal` or `-shm` beside it that exists must be a regular file too.
-- A database not in WAL mode, or whose `-shm` exists (a process has it open), is opened in place
-  with `mode=ro`: it uses that `-shm` as any SQLite reader does (it writes to that shared-memory file
-  and takes SQLite's shared read locks) and never changes the database or its `-wal`.
-- A WAL database with no `-shm` cannot be opened in place without SQLite making one. With its `-wal`
-  missing or empty it is opened `immutable`. With a `-wal` that holds committed changes it is copied,
-  with its `-wal`, into a private folder (0700, `wal-<pid>-<n>`) under `$PLUXY_TOOL_DATA_DIR/tmp`
-  (the system's temporary folder when that is not set), read there, and the folder is removed when
-  the `Db` is dropped.
-- Before a copy is made in the tool's own `tmp`, the copies of processes no longer running are
-  removed; those of this process and of every process still running stay. Nothing is pruned in the
-  system's temporary folder.
+  without being opened. A `-wal`, `-shm` or `-journal` beside it that exists must be a regular file
+  too (SQLite opens a `-journal` to look for a hot one, and a FIFO there would hang it). The database
+  and a `-wal` that is copied are opened without following a link or waiting on a FIFO, and checked
+  to be regular files on the open handle.
+- A database whose `-shm` exists (a process has it open) is opened in place with `mode=ro`: it uses
+  that `-shm` as any SQLite reader does (it writes to that shared-memory file and takes SQLite's
+  shared read locks) and never changes the database or its `-wal`.
+- With no `-shm` and a `-wal`, the database is never opened in place, whatever its header says
+  (SQLite deletes a `-wal` that holds bytes beside a database of 0 bytes, and creates a `-shm` beside
+  one whose header is not WAL's). With the `-wal` empty it is opened `immutable`. With the `-wal`
+  holding bytes it is copied, with its `-wal`, into a private folder (0700, `wal-<pid>-<n>`) under
+  `$PLUXY_TOOL_DATA_DIR/tmp` (the system's temporary folder when that is not set), read there, and
+  the folder is removed when the `Db` is dropped.
+- With no `-shm` and no `-wal`, a database with a WAL header is opened `immutable`, and any other
+  in place.
+- The tool's own `tmp` must be a real folder, not a link; one open to group or others is tightened
+  to 0700. Before a copy is made there, the copies of processes no longer running (folders named
+  exactly `wal-<pid>-<n>`, directories only) are removed; those of this process and of every process
+  still running stay. Nothing is pruned in the system's temporary folder.
 - An `Error` names no path, and carries SQLite's error code, not its message (which names the file).
   A tool that shows a path to its user adds it around the error itself.
 
@@ -294,7 +301,7 @@ writes an OpenCode file.
   A message's time is its `time.created`. Title and other side requests OpenCode records only as
   session totals are not counted.
 - The database is opened by [`lib/sqlite-ro`](#libsqlite-ro): read-only, nothing made beside it, a
-  link, or a `-wal` or `-shm` that is one, not read.
+  link, or a `-wal`, `-shm` or `-journal` that is not a regular file, not read.
 
 ## `codex-sessions`
 

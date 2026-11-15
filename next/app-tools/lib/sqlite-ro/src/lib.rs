@@ -3,16 +3,24 @@
 //! A WAL database whose `-shm` is missing (no process has it open) cannot be opened in place
 //! without SQLite making that file, so:
 //!
-//! - the database path must be a regular file, not a link, a FIFO or anything else (it is never
-//!   opened to be looked at otherwise), and a `-wal` or `-shm` beside it that exists must be one too;
-//! - a database that is not in WAL mode, or whose `-shm` exists, is opened in place with
-//!   `mode=ro`;
-//! - one whose `-wal` is missing or empty is opened with `immutable=1`;
-//! - one whose `-wal` holds changes and has no `-shm` is copied, with its `-wal`, into a private
-//!   folder (0700) under `$PLUXY_TOOL_DATA_DIR/tmp` (the system's temporary folder when that is not
-//!   set), read there, and removed when the [`Db`] is dropped. Before a copy is made in the tool's
-//!   own folder, the copies of processes no longer running (`wal-<pid>-<n>`) are removed; those of
-//!   this process and of every process still running stay.
+//! - the database path must be a regular file, not a link, a FIFO or anything else, and a `-wal`,
+//!   `-shm` or `-journal` beside it that exists must be one too (SQLite opens a `-journal` to check
+//!   for a hot one, and a FIFO there would hang it). The database and a `-wal` that is copied are
+//!   opened without following a link or waiting on a FIFO, and checked to be regular files on the
+//!   open handle;
+//! - a database whose `-shm` exists (a process has it open) is opened in place with `mode=ro`;
+//! - one with no `-shm` and a `-wal` is never opened in place, whatever its header says: SQLite
+//!   would delete a `-wal` that holds bytes beside a database of 0 bytes, or create a `-shm` beside
+//!   one whose header is not WAL's. With the `-wal` empty it is opened with `immutable=1`; with the
+//!   `-wal` holding bytes it is copied, with its `-wal`, into a private folder (0700) under
+//!   `$PLUXY_TOOL_DATA_DIR/tmp` (the system's temporary folder when that is not set), read there,
+//!   and the copy is removed when the [`Db`] is dropped;
+//! - one with no `-shm` and no `-wal` is opened with `immutable=1` when its header says WAL, and
+//!   else in place;
+//! - the tool's own `tmp` must be a real folder, not a link; one open to group or others is
+//!   tightened to 0700. Before a copy is made there, the copies of processes no longer running
+//!   (folders named exactly `wal-<pid>-<n>`) are removed; those of this process and of every
+//!   process still running stay.
 //!
 //! An [`Error`] names no path: a tool that shows one to its user adds it itself.
 
@@ -30,7 +38,7 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 pub enum Error {
     /// The database path is not a regular file (a link, a FIFO, a folder, or missing).
     NotRegular,
-    /// The named sidecar (`-wal` or `-shm`) exists and is not a regular file.
+    /// The named sidecar (`-wal`, `-shm` or `-journal`) exists and is not a regular file.
     SidecarNotRegular(&'static str),
     /// The private copy of the database and its `-wal` could not be made.
     Copy(std::io::Error),
@@ -97,28 +105,34 @@ fn open(path: &Path, root: &CopyRoot) -> Result<Db, Error> {
     }
     let wal = sidecar(path, "-wal");
     let shm = sidecar(path, "-shm");
-    for (side, name) in [(&wal, "-wal"), (&shm, "-shm")] {
+    let journal = sidecar(path, "-journal");
+    for (side, name) in [(&wal, "-wal"), (&shm, "-shm"), (&journal, "-journal")] {
         if fs::symlink_metadata(side).is_ok_and(|m| !m.is_file()) {
             return Err(Error::SidecarNotRegular(name));
         }
     }
-    if !is_wal(path) || shm.exists() {
-        return Ok(Db {
-            connection: connect(path, false)?,
+    let in_place = |immutable| {
+        Ok(Db {
+            connection: connect(path, immutable)?,
             _copy: None,
-        });
+        })
+    };
+    // A process has the database open: share its -shm as any reader does.
+    if fs::symlink_metadata(&shm).is_ok() {
+        return in_place(false);
     }
-    if fs::metadata(&wal).map_or(0, |m| m.len()) == 0 {
-        return Ok(Db {
-            connection: connect(path, true)?,
-            _copy: None,
-        });
+    match fs::symlink_metadata(&wal).map(|m| m.len()) {
+        Ok(0) => in_place(true),
+        Ok(_) => {
+            let copy = private_copy(path, &wal, root).map_err(Error::Copy)?;
+            Ok(Db {
+                connection: connect(&copy.0.join("db"), false)?,
+                _copy: Some(copy),
+            })
+        }
+        Err(_) if is_wal(path) => in_place(true),
+        Err(_) => in_place(false),
     }
-    let copy = private_copy(path, &wal, root).map_err(Error::Copy)?;
-    Ok(Db {
-        connection: connect(&copy.0.join("db"), false)?,
-        _copy: Some(copy),
-    })
 }
 
 fn copy_root() -> CopyRoot {
@@ -134,18 +148,15 @@ fn copy_root() -> CopyRoot {
     }
 }
 
-/// Copies db and its -wal into a new folder of this user's that no one else may use.
+/// Copies db and its -wal into a new folder of this user's that no one else may use. Both are
+/// read through handles opened without following a link or waiting on a FIFO.
 fn private_copy(db: &Path, wal: &Path, root: &CopyRoot) -> std::io::Result<Copy> {
-    use std::os::unix::fs::DirBuilderExt;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&root.dir)?;
-    if root.own {
-        prune(&root.dir);
-    }
+    let mut db_source = open_regular(db)?;
+    let mut wal_source = open_regular(wal)?;
+    prepare_root(root)?;
     let dir = root.dir.join(format!(
         "wal-{}-{}",
         std::process::id(),
@@ -153,30 +164,87 @@ fn private_copy(db: &Path, wal: &Path, root: &CopyRoot) -> std::io::Result<Copy>
     ));
     fs::DirBuilder::new().mode(0o700).create(&dir)?;
     let copy = Copy(dir);
-    fs::copy(db, copy.0.join("db"))?;
-    fs::copy(wal, copy.0.join("db-wal"))?;
+    for (source, name) in [(&mut db_source, "db"), (&mut wal_source, "db-wal")] {
+        let mut dest = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(copy.0.join(name))?;
+        std::io::copy(source, &mut dest)?;
+    }
     Ok(copy)
 }
 
+/// Makes root usable for copies. The tool's own `tmp` must be a real folder (not a link, so nothing
+/// is made or removed elsewhere through it) that only this user can use; the system's temporary
+/// folder is made if missing and left as it is.
+fn prepare_root(root: &CopyRoot) -> std::io::Result<()> {
+    use std::io::{Error as IoError, ErrorKind};
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    if !root.own {
+        return fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&root.dir);
+    }
+    let check = || -> std::io::Result<fs::Metadata> {
+        let m = fs::symlink_metadata(&root.dir)?;
+        if m.file_type().is_symlink() {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                "the copy folder is a link",
+            ));
+        }
+        if !m.is_dir() {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                "the copy folder is not a folder",
+            ));
+        }
+        Ok(m)
+    };
+    let meta = match check() {
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&root.dir)?;
+            check()?
+        }
+        other => other?,
+    };
+    if meta.permissions().mode() & 0o077 != 0 {
+        fs::set_permissions(&root.dir, fs::Permissions::from_mode(0o700))?;
+    }
+    prune(&root.dir);
+    Ok(())
+}
+
 /// Removes the copies in root that a process no longer running left behind (cut short); the copies
-/// of this process and of every process still running stay.
+/// of this process and of every process still running stay. Only a folder named exactly
+/// `wal-<pid>-<n>` is a copy.
 fn prune(root: &Path) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
     };
     for e in entries.flatten() {
-        let name = e.file_name();
-        let pid = name
-            .to_str()
-            .and_then(|n| n.strip_prefix("wal-"))
-            .and_then(|n| n.split('-').next())
-            .and_then(|p| p.parse::<u32>().ok());
+        let pid = e.file_name().to_str().and_then(copy_pid);
         if let Some(pid) = pid {
-            if pid != std::process::id() && !alive(pid) {
+            if pid != std::process::id() && e.file_type().is_ok_and(|t| t.is_dir()) && !alive(pid) {
                 let _ = fs::remove_dir_all(e.path());
             }
         }
     }
+}
+
+/// The pid in a copy's folder name, `wal-<pid>-<n>` (digits only, the pid above 0).
+fn copy_pid(name: &str) -> Option<u32> {
+    let (pid, n) = name.strip_prefix("wal-")?.split_once('-')?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(pid) || !digits(n) {
+        return None;
+    }
+    pid.parse::<u32>().ok().filter(|p| *p > 0)
 }
 
 /// Whether process pid is running; true where that cannot be told (no `/proc`).
@@ -232,10 +300,28 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Opens path for reading without following a link or waiting on a FIFO, and only if it is a
+/// regular file (checked on the open handle, so a swap after an earlier check is caught).
+fn open_regular(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    if file.metadata()?.is_file() {
+        Ok(file)
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ))
+    }
+}
+
 /// Whether path is a SQLite database in WAL mode, by its header.
 fn is_wal(path: &Path) -> bool {
     let mut header = [0u8; 20];
-    fs::File::open(path)
+    open_regular(path)
         .and_then(|mut f| f.read_exact(&mut header))
         .is_ok_and(|_| &header[..16] == b"SQLite format 3\0" && header[18] == 2)
 }

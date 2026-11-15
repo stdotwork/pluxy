@@ -476,6 +476,19 @@ fn an_error_from_a_database_that_cannot_be_opened_names_no_folder_and_no_uri() {
 }
 
 #[test]
+fn a_database_of_no_bytes_with_a_wal_that_holds_bytes_leaves_the_wal_alone() {
+    // SQLite opening such a pair read-only deletes a -wal that holds bytes.
+    let d = folder("empty-db-wal");
+    let db = d.join("opencode.db");
+    std::fs::write(&db, b"").unwrap();
+    std::fs::write(d.join("opencode.db-wal"), [7u8; 64]).unwrap();
+    let before = files(&d);
+    assert!(Cache::default().sessions(&db).unwrap().is_empty());
+    assert_eq!(files(&d), before, "the -wal was deleted or a file was made");
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
 fn file_ids_hash_sessions_and_messages_and_find_their_files_again() {
     let p = OpenCode {
         db: Cache::default(),

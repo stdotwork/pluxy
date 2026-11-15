@@ -576,6 +576,29 @@ fn a_database_that_cannot_be_opened_is_a_warning_that_names_it_once_and_not_sqli
 }
 
 #[test]
+fn a_database_of_no_bytes_with_a_wal_that_holds_bytes_leaves_the_wal_alone() {
+    // SQLite opening such a pair read-only deletes a -wal that holds bytes; a candidate is opened to see its tables.
+    let root = Root::new("empty-db-wal");
+    let dir = root.join("sqlite");
+    fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("empty.db");
+    fs::write(&db, b"").unwrap();
+    fs::write(sidecar(&db, "-wal"), [7u8; 64]).unwrap();
+    let page = list(&root, 0, 50);
+    assert!(
+        page.databases.is_empty() && page.warnings.is_empty(),
+        "{:?}",
+        page.warnings
+    );
+    assert_eq!(
+        fs::read(sidecar(&db, "-wal")).ok(),
+        Some(vec![7u8; 64]),
+        "the -wal was deleted or changed"
+    );
+    assert!(!sidecar(&db, "-shm").exists(), "a -shm appeared");
+}
+
+#[test]
 fn the_opener_refuses_a_database_that_is_not_a_regular_file() {
     let root = Root::new("opener-link");
     let db = root.join("real.db");
