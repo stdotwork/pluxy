@@ -320,6 +320,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one (Linux) |
 | `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key (Linux) |
 | `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it (Linux) |
+| `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it (Linux) |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
 | `privacy_get`, `privacy_set` | Reads or saves privacy mode |
@@ -922,9 +923,16 @@ are shown as such: Apply and Clear integration stay disabled, Restore Backup and
 reachable. The form keeps the
 old app's **Claude Desktop Models and Aliases** list: rows of **Original model**, **Alias (optional
 for Claude models)** and **1M**, **Add model** and **Remove model**, three Claude models to start
-with. Claude Desktop takes only Claude model names, so a non-Claude model needs an alias, which the
-core must serve the model under (the account's or extension's `model_alias`); the old app added it to
-the core's config itself, this page says so instead. The **Authentication Key** is one of the
+with. Claude Desktop takes only Claude model names, so a non-Claude model needs an alias, and Claude
+Desktop sends that alias to the core, which must serve the model under it too. For a row whose alias
+the core does not list (`GET /models`), the page offers **Create alias in core**: after a native
+confirmation naming the core, the alias, the model and the accounts, the app adds the alias through
+the management API (`PATCH /v0/management/accounts/{id}`, its `model_alias`) to every account added
+by login that serves the model. An account set in core's config is changed only in core's config,
+so it is named and left alone, and a model only such accounts serve is refused; so is an alias the
+core already serves for anything else. Clear integration and Restore Backup leave an alias made in
+core: the core's config is not the tool's file. The old app wrote the alias into the core's config
+file itself. The **Authentication Key** is one of the
 vault's secrets (a client key only when it is bound to this tool), or a new one through native key
 entry.
 
@@ -937,6 +945,43 @@ arguments in the home folder) and starts it through the launcher, with an option
 other installs. Claude Desktop reads its configuration at launch: quit and reopen it after a
 change (the page does not stop a running Claude Desktop). **Backup and restore** keeps manual
 backups of the three files, as on the Claude Code page.
+
+## OpenCode
+
+The OpenCode page sets up and starts OpenCode with this core (`src/opencode.tsx`). It needs the
+curated native tool `pluxy/opencode` ([app tools](../app-tools/README.md#opencode)) and, for
+**Start CLI** and **Start App**, the execution program, both installed and enabled on the Device
+extensions page. Like the Claude Code page it is the window's own page, because **Apply** gives the
+tool the client key.
+
+**Read configuration** previews the config file: OpenCode's global config
+(`~/.config/opencode/opencode.jsonc`, or `opencode.json` when only that exists, as OpenCode picks
+the file it writes), a selected file (for example the one `OPENCODE_CONFIG` names; a link, as stow
+makes, is followed and kept) or a file in a selected folder (for example `OPENCODE_CONFIG_DIR`). It
+shows whether pluxy's integration is applied, the file it writes to, whether a key is in it and the
+default model, never the key, and warns when the old desktop app's `cpa-gui` provider is still
+there, or when OpenCode 2's own `providers.pluxy` is (OpenCode uses that one, so Apply stays off
+until it is removed). A file OpenCode would not take is shown with the reason: Apply and Close
+configuration stay off, Restore Backup and the backups still work on it. Choosing another file
+drops the last preview: every write uses the pins of the preview on screen. **Models** lists the models OpenCode shows under the pluxy provider: **Import models from
+core** adds the core's served models, **Add model** one by ID; each has a display name, an
+**Attachments** switch (images and PDFs; new models start from the old app's list of model names
+that take images) and **Remove**; **Default model** is one of them. The **Authentication Key** is
+one of the vault's secrets (plain ones, or client keys bound to this tool), or a new one through
+native key entry (**Add key…**).
+
+**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
+**Close configuration** (Clear) and **Restore Backup** each preview the file again and call the
+tool, whose native confirmation names the file it resolves to, the key's label for Apply, and that
+an edit made in the same instant by another program may be lost; comments and everything else in
+the file stay. **Backup and restore** is the shared backup browser. **Start CLI** asks the tool for
+its CLI recipe (`opencode` in a terminal, no arguments; `~/.opencode/bin/opencode`, where OpenCode's
+install script puts it, when that exists) and starts it through the launcher in the chosen working
+directory (recently used ones offered), terminal and optional program path. **Start App** starts
+OpenCode Desktop (`/opt/OpenCode/ai.opencode`, or OpenCode 1's `ai.opencode.desktop` there, where its
+.deb and .rpm install it, or a given path such as an AppImage) in the home folder. Each launch's confirmation shows it in full; the key is not
+part of a launch: OpenCode reads it from its config. There is no Restart App: the app never stops a
+program it did not start, so quit OpenCode and start it again to load a new configuration.
 
 ## Build and check
 

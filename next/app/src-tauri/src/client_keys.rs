@@ -77,9 +77,9 @@ fn view(id: String, label: &str, binding: &ClientKey) -> Value {
 
 /// The connection as a capture or an entry finds it before asking the person.
 #[derive(Clone, Debug, PartialEq)]
-struct Pinned {
+pub(crate) struct Pinned {
     target: Option<CoreTarget>,
-    revision: u64,
+    pub(crate) revision: u64,
     signed_in: bool,
 }
 
@@ -103,7 +103,7 @@ fn unchanged(before: &Pinned, now: &Pinned) -> bool {
 }
 
 /// The connection, read once under its lock: connected to a core and signed in.
-fn connected(app: &AppHandle) -> Result<(Pinned, CoreTarget), String> {
+pub(crate) fn connected(app: &AppHandle) -> Result<(Pinned, CoreTarget), String> {
     let st = app.state::<App>();
     let c = st.conn.lock().unwrap();
     let pin = Pinned::of(&c);
@@ -119,7 +119,11 @@ fn connected(app: &AppHandle) -> Result<(Pinned, CoreTarget), String> {
 
 /// What calls core now, once the person has answered: only when the connection is unchanged
 /// since pin; again says what to do otherwise.
-fn fresh(app: &AppHandle, pin: &Pinned, again: &str) -> Result<crate::conn::Caller, String> {
+pub(crate) fn fresh(
+    app: &AppHandle,
+    pin: &Pinned,
+    again: &str,
+) -> Result<crate::conn::Caller, String> {
     let st = app.state::<App>();
     let c = st.conn.lock().unwrap();
     if !unchanged(pin, &Pinned::of(&c)) {

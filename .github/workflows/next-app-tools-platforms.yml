@@ -1,8 +1,8 @@
 name: Next app tools platforms
 
 # Builds, lints and unit-tests the app tools (next/app-tools, the native programs the desktop app
-# runs on demand) on Windows and macOS. Linux runs them in next-app.yml. claude-desktop is not
-# ported yet and is left out here.
+# runs on demand) on Windows and macOS. Linux runs them in next-app.yml. The claude-desktop and
+# opencode writer tools are not ported yet and are left out here.
 
 on:
   workflow_dispatch:
@@ -30,8 +30,8 @@ defaults:
     working-directory: next/app-tools
 
 env:
-  # Claude Desktop's setup, Linux only for now (its files are elsewhere on Windows and macOS).
-  NOT_PORTED: --exclude claude-desktop
+  # Claude Desktop's and OpenCode's setup, Linux only for now (not ported to Windows and macOS).
+  NOT_PORTED: --exclude claude-desktop --exclude opencode
 
 jobs:
   tools:
