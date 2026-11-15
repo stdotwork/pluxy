@@ -581,6 +581,35 @@ pub mod ipc {
         }
     }
 
+    /// Makes pipe instances until one waits for a client (a client that is connected already is
+    /// taken into `conns` on the way), so that one is always listening while the others are
+    /// served. False if one could not be made.
+    // The connections are boxed on purpose: a read in flight names each one's buffer.
+    #[allow(clippy::vec_box)]
+    fn listening(
+        spare: &mut Option<Handle>,
+        name: &[u16],
+        sec: &Security,
+        conns: &mut Vec<Box<Conn>>,
+        connecting: &mut Option<Connecting>,
+    ) -> bool {
+        while connecting.is_none() && conns.len() < MAX_CONNECTIONS {
+            let pipe = match spare.take() {
+                Some(p) => Ok(p),
+                None => create_instance(name, sec, false),
+            };
+            match pipe.and_then(start_connecting) {
+                Ok(Started::Connected(p)) => match Conn::new(p) {
+                    Ok(c) => conns.push(Box::new(c)),
+                    Err(_) => return false,
+                },
+                Ok(Started::Waiting(c)) => *connecting = Some(c),
+                Err(_) => return false,
+            }
+        }
+        true
+    }
+
     impl Listener {
         /// Serves the pipe on a thread of its own until [`Listening::stop`].
         pub fn serve(
@@ -606,22 +635,11 @@ pub mod ipc {
             loop {
                 let now = Instant::now();
                 conns.retain(|c| c.deadline > now);
-                let accepting = conns.len() < MAX_CONNECTIONS;
-                let mut failed = false;
-                if accepting && connecting.is_none() {
-                    let pipe = match spare.take() {
-                        Some(p) => Ok(p),
-                        None => create_instance(&name, &sec, false),
-                    };
-                    match pipe.and_then(start_connecting) {
-                        Ok(Started::Connected(p)) => match Conn::new(p) {
-                            Ok(c) => conns.push(Box::new(c)),
-                            Err(_) => failed = true,
-                        },
-                        Ok(Started::Waiting(c)) => connecting = Some(c),
-                        Err(_) => failed = true,
-                    }
-                }
+                // A pipe instance waits for a client before anything else, and again as soon as
+                // it has taken one, before that one is read and the window is raised: with none,
+                // a launch finds every instance busy, or no pipe, or another program could make
+                // the name.
+                let mut failed = !listening(&mut spare, &name, &sec, &mut conns, &mut connecting);
                 if connecting.as_ref().is_some_and(|c| c.op.ended()) {
                     let c = connecting.take().expect("checked above");
                     let Connecting { mut op, pipe } = c;
@@ -635,6 +653,7 @@ pub mod ipc {
                     } else {
                         failed = true;
                     }
+                    failed |= !listening(&mut spare, &name, &sec, &mut conns, &mut connecting);
                 }
                 let mut i = conns.len();
                 while i > 0 {
@@ -651,9 +670,12 @@ pub mod ipc {
                         }
                     }
                 }
-                // A pipe instance waits for the next client before anything else: with none, a
-                // client finds every instance busy (or no pipe) while this thread waits.
+                // Served some, and room for more: a pipe instance is made again at the top.
                 if !failed && connecting.is_none() && conns.len() < MAX_CONNECTIONS {
+                    // SAFETY: the event is open while the thread runs.
+                    if unsafe { WaitForSingleObject(stop.0, 0) } == WAIT_OBJECT_0 {
+                        return;
+                    }
                     continue;
                 }
                 let mut handles = vec![stop.0];
@@ -1213,6 +1235,51 @@ pub mod ipc {
                 Start::Raised
             ));
             assert_eq!(n.load(Ordering::SeqCst), 4);
+        }
+
+        /// While the window is being raised for one launch (which can take long), a pipe
+        /// instance is listening: another launch is connected at once, not found a pipe with
+        /// every instance busy, and is answered when the first is done.
+        #[test]
+        fn a_pipe_instance_listens_while_a_window_is_being_raised() {
+            let t = temp();
+            let dir = t.0.join("instance");
+            let i = first(&dir);
+            let entered = Arc::new(AtomicUsize::new(0));
+            let release = Arc::new(AtomicUsize::new(0));
+            let (e, r) = (entered.clone(), release.clone());
+            i.listen(&socket_dirs(), move || {
+                e.fetch_add(1, Ordering::SeqCst);
+                while r.load(Ordering::SeqCst) == 0 {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                true
+            })
+            .unwrap();
+            let pipe = pipe_of(&i);
+            let d = dir.clone();
+            let a = std::thread::spawn(move || start(&d, Duration::from_secs(30)).unwrap());
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while entered.load(Ordering::SeqCst) == 0 {
+                assert!(
+                    Instant::now() < deadline,
+                    "the first launch never reached the app"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            // One try, no waiting: an instance is listening.
+            let mut b = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&pipe)
+                .expect("no pipe instance listens while the window is being raised");
+            b.write_all(MESSAGE).unwrap();
+            release.store(1, Ordering::SeqCst);
+            assert!(matches!(a.join().unwrap(), Start::Raised));
+            let mut answer = [0u8; 3];
+            b.read_exact(&mut answer).unwrap();
+            assert_eq!(&answer, OK);
+            assert_eq!(entered.load(Ordering::SeqCst), 2);
         }
 
         #[test]
