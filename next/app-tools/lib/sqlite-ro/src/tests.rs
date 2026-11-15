@@ -111,12 +111,63 @@ fn names(root: &Path) -> Vec<String> {
     n
 }
 
-/// The id of a process that has stopped.
+/// The id of a process that has stopped, on Linux, where a copy's process is told by its pid;
+/// elsewhere its lock tells, so any number serves in a name.
 fn dead_pid() -> u32 {
-    let mut child = std::process::Command::new("true").spawn().unwrap();
-    let pid = child.id();
-    child.wait().unwrap();
-    pid
+    #[cfg(target_os = "linux")]
+    {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+    #[cfg(not(target_os = "linux"))]
+    4_294_967_294
+}
+
+/// Makes the copy folder name in root as one left over by a stopped process: on Linux its name says
+/// so; elsewhere it also holds a `lock` that no process holds.
+fn stale_copy(root: &Path, name: &str) {
+    fs::create_dir_all(root.join(name)).unwrap();
+    #[cfg(not(target_os = "linux"))]
+    fs::write(root.join(name).join(LOCK), b"").unwrap();
+}
+
+/// A copy folder in root of a process still running, and what keeps it so while it lives: on Linux
+/// pid 1's; elsewhere one whose `lock` this test holds.
+fn running_copy(root: &Path) -> (String, Option<fs::File>) {
+    let name = "wal-1-0".to_string();
+    fs::create_dir_all(root.join(&name)).unwrap();
+    #[cfg(target_os = "linux")]
+    return (name, None);
+    #[cfg(not(target_os = "linux"))]
+    {
+        let lock = fs::File::create(root.join(&name).join(LOCK)).unwrap();
+        lock.try_lock().unwrap();
+        (name, Some(lock))
+    }
+}
+
+/// A FIFO at path (Linux and macOS: Windows has none in a folder).
+#[cfg(unix)]
+fn make_fifo(path: &Path) {
+    let made = std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(made.success(), "mkfifo");
+}
+
+/// Removes the link at link (on Windows a folder link is removed as a folder).
+fn remove_link(link: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        if fs::symlink_metadata(link)?.file_type().is_symlink_dir() {
+            return fs::remove_dir(link);
+        }
+    }
+    fs::remove_file(link)
 }
 
 #[test]
@@ -170,7 +221,6 @@ fn an_empty_wal_with_no_shm_is_opened_immutable_and_nothing_is_made() {
 
 #[test]
 fn a_wal_with_changes_and_no_shm_is_read_from_a_private_copy_removed_when_closed() {
-    use std::os::unix::fs::PermissionsExt;
     let d = Dir::new("wal-copy");
     let tool = Dir::new("wal-copy-tool");
     let db = d.join("live.db");
@@ -189,8 +239,13 @@ fn a_wal_with_changes_and_no_shm_is_read_from_a_private_copy_removed_when_closed
         "{copies:?}"
     );
     for dir in [&root.dir, &root.dir.join(&copies[0])] {
-        let mode = fs::metadata(dir).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "{dir:?}");
+        assert!(pluxy_files::is_private(dir).unwrap(), "{dir:?}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{dir:?}");
+        }
     }
     assert!(o.execute_batch("INSERT INTO t VALUES ('z')").is_err());
     drop(o);
@@ -265,15 +320,16 @@ fn a_link_fifo_folder_or_missing_file_is_not_a_database() {
     wal_db(&db);
     // The positive control: the file itself opens.
     assert!(open_read_only(&db).is_ok());
-    std::os::unix::fs::symlink(&db, d.join("link.db")).unwrap();
-    let fifo = d.join("fifo.db");
-    let made = std::process::Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .unwrap();
-    assert!(made.success(), "mkfifo");
+    make_link(&db, d.join("link.db")).unwrap();
+    #[cfg(unix)]
+    make_fifo(&d.join("fifo.db"));
     fs::create_dir(d.join("folder.db")).unwrap();
-    for name in ["link.db", "fifo.db", "folder.db", "missing.db"] {
+    let names: &[&str] = if cfg!(unix) {
+        &["link.db", "fifo.db", "folder.db", "missing.db"]
+    } else {
+        &["link.db", "folder.db", "missing.db"]
+    };
+    for &name in names {
         // Opening a FIFO to look at it would block for ever: run it where a hang is a failure.
         let path = d.join(name);
         let (tx, rx) = mpsc::channel();
@@ -294,13 +350,11 @@ fn a_link_fifo_folder_or_missing_file_is_not_a_database() {
 /// Makes something at path that is not a regular file: a link to target, a folder or a FIFO.
 fn make_irregular(kind: &str, path: &Path, target: &Path) {
     match kind {
-        "link" => std::os::unix::fs::symlink(target, path).unwrap(),
+        "link" => make_link(target, path).unwrap(),
         "folder" => fs::create_dir(path).unwrap(),
-        _ => assert!(std::process::Command::new("mkfifo")
-            .arg(path)
-            .status()
-            .unwrap()
-            .success()),
+        #[cfg(unix)]
+        "fifo" => make_fifo(path),
+        _ => unreachable!("{kind}"),
     }
 }
 
@@ -313,7 +367,12 @@ fn a_wal_shm_or_journal_that_is_not_a_regular_file_is_not_read() {
     fs::write(&elsewhere, b"").unwrap();
     for name in ["-wal", "-shm", "-journal"] {
         let path = sidecar(&db, name);
-        for kind in ["link", "folder", "fifo"] {
+        let kinds: &[&str] = if cfg!(unix) {
+            &["link", "folder", "fifo"]
+        } else {
+            &["link", "folder"]
+        };
+        for &kind in kinds {
             make_irregular(kind, &path, &elsewhere);
             let e = open_read_only(&db)
                 .err()
@@ -340,17 +399,20 @@ fn only_copies_left_by_processes_no_longer_running_are_pruned() {
     let d = Dir::new("prune");
     let dead = dead_pid();
     let own = format!("wal-{}-9", std::process::id());
+    let stale = format!("wal-{dead}-0");
+    stale_copy(&d, &stale);
+    // A running process's, and names that are not a copy's.
+    let (running, _held) = running_copy(&d);
     let left = [
         own.clone(),
-        format!("wal-{dead}-0"),
-        // A running process's (pid 1) and names that are not a copy's.
-        "wal-1-0".to_string(),
+        stale,
+        running.clone(),
         "wal-x-0".to_string(),
         "wal-".to_string(),
         "other".to_string(),
     ];
     for n in &left {
-        fs::create_dir(d.join(n)).unwrap();
+        fs::create_dir_all(d.join(n)).unwrap();
     }
     prune(&d);
     let mut kept: Vec<String> = left
@@ -361,7 +423,7 @@ fn only_copies_left_by_processes_no_longer_running_are_pruned() {
     kept.sort();
     let mut want = vec![
         own,
-        "wal-1-0".into(),
+        running,
         "wal-x-0".into(),
         "wal-".into(),
         "other".into(),
@@ -379,12 +441,11 @@ fn a_copy_prunes_stale_copies_only_in_the_tools_own_folder() {
     let dead = dead_pid();
     // In the tool's own folder, a stopped process's copy goes and a running one's stays.
     let own = own_root(&tool);
-    for n in [format!("wal-{dead}-0"), "wal-1-0".to_string()] {
-        fs::create_dir_all(own.dir.join(n)).unwrap();
-    }
+    stale_copy(&own.dir, &format!("wal-{dead}-0"));
+    let (running, _held) = running_copy(&own.dir);
     let o = open(&db, &own).unwrap();
     assert_eq!(ids(&o), ["a", "b"]);
-    assert!(own.dir.join("wal-1-0").exists());
+    assert!(own.dir.join(running).exists());
     assert!(!own.dir.join(format!("wal-{dead}-0")).exists());
     drop(o);
     // In the shared temporary folder, other programs' folders are not ours to remove.
@@ -392,7 +453,7 @@ fn a_copy_prunes_stale_copies_only_in_the_tools_own_folder() {
         dir: tool.join("shared"),
         own: false,
     };
-    fs::create_dir_all(shared.dir.join(format!("wal-{dead}-0"))).unwrap();
+    stale_copy(&shared.dir, &format!("wal-{dead}-0"));
     drop(open(&db, &shared).unwrap());
     assert!(shared.dir.join(format!("wal-{dead}-0")).exists());
 }
@@ -404,11 +465,11 @@ fn errors_name_no_path() {
     wal_db(&db);
     let mut errors = vec![];
     errors.push(open_read_only(&d.join("missing.db")).err().unwrap());
-    std::os::unix::fs::symlink(&db, d.join("link.db")).unwrap();
+    make_link(&db, d.join("link.db")).unwrap();
     errors.push(open_read_only(&d.join("link.db")).err().unwrap());
     let with_link = d.join("b.db");
     wal_db(&with_link);
-    std::os::unix::fs::symlink(&db, sidecar(&with_link, "-wal")).unwrap();
+    make_link(&db, sidecar(&with_link, "-wal")).unwrap();
     errors.push(open_read_only(&with_link).err().unwrap());
     // A copy that cannot be made: the copy folder's parent is a file.
     let live = d.join("live.db");
@@ -423,10 +484,13 @@ fn errors_name_no_path() {
     // A database SQLite cannot open: no one may read it (skipped where the test runs as root).
     let locked = d.join("locked.db");
     wal_db(&locked);
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
     }
+    #[cfg(windows)]
+    deny_reading(&locked);
     if fs::File::open(&locked).is_err() {
         let e = open_read_only(&locked).err();
         errors.extend(e);
@@ -538,35 +602,90 @@ fn a_tmp_folder_that_is_a_link_is_refused_and_nothing_is_made_or_pruned_through_
     let db = d.join("live.db");
     wal_with_rows_in_the_wal(&db);
     let dead = dead_pid();
-    fs::create_dir(elsewhere.join(format!("wal-{dead}-0"))).unwrap();
+    stale_copy(&elsewhere, &format!("wal-{dead}-0"));
     let before = names(&elsewhere);
-    std::os::unix::fs::symlink(&*elsewhere, tool.join("tmp")).unwrap();
+    make_link(&*elsewhere, tool.join("tmp")).unwrap();
     let e = open(&db, &own_root(&tool))
         .err()
         .expect("a linked tmp was used");
     assert!(matches!(e, Error::Copy(_)), "{e:?}");
     assert_eq!(names(&elsewhere), before, "the link's target was written");
     // The positive control: with a real folder, the copy is made.
-    fs::remove_file(tool.join("tmp")).unwrap();
+    remove_link(&tool.join("tmp")).unwrap();
     assert_eq!(ids(&open(&db, &own_root(&tool)).unwrap()), ["a", "b"]);
 }
 
 #[test]
-fn a_tmp_folder_open_to_group_and_others_is_tightened_to_0700() {
-    use std::os::unix::fs::PermissionsExt;
+fn a_tmp_folder_open_to_others_is_made_private() {
     let d = Dir::new("tmp-mode");
     let tool = Dir::new("tmp-mode-tool");
     let db = d.join("live.db");
     wal_with_rows_in_the_wal(&db);
     let tmp = tool.join("tmp");
     fs::create_dir(&tmp).unwrap();
-    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[cfg(windows)]
+    let_everyone_read(&tmp);
+    assert!(!pluxy_files::is_private(&tmp).unwrap());
     let o = open(&db, &own_root(&tool)).unwrap();
     assert_eq!(ids(&o), ["a", "b"]);
-    let mode = fs::metadata(&tmp).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o700);
+    assert!(pluxy_files::is_private(&tmp).unwrap());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&tmp).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+    }
 }
 
+/// Windows: adds an entry to path's access list letting everyone read it.
+#[cfg(windows)]
+fn let_everyone_read(path: &Path) {
+    icacls(path, &["/grant", "*S-1-1-0:(R)"]);
+}
+
+/// Windows: adds an entry to path's access list denying everyone (this user too) its bytes.
+#[cfg(windows)]
+fn deny_reading(path: &Path) {
+    icacls(path, &["/deny", "*S-1-1-0:(RD)"]);
+}
+
+#[cfg(windows)]
+fn icacls(path: &Path, args: &[&str]) {
+    let out = std::process::Command::new("icacls")
+        .arg(path)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+}
+
+#[test]
+fn a_link_in_place_of_the_database_or_its_wal_is_not_read_or_copied() {
+    let d = Dir::new("swapped-link");
+    let tool = Dir::new("swapped-link-tool");
+    let db = d.join("a.db");
+    wal_db(&db);
+    make_link(&db, d.join("link.db")).unwrap();
+    assert!(is_wal(&db), "the positive control");
+    assert!(!is_wal(&d.join("link.db")), "a link was followed");
+    let live = d.join("live.db");
+    wal_with_rows_in_the_wal(&live);
+    let wal_link = d.join("wal-link");
+    make_link(sidecar(&live, "-wal"), &wal_link).unwrap();
+    let root = own_root(&tool);
+    assert!(private_copy(&d.join("link.db"), &sidecar(&live, "-wal"), &root).is_err());
+    assert!(private_copy(&live, &wal_link, &root).is_err());
+    assert!(names(&root.dir).is_empty(), "a partial copy stayed");
+    // The positive control: the files themselves are copied.
+    assert!(private_copy(&live, &sidecar(&live, "-wal"), &root).is_ok());
+}
+
+#[cfg(unix)]
 #[test]
 fn a_fifo_or_link_in_place_of_the_database_is_caught_when_it_is_opened_and_never_waited_on() {
     let d = Dir::new("swapped");
@@ -574,12 +693,8 @@ fn a_fifo_or_link_in_place_of_the_database_is_caught_when_it_is_opened_and_never
     let db = d.join("a.db");
     wal_db(&db);
     let fifo = d.join("fifo.db");
-    assert!(std::process::Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .unwrap()
-        .success());
-    std::os::unix::fs::symlink(&db, d.join("link.db")).unwrap();
+    make_fifo(&fifo);
+    make_link(&db, d.join("link.db")).unwrap();
     // The header is read through a handle that does not follow links or wait for a writer.
     assert!(is_wal(&db), "the positive control");
     let (f, l) = (fifo.clone(), d.join("link.db"));
@@ -608,7 +723,7 @@ fn prune_removes_only_directories_named_wal_pid_counter_of_a_stopped_process() {
     let d = Dir::new("prune-names");
     let dead = dead_pid();
     let gone = format!("wal-{dead}-0");
-    fs::create_dir(d.join(&gone)).unwrap();
+    stale_copy(&d, &gone);
     // Names that are not a copy's, though a pid is in them; and non-directories.
     let kept = [
         format!("wal-{dead}"),
@@ -623,7 +738,7 @@ fn prune_removes_only_directories_named_wal_pid_counter_of_a_stopped_process() {
         fs::create_dir(d.join(n)).unwrap();
     }
     fs::write(d.join(format!("wal-{dead}-2")), b"").unwrap();
-    std::os::unix::fs::symlink(&*d, d.join(format!("wal-{dead}-3"))).unwrap();
+    make_link(&*d, d.join(format!("wal-{dead}-3"))).unwrap();
     prune(&d);
     assert!(!d.join(&gone).exists(), "the stopped process's copy stayed");
     for n in &kept {
@@ -637,4 +752,16 @@ fn prune_removes_only_directories_named_wal_pid_counter_of_a_stopped_process() {
         fs::symlink_metadata(d.join(format!("wal-{dead}-3"))).is_ok(),
         "a link was removed"
     );
+}
+
+/// A symbolic link at link to target: on Windows a folder link when target is a folder.
+fn make_link(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return if target.as_ref().is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
 }

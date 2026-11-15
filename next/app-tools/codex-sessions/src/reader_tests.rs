@@ -220,7 +220,7 @@ fn links_in_the_session_folders_are_skipped() {
     let target = outside.join(format!("rollout-{id}.jsonl"));
     write(&target, "");
     fs::create_dir_all(root.join("sessions")).unwrap();
-    std::os::unix::fs::symlink(&target, root.join(format!("sessions/rollout-{id}.jsonl"))).unwrap();
+    make_link(&target, root.join(format!("sessions/rollout-{id}.jsonl"))).unwrap();
     assert!(list(&root, 0, 50).sessions.is_empty());
     assert!(find_rollout(&root, id).is_none());
 }
@@ -548,7 +548,6 @@ static COPY_ROOT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn a_database_that_cannot_be_opened_is_a_warning_that_names_it_once_and_not_sqlites_uri() {
-    use std::os::unix::fs::PermissionsExt;
     let root = Root::new("unreadable");
     let db = root.join("state_5.sqlite");
     sql(
@@ -559,12 +558,24 @@ fn a_database_that_cannot_be_opened_is_a_warning_that_names_it_once_and_not_sqli
     let page = list(&root, 0, 50);
     assert_eq!(page.sessions.len(), 1);
     assert!(page.warnings.is_empty(), "{:?}", page.warnings);
-    fs::set_permissions(&db, fs::Permissions::from_mode(0o000)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&db, fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    #[cfg(windows)]
+    deny_reading(&db, true);
     if fs::File::open(&db).is_ok() {
         return; // running as root: nothing is unreadable
     }
     let page = list(&root, 0, 50);
-    fs::set_permissions(&db, fs::Permissions::from_mode(0o600)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&db, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    #[cfg(windows)]
+    deny_reading(&db, false);
     assert!(page.sessions.is_empty());
     let shown = db.to_string_lossy().into_owned();
     assert_eq!(page.warnings.len(), 1, "{:?}", page.warnings);
@@ -607,7 +618,7 @@ fn the_opener_refuses_a_database_that_is_not_a_regular_file() {
         "CREATE TABLE threads (id TEXT PRIMARY KEY); INSERT INTO threads VALUES ('x');",
     );
     let link = root.join("link.db");
-    std::os::unix::fs::symlink(&db, &link).unwrap();
+    make_link(&db, &link).unwrap();
     // The positive control: the file itself opens.
     assert!(open_read_only(&db).is_ok());
     let e = open_read_only(&link)
@@ -626,14 +637,29 @@ fn only_private_copies_of_processes_no_longer_running_are_removed() {
     let data = Root::new("prune-data");
     let db = root.join("sqlite/live.db");
     wal_with_uncheckpointed_rows(&db);
-    let mut child = std::process::Command::new("true").spawn().unwrap();
-    let dead = child.id();
-    child.wait().unwrap();
     let tmp = data.join("tmp");
-    // A process that is running (pid 1) and one that is not, each with a copy left in the folder.
+    // A process that is running and one that is not, each with a copy left in the folder. On Linux
+    // a copy's process is told by the pid in its name (pid 1 runs); elsewhere by the `lock` file in
+    // it, which a running process holds locked (pluxy-sqlite-ro).
+    #[cfg(target_os = "linux")]
+    let dead = {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+        dead
+    };
+    #[cfg(not(target_os = "linux"))]
+    let dead = 4_294_967_294u32;
     for left in ["wal-1-0".to_string(), format!("wal-{dead}-0")] {
         fs::create_dir_all(tmp.join(left)).unwrap();
     }
+    #[cfg(not(target_os = "linux"))]
+    let _held = {
+        fs::write(tmp.join(format!("wal-{dead}-0/lock")), b"").unwrap();
+        let held = fs::File::create(tmp.join("wal-1-0/lock")).unwrap();
+        held.try_lock().unwrap();
+        held
+    };
     std::env::set_var("PLUXY_TOOL_DATA_DIR", &*data);
     let page = list(&root, 0, 50);
     std::env::remove_var("PLUXY_TOOL_DATA_DIR");
@@ -727,8 +753,8 @@ fn linked_databases_and_index_are_skipped() {
     let db = outside.join("real.db");
     sql(&db, "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT); INSERT INTO threads VALUES ('x', 'Linked');");
     fs::create_dir_all(root.join("sqlite")).unwrap();
-    std::os::unix::fs::symlink(&db, root.join("sqlite/linked.db")).unwrap();
-    std::os::unix::fs::symlink(&db, root.join("state_5.sqlite")).unwrap();
+    make_link(&db, root.join("sqlite/linked.db")).unwrap();
+    make_link(&db, root.join("state_5.sqlite")).unwrap();
     let id = "019f1234-abcd-7000-8000-0000000000ee";
     write(&root.join(format!("sessions/rollout-{id}.jsonl")), "");
     let index = outside.join("index.jsonl");
@@ -736,7 +762,7 @@ fn linked_databases_and_index_are_skipped() {
         &index,
         &format!("{}\n", json!({"id": id, "thread_name": "Through a link"})),
     );
-    std::os::unix::fs::symlink(&index, root.join("session_index.jsonl")).unwrap();
+    make_link(&index, root.join("session_index.jsonl")).unwrap();
     let page = list(&root, 0, 50);
     assert!(page.databases.is_empty(), "{:?}", page.databases);
     assert_eq!(page.sessions.len(), 1);
@@ -757,7 +783,7 @@ fn a_linked_sqlite_folder_is_skipped_with_a_warning_and_a_real_one_is_read() {
     let outside = Root::new("linked-sqlite-outside");
     one_thread_db(&outside.join("other.db"));
     let root = Root::new("linked-sqlite");
-    std::os::unix::fs::symlink(&*outside, root.join("sqlite")).unwrap();
+    make_link(&*outside, root.join("sqlite")).unwrap();
     let page = list(&root, 0, 50);
     assert!(page.databases.is_empty(), "{:?}", page.databases);
     assert!(page.sessions.is_empty());
@@ -780,8 +806,8 @@ fn linked_session_folders_are_skipped_with_a_warning_each_and_real_ones_are_read
     write(&outside.join(format!("a/rollout-{live}.jsonl")), "");
     write(&outside.join(format!("b/rollout-{old}.jsonl")), "");
     let root = Root::new("linked-sessions");
-    std::os::unix::fs::symlink(outside.join("a"), root.join("sessions")).unwrap();
-    std::os::unix::fs::symlink(outside.join("b"), root.join("archived_sessions")).unwrap();
+    make_link(outside.join("a"), root.join("sessions")).unwrap();
+    make_link(outside.join("b"), root.join("archived_sessions")).unwrap();
     let page = list(&root, 0, 50);
     assert!(page.sessions.is_empty(), "{:?}", page.sessions);
     assert_eq!(page.warnings.len(), 2, "{:?}", page.warnings);
@@ -823,7 +849,7 @@ fn a_database_with_a_linked_wal_or_shm_is_skipped_with_a_warning() {
     wal_with_uncheckpointed_rows(&db);
     let moved = outside.join("live.db-wal");
     fs::rename(sidecar(&db, "-wal"), &moved).unwrap();
-    std::os::unix::fs::symlink(&moved, sidecar(&db, "-wal")).unwrap();
+    make_link(&moved, sidecar(&db, "-wal")).unwrap();
     let page = list(&root, 0, 50);
     assert!(page.sessions.is_empty(), "{:?}", page.sessions);
     assert_eq!(page.warnings.len(), 1, "{:?}", page.warnings);
@@ -834,7 +860,7 @@ fn a_database_with_a_linked_wal_or_shm_is_skipped_with_a_warning() {
     wal_with_uncheckpointed_rows(&db);
     let shm = outside.join("live.db-shm");
     fs::write(&shm, b"").unwrap();
-    std::os::unix::fs::symlink(&shm, sidecar(&db, "-shm")).unwrap();
+    make_link(&shm, sidecar(&db, "-shm")).unwrap();
     let page = list(&root, 0, 50);
     assert!(page.sessions.is_empty(), "{:?}", page.sessions);
     assert_eq!(page.warnings.len(), 1, "{:?}", page.warnings);
@@ -879,4 +905,33 @@ fn a_thread_stored_as_local_uuid_is_found_by_either_form_of_its_id() {
             "Plain row"
         );
     }
+}
+
+/// A symbolic link at link to target: on Windows a folder link when target is a folder.
+fn make_link(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return if target.as_ref().is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+}
+
+/// Windows: an entry in path's access list denying everyone (this user too) its bytes (`deny`), or
+/// that entry taken out again.
+#[cfg(windows)]
+fn deny_reading(path: &Path, deny: bool) {
+    let args: &[&str] = if deny {
+        &["/deny", "*S-1-1-0:(RD)"]
+    } else {
+        &["/remove:d", "*S-1-1-0"]
+    };
+    let out = std::process::Command::new("icacls")
+        .arg(path)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
 }

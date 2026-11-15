@@ -78,10 +78,22 @@ impl Parser for OpenCode {
     }
 
     fn default_roots(&self, home: &Path) -> Vec<PathBuf> {
-        vec![
+        let mut roots = vec![
             home.join(".local").join("share").join("opencode"),
             home.join(".opencode"),
-        ]
+        ];
+        // On Windows OpenCode may also keep its store in the roaming or local app data folder.
+        if cfg!(windows) {
+            for name in ["APPDATA", "LOCALAPPDATA"] {
+                if let Some(dir) = std::env::var_os(name)
+                    .map(PathBuf::from)
+                    .filter(|d| d.is_absolute())
+                {
+                    roots.push(dir.join("opencode"));
+                }
+            }
+        }
+        roots
     }
 
     fn wanted(&self, path: &Path) -> bool {

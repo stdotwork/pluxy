@@ -42,8 +42,8 @@ fn a_scan_lists_wanted_files_newest_first_skipping_links_and_deep_files() {
     file(&deep.join("ok.log"), "ok", 2_000);
     file(&deep.join("too/deep.log"), "no", 5_000);
     file(&d.join("outside/o.log"), "o", 6_000);
-    std::os::unix::fs::symlink(d.join("outside/o.log"), root.join("link.log")).unwrap();
-    std::os::unix::fs::symlink(d.join("outside"), root.join("linked")).unwrap();
+    make_link(d.join("outside/o.log"), root.join("link.log")).unwrap();
+    make_link(d.join("outside"), root.join("linked")).unwrap();
     let (found, truncated) = scan(std::slice::from_ref(&root), &log, &|| false).unwrap();
     let got: Vec<(PathBuf, u64, i64)> = found
         .into_iter()
@@ -74,7 +74,7 @@ fn locate_finds_only_what_a_scan_would() {
     file(&root.join("x/b.log"), "bb", 3_000);
     file(&root.join("x/c.txt"), "c", 3_000);
     file(&d.join("outside/o.log"), "o", 3_000);
-    std::os::unix::fs::symlink(d.join("outside"), root.join("linked")).unwrap();
+    make_link(d.join("outside"), root.join("linked")).unwrap();
     let roots = [root.clone()];
     let s = |p: &Path| p.to_str().unwrap().to_string();
     assert_eq!(
@@ -109,7 +109,7 @@ fn read_file_reads_a_regular_file_up_to_the_limit() {
     assert!(read_file(&d.join("big.log"))
         .unwrap_err()
         .contains("larger"));
-    std::os::unix::fs::symlink(d.join("a.log"), d.join("link.log")).unwrap();
+    make_link(d.join("a.log"), d.join("link.log")).unwrap();
     assert!(read_file(&d.join("link.log")).is_err());
     std::fs::remove_dir_all(d).unwrap();
 }
@@ -626,4 +626,16 @@ fn parts_listed_twice_are_listed_once_at_their_newest_revision_and_unlistable_on
     assert!(files.contains(&json!({"file": "c.parts", "size": 5, "mtime_ns": 80_000_000_000i64})));
     assert_eq!(out["truncated"], true);
     std::fs::remove_dir_all(d).unwrap();
+}
+
+/// A symbolic link at link to target: on Windows a folder link when target is a folder.
+fn make_link(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return if target.as_ref().is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
 }

@@ -458,20 +458,31 @@ fn a_wal_database_with_no_shm_is_read_without_making_one() {
 
 #[test]
 fn an_error_from_a_database_that_cannot_be_opened_names_no_folder_and_no_uri() {
-    use std::os::unix::fs::PermissionsExt;
     let d = folder("unreadable-CANARY");
     let (db, c) = wal_db(&d);
     drop(c);
     // The positive control: readable, it is read.
     assert!(Cache::default().sessions(&db).is_ok());
-    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o000)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    #[cfg(windows)]
+    deny_reading(&db, true);
     if std::fs::File::open(&db).is_err() {
         // SQLite's own message for an open names the file as a `file:` URI.
         let e = Cache::default().sessions(&db).err().unwrap();
         assert!(e.starts_with("could not open the database"), "{e}");
         assert!(!e.contains("CANARY") && !e.contains("file:"), "{e}");
     }
-    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    #[cfg(windows)]
+    deny_reading(&db, false);
     std::fs::remove_dir_all(d).unwrap();
 }
 
@@ -699,7 +710,7 @@ fn a_database_that_cannot_be_opened_is_listed_as_itself_and_its_read_gives_the_r
     drop(c);
     let elsewhere = d.join("elsewhere");
     std::fs::write(&elsewhere, b"").unwrap();
-    std::os::unix::fs::symlink(&elsewhere, root.join("opencode.db-wal")).unwrap();
+    make_link(&elsewhere, root.join("opencode.db-wal")).unwrap();
     // Listed as itself, and the listing cut short, so the hub marks none of its sessions gone.
     let (files, out) = listed(json!([root]));
     assert_eq!(files.len(), 1);
@@ -838,4 +849,33 @@ fn a_json_message_file_is_keyed_by_its_file_and_folder_names() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["key"], message::key("msg_x", S1));
     std::fs::remove_dir_all(d).unwrap();
+}
+
+/// A symbolic link at link to target: on Windows a folder link when target is a folder.
+fn make_link(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return if target.as_ref().is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+}
+
+/// Windows: an entry in path's access list denying everyone (this user too) its bytes (`deny`), or
+/// that entry taken out again.
+#[cfg(windows)]
+fn deny_reading(path: &Path, deny: bool) {
+    let args: &[&str] = if deny {
+        &["/deny", "*S-1-1-0:(RD)"]
+    } else {
+        &["/remove:d", "*S-1-1-0"]
+    };
+    let out = std::process::Command::new("icacls")
+        .arg(path)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
 }

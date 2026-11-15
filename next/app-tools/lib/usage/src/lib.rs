@@ -43,7 +43,6 @@ use pluxy_program::{Call, Error};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead, Read};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 pub mod fields;
@@ -250,11 +249,7 @@ pub enum Listing {
     Failed,
 }
 
-fn mtime_ns(m: &std::fs::Metadata) -> i64 {
-    m.mtime()
-        .saturating_mul(1_000_000_000)
-        .saturating_add(m.mtime_nsec())
-}
+use pluxy_files::mtime_ns;
 
 /// The files under roots that wanted accepts: regular files at most `MAX_DEPTH` folders below a
 /// root, reached without following a link (links are skipped, the roots themselves excepted),
@@ -344,9 +339,10 @@ pub fn open_file(path: &Path) -> Result<(std::fs::File, u64, i64), String> {
     if !before.is_file() {
         return Err("not a regular file".into());
     }
+    let id = pluxy_files::id_of_path(path).map_err(|e| e.to_string())?;
     let f = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let m = f.metadata().map_err(|e| e.to_string())?;
-    if (m.dev(), m.ino()) != (before.dev(), before.ino()) || !m.is_file() {
+    if pluxy_files::id_of(&f).map_err(|e| e.to_string())? != id || !m.is_file() {
         return Err("the file changed while it was opened".into());
     }
     Ok((f, m.len(), mtime_ns(&m)))

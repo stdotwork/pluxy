@@ -7,8 +7,11 @@
     "tier": "native",
     "host_versions": [0],
     "programs": {
+      "darwin/amd64": "bin/usage-opencode",
+      "darwin/arm64": "bin/usage-opencode",
       "linux/amd64": "bin/usage-opencode",
-      "linux/arm64": "bin/usage-opencode"
+      "linux/arm64": "bin/usage-opencode",
+      "windows/amd64": "bin/usage-opencode.exe"
     },
     "operations": [
       {

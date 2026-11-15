@@ -249,7 +249,7 @@ fn the_paths_named_are_resolved_even_when_the_codex_home_is_reached_through_a_li
     let home = Home::new();
     let file = home.rollout("sessions/2026/08");
     let link = home.0.join("link-to-home");
-    std::os::unix::fs::symlink(&home.0, &link).unwrap();
+    make_link(&home.0, &link).unwrap();
     let o = open(&link, json!({"id": ID}));
     assert_eq!(
         o.calls[0].2,
@@ -308,7 +308,7 @@ fn a_folder_or_a_link_outside_the_sessions_folders_is_not_opened() {
     // the database.
     let outside = Home::new();
     let target = outside.write("outside.jsonl", &format!("{CANARY}\n"));
-    std::os::unix::fs::symlink(&target, &dir).unwrap();
+    make_link(&target, &dir).unwrap();
     let o = open(&home.0, json!({"id": ID}));
     asked_nothing(&o);
     assert_eq!(code(&o), "not_found");
@@ -330,7 +330,7 @@ fn a_link_to_a_rollout_inside_the_folder_is_opened_as_the_file_it_resolves_to() 
     let home = Home::new();
     let target = home.rollout("sessions/2026/08");
     let link = home.0.join("sessions/2026/rollout-link-to-it.jsonl");
-    std::os::unix::fs::symlink(&target, &link).unwrap();
+    make_link(&target, &link).unwrap();
     home.database(&text(&link));
     let o = open(&home.0, json!({"id": ID}));
     assert_eq!(o.calls[0].2["file"], text(&target));
@@ -393,4 +393,16 @@ fn a_launch_the_person_did_not_confirm_is_the_calls_error() {
         "the native confirmation was cancelled"
     );
     says_nothing_of(&o, &home.0);
+}
+
+/// A symbolic link at link to target: on Windows a folder link when target is a folder.
+fn make_link(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return if target.as_ref().is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
 }

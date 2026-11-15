@@ -18,9 +18,12 @@
 //! - one with no `-shm` and no `-wal` is opened with `immutable=1` when its header says WAL, and
 //!   else in place;
 //! - the tool's own `tmp` must be a real folder, not a link; one open to group or others is
-//!   tightened to 0700. Before a copy is made there, the copies of processes no longer running
-//!   (folders named exactly `wal-<pid>-<n>`) are removed; those of this process and of every
-//!   process still running stay.
+//!   tightened to 0700 (on Windows, given an access list for this user and SYSTEM only). Before a
+//!   copy is made there, the copies of processes no longer running (folders named exactly
+//!   `wal-<pid>-<n>`) are removed; those of this process and of every process still running stay.
+//!   On Linux a process is running when `/proc` lists its pid; elsewhere a copy holds a `lock`
+//!   file that its process keeps locked while the copy is open, and a copy is stale once that lock
+//!   can be taken (or, with no `lock` file yet, once its folder is a minute old).
 //!
 //! An [`Error`] names no path: a tool that shows one to its user adds it itself.
 
@@ -78,14 +81,19 @@ impl std::ops::Deref for Db {
     }
 }
 
-/// A private copy's folder, removed when dropped.
-struct Copy(PathBuf);
+/// A private copy's folder, removed when dropped; and, outside Linux, its lock (see `prune`).
+struct Copy(PathBuf, Option<fs::File>);
 
 impl Drop for Copy {
     fn drop(&mut self) {
+        drop(self.1.take());
         let _ = fs::remove_dir_all(&self.0);
     }
 }
+
+/// Outside Linux: the file in a copy's folder that its process holds locked while it is open.
+#[cfg(not(target_os = "linux"))]
+const LOCK: &str = "lock";
 
 /// Where private copies go: the folder, and whether it is the tool's own (so stale copies in it
 /// are pruned).
@@ -151,7 +159,6 @@ fn copy_root() -> CopyRoot {
 /// Copies db and its -wal into a new folder of this user's that no one else may use. Both are
 /// read through handles opened without following a link or waiting on a FIFO.
 fn private_copy(db: &Path, wal: &Path, root: &CopyRoot) -> std::io::Result<Copy> {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
     let mut db_source = open_regular(db)?;
@@ -162,14 +169,17 @@ fn private_copy(db: &Path, wal: &Path, root: &CopyRoot) -> std::io::Result<Copy>
         std::process::id(),
         N.fetch_add(1, Ordering::SeqCst)
     ));
-    fs::DirBuilder::new().mode(0o700).create(&dir)?;
-    let copy = Copy(dir);
+    pluxy_files::create_private_dir(&dir)?;
+    #[allow(unused_mut)]
+    let mut copy = Copy(dir, None);
+    #[cfg(not(target_os = "linux"))]
+    {
+        let lock = pluxy_files::create_new_private(&copy.0.join(LOCK))?;
+        lock.try_lock().map_err(std::io::Error::other)?;
+        copy.1 = Some(lock);
+    }
     for (source, name) in [(&mut db_source, "db"), (&mut wal_source, "db-wal")] {
-        let mut dest = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(copy.0.join(name))?;
+        let mut dest = pluxy_files::create_new_private(&copy.0.join(name))?;
         std::io::copy(source, &mut dest)?;
     }
     Ok(copy)
@@ -180,12 +190,8 @@ fn private_copy(db: &Path, wal: &Path, root: &CopyRoot) -> std::io::Result<Copy>
 /// folder is made if missing and left as it is.
 fn prepare_root(root: &CopyRoot) -> std::io::Result<()> {
     use std::io::{Error as IoError, ErrorKind};
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     if !root.own {
-        return fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&root.dir);
+        return pluxy_files::create_private_dir_all(&root.dir);
     }
     let check = || -> std::io::Result<fs::Metadata> {
         let m = fs::symlink_metadata(&root.dir)?;
@@ -203,18 +209,15 @@ fn prepare_root(root: &CopyRoot) -> std::io::Result<()> {
         }
         Ok(m)
     };
-    let meta = match check() {
+    match check() {
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(&root.dir)?;
+            pluxy_files::create_private_dir_all(&root.dir)?;
             check()?
         }
         other => other?,
     };
-    if meta.permissions().mode() & 0o077 != 0 {
-        fs::set_permissions(&root.dir, fs::Permissions::from_mode(0o700))?;
+    if !pluxy_files::is_private(&root.dir)? {
+        pluxy_files::make_private(&root.dir)?;
     }
     prune(&root.dir);
     Ok(())
@@ -230,7 +233,10 @@ fn prune(root: &Path) {
     for e in entries.flatten() {
         let pid = e.file_name().to_str().and_then(copy_pid);
         if let Some(pid) = pid {
-            if pid != std::process::id() && e.file_type().is_ok_and(|t| t.is_dir()) && !alive(pid) {
+            if pid != std::process::id()
+                && e.file_type().is_ok_and(|t| t.is_dir())
+                && stale(pid, &e.path())
+            {
                 let _ = fs::remove_dir_all(e.path());
             }
         }
@@ -247,16 +253,57 @@ fn copy_pid(name: &str) -> Option<u32> {
     pid.parse::<u32>().ok().filter(|p| *p > 0)
 }
 
-/// Whether process pid is running; true where that cannot be told (no `/proc`).
-fn alive(pid: u32) -> bool {
+/// Whether the copy in folder dir, made by process pid, is left over: that process is no longer
+/// running (as `/proc` tells; never when it cannot tell).
+#[cfg(target_os = "linux")]
+fn stale(pid: u32, _dir: &Path) -> bool {
     let proc = Path::new("/proc");
-    !proc.join("self").exists() || proc.join(pid.to_string()).exists()
+    proc.join("self").exists() && !proc.join(pid.to_string()).exists()
+}
+
+/// Whether the copy in folder dir is left over: its `lock` is held by no process (the lock goes
+/// with the process that held it), or it has no `lock` and its folder is over a minute old (a copy
+/// being made gets its lock right after its folder).
+#[cfg(not(target_os = "linux"))]
+fn stale(_pid: u32, dir: &Path) -> bool {
+    match pluxy_files::open_regular(&dir.join(LOCK)) {
+        Ok(lock) => lock.try_lock().is_ok(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => fs::symlink_metadata(dir)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(60)),
+        Err(_) => false,
+    }
+}
+
+/// path as what follows `file:` in a URI. On Windows: separators as `/`, a `\\?\` prefix
+/// dropped, a drive path as `/C:/…` and a share as `////server/share/…` (an empty authority, then
+/// the share's own `//`), as SQLite reads them.
+#[cfg(windows)]
+fn uri_path(path: &Path) -> Vec<u8> {
+    let s = path.to_string_lossy().replace('\\', "/");
+    let s = match s.strip_prefix("//?/UNC/") {
+        Some(share) => format!("//{share}"),
+        None => s.strip_prefix("//?/").map(str::to_string).unwrap_or(s),
+    };
+    let s = if s.starts_with("//") {
+        format!("//{s}")
+    } else {
+        format!("/{s}")
+    };
+    s.into_bytes()
+}
+
+#[cfg(not(windows))]
+fn uri_path(path: &Path) -> Vec<u8> {
+    path.as_os_str().as_encoded_bytes().to_vec()
 }
 
 /// A read-only connection to path (immutable when asked).
 fn connect(path: &Path, immutable: bool) -> Result<Connection, Error> {
     let mut uri = String::from("file:");
-    for b in path.as_os_str().as_encoded_bytes() {
+    for b in &uri_path(path) {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
                 uri.push(*b as char)
@@ -300,23 +347,7 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Opens path for reading without following a link or waiting on a FIFO, and only if it is a
-/// regular file (checked on the open handle, so a swap after an earlier check is caught).
-fn open_regular(path: &Path) -> std::io::Result<fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)?;
-    if file.metadata()?.is_file() {
-        Ok(file)
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "not a regular file",
-        ))
-    }
-}
+use pluxy_files::open_regular;
 
 /// Whether path is a SQLite database in WAL mode, by its header.
 fn is_wal(path: &Path) -> bool {

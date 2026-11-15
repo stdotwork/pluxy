@@ -843,24 +843,54 @@ fn roots_longer_than_16_kib_are_refused() {
         .collect();
     let e = checked_roots(&json!({"roots": long})).unwrap_err();
     assert_eq!(e.code, "invalid_request");
+    // Full paths as this system writes them.
+    let (a, b) = if cfg!(windows) {
+        (r"C:\a", r"C:\b")
+    } else {
+        ("/a", "/b")
+    };
     assert_eq!(
-        checked_roots(&json!({"roots": ["/a", "/b"]})).unwrap(),
-        vec!["/a", "/b"]
+        checked_roots(&json!({"roots": [a, b]})).unwrap(),
+        vec![a, b]
     );
     assert!(checked_roots(&json!({"roots": ["relative"]})).is_err());
 }
 
 #[test]
 fn the_store_is_private_and_clear_replaces_one_that_will_not_open() {
-    use std::os::unix::fs::PermissionsExt;
     let (_, d) = store("repair");
     let path = d.join("usage.db");
-    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode(&path), 0o600);
+    // Private: 0600 on Linux and macOS; on Windows an access list of this user and SYSTEM only.
+    let private = |p: &Path| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(p).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        pluxy_files::is_private(p).unwrap()
+    };
+    assert!(private(&path));
     // A store an earlier version left readable by others is made private when opened.
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("icacls")
+            .arg(&path)
+            .args(["/grant", "*S-1-1-0:(R)"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    }
+    assert!(!pluxy_files::is_private(&path).unwrap());
     open_store(&path, false).unwrap();
-    assert_eq!(mode(&path), 0o600);
+    assert!(private(&path));
     std::fs::write(&path, b"not a database at all, not even close to one").unwrap();
     let e = open_store(&path, false).err().unwrap();
     assert!(
@@ -870,7 +900,7 @@ fn the_store_is_private_and_clear_replaces_one_that_will_not_open() {
     );
     let s = open_store(&path, true).unwrap();
     assert_eq!(s.storage().unwrap().1, 0);
-    assert_eq!(mode(&path), 0o600);
+    assert!(private(&path));
     assert!(open_store(&path, false).is_ok());
     std::fs::remove_dir_all(d).unwrap();
 }
