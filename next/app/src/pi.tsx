@@ -7,7 +7,6 @@
 // back only whether one is set. Labels follow the old app's Agents page.
 
 import { useEffect, useId, useState } from "preact/hooks";
-import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
 import {
   Badge,
@@ -23,6 +22,7 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
+import type { AgentPage } from "./easyMode";
 import { connectionGet } from "./host";
 import { selectionFor, type Where } from "./piForm";
 
@@ -507,8 +507,9 @@ export function PiPage() {
   );
 }
 
-export const piPage = (): PageDef => ({
+export const piPage = (): AgentPage => ({
   id: "pi",
+  package: PACKAGE,
   group: "control",
   title: t("title"),
   short: t("short"),

@@ -7,7 +7,6 @@
 // set. Labels follow the old app's Agents page.
 
 import { useEffect, useId, useState } from "preact/hooks";
-import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
 import {
   Button,
@@ -22,6 +21,7 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
+import type { AgentPage } from "./easyMode";
 import { CLIENT, keysOf, modelOf, PACKAGE, type ReadBack, type Secret, validModel } from "./hermesForm";
 import { connectionGet } from "./host";
 
@@ -379,8 +379,9 @@ export function HermesPage() {
   );
 }
 
-export const hermesPage = (): PageDef => ({
+export const hermesPage = (): AgentPage => ({
   id: "hermes",
+  package: PACKAGE,
   group: "control",
   title: t("title"),
   short: t("short"),

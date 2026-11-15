@@ -7,7 +7,6 @@
 // key's value never reaches this webview. Labels follow the old app's Agents page.
 
 import { useEffect, useId, useState } from "preact/hooks";
-import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
 import {
   Button,
@@ -33,6 +32,7 @@ import {
   type ReadBack,
   type Secret,
 } from "./codexForm";
+import type { AgentPage } from "./easyMode";
 import { connectionGet } from "./host";
 
 const t = strings("codex", {
@@ -703,8 +703,9 @@ export function CodexPage() {
   );
 }
 
-export const codexPage = (): PageDef => ({
+export const codexPage = (): AgentPage => ({
   id: "codex",
+  package: PACKAGE,
   group: "control",
   title: t("title"),
   short: t("short"),

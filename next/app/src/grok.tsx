@@ -7,7 +7,6 @@
 // whether one is set. Labels follow the old app's Agents page.
 
 import { useEffect, useId, useState } from "preact/hooks";
-import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
 import {
   Button,
@@ -23,6 +22,7 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
+import type { AgentPage } from "./easyMode";
 import {
   blocked,
   CLIENT,
@@ -446,8 +446,9 @@ export function GrokPage() {
   );
 }
 
-export const grokPage = (): PageDef => ({
+export const grokPage = (): AgentPage => ({
   id: "grok-build",
+  package: PACKAGE,
   group: "control",
   title: t("title"),
   short: t("short"),
