@@ -85,9 +85,11 @@
 // The Codex session reader check (sessions.ts, sessions_native.rs) runs in one more session with
 // that build: the reader (next/app-tools/codex-sessions, built here) lists a copied Codex home
 // exactly as a hand-written expect file says, shows a session only after a native confirmation of
-// each detail call, leaves the Codex home's bytes and modification times as they were, keeps the
-// config.toml and auth.json canaries out of pages, webviews and the app's output, and leaves no
-// reader process when idle or disabled.
+// each detail call, saves a session's rollout byte for byte only through the real save dialog
+// after the native confirmation of each export call (cancelled: nothing is written), leaves the
+// Codex home's bytes and modification times as they were, keeps the config.toml and auth.json
+// canaries, and the rollout text only the export carries, out of pages, webviews and the app's
+// output, and leaves no reader process when idle or disabled.
 // The usage hub check (usage.ts, usage_native.rs) runs in one more session with that build: the hub
 // and the test-only fixture parser (next/app-tools/agent-usage and usage-fixture, built here) sync a
 // fixture root through the host's jobs, driven from the hub's page, and its report equals a
