@@ -110,6 +110,12 @@ fn config_object(bytes: Option<&[u8]>) -> Result<Map<String, Value>, Error> {
     Ok(m)
 }
 
+/// Refuses cliproxyapi.json or settings.json when Pi or the plugin would not take it.
+pub fn check_files(config: Option<&[u8]>, settings: Option<&[u8]>) -> Result<(), Error> {
+    config_object(config)?;
+    settings_object(settings).map(|_| ())
+}
+
 /// The provider ID the adapter registers: cliproxyapi.json's `providerId`, else `cliproxyapi`.
 /// (A `CLIPROXYAPI_PROVIDER_ID` in Pi's environment would win; the tool cannot see it.)
 pub fn provider_of(config: Option<&[u8]>) -> Result<String, Error> {

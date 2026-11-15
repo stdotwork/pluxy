@@ -241,8 +241,15 @@ pub fn remove(agent: &Path) -> Result<bool, Error> {
     if !matches!(state(agent), State::Installed(_)) {
         return Ok(false);
     }
+    // Moved aside first: a stop part way through leaves a hidden sibling, never a half-removed
+    // folder under the plugin's name that would then read as someone else's.
     let dest = folder(agent);
-    fs::remove_dir_all(&dest).map_err(|e| io("remove", &dest, e))?;
+    let old = sibling(agent, "old");
+    fs::rename(&dest, &old).map_err(|e| io("move aside", &dest, e))?;
+    File::open(agent)
+        .and_then(|d| d.sync_all())
+        .map_err(|e| io("sync", agent, e))?;
+    fs::remove_dir_all(&old).map_err(|e| io("remove", &old, e))?;
     Ok(true)
 }
 

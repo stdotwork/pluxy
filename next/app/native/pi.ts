@@ -331,6 +331,8 @@ function configs(home: string, login: string) {
       mcp: ['"./pluxy-cliproxyapi-provider"\n', '"./pluxy-cliproxyapi-provider",\n    "npm:pi-mcp"\n'],
       backup: ['"theme": "dark"', '"theme": "pi-theme-canary"'],
       corrupt: ['"theme": "dark",', '"theme": "dark",,'],
+      model_shape: ['"defaultModel": "gpt-6.1-sol",', '"defaultModel": 5,'],
+      provider_shape: ['"fast": true,', '"fast": true,\n  "providerId": 7,'],
     },
     // The backup browser's step, from the cleared files: the diff a restore of a backup taken
     // before the backup edit shows (setting names, never a value), and the values no answer may hold.

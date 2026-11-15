@@ -24,6 +24,7 @@ import {
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
 import { connectionGet } from "./host";
+import { selectionFor, type Where } from "./piForm";
 
 const t = strings("pi", {
   title: "Pi",
@@ -229,7 +230,7 @@ function StartCli(props: { available: boolean }) {
 
 export function PiPage() {
   const { api } = useKit();
-  const [where, setWhere] = useState<"default" | "folder" | "links">("default");
+  const [where, setWhere] = useState<Where>("default");
   const [folder, setFolder] = useState("");
   const [preview, setPreview] = useState<Preview>();
   const [model, setModel] = useState("");
@@ -249,16 +250,7 @@ export function PiPage() {
       () => setCore(undefined),
     );
   }, []);
-  const selection = () =>
-    where === "folder"
-      ? { folder: folder.trim() }
-      : where === "links"
-        ? {
-            targets: ["cliproxyapi.json", "settings.json", "cliproxyapi-models.json"].map((n) => ({
-              file: `${folder.trim().replace(/\/+$/, "")}/${n}`,
-            })),
-          }
-        : {};
+  const selection = () => selectionFor(where, folder);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
@@ -350,7 +342,7 @@ export function PiPage() {
             { value: "folder", label: t("fileFolder") },
             { value: "links", label: t("fileLinks") },
           ]}
-          onChange={(v: "default" | "folder" | "links") => {
+          onChange={(v: Where) => {
             setWhere(v);
             setPreview(undefined);
           }}

@@ -508,3 +508,69 @@ fn a_preview_takes_the_three_files_selected() {
     );
     assert!(crate::selections(&json!({"targets": [{"file": "/s/settings.json"}]})).is_err());
 }
+
+#[test]
+fn clear_and_uninstall_refuse_files_pi_or_the_plugin_would_not_take() {
+    use pluxy_transactions::Target;
+    let agent = temp("checked");
+    let pins = |agent: &Path| {
+        crate::FILES.map(|n| {
+            Target::resolve(&Selection::File(agent.join(n)))
+                .unwrap()
+                .pin
+        })
+    };
+    // The person's files, and no files at all: taken.
+    std::fs::write(agent.join("cliproxyapi.json"), CONFIG_APPLIED).unwrap();
+    std::fs::write(agent.join("settings.json"), APPLIED).unwrap();
+    crate::checked(&pins(&agent)).unwrap();
+    let empty = temp("checked-empty");
+    crate::checked(&pins(&empty)).unwrap();
+    // JSON of a shape the plugin or Pi would not take, in either file: refused with why.
+    for (config, settings, says) in [
+        (CONFIG_APPLIED, "{\"defaultModel\": 5}\n", "defaultModel"),
+        (
+            CONFIG_APPLIED,
+            "{\"packages\": {\"npm:x\": true}}\n",
+            "packages",
+        ),
+        ("{\"providerId\": 7}\n", APPLIED, "providerId"),
+        ("[]\n", APPLIED, "object"),
+        (CONFIG_APPLIED, "{\n  \"theme\": \"dark\",,\n}\n", "JSON"),
+    ] {
+        std::fs::write(agent.join("cliproxyapi.json"), config).unwrap();
+        std::fs::write(agent.join("settings.json"), settings).unwrap();
+        let e = crate::checked(&pins(&agent)).unwrap_err();
+        assert!(e.message.contains(says), "{says}: {}", e.message);
+    }
+    std::fs::remove_dir_all(&agent).unwrap();
+    std::fs::remove_dir_all(&empty).unwrap();
+}
+
+#[test]
+fn the_file_systems_root_is_no_agent_folder() {
+    // An empty folder field on the page sends empty paths; a bare `/` folder is refused too.
+    let at = |d: &str| crate::FILES.map(|n| Selection::File(PathBuf::from(format!("{d}{n}"))));
+    for d in ["/", ""] {
+        let s = at(d);
+        assert!(crate::agent_of(&[&s[0], &s[1], &s[2]]).is_err(), "{d:?}");
+    }
+    let root = |p: &str| Selection::Root {
+        root: PathBuf::from("/"),
+        path: p.into(),
+    };
+    let s = crate::FILES.map(root);
+    assert!(crate::agent_of(&[&s[0], &s[1], &s[2]]).is_err());
+}
+
+#[test]
+fn removing_the_plugin_leaves_nothing_under_its_name_or_beside_it() {
+    let agent = temp("remove");
+    adapter::ensure(&agent).unwrap();
+    assert!(adapter::remove(&agent).unwrap());
+    assert_eq!(std::fs::read_dir(&agent).unwrap().count(), 0);
+    // A hidden sibling left by a stop part way through is not the plugin, nor someone else's.
+    std::fs::create_dir(agent.join(".pluxy-cliproxyapi-provider.old-1-2")).unwrap();
+    assert_eq!(adapter::state(&agent), State::Absent);
+    std::fs::remove_dir_all(&agent).unwrap();
+}

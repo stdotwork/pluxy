@@ -26,9 +26,11 @@
 //! - restore: after the person's edit, Restore Backup puts the three originals back, the cache too;
 //! - clear: applied again and edited by the person, Clear takes out only pluxy's values; their own
 //!   entries and settings stay, as the expected bytes say;
-//! - corrupt: applied again, then settings.json made into a file Pi would not take: the preview
-//!   reports it refused, a confirmed Clear is refused and changes nothing, and Restore Backup puts
-//!   back the files as they were before that apply and removes the adapter folder;
+//! - corrupt: applied again, then settings.json made into a file that is not JSON, then one of a
+//!   shape Pi would not take, then cliproxyapi.json of a shape the plugin would not take: each
+//!   preview reports it refused, a confirmed Clear and a confirmed Uninstall are refused and change
+//!   nothing, and Restore Backup puts back the files as they were before that apply and removes the
+//!   adapter folder;
 //! - backups: a Manual Backup, a diff naming the setting the person changed and never its value,
 //!   restore over that edit, delete;
 //! - stow: an apply through the selected links changes only their targets (0640 becomes 0600), the
@@ -39,7 +41,8 @@
 //! - launch: the CLI recipe is the terminal running `pi`, and once `~/.local/bin/pi` and then
 //!   `~/.pi/agent/bin/pi` (which comes first) hold a program, that one. Through the launcher, a
 //!   cancelled confirmation starts nothing; confirmed ones run the stand-in terminal with exactly
-//!   `-e <pi>` in the chosen folder, then `pi` with no arguments, then the installed one; none has
+//!   `-e <pi>` in the chosen folder, then `pi` with no arguments, then the installed one in each
+//!   place; none has
 //!   the key or the login canary in its environment;
 //! - uninstall: disabled and removed, no pluxy/pi-setup process is left, and the files are as the
 //!   last step left them;
@@ -693,73 +696,82 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )?;
     passed("clear");
 
-    // ---- corrupt: an applied settings file Pi would not take; Clear is refused, Restore Backup
-    // still puts the files back
+    // ---- corrupt: applied files Pi or the plugin would not take (settings.json not JSON, of the
+    // wrong shape, or cliproxyapi.json of the wrong shape); Clear and Uninstall are refused and
+    // change nothing, Restore Backup still puts the files back
     step(
         "corrupt",
         (|| {
-            let v = read_op(main, &seen, "preview", json!({}))?;
-            written(
-                app,
-                main,
-                &seen,
-                "apply",
-                apply_input(&v, &secret),
-                &[&txt(&cliproxy), &txt(&settings), &txt(&cache), LABEL],
-                &hidden,
-            )?;
-            adapter_is(&adapter, &bundled(&x, &marker)?)?;
-            let (from, to) = edit_pair("corrupt");
-            edit(&settings, &from, &to)?;
-            let corrupt = read(&settings);
-            let v = read_op(main, &seen, "preview", json!({}))?;
-            let c = &v["pi"];
-            require(
-                v["applied"] == true
-                    && c["state"] == "refused"
-                    && c["reason"].as_str().is_some_and(|r| r.contains("JSON"))
-                    && c["adapter"]["installed"] == true,
-                format!("the corrupt file's preview: {v}"),
-            )?;
-            let r = confirmed(
-                app,
-                main,
-                &seen,
-                "clear",
-                json!({"targets": v["targets"]}),
-                &[&txt(&settings)],
-                &hidden,
-            )?;
-            require(
-                r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("JSON")),
-                format!("a clear of the corrupt file should be refused: {r}"),
-            )?;
-            require(
-                read(&settings) == corrupt && adapter.exists(),
-                "the refused clear changed the files",
-            )?;
-            let o = written(
-                app,
-                main,
-                &seen,
-                "restore",
-                json!({"targets": v["targets"]}),
-                &[&txt(&settings)],
-                &hidden,
-            )?;
-            require(o["outcome"] == "restored", format!("the restore: {o}"))?;
-            require(
-                read(&settings) == Some(bytes("settings_cleared"))
-                    && read(&cliproxy) == Some(bytes("cliproxy_original"))
-                    && read(&cache) == Some(bytes("cache_original"))
-                    && !adapter.exists(),
-                format!(
-                    "the files restored: {:?} {:?} {:?}",
-                    read(&settings),
-                    read(&cliproxy),
-                    read(&cache)
-                ),
-            )?;
+            for (file, pair, says) in [
+                (&settings, "corrupt", "JSON"),
+                (&settings, "model_shape", "defaultModel"),
+                (&cliproxy, "provider_shape", "providerId"),
+            ] {
+                let v = read_op(main, &seen, "preview", json!({}))?;
+                written(
+                    app,
+                    main,
+                    &seen,
+                    "apply",
+                    apply_input(&v, &secret),
+                    &[&txt(&cliproxy), &txt(&settings), &txt(&cache), LABEL],
+                    &hidden,
+                )?;
+                adapter_is(&adapter, &bundled(&x, &marker)?)?;
+                let (from, to) = edit_pair(pair);
+                edit(file, &from, &to)?;
+                let before = (read(&settings), read(&cliproxy));
+                let v = read_op(main, &seen, "preview", json!({}))?;
+                let c = &v["pi"];
+                require(
+                    v["applied"] == true
+                        && c["state"] == "refused"
+                        && c["reason"].as_str().is_some_and(|r| r.contains(says))
+                        && c["adapter"]["installed"] == true,
+                    format!("the {pair} preview: {v}"),
+                )?;
+                for op in ["clear", "uninstall"] {
+                    let r = confirmed(
+                        app,
+                        main,
+                        &seen,
+                        op,
+                        json!({"targets": v["targets"]}),
+                        &[&txt(file)],
+                        &hidden,
+                    )?;
+                    require(
+                        r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains(says)),
+                        format!("a {op} of the {pair} files should be refused: {r}"),
+                    )?;
+                    require(
+                        (read(&settings), read(&cliproxy)) == before && adapter.exists(),
+                        format!("the refused {op} of the {pair} files changed them"),
+                    )?;
+                }
+                let o = written(
+                    app,
+                    main,
+                    &seen,
+                    "restore",
+                    json!({"targets": v["targets"]}),
+                    &[&txt(file)],
+                    &hidden,
+                )?;
+                require(o["outcome"] == "restored", format!("the restore: {o}"))?;
+                require(
+                    read(&settings) == Some(bytes("settings_cleared"))
+                        && read(&cliproxy) == Some(bytes("cliproxy_original"))
+                        && read(&cache) == Some(bytes("cache_original"))
+                        && !adapter.exists(),
+                    format!(
+                        "the {pair} files restored: {:?} {:?} {:?}",
+                        read(&settings),
+                        read(&cliproxy),
+                        read(&cache)
+                    ),
+                )?;
+            }
             Ok(())
         })(),
     )?;
@@ -1103,6 +1115,23 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 recipe["program"] == json!(txt(&agent_bin)),
                 format!("the recipe with pi in the agent folder's bin: {recipe}"),
             )?;
+            clear_records(&records)?;
+            let r = launch(
+                &recipe,
+                in_work.clone(),
+                &[EXECUTION, "launch", &txt(&agent_bin)],
+                false,
+            )?;
+            require(
+                r["ok"] == true,
+                format!("the agent folder's pi's launch: {r}"),
+            )?;
+            let (argv, cwd, env) = stand_in(&records, "installed")?;
+            require(
+                argv.is_empty() && cwd == txt(&work),
+                format!("the agent folder's pi ran with {argv:?} in {cwd}"),
+            )?;
+            clean(&env, "the agent folder's pi")?;
             Ok(())
         })(),
     )?;

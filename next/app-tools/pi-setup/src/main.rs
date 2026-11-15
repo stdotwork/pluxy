@@ -118,7 +118,9 @@ fn place(s: &Selection) -> (PathBuf, String) {
 fn agent_of(sels: &[&Selection; 3]) -> Result<PathBuf, Error> {
     let places = sels.map(place);
     let agent = places[0].0.clone();
+    // The folder must be one with a parent: never the file system's root (an empty folder field).
     let ok = agent.is_absolute()
+        && agent.parent().is_some()
         && places
             .iter()
             .zip(FILES)
@@ -129,6 +131,14 @@ fn agent_of(sels: &[&Selection; 3]) -> Result<PathBuf, Error> {
         ));
     }
     Ok(agent)
+}
+
+/// Refuses, before any write, pinned files Pi or the plugin would not take (as preview reports
+/// them): Clear and Uninstall leave such files to the person, and Restore Backup still works.
+fn checked(pins: &[Pin; 3]) -> Result<(), Error> {
+    let (_, config) = Target::open(&pins[0])?.read_now()?;
+    let (_, settings) = Target::open(&pins[1])?.read_now()?;
+    pi::check_files(config.as_deref(), settings.as_deref())
 }
 
 /// The input's three pins, and their agent folder.
@@ -302,6 +312,7 @@ impl Handler for Pi {
             // Clear and Restore after it) stays whole; the connection settings stay (old app).
             "uninstall" => {
                 let (pins, agent) = pins(input)?;
+                checked(&pins)?;
                 let mut v = Transactions::new(call, data_dir()?).apply(
                     SET,
                     &pins,
@@ -317,6 +328,7 @@ impl Handler for Pi {
             }
             "clear" => {
                 let (pins, agent) = pins(input)?;
+                checked(&pins)?;
                 let mut v = Transactions::new(call, data_dir()?).clear(
                     SET,
                     &pins,
