@@ -40,10 +40,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Webview};
 
-const LAUNCHER: &str = "pluxy/launcher";
-const OTHER: &str = "pluxy/other";
-const LABEL: &str = "fixture agent key";
-const AGENT: &str = "pluxy-fixture-agent";
+pub(super) const LAUNCHER: &str = "pluxy/launcher";
+pub(super) const OTHER: &str = "pluxy/other";
+pub(super) const LABEL: &str = "fixture agent key";
+pub(super) const AGENT: &str = "pluxy-fixture-agent";
 
 /// The session values a spawned process may get from the app's environment, with `LC_*`.
 const BASE: &[&str] = &[
@@ -86,14 +86,14 @@ fn alive(pid: u64) -> bool {
 }
 
 /// Whether pid runs as the process whose command line holds marker.
-fn owned(pid: u64, marker: &str) -> bool {
+pub(super) fn owned(pid: u64, marker: &str) -> bool {
     alive(pid)
         && std::fs::read(format!("/proc/{pid}/cmdline"))
             .is_ok_and(|c| String::from_utf8_lossy(&c).contains(marker))
 }
 
 /// Waits until pid no longer runs as marker's process, at most within.
-fn ended(pid: u64, marker: &str, within: Duration) -> bool {
+pub(super) fn ended(pid: u64, marker: &str, within: Duration) -> bool {
     let deadline = Instant::now() + within;
     while Instant::now() < deadline {
         if !owned(pid, marker) {
@@ -105,7 +105,7 @@ fn ended(pid: u64, marker: &str, within: Duration) -> bool {
 }
 
 /// The record the agent writes at path, once it is there and names a process other than not.
-fn record(path: &Path, not: u64) -> Result<Value, String> {
+pub(super) fn record(path: &Path, not: u64) -> Result<Value, String> {
     wait_for(&format!("the agent's record {}", path.display()), || {
         std::fs::read(path)
             .ok()
@@ -133,7 +133,7 @@ fn own_core() -> Value {
 
 /// The launcher's start call from the window, with input, its native confirmation (which must name
 /// every one of needles and none of hidden) accepted; the call's answer.
-fn launch(
+pub(super) fn launch(
     app: &AppHandle,
     main: &Webview,
     input: Value,
@@ -176,7 +176,7 @@ fn after_backoff(main: &Webview) -> Result<(), String> {
 }
 
 /// The launcher's runtime call: the host's answer to its runtime frame.
-fn runtime(main: &Webview, package: &str, op: &str, id: &str) -> Result<Value, String> {
+pub(super) fn runtime(main: &Webview, package: &str, op: &str, id: &str) -> Result<Value, String> {
     let r = call(main, package, "runtime", json!({"op": op, "runtime": id}))?;
     require(r["ok"] == true, format!("{package}'s runtime {op}: {r}"))?;
     Ok(r["value"]["answer"].clone())
