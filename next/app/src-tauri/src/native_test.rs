@@ -89,6 +89,7 @@ mod codex;
 mod core_updates;
 #[path = "device_native.rs"]
 mod device;
+#[cfg(target_os = "linux")]
 #[path = "easy_mode_native.rs"]
 mod easy_mode;
 #[cfg(target_os = "linux")]
