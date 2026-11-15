@@ -1166,10 +1166,13 @@ fn page_navigation(
         .frame_navigation(label, u);
     notify_page_closed(app, label);
     #[cfg(feature = "native-test")]
-    if pages::is_ingress(u) {
-        return true;
-    }
-    (app_document && *u == pages::app_url()) || site.on_site(u)
+    let allowed = pages::is_ingress(u);
+    #[cfg(not(feature = "native-test"))]
+    let allowed = false;
+    let allowed = allowed || (app_document && *u == pages::app_url()) || site.on_site(u);
+    #[cfg(feature = "native-test")]
+    native_test::navigated(label, u, allowed);
+    allowed
 }
 
 /// Makes the webview for page label, bound to site.

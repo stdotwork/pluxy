@@ -48,26 +48,33 @@ try {
 } catch (e) {
   results["native message handler"] = { status: "blocked", detail: short(e) };
 }
-await attempt("fetch ipc scheme", () =>
-  fetch("ipc://localhost/connection_get", { method: "POST" }).then((r) => r.status),
-);
-await attempt("fetch page scheme", () => fetch("pluxy-page://localhost/frame").then((r) => r.text()));
+// The app's schemes at each address they have: their own on Linux and macOS, http://<scheme>.localhost
+// on Windows. This page is on the pages site, so it cannot tell from its own address which one
+// the app uses (ingress-test.js, served by the page scheme, can): it tries both.
+const schemes = (name) => [`${name}://localhost`, `http://${name}.localhost`];
+for (const base of schemes("ipc"))
+  await attempt(`fetch ipc scheme ${base}`, () =>
+    fetch(`${base}/connection_get`, { method: "POST" }).then((r) => r.status),
+  );
+for (const base of schemes("pluxy-page"))
+  await attempt(`fetch page scheme ${base}`, () => fetch(`${base}/frame`).then((r) => r.text()));
 await attempt("read the app document", () => window.parent.document.body.innerHTML);
 await attempt("navigate the top", () => {
   window.top.location.href = "about:blank";
   return "navigated";
 });
 
-await attempt("direct pages-site scheme", () =>
-  fetch("pluxy-page://localhost/send?pages_site_probe", {
-    method: "POST",
-    mode: "no-cors",
-    body: JSON.stringify({
-      type: "call",
-      data: { v: 0, id: "real-site", method: "theme.get", params: null },
+for (const base of schemes("pluxy-page"))
+  await attempt(`direct pages-site scheme ${base}`, () =>
+    fetch(`${base}/send?pages_site_probe`, {
+      method: "POST",
+      mode: "no-cors",
+      body: JSON.stringify({
+        type: "call",
+        data: { v: 0, id: "real-site", method: "theme.get", params: null },
+      }),
     }),
-  }),
-);
+  );
 
 // The native test's requests come as soon as the core has the report, which can be before the
 // report's call returns here: listen first.
@@ -101,6 +108,24 @@ window.addEventListener("message", async (e) => {
     }),
   );
   parent.postMessage({ nativeInvoked: { internals: typeof inv === "function", calls } }, "*");
+});
+
+// And to leave its site: each navigation must be cancelled, so this document stays to answer.
+window.addEventListener("message", async (e) => {
+  if (e.source !== parent || !Array.isArray(e.data?.nativeOffsite)) return;
+  const before = location.href;
+  const tried = [];
+  for (const url of e.data.nativeOffsite) {
+    try {
+      location.href = url;
+    } catch (err) {
+      tried.push({ url, stayed: location.href === before, error: short(err) });
+      continue;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    tried.push({ url, stayed: location.href === before });
+  }
+  parent.postMessage({ nativeOffsite: tried }, "*");
 });
 
 const report = JSON.stringify(results);

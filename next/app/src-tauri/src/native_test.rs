@@ -53,9 +53,9 @@
 use crate::{App, COMMANDS, MAIN, WINDOW};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, Webview};
+use tauri::{AppHandle, Manager, Url, Webview};
 
 #[cfg(target_os = "linux")]
 #[path = "access_native.rs"]
@@ -147,6 +147,28 @@ pub fn window_call(method: &str, path: &str) {
 }
 
 const WAIT: Duration = Duration::from_secs(120);
+
+/// Where the page's frame tries to go off its site (the frame-offsite step).
+const OFFSITE: &[&str] = &[
+    "https://example.com/",
+    "about:blank",
+    "data:text/html,pluxy-offsite",
+];
+
+/// Each navigation a page webview's handler decided, in order (lib.rs page_navigation).
+static NAVIGATIONS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+
+/// Records a page webview's navigation and whether it was allowed.
+pub fn navigated(label: &str, url: &Url, allowed: bool) {
+    NAVIGATIONS
+        .lock()
+        .unwrap()
+        .push(json!({"label": label, "url": url.as_str(), "allowed": allowed}));
+}
+
+fn navigations() -> Vec<Value> {
+    NAVIGATIONS.lock().unwrap().clone()
+}
 
 /// Every app command and every command of the plugins this build registers.
 fn every_command() -> Vec<String> {
@@ -680,6 +702,26 @@ fn run(app: &AppHandle) -> Result<(), String> {
             wait_for("the frame's calls", || {
                 eval(&wv, "window.__frameInvoked ?? null").filter(|v| !v.is_null())
             })?,
+        );
+        // The frame tries to leave its site: the app cancels each, and the channel stays open.
+        let reported = navigations();
+        wv.eval(format!(
+            "window.__frameOffsite = null; window.addEventListener('message', e => {{ if (e.data?.nativeOffsite) window.__frameOffsite = e.data.nativeOffsite; }}); document.querySelector('iframe').contentWindow.postMessage({{nativeOffsite: {}}}, '*')",
+            json!(OFFSITE)
+        ))
+        .map_err(|e| e.to_string())?;
+        let tried = wait_for("the frame's off-site navigations", || {
+            eval(&wv, "window.__frameOffsite ?? null").filter(|v| !v.is_null())
+        })?;
+        let decided: Vec<Value> = navigations().split_off(reported.len());
+        log(
+            "frame_offsite",
+            json!({
+                "tried": tried,
+                "allowed": decided.iter().filter(|d| d["allowed"] == true && OFFSITE.contains(&d["url"].as_str().unwrap_or_default())).collect::<Vec<_>>(),
+                "refused": decided.iter().filter(|d| d["allowed"] == false).map(|d| d["url"].clone()).collect::<Vec<_>>(),
+                "open": !app.state::<App>().pages.lock().unwrap().document_closed(&label),
+            }),
         );
         // The real HTTP pages-site frame navigates while wrapper closed is deliberately lost.
         // The native navigation callback must invalidate admission before its new document loads.

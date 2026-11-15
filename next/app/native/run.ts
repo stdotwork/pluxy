@@ -1748,6 +1748,31 @@ async function runApp(
     for (const [cmd, c] of Object.entries(invoked?.calls ?? {}))
       check(!c.ok, `${cmd} from the page's frame: ${JSON.stringify(c)}`);
 
+    // The frame's navigations off its site: each cancelled, none allowed, the channel open.
+    const offsite = steps.get("frame_offsite") as
+      | {
+          tried?: { url: string; stayed: boolean }[];
+          allowed?: unknown[];
+          refused?: string[];
+          open?: boolean;
+        }
+      | undefined;
+    check(
+      offsite?.tried?.length === 3,
+      `the page's frame did not try to leave its site: ${JSON.stringify(offsite)}`,
+    );
+    for (const t of offsite?.tried ?? [])
+      check(t.stayed, `the page's frame left for ${t.url}: ${JSON.stringify(offsite)}`);
+    check(
+      offsite?.allowed?.length === 0,
+      `the app allowed the frame off its site: ${JSON.stringify(offsite)}`,
+    );
+    check(
+      offsite?.open === true,
+      `a cancelled navigation closed the page's channel: ${JSON.stringify(offsite)}`,
+    );
+    console.log(`${label} frame_offsite ${JSON.stringify(offsite)}`);
+
     for (const [step, expected] of [
       ["ingress_site", { attempts: 1, arrivals: 0, blocked: true }],
       ["ingress_recovery", { error: "unavailable", control: true }],
