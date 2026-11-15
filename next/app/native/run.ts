@@ -90,6 +90,12 @@
 // given its key in its environment, a final process given key, base URL and model, a credential
 // bridge given its key on stdin) get the key and the execution program only references. After
 // the app quits, the runner checks the launched agents still run, then ends them.
+// The open check (open.ts, open_native.rs) runs in one more session with that build: a stand-in
+// tool asks the execution program to prepare opening one of its files with the desktop's opener
+// and to launch it; the native confirmation names the opener, the file and the folder the tool may
+// open files in; cancelled nothing runs, confirmed the stand-in opener runs with exactly that file;
+// a file outside that folder (directly, through `..` or a link), an executable one, or a launch
+// naming no folder or the whole file system is refused before any confirmation.
 // The Codex session reader check (sessions.ts, sessions_native.rs) runs in one more session with
 // that build: the reader (next/app-tools/codex-sessions, built here) lists a copied Codex home
 // exactly as a hand-written expect file says, shows a session only after a native confirmation of
@@ -176,6 +182,7 @@ import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
 import { runInstances } from "./instances";
 import { buildLauncherFixtures } from "./launcher";
+import { buildOpenFixtures } from "./open";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
@@ -616,12 +623,13 @@ interface Rotation {
  * stages. earlyExit: the app's setup waits for its core's exit callback before the app state
  * exists (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. admission:
  * the session checks only signed native-tier admission; program: only the program host and swap
- * checks; routing: only the cross-package routing check; vault: only the vault check. core:
- * the session runs only the core steps, against that core source. release: the app starts with
- * that release installed and selected. spawnCheck: only the spawn check. reader: only the session
- * reader check. launcherCheck: only the launcher check. transactions: only the transaction
- * library check. claudeCode: only the Claude Code setup and launcher check. codex: only the
- * Codex setup and launcher check. */
+ * checks; routing: only the cross-package routing check; vault: only the vault check; reader: only
+ * the session reader check; transactions: only the transaction library check. core: the session
+ * runs only the core steps, against that core source. release: the app starts with that release
+ * installed and selected. spawnCheck: only the spawn check. launcherCheck: only the launcher check.
+ * claudeCode: only the Claude Code setup and launcher check. openCheck: only the check of a tool
+ * opening a file in the person's own app. codex: only the Codex setup and launcher check.
+ */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -646,6 +654,7 @@ async function runApp(
   launcherCheck = false,
   transactions = false,
   claudeCode = false,
+  openCheck = false,
   codex = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
@@ -727,6 +736,7 @@ async function runApp(
       !core &&
       !spawnCheck &&
       !launcherCheck &&
+      !openCheck &&
       !reader &&
       !transactions &&
       !claudeCode &&
@@ -829,6 +839,18 @@ async function runApp(
       nonce = f.nonce;
       canaries = f.canaries;
       launcherBin = f.bin;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
+    // The open check's signed packages, stand-in opener, files, registry and trust profile.
+    const openDir = openCheck ? join(root, "open") : undefined;
+    if (openDir) {
+      mkdirSync(openDir);
+      const f = buildOpenFixtures(openDir, dirs.home, programFixture, executionProgram, executionManifest);
+      nonce = f.nonce;
       roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
       writeFileSync(
         join(dirs.config, artifact.identifier, "device-registries.json"),
@@ -953,6 +975,7 @@ async function runApp(
       !spawnDir &&
       !sessionsDir &&
       !launcherDir &&
+      !openDir &&
       !usageDir &&
       !transactionsDir &&
       !claudeCodeDir &&
@@ -1016,6 +1039,8 @@ async function runApp(
       ...(spawnDir ? { PLUXY_APP_TEST_SPAWN: spawnDir, ...spawnEnv } : {}),
       // The probe clicks the tray's Start… items through the real watcher's dbusmenu.
       ...(launcherDir ? { PLUXY_APP_TEST_LAUNCHER: launcherDir, PLUXY_APP_TEST_PROBE: probe } : {}),
+      // The only folder besides the system's a native-test build takes an opener from.
+      ...(openDir ? { PLUXY_APP_TEST_OPEN: openDir, PLUXY_APP_TEST_OPENERS: join(openDir, "bin") } : {}),
       ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
       ...(transactionsDir ? { PLUXY_APP_TEST_TRANSACTIONS: transactionsDir } : {}),
       ...(claudeCodeDir ? { PLUXY_APP_TEST_CLAUDE_CODE: claudeCodeDir } : {}),
@@ -1325,6 +1350,16 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} launcher ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: launcher ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (openDir) {
+      const r = steps.get("open") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the open check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} open ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: open ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1955,9 +1990,14 @@ async function main(): Promise<number> {
     ],
     tauri,
   );
-  // The execution program the launcher check installs, from its own workspace.
+  // The execution program the launcher check installs, from its own workspace. Its native-test
+  // feature lets an open launch take the open check's stand-in opener from a search path.
   if (existsSync(executionManifest))
-    run("cargo", ["build", "--locked", "-p", "execution", "--target-dir", appToolsTarget], appTools);
+    run(
+      "cargo",
+      ["build", "--locked", "-p", "execution", "--features", "native-test", "--target-dir", appToolsTarget],
+      appTools,
+    );
   // pluxy/claude-code, which the Claude Code check installs.
   if (existsSync(claudeCodeManifest))
     run("cargo", ["build", "--locked", "-p", "claude-code", "--target-dir", appToolsTarget], appTools);
@@ -2355,6 +2395,35 @@ async function main(): Promise<number> {
           true,
         )),
       );
+      // The open check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          true,
+        )),
+      );
       // The Codex setup and launcher check, on the same build.
       p.push(
         ...(await runApp(
@@ -2375,6 +2444,7 @@ async function main(): Promise<number> {
           false,
           undefined,
           release,
+          false,
           false,
           false,
           false,

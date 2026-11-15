@@ -27,10 +27,11 @@
 //!    with `PLUXY_APP_TEST_TRANSACTIONS`, only the transaction library's fixture writer
 //!    (`transactions_native.rs`); with `PLUXY_APP_TEST_USAGE`, only the usage hub and its
 //!    fixture parser (`usage_native.rs`); with `PLUXY_APP_TEST_LAUNCHER`, only the execution
-//!    program and the launcher (`launcher_native.rs`); with `PLUXY_APP_TEST_CLAUDE_CODE`, only
-//!    the Claude Code setup and launcher (`claude_code_native.rs`), with its backup browser
-//!    (`backups_native.rs`); with `PLUXY_APP_TEST_CODEX`, only the Codex setup and launcher
-//!    (`codex_native.rs`);
+//!    program and the launcher (`launcher_native.rs`); with `PLUXY_APP_TEST_OPEN`, only a tool's
+//!    opening of a file in the person's own app (`open_native.rs`); with
+//!    `PLUXY_APP_TEST_CLAUDE_CODE`, only the Claude Code setup and launcher
+//!    (`claude_code_native.rs`), with its backup browser (`backups_native.rs`); with
+//!    `PLUXY_APP_TEST_CODEX`, only the Codex setup and launcher (`codex_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -83,6 +84,9 @@ mod jobs;
 #[cfg(target_os = "linux")]
 #[path = "launcher_native.rs"]
 mod launcher;
+#[cfg(target_os = "linux")]
+#[path = "open_native.rs"]
+mod open;
 #[cfg(target_os = "linux")]
 #[path = "program_native.rs"]
 mod program;
@@ -493,6 +497,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_LAUNCHER") {
         launcher::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // A tool's opening of a file in the person's own app (open_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_OPEN") {
+        open::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
