@@ -80,8 +80,11 @@
 // runtimes, each with exactly the confirmed argv and cwd and the filtered launch environment, the
 // key only in the final process's environment; the agent outlives the tool's crash and idle stop
 // and the app; the runtimes stay controlled across the tool's restart, and Stop and Restart reach
-// only the registered group. After the app quits, the runner checks the detached agent still runs
-// and the runtimes do not, then ends every process the check named.
+// only the registered group. Then, in that session, a launch's client keys (spawn_keys_native.rs):
+// a key deleted on core, bound to another core or another tool's is refused at the call, at the
+// spawn and at a runtime's restart, and never shows in a webview or the app's output. After the
+// app quits, the runner checks the detached agent still runs and the runtimes do not, then ends
+// every process the check named.
 // The launcher check (launcher.ts, launcher_native.rs) runs in one more session with that build:
 // the execution program prepares a terminal launch (Automatic, a program found on PATH) and
 // direct ones, the host spawns them after native confirmation; a remembered launch starts again in
@@ -1174,8 +1177,10 @@ async function runApp(
       !output.some((line) => rotated.some((k) => line.includes(k))),
       "a management key from the rotation check appeared on stdout/stderr",
     );
-    // The client keys the client-key check captured (client_key_native.rs), as it learned them.
-    const clientKeysFile = vaultDir ? join(vaultDir, "client-keys") : undefined;
+    // The client keys the client-key checks captured (client_key_native.rs, spawn_keys_native.rs),
+    // as they learned them.
+    const keysDir = vaultDir ?? spawnDir;
+    const clientKeysFile = keysDir ? join(keysDir, "client-keys") : undefined;
     const clientKeys =
       clientKeysFile && existsSync(clientKeysFile)
         ? readFileSync(clientKeysFile, "utf8")
@@ -1279,6 +1284,8 @@ async function runApp(
       const r = steps.get("spawn") as { passed?: boolean } | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
       check(r?.passed === true, `the spawn check did not complete: ${failure}`);
+      const k = steps.get("spawn_keys") as { passed?: boolean } | undefined;
+      check(k?.passed === true, `the launch client-key check did not complete: ${failure}`);
       // After the app quit: its detached agent runs on, its managed runtimes do not.
       await Bun.sleep(1000);
       const known = readKnown(spawnDir);
@@ -1292,6 +1299,7 @@ async function runApp(
       }
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} spawn ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode} spawn_keys ${JSON.stringify(k ?? {})}`);
       console.log(`${mode}: spawn ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }

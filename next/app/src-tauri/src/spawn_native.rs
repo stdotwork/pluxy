@@ -40,10 +40,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Webview};
 
-const LAUNCHER: &str = "pluxy/launcher";
-const OTHER: &str = "pluxy/other";
-const LABEL: &str = "fixture agent key";
-const AGENT: &str = "pluxy-fixture-agent";
+pub(super) const LAUNCHER: &str = "pluxy/launcher";
+pub(super) const OTHER: &str = "pluxy/other";
+pub(super) const LABEL: &str = "fixture agent key";
+pub(super) const AGENT: &str = "pluxy-fixture-agent";
 
 /// The session values a spawned process may get from the app's environment, with `LC_*`.
 const BASE: &[&str] = &[
@@ -133,7 +133,7 @@ fn own_core() -> Value {
 
 /// The launcher's start call from the window, with input, its native confirmation (which must name
 /// every one of needles and none of hidden) accepted; the call's answer.
-fn launch(
+pub(super) fn launch(
     app: &AppHandle,
     main: &Webview,
     input: Value,
@@ -176,7 +176,7 @@ fn after_backoff(main: &Webview) -> Result<(), String> {
 }
 
 /// The launcher's runtime call: the host's answer to its runtime frame.
-fn runtime(main: &Webview, package: &str, op: &str, id: &str) -> Result<Value, String> {
+pub(super) fn runtime(main: &Webview, package: &str, op: &str, id: &str) -> Result<Value, String> {
     let r = call(main, package, "runtime", json!({"op": op, "runtime": id}))?;
     require(r["ok"] == true, format!("{package}'s runtime {op}: {r}"))?;
     Ok(r["value"]["answer"].clone())
