@@ -189,8 +189,8 @@ import { buildAccessFixtures } from "./access";
 import { buildAdmissionFixtures, MARKER_FILE, PROFILE_FILE } from "./admission";
 import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
 import { buildClaudeCodeFixtures } from "./claude-code";
-import { buildCodexFixtures } from "./codex";
 import { buildClaudeDesktopFixtures } from "./claude-desktop";
+import { buildCodexFixtures } from "./codex";
 import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
 import { runInstances } from "./instances";
@@ -2550,7 +2550,7 @@ async function main(): Promise<number> {
           true,
         )),
       );
-            for (const suite of ["window", "window-no-tray", "privacy", "access"] as const)
+      for (const suite of ["window", "window-no-tray", "privacy", "access"] as const)
         p.push(
           ...(await runApp(
             "managed",
