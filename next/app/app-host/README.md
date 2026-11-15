@@ -544,6 +544,34 @@ program's name) and `cwd`, and may name:
 - `program`: the program a terminal runs, which must be one of `argv`. The confirmation opens and
   hashes it as it does the executable, so a remembered approval does not stand for a replaced
   program (a self-update) either, and the spawn refuses one changed since it was confirmed;
+- `file` and `within`: the file the launch opens, which must be one of `argv`, and the folder it
+  must be inside, named together, each by its resolved path. The confirmation resolves both and
+  refuses, before any dialog:
+  - a file that is not a regular file, has an execute bit, is named `.desktop`, or does not
+    resolve inside the folder;
+  - a file or folder that is not the person's own or that someone else may write (group or
+    world write bits): another user could replace it before the opener reads it;
+  - a folder that is `/`, the home folder or a folder above it;
+  - a file whose content type is not plain text (`text/plain`, `application/json`,
+    `application/x-ndjson`, `application/jsonl`, `text/markdown` or `text/x-log`). The type is
+    the one GIO guesses from the file's name and first bytes, with the shared-mime-info rules
+    the desktop's opener uses: an HTML, SVG, script or archive file named `.jsonl` is refused,
+    since the desktop would open it in an app that may run it;
+  - a launch of any other shape: the executable must be `xdg-open` (argv exactly the file) or
+    `gio` (argv `open` and the file) from `/usr/local/bin`, `/usr/bin`, `/bin` or
+    `/run/current-system/sw/bin`, the cwd the file's folder, detached, with no `program`,
+    `environment`, `stdin` or secret. A native-test build also takes an opener from the folder
+    `PLUXY_APP_TEST_OPENERS` names, for the native test's stand-in.
+
+  The dialog's first line says "Opens the file <file> (<type>, inside <folder>) with <opener>.",
+  with the resolved paths. Both identities, the file's metadata (mode, size, times) and its type
+  are bound: the spawn refuses the launch if either was replaced, reached through a different
+  link, written or changed mode since it was confirmed. The launch gets the launch environment
+  with only the absolute entries of `PATH`. The executing tool, not the host, decides which
+  folder is its own ([the execution program's `open`
+  launch](../../app-tools/README.md#execution)). A desktop whose opener guesses types otherwise
+  than GIO (KDE's `kde-open`, which xdg-open runs there) may still pick another app for a file
+  the check let through;
 - `stdin`: one of the launch's secret fields, whose secret the host writes to the launch's
   standard input and then closes: the private channel to a credential bridge, never argv, its
   environment or a file. The confirmation names it; it is part of the environment revision;
