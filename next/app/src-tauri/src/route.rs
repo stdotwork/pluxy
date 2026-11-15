@@ -34,7 +34,10 @@
 //! the secret, its release and this call; a `value` field's secret also travels in the call's frame,
 //! and nowhere else. The references end with the call. A client key's binding (`client_keys.rs`:
 //! its tool, its core, and that core still taking it) is checked before the confirmation, and
-//! again before the call is made.
+//! again before the call is made. A launch's secret that its environment gives to the process it
+//! starts is a delivery to the target too: checked so before the confirmation and the call, and
+//! again whenever the host resolves it (`client_keys::launch_value`), with nothing older standing
+//! for it, and all of a launch's secrets once more right before its spawn (`client_keys::Launches`).
 //!
 //! A launch-class call's confirmation opens the executable and cwd it names; the router keeps them
 //! with the call, with the launch's lifetime, environment request and secrets (`spawn.rs`). The
@@ -76,6 +79,9 @@ struct Origin {
     /// The launch the call's confirmation authorized, for its target's release, until the target
     /// spawns it.
     launch: Mutex<Option<(Holder, spawn::Launch)>>,
+    /// A confirmed `disclose` call's one save, for its target's release (`save_frame`): the bytes
+    /// handed to the save service so far, until the target saves them.
+    save: Mutex<Option<(Holder, Vec<u8>)>>,
     /// The remembered approval that authorized the call's launch, or that its confirmation saved.
     approval: Arc<Mutex<Option<String>>>,
 }
@@ -150,6 +156,7 @@ pub fn call_main_launch(
         gesture: Arc::new(Mutex::new(gesture)),
         token: 0,
         launch: Mutex::new(None),
+        save: Mutex::new(None),
         approval: Arc::clone(&approval),
     };
     let out = dispatch(
@@ -211,6 +218,7 @@ fn outbound(app: &AppHandle, o: Outbound) -> Result<Value, CallError> {
         gesture: Arc::new(Mutex::new(None)),
         token: 0,
         launch: Mutex::new(None),
+        save: Mutex::new(None),
         approval: Arc::default(),
     };
     let filler = Filler::Tool {
@@ -309,6 +317,7 @@ fn page_call(app: &AppHandle, label: &str, params: &Value) -> Result<Value, Call
                 gesture: Arc::new(Mutex::new(None)),
                 token: 0,
                 launch: Mutex::new(None),
+                save: Mutex::new(None),
                 approval: Arc::default(),
             };
             let chain = vec![Hop::Page {
@@ -340,6 +349,12 @@ fn page_call(app: &AppHandle, label: &str, params: &Value) -> Result<Value, Call
 fn release_of(caller: &str, folder: &str) -> Option<String> {
     let digest = folder.trim_end_matches('/').rsplit('/').next()?;
     (device::asset_url(caller, digest, "") == folder).then(|| digest.to_string())
+}
+
+/// Whether the target gets f's secret itself: a `value` field's, or a launch's secret field whose
+/// secret its environment request gives to the process it starts.
+fn delivered(f: &Filled, request: Option<&spawn::Request>) -> bool {
+    f.value || request.is_some_and(|r| r.delivers(&f.field))
 }
 
 /// The one refusal of an input that is not valid for grant's operation, whatever is wrong with it:
@@ -443,8 +458,10 @@ fn dispatch(
     let vault = Arc::clone(&app.state::<App>().vault);
     // Each client key again now, its value's core too: the connection, the core or the vault may
     // have changed meanwhile.
+    let request = launch.as_ref().map(|l| &l.request);
     for f in &filled {
-        crate::client_keys::admit(app, &f.secret, &f.label, grant.target.id(), false, f.value)?;
+        let deliver = delivered(f, request);
+        crate::client_keys::admit(app, &f.secret, &f.label, grant.target.id(), false, deliver)?;
     }
     // Each secret field gets a reference for the target's release, in this call.
     let token = vault.begin_call();
@@ -455,6 +472,10 @@ fn dispatch(
         generation: grant.target.installed_at(),
     };
     *origin.launch.lock().unwrap() = launch.map(|l| (holder.clone(), l));
+    // A disclose call, confirmed: its target may save one file of what it shows.
+    if grant.op.effect == "disclose" {
+        *origin.save.lock().unwrap() = Some((holder.clone(), Vec::new()));
+    }
     let mut secrets = Vec::new();
     for f in &filled {
         let minted = vault.mint(&f.secret, &holder, token).and_then(|r| {
@@ -519,6 +540,14 @@ fn checked(
         .map_err(|_| invalid_input(grant))?;
     let vault = Arc::clone(&app.state::<App>().vault);
     let filled = secret_fields(&vault, grant, input, filler)?;
+    // A launch gives the secrets its environment names to the process it starts.
+    let request = if grant.op.effect == "launch" {
+        let (_, r) = spawn::parse(input, &|f| filled.iter().any(|x| x.field == f))
+            .map_err(|e| fail("invalid_request", e))?;
+        Some(r)
+    } else {
+        None
+    };
     for f in &filled {
         crate::client_keys::admit(
             app,
@@ -526,7 +555,7 @@ fn checked(
             &f.label,
             grant.target.id(),
             matches!(filler, Filler::Window),
-            f.value,
+            delivered(f, request.as_ref()),
         )?;
     }
     // A secret's value delivered, or any secret the window gives, is the person's decision.
@@ -624,6 +653,7 @@ fn start_job(
                     gesture: Arc::new(Mutex::new(None)),
                     token: 0,
                     launch: Mutex::new(None),
+                    save: Mutex::new(None),
                     approval: Arc::default(),
                 };
                 let input = i["input"].clone();
@@ -765,6 +795,7 @@ fn run_job(
                 gesture: Arc::new(Mutex::new(None)),
                 token: 0,
                 launch: Mutex::new(None),
+                save: Mutex::new(None),
                 approval: Arc::default(),
             }),
             feed: None,
@@ -1197,10 +1228,11 @@ fn spawn_frame(
                 "the call it serves, or the request, was cancelled",
             ));
         }
-        let vault = Arc::clone(&st.vault);
-        let value = move |s: &str| vault.value(s);
+        // Each secret checked as a delivery to this tool now, as the host gives it to the process,
+        // and all of them once more right before the spawn.
+        let values = crate::client_keys::Launches(app.clone());
         return match launch.lifetime {
-            Lifetime::Detached => spawn::detached(&launch, &value)
+            Lifetime::Detached => spawn::detached(&launch, id, &values)
                 .map(|_| json!({"lifetime": "detached"}))
                 .map_err(unavailable),
             Lifetime::Managed => st.runtimes.start(id, launch).map_err(unavailable),
@@ -1227,6 +1259,154 @@ fn spawn_frame(
     }
 }
 
+/// The host's save service for tools' `files` frames (`program::Host::set_saver`).
+pub fn saver(app: AppHandle) -> program::Saver {
+    Arc::new(move |tool, context, frame, cancel| save_frame(&app, tool, context, frame, cancel))
+}
+
+/// Tool's `files` frame, for a call it serves (context) whose operation's effect is `disclose`,
+/// confirmed for the tool's own release: `append` adds bytes (`{"offset", "data"}`: base64, at the
+/// size so far, at most `savefile::MAX_BYTES` in all), and `save` (`{"name"}`, a suggested file
+/// name) asks the person where to save them in the native save dialog, titled with the tool's
+/// package, and saves them there. One save per call: once asked, the call's bytes are gone, whatever
+/// the answer. Refused unless the tool still runs its package's admitted release, as its own calls
+/// are; a page or tool never names the path.
+fn save_frame(
+    app: &AppHandle,
+    tool: &Hop,
+    context: &Arc<Context>,
+    frame: &Value,
+    cancel: &Cancel,
+) -> Result<Value, CallError> {
+    use base64::Engine;
+    let Hop::Package {
+        id,
+        sha256,
+        generation,
+    } = tool
+    else {
+        return Err(fail("permission", "only a tool's run saves files"));
+    };
+    app.state::<App>()
+        .device
+        .lock()
+        .unwrap()
+        .current_run((id, sha256, *generation), &roots())
+        .map_err(refused)?;
+    let origin = context.extra.downcast_ref::<Origin>().ok_or_else(|| {
+        fail(
+            "permission",
+            "the call it serves was not made by the router",
+        )
+    })?;
+    let op = frame["op"].as_str().unwrap_or_default();
+    let input = frame["input"].as_object();
+    let fields: Option<Vec<&str>> = input.map(|i| {
+        let mut k: Vec<&str> = i.keys().map(String::as_str).collect();
+        k.sort_unstable();
+        k
+    });
+    let mut slot = origin.save.lock().unwrap();
+    let Some((holder, bytes)) = slot.as_mut() else {
+        return Err(fail(
+            "permission",
+            "the call it serves does not show content (its effect is not disclose), or its file was saved already",
+        ));
+    };
+    if holder.id != *id || holder.sha256 != *sha256 || holder.generation != *generation {
+        return Err(fail(
+            "permission",
+            "the call was confirmed for another release",
+        ));
+    }
+    if cancel.is_set() {
+        return Err(fail(
+            "cancelled",
+            "the call it serves, or the request, was cancelled",
+        ));
+    }
+    match op {
+        "append" => {
+            let i = input.filter(|_| fields.as_deref() == Some(&["data", "offset"][..]));
+            let (Some(offset), Some(data)) = (
+                i.and_then(|i| i["offset"].as_u64()),
+                i.and_then(|i| i["data"].as_str()),
+            ) else {
+                return Err(fail(
+                    "invalid_request",
+                    "an append's input is {\"offset\", \"data\"}: the size so far and base64 bytes",
+                ));
+            };
+            if offset != bytes.len() as u64 {
+                return Err(fail(
+                    "invalid_request",
+                    format!("the bytes so far are {}, not {offset}", bytes.len()),
+                ));
+            }
+            let more = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .map_err(|_| fail("invalid_request", "an append's data is not base64"))?;
+            if bytes.len() + more.len() > crate::savefile::MAX_BYTES {
+                // Too much: nothing of it is saved.
+                *slot = None;
+                return Err(fail(
+                    "invalid_request",
+                    format!(
+                        "a file saved through the host is at most {} bytes",
+                        crate::savefile::MAX_BYTES
+                    ),
+                ));
+            }
+            bytes.extend_from_slice(&more);
+            Ok(json!({"size": bytes.len()}))
+        }
+        "save" => {
+            let name = input
+                .filter(|_| fields.as_deref() == Some(&["name"][..]))
+                .and_then(|i| i["name"].as_str())
+                .ok_or_else(|| {
+                    fail(
+                        "invalid_request",
+                        "a save's input is {\"name\"}, a suggested file name; the person chooses where",
+                    )
+                })?;
+            let name = crate::savefile::file_name(name).map_err(|e| fail("invalid_request", e))?;
+            let (_, bytes) = slot
+                .take()
+                .ok_or_else(|| fail("permission", "the call's file was saved already"))?;
+            drop(slot);
+            let size = bytes.len();
+            let chosen = crate::savefile::ask(app, format!("Save a file from {id}"), name, &|| {
+                cancel.is_set()
+            })
+            .map_err(|e| fail("unavailable", e))?;
+            // The tool must still run its package's admitted release once the person answered: a
+            // release disabled, removed or swapped out meanwhile saves nothing.
+            let current = || {
+                app.state::<App>()
+                    .device
+                    .lock()
+                    .unwrap()
+                    .current_run((id, sha256, *generation), &roots())
+                    .map_err(|r| r.message)
+            };
+            let outcome = crate::savefile::finish(chosen, &bytes, &|| cancel.is_set(), &current)
+                .map_err(|r| match r {
+                    crate::savefile::Refusal::Changed(m) => fail("permission", m),
+                    crate::savefile::Refusal::Failed(m) => fail("unavailable", m),
+                })?;
+            Ok(match outcome {
+                crate::savefile::Outcome::Saved => json!({"outcome": "saved", "size": size}),
+                crate::savefile::Outcome::Cancelled => json!({"outcome": "cancelled"}),
+            })
+        }
+        _ => Err(fail(
+            "unsupported",
+            format!("a files request's op is append or save, not {op:?}"),
+        )),
+    }
+}
+
 /// Waits for the person's answer to the native confirmation of prepared action id, which its
 /// dialog's own handler leaves for native code, and spends its single-use token. Once cancel is
 /// set, the confirmation is withdrawn and its dialog closes.
@@ -1247,5 +1427,34 @@ fn confirmed_authorized(app: &AppHandle, id: &str, cancel: &Cancel) -> Result<Au
         Ok(Some(token)) => st.confirmations.lock().unwrap().consume(id, &token),
         Ok(None) => Err("the native confirmation was cancelled".into()),
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_launch_delivers_the_secrets_its_environment_gives_the_process() {
+        let input = json!({"executable": "/bin/true", "argv": [], "cwd": "/",
+            "key": "r-1", "other": "r-2", "bridge": "r-3", "stdin": "bridge",
+            "environment": {"secrets": {"API_KEY": "key"}}});
+        let fields = ["key", "other", "bridge"];
+        let (_, request) = spawn::parse(&input, &|f| fields.contains(&f)).unwrap();
+        let filled = |field: &str, value| Filled {
+            field: field.into(),
+            secret: "s-1".into(),
+            label: "a key".into(),
+            value,
+        };
+        // Given to the process, in its environment or on its stdin: a delivery, checked as one at
+        // the call and at the spawn.
+        assert!(delivered(&filled("key", false), Some(&request)));
+        assert!(delivered(&filled("bridge", false), Some(&request)));
+        // A reference the tool only holds, and any field of a call that is not a launch.
+        assert!(!delivered(&filled("other", false), Some(&request)));
+        assert!(!delivered(&filled("key", false), None));
+        // A value field's secret is always delivered.
+        assert!(delivered(&filled("key", true), None));
     }
 }

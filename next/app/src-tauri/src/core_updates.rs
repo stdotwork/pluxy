@@ -8,8 +8,12 @@
 //! `core_versions`.
 
 use crate::conn::{CoreChange, Versions};
-use crate::{trusted, App, MAIN};
-use tauri::{AppHandle, Emitter, EventTarget, Manager, Webview};
+#[cfg(target_os = "linux")]
+use crate::MAIN;
+use crate::{trusted, App};
+use tauri::{AppHandle, Manager, Webview};
+#[cfg(target_os = "linux")]
+use tauri::{Emitter, EventTarget};
 
 /// A change waiting for the person's confirmation.
 pub(crate) struct Pending {
@@ -19,6 +23,7 @@ pub(crate) struct Pending {
     change: CoreChange,
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 enum Ask {
     Install(String),
     Rollback(String),
@@ -26,6 +31,7 @@ enum Ask {
 }
 
 impl Ask {
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn name(&self) -> &'static str {
         match self {
             Ask::Install(_) => "install",
