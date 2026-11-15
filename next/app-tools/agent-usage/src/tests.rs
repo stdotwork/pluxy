@@ -303,6 +303,8 @@ fn a_sync_lists_reads_changed_files_and_commits_each_once() {
         )
     );
     assert_eq!(st["last_sync"], T0 + 3);
+    // The parser's reason for the file it could not read is the source's error.
+    assert_eq!(st["sources"][0]["error"], "f2: unreadable");
     assert_eq!(
         stored(&s),
         vec![("p/a".into(), NOV10 + H, "m-1".into(), 7, 7)]
