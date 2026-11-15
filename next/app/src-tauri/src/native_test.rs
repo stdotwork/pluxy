@@ -87,13 +87,13 @@ mod codex;
 mod core_updates;
 #[path = "device_native.rs"]
 mod device;
+#[path = "easy_mode_native.rs"]
+mod easy_mode;
 #[cfg(target_os = "linux")]
 #[path = "grok_native.rs"]
 mod grok;
 #[path = "hermes_native.rs"]
 mod hermes;
-#[path = "easy_mode_native.rs"]
-mod easy_mode;
 #[path = "native_ingress.rs"]
 mod ingress;
 #[cfg(target_os = "linux")]
