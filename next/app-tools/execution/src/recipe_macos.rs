@@ -77,6 +77,17 @@ pub fn terminal(
         return Err(Error::invalid_request(format!("no terminal {wanted}")));
     }
     let app = terminal_app().ok_or_else(|| Error::not_found("Terminal is not on this Mac"))?;
+    // The program and arguments are handed over to Terminal's window whole: refused here when
+    // they alone are over what a hand-over carries (the environment is added at the launch).
+    let mut handed = vec![program.to_string()];
+    handed.extend(args.iter().cloned());
+    crate::handover::Spec {
+        argv: handed,
+        cwd: String::new(),
+        env: Vec::new(),
+    }
+    .encode()
+    .map_err(Error::invalid_request)?;
     let mut argv: Vec<String> = [
         "terminal", "--with", "terminal", "--app", app, "--", program,
     ]

@@ -33,6 +33,28 @@ fn the_terminal_mode_hands_over_to_terminal_only_and_attach_takes_only_a_live_la
     assert!(String::from_utf8_lossy(&out.stderr).contains("launch expired or already taken"));
 }
 
+#[test]
+fn a_launch_too_large_to_hand_over_is_refused_before_terminal_opens() {
+    // 200,000 control characters: 1.2 MB in the hand-over (over its 1 MiB), within macOS'
+    // argument limit.
+    let out = helper()
+        .args([
+            "terminal",
+            "--with",
+            "terminal",
+            "--app",
+            TERMINAL,
+            "--",
+            "/bin/echo",
+        ])
+        .arg("\u{1}".repeat(200_000))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("the launch is too large"), "{stderr}");
+}
+
 /// Opens a Terminal window: on GitHub's runners only, elsewhere it would open one on the
 /// person's desktop.
 #[test]

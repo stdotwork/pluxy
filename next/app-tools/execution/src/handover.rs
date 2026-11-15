@@ -27,6 +27,20 @@ impl Spec {
         json!({"argv": self.argv, "cwd": self.cwd, "env": self.env})
     }
 
+    /// The hand-over's bytes, refused over `MAX` (what `receive` takes): checked before Terminal
+    /// is asked to open anything, so a launch too large fails here and not in its window.
+    pub fn encode(&self) -> Result<Vec<u8>, String> {
+        let bytes = serde_json::to_vec(&self.to_json()).map_err(|e| e.to_string())?;
+        if bytes.len() as u64 > MAX {
+            return Err(format!(
+                "the launch is too large to hand over to Terminal: its program, arguments, \
+                 folder and environment come to {} bytes, over {MAX}",
+                bytes.len()
+            ));
+        }
+        Ok(bytes)
+    }
+
     fn from_json(v: &Value) -> Option<Spec> {
         let strings = |v: &Value| -> Option<Vec<String>> {
             v.as_array()?
@@ -84,9 +98,10 @@ fn peer_uid(s: &UnixStream) -> std::io::Result<u32> {
     }
 }
 
-/// Offers spec once on listener, within wait: to the first connection from this user (another
-/// user's is dropped and the wait goes on). Fails with "launch expired" when no one takes it.
-pub fn serve(listener: &UnixListener, spec: &Spec, wait: Duration) -> Result<(), String> {
+/// Offers a hand-over's bytes (`Spec::encode`) once on listener, within wait: to the first
+/// connection from this user (another user's is dropped and the wait goes on). Fails with "launch
+/// expired" when no one takes it.
+pub fn serve(listener: &UnixListener, bytes: &[u8], wait: Duration) -> Result<(), String> {
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let me = unsafe { libc::geteuid() };
     let end = Instant::now() + wait;
@@ -97,8 +112,7 @@ pub fn serve(listener: &UnixListener, spec: &Spec, wait: Duration) -> Result<(),
                     continue;
                 }
                 s.set_nonblocking(false).map_err(|e| e.to_string())?;
-                let bytes = serde_json::to_vec(&spec.to_json()).map_err(|e| e.to_string())?;
-                s.write_all(&bytes).map_err(|e| e.to_string())?;
+                s.write_all(bytes).map_err(|e| e.to_string())?;
                 return s
                     .shutdown(std::net::Shutdown::Write)
                     .map_err(|e| e.to_string());

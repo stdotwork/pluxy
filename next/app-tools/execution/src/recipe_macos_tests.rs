@@ -161,3 +161,18 @@ fn an_app_in_an_applications_folder_starts_through_open() {
     }
     std::fs::remove_dir_all(d).unwrap();
 }
+
+#[test]
+fn a_terminal_launch_too_large_to_hand_over_is_refused() {
+    let d = folder();
+    // Each control character is six bytes in the hand-over: 1.44 MB, over its 1 MiB.
+    let args: Vec<String> = (0..8).map(|_| "\u{1}".repeat(30_000)).collect();
+    let e = prepare(
+        &json!({"kind": "terminal", "program": "/bin/echo", "args": args, "cwd": d,
+        "search_path": []}),
+    )
+    .unwrap_err();
+    assert_eq!(e.code, "invalid_request", "{}", e.message);
+    assert!(e.message.contains("too large"), "{}", e.message);
+    std::fs::remove_dir_all(d).unwrap();
+}

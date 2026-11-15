@@ -87,7 +87,7 @@ fn terminal(app: &str, program: &str, args: &[&str]) -> Result<(), String> {
         .map_err(|_| "the working folder is not UTF-8".to_string())?;
     let mut argv = vec![program.to_string()];
     argv.extend(args.iter().map(|a| a.to_string()));
-    let spec = Spec { argv, cwd, env };
+    let spec = Spec { argv, cwd, env }.encode()?;
     let helper = std::env::current_exe()
         .and_then(std::fs::canonicalize)
         .map_err(|e| e.to_string())?;
@@ -113,7 +113,7 @@ fn terminal(app: &str, program: &str, args: &[&str]) -> Result<(), String> {
     r
 }
 
-fn hand_over(dir: &Path, app: &str, helper: &str, spec: &Spec) -> Result<(), String> {
+fn hand_over(dir: &Path, app: &str, helper: &str, spec: &[u8]) -> Result<(), String> {
     let socket = dir.join("s");
     if socket.as_os_str().len() > 103 {
         return Err("the temporary folder's path is too long for a socket".into());

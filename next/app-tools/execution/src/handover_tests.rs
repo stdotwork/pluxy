@@ -37,7 +37,13 @@ fn the_launch_reaches_the_window_as_it_was_given() {
     let d = folder();
     let socket = d.join("s");
     let listener = UnixListener::bind(&socket).unwrap();
-    let served = std::thread::spawn(move || serve(&listener, &spec(), Duration::from_secs(10)));
+    let served = std::thread::spawn(move || {
+        serve(
+            &listener,
+            &spec().encode().unwrap(),
+            Duration::from_secs(10),
+        )
+    });
     assert_eq!(receive(&socket).unwrap(), spec());
     assert_eq!(served.join().unwrap(), Ok(()));
     std::fs::remove_dir_all(d).unwrap();
@@ -48,9 +54,38 @@ fn a_launch_no_one_takes_expires() {
     let d = folder();
     let listener = UnixListener::bind(d.join("s")).unwrap();
     let started = Instant::now();
-    let e = serve(&listener, &spec(), Duration::from_millis(300)).unwrap_err();
+    let e = serve(
+        &listener,
+        &spec().encode().unwrap(),
+        Duration::from_millis(300),
+    )
+    .unwrap_err();
     assert!(e.starts_with("launch expired"), "{e}");
     assert!(started.elapsed() < Duration::from_secs(5));
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn a_launch_over_what_a_hand_over_carries_is_refused_before_it_is_offered() {
+    // Each control character is six bytes in the hand-over (`\u0001`).
+    let mut big = spec();
+    big.argv.push("\u{1}".repeat(MAX as usize / 6 + 1));
+    let Err(e) = big.encode() else {
+        panic!("a launch over MAX was offered");
+    };
+    assert!(e.starts_with("the launch is too large"), "{e}");
+    // Just under: offered, and taken whole.
+    let mut near = spec();
+    let room = MAX as usize - near.encode().unwrap().len() - 3;
+    near.argv.push("x".repeat(room));
+    assert_eq!(near.encode().unwrap().len() as u64, MAX);
+    let d = folder();
+    let socket = d.join("s");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let bytes = near.encode().unwrap();
+    let served = std::thread::spawn(move || serve(&listener, &bytes, Duration::from_secs(10)));
+    assert_eq!(receive(&socket).unwrap(), near);
+    assert_eq!(served.join().unwrap(), Ok(()));
     std::fs::remove_dir_all(d).unwrap();
 }
 
