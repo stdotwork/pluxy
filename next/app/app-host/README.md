@@ -720,8 +720,9 @@ The host writes the file atomically beside the chosen one: a temporary file in t
 opened relative to that folder without following a link, mode 0600 (a replaced file keeps its
 permission bits), the bytes, fsync, then a rename over the chosen name (for a new file, one that
 replaces nothing) and an fsync of the folder. Before the rename it checks that the folder and the
-name are still what the dialog answered: a link, another file or a folder now at the name, a file
-that appeared where there was none, or a replaced folder is refused with `permission`, and the
+name are still what the dialog answered (an existing file by its device, inode, size and
+modification and change times): a link, another or a changed file or a folder now at the name, a
+file that appeared where there was none, or a replaced folder is refused with `permission`, and the
 temporary file is removed. The check and the rename are two steps; a change between them is not
 caught. Nothing of the bytes or the chosen path is logged, and the answers carry neither.
 

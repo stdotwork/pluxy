@@ -868,7 +868,8 @@ async function runApp(
       !spawnDir &&
       !sessionsDir &&
       !usageDir &&
-      !transactionsDir
+      !transactionsDir &&
+      !saveDir
     ) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";

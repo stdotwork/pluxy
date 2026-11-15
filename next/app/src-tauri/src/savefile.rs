@@ -9,7 +9,7 @@
 //! the call it serves ending, writes nothing.
 //!
 //! What the dialog answered is looked at as it answers (`Chosen`): its folder, and whether the name
-//! is a regular file (and which) or nothing. A link, a folder or anything else at the name is
+//! is a regular file (which, by device, inode, size and times) or nothing. A link, a folder or anything else at the name is
 //! refused: the dialog showed a name, and writing through a link would write a file it did not show.
 //! `write` then saves atomically beside it: a new file `.pluxy-save-<random>` in that folder, opened
 //! relative to the folder it opened (no link followed), mode 0600 (a replaced file keeps its
@@ -72,9 +72,14 @@ pub struct Chosen {
     name: OsString,
     /// The folder's device and inode.
     dir_id: (u64, u64),
-    /// The regular file at the name (device, inode and permission bits), or None for no file.
-    existing: Option<(u64, u64, u32)>,
+    /// The regular file at the name (`Stamp`, and its permission bits), or None for no file.
+    existing: Option<(Stamp, u32)>,
 }
+
+/// A file's device, inode, size, modification and change times (seconds and nanoseconds): which
+/// file it is, and that it is unchanged. The inode alone is not enough: a file removed and made
+/// again may get the same inode number.
+type Stamp = (u64, u64, u64, i64, i64, i64, i64);
 
 /// Looks at path, which a save dialog just answered with: refused unless it is a name in a folder,
 /// with a regular file or nothing at it.
@@ -95,7 +100,18 @@ pub fn chosen(path: &Path) -> Result<Chosen, String> {
                 "the chosen file is a link: choose the file it points to, or another name".into(),
             )
         }
-        Ok(m) if m.is_file() => Some((m.dev(), m.ino(), m.mode() & 0o777)),
+        Ok(m) if m.is_file() => Some((
+            (
+                m.dev(),
+                m.ino(),
+                m.size(),
+                m.mtime(),
+                m.mtime_nsec(),
+                m.ctime(),
+                m.ctime_nsec(),
+            ),
+            m.mode() & 0o777,
+        )),
         Ok(_) => return Err("the chosen name is not a file".into()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("the chosen file: {e}")),
@@ -148,6 +164,21 @@ fn identity(st: &libc::stat) -> (u64, u64) {
     (st.st_dev as u64, st.st_ino as u64)
 }
 
+/// A stat's `Stamp`.
+#[allow(clippy::unnecessary_cast)]
+fn stamp(st: &libc::stat) -> Stamp {
+    let (dev, ino) = identity(st);
+    (
+        dev,
+        ino,
+        st.st_size as u64,
+        st.st_mtime as i64,
+        st.st_mtime_nsec as i64,
+        st.st_ctime as i64,
+        st.st_ctime_nsec as i64,
+    )
+}
+
 fn rename_at(dir: &OwnedFd, from: &CString, to: &CString, flags: libc::c_uint) -> libc::c_int {
     unsafe {
         libc::renameat2(
@@ -194,7 +225,7 @@ pub fn write(c: &Chosen, bytes: &[u8]) -> Result<(), Refusal> {
     );
     let tmp = cstr(OsStr::new(&tmp_name))?;
     let name = cstr(&c.name)?;
-    let mode = c.existing.map_or(0o600, |(_, _, m)| m);
+    let mode = c.existing.map_or(0o600, |(_, m)| m);
     let f = unsafe {
         libc::openat(
             dir.as_raw_fd(),
@@ -227,8 +258,8 @@ pub fn write(c: &Chosen, bytes: &[u8]) -> Result<(), Refusal> {
         };
         match (stat_at(&dir, &name), c.existing) {
             (Err(e), None) if e.kind() == io::ErrorKind::NotFound => {}
-            (Ok(s), Some((dev, ino, _)))
-                if s.st_mode & libc::S_IFMT == libc::S_IFREG && identity(&s) == (dev, ino) => {}
+            (Ok(s), Some((was, _)))
+                if s.st_mode & libc::S_IFMT == libc::S_IFREG && stamp(&s) == was => {}
             (Err(e), _) if e.kind() != io::ErrorKind::NotFound => {
                 return Err(Refusal::Failed(format!("the chosen file: {e}")))
             }
@@ -499,6 +530,15 @@ mod tests {
         std::fs::write(&path, b"other").unwrap();
         assert!(matches!(write(&c, b"bytes"), Err(Refusal::Changed(_))));
         assert_eq!(std::fs::read(&path).unwrap(), b"other");
+        // The same file, written to in place since.
+        let c = chosen(&path).unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, b" and more"))
+            .unwrap();
+        assert!(matches!(write(&c, b"bytes"), Err(Refusal::Changed(_))));
+        assert_eq!(std::fs::read(&path).unwrap(), b"other and more");
         // Gone.
         std::fs::remove_file(&path).unwrap();
         assert!(matches!(write(&c, b"bytes"), Err(Refusal::Changed(_))));
