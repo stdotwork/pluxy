@@ -45,6 +45,8 @@ pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
 pub mod notes;
+#[cfg(windows)]
+mod page_frames;
 pub mod pages;
 mod place;
 mod privacy;
@@ -158,6 +160,40 @@ struct App {
     /// The app's own update (`updater.rs`).
     #[cfg(unix)]
     updater: updater::State,
+}
+
+/// Every command of the plugins this build registers, as a webview calls it
+/// (`plugin:<name>|<command>`), from the ACL manifests Tauri's build writes for each plugin. The
+/// native test calls each from the page webview and its frame, so a plugin command added later
+/// is tried without a list to keep up.
+#[cfg(any(test, feature = "native-test"))]
+pub(crate) fn plugin_commands() -> Vec<String> {
+    let manifests: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/gen/schemas/acl-manifests.json"
+    )))
+    .expect("Tauri's ACL manifests");
+    let mut all = std::collections::BTreeSet::new();
+    for (plugin, manifest) in manifests.as_object().expect("a map of plugins") {
+        // The app's own commands are COMMANDS.
+        if plugin == "__app-acl__" {
+            continue;
+        }
+        let name = plugin.strip_prefix("core:").unwrap_or(plugin);
+        for permission in manifest["permissions"].as_object().into_iter().flatten() {
+            for list in ["allow", "deny"] {
+                for command in permission.1["commands"][list]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                {
+                    let command = command.as_str().expect("a command name");
+                    all.insert(format!("plugin:{name}|{command}"));
+                }
+            }
+        }
+    }
+    all.into_iter().collect()
 }
 
 /// Every command checks its caller too: the capability already allows only the window.
@@ -347,14 +383,6 @@ fn tray_refused(action: &str, mode: Option<Mode>, reason: &str) {
 fn is_app_url(u: &Url) -> bool {
     (u.scheme() == "tauri" && u.host_str() == Some("localhost"))
         || (matches!(u.scheme(), "http" | "https") && u.host_str() == Some("tauri.localhost"))
-}
-
-fn page_scheme_url() -> Url {
-    #[cfg(any(windows, target_os = "android"))]
-    let s = format!("http://{}.localhost/", pages::SCHEME);
-    #[cfg(not(any(windows, target_os = "android")))]
-    let s = format!("{}://localhost/", pages::SCHEME);
-    Url::parse(&s).expect("the page scheme's URL")
 }
 
 /// Whether the app shows in the Dock: only while it has a window, as the old app did. In the
@@ -1163,32 +1191,47 @@ fn open_page(webview: &Webview, binding: Binding, rect: Rect) -> Result<String, 
     add_page(webview, label, site, rect)
 }
 
+/// A navigation in page label's webview: closes the page's channel when its frame loads a second
+/// document, and allows the page's own site, and the app's document where app_document (the top's
+/// navigations; WebKitGTK and WKWebView do not say whether the top or the frame navigates, on
+/// Windows the frame's come apart).
+fn page_navigation(
+    app: &AppHandle,
+    label: &str,
+    site: &Binding,
+    u: &Url,
+    app_document: bool,
+) -> bool {
+    app.state::<App>()
+        .pages
+        .lock()
+        .unwrap()
+        .frame_navigation(label, u);
+    notify_page_closed(app, label);
+    #[cfg(feature = "native-test")]
+    let allowed = pages::is_ingress(u);
+    #[cfg(not(feature = "native-test"))]
+    let allowed = false;
+    let allowed = allowed || (app_document && *u == pages::app_url()) || site.on_site(u);
+    #[cfg(feature = "native-test")]
+    native_test::navigated(label, u, allowed);
+    allowed
+}
+
 /// Makes the webview for page label, bound to site.
 fn add_page(webview: &Webview, label: String, site: Binding, rect: Rect) -> Result<String, String> {
     let state = webview.state::<App>();
-    let app_doc = page_scheme_url();
     let navigation_app = webview.app_handle().clone();
     let navigation_label = label.clone();
-    let builder = WebviewBuilder::new(&label, WebviewUrl::CustomProtocol(app_doc.clone()))
+    #[cfg(windows)]
+    let frame_site = site.clone();
+    let builder = WebviewBuilder::new(&label, WebviewUrl::CustomProtocol(pages::app_url()))
         // A web context of their own, apart from the window's storage and cookies. Not
         // `incognito`: on Linux, Tauri then gives the webview no custom schemes at all.
         .data_directory(state.pages_dir.clone())
         .devtools(false)
         // The app's document at the top, the page's site in its frame; nowhere else.
-        .on_navigation(move |u| {
-            navigation_app
-                .state::<App>()
-                .pages
-                .lock()
-                .unwrap()
-                .frame_navigation(&navigation_label, u);
-            notify_page_closed(&navigation_app, &navigation_label);
-            #[cfg(feature = "native-test")]
-            if pages::ingress_test(u) && (cfg!(windows) || u.host_str() == Some("localhost")) {
-                return true;
-            }
-            *u == app_doc || site.on_site(u)
-        })
+        .on_navigation(move |u| page_navigation(&navigation_app, &navigation_label, &site, u, true))
         .on_new_window(|_, _| NewWindowResponse::Deny)
         .on_page_load(|wv, p| {
             if p.event() == PageLoadEvent::Started {
@@ -1210,7 +1253,34 @@ fn add_page(webview: &Webview, label: String, site: Binding, rect: Rect) -> Resu
             LogicalSize::new(b.width.max(1.0), b.height.max(1.0)),
         )
         .map_err(|e| e.to_string())
-        .and_then(|_| place::adopt(&window, &label, Some(b)));
+        .and_then(|_page| {
+            // WebView2 tells wry's navigation handler of the top document only: the page's
+            // frame is watched apart, and shown only once it is (pages.rs `/frame`).
+            #[cfg(windows)]
+            {
+                let app = _page.app_handle().clone();
+                let frame_label = label.clone();
+                let replaced_app = app.clone();
+                let replaced_label = label.clone();
+                page_frames::watch(
+                    &_page,
+                    move |u| page_navigation(&app, &frame_label, &frame_site, u, false),
+                    move |_status| {
+                        replaced_app
+                            .state::<App>()
+                            .pages
+                            .lock()
+                            .unwrap()
+                            .frame_replaced(&replaced_label);
+                        notify_page_closed(&replaced_app, &replaced_label);
+                        #[cfg(feature = "native-test")]
+                        native_test::frame_replaced(&replaced_label, _status);
+                    },
+                )?;
+                state.pages.lock().unwrap().watch_frames(&label);
+            }
+            place::adopt(&window, &label, Some(b))
+        });
     // Unbound while it was made (its package changed, or the window closed its pages): the
     // webview must not stay.
     let placed = placed.and_then(|_| {
@@ -3404,6 +3474,31 @@ mod tests {
         assert_eq!(conf["app"]["withGlobalTauri"], false);
         let dir = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities")).unwrap();
         assert_eq!(dir.count(), 1, "one capability file, for the window");
+    }
+
+    /// The native test's probes take the plugin commands from Tauri's manifests: every
+    /// registered plugin gives some, including those the probes always tried.
+    #[test]
+    fn plugin_commands_cover_every_registered_plugin() {
+        let all = plugin_commands();
+        for c in [
+            "plugin:event|listen",
+            "plugin:event|emit",
+            "plugin:window|close",
+            "plugin:webview|create_webview",
+            "plugin:app|version",
+            "plugin:path|resolve_directory",
+            "plugin:menu|new",
+            "plugin:tray|new",
+            "plugin:image|new",
+            "plugin:resources|close",
+        ] {
+            assert!(all.iter().any(|a| a == c), "{c} missing from {all:?}");
+        }
+        #[cfg(unix)]
+        assert!(all.iter().any(|a| a == "plugin:updater|check"));
+        assert!(all.iter().all(|c| !c.contains("__app-acl__")));
+        assert!(all.len() > 100, "{} plugin commands", all.len());
     }
 
     #[test]

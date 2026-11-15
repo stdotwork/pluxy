@@ -2,8 +2,8 @@
   parent.postMessage({ ingress: { boot: true } }, "*");
   try {
     // Only served by native-test. A sandboxed frame posts directly to the native scheme, which
-    // Windows serves at http://pluxy-page.localhost.
-    const base = location.protocol === "http:" ? `http://${location.host}` : "pluxy-page://localhost";
+    // serves this document (pluxy-page://localhost, or http://pluxy-page.localhost on Windows).
+    const base = `${location.protocol}//${location.host}`;
     const info = await (await fetch(`${base}/frame`)).json();
     const generation = info.generation ?? 0;
     const answers = new Map();

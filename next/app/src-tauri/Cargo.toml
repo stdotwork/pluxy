@@ -100,6 +100,9 @@ windows = { version = "0.62", features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 zeroize = "1"
+# The WebView2 bindings wry uses (the same version, so one copy), to watch a page's frame
+# navigations (src/page_frames.rs).
+webview2-com = "=0.39.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

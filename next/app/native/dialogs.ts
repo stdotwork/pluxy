@@ -51,25 +51,43 @@ const platform =
  * isolation on Windows and macOS). Whichever of this change and the owner's fix lands second
  * removes the entry.
  */
-const FRAME_NAVIGATION =
-  "WebView2 does not report a navigation inside the page's frame (wry hooks only the top-level " +
-  "NavigationStarting), so the app does not close the page's channel when its frame navigates";
-const FRAGMENT =
-  "a fragment change inside the page's frame closes the page's channel, which on Linux stays open " +
-  "(the navigations the webview reported are in the evidence; the HTTP navigation check is then not run)";
-const EXPECTED: Record<string, { platforms: string[]; owner: string; why: string }> = {
-  http_navigation: {
-    platforms: ["windows", "macos"],
-    owner: "P8p7",
-    why: platform === "macos" ? FRAGMENT : FRAME_NAVIGATION,
-  },
-  ingress_navigation: { platforms: ["windows"], owner: "P8p7", why: FRAME_NAVIGATION },
-  "frame own tauri internals": {
-    platforms: ["windows"],
-    owner: "P8p7",
-    why: "the Tauri bridge (window.__TAURI_INTERNALS__) is present in the page's frame, though every call from it is refused",
-  },
-};
+const EXPECTED: Record<string, { platforms: string[]; owner: string; why: string }> = {};
+
+/**
+ * Known Windows limitation, the one exception to the frame checks: wry adds every Tauri
+ * initialization script to all frames on WebView2, main-frame-only ones too, so the page's frame
+ * has a Tauri bridge of its own there ("own tauri internals" succeeds). The frame-commands and
+ * reached checks below show it reaches nothing. Drop this once wry keeps main-frame-only scripts
+ * out of frames on WebView2: https://github.com/tauri-apps/wry/pull/1874
+ */
+const FRAME_BRIDGE_ON_WINDOWS = { platform: "windows", check: "own tauri internals", status: "succeeded" };
+
+/**
+ * Windows only: when the page document's frame-src blocks a frame's off-site address, WebView2
+ * shows its own error page in the frame even though the app's navigation hook cancelled the
+ * navigation (it ends unsuccessfully, not cancelled). The page's document is then gone, so the app
+ * closes the page's channel (page_frames.rs); the off-site address itself never loads. This is
+ * accepted there only with the hook's or the frame-src stop recorded, the replacement recorded and
+ * the channel closed.
+ */
+const ERROR_PAGE_ON_WINDOWS = { platform: "windows" };
+
+/** Every command of the plugins the build registers, from the ACL manifests Tauri's build
+ * writes (as lib.rs plugin_commands reads them); read once the app is built. */
+function pluginCommands(): string[] {
+  const manifests = JSON.parse(readFileSync(join(tauri, "gen", "schemas", "acl-manifests.json"), "utf8"));
+  const all = new Set<string>();
+  for (const [plugin, manifest] of Object.entries<{
+    permissions?: Record<string, { commands?: { allow?: string[]; deny?: string[] } }>;
+  }>(manifests)) {
+    if (plugin === "__app-acl__") continue;
+    const name = plugin.replace(/^core:/, "");
+    for (const p of Object.values(manifest.permissions ?? {}))
+      for (const c of [...(p.commands?.allow ?? []), ...(p.commands?.deny ?? [])])
+        all.add(`plugin:${name}|${c}`);
+  }
+  return [...all];
+}
 
 function refuse(why: string): never {
   console.error(`dialogs: refused to start: ${why}`);
@@ -233,6 +251,8 @@ async function main(): Promise<number> {
     // biome-ignore lint/suspicious/noExplicitAny: the app's JSON evidence, checked field by field below
     const steps = new Map<string, any>();
     const order: string[] = [];
+    // The webview of each command the app reached (lib.rs trusted, native-test builds).
+    const reached: string[] = [];
     const onLine = (line: string) => {
       output.push(line);
       if ([core?.key ?? "", wrong].some((k) => k && line.includes(k))) {
@@ -243,6 +263,13 @@ async function main(): Promise<number> {
       const m = /^native-test: (\S+) (.*)$/.exec(line);
       if (!m) return;
       const [, step, json] = m as unknown as [string, string, string];
+      if (step === "reached") {
+        try {
+          reached.push(JSON.parse(json).webview);
+        } catch {
+          reached.push(json);
+        }
+      }
       try {
         steps.set(step, JSON.parse(json));
       } catch {
@@ -308,7 +335,7 @@ async function main(): Promise<number> {
         (["x", "y", "width", "height"] as const).every((k) => near(page.area[k], page.placed[k])),
       `the page webview is at ${JSON.stringify(page?.placed)}, the page area at ${JSON.stringify(page?.area)}`,
     );
-    for (const cmd of commands)
+    for (const cmd of [...commands, ...pluginCommands()])
       check(`page tried ${cmd}`, page?.calls?.[cmd], `the page's probe did not try ${cmd}`);
     for (const [cmd, c] of Object.entries(page?.calls ?? {}))
       check(
@@ -319,12 +346,93 @@ async function main(): Promise<number> {
 
     const frame = steps.get("frame") as Record<string, { status: string; detail: string }> | undefined;
     check("frame report", frame && Object.keys(frame).length >= 10, "the page sent no report");
+    // The frame has a Tauri bridge on Windows only (FRAME_BRIDGE_ON_WINDOWS).
+    const bridged = platform === FRAME_BRIDGE_ON_WINDOWS.platform;
     for (const [what, r] of Object.entries(frame ?? {}))
       check(
         `frame ${what}`,
-        r.status === "blocked" || (r.status === "attempted" && what === "native message handler"),
+        r.status === "blocked" ||
+          (r.status === "attempted" && what === "native message handler") ||
+          (bridged && what === FRAME_BRIDGE_ON_WINDOWS.check && r.status === FRAME_BRIDGE_ON_WINDOWS.status),
         `from the page's frame, "${what}" ${r.status}: ${r.detail}`,
       );
+    // The frame calls every command through its own bridge: none succeeds.
+    const invoked = steps.get("frame_invoke") as Probe | undefined;
+    check(
+      "frame bridge",
+      invoked?.internals === bridged,
+      `the page's frame ${invoked?.internals ? "has" : "has no"} Tauri bridge: ${JSON.stringify(invoked)}`,
+    );
+    const plugins = pluginCommands();
+    check("plugin commands", plugins.length > 0, "no plugin commands in Tauri's ACL manifests");
+    for (const cmd of [...commands, ...plugins])
+      check(`frame tried ${cmd}`, invoked?.calls?.[cmd], `the page's frame did not try ${cmd}`);
+    for (const [cmd, c] of Object.entries(invoked?.calls ?? {}))
+      check(`frame refused ${cmd}`, !c.ok, `${cmd} from the page's frame: ${JSON.stringify(c)}`);
+    // And the app reached commands from its window only.
+    check("reached", reached.length > 0, "no command was reached at all");
+    check(
+      "reached only from main",
+      reached.every((w) => w === "main"),
+      `commands were reached from ${[...new Set(reached)].join(", ")}`,
+    );
+    // The frame's navigations off its site, each from a page of its own (native_test.rs
+    // frame_offsite): each stopped where the evidence shows, refused by the app's navigation
+    // handler or first by the app document's frame-src; none allowed, nothing reaching the page
+    // scheme's probe address, the frame still there and the channel open, but for
+    // ERROR_PAGE_ON_WINDOWS.
+    type OffsiteTry = {
+      url: string;
+      error?: unknown;
+      stopped?: string | null;
+      refused?: boolean;
+      allowed?: unknown[];
+      replaced?: unknown[];
+      stayed?: boolean;
+      open?: boolean;
+    };
+    const offsite = steps.get("frame_offsite") as { tried?: OffsiteTry[]; probe_hits?: number } | undefined;
+    check(
+      "frame offsite tried",
+      offsite?.tried?.length === 4,
+      `the page's frame did not try to leave its site: ${JSON.stringify(offsite)}`,
+    );
+    check(
+      "frame offsite probe",
+      offsite?.probe_hits === 0,
+      `an off-site try reached the page scheme: ${JSON.stringify(offsite)}`,
+    );
+    for (const t of offsite?.tried ?? []) {
+      const seen = JSON.stringify(t);
+      check(
+        `frame offsite ${t.url} error`,
+        t.error == null,
+        `the page's frame could not try ${t.url}: ${seen}`,
+      );
+      check(
+        `frame offsite ${t.url} stopped`,
+        (t.stopped === "hook" && t.refused === true) || t.stopped === "frame-src",
+        `nothing shows where ${t.url} stopped: ${seen}`,
+      );
+      check(
+        `frame offsite ${t.url} allowed`,
+        t.allowed?.length === 0,
+        `the app allowed the frame to ${t.url}: ${seen}`,
+      );
+      const held = t.stayed === true && t.open === true;
+      const errorPage =
+        platform === ERROR_PAGE_ON_WINDOWS.platform &&
+        t.stopped !== null &&
+        t.stayed === false &&
+        t.open === false &&
+        (t.replaced?.length ?? 0) > 0;
+      check(
+        `frame offsite ${t.url} held`,
+        held || errorPage,
+        `the page's frame or channel did not hold for ${t.url}: ${seen}`,
+      );
+    }
+    console.log(`frame_offsite ${JSON.stringify(offsite)}`);
     for (const [step, want] of [
       ["ingress_site", { attempts: 1, arrivals: 0, blocked: true }],
       ["ingress_recovery", { error: "unavailable", control: true }],

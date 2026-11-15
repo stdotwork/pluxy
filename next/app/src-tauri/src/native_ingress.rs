@@ -13,7 +13,16 @@ static OPERATIONS: AtomicUsize = AtomicUsize::new(0);
 static REAL_SITE: AtomicUsize = AtomicUsize::new(0);
 static ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// Requests for the page scheme's off-site probe address (native_test.rs frame_offsite).
+static OFFSITE: AtomicUsize = AtomicUsize::new(0);
+pub fn offsite_hits() -> usize {
+    OFFSITE.load(SeqCst)
+}
+
 pub fn count(method: &str, path: &str, status: u16, query: Option<&str>) {
+    if path == "/offsite-probe" {
+        OFFSITE.fetch_add(1, SeqCst);
+    }
     if query == Some("pages_site_probe") {
         REAL_SITE.fetch_add(1, SeqCst);
     }
@@ -196,36 +205,17 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
     // Suppress the wrapper's closed notification: native navigation alone must invalidate it.
     w.eval("{ const original=window.fetch; window.fetch=(url, options) => options?.body && JSON.parse(options.body).type === 'closed' ? Promise.resolve(new Response('',{status:204})) : original(url,options); }").map_err(|e| e.to_string())?;
     let nav = command(&w, "navigate", "navigated")?;
-    let closed = require(
+    require(
         nav["navigated"]["status"] == 409,
         "second frame document called before native closure",
-    )
-    .and_then(|_| {
-        wait_for("ingress window closed state", || {
-            eval(main,"document.querySelector('[data-part=extension-frame]')?.dataset.phase === 'closed' && document.body.innerText.includes('Load the page again')").filter(|v|v==true)
-        })
-    });
-    if let Err(e) = closed {
-        #[cfg(target_os = "linux")]
-        return Err(e);
-        // Off Linux the session records what it saw and goes on, as for `http_navigation`
-        // (native_test.rs): the same frame navigation, which Windows does not report.
-        #[cfg(not(target_os = "linux"))]
-        log(
-            "ingress_navigation",
-            json!({
-                "native_closed": false,
-                "error": e,
-                "status": nav["navigated"]["status"],
-                "navigations": crate::pages::navigations(),
-            }),
-        );
-    } else {
-        log(
-            "ingress_navigation",
-            json!({"native_closed":true,"wrapper_closed_suppressed":true,"status":409,"window_closed":true}),
-        );
-    }
+    )?;
+    wait_for("ingress window closed state", || {
+        eval(main,"document.querySelector('[data-part=extension-frame]')?.dataset.phase === 'closed' && document.body.innerText.includes('Load the page again')").filter(|v|v==true)
+    })?;
+    log(
+        "ingress_navigation",
+        json!({"native_closed":true,"wrapper_closed_suppressed":true,"status":409,"window_closed":true}),
+    );
     main.eval("location.hash='#/extensions'")
         .map_err(|e| e.to_string())?;
     wait_for("navigation page closed", || {
