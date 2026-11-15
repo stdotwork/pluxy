@@ -45,7 +45,7 @@ const ENTRY: &str = "pluxy client key";
 
 /// The client keys in the core config at path, its `client_keys` (the app writes that config as
 /// JSON, and core keeps a JSON config JSON when it changes it).
-fn core_keys(path: &Path) -> Result<BTreeSet<String>, String> {
+pub(super) fn core_keys(path: &Path) -> Result<BTreeSet<String>, String> {
     let text = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let cfg: Value = serde_json::from_slice(&text)
         .map_err(|e| format!("{} is not JSON: {e}", path.display()))?;
@@ -60,7 +60,7 @@ fn core_keys(path: &Path) -> Result<BTreeSet<String>, String> {
 }
 
 /// Adds key to the file the runner audits the app's output for.
-fn note(file: &Path, key: &str) -> Result<(), String> {
+pub(super) fn note(file: &Path, key: &str) -> Result<(), String> {
     use std::io::Write;
     std::fs::OpenOptions::new()
         .create(true)
@@ -71,7 +71,12 @@ fn note(file: &Path, key: &str) -> Result<(), String> {
 }
 
 /// Starts cmd with args and requires it refused saying says, before any native confirmation.
-fn refused_unasked(main: &Webview, cmd: &str, args: Value, says: &str) -> Result<(), String> {
+pub(super) fn refused_unasked(
+    main: &Webview,
+    cmd: &str,
+    args: Value,
+    says: &str,
+) -> Result<(), String> {
     let slot = start(main, cmd, args.clone())?;
     let r = settle_unasked(main, &slot)?;
     require(
@@ -125,7 +130,10 @@ fn capture(app: &AppHandle, main: &Webview, base: &str, confirm: bool) -> Result
 }
 
 /// The one key in after that is not in before.
-fn new_key(before: &BTreeSet<String>, after: &BTreeSet<String>) -> Result<String, String> {
+pub(super) fn new_key(
+    before: &BTreeSet<String>,
+    after: &BTreeSet<String>,
+) -> Result<String, String> {
     let added: Vec<&String> = after.difference(before).collect();
     match added.as_slice() {
         [k] => Ok((*k).clone()),
@@ -160,15 +168,15 @@ fn captured(r: &Value, base: &str, key: &str) -> Result<(String, String), String
 }
 
 /// A loopback listener standing in for another core: it keeps every byte sent to it.
-struct Listener {
-    base: String,
+pub(super) struct Listener {
+    pub(super) base: String,
     got: Arc<Mutex<Vec<u8>>>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Listener {
-    fn start() -> Result<Listener, String> {
+    pub(super) fn start() -> Result<Listener, String> {
         let l = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
         let base = format!("http://{}", l.local_addr().map_err(|e| e.to_string())?);
         l.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -202,7 +210,7 @@ impl Listener {
         })
     }
 
-    fn received(&self) -> String {
+    pub(super) fn received(&self) -> String {
         String::from_utf8_lossy(&self.got.lock().unwrap()).into_owned()
     }
 }

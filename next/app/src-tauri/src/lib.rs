@@ -49,6 +49,8 @@ mod release_native;
 #[cfg(target_os = "linux")]
 pub mod route;
 #[cfg(target_os = "linux")]
+pub mod savefile;
+#[cfg(target_os = "linux")]
 pub mod spawn;
 mod startup;
 pub mod trust;
@@ -89,6 +91,7 @@ struct App {
     startup: Mutex<(startup::Store, startup::Preferences)>,
     conn: Mutex<Connection>,
     /// A change of the app's own core waiting for its native confirmation (`core_updates.rs`).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     core_change: Mutex<Option<core_updates::Pending>>,
     #[cfg(target_os = "linux")]
     confirmations: Mutex<confirmation::Confirmations>,
@@ -1624,6 +1627,15 @@ fn choose_archive(app: &AppHandle) -> Result<Option<std::path::PathBuf>, String>
 /// Installs or updates a package from a local archive the person chooses in the native file
 /// chooser; the window names no path.
 #[tauri::command]
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        unreachable_code,
+        unused_variables,
+        unused_assignments,
+        clippy::diverging_sub_expression
+    )
+)]
 async fn device_install_file(webview: Webview) -> Result<device::View, String> {
     trusted(&webview)?;
     let app = webview.app_handle().clone();
@@ -1896,6 +1908,7 @@ fn access_choose(
     rx.recv().map_err(|_| "the file chooser closed".to_string())
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn access_facts(app: &AppHandle, id: &str) -> Result<access::Facts, String> {
     app.state::<App>()
         .device
@@ -2009,7 +2022,8 @@ async fn access_grant(webview: Webview, id: String, resource: String) -> Result<
             let Some(path) = access_choose(&app, title, folder)? else {
                 return Ok(serde_json::json!({"outcome": "cancelled"}));
             };
-            let r = access::resolve(&path, &d.kind)?;
+            let own = app.state::<App>().access.lock().unwrap().own();
+            let r = access::resolve(&path, &d.kind, &own)?;
             let ops: Vec<&str> = d
                 .operations
                 .iter()
@@ -2044,7 +2058,7 @@ async fn access_grant(webview: Webview, id: String, resource: String) -> Result<
             if now.sha256 != f.sha256 || now.signed != f.signed || now.source != f.source {
                 return Err(format!("{id} changed during review; grant it again"));
             }
-            if access::resolve(&path, &d.kind)? != r {
+            if access::resolve(&path, &d.kind, &own)? != r {
                 return Err("the chosen file changed during review; grant it again".into());
             }
             let g = st.access.lock().unwrap().add(&now, &d, &r)?;
@@ -2923,8 +2937,19 @@ pub fn run() {
             if let Some(w) = &catalog.warning {
                 eprintln!("pluxy-app: {w}");
             }
+            // The app's own folders, which no Access grant may be, hold or lie inside: its
+            // settings, its data (vault, packages, tools, cores), and its caches.
             #[cfg(unix)]
-            let access_store = access::Store::open(&config);
+            let access_store = access::Store::open(
+                &config,
+                vec![
+                    config.clone(),
+                    app.path().app_data_dir()?,
+                    app.path().app_data_dir()?.join("vault"),
+                    app.path().app_local_data_dir()?,
+                    app.path().app_cache_dir()?,
+                ],
+            );
             #[cfg(unix)]
             if let Some(w) = &access_store.warning {
                 eprintln!("pluxy-app: {w}");
@@ -3009,10 +3034,10 @@ pub fn run() {
                 #[cfg(target_os = "linux")]
                 runtimes: spawn::Runtimes::open(
                     Some(app.path().app_data_dir()?.join("runtimes.json")),
-                    {
-                        let vault = std::sync::Arc::clone(&vault);
-                        Box::new(move |id| vault.value(id))
-                    },
+                    // Checked as a delivery to the runtime's package at each start and restart,
+                    // and again right before its spawn: a client key revoked or unbound since is
+                    // refused.
+                    Box::new(client_keys::Launches(app.handle().clone())),
                 ),
                 #[cfg(target_os = "linux")]
                 launcher: Mutex::new(launcher::Launcher::open(launcher_file)),
@@ -3048,6 +3073,12 @@ pub fn run() {
                 .state::<App>()
                 .programs
                 .set_spawner(route::spawner(handle.clone()));
+            // And their files frames, to the host's save service.
+            #[cfg(target_os = "linux")]
+            handle
+                .state::<App>()
+                .programs
+                .set_saver(route::saver(handle.clone()));
             // Tools get the app's home and a data folder of their own, beside the vault.
             #[cfg(target_os = "linux")]
             handle

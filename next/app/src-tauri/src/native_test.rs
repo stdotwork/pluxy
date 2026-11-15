@@ -22,7 +22,7 @@
 //!    secret delivery and references and journal recovery (`vault_native.rs`), then native
 //!    client-key capture (`client_key_native.rs`); with
 //!    `PLUXY_APP_TEST_SPAWN`, only the host's spawn service, managed runtimes and launch
-//!    environment (`spawn_native.rs`); with
+//!    environment (`spawn_native.rs`), then a launch's client keys (`spawn_keys_native.rs`); with
 //!    `PLUXY_APP_TEST_SESSIONS`, only the read-only Codex session reader (`sessions_native.rs`);
 //!    with `PLUXY_APP_TEST_TRANSACTIONS`, only the transaction library's fixture writer
 //!    (`transactions_native.rs`); with `PLUXY_APP_TEST_USAGE`, only the usage hub and its
@@ -32,6 +32,7 @@
 //!    `PLUXY_APP_TEST_CLAUDE_CODE`, only the Claude Code setup and launcher
 //!    (`claude_code_native.rs`), with its backup browser (`backups_native.rs`); with
 //!    `PLUXY_APP_TEST_CODEX`, only the Codex setup and launcher (`codex_native.rs`); with
+//!    `PLUXY_APP_TEST_SAVE`, only the host's save-file service (`save_native.rs`);
 //!    `PLUXY_APP_TEST_CLAUDE_DESKTOP`, only the Claude Desktop setup and launcher
 //!    (`claude_desktop_native.rs`); with `PLUXY_APP_TEST_OPENCODE`, only the OpenCode setup and
 //!    launcher (`opencode_native.rs`);
@@ -102,11 +103,17 @@ mod program;
 #[path = "routing_native.rs"]
 mod routing;
 #[cfg(target_os = "linux")]
+#[path = "save_native.rs"]
+mod save;
+#[cfg(target_os = "linux")]
 #[path = "sessions_native.rs"]
 mod sessions;
 #[cfg(target_os = "linux")]
 #[path = "spawn_native.rs"]
 mod spawn;
+#[cfg(target_os = "linux")]
+#[path = "spawn_keys_native.rs"]
+mod spawn_keys;
 #[cfg(target_os = "linux")]
 #[path = "swap_native.rs"]
 mod swap;
@@ -496,7 +503,10 @@ fn run(app: &AppHandle) -> Result<(), String> {
     // session of its own.
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_SPAWN") {
-        spawn::run(app, &main, dir.into())?;
+        spawn::run(app, &main, dir.clone().into())?;
+        // A launch's client keys, checked at the call, the spawn and each restart
+        // (spawn_keys_native.rs), with the same tools.
+        spawn_keys::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
@@ -569,6 +579,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_USAGE") {
         usage::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The host's save-file service (save_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_SAVE") {
+        save::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
