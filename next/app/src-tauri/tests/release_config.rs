@@ -1031,3 +1031,308 @@ fn release_config_removes_its_unpacked_folder() {
     )
     .unwrap();
 }
+
+/// A minimal well-formed PE32+ executable for x86-64: an MZ header pointing at the PE header at
+/// 0x80, the file header (one section, an optional header of 0xF0 bytes, executable image), the
+/// optional header's PE32+ magic, then body.
+fn pe(body: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0u8; 0x80 + 24 + 0xF0];
+    bytes[..2].copy_from_slice(b"MZ");
+    bytes[0x3c] = 0x80; // e_lfanew
+    bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+    bytes[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes()); // Machine: AMD64
+    bytes[0x86] = 1; // NumberOfSections
+    bytes[0x94..0x96].copy_from_slice(&0xF0u16.to_le_bytes()); // SizeOfOptionalHeader
+    bytes[0x96..0x98].copy_from_slice(&0x0022u16.to_le_bytes()); // executable, large address aware
+    bytes[0x98..0x9a].copy_from_slice(&0x20bu16.to_le_bytes()); // PE32+
+    bytes.extend_from_slice(body);
+    bytes
+}
+
+/// A minimal well-formed 64-bit Mach-O executable for arm64: its 32-byte header, one 16-byte load
+/// command, then body.
+fn macho(body: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0u8; 32 + 16];
+    bytes[..4].copy_from_slice(&0xfeed_facfu32.to_le_bytes());
+    bytes[4..8].copy_from_slice(&0x0100_000cu32.to_le_bytes()); // CPU_TYPE_ARM64
+    bytes[12..16].copy_from_slice(&2u32.to_le_bytes()); // MH_EXECUTE
+    bytes[16..20].copy_from_slice(&1u32.to_le_bytes()); // ncmds
+    bytes[20..24].copy_from_slice(&16u32.to_le_bytes()); // sizeofcmds
+    bytes[32..36].copy_from_slice(&0x19u32.to_le_bytes()); // LC_SEGMENT_64
+    bytes[36..40].copy_from_slice(&16u32.to_le_bytes()); // cmdsize
+    bytes.extend_from_slice(body);
+    bytes
+}
+
+/// A universal (fat) Mach-O file holding thin, as macOS's universal builds are.
+fn fat(thin: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0u8; 0x1000];
+    bytes[..4].copy_from_slice(&0xcafe_babeu32.to_be_bytes());
+    bytes[4..8].copy_from_slice(&1u32.to_be_bytes()); // nfat_arch
+    bytes[8..12].copy_from_slice(&0x0100_000cu32.to_be_bytes()); // cputype
+    bytes[16..20].copy_from_slice(&0x1000u32.to_be_bytes()); // offset
+    bytes[20..24].copy_from_slice(&(thin.len() as u32).to_be_bytes()); // size
+    bytes[24..28].copy_from_slice(&12u32.to_be_bytes()); // align
+    bytes.extend_from_slice(thin);
+    bytes
+}
+
+/// A clean macOS app bundle's Info.plist, as Tauri's bundler writes one.
+const PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>pluxy-app</string>
+<key>CFBundleIdentifier</key><string>dev.pluxy.desktop</string>
+<key>CFBundleName</key><string>pluxy</string>
+</dict></plist>
+"#;
+
+/// Writes files (relative path, bytes) under root, replacing what was there.
+fn tree(root: &std::path::Path, files: &[(&str, &[u8])]) {
+    let _ = fs::remove_dir_all(root);
+    for (name, bytes) in files {
+        let path = root.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+}
+
+fn validate_alone(f: &Fixture, artifacts: &[&std::path::Path]) -> Result<(), String> {
+    let mut inputs = f.inputs.clone();
+    inputs.artifacts = artifacts.iter().map(|p| p.to_path_buf()).collect();
+    validate(&inputs)
+}
+
+fn expect_on(
+    wrong: &mut Vec<String>,
+    case: &str,
+    result: Result<(), String>,
+    reason: Option<&str>,
+) {
+    match (result, reason) {
+        (Ok(()), None) => {}
+        (Err(error), Some(reason)) if error.contains(reason) => {}
+        (got, want) => wrong.push(format!("{case}: expected {want:?}, got {got:?}")),
+    }
+}
+
+// The Windows and macOS forms of the app: its executable alone (PE, Mach-O thin or universal), a
+// Windows folder bundle holding pluxy-app.exe, a macOS app bundle holding Contents/MacOS/pluxy-app.
+// Each refusal has a clean artifact of the same form on the same route as its positive control.
+#[test]
+fn release_config_checks_windows_and_macos_forms() {
+    let f = Fixture::new();
+    if cfg!(feature = "artifact-test-trust") || cfg!(feature = "native-test") {
+        return;
+    }
+    let receipt = env!("PLUXY_BUILD_RECEIPT").as_bytes();
+    let mut wrong = Vec::new();
+
+    let exe = f.dir.join("pluxy-app.exe");
+    fs::write(&exe, pe(receipt)).unwrap();
+    expect_on(
+        &mut wrong,
+        "a PE app executable",
+        validate_alone(&f, &[&exe]),
+        None,
+    );
+    let mut marked = receipt.to_vec();
+    marked.extend_from_slice(b"PLUXY_TEST_BUILD_DO_NOT_RELEASE");
+    fs::write(&exe, pe(&marked)).unwrap();
+    expect_on(
+        &mut wrong,
+        "a PE executable with the test marker",
+        validate_alone(&f, &[&exe]),
+        Some("test build marker/identity"),
+    );
+    let mut fabricated = b"MZ".to_vec();
+    fabricated.extend_from_slice(receipt);
+    fs::write(&exe, fabricated).unwrap();
+    expect_on(
+        &mut wrong,
+        "an MZ signature alone with the receipt",
+        validate_alone(&f, &[&exe]),
+        Some("cannot be checked"),
+    );
+
+    let bin = f.dir.join("pluxy-app-macos");
+    for (case, bytes) in [
+        ("a thin Mach-O", macho(receipt)),
+        ("a universal Mach-O", fat(&macho(receipt))),
+    ] {
+        fs::write(&bin, bytes).unwrap();
+        expect_on(&mut wrong, case, validate_alone(&f, &[&bin]), None);
+    }
+    let mut header = macho(receipt);
+    header.truncate(8);
+    header.extend_from_slice(receipt);
+    fs::write(&bin, header).unwrap();
+    expect_on(
+        &mut wrong,
+        "a Mach-O magic alone with the receipt",
+        validate_alone(&f, &[&bin]),
+        Some("cannot be checked"),
+    );
+
+    // A Windows folder bundle: the folder holding the app's exe.
+    let folder = f.dir.join("pluxy");
+    let clean_exe = pe(receipt);
+    tree(&folder, &[("pluxy-app.exe", &clean_exe)]);
+    expect_on(
+        &mut wrong,
+        "a clean folder bundle",
+        validate_alone(&f, &[&folder]),
+        None,
+    );
+    let marked_exe = pe(&marked);
+    tree(&folder, &[("pluxy-app.exe", &marked_exe)]);
+    expect_on(
+        &mut wrong,
+        "a folder bundle holding a test-marked exe",
+        validate_alone(&f, &[&folder]),
+        Some("pluxy-app.exe: test build marker/identity"),
+    );
+    let stale = pe(b"stale");
+    tree(
+        &folder,
+        &[("pluxy-app.exe", &stale), ("other.dll", &clean_exe)],
+    );
+    expect_on(
+        &mut wrong,
+        "a folder bundle whose exe lacks the receipt",
+        validate_alone(&f, &[&folder]),
+        Some("matching build receipt"),
+    );
+    let elf_app = elf(receipt);
+    tree(&folder, &[("pluxy-app.exe", &elf_app)]);
+    expect_on(
+        &mut wrong,
+        "a folder bundle whose exe is not a PE file",
+        validate_alone(&f, &[&folder]),
+        Some("matching build receipt"),
+    );
+    tree(
+        &folder,
+        &[("pluxy-app.exe", &clean_exe), ("pluxy-app-test.exe", b"x")],
+    );
+    expect_on(
+        &mut wrong,
+        "a folder bundle with a test file name",
+        validate_alone(&f, &[&folder]),
+        Some("test file name in package"),
+    );
+    tree(&folder, &[("pluxy-app.exe", &clean_exe)]);
+    expect_on(
+        &mut wrong,
+        "the clean folder bundle again",
+        validate_alone(&f, &[&folder]),
+        None,
+    );
+
+    // A macOS app bundle.
+    let bundle = f.dir.join("pluxy.app");
+    let clean_bin = macho(receipt);
+    let clean = |bundle: &std::path::Path| {
+        tree(
+            bundle,
+            &[
+                ("Contents/Info.plist", PLIST.as_bytes()),
+                ("Contents/MacOS/pluxy-app", &clean_bin),
+                ("Contents/Resources/icon.icns", b"icon"),
+            ],
+        )
+    };
+    clean(&bundle);
+    expect_on(
+        &mut wrong,
+        "a clean app bundle",
+        validate_alone(&f, &[&bundle]),
+        None,
+    );
+    let test_plist = PLIST.replace("dev.pluxy.desktop<", "dev.pluxy.desktop.test<");
+    tree(
+        &bundle,
+        &[
+            ("Contents/Info.plist", test_plist.as_bytes()),
+            ("Contents/MacOS/pluxy-app", &clean_bin),
+        ],
+    );
+    expect_on(
+        &mut wrong,
+        "an app bundle whose Info.plist names the test identifier",
+        validate_alone(&f, &[&bundle]),
+        Some("Info.plist: test build marker/identity"),
+    );
+    let marked_bin = macho(&marked);
+    tree(
+        &bundle,
+        &[
+            ("Contents/Info.plist", PLIST.as_bytes()),
+            ("Contents/MacOS/pluxy-app", &marked_bin),
+        ],
+    );
+    expect_on(
+        &mut wrong,
+        "an app bundle holding a test-marked program",
+        validate_alone(&f, &[&bundle]),
+        Some("test build marker/identity"),
+    );
+    tree(
+        &bundle,
+        &[
+            ("Contents/Info.plist", PLIST.as_bytes()),
+            ("Contents/MacOS/pluxy-app", &stale),
+            ("Contents/Frameworks/other", &clean_bin),
+        ],
+    );
+    expect_on(
+        &mut wrong,
+        "an app bundle whose program lacks the receipt",
+        validate_alone(&f, &[&bundle]),
+        Some("matching build receipt"),
+    );
+    let gz = gzip_bytes();
+    tree(
+        &bundle,
+        &[
+            ("Contents/Info.plist", PLIST.as_bytes()),
+            ("Contents/MacOS/pluxy-app", &clean_bin),
+            ("Contents/Resources/payload.gz", &gz),
+        ],
+    );
+    expect_on(
+        &mut wrong,
+        "an app bundle holding an archive",
+        validate_alone(&f, &[&bundle]),
+        Some("cannot be checked"),
+    );
+    clean(&bundle);
+    expect_on(
+        &mut wrong,
+        "the clean app bundle beside the clean folder bundle",
+        validate_alone(&f, &[&bundle, &folder]),
+        None,
+    );
+    // A folder that is neither form, and an archive of the bundle, cannot be checked.
+    let other = f.dir.join("other");
+    tree(&other, &[("pluxy-app", &clean_bin)]);
+    expect_on(
+        &mut wrong,
+        "a folder without pluxy-app.exe",
+        validate_alone(&f, &[&other]),
+        Some("matching build receipt"),
+    );
+    let tarball = f.dir.join("pluxy.app.tar.gz");
+    fs::write(&tarball, &gz).unwrap();
+    expect_on(
+        &mut wrong,
+        "an app bundle archive",
+        validate_alone(&f, &[&tarball]),
+        Some("cannot be checked"),
+    );
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// The first bytes of a gzip file: enough for the validator to know it for one.
+fn gzip_bytes() -> Vec<u8> {
+    b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03".to_vec()
+}

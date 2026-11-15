@@ -120,16 +120,14 @@ pub fn validate(inputs: &ReleaseInputs) -> Result<(), String> {
     {
         return Err("cargo feature snapshot mismatch".into());
     }
-    // The app executable inside a package: Tauri bundles it as usr/bin/<mainBinaryName>, or
-    // under the Cargo binary's name (Cargo.toml [[bin]]) when the config sets none.
-    let app = Path::new("usr/bin").join(
-        config
-            .get("mainBinaryName")
-            .and_then(Value::as_str)
-            .unwrap_or("pluxy-app"),
-    );
+    // The app executable's name in a package: Tauri's mainBinaryName, or the Cargo binary's name
+    // (Cargo.toml [[bin]]) when the config sets none.
+    let name = config
+        .get("mainBinaryName")
+        .and_then(Value::as_str)
+        .unwrap_or("pluxy-app");
     for artifact in &inputs.artifacts {
-        scan_artifact(artifact, &app)?;
+        scan_artifact(artifact, name)?;
     }
     Ok(())
 }
@@ -248,24 +246,30 @@ const FORBIDDEN: [(&[u8], &str); 4] = [
     ),
 ];
 
-/// Checks one artifact. Each must be the app executable or a type-2 AppImage holding it at app,
-/// and carry this build's receipt itself.
-fn scan_artifact(path: &Path, app: &Path) -> Result<(), String> {
+/// Checks one artifact; name is the app executable's name in a package. Each must be the app
+/// executable (ELF, PE or Mach-O), a type-2 AppImage holding it at usr/bin/<name>, a Windows
+/// folder bundle holding <name>.exe or a macOS app bundle holding Contents/MacOS/<name>, and
+/// carry this build's receipt itself.
+fn scan_artifact(path: &Path, name: &str) -> Result<(), String> {
     let meta =
         fs::symlink_metadata(path).map_err(|e| format!("artifact missing/unreadable: {e}"))?;
-    if !meta.is_file() {
-        return Err("artifact must be a regular file".into());
-    }
     let what = path.display().to_string();
-    let open = || fs::File::open(path).map_err(|e| format!("{what}: {e}"));
-    let receipt = match format(path)? {
-        Format::Executable => scan_stream(open()?, &what)?,
-        Format::AppImage(offset) => {
-            // The files inside first, then every byte of the AppImage itself.
-            let inside = scan_appimage(path, offset, app)?;
-            scan_stream(open()?, &what)?;
-            inside
+    let receipt = if meta.is_dir() {
+        scan_bundle(path, name, &what)?
+    } else if meta.is_file() {
+        let open = || fs::File::open(path).map_err(|e| format!("{what}: {e}"));
+        match format(path)? {
+            Format::Executable => scan_stream(open()?, &what)?,
+            Format::AppImage(offset) => {
+                // The files inside first, then every byte of the AppImage itself.
+                let app = Path::new("usr/bin").join(name);
+                let inside = scan_appimage(path, offset, &app)?;
+                scan_stream(open()?, &what)?;
+                inside
+            }
         }
+    } else {
+        return Err("artifact must be a regular file or a bundle folder".into());
     };
     if !receipt {
         return Err(format!(
@@ -277,26 +281,42 @@ fn scan_artifact(path: &Path, app: &Path) -> Result<(), String> {
 
 /// What an artifact is, from its first bytes; it is never run.
 enum Format {
-    /// An ELF executable or shared object, such as the app's own binary.
+    /// An ELF, PE or Mach-O executable or library, such as the app's own binary.
     Executable,
     /// A type-2 AppImage, whose squashfs image starts at this offset.
     AppImage(u64),
 }
 
-/// Reads an artifact's ELF header. Anything that is not an ELF executable or a type-2 AppImage
-/// cannot be looked inside, so it is refused. For an AppImage: the squashfs image must start
-/// where the runtime's header says it ends, and nothing but zero padding may follow it.
+/// The kinds of executable file the app is built as: Linux, Windows, macOS.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Exec {
+    Elf,
+    Pe,
+    MachO,
+}
+
+/// How many first bytes of a file are read to tell what it is (an executable's headers lie in
+/// them).
+const HEAD: u64 = 512;
+
+/// Reads an artifact's header. Anything that is not an executable (ELF, PE or Mach-O) or a type-2
+/// AppImage cannot be looked inside, so it is refused. For an AppImage: the squashfs image must
+/// start where the runtime's header says it ends, and nothing but zero padding may follow it.
 fn format(path: &Path) -> Result<Format, String> {
     let what = path.display();
     let mut file = fs::File::open(path).map_err(|e| format!("{what}: {e}"))?;
     let mut header = Vec::new();
     file.by_ref()
-        .take(64)
+        .take(HEAD)
         .read_to_end(&mut header)
         .map_err(|e| format!("{what}: {e}"))?;
     let unsupported = || {
-        format!("{what}: not an app executable (ELF) or a type-2 AppImage, so it cannot be checked")
+        format!("{what}: not an app executable (ELF, PE or Mach-O) or a type-2 AppImage, so it cannot be checked")
     };
+    let len = file.metadata().map_err(|e| format!("{what}: {e}"))?.len();
+    if matches!(executable(&header, len), Some(Exec::Pe | Exec::MachO)) {
+        return Ok(Format::Executable);
+    }
     if header.len() < 20 || header[..4] != *b"\x7fELF" || !matches!(header[5], 1 | 2) {
         return Err(unsupported());
     }
@@ -313,7 +333,6 @@ fn format(path: &Path) -> Result<Format, String> {
     };
     // The AppImage specification's magic: "AI" and the type at offset 8.
     if header[8..10] != *b"AI" {
-        let len = file.metadata().map_err(|e| format!("{what}: {e}"))?.len();
         return if well_formed_elf(&header, len) {
             Ok(Format::Executable)
         } else {
@@ -349,7 +368,6 @@ fn format(path: &Path) -> Result<Format, String> {
         return Err(format!("{what}: too many entries to unpack ({inodes})"));
     }
     let used = u64::from_le_bytes(superblock[40..48].try_into().unwrap());
-    let len = file.metadata().map_err(|e| format!("{what}: {e}"))?.len();
     let end = offset
         .checked_add(used)
         .filter(|end| *end <= len)
@@ -402,6 +420,109 @@ fn well_formed_elf(header: &[u8], len: u64) -> bool {
         )
     };
     check() == Some(true)
+}
+
+/// What kind of executable a file is, from its first bytes (header) and its length: an ELF file
+/// as `well_formed_elf` takes one, a PE image, or a Mach-O file (thin or universal). Only the
+/// headers are read, never run; None for anything else, a bare magic number included.
+fn executable(header: &[u8], len: u64) -> Option<Exec> {
+    if well_formed_elf(header, len) {
+        Some(Exec::Elf)
+    } else if well_formed_pe(header, len) {
+        Some(Exec::Pe)
+    } else if well_formed_macho(header, len) {
+        Some(Exec::MachO)
+    } else {
+        None
+    }
+}
+
+/// A PE image (Windows executable or DLL) for x86, x86-64 or arm64: the MZ header's e_lfanew
+/// leads, inside header, to the PE signature and a file header marked an executable image, whose
+/// optional header (PE32 or PE32+) lies inside the file.
+fn well_formed_pe(header: &[u8], len: u64) -> bool {
+    let u16_at = |at: usize| {
+        header
+            .get(at..at + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+    };
+    let check = || -> Option<bool> {
+        if !header.starts_with(b"MZ") {
+            return Some(false);
+        }
+        let pe = u32::from_le_bytes(header.get(0x3c..0x40)?.try_into().ok()?) as usize;
+        let machine = u16_at(pe + 4)?;
+        let sections = u16_at(pe + 6)?;
+        let optional = u16_at(pe + 20)?;
+        let characteristics = u16_at(pe + 22)?;
+        let magic = u16_at(pe + 24)?;
+        Some(
+            header.get(pe..pe + 4)? == b"PE\0\0"
+                && matches!(machine, 0x14c | 0x8664 | 0xaa64)
+                && sections >= 1
+                && characteristics & 0x0002 != 0
+                && matches!(magic, 0x10b | 0x20b)
+                && (pe + 24 + usize::from(optional)) as u64 <= len,
+        )
+    };
+    check() == Some(true)
+}
+
+/// A Mach-O file for x86-64 or arm64: a 64-bit executable, library or bundle whose load
+/// commands lie inside the file, or a universal file of one to eight such parts (each inside the
+/// file; the parts' bytes are scanned with the rest).
+fn well_formed_macho(header: &[u8], len: u64) -> bool {
+    const CPUS: [u32; 2] = [0x0100_0007, 0x0100_000c];
+    let le = |at: usize| -> Option<u32> {
+        Some(u32::from_le_bytes(header.get(at..at + 4)?.try_into().ok()?))
+    };
+    let be = |at: usize| -> Option<u32> {
+        Some(u32::from_be_bytes(header.get(at..at + 4)?.try_into().ok()?))
+    };
+    let check = || -> Option<bool> {
+        if le(0)? == 0xfeed_facf {
+            let (cpu, kind, commands, size) = (le(4)?, le(12)?, le(16)?, le(20)?);
+            return Some(
+                CPUS.contains(&cpu)
+                    && matches!(kind, 2 | 6 | 8)
+                    && commands >= 1
+                    && 32 + u64::from(size) <= len,
+            );
+        }
+        if be(0)? != 0xcafe_babe {
+            return Some(false);
+        }
+        // A universal file; Java class files share its magic, and have a version past 8 there.
+        let parts = be(4)? as usize;
+        if !(1..=8).contains(&parts) {
+            return Some(false);
+        }
+        for i in 0..parts {
+            let at = 8 + 20 * i;
+            let (cpu, offset, size) = (be(at)?, be(at + 8)?, be(at + 12)?);
+            if !CPUS.contains(&cpu) || u64::from(offset) + u64::from(size) > len || size < 32 {
+                return Some(false);
+            }
+        }
+        Some(true)
+    };
+    check() == Some(true)
+}
+
+/// Checks a bundle folder given as an artifact: a macOS app bundle (a folder named `*.app`), whose
+/// app executable is Contents/MacOS/<name>, a Mach-O file; or a Windows folder bundle, whose app
+/// executable is <name>.exe at its top, a PE file. Every file in it is checked as a file inside
+/// an AppImage is. Says whether the app executable carries the build's receipt.
+fn scan_bundle(path: &Path, name: &str, what: &str) -> Result<bool, String> {
+    let (app, kind) = if path.extension().is_some_and(|e| e == "app") {
+        (Path::new("Contents/MacOS").join(name), Exec::MachO)
+    } else {
+        (PathBuf::from(format!("{name}.exe")), Exec::Pe)
+    };
+    let mut budget = Budget::default();
+    let mut receipt = false;
+    scan_tree(path, path, (&app, kind), what, 0, &mut budget, &mut receipt)?;
+    Ok(receipt)
 }
 
 /// Streams reader with overlap, so markers split across reads are still found; no
@@ -553,7 +674,15 @@ fn unpack_and_scan(
     )?;
     let mut budget = Budget::default();
     let mut receipt = false;
-    scan_tree(&root, &root, app, what, 0, &mut budget, &mut receipt)?;
+    scan_tree(
+        &root,
+        &root,
+        (app, Exec::Elf),
+        what,
+        0,
+        &mut budget,
+        &mut receipt,
+    )?;
     Ok(receipt)
 }
 
@@ -666,12 +795,13 @@ struct Budget {
     bytes: u64,
 }
 
-/// Checks a folder unpacked from an AppImage: names, links, contents, nested containers and JSON.
-/// Sets receipt when its app executable (app, under root) is an ELF file with the build's receipt.
+/// Checks a folder unpacked from an AppImage, or a bundle folder: names, links, contents, nested
+/// containers and JSON. Sets receipt when its app executable (app's path, under root) is an
+/// executable of app's kind with the build's receipt.
 fn scan_tree(
     root: &Path,
     dir: &Path,
-    app: &Path,
+    app: (&Path, Exec),
     appimage: &str,
     depth: usize,
     budget: &mut Budget,
@@ -717,7 +847,7 @@ fn scan_tree(
             let mut file = fs::File::open(&path).map_err(|e| format!("{what}: {e}"))?;
             let mut head = Vec::new();
             file.by_ref()
-                .take(512)
+                .take(HEAD)
                 .read_to_end(&mut head)
                 .map_err(|e| format!("{what}: {e}"))?;
             if let Some(kind) = container(&head) {
@@ -730,8 +860,8 @@ fn scan_tree(
             file.seek(SeekFrom::Start(0))
                 .map_err(|e| format!("{what}: {e}"))?;
             let has = scan_stream(file, &what)?;
-            if path.strip_prefix(root).is_ok_and(|p| p == app) {
-                *receipt = has && well_formed_elf(&head, meta.len());
+            if path.strip_prefix(root).is_ok_and(|p| p == app.0) {
+                *receipt = has && executable(&head, meta.len()) == Some(app.1);
             }
             check_json(&path, name.ends_with(".json"), first, meta.len(), &what)?;
         } else {
