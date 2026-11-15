@@ -242,7 +242,8 @@ fn apply_writes_only_the_link_target_and_keeps_the_link() {
         read(&target).unwrap(),
         "{\n  \"theme\": \"light\",\n  \"model\": \"m\"\n}\n"
     );
-    assert_eq!(std::fs::metadata(&target).unwrap().mode() & 0o7777, 0o640);
+    // An apply's file is owner-only: the group's read bit goes.
+    assert_eq!(std::fs::metadata(&target).unwrap().mode() & 0o7777, 0o600);
     assert_eq!(link_of(&link), before);
     assert_eq!(read(&other).unwrap(), "{}\n");
     let names: Vec<_> = std::fs::read_dir(target.parent().unwrap())
@@ -840,11 +841,11 @@ fn temporary_files_are_private_and_reconcile_removes_them() {
         "the temporary file was left"
     );
     assert!(unrelated.exists());
-    // The written file keeps the target's mode.
+    // The written file keeps the target's mode for the owner only.
     let p = pins(&tx, "s", &[Selection::File(a.clone())]);
     tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
         .unwrap();
-    assert_eq!(mode_of(&a), 0o644);
+    assert_eq!(mode_of(&a), 0o600);
 }
 
 /// Finding 6: the person's key order and numbers' digits are kept.
@@ -888,7 +889,7 @@ fn modes_are_masked_and_kept_through_removal() {
     let p = pins(&tx, "s", &[Selection::File(a.clone())]);
     tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
         .unwrap();
-    assert_eq!(mode_of(&a), 0o755);
+    assert_eq!(mode_of(&a), 0o700);
     // x did not exist: apply creates it (0600), the person makes it 0644; a restore that removes
     // it, then fails on b, puts it back 0644.
     let x = t.at("one/x.json");
@@ -922,7 +923,68 @@ fn modes_are_masked_and_kept_through_removal() {
     assert_eq!(mode_of(&a), 0o640);
 }
 
+/// An apply writes a writer's values, a key among them: the file it writes is owner-only, an
+/// existing file's group and other bits taken away; clear and restore keep the mode it has then.
+#[test]
+fn apply_makes_the_file_owner_only_and_clear_keeps_that() {
+    let t = Tmp::new();
+    let (a, _, mem, data) = two(&t);
+    chmod(&a, 0o644);
+    let tx = Transactions::new(&mem, &data);
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    tx.apply("s", &p, &values(json!({"key": "k"})), &Json, &mut none)
+        .unwrap();
+    assert_eq!(mode_of(&a), 0o600);
+    // The person's edit, so clear writes the file again.
+    let now = read(&a).unwrap();
+    std::fs::write(
+        &a,
+        now.replace("\"key\": \"k\"", "\"key\": \"k\", \"mine\": 1"),
+    )
+    .unwrap();
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    let o = tx.clear("s", &p, &Json, &mut none).unwrap();
+    assert_eq!(o["outcome"], "cleared");
+    assert!(!read(&a).unwrap().contains("\"key\""));
+    assert_eq!(mode_of(&a), 0o600);
+    // Restore puts the bytes back and keeps the mode the file has.
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    tx.apply("s", &p, &values(json!({"key": "k"})), &Json, &mut none)
+        .unwrap();
+    chmod(&a, 0o640);
+    let p = pins(&tx, "s", &[Selection::File(a.clone())]);
+    tx.restore("s", &p, &mut none).unwrap();
+    assert_eq!(mode_of(&a), 0o640);
+}
+
 /// Finding 9: a backup answer without its bytes fails the operation; nothing is written.
+#[test]
+fn a_rolled_back_apply_leaves_the_mode_as_it_was() {
+    // An apply makes the file owner-only; one rolled back, in the call or by recovery after a
+    // crash, puts back the mode the file had as well as its bytes.
+    let t = Tmp::new();
+    let (a, _, mem, data) = two(&t);
+    chmod(&a, 0o644);
+    let tx = Transactions::new(&mem, &data);
+    let sel = [
+        Selection::File(a.clone()),
+        Selection::File(t.at("two/b.json")),
+    ];
+    let p = pins(&tx, "s", &sel);
+    chmod(&t.at("two"), 0o555);
+    let e = tx
+        .apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap_err();
+    chmod(&t.at("two"), 0o755);
+    assert!(e.message.contains("rolled back"), "{e}");
+    assert_eq!((read(&a).unwrap(), mode_of(&a)), ("{}\n".into(), 0o644));
+    let j = crash(&tx, &mem, "s", &sel, 0, json!({"x": 2}));
+    assert_eq!(mode_of(&a), 0o600);
+    let r = tx.reconcile(std::slice::from_ref(&j)).unwrap();
+    assert_eq!(r[0]["restored"], json!([a]));
+    assert_eq!((read(&a).unwrap(), mode_of(&a)), ("{}\n".into(), 0o644));
+}
+
 #[test]
 fn a_backup_without_its_bytes_is_an_error() {
     let t = Tmp::new();
@@ -971,6 +1033,361 @@ fn pins_are_strict() {
             assert!(op["description"].as_str().unwrap().contains("may be lost"));
         }
     }
+}
+
+// ---- manual backups (backups.rs)
+
+fn tx_in(t: &Tmp, mem: &Mem) -> PathBuf {
+    let data = t.at("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let _ = mem;
+    data
+}
+
+fn manual(mem: &Mem) -> Vec<String> {
+    mem.backups
+        .borrow()
+        .iter()
+        .filter(|(_, (l, _))| l.starts_with("bk "))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+#[test]
+fn a_manual_backup_lists_diffs_by_name_restores_and_deletes() {
+    let t = Tmp::new();
+    let f = t.put(
+        "x/settings.json",
+        "{\"theme\": \"light\", \"token\": \"sekrit-value\"}\n",
+    );
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, tx_in(&t, &mem));
+    let sel = [Selection::File(f.clone())];
+    let o = tx.backup_create("s", &pins(&tx, "s", &sel)).unwrap();
+    let id = o["backup"].as_str().unwrap().to_string();
+    assert_eq!(o["deleted"], json!([]));
+    let l = tx.backup_list("s").unwrap();
+    assert_eq!(l["keep"], KEEP_BACKUPS);
+    assert_eq!(l["backups"][0]["id"], json!(id));
+    assert_eq!(
+        l["backups"][0]["files"],
+        json!([{"selected": f, "path": null, "target": f, "exists": true, "size": 44}])
+    );
+    assert_eq!(tx.backup_list("other").unwrap()["backups"], json!([]));
+    assert_eq!(
+        tx.backup_diff("s", &id, &json_leaves).unwrap()["same"],
+        true
+    );
+    // The person's edits: a changed value and a new setting.
+    std::fs::write(
+        &f,
+        "{\"theme\": \"dark\", \"token\": \"sekrit-value\", \"editor\": \"vim\"}\n",
+    )
+    .unwrap();
+    let d = tx.backup_diff("s", &id, &json_leaves).unwrap();
+    assert_eq!(
+        d,
+        json!({"backup": id, "same": false, "files": [{"target": f, "exists": true,
+            "now_exists": true, "same": false, "readable": true, "more": 0, "changes": [
+                {"path": ["theme"], "restore": "changes"},
+                {"path": ["editor"], "restore": "removes"}]}]})
+    );
+    // No value in any answer, and none in the state file.
+    let state = read(&t.at("data/transactions.json")).unwrap();
+    for text in [l.to_string(), d.to_string(), state] {
+        for v in ["light", "dark", "vim", "sekrit-value"] {
+            assert!(!text.contains(v), "{v} in {text}");
+        }
+    }
+    let o = tx
+        .backup_restore("s", &pins(&tx, "s", &sel), &id, &mut none)
+        .unwrap();
+    assert_eq!(o, json!({"outcome": "restored", "changed": [f]}));
+    assert_eq!(
+        read(&f).unwrap(),
+        "{\"theme\": \"light\", \"token\": \"sekrit-value\"}\n"
+    );
+    // Its journal committed, its own backups swept, the manual one kept.
+    assert!(mem.open().is_empty());
+    assert_eq!(manual(&mem), vec![id.clone()]);
+    assert_eq!(mem.backups.borrow().len(), 1);
+    assert_eq!(tx.backup_delete("s", &id).unwrap(), json!({"deleted": id}));
+    assert_eq!(tx.backup_list("s").unwrap()["backups"], json!([]));
+    assert!(mem.backups.borrow().is_empty());
+}
+
+#[test]
+fn a_backup_of_an_absent_file_removes_it_on_restore() {
+    let t = Tmp::new();
+    let f = t.at("x/settings.json");
+    std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, tx_in(&t, &mem));
+    let sel = [Selection::File(f.clone())];
+    let id = tx.backup_create("s", &pins(&tx, "s", &sel)).unwrap()["backup"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let l = tx.backup_list("s").unwrap();
+    assert_eq!(l["backups"][0]["files"][0]["exists"], false);
+    assert_eq!(l["backups"][0]["files"][0]["size"], 0);
+    std::fs::write(&f, "{\"a\": {\"b\": 1}}").unwrap();
+    let d = tx.backup_diff("s", &id, &json_leaves).unwrap();
+    assert_eq!(d["files"][0]["exists"], false);
+    assert_eq!(d["files"][0]["now_exists"], true);
+    assert_eq!(
+        d["files"][0]["changes"],
+        json!([{"path": ["a", "b"], "restore": "removes"}])
+    );
+    tx.backup_restore("s", &pins(&tx, "s", &sel), &id, &mut none)
+        .unwrap();
+    assert!(!f.exists());
+    // An unreadable file is told so, with no settings.
+    std::fs::write(&f, "not json").unwrap();
+    let d = tx.backup_diff("s", &id, &json_leaves).unwrap();
+    assert_eq!(d["files"][0]["readable"], false);
+    assert_eq!(d["files"][0]["changes"], json!([]));
+}
+
+#[test]
+fn retention_keeps_the_newest_ten_and_never_the_librarys_own() {
+    let t = Tmp::new();
+    let f = t.put("x/settings.json", "{}\n");
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, tx_in(&t, &mem));
+    let sel = [Selection::File(f.clone())];
+    tx.apply(
+        "s",
+        &pins(&tx, "s", &sel),
+        &values(json!({"model": "m"})),
+        &Json,
+        &mut none,
+    )
+    .unwrap();
+    let own: Vec<String> = mem.backups.borrow().keys().cloned().collect();
+    assert_eq!(own.len(), 2, "the record's original and applied images");
+    let mut made = Vec::new();
+    for _ in 0..KEEP_BACKUPS {
+        let o = tx.backup_create("s", &pins(&tx, "s", &sel)).unwrap();
+        assert_eq!(o["deleted"], json!([]));
+        made.push(o["backup"].as_str().unwrap().to_string());
+    }
+    // Another set's backups count apart.
+    let other = tx.backup_create("t", &pins(&tx, "t", &sel)).unwrap()["backup"].clone();
+    let o = tx.backup_create("s", &pins(&tx, "s", &sel)).unwrap();
+    assert_eq!(o["deleted"], json!([made[0]]));
+    let ids: Vec<Value> = tx.backup_list("s").unwrap()["backups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["id"].clone())
+        .collect();
+    assert_eq!(ids.len(), KEEP_BACKUPS);
+    assert_eq!(ids[0], o["backup"]);
+    assert!(!ids.contains(&json!(made[0])));
+    let all = mem.backups.borrow().keys().cloned().collect::<Vec<_>>();
+    assert!(!all.contains(&made[0]));
+    assert!(own.iter().all(|b| all.contains(b)));
+    assert!(all.contains(&other.as_str().unwrap().to_string()));
+    // A write's sweep keeps every manual backup.
+    tx.clear("s", &pins(&tx, "s", &sel), &Json, &mut none)
+        .unwrap();
+    assert_eq!(manual(&mem).len(), KEEP_BACKUPS + 1);
+    // A manual backup the state file does not name (its delete failed) is swept.
+    mem.backups
+        .borrow_mut()
+        .insert("b-orphan".into(), ("bk s".into(), String::new()));
+    tx.apply(
+        "s",
+        &pins(&tx, "s", &sel),
+        &values(json!({"model": "n"})),
+        &Json,
+        &mut none,
+    )
+    .unwrap();
+    assert!(!mem.backups.borrow().contains_key("b-orphan"));
+}
+
+#[test]
+fn foreign_ids_other_sets_and_other_files_are_refused() {
+    let t = Tmp::new();
+    let f = t.put("x/settings.json", "{}\n");
+    let g = t.put("y/settings.json", "{}\n");
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, tx_in(&t, &mem));
+    let sel = [Selection::File(f.clone())];
+    tx.apply(
+        "s",
+        &pins(&tx, "s", &sel),
+        &values(json!({"model": "m"})),
+        &Json,
+        &mut none,
+    )
+    .unwrap();
+    let theirs = mem.backups.borrow().keys().next().unwrap().clone();
+    let id = tx.backup_create("s", &pins(&tx, "s", &sel)).unwrap()["backup"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let p = pins(&tx, "s", &sel);
+    for (set, b) in [("s", theirs.as_str()), ("t", id.as_str())] {
+        let e = tx.backup_diff(set, b, &json_leaves).unwrap_err();
+        assert!(
+            e.code == "not_found" && e.message.contains("no manual backup"),
+            "{e:?}"
+        );
+        assert!(tx.backup_restore(set, &p, b, &mut none).is_err());
+        assert!(tx.backup_delete(set, b).is_err());
+    }
+    assert!(mem.backups.borrow().contains_key(&theirs));
+    let e = tx
+        .backup_restore(
+            "s",
+            &pins(&tx, "s", &[Selection::File(g.clone())]),
+            &id,
+            &mut none,
+        )
+        .unwrap_err();
+    assert!(e.message.contains("backup of"), "{e:?}");
+    assert_eq!(read(&g).unwrap(), "{}\n");
+}
+
+#[test]
+fn restoring_a_manual_backup_keeps_the_originals_kept_for_restore() {
+    let t = Tmp::new();
+    let f = t.put("x/settings.json", "{\"a\": 1}\n");
+    let mem = Mem::default();
+    let data = tx_in(&t, &mem);
+    let tx = Transactions::new(&mem, &data);
+    let sel = [Selection::File(f.clone())];
+    let id = tx.backup_create("s", &pins(&tx, "s", &sel)).unwrap()["backup"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // An original kept after a conflict, for this file.
+    let kept = tx.put("original", b"{\"kept\": true}\n").unwrap();
+    let mut state: Value = serde_json::from_str(&read(&data.join(STATE)).unwrap()).unwrap();
+    state["kept"] = json!([{"set": "s", "selected": f, "path": null, "target": f,
+        "original": kept, "original_mode": 420, "written": null, "why": "conflict"}]);
+    tx.save(&state).unwrap();
+    std::fs::write(&f, "{\"a\": 2}\n").unwrap();
+    tx.backup_restore("s", &pins(&tx, "s", &sel), &id, &mut none)
+        .unwrap();
+    assert_eq!(read(&f).unwrap(), "{\"a\": 1}\n");
+    assert_eq!(tx.status().unwrap()["kept"].as_array().unwrap().len(), 1);
+    // Restore still reaches it.
+    tx.restore("s", &pins(&tx, "s", &sel), &mut none).unwrap();
+    assert_eq!(read(&f).unwrap(), "{\"kept\": true}\n");
+}
+
+#[test]
+fn json_settings_are_leaves_by_path() {
+    assert_eq!(json_leaves(b"  \n").unwrap(), vec![]);
+    assert!(json_leaves(b"{,}").is_none());
+    let l = json_leaves(br#"{"a": {"b": [1, 2], "c": {}}, "d": null}"#).unwrap();
+    let paths: Vec<Vec<String>> = l.into_iter().map(|(p, _)| p).collect();
+    assert_eq!(
+        paths,
+        vec![
+            vec!["a".to_string(), "b".into()],
+            vec!["a".into(), "c".into()],
+            vec!["d".into()]
+        ]
+    );
+}
+
+/// Review #298 row 4: an empty root object has no settings, so no change with an empty path.
+#[test]
+fn an_empty_root_object_has_no_settings() {
+    assert_eq!(json_leaves(b"{}").unwrap(), vec![]);
+    let t = Tmp::new();
+    let f = t.put("x/settings.json", "{}\n");
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, tx_in(&t, &mem));
+    let sel = [Selection::File(f.clone())];
+    let id = tx.backup_create("s", &pins(&tx, "s", &sel)).unwrap()["backup"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    std::fs::write(&f, "{\"a\": 1}\n").unwrap();
+    let d = tx.backup_diff("s", &id, &json_leaves).unwrap();
+    assert_eq!(
+        d["files"][0]["changes"],
+        json!([{"path": ["a"], "restore": "removes"}])
+    );
+}
+
+/// Review #298 row 6: a version whose record names no vault backup for a file that existed is an
+/// internal error, never an empty file written.
+#[test]
+fn a_backup_record_naming_no_vault_backup_restores_nothing() {
+    let t = Tmp::new();
+    let f = t.put("x/settings.json", "{\"a\": 1}\n");
+    let mem = Mem::default();
+    let data = tx_in(&t, &mem);
+    let tx = Transactions::new(&mem, &data);
+    let sel = [Selection::File(f.clone())];
+    let id = tx.backup_create("s", &pins(&tx, "s", &sel)).unwrap()["backup"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut state: Value = serde_json::from_str(&read(&data.join(STATE)).unwrap()).unwrap();
+    state["backups"][0]["files"][0]["backup"] = Value::Null;
+    tx.save(&state).unwrap();
+    std::fs::write(&f, "{\"a\": 2}\n").unwrap();
+    let e = tx
+        .backup_restore("s", &pins(&tx, "s", &sel), &id, &mut none)
+        .unwrap_err();
+    assert_eq!(e.code, "internal", "{e:?}");
+    assert_eq!(read(&f).unwrap(), "{\"a\": 2}\n");
+    assert!(mem.open().is_empty());
+}
+
+/// Review #298 row 6: when the state file cannot be saved, the vault backups just put are deleted.
+#[test]
+fn a_backup_whose_record_cannot_be_saved_leaves_nothing_in_the_vault() {
+    let t = Tmp::new();
+    let f = t.put("x/settings.json", "{\"a\": 1}\n");
+    let mem = Mem::default();
+    let data = tx_in(&t, &mem);
+    let tx = Transactions::new(&mem, &data);
+    let p = pins(&tx, "s", &[Selection::File(f.clone())]);
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let r = tx.backup_create("s", &p);
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(r.is_err(), "{r:?}");
+    assert!(mem.backups.borrow().is_empty());
+}
+
+/// A restore of a manual backup keeps the file's permission bits, as clear and restore do; a file
+/// made again gets the bits it had when it was backed up.
+#[test]
+fn restoring_a_manual_backup_keeps_the_files_mode_and_remakes_a_file_with_its_own() {
+    let t = Tmp::new();
+    let f = t.put("x/settings.json", "{\"a\": 1}\n");
+    chmod(&f, 0o640);
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, tx_in(&t, &mem));
+    let sel = [Selection::File(f.clone())];
+    let id = tx.backup_create("s", &pins(&tx, "s", &sel)).unwrap()["backup"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    std::fs::write(&f, "{\"a\": 2}\n").unwrap();
+    chmod(&f, 0o604);
+    tx.backup_restore("s", &pins(&tx, "s", &sel), &id, &mut none)
+        .unwrap();
+    assert_eq!(
+        (read(&f).unwrap(), mode_of(&f)),
+        ("{\"a\": 1}\n".into(), 0o604)
+    );
+    std::fs::remove_file(&f).unwrap();
+    tx.backup_restore("s", &pins(&tx, "s", &sel), &id, &mut none)
+        .unwrap();
+    assert_eq!(
+        (read(&f).unwrap(), mode_of(&f)),
+        ("{\"a\": 1}\n".into(), 0o640)
+    );
 }
 
 /// Reaudit 6, #278 finding 1: backups put for an operation that then fails are not left to count
@@ -1064,4 +1481,43 @@ fn a_reconcile_delivered_again_keeps_each_original_once() {
     mem.fail_end.set(false);
     tx.reconcile(std::slice::from_ref(&j)).unwrap();
     assert_eq!(tx.status().unwrap()["kept"].as_array().unwrap().len(), 1);
+}
+
+/// The sweeps of a failed operation (#309) delete only what the operation put: a manual backup
+/// the state file names stays, and a Manual Backup that cannot put all its files leaves none.
+#[test]
+fn a_failed_operations_sweep_keeps_the_manual_backups() {
+    let t = Tmp::new();
+    let (a, b, mem, data) = two(&t);
+    let tx = Transactions::new(&mem, &data);
+    let sel = [Selection::File(a.clone()), Selection::File(b.clone())];
+    let p = pins(&tx, "s", &sel);
+    let id = tx.backup_create("s", &p).unwrap()["backup"].clone();
+    let manual_ids = manual(&mem);
+    assert_eq!(manual_ids.len(), 2);
+    mem.puts_left.set(Some(3));
+    tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap_err();
+    mem.puts_left.set(None);
+    assert_eq!(manual(&mem), manual_ids);
+    assert_eq!(mem.backups.borrow().len(), 2);
+    mem.journals
+        .borrow_mut()
+        .insert("j-open".into(), (json!({}), None));
+    tx.apply("s", &p, &values(json!({"x": 1})), &Json, &mut none)
+        .unwrap_err();
+    assert_eq!(manual(&mem), manual_ids);
+    assert_eq!(tx.backup_list("s").unwrap()["backups"][0]["id"], id);
+    // A Manual Backup whose second file cannot be put leaves no backup of the first.
+    mem.puts_left.set(Some(1));
+    tx.backup_create("s", &p).unwrap_err();
+    mem.puts_left.set(None);
+    assert_eq!(manual(&mem), manual_ids);
+    assert_eq!(
+        tx.backup_list("s").unwrap()["backups"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
