@@ -25,6 +25,7 @@ The program side of the contract, for any tool (`pluxy-program`):
 | `Handler::reconcile(&Call, unknown, journals)` | Before `describe` is answered: the calls of unknown outcome and the open journals the host names. By default nothing. |
 | `Call` | `id`, `op`, `input`, `chain`, `secrets`, `job`; `cancelled()` and `check()`; `progress(value)`; `call(package, op, input)` (an import, through the host; cancelled with its call); `vault(op, fields)` (backups and journals); `jobs(op, input)` (a consumer's `registrations`, `start` or `cancel`); `batch(value)` (a producer's next batch, once the job's window has room) and `acked()`. |
 | `Job` | The job a producer's call runs: `id`, `kind`, `window`. |
+| `Call::save_file(name, bytes)`, `SaveOutcome` | For a call of a `disclose` operation: hands the host `bytes` as `append` frames of at most `APPEND_BYTES` (783,000 bytes, base64 under the frame limit) and one `save` suggesting `name` (the host's save service, [`../app/app-host/README.md`](../app/app-host/README.md) "Saving files"). The person chooses the place in the host's dialog; the answer is `Saved { size }` or `Cancelled`, or the host's error (not a `disclose` call, a name holding a path, more than 64 MiB, a second save, no dialog). One save per call. |
 | `Error` | The contract's error object: `invalid_request`, `unsupported`, `not_found`, `unavailable`, `internal`, `cancelled`, or any code. |
 | `read_frame`, `write_frame` | The framing: a four-byte big-endian length and UTF-8 JSON; a program's frames are at most `MAX_FRAME` (1 MiB). |
 | `MAX_BATCH` | The largest batch a producer may send, 48 KiB of JSON. |
@@ -231,13 +232,25 @@ parser.
 
 `pluxy/codex-sessions` reads Codex's local sessions, read-only, and shows them on its page
 (*Codex sessions*). It never writes a Codex file, never reads `config.toml` or `auth.json`, and
-has no repair, delete, export or editor.
+has no repair, delete or editor. Its one write outside its data folder is a file the person saves
+from `export`, in the host's save dialog.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
 | `list` | `read` | `offset` (default 0), `limit` (1 to 100, default 50) | The Codex home, the databases read, a page of sessions (ID, title, folder, provider, archived, update time, database), the total, whether there are more, the page's active and archived counts, and warnings |
 | `detail` | `disclose`: each call asks the person | `id`, `offset`, `limit` (messages) | The session's title, folder, provider, model, archived, update time, rollout file and database; its statistics; a page of its messages, each cut at 8 KiB (`truncated`), at most 512 KiB in all, and `next_offset` |
+| `export` | `disclose`: each call asks the person | `id` | Whether the person `saved` the session's rollout (and its `size`) or `cancelled` the save dialog; never the rollout's bytes |
 | `settings` | `write` | `codex_home`: a full path, or empty for the default | The Codex home now read, and whether it is custom |
+
+`export` finds a session's rollout as `detail` does (same ID checks; a link to a file outside the
+Codex home is refused) and saves its bytes exactly as they are on disk, with
+[`Call::save_file`](lib/program/src/lib.rs): the host asks where in its native save dialog,
+titled *Save a file from pluxy/codex-sessions*, which suggests `session-<id>-<YYYY-MM-DD>.jsonl`
+(the ID without `local:`, the date in UTC), as the old app's *Export JSONL* did. The page shows
+the outcome as text and never holds the bytes. Like the old app it saves only a rollout of at
+most 10 MiB that is UTF-8 text (the host takes up to 64 MiB): the whole file is read to be sent,
+so this also bounds the reader's memory. No error names the rollout's path or holds a byte of
+it.
 
 The Codex home is `~/.codex` (from the `HOME` the app gives), or the folder set with `settings`,
 kept in the tool's data folder (`PLUXY_TOOL_DATA_DIR`). `list` and `detail` take no paths, so a

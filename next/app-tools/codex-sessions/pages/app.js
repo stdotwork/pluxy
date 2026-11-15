@@ -6,7 +6,7 @@ const PAGE_SIZE = 50;
 const t = {
   title: "Codex Session Management",
   description:
-    "Codex's local sessions on this computer, read-only. Showing a session's messages asks you each time.",
+    "Codex's local sessions on this computer, read-only. Showing a session's messages, or exporting one, asks you each time.",
   refresh: "Refresh",
   total: "Total sessions",
   active: "Active",
@@ -59,6 +59,11 @@ const t = {
   loadMore: "Show more messages",
   detailFailed: "Failed to load session context: {error}",
   emptyMessages: "No conversational messages found in this session.",
+  exportJsonl: "Export JSONL",
+  exporting: "Choose where to save the file…",
+  exportSaved: "Saved the session's JSONL ({size}).",
+  exportCancelled: "Nothing was saved: the save dialog was cancelled.",
+  exportFailed: "Failed to export the session: {error}",
 };
 
 const fill = (s, vars) => s.replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ""));
@@ -299,11 +304,37 @@ async function showDetail(id, title) {
           ),
     );
   };
+  // The rollout's bytes go from the reader to the host's save dialog, never to this page: the
+  // call answers only whether the person saved the file.
+  const status = el("p", { class: "muted", role: "status" });
+  const exportButton = el(
+    "button",
+    {
+      type: "button",
+      onclick: async () => {
+        exportButton.disabled = true;
+        status.setAttribute("class", "muted");
+        status.textContent = t.exporting;
+        try {
+          const r = await call("export", { id: d.id });
+          status.textContent =
+            r.outcome === "saved" ? fill(t.exportSaved, { size: size(r.size) }) : t.exportCancelled;
+        } catch (e) {
+          status.setAttribute("class", "error");
+          status.textContent = fill(t.exportFailed, { error: errorText(e) });
+        } finally {
+          exportButton.disabled = false;
+        }
+      },
+    },
+    t.exportJsonl,
+  );
   filter.addEventListener("change", render);
   render();
   loadMore(d.next_offset);
   show(
-    el("div", { class: "row" }, back),
+    el("div", { class: "row" }, back, exportButton),
+    status,
     el("h1", {}, d.title || t.untitled),
     el(
       "div",
