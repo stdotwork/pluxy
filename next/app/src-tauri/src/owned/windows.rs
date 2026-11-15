@@ -541,6 +541,10 @@ impl Command {
         let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
         let created = {
             let _held = SPAWN.lock().unwrap_or_else(|e| e.into_inner());
+            // The child's ends, made inheritable below, belong to this block from here: declared
+            // after the lock's guard, they close before it is let go on every way out of it, an
+            // error's too, so no other spawn can pass them on.
+            let child = child;
             for h in &handles {
                 if unsafe { SetHandleInformation(*h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) }
                     == 0
@@ -601,7 +605,7 @@ impl Command {
             if !list.is_null() {
                 unsafe { DeleteProcThreadAttributeList(list) };
             }
-            // The child's ends close here, still under the lock: no other spawn can pass them on.
+            // The child's ends close here, still under the lock.
             drop(child);
             if ok == 0 {
                 Err(err)
