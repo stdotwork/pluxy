@@ -125,14 +125,6 @@ fn private_folders_and_files_are_private() {
         create_new_private(&file).unwrap_err().kind(),
         io::ErrorKind::AlreadyExists
     );
-    // A file made in a private folder by plain std is private too on Windows (inherited); on
-    // Linux and macOS its mode decides.
-    #[cfg(windows)]
-    {
-        let plain = folder.join("plain");
-        fs::write(&plain, b"x").unwrap();
-        assert!(is_private(&plain).unwrap());
-    }
     let all = dir.join("a").join("b");
     create_private_dir_all(&all).unwrap();
     assert!(all.is_dir());
@@ -157,12 +149,7 @@ fn an_open_folder_or_file_is_made_private() {
     // On Windows: an entry that lets everyone read, added by the system's own tool.
     #[cfg(windows)]
     for p in [&folder, &file] {
-        let out = std::process::Command::new("icacls")
-            .arg(p)
-            .args(["/grant", "*S-1-1-0:(R)"])
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "{out:?}");
+        assert!(icacls(p, &["/grant", "*S-1-1-0:(R)"]));
     }
     assert!(!is_private(&folder).unwrap());
     assert!(!is_private(&file).unwrap());
@@ -170,11 +157,15 @@ fn an_open_folder_or_file_is_made_private() {
     make_private(&file).unwrap();
     assert!(is_private(&folder).unwrap());
     assert!(is_private(&file).unwrap());
-    // What is made in the folder afterwards inherits it on Windows.
+    // What plain std makes in the folder afterwards inherits its entries on Windows, but not its
+    // protection, so it is not private until it is made so.
     #[cfg(windows)]
     {
-        fs::write(folder.join("later"), b"x").unwrap();
-        assert!(is_private(&folder.join("later")).unwrap());
+        let later = folder.join("later");
+        fs::write(&later, b"x").unwrap();
+        assert!(!is_private(&later).unwrap());
+        make_private(&later).unwrap();
+        assert!(is_private(&later).unwrap());
     }
     #[cfg(unix)]
     {
@@ -199,6 +190,86 @@ fn make_private_refuses_a_link() {
     let link = dir.join("link");
     if file_link(&target, &link).is_some() {
         assert!(make_private(&link).is_err());
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Windows: runs the system's icacls on path with args; whether it succeeded.
+#[cfg(windows)]
+fn icacls(path: &Path, args: &[&str]) -> bool {
+    let out = std::process::Command::new("icacls")
+        .arg(path)
+        .args(args)
+        .output()
+        .unwrap();
+    if !out.status.success() {
+        eprintln!("icacls {args:?}: {out:?}");
+    }
+    out.status.success()
+}
+
+#[cfg(unix)]
+#[test]
+fn make_private_refuses_a_fifo_and_leaves_it_as_it_was() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp("private-fifo");
+    let fifo = dir.join("fifo");
+    let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0);
+    fs::set_permissions(&fifo, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(make_private(&fifo).is_err());
+    let mode = fs::symlink_metadata(&fifo).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o644);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Windows: a private folder or file gets its access list as it is made, so a parent whose
+/// inherited entries stop an owner from changing an access list afterwards does not stop it.
+#[cfg(windows)]
+#[test]
+fn a_private_folder_or_file_is_private_from_the_moment_it_is_made() {
+    let dir = temp("owner-rights");
+    // OWNER RIGHTS (S-1-3-4) may not change the access list of what is made in dir.
+    assert!(icacls(&dir, &["/deny", "*S-1-3-4:(OI)(CI)(IO)(WDAC)"]));
+    let folder = dir.join("folder");
+    create_private_dir(&folder).unwrap();
+    assert!(is_private(&folder).unwrap());
+    let file = dir.join("file");
+    create_new_private(&file)
+        .unwrap()
+        .write_all(b"secret")
+        .unwrap();
+    assert!(is_private(&file).unwrap());
+    assert_eq!(fs::read(&file).unwrap(), b"secret");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Windows: an access list that is not protected (a later change to the folder's would reach it),
+/// or an owner other than this user or SYSTEM (who could change the list), is not private.
+#[cfg(windows)]
+#[test]
+fn an_inherited_list_or_another_owner_is_not_private() {
+    let dir = temp("protected");
+    let folder = dir.join("folder");
+    create_private_dir(&folder).unwrap();
+    let plain = folder.join("plain");
+    fs::write(&plain, b"x").unwrap();
+    assert!(!is_private(&plain).unwrap(), "an inherited list");
+    make_private(&plain).unwrap();
+    assert!(is_private(&plain).unwrap());
+    let file = folder.join("file");
+    drop(create_new_private(&file).unwrap());
+    assert!(is_private(&file).unwrap());
+    // Handed to the Administrators group, where this account may do so.
+    if icacls(&file, &["/setowner", "*S-1-5-32-544"]) {
+        assert!(
+            !is_private(&file).unwrap(),
+            "owned by the Administrators group"
+        );
+        make_private(&file).unwrap();
+        assert!(is_private(&file).unwrap());
+    } else {
+        eprintln!("skipped: this account cannot hand a file to the Administrators group");
     }
     fs::remove_dir_all(dir).unwrap();
 }

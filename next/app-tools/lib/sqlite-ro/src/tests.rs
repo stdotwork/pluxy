@@ -401,6 +401,9 @@ fn only_copies_left_by_processes_no_longer_running_are_pruned() {
     let own = format!("wal-{}-9", std::process::id());
     let stale = format!("wal-{dead}-0");
     stale_copy(&d, &stale);
+    // One with this process's own pid, as a process that had it before left it: on Linux that
+    // pid is running, so it stays; elsewhere its lock decides, and no process holds it.
+    stale_copy(&d, &own);
     // A running process's, and names that are not a copy's.
     let (running, _held) = running_copy(&d);
     let left = [
@@ -421,15 +424,62 @@ fn only_copies_left_by_processes_no_longer_running_are_pruned() {
         .cloned()
         .collect();
     kept.sort();
-    let mut want = vec![
-        own,
-        running,
-        "wal-x-0".into(),
-        "wal-".into(),
-        "other".into(),
-    ];
+    let mut want = vec![running, "wal-x-0".into(), "wal-".into(), "other".into()];
+    if cfg!(target_os = "linux") {
+        want.push(own);
+    }
     want.sort();
     assert_eq!(kept, want);
+}
+
+#[test]
+fn a_copy_is_made_past_folders_left_with_this_processs_pid() {
+    let d = Dir::new("pid-reuse");
+    let tool = Dir::new("pid-reuse-tool");
+    let db = d.join("live.db");
+    wal_with_rows_in_the_wal(&db);
+    let root = own_root(&tool);
+    fs::create_dir_all(&root.dir).unwrap();
+    for n in 0..256 {
+        stale_copy(&root.dir, &format!("wal-{}-{n}", std::process::id()));
+    }
+    let o = open(&db, &root).unwrap();
+    assert_eq!(ids(&o), ["a", "b"]);
+    drop(o);
+    // Elsewhere than Linux no process holds their locks, so they are pruned.
+    if !cfg!(target_os = "linux") {
+        assert!(names(&root.dir).is_empty(), "{:?}", names(&root.dir));
+    }
+}
+
+/// Windows: a path SQLite would read against another folder is refused; a path longer than
+/// Windows' old limit, or one already written in its long form (`\\?\`), opens.
+#[cfg(windows)]
+#[test]
+fn on_windows_a_relative_path_is_refused_and_a_long_or_verbatim_one_opens() {
+    let e = connect(Path::new("relative.db"), true).err().unwrap();
+    assert!(
+        matches!(&e, Error::Open(m) if m.contains("full path")),
+        "{e:?}"
+    );
+    let e = connect(Path::new(r"\relative.db"), true).err().unwrap();
+    assert!(
+        matches!(&e, Error::Open(m) if m.contains("full path")),
+        "{e:?}"
+    );
+    let d = Dir::new("long");
+    let short = d.join("a.db");
+    wal_db(&short);
+    let mut long = d.to_path_buf();
+    while long.as_os_str().len() < 600 {
+        long.push("a-folder-with-a-name-forty-letters-long-");
+    }
+    fs::create_dir_all(&long).unwrap();
+    let long = long.join("a.db");
+    fs::copy(&short, &long).unwrap();
+    assert_eq!(ids(&open_read_only(&long).unwrap()), ["a"]);
+    let verbatim = PathBuf::from(format!(r"\\?\{}", short.display()));
+    assert_eq!(ids(&open_read_only(&verbatim).unwrap()), ["a"]);
 }
 
 #[test]
@@ -517,6 +567,7 @@ fn a_path_with_uri_characters_opens() {
 }
 
 /// Runs f where a hang is a failure: its result, or a panic after ten seconds.
+#[cfg(unix)]
 fn within_ten_seconds<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
