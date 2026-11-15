@@ -544,7 +544,9 @@ mod imp {
 
     pub fn make_private_open(f: &File) -> io::Result<()> {
         let m = f.metadata()?;
-        if !(m.is_dir() || m.is_file()) {
+        // A link (symbolic link or junction) opened itself, or anything not on a disk, is refused.
+        refuse_link(&m)?;
+        if !(m.is_dir() || m.is_file()) || unsafe { GetFileType(handle(f)) } != FILE_TYPE_DISK {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "not a file or folder",

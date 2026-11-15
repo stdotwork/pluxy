@@ -407,6 +407,15 @@ fn rename_open_replaces_a_file_through_the_handles() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// Windows: a handle on something that is not a file on a disk (the NUL device) is not made
+/// private.
+#[cfg(windows)]
+#[test]
+fn make_private_open_refuses_what_is_not_on_a_disk() {
+    let nul = fs::OpenOptions::new().write(true).open(r"\\.\NUL").unwrap();
+    assert!(make_private_open(&nul).is_err());
+}
+
 #[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn a_lock_is_made_held_and_taken_only_once_released() {
@@ -460,6 +469,23 @@ fn a_junction_is_not_opened_or_made_private_and_its_target_is_left_alone() {
     junction(&target, &link);
     assert!(open_regular(&link).is_err());
     assert!(make_private(&link).is_err());
+    // Nor through a handle open on the junction itself.
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+            READ_CONTROL, WRITE_DAC,
+        };
+        let itself = fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&link)
+            .unwrap();
+        assert_eq!(
+            make_private_open(&itself).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
     assert!(
         !is_private(&target).unwrap(),
         "the junction's target was changed"
