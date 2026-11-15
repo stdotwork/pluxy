@@ -1,14 +1,15 @@
 //! pluxy/codex-sessions: reads Codex's local sessions for pluxy's desktop app, read-only. Its
-//! operations (README.md): `list` (read), `detail` (disclose: each call asks the person),
-//! `open` (read: opens a rollout in the person's own app through `pluxy/execution`, whose
-//! launch the person confirms) and `settings` (write: the Codex home folder, kept in the tool's
-//! data folder).
+//! operations (README.md): `list` (read), `detail` and `export` (disclose: each call asks the
+//! person), `open` (read: opens a rollout in the person's own app through `pluxy/execution`,
+//! whose launch the person confirms) and `settings` (write: the Codex home folder, kept in the
+//! tool's data folder).
 
 mod reader;
 
-use pluxy_program::{run, Call, Error, Handler};
+use pluxy_program::{run, Call, Error, Handler, SaveOutcome};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The settings file in the tool's data folder.
 const SETTINGS: &str = "settings.json";
@@ -87,7 +88,7 @@ fn count(input: &Value, key: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-/// The error a call of `detail` or `open` ends with.
+/// The error a call of `detail`, `export` or `open` ends with.
 fn failure(e: reader::DetailError) -> Error {
     match e {
         reader::DetailError::Invalid(m) => Error::invalid_request(m),
@@ -181,6 +182,22 @@ impl Handler for Sessions {
                 )
                 .map_err(failure)
             }
+            // The rollout's bytes go to the host's save dialog and never into the answer, which
+            // says only whether the person saved the file.
+            "export" => {
+                let (home, _) = self.home()?;
+                let id = call.input["id"].as_str().unwrap_or_default();
+                let (id, bytes) = reader::export_bytes(&home, id).map_err(failure)?;
+                let today = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                Ok(
+                    match call.save_file(&reader::export_name(&id, today), &bytes)? {
+                        SaveOutcome::Saved { size } => json!({"outcome": "saved", "size": size}),
+                        SaveOutcome::Cancelled => json!({"outcome": "cancelled"}),
+                    },
+                )
+            }
             // Only the rollout's resolved path and its folder leave this program, for execution to
             // prepare and the host to confirm; the answer says only that the launch was started.
             "open" => {
@@ -207,5 +224,7 @@ fn main() {
     }
 }
 
+#[cfg(test)]
+mod export_tests;
 #[cfg(test)]
 mod open_tests;

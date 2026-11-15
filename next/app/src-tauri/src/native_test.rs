@@ -72,6 +72,7 @@ mod claude_code;
 #[cfg(target_os = "linux")]
 #[path = "claude_desktop_native.rs"]
 mod claude_desktop;
+#[cfg(target_os = "linux")]
 #[path = "client_key_native.rs"]
 mod client_key;
 #[cfg(target_os = "linux")]
@@ -175,8 +176,11 @@ const ACTING: &[&str] = &[
     "app_update_cancel",
 ];
 
+// GTK dialogs, driven by xdotool: Linux only.
+#[cfg(target_os = "linux")]
 #[path = "key_entry_test.rs"]
 mod key_entry_test;
+#[cfg(target_os = "linux")]
 #[path = "rotation_test.rs"]
 mod rotation_test;
 
@@ -439,6 +443,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_STARTUP") {
         return startup(app, &stage);
     }
+    #[cfg(target_os = "linux")]
     if std::env::var("PLUXY_APP_TEST_ROTATION_RESTART").is_ok() {
         return rotation_test::after_restart(app);
     }
@@ -700,8 +705,10 @@ fn run(app: &AppHandle) -> Result<(), String> {
         );
     }
 
+    #[cfg(target_os = "linux")]
     key_entry_test::check(app, &main)?;
     // In local and remote mode the window closes to the tray and opens again meanwhile.
+    #[cfg(target_os = "linux")]
     let main = rotation_test::check(app, &main)?;
     ingress::run(app, &main)?;
     #[cfg(target_os = "linux")]
@@ -764,6 +771,13 @@ fn window_state(app: &AppHandle) -> Value {
             "visible": w.is_visible().unwrap_or(false),
             "minimized": w.is_minimized().unwrap_or(false),
             "focused": w.is_focused().unwrap_or(false),
+            // As the app keeps them (`window.rs`): the size in logical pixels, the place in
+            // physical ones.
+            "size": w.scale_factor().ok().zip(w.inner_size().ok()).map(|(f, s)| {
+                let s = s.to_logical::<f64>(f);
+                json!([s.width.round(), s.height.round()])
+            }),
+            "position": w.outer_position().ok().map(|p| json!([p.x, p.y])),
         }),
         None => json!({"exists": false}),
     }
@@ -771,9 +785,9 @@ fn window_state(app: &AppHandle) -> Value {
 
 /// The single-instance scenario (`native/instances-session.ts`, which sets
 /// `PLUXY_APP_TEST_INSTANCES`): reports once the window is up (`up`), then answers each line on
-/// stdin, one command per line, with the window's state (`state`): `state`, `hide`, `close`, or
-/// `quit`, which quits (stopping the app's own core) and answers nothing. If stdin closes, the
-/// app quits.
+/// stdin, one command per line, with the window's state (`state`): `state`, `hide`, `close`,
+/// `resize <width> <height>` (logical pixels), `move <x> <y>` (physical), or `quit`, which quits
+/// (stopping the app's own core) and answers nothing. If stdin closes, the app quits.
 fn instances(app: &AppHandle) -> Result<(), String> {
     wait_for("the window", || app.get_webview(MAIN))?;
     log(
@@ -806,6 +820,22 @@ fn instances(app: &AppHandle) -> Result<(), String> {
                 crate::quit(app);
                 return Ok(());
             }
+            other if other.starts_with("resize ") || other.starts_with("move ") => {
+                let (name, rest) = other.split_once(' ').expect("checked above");
+                let n: Vec<f64> = rest.split(' ').filter_map(|v| v.parse().ok()).collect();
+                let [a, b] = n[..] else {
+                    return Err(format!("{name} takes two numbers: {other:?}"));
+                };
+                let w = app.get_window(WINDOW).ok_or("no window")?;
+                if name == "resize" {
+                    w.set_size(tauri::LogicalSize::new(a, b))
+                } else {
+                    w.set_position(tauri::PhysicalPosition::new(a as i32, b as i32))
+                }
+                .map_err(|e| e.to_string())?;
+                // The window reports its new place once the system has moved it.
+                std::thread::sleep(Duration::from_millis(500));
+            }
             other => return Err(format!("unknown command {other:?}")),
         }
         log("state", window_state(app));
@@ -829,8 +859,15 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
         }
     }
     if let Some(main) = app.get_webview(MAIN) {
+        // Until a core is installed the window shows only the Connection page, which is all
+        // there is to see where the app runs no managed core (Windows and macOS for now).
+        let ready = if cfg!(target_os = "linux") {
+            "document.querySelector('[data-part=nav]') !== null"
+        } else {
+            "document.querySelector('[data-part=nav]') !== null || document.body.innerText.includes('Save startup preferences')"
+        };
         wait_for("startup window shell", || {
-            eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
+            eval(&main, ready).filter(|v| v == true)
         })?;
     }
     let connection = app.state::<App>().conn.lock().unwrap().view();
@@ -838,6 +875,7 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
         "startup",
         json!({
             "app_pid": std::process::id(),
+            "autostart": std::env::args_os().any(|a| a == "--autostart"),
             "windows": app.windows().len(),
             "webviews": app.webviews().len(),
             "tray": app.state::<App>().has_tray.load(std::sync::atomic::Ordering::SeqCst),
