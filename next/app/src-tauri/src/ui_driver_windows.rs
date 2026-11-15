@@ -268,46 +268,55 @@ pub(crate) fn fixture_button(
 
 /// Reads the key entry titled title as another process can, through UI Automation (Windows
 /// PowerShell): its entry must say it is a password field and must not give out canary, which
-/// was typed into it. The canary goes to PowerShell on stdin; only booleans come back.
-pub(crate) fn uia_canary(title: &str, canary: &str) -> Result<serde_json::Value, String> {
+/// was typed into it. UI Automation opens the dialog and its entry by their window handles, and
+/// reports the path from the desktop down to the entry, each element's control type, name and
+/// window class (never its value). The canary goes to PowerShell on stdin; only booleans, counts
+/// and that path come back.
+pub(crate) fn uia_canary(
+    app: &AppHandle,
+    title: &str,
+    canary: &str,
+) -> Result<serde_json::Value, String> {
     use base64::Engine;
     use std::io::Write;
     use std::process::{Command, Stdio};
-    let pid = std::process::id();
+    let t = title.to_string();
+    let (dialog, edit) = on_main(app, move || {
+        let d = *inspect::all(&t).first()?;
+        Some((raw(d), raw(inspect::secret(d)?)))
+    })
+    .flatten()
+    .ok_or("no key window with an entry to read through UI Automation")?;
     let script = format!(
         r#"$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $canary = [Console]::In.ReadLine()
 $A = [System.Windows.Automation.AutomationElement]
 $scope = [System.Windows.Automation.TreeScope]
-# The app's own top-level window with this title: a search of the whole desktop can find the
-# taskbar's button for it first.
-$named = New-Object System.Windows.Automation.AndCondition(
-  (New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, '{title}')),
-  (New-Object System.Windows.Automation.PropertyCondition($A::ProcessIdProperty, {pid})),
-  (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)))
-$win = $null
-for ($i = 0; $i -lt 100 -and -not $win; $i++) {{
-  $win = $A::RootElement.FindFirst($scope::Children, $named)
-  if (-not $win) {{ Start-Sleep -Milliseconds 100 }}
+$walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+function Describe($e) {{ $c = $e.Current; "$($c.ControlType.ProgrammaticName) '$($c.Name)' [$($c.ClassName)]" }}
+$out = @{{ found = $false; edits = 0; is_password = $false; readable = $false; leaked = $false; path = @(); dialog_in_desktop = $false }}
+$dlg = $A::FromHandle([IntPtr]{dialog})
+$e = $A::FromHandle([IntPtr]{edit})
+if ($e) {{
+  $out.found = $true
+  $path = @()
+  for ($x = $e; $x; $x = $walker.GetParent($x)) {{ $path = @(Describe $x) + $path }}
+  $out.path = $path
+  $out.is_password = [bool]$e.Current.IsPassword
+  try {{
+    $v = $e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+    $out.readable = $true
+    if ($v -and $v.Contains($canary)) {{ $out.leaked = $true }}
+  }} catch {{ }}
 }}
-$out = @{{ found = [bool]$win; edits = 0; is_password = $false; readable = $false; leaked = $false }}
-if ($win) {{
-  $edit = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
-  $all = $win.FindAll($scope::Descendants, $edit)
-  $out.edits = $all.Count
-  foreach ($e in $all) {{
-    if ($e.Current.IsPassword) {{
-      $out.is_password = $true
-      try {{
-        $v = $e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
-        $out.readable = $true
-        if ($v -and $v.Contains($canary)) {{ $out.leaked = $true }}
-      }} catch {{ }}
-    }}
-  }}
+if ($dlg) {{
+  $edits = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
+  $out.edits = $dlg.FindAll($scope::Subtree, $edits).Count
+  $own = New-Object System.Windows.Automation.PropertyCondition($A::NativeWindowHandleProperty, [int]{dialog})
+  $out.dialog_in_desktop = [bool]$A::RootElement.FindFirst($scope::Children, $own)
 }}
-$out | ConvertTo-Json -Compress"#
+$out | ConvertTo-Json -Compress -Depth 3"#
     );
     let encoded: Vec<u8> = script
         .encode_utf16()

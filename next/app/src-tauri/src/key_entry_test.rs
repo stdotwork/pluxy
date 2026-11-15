@@ -47,7 +47,7 @@ fn answer(
             static ONCE: std::sync::Once = std::sync::Once::new();
             let mut result = Ok(());
             ONCE.call_once(|| {
-                result = ui::uia_canary(text::MANAGEMENT_TITLE, &key).map(|v| log("uia", v));
+                result = ui::uia_canary(&app, text::MANAGEMENT_TITLE, &key).map(|v| log("uia", v));
             });
             result?;
         }

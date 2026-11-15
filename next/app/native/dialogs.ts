@@ -341,6 +341,8 @@ async function main(): Promise<number> {
     if (platform === "windows") {
       // Another process, through UI Automation, sees a password field and not what was typed.
       const uia = steps.get("uia");
+      // Where UI Automation found the entry, from the desktop down.
+      console.log(`dialogs: UI Automation path to the key entry: ${(uia?.path ?? []).join(" > ")}`);
       check(
         "uia password field",
         uia?.found === true && uia?.is_password === true,
