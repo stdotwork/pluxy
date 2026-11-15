@@ -605,6 +605,7 @@ fn a_passing_error_does_not_end_a_grant() {
 }
 
 /// Records mount for every grant of the store, as if the targets were granted on that mount.
+#[cfg(target_os = "linux")] // its callers check mount ids, which only Linux reports
 fn granted_on(s: &mut Store, mount: Option<u64>) {
     for g in s.saved.grants.iter_mut() {
         g.mount = mount;

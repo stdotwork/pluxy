@@ -1739,6 +1739,7 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     })
     .unwrap_err();
     assert!(e.contains("changed while its files were checked"), "{e}");
+    #[cfg(unix)]
     let c = m.into_inner().unwrap();
 
     // A changed file in the store: no longer admitted.

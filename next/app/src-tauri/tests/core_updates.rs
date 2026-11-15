@@ -2,6 +2,8 @@
 //! commands use), with real cores built by Go and releases signed at run time. The native test
 //! (`native/run.ts`) runs the same changes through the real confirmation dialog; these cover the
 //! paths it does not, such as a crash while a candidate starts and hostile archives.
+// Every core here starts from `/proc/self/fd`, which only Linux has.
+#![cfg(target_os = "linux")]
 
 #[path = "support/releases.rs"]
 mod releases;
