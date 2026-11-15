@@ -428,6 +428,8 @@ fn settings_version_access_lists_and_reparse_points_fail_closed() {
         // Creating a symbolic link needs a privilege (or developer mode) this account may lack.
         Err(e) => eprintln!("SKIP symbolic-link settings: {e}"),
     }
+    // The privacy check reads the open handle: a private file passes through it.
+    owner_only(&dir.join(TOOL));
     let file = File::open(dir.join(TOOL)).unwrap();
     assert!(private_file(&file).is_ok());
     remove(&dir);
