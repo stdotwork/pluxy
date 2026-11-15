@@ -221,6 +221,10 @@ pub fn provenance(app: &AppHandle) -> Result<PathBuf, String> {
         .ok_or("This AppImage does not say where it is (APPIMAGE is not set). Install the new version by hand.")?;
     check_owned(&appimage, false)?;
     let parent = appimage.parent().ok_or("The AppImage has no folder.")?;
+    // shortcut: only the AppImage and its folder are checked, and `replace` renames by path; a
+    // group- or world-writable, non-sticky folder further up could be swapped by another user of
+    // a shared machine. Upgrade by checking the ancestors and renaming through an open folder
+    // handle, if updating on shared machines is wanted.
     check_owned(parent, true)?;
     let mut head = [0u8; 16];
     {
@@ -363,12 +367,15 @@ fn set_task(app: &AppHandle, f: impl FnOnce(&mut Task)) {
 }
 
 /// Takes the task for t, unless an update or a rollback already runs (or waits for its
-/// confirmation).
-fn claim(task: &Mutex<Task>, t: Task) -> Result<(), String> {
+/// confirmation), and clears a cancel left over from an earlier one. The clearing happens under
+/// the task's lock, which Cancel Download also holds when it sets the flag: a cancel arrives
+/// either before this task exists (refused) or after the flag was cleared (kept).
+fn claim(task: &Mutex<Task>, cancel: &AtomicBool, t: Task) -> Result<(), String> {
     let mut current = task.lock().unwrap();
     if current.running() {
         return Err("An update is already running.".into());
     }
+    cancel.store(false, Ordering::SeqCst);
     *current = t;
     Ok(())
 }
@@ -420,6 +427,7 @@ pub fn app_update_start(webview: Webview) -> Result<(), String> {
     let st = app.state::<App>();
     claim(
         &st.updater.task,
+        &st.updater.cancel,
         Task {
             phase: "downloading",
             version: Some(release.version.clone()),
@@ -428,7 +436,6 @@ pub fn app_update_start(webview: Webview) -> Result<(), String> {
             error: None,
         },
     )?;
-    st.updater.cancel.store(false, Ordering::SeqCst);
     emit_task(&app);
     std::thread::spawn(
         move || match install(&app, &appimage, &release, &artifact) {
@@ -453,7 +460,8 @@ pub fn app_update_cancel(webview: Webview) -> Result<(), String> {
     trusted(&webview)?;
     let app = webview.app_handle();
     let st = app.state::<App>();
-    if st.updater.task.lock().unwrap().phase != "downloading" {
+    let task = st.updater.task.lock().unwrap();
+    if task.phase != "downloading" {
         return Err("No download is running.".into());
     }
     st.updater.cancel.store(true, Ordering::SeqCst);
@@ -528,14 +536,16 @@ fn install(
         version: release.version.clone(),
         sha256: sha256(&bytes),
     };
-    let pending = pending(&dir, "update", from, to.clone(), appimage)?;
+    // Checked before the pending record is written, so a refusal leaves none behind.
     provenance(app)?;
+    let pending = pending(&dir, "update", from, to.clone(), appimage)?;
     // The app's own replace, in one step, of the bytes the plugin just verified: the AppImage
     // is the old one or the new one, never missing or cut short.
     if let Err(e) = replace(appimage, &bytes) {
         let _ = fs::remove_file(dir.join("pending.json"));
         return Err(format!("The update could not be installed: {e}"));
     }
+    evict(&dir);
     Ok(Restart { dir, pending })
 }
 
@@ -584,11 +594,25 @@ fn keep(dir: &Path, appimage: &Path, version: &str, started: &str) -> Result<Pin
     let mut h = history(dir);
     h.kept.retain(|p| p != &pin);
     h.kept.insert(0, pin.clone());
-    for old in h.kept.split_off(KEEP.min(h.kept.len())) {
-        let _ = fs::remove_file(kept_path(dir, &old));
-    }
     write_json(&dir.join("history.json"), &h)?;
     Ok(pin)
+}
+
+/// Drops the oldest kept versions beyond `KEEP`, history entry and copy. Run only once the
+/// install they were kept for has replaced the AppImage: until then a failed replace must leave
+/// every earlier version it could roll back to.
+fn evict(dir: &Path) {
+    let mut h = history(dir);
+    let old = h.kept.split_off(KEEP.min(h.kept.len()));
+    if old.is_empty() {
+        return;
+    }
+    // History first: a copy without an entry is harmless, an entry without its copy is not.
+    if write_json(&dir.join("history.json"), &h).is_ok() {
+        for p in old {
+            let _ = fs::remove_file(kept_path(dir, &p));
+        }
+    }
 }
 
 /// Replaces the AppImage with bytes in one step: a new file in the same folder, written and
@@ -644,7 +668,9 @@ fn restart_into(app: &AppHandle, restart: Restart) {
     let app = app.clone();
     std::thread::spawn(move || {
         let st = app.state::<App>();
-        // Tray actions refuse to start now, and closing the window no longer keeps the app.
+        // Tray actions, Open and Quit refuse now (a Quit would end this process, which waits
+        // for the new version and rolls a broken one back), and closing the window no longer
+        // keeps the app.
         st.quitting.store(true, Ordering::SeqCst);
         crate::remember_window(&app);
         #[cfg(target_os = "linux")]
@@ -715,6 +741,43 @@ fn spawn_holding(
     c.spawn()
 }
 
+/// Waits until the started version accepts itself, ends, or the deadline passes (then its
+/// process group is killed). A receipt that arrives as it ends, or in the last wait before the
+/// deadline, still counts.
+fn await_acceptance(
+    child: &mut std::process::Child,
+    deadline: Instant,
+    accepted: impl Fn() -> bool,
+) -> Result<(), String> {
+    loop {
+        if accepted() {
+            return Ok(());
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            return if accepted() {
+                Ok(())
+            } else {
+                Err(format!("it ended ({status}) before accepting the update"))
+            };
+        }
+        if Instant::now() > deadline {
+            // One last look before the kill: a receipt written during the last wait counts, and
+            // a version killed after accepting would leave nothing running.
+            if accepted() {
+                return Ok(());
+            }
+            // SAFETY: kill has no memory preconditions; the group is the child's own.
+            unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+            let _ = child.wait();
+            return Err(format!(
+                "it did not accept the update within {} seconds",
+                ACCEPT_WITHIN.as_secs()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// Starts the installed AppImage, holding the profile lock for it, and waits for it to accept
 /// itself; if it ends or does not accept in time, puts the earlier version back and starts that
 /// (or, if it cannot be put back, starts nothing and says where the kept copy is).
@@ -728,31 +791,7 @@ fn supervise(r: &Restart, lock: Option<std::os::fd::RawFd>) {
             .is_some_and(|a| a.nonce == p.nonce && a.version == p.to.version)
     };
     let outcome = match spawn_holding(lock, &p.appimage, &args, None) {
-        Ok(mut child) => {
-            let deadline = Instant::now() + ACCEPT_WITHIN;
-            loop {
-                if accepted() {
-                    break Ok(());
-                }
-                if let Ok(Some(status)) = child.try_wait() {
-                    break if accepted() {
-                        Ok(())
-                    } else {
-                        Err(format!("it ended ({status}) before accepting the update"))
-                    };
-                }
-                if Instant::now() > deadline {
-                    // SAFETY: kill has no memory preconditions; the group is the child's own.
-                    unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-                    let _ = child.wait();
-                    break Err(format!(
-                        "it did not accept the update within {} seconds",
-                        ACCEPT_WITHIN.as_secs()
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-        }
+        Ok(mut child) => await_acceptance(&mut child, Instant::now() + ACCEPT_WITHIN, accepted),
         Err(e) => Err(format!("it could not be started: {e}")),
     };
     let _ = fs::remove_file(&receipt);
@@ -895,8 +934,10 @@ pub fn app_update_rollback(
             target.version
         ));
     }
+    let st = app.state::<App>();
     claim(
-        &app.state::<App>().updater.task,
+        &st.updater.task,
+        &st.updater.cancel,
         Task {
             phase: "confirming",
             version: Some(target.version.clone()),
@@ -1029,6 +1070,7 @@ fn roll_back(
         let _ = fs::remove_file(dir.join("pending.json"));
         return Err(format!("The rollback could not be installed: {e}"));
     }
+    evict(dir);
     Ok(Restart {
         dir: dir.to_path_buf(),
         pending,
@@ -1069,6 +1111,7 @@ mod tests {
             let b = format!("AppImage {v}");
             fs::write(&image, &b).unwrap();
             pins.push(keep(&tmp.join("updates"), &image, v, &sha256(b.as_bytes())).unwrap());
+            evict(&tmp.join("updates"));
         }
         let h = history(&tmp.join("updates"));
         assert_eq!(h.kept, pins[1..].iter().rev().cloned().collect::<Vec<_>>());
@@ -1151,8 +1194,10 @@ mod tests {
     #[test]
     fn a_waiting_rollback_holds_the_task() {
         let task = Mutex::new(idle());
+        let cancel = AtomicBool::new(false);
         claim(
             &task,
+            &cancel,
             Task {
                 phase: "confirming",
                 ..Task::default()
@@ -1162,6 +1207,7 @@ mod tests {
         for phase in ["downloading", "confirming"] {
             let e = claim(
                 &task,
+                &cancel,
                 Task {
                     phase,
                     ..Task::default()
@@ -1173,11 +1219,92 @@ mod tests {
         *task.lock().unwrap() = idle();
         claim(
             &task,
+            &cancel,
             Task {
                 phase: "downloading",
                 ..Task::default()
             },
         )
         .unwrap();
+    }
+
+    // Update Now clears an old cancel inside the claim, and a refused claim leaves the running
+    // download's cancel alone: a cancel cannot be lost between the claim and the clearing.
+    #[test]
+    fn a_claim_clears_the_cancel_only_when_it_takes_the_task() {
+        let task = Mutex::new(idle());
+        let cancel = AtomicBool::new(true);
+        let download = || Task {
+            phase: "downloading",
+            ..Task::default()
+        };
+        claim(&task, &cancel, download()).unwrap();
+        assert!(!cancel.load(Ordering::SeqCst), "the old cancel was cleared");
+        cancel.store(true, Ordering::SeqCst);
+        claim(&task, &cancel, download()).unwrap_err();
+        assert!(
+            cancel.load(Ordering::SeqCst),
+            "a refused claim keeps the cancel"
+        );
+    }
+
+    // A failed replace must not cost the oldest kept version: the history and the copies change
+    // only in `evict`, which runs after the AppImage was replaced.
+    #[test]
+    fn keeping_deletes_nothing_until_the_replace_has_worked() {
+        let tmp = temp("keep-evict");
+        let dir = tmp.join("updates");
+        let image = tmp.join("app.AppImage");
+        let mut pins = vec![];
+        for v in ["0.1.0", "0.2.0", "0.3.0", "0.4.0"] {
+            let b = format!("AppImage {v}");
+            fs::write(&image, &b).unwrap();
+            pins.push(keep(&dir, &image, v, &sha256(b.as_bytes())).unwrap());
+        }
+        // The install of 0.5.0 failed at replace: no evict ran.
+        assert_eq!(history(&dir).kept.len(), 4);
+        assert!(pins.iter().all(|p| kept_path(&dir, p).exists()));
+        evict(&dir);
+        assert_eq!(history(&dir).kept.len(), KEEP);
+        assert!(!kept_path(&dir, &pins[0]).exists());
+        assert!(kept_path(&dir, &pins[1]).exists());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    fn sleeper() -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap()
+    }
+
+    // A receipt that arrives in the last wait before the deadline counts: the new version is not
+    // killed and the earlier one is not put back over it.
+    #[test]
+    fn a_receipt_at_the_deadline_is_accepted_and_the_child_not_killed() {
+        let mut child = sleeper();
+        let calls = std::cell::Cell::new(0);
+        let accepted = || {
+            calls.set(calls.get() + 1);
+            calls.get() >= 2
+        };
+        let past = Instant::now() - Duration::from_secs(1);
+        let r = await_acceptance(&mut child, past, accepted);
+        let alive = child.try_wait().unwrap().is_none();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(r, Ok(()));
+        assert!(alive, "the new version was killed after it accepted");
+    }
+
+    #[test]
+    fn a_version_that_never_accepts_is_killed_at_the_deadline() {
+        let mut child = sleeper();
+        let past = Instant::now() - Duration::from_secs(1);
+        let r = await_acceptance(&mut child, past, || false);
+        assert!(r.unwrap_err().contains("did not accept"));
+        assert!(child.try_wait().unwrap().is_some(), "the child was killed");
     }
 }

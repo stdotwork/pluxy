@@ -38,6 +38,25 @@ test("masks proxy URL credentials", () => {
   expect(maskSensitiveText("http://proxy.local:8080")).toBe("http://proxy.local:8080");
 });
 
+test("masks proxy URL credentials that hold @ or /", () => {
+  // The userinfo runs to the last @ of the address, so nothing of the password is left.
+  expect(maskSensitiveText("socks5://user:p@ssword@proxy.example:1080")).toBe(
+    "socks5://***@proxy.example:1080",
+  );
+  expect(maskSensitiveText("socks5://user:p/ss@proxy.example:1080")).toBe("socks5://***@proxy.example:1080");
+  expect(maskSensitiveText("socks5://user:p/s@s@proxy.example:1080/")).toBe(
+    "socks5://***@proxy.example:1080/",
+  );
+  // The text around it stays, and a URL's query or fragment is not read as userinfo.
+  expect(maskSensitiveText("dial http://u:p@ss@proxy.example:3128 failed: refused")).toBe(
+    "dial http://***@proxy.example:3128 failed: refused",
+  );
+  expect(maskSensitiveText("http://proxy.example/path?next=https://other.example")).toBe(
+    "http://proxy.example/path?next=https://other.example",
+  );
+  expect(maskSensitiveText("http://proxy.example/#frag@x")).toBe("http://proxy.example/#frag@x");
+});
+
 test("masks known identities inside names, including file-name forms", () => {
   const identities = ["alice@example.com", "my-gcp-project-123456"];
   // The address is masked as an address first (the old app masked the identity first).

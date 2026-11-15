@@ -111,6 +111,29 @@ textarea {
 .chip[data-status="archived"] {
   border-style: dashed;
 }
+/* A source's colour, in its chip and its Sources row. */
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+/* A source's share, as a bar before its percent. */
+.share {
+  display: inline-block;
+  width: 64px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  vertical-align: middle;
+  background: var(--px-color-border, #ddd);
+}
+.share i {
+  display: block;
+  height: 100%;
+}
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
