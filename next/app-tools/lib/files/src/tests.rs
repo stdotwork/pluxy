@@ -388,7 +388,7 @@ fn rename_open_replaces_a_file_through_the_handles() {
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(&dir)
         .unwrap();
-    for bad in ["", r"sub\target", "sub/target"] {
+    for bad in ["", ".", "..", r"sub\target", "sub/target"] {
         assert_eq!(
             rename_open(&f, &folder, bad.as_ref()).unwrap_err().kind(),
             io::ErrorKind::InvalidInput,

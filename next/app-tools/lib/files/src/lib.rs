@@ -317,10 +317,15 @@ mod imp {
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     use std::os::windows::io::{AsRawHandle, FromRawHandle};
     use std::ptr::{null, null_mut};
+    use windows_sys::Wdk::Storage::FileSystem::{
+        FileRenameInformation, FileRenameInformationEx, NtSetInformationFile,
+        FILE_RENAME_INFORMATION, FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS,
+    };
     use windows_sys::Win32::Foundation::{
-        CloseHandle, LocalFree, ERROR_ACCESS_DENIED, ERROR_INVALID_FUNCTION,
-        ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, ERROR_SHARING_VIOLATION, ERROR_SUCCESS,
-        GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+        CloseHandle, LocalFree, RtlNtStatusToDosError, ERROR_ACCESS_DENIED,
+        ERROR_SHARING_VIOLATION, ERROR_SUCCESS, GENERIC_READ, GENERIC_WRITE, HANDLE,
+        INVALID_HANDLE_VALUE, NTSTATUS, STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER,
+        STATUS_NOT_IMPLEMENTED, STATUS_NOT_SUPPORTED,
     };
     use windows_sys::Win32::Security::Authorization::{
         ConvertSecurityDescriptorToStringSecurityDescriptorW,
@@ -339,15 +344,15 @@ mod imp {
         TOKEN_INFORMATION_CLASS, TOKEN_QUERY, UNPROTECTED_DACL_SECURITY_INFORMATION,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateDirectoryW, CreateFileW, FileIdInfo, FileRenameInfo, FileRenameInfoEx,
-        GetFileInformationByHandle, GetFileInformationByHandleEx, GetFileType,
-        SetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, DELETE,
+        CreateDirectoryW, CreateFileW, FileIdInfo, GetFileInformationByHandle,
+        GetFileInformationByHandleEx, GetFileType, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, DELETE,
         FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, FILE_TYPE_DISK, OPEN_EXISTING, READ_CONTROL, WRITE_DAC,
+        FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        FILE_TYPE_DISK, OPEN_EXISTING, READ_CONTROL, WRITE_DAC,
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
     /// `ACCESS_ALLOWED_ACE_TYPE` and `ACCESS_DENIED_ACE_TYPE` (winnt.h).
     const ACCESS_ALLOWED: u8 = 0;
@@ -645,28 +650,50 @@ mod imp {
         })
     }
 
-    /// `FILE_RENAME_FLAG_REPLACE_IF_EXISTS` and `FILE_RENAME_FLAG_POSIX_SEMANTICS` (winbase.h).
-    const REPLACE_IF_EXISTS: u32 = 1;
-    const POSIX_SEMANTICS: u32 = 2;
+    /// An NTSTATUS as a result, its error as the matching Win32 one.
+    fn nt(status: NTSTATUS) -> io::Result<()> {
+        if status >= 0 {
+            Ok(())
+        } else {
+            Err(io::Error::from_raw_os_error(
+                unsafe { RtlNtStatusToDosError(status) } as i32,
+            ))
+        }
+    }
 
-    pub fn rename_open(f: &File, folder: &File, name: &std::ffi::OsStr) -> io::Result<()> {
-        let name: Vec<u16> = name.encode_wide().collect();
-        if name.is_empty()
-            || name.contains(&0)
-            || name.iter().any(|c| *c == b'\\' as u16 || *c == b'/' as u16)
+    /// A single name in a folder, as UTF-16: not empty, no separator, no NUL, not `.` or `..`.
+    fn single_name(name: &std::ffi::OsStr) -> io::Result<Vec<u16>> {
+        let wide: Vec<u16> = name.encode_wide().collect();
+        if wide.is_empty()
+            || wide.contains(&0)
+            || wide.iter().any(|c| *c == b'\\' as u16 || *c == b'/' as u16)
+            || name == "."
+            || name == ".."
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "not a file name",
             ));
         }
-        let head = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-        let bytes = head + name.len() * 2;
+        Ok(wide)
+    }
+
+    pub fn rename_open(f: &File, folder: &File, name: &std::ffi::OsStr) -> io::Result<()> {
+        let name = single_name(name)?;
+        // The native call: the Win32 one takes no folder handle (RootDirectory must be null).
+        let head = std::mem::offset_of!(FILE_RENAME_INFORMATION, FileName);
+        let bytes = (head + name.len() * 2).max(std::mem::size_of::<FILE_RENAME_INFORMATION>());
         // u64s keep the structure's handle field aligned.
-        let mut buf = vec![0u64; bytes.div_ceil(8) + 1];
-        let info = buf.as_mut_ptr() as *mut FILE_RENAME_INFO;
-        let rename = |class, flags: u32| unsafe {
-            (*info).Anonymous.Flags = flags;
+        let mut buf = vec![0u64; bytes.div_ceil(8)];
+        let info = buf.as_mut_ptr() as *mut FILE_RENAME_INFORMATION;
+        let rename = |class, posix: bool| unsafe {
+            if posix {
+                (*info).Anonymous.Flags =
+                    FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS;
+            } else {
+                (*info).Anonymous.Flags = 0;
+                (*info).Anonymous.ReplaceIfExists = true;
+            }
             (*info).RootDirectory = handle(folder);
             (*info).FileNameLength = (name.len() * 2) as u32;
             std::ptr::copy_nonoverlapping(
@@ -674,25 +701,29 @@ mod imp {
                 std::ptr::addr_of_mut!((*info).FileName) as *mut u16,
                 name.len(),
             );
-            ok(SetFileInformationByHandle(
+            let mut status = IO_STATUS_BLOCK::default();
+            NtSetInformationFile(
                 handle(f),
-                class,
+                &mut status,
                 info as *const core::ffi::c_void,
                 bytes as u32,
-            ))
+                class,
+            )
         };
         // POSIX semantics (the name is replaced even while another program has the old file
         // open) where the file system has them; else the classic rename, which replaces too.
-        match rename(FileRenameInfoEx, REPLACE_IF_EXISTS | POSIX_SEMANTICS) {
-            Err(e)
-                if e.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32)
-                    || e.raw_os_error() == Some(ERROR_NOT_SUPPORTED as i32)
-                    || e.raw_os_error() == Some(ERROR_INVALID_FUNCTION as i32) =>
-            {
-                rename(FileRenameInfo, REPLACE_IF_EXISTS)
-            }
-            r => r,
+        let status = rename(FileRenameInformationEx, true);
+        if [
+            STATUS_INVALID_PARAMETER,
+            STATUS_INVALID_INFO_CLASS,
+            STATUS_NOT_SUPPORTED,
+            STATUS_NOT_IMPLEMENTED,
+        ]
+        .contains(&status)
+        {
+            return nt(rename(FileRenameInformation, false));
         }
+        nt(status)
     }
 
     /// A SID this process's token names, in the buffer that holds it: its user, or its default
