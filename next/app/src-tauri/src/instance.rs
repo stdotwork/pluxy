@@ -995,8 +995,17 @@ mod tests {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
+    /// Where the tests' folders go. A socket path must fit in about 100 bytes, which macOS's
+    /// temporary folder (`/var/folders/..`, a link into `/private`) is too long for.
+    fn temp_base() -> PathBuf {
+        #[cfg(target_os = "macos")]
+        return PathBuf::from("/private/tmp");
+        #[cfg(not(target_os = "macos"))]
+        std::env::temp_dir()
+    }
+
     fn temp() -> Temp {
-        let d = std::env::temp_dir().join(format!(
+        let d = temp_base().join(format!(
             "pluxy-app-inst-{}",
             &crate::managed::random_key()[..12]
         ));
@@ -1328,7 +1337,13 @@ mod tests {
             };
             if r != 0 {
                 let e = io::Error::last_os_error();
-                assert_eq!(e.kind(), io::ErrorKind::WouldBlock, "{e}");
+                // A full queue refuses a connection: with WouldBlock on Linux, ConnectionRefused
+                // on macOS.
+                #[cfg(target_os = "macos")]
+                let full = io::ErrorKind::ConnectionRefused;
+                #[cfg(not(target_os = "macos"))]
+                let full = io::ErrorKind::WouldBlock;
+                assert_eq!(e.kind(), full, "{e}");
                 return held;
             }
             held.push(fd);
