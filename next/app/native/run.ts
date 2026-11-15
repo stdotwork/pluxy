@@ -996,7 +996,8 @@ async function runApp(
       ...(spawnDir ? { PLUXY_APP_TEST_SPAWN: spawnDir, ...spawnEnv } : {}),
       // The probe clicks the tray's Start… items through the real watcher's dbusmenu.
       ...(launcherDir ? { PLUXY_APP_TEST_LAUNCHER: launcherDir, PLUXY_APP_TEST_PROBE: probe } : {}),
-      ...(openDir ? { PLUXY_APP_TEST_OPEN: openDir } : {}),
+      // The only folder besides the system's a native-test build takes an opener from.
+      ...(openDir ? { PLUXY_APP_TEST_OPEN: openDir, PLUXY_APP_TEST_OPENERS: join(openDir, "bin") } : {}),
       ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
       ...(transactionsDir ? { PLUXY_APP_TEST_TRANSACTIONS: transactionsDir } : {}),
       ...(claudeCodeDir ? { PLUXY_APP_TEST_CLAUDE_CODE: claudeCodeDir } : {}),
@@ -1931,9 +1932,14 @@ async function main(): Promise<number> {
     ],
     tauri,
   );
-  // The execution program the launcher check installs, from its own workspace.
+  // The execution program the launcher check installs, from its own workspace. Its native-test
+  // feature lets an open launch take the open check's stand-in opener from a search path.
   if (existsSync(executionManifest))
-    run("cargo", ["build", "--locked", "-p", "execution", "--target-dir", appToolsTarget], appTools);
+    run(
+      "cargo",
+      ["build", "--locked", "-p", "execution", "--features", "native-test", "--target-dir", appToolsTarget],
+      appTools,
+    );
   // pluxy/claude-code, which the Claude Code check installs.
   if (existsSync(claudeCodeManifest))
     run("cargo", ["build", "--locked", "-p", "claude-code", "--target-dir", appToolsTarget], appTools);

@@ -72,8 +72,8 @@ pub const AUTOMATIC: &str = "automatic";
 /// `xdg-open`, then `gio open`).
 pub const OPENERS: &[(&str, &[&str])] = &[("xdg-open", &[]), ("gio", &["open"])];
 
-/// Where an open launch looks for its opener when the caller names no search path (a tool has no
-/// launch environment of its own): the system's program folders.
+/// Where an open launch takes its opener from: the system's program folders, the only ones the
+/// app accepts an opener from (a caller's search path could name any program `xdg-open`).
 pub const SYSTEM_PATH: &[&str] = &[
     "/usr/local/bin",
     "/usr/bin",
@@ -155,20 +155,37 @@ fn text(what: &str, p: &Path) -> Result<String, Error> {
         .ok_or_else(|| Error::invalid_request(format!("{what} is not a UTF-8 path")))
 }
 
-/// An open launch: `<opener> <file>` (or `gio open <file>`) in the file's folder, the opener the
-/// first of `OPENERS` found on the search path (else in `SYSTEM_PATH`). It names the file (the
-/// resolved path, which is its argument) and the folder it must be inside (`within`, resolved),
-/// which the host checks, shows and binds again. The file must be a regular file with no execute
-/// bit inside that folder; the folder must not be `/` or the home folder.
+/// An open launch, with its opener from `SYSTEM_PATH`. A native-test build also takes the
+/// opener from the input's `search_path`, for the native test's stand-in; a release build refuses
+/// it.
 fn open(input: &Value) -> Result<Value, Error> {
+    #[allow(unused_mut)]
+    let mut fields = vec!["kind", "file", "within"];
+    #[allow(unused_mut)]
+    let mut folders: Vec<PathBuf> = SYSTEM_PATH.iter().map(PathBuf::from).collect();
+    #[cfg(feature = "native-test")]
+    if input.get("search_path").is_some() {
+        fields.push("search_path");
+        folders = self::folders(input);
+    }
+    open_from(input, &fields, &folders)
+}
+
+/// An open launch: `<opener> <file>` (or `gio open <file>`) in the file's folder, the opener the
+/// first of `OPENERS` found in folders. It names the file (the resolved path, which is its
+/// argument) and the folder it must be inside (`within`, resolved), which the host checks, shows
+/// and binds again. The file must be a regular file with no execute bit inside that folder; the
+/// folder must not be `/`, the home folder or a folder above it. The input holds only fields.
+fn open_from(input: &Value, fields: &[&str], folders: &[PathBuf]) -> Result<Value, Error> {
     if let Some((k, _)) = input
         .as_object()
         .into_iter()
         .flatten()
-        .find(|(k, _)| !["kind", "file", "within", "search_path"].contains(&k.as_str()))
+        .find(|(k, _)| !fields.contains(&k.as_str()))
     {
         return Err(Error::invalid_request(format!(
-            "an open launch takes file, within and search_path, not {k}"
+            "an open launch takes {}, not {k}",
+            fields.join(", ")
         )));
     }
     let resolve = |what: &str, k: &str| -> Result<PathBuf, Error> {
@@ -188,9 +205,9 @@ fn open(input: &Value) -> Result<Value, Error> {
         )));
     }
     let home = std::env::var_os("HOME").and_then(|h| std::fs::canonicalize(h).ok());
-    if within == Path::new("/") || Some(&within) == home.as_ref() {
+    if within == Path::new("/") || home.as_ref().is_some_and(|h| h.starts_with(&within)) {
         return Err(Error::invalid_request(
-            "the within folder cannot be / or the home folder",
+            "the within folder cannot be /, the home folder or a folder above it",
         ));
     }
     let file = resolve("the file to open", "file")?;
@@ -210,13 +227,9 @@ fn open(input: &Value) -> Result<Value, Error> {
             "the file to open must be inside its within folder",
         ));
     }
-    let folders = match input.get("search_path") {
-        Some(_) => folders(input),
-        None => SYSTEM_PATH.iter().map(PathBuf::from).collect(),
-    };
     let (path, flags) = OPENERS
         .iter()
-        .find_map(|(name, flags)| find(name, &folders).map(|p| (p, *flags)))
+        .find_map(|(name, flags)| find(name, folders).map(|p| (p, *flags)))
         .ok_or_else(|| Error::not_found("no opener (xdg-open or gio) found"))?;
     let file = text("the file to open", &file)?;
     let cwd = text(

@@ -371,14 +371,19 @@ an existing absolute folder.
 
 An **open** launch opens a file in the app the desktop opens its type with, as the old desktop
 app's "Edit with local app" did: it runs `xdg-open <file>`, or `gio open <file>` when there is no
-`xdg-open`, in the file's folder. The opener is looked up on `search_path`; a tool, which has no
-launch environment of its own, names none, and then it is looked up in `/usr/local/bin`,
-`/usr/bin`, `/bin` and `/run/current-system/sw/bin`. The caller names the file and the folder it
-may open files in (`within`), for the Codex session reader its Codex home: both are resolved, links
-followed, and the file must be a regular file with no execute bit (a desktop may run an executable
-or a trusted `.desktop` file it is asked to open) inside that folder, which must not be `/` or the
-home folder. The resolved file is the opener's argument. The app checks all of this again, shows
-the file and the folder in its confirmation and binds them
+`xdg-open`, in the file's folder. The opener is taken only from `/usr/local/bin`, `/usr/bin`,
+`/bin` and `/run/current-system/sw/bin`: an open launch takes no `search_path` (only a
+native-test build of the program does, for the native test's stand-in opener). The caller names
+the file and the folder it may open files in (`within`), for the Codex session reader its
+sessions folder: both are resolved, links followed, and the file must be a regular file with no
+execute bit inside that folder, which must not be `/`, the home folder or a folder above it. The
+resolved file is the opener's argument. The app checks all of this again, and more (the file's
+content type, who owns and may write the file and folder, the launch's exact shape), shows the
+file, its type and the folder in its confirmation and binds them
 (`../app/app-host/README.md`, "Launches and managed runtimes"). Which app the opener then starts
 is the desktop's choice for the file's type: the confirmation names the opener, not that app.
+
+A call from another package (a tool's import, or a page's) may prepare only an open launch: a
+terminal or direct preparation answers whether programs and folders exist, so only the app's own
+window asks for those.
 

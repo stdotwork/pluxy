@@ -7,9 +7,11 @@
 //   `relay` calls pluxy/execution's `prepare` and `launch`: a stand-in for a tool such as the Codex
 //   session reader asking to open one of its files.
 //
-// bin/xdg-open is the fixture program as the stand-in opener: it writes what it was started with
-// to the file FIXTURE_OPENER_RECORD names and exits. codex/ is the folder the tool may open files
-// in, with a session file in it; outside/ holds files it may not open, and codex/ links to one.
+// bin/xdg-open is the fixture program as the stand-in opener (the app accepts an opener from bin/
+// only in a native-test build, PLUXY_APP_TEST_OPENERS): it appends a line of what it was started
+// with to bin/opened.jsonl and exits. codex/ is the folder the tool may open files in, with a
+// session file in it, and files it may not open: an HTML file named .jsonl, a .desktop file, an
+// executable file and a link to a file in outside/.
 
 import { generateKeyPairSync, type KeyObject } from "node:crypto";
 import {
@@ -95,18 +97,25 @@ export function buildOpenFixtures(
   chmodSync(join(bin, "xdg-open"), 0o755);
 
   const sessions = join(root, "codex", "sessions", "2026", "11", "15");
-  mkdirSync(sessions, { recursive: true });
+  // Private: the app opens only a file and folder no one else may write.
+  mkdirSync(sessions, { recursive: true, mode: 0o700 });
   writeFileSync(join(sessions, "rollout-2026-11-15T03-00-00-session.jsonl"), '{"type":"session_meta"}\n', {
     mode: 0o600,
   });
   // An executable file inside the folder: never opened (a desktop may run what it opens).
   writeFileSync(join(sessions, "run.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  // HTML named .jsonl, and a .desktop file: the desktop would open them in apps that run them.
+  writeFileSync(join(sessions, "rollout-page.jsonl"), "<html><body><script>x</script></body></html>\n", {
+    mode: 0o600,
+  });
+  writeFileSync(join(sessions, "app.desktop"), "[Desktop Entry]\nType=Application\nExec=true\n", {
+    mode: 0o600,
+  });
   const outside = join(root, "outside");
   mkdirSync(outside);
   writeFileSync(join(outside, "private.txt"), "not the tool's\n", { mode: 0o600 });
   // A link inside the folder to a file outside it: refused as the file outside.
   symlinkSync(join(outside, "private.txt"), join(sessions, "rollout-link.jsonl"));
-  mkdirSync(join(root, "records"));
 
   const nonce = writeTrustProfile(home, [curatedFile], publicKey);
   return { registries: [{ name: "curated", url: curatedFile }], nonce };

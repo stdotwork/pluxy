@@ -46,8 +46,8 @@
 //! Started as `x-terminal-emulator` (the launcher check's stand-in terminal, `terminal`) it writes
 //! its arguments, folder and environment to the file `FIXTURE_TERMINAL_RECORD` names and runs the
 //! command after its `-e`, as a terminal would. Started as `xdg-open` (the open check's stand-in
-//! opener, `opener`) it writes its arguments and folder to the file `FIXTURE_OPENER_RECORD` names
-//! and exits.
+//! opener, `opener`) it appends its arguments and folder to `opened.jsonl` beside itself and
+//! exits.
 //!
 //! In describe, it reconciles each open vault journal the host names, never redoing it: it ends it
 //! as `committed` when the file holds the bytes the journal names, `rolled_back` otherwise, and
@@ -692,20 +692,25 @@ fn terminal(args: &[String]) -> ! {
     std::process::exit(127);
 }
 
-/// The open check's stand-in opener, started as `xdg-open <file>`: it writes what it was started
-/// with (process ID, arguments, folder) to the file `FIXTURE_OPENER_RECORD` names and exits, as
-/// an opener that has handed the file to an app does.
+/// The open check's stand-in opener, started as `xdg-open <file>` (an open launch gets no
+/// environment of its own): it appends one line of what it was started with (process ID,
+/// arguments, folder) to `opened.jsonl` in its own folder and exits, as an opener that has handed
+/// the file to an app does.
 #[cfg(target_os = "linux")]
 fn opener(args: &[String]) -> ! {
-    if let Some(record) = std::env::var_os("FIXTURE_OPENER_RECORD") {
-        let seen = json!({
-            "pid": std::process::id(),
-            "argv": args,
-            "cwd": std::env::current_dir().ok(),
-        });
-        let tmp = format!("{}.tmp", record.to_string_lossy());
-        if std::fs::write(&tmp, seen.to_string()).is_ok() {
-            let _ = std::fs::rename(&tmp, &record);
+    use std::io::Write as _;
+    let seen = json!({
+        "pid": std::process::id(),
+        "argv": args,
+        "cwd": std::env::current_dir().ok(),
+    });
+    if let Some(dir) = args.first().and_then(|a| std::path::Path::new(a).parent()) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("opened.jsonl"))
+        {
+            let _ = writeln!(f, "{seen}");
         }
     }
     std::process::exit(0);

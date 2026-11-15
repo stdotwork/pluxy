@@ -960,8 +960,23 @@ fn authorize(
             ));
         }
         let mut l = launch_of(input, &executor)?;
-        let (lifetime, request) = spawn::parse(input, &|f| filled.iter().any(|x| x.field == f))
+        let (lifetime, mut request) = spawn::parse(input, &|f| filled.iter().any(|x| x.field == f))
             .map_err(|e| fail("invalid_request", e))?;
+        // A launch that opens a file has a fixed shape (the confirmation checks the rest): the
+        // launch environment as it is, with only absolute PATH entries, detached, nothing on its
+        // stdin and no secrets, so no variable can steer the opener to another program.
+        if l.opens.is_some() {
+            if request != spawn::Request::default()
+                || !filled.is_empty()
+                || lifetime != Lifetime::Detached
+            {
+                return Err(fail(
+                    "invalid_request",
+                    "an open launch takes no environment, stdin, secrets or managed lifetime",
+                ));
+            }
+            request.absolute_path = true;
+        }
         // Names, set values, "inherited", "removed" and secrets' labels: never a secret's value
         // or an inherited value. A changed request is a changed revision, so a remembered
         // approval of another one does not stand for it.
@@ -1012,27 +1027,13 @@ fn authorize(
         .as_ref()
         .map(|(l, ..): &Spawning| format!(" {}", l.review()))
         .unwrap_or_default();
-    // What a launch that opens a file opens, and with which program, in words.
-    let opens_text = launch
-        .as_ref()
-        .and_then(|l| {
-            let (file, within) = l.opens.as_ref()?;
-            Some(format!(
-                " Opens the file {} (inside {}) with {}.",
-                file.display(),
-                within.display(),
-                l.executable.display()
-            ))
-        })
-        .unwrap_or_default();
     let action = confirmation::Action {
         what: format!(
-            "{} {}: {} ({}).{} Input: {}{}{}",
+            "{} {}: {} ({}). Input: {}{}{}",
             grant.target.id(),
             grant.op.id,
             grant.op.description,
             crate::device::effect_label(effect),
-            opens_text,
             input,
             secret_text(grant.target.id(), filled),
             lifetime_text

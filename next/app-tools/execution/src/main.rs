@@ -17,6 +17,12 @@ impl Handler for Execution {
     fn call(&self, call: &Call) -> Result<Value, Error> {
         match call.op.as_str() {
             "terminals" => Ok(recipe::terminals(&call.input)),
+            // Another package (a tool's import, or a page's) prepares only open launches: a
+            // terminal or direct preparation answers whether programs and folders exist.
+            "prepare" if imported(&call.chain) && call.input["kind"] != "open" => Err(Error::new(
+                "permission",
+                "another package prepares only open launches",
+            )),
             "prepare" => recipe::prepare(&call.input),
             // The host spawns exactly the launch it confirmed for this call; nothing of it is
             // named here.
@@ -26,6 +32,12 @@ impl Handler for Execution {
             op => Err(Error::unsupported(format!("no operation {op}"))),
         }
     }
+}
+
+/// Whether a call with chain came through another package: its chain is not the app's window
+/// alone.
+fn imported(chain: &[Value]) -> bool {
+    !(chain.len() == 1 && chain[0]["kind"] == "main")
 }
 
 /// A runtime request of one of ops for the call's input, refused for any other op: a read call

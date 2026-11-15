@@ -679,79 +679,205 @@ fn the_remember_text_names_the_secrets_a_launch_uses() {
     let _ = fs::remove_dir_all(dir);
 }
 
-/// Action a opening file f, which its argv names, inside folder w.
-fn opening(a: &Action, f: &Path, w: &Path) -> Action {
+/// Action a opening file f, which its argv names, inside folder w, with opener in f's folder.
+fn opening(a: &Action, opener: &Path, f: &Path, w: &Path) -> Action {
     let mut a = a.clone();
     let l = a.launch.as_mut().unwrap();
+    l.executable = opener.into();
     l.argv = vec![f.to_string_lossy().into_owned()];
+    l.cwd = f.parent().unwrap().into();
     l.opens = Some((f.into(), w.into()));
     a
 }
 
-#[test]
-fn a_launch_opens_only_a_plain_file_inside_its_folder_and_binds_both() {
+/// A private file at p holding bytes.
+fn private(p: &Path, bytes: &[u8]) {
+    fs::write(p, bytes).unwrap();
+    fs::set_permissions(p, fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+/// The fixture's folder with an opener `xdg-open` the confirmations accept, a folder `codex`
+/// holding `sessions/rollout.jsonl` and a private file outside it.
+fn open_fixture() -> (PathBuf, Confirmations, Action, PathBuf, PathBuf, PathBuf) {
     let (dir, mut c, a) = fixture();
+    let dir = fs::canonicalize(&dir).unwrap();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let bin = dir.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let opener = bin.join("xdg-open");
+    fs::write(&opener, b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&opener, fs::Permissions::from_mode(0o700)).unwrap();
+    c.opener_folders = vec![bin];
     let within = dir.join("codex");
     let sessions = within.join("sessions");
     fs::create_dir_all(&sessions).unwrap();
+    for d in [&within, &sessions] {
+        fs::set_permissions(d, fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let file = sessions.join("rollout.jsonl");
-    fs::write(&file, b"{}\n").unwrap();
-    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    private(&file, b"{\"type\":\"session_meta\"}\n");
+    private(&dir.join("private.txt"), b"not the tool's\n");
+    (dir, c, a, opener, within, file)
+}
+
+#[test]
+fn a_launch_opens_only_a_plain_file_inside_its_folder() {
+    let (dir, mut c, a, opener, within, file) = open_fixture();
+    let sessions = within.join("sessions");
     let outside = dir.join("private.txt");
-    fs::write(&outside, b"not the tool's\n").unwrap();
-    fs::set_permissions(&outside, fs::Permissions::from_mode(0o600)).unwrap();
     std::os::unix::fs::symlink(&outside, sessions.join("link.jsonl")).unwrap();
     let script = sessions.join("run.sh");
     fs::write(&script, b"#!/bin/sh\n").unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    private(
+        &sessions.join("page.jsonl"),
+        b"<html><body><script>x</script></body></html>\n",
+    );
+    private(
+        &sessions.join("app.desktop"),
+        b"[Desktop Entry]\nType=Application\nExec=true\n",
+    );
+    private(
+        &sessions.join("notes.txt"),
+        b"[Desktop Entry]\nType=Application\n",
+    );
+    let shared = dir.join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o770)).unwrap();
+    private(&shared.join("a.jsonl"), b"{}\n");
+    std::os::unix::fs::symlink(&within, dir.join("codex-link")).unwrap();
 
-    // Inside: its review names the file and the folder, resolved.
-    let ok = opening(&a, &file, &within);
-    let review = c
-        .prepare(ok.clone(), Origin::Import)
-        .unwrap()
-        .review()
+    // Inside: its headline names the resolved file, its type, the folder and the opener.
+    let p = c
+        .prepare(opening(&a, &opener, &file, &within), Origin::Import)
         .unwrap();
-    assert!(review.contains("\"opens\""), "{review}");
-    assert!(review.contains(file.to_str().unwrap()), "{review}");
-    assert!(review.contains(within.to_str().unwrap()), "{review}");
+    let review = p.review().unwrap();
+    let headline = format!(
+        "Opens the file {} (text/plain, inside {}) with {}.",
+        file.display(),
+        within.display(),
+        opener.display()
+    );
+    assert!(review.contains(&headline), "{review}");
+    // Text whose name says nothing: still plain text.
+    assert!(c
+        .prepare(
+            opening(&a, &opener, &sessions.join("notes.txt"), &within),
+            Origin::Import
+        )
+        .is_ok());
+
     let dotted = within.join("../private.txt");
-    for (f, w, says) in [
-        (&outside, &within, "inside its within folder"),
-        (&dotted, &within, "inside its within folder"),
+    let home_parent = std::env::var_os("HOME")
+        .and_then(|h| fs::canonicalize(h).ok())
+        .and_then(|h| h.parent().map(PathBuf::from));
+    let mut cases: Vec<(PathBuf, PathBuf, &str)> = vec![
+        (outside.clone(), within.clone(), "inside its within folder"),
+        (dotted, within.clone(), "inside its within folder"),
         (
-            &sessions.join("link.jsonl"),
-            &within,
+            sessions.join("link.jsonl"),
+            within.clone(),
             "inside its within folder",
         ),
-        (&script, &within, "must not be executable"),
-        (&sessions, &within, "regular file"),
-        (&file, &PathBuf::from("/"), "cannot be / or the home folder"),
-        (&file, &file, "not a folder"),
-    ] {
+        (script, within.clone(), "must not be executable"),
+        (sessions.clone(), within.clone(), "regular file"),
+        (
+            sessions.join("page.jsonl"),
+            within.clone(),
+            "plain text, not text/html",
+        ),
+        (sessions.join("app.desktop"), within.clone(), ".desktop"),
+        (
+            shared.join("a.jsonl"),
+            shared.clone(),
+            "writable by no one else",
+        ),
+        (file.clone(), PathBuf::from("/"), "a folder above it"),
+        (file.clone(), file.clone(), "not a folder"),
+        (file.clone(), dir.join("codex-link"), "resolved paths"),
+    ];
+    if let Some(h) = home_parent {
+        cases.push((file.clone(), h, "a folder above it"));
+    }
+    if let Some(h) = std::env::var_os("HOME").filter(|h| Path::new(h).is_dir()) {
+        cases.push((file.clone(), PathBuf::from(h), "a folder above it"));
+    }
+    for (f, w, says) in cases {
         let e = c
-            .prepare(opening(&a, f, w), Origin::Import)
+            .prepare(opening(&a, &opener, &f, &w), Origin::Import)
             .err()
             .unwrap_or_else(|| panic!("{} inside {} was accepted", f.display(), w.display()));
-        assert!(e.contains(says), "{}: {e}", f.display());
+        assert!(
+            e.contains(says),
+            "{} inside {}: {e}",
+            f.display(),
+            w.display()
+        );
     }
-    if let Some(home) = std::env::var_os("HOME").filter(|h| Path::new(h).is_dir()) {
-        let e = c
-            .prepare(opening(&a, &file, Path::new(&home)), Origin::Import)
-            .err()
-            .unwrap();
-        assert!(e.contains("cannot be / or the home folder"), "{e}");
-    }
+    let _ = fs::remove_dir_all(dir);
+}
 
-    // Bound: another file at the name after the confirmation refuses its token, and so does a
-    // folder replaced by a link to another.
-    let (id, t) = approve(&mut c, ok.clone(), false);
-    fs::remove_file(&file).unwrap();
-    fs::write(&file, b"{}\n").unwrap();
-    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
-    assert!(c.consume(&id, &t).is_err());
+#[test]
+fn a_launch_that_opens_a_file_has_the_openers_shape() {
+    let (dir, mut c, a, opener, within, file) = open_fixture();
+    let ok = opening(&a, &opener, &file, &within);
+    assert!(c.prepare(ok.clone(), Origin::Import).is_ok());
+    let mut changes: Vec<(Action, &str)> = vec![];
+    let mut x = ok.clone();
+    x.launch.as_mut().unwrap().argv.push("--extra".into());
+    changes.push((x, "runs exactly"));
+    let mut x = ok.clone();
+    x.launch.as_mut().unwrap().argv.insert(0, "open".into());
+    changes.push((x, "runs exactly"));
+    let mut x = ok.clone();
+    x.launch.as_mut().unwrap().cwd = within.clone();
+    changes.push((x, "folder of the file"));
+    let mut x = ok.clone();
+    // The fixture's own program, not an opener.
+    x.launch.as_mut().unwrap().executable = dir.join("tool");
+    changes.push((x, "runs xdg-open or gio"));
+    let mut x = ok.clone();
+    x.launch.as_mut().unwrap().program = Some(opener.clone());
+    changes.push((x, "no terminal program"));
+    for (x, says) in changes {
+        let e = c.prepare(x, Origin::Import).err().unwrap();
+        assert!(e.contains(says), "{says}: {e}");
+    }
+    // gio takes `open` before the file.
+    let gio = opener.with_file_name("gio");
+    fs::copy(&opener, &gio).unwrap();
+    let mut g = opening(&a, &gio, &file, &within);
+    g.launch.as_mut().unwrap().argv.insert(0, "open".into());
+    assert!(c.prepare(g, Origin::Import).is_ok());
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_confirmed_open_is_refused_once_its_file_or_folder_changed() {
+    let (dir, mut c, a, opener, within, file) = open_fixture();
+    let ok = opening(&a, &opener, &file, &within);
     let (id, t) = approve(&mut c, ok.clone(), false);
     c.consume(&id, &t).unwrap();
+    // Written in place.
+    let (id, t) = approve(&mut c, ok.clone(), false);
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .unwrap()
+        .write_all(b"{\"more\":1}\n")
+        .unwrap();
+    assert!(c.consume(&id, &t).is_err());
+    // Its mode changed.
+    let (id, t) = approve(&mut c, ok.clone(), false);
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o640)).unwrap();
+    assert!(c.consume(&id, &t).is_err());
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    // Another file at its name.
+    let (id, t) = approve(&mut c, ok.clone(), false);
+    fs::remove_file(&file).unwrap();
+    private(&file, b"{}\n");
+    assert!(c.consume(&id, &t).is_err());
+    // Its folder replaced by a link to another.
     let (id, t) = approve(&mut c, ok, false);
     fs::rename(&within, dir.join("moved")).unwrap();
     std::os::unix::fs::symlink(dir.join("moved"), &within).unwrap();

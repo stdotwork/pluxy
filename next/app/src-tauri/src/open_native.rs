@@ -1,31 +1,34 @@
 //! The native test's check of opening a file in the person's own app (native-test builds with
 //! `artifact-test-trust` only). It drives the real app, the real execution program and the real
 //! native confirmations with the signed packages `native/open.ts` built: pluxy/execution (the
-//! real execution program) and pluxy/open-relay, a stand-in for a tool such as the Codex session
+//! real execution program, built with its native-test feature so it takes the stand-in opener
+//! from a search path) and pluxy/open-relay, a stand-in for a tool such as the Codex session
 //! reader: a fixture tool whose `relay` calls execution's `prepare` and `launch`. The opener is
-//! the fixture program as `xdg-open` in `bin/`, which writes what it was started with to its
-//! record and exits. The tool may open files in `codex/`; `outside/` is not its. Each refusal
-//! has a positive control on the same route:
+//! the fixture program as `xdg-open` in `bin/` (the one folder besides the system's the app takes
+//! an opener from, in a native-test build), which appends what it was started with to
+//! `bin/opened.jsonl` and exits. The tool may open files in `codex/`; `outside/` is not its.
+//! Each refusal has a positive control on the same route:
 //!
 //! - enable: both tools installed and enabled;
-//! - prepare: the tool asks the execution program to prepare opening a session file: the opener
-//!   found on the search path, the file as its only argument, its folder as the cwd, the file
-//!   and the folder it may open files in named;
-//! - cancel: the tool's launch of it asks a native confirmation naming the tool, the opener, the
-//!   file and the folder, with no Remember; cancelled, nothing runs;
+//! - prepare: the tool asks the execution program to prepare opening a session file: the opener,
+//!   the file as its only argument, its folder as the cwd, the file and the folder it may open
+//!   files in named;
+//! - cancel: the tool's launch of it asks a native confirmation whose headline names the file,
+//!   its content type, the folder and the opener, with no Remember; cancelled, nothing runs;
 //! - open: confirmed, the opener runs once with exactly that file, in its folder;
 //! - outside: a file outside the folder (named directly, through `..`, or through a link inside
 //!   the folder), an executable file inside it, a file that is not the launch's argument, a launch
 //!   naming a file but no folder, and the whole file system as the folder are each refused
-//!   before any confirmation shows; the execution program refuses to prepare the file outside.
+//!   before any confirmation shows; the execution program refuses to prepare the file outside;
+//! - type: an HTML file named `.jsonl` and a `.desktop` file are refused;
+//! - shape: an extra argument and an environment variable are refused; the opener ran once in all.
 //!
 //! One line on stderr: `native-test: open <JSON>`.
 
 use super::admission::{press, require};
-use super::log;
 use super::routing::{answer, clicked, enable, install, showing};
-use super::spawn::record;
 use super::vault::dialog_with;
+use super::{log, wait_for};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -93,7 +96,14 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     let file = folder.join("rollout-2026-11-15T03-00-00-session.jsonl");
     let outside = canonical(fixtures.join("outside"))?;
     let private = outside.join("private.txt");
-    let records = canonical(fixtures.join("records"))?;
+    // What the stand-in opener ran with, a line each time it ran.
+    let opened = || -> Vec<Value> {
+        std::fs::read_to_string(bin.join("opened.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()
+    };
     let mut out = json!({});
     let step = |name: &str, r: Result<(), String>| r.map_err(|e| format!("{name}: {e}"));
 
@@ -130,39 +140,30 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             Ok(())
         })(),
     )?;
-    // The launch of what was prepared, the opener writing its record to rec.
-    let launch = |rec: &Path| {
-        let mut l = prepared.clone();
-        l["environment"] = json!({"set": {"FIXTURE_OPENER_RECORD": s(rec)}});
-        l
-    };
 
-    // ---- cancel: the confirmation names the tool, the opener, the file and the folder
+    // ---- cancel: the confirmation's headline names the file, its type, the folder and the opener
     step(
         "cancel",
         (|| {
-            let rec = records.join("cancel");
             let rx = clicked(
                 app,
                 RELAY,
                 "relay",
-                json!({"package": EXECUTION, "op": "launch", "input": launch(&rec)}),
+                json!({"package": EXECUTION, "op": "launch", "input": prepared}),
             )?;
-            let text = dialog_with(
-                app,
-                &[
-                    RELAY,
-                    EXECUTION,
-                    &s(&opener),
-                    &s(&file),
-                    &s(&codex),
-                    "Opens",
-                ],
-            )?;
+            let head = format!("Opens the file {} (", s(&file));
+            let tail = format!(", inside {}) with {}.", s(&codex), s(&opener));
+            let text = dialog_with(app, &[RELAY, EXECUTION, &head, &tail])?;
             require(
                 !text.contains("Remember"),
                 "a tool's open confirmation offers Remember",
             )?;
+            // The content type the app found for a JSON Lines session file, as the dialog says.
+            out["type"] = json!(text
+                .split(&head)
+                .nth(1)
+                .and_then(|t| t.split(", inside").next())
+                .unwrap_or_default());
             press("alt+c")?;
             let v = answer(&rx)?.map_err(|e| format!("the relay call failed: {e:?}"))?;
             require(
@@ -171,7 +172,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             std::thread::sleep(Duration::from_millis(1500));
             require(
-                !rec.exists(),
+                opened().is_empty(),
                 "the opener ran though the open was cancelled",
             )
         })(),
@@ -182,14 +183,13 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         "open",
         (|| {
             std::thread::sleep(Duration::from_millis(1100));
-            let rec = records.join("open");
             let rx = clicked(
                 app,
                 RELAY,
                 "relay",
-                json!({"package": EXECUTION, "op": "launch", "input": launch(&rec)}),
+                json!({"package": EXECUTION, "op": "launch", "input": prepared}),
             )?;
-            dialog_with(app, &[RELAY, &s(&opener), &s(&file), "Opens"])?;
+            dialog_with(app, &[RELAY, &s(&opener), &s(&file), "Opens the file"])?;
             // A tool chain's dialog takes its Confirm only a second after it shows.
             std::thread::sleep(Duration::from_millis(1300));
             press("alt+o")?;
@@ -198,24 +198,26 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 v["answer"]["output"]["lifetime"] == "detached",
                 format!("the confirmed open: {v}"),
             )?;
-            let r = record(&rec, 0)?;
+            let r = wait_for("the opener's record", || opened().into_iter().next())?;
             require(
                 r["argv"] == json!([s(&opener), s(&file)]) && r["cwd"] == json!(s(&folder)),
-                format!("the opener ran with {}", r),
+                format!("the opener ran with {r}"),
             )?;
             out["opened"] = r["argv"].clone();
             Ok(())
         })(),
     )?;
 
+    // The launch of file inside within, as the opener would run it.
+    let opens = |f: &Path, within: &Path| {
+        json!({"executable": s(&opener), "argv": [s(f)], "cwd": s(&folder),
+               "file": s(f), "within": s(within)})
+    };
+
     // ---- outside: files the tool may not name, refused before any confirmation
     step(
         "outside",
         (|| {
-            let opens = |f: &Path, within: &Path| {
-                json!({"executable": s(&opener), "argv": [s(f)], "cwd": s(&folder),
-                       "file": s(f), "within": s(within)})
-            };
             refused(app, "launch", opens(&private, &codex), INSIDE)?;
             let dotted = codex.join("../outside/private.txt");
             refused(app, "launch", opens(&dotted, &codex), INSIDE)?;
@@ -241,19 +243,49 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 app,
                 "launch",
                 opens(&file, Path::new("/")),
-                "cannot be / or the home folder",
+                "a folder above it",
             )?;
             refused(
                 app,
                 "prepare",
                 json!({"kind": "open", "file": s(&private), "within": s(&codex), "search_path": [s(&bin)]}),
                 INSIDE,
+            )
+        })(),
+    )?;
+
+    // ---- type: files a desktop would open in an app that runs them
+    step(
+        "type",
+        (|| {
+            refused(
+                app,
+                "launch",
+                opens(&folder.join("rollout-page.jsonl"), &codex),
+                "plain text, not text/html",
             )?;
+            refused(
+                app,
+                "launch",
+                opens(&folder.join("app.desktop"), &codex),
+                ".desktop",
+            )
+        })(),
+    )?;
+
+    // ---- shape: an open launch runs the opener with the file alone, in the launch environment
+    step(
+        "shape",
+        (|| {
+            let mut extra = prepared.clone();
+            extra["argv"] = json!([s(&file), "--new-window"]);
+            refused(app, "launch", extra, "runs exactly")?;
+            let mut env = prepared.clone();
+            env["environment"] = json!({"set": {"BROWSER": s(&opener)}});
+            refused(app, "launch", env, "takes no environment")?;
             require(
-                std::fs::read_dir(&records)
-                    .map(|d| d.count() == 1)
-                    .unwrap_or(false),
-                "the opener ran for a refused file",
+                opened().len() == 1,
+                format!("the opener ran {} times, not once", opened().len()),
             )
         })(),
     )?;

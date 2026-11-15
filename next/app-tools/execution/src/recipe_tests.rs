@@ -132,6 +132,9 @@ fn files() -> (PathBuf, PathBuf, PathBuf) {
     (root, within, file)
 }
 
+/// The fields an open launch takes in a release build.
+const OPEN: &[&str] = &["kind", "file", "within"];
+
 #[test]
 fn an_open_launch_runs_the_opener_with_the_resolved_file_in_its_folder() {
     let (root, within, file) = files();
@@ -139,10 +142,9 @@ fn an_open_launch_runs_the_opener_with_the_resolved_file_in_its_folder() {
     let s = |p: &Path| p.to_string_lossy().into_owned();
     // Named through `..`: the resolved file is the argument.
     let named = within.join("sessions/../sessions/rollout-a.jsonl");
-    let i =
-        json!({"kind": "open", "file": s(&named), "within": s(&within), "search_path": [openers]});
+    let i = json!({"kind": "open", "file": s(&named), "within": s(&within)});
     assert_eq!(
-        prepare(&i).unwrap(),
+        open_from(&i, OPEN, std::slice::from_ref(&openers)).unwrap(),
         json!({
             "executable": s(&openers.join("xdg-open")), "argv": [s(&file)],
             "cwd": s(&within.join("sessions")), "file": s(&file), "within": s(&within),
@@ -150,17 +152,35 @@ fn an_open_launch_runs_the_opener_with_the_resolved_file_in_its_folder() {
     );
     // With no xdg-open, gio's `open`.
     let gio = bin(&["gio"]);
-    let mut g = i.clone();
-    g["search_path"] = json!([gio]);
-    let r = prepare(&g).unwrap();
+    let r = open_from(&i, OPEN, std::slice::from_ref(&gio)).unwrap();
     assert_eq!(r["executable"], json!(s(&gio.join("gio"))));
     assert_eq!(r["argv"], json!(["open", s(&file)]));
     // Neither: not found.
-    g["search_path"] = json!([root]);
-    assert_eq!(prepare(&g).unwrap_err().code, "not_found");
+    assert_eq!(
+        open_from(&i, OPEN, std::slice::from_ref(&root))
+            .unwrap_err()
+            .code,
+        "not_found"
+    );
     for d in [root, openers, gio] {
         std::fs::remove_dir_all(d).unwrap();
     }
+}
+
+#[test]
+fn an_open_launch_takes_no_search_path_in_a_release_build() {
+    let (root, within, file) = files();
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let i =
+        json!({"kind": "open", "file": s(&file), "within": s(&within), "search_path": [s(&root)]});
+    let e = prepare(&i).unwrap_err();
+    if cfg!(feature = "native-test") {
+        // The stand-in's way: the search path names no opener here.
+        assert_eq!(e.code, "not_found", "{}", e.message);
+    } else {
+        assert!(e.message.contains("not search_path"), "{}", e.message);
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -168,11 +188,11 @@ fn an_open_launch_names_only_a_plain_file_inside_its_folder() {
     let (root, within, file) = files();
     let openers = bin(&["xdg-open"]);
     let s = |p: &Path| p.to_string_lossy().into_owned();
-    let ok =
-        json!({"kind": "open", "file": s(&file), "within": s(&within), "search_path": [openers]});
-    assert!(prepare(&ok).is_ok());
+    let ok = json!({"kind": "open", "file": s(&file), "within": s(&within)});
+    let from = std::slice::from_ref(&openers);
+    assert!(open_from(&ok, OPEN, from).is_ok());
     let sessions = within.join("sessions");
-    for (k, v, says) in [
+    let mut cases = vec![
         ("file", json!(s(&root.join("private.txt"))), "inside"),
         ("file", json!(s(&sessions.join("link.jsonl"))), "inside"),
         ("file", json!(s(&within.join("../private.txt"))), "inside"),
@@ -182,11 +202,18 @@ fn an_open_launch_names_only_a_plain_file_inside_its_folder() {
         ("within", json!("/"), "cannot be /"),
         ("within", json!(s(&file)), "not a folder"),
         ("program", json!("agent"), "not program"),
-    ] {
+    ];
+    // The home folder and every folder above it.
+    if let Some(home) = std::env::var_os("HOME").and_then(|h| std::fs::canonicalize(h).ok()) {
+        for d in home.ancestors() {
+            cases.push(("within", json!(s(d)), "a folder above it"));
+        }
+    }
+    for (k, v, says) in cases {
         let mut i = ok.clone();
-        i[k] = v;
-        let e = prepare(&i).unwrap_err();
-        assert!(e.message.contains(says), "{k}: {}", e.message);
+        i[k] = v.clone();
+        let e = open_from(&i, OPEN, from).unwrap_err();
+        assert!(e.message.contains(says), "{k} {v}: {}", e.message);
     }
     std::fs::remove_dir_all(root).unwrap();
     std::fs::remove_dir_all(openers).unwrap();

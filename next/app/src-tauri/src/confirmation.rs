@@ -179,10 +179,13 @@ struct ExactProgram {
     metadata: Metadata,
     sha256: String,
 }
-/// The file a launch opens and the folder it is inside, as confirmed.
+/// The file a launch opens, its metadata and content type, and the folder it is inside, as
+/// confirmed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct ExactOpen {
     file: Target,
+    metadata: Metadata,
+    content_type: String,
     within: Target,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,9 +264,11 @@ impl Prepared {
         for f in &self.files {
             f.check()?;
         }
-        if let Some((file, within)) = &self.opens {
-            file.check()?;
-            within.check()?;
+        if let (Some((file, within)), Some(x)) = (
+            &self.opens,
+            self.exact.launch.as_ref().and_then(|l| l.opens.as_ref()),
+        ) {
+            open_rules(file, within, x)?;
         }
         if let (Some(e), Some(l)) = (&self.executable, &self.exact.launch) {
             e.check()?;
@@ -330,6 +335,19 @@ impl Prepared {
         }
         // JSON quoting makes argv boundaries, newlines and control characters unambiguous.
         let mut s = review_text(&self.exact)?;
+        // What a launch that opens a file opens, with which program, from the resolved paths.
+        if let Some(l) = &self.exact.launch {
+            if let Some(o) = &l.opens {
+                let line = escape_format_characters(&format!(
+                    "Opens the file {} ({}, inside {}) with {}.",
+                    o.file.canonical.display(),
+                    o.content_type,
+                    o.within.canonical.display(),
+                    l.executable.canonical.display()
+                ));
+                s.insert_str(0, &format!("{line}\n\n"));
+            }
+        }
         if self.exact.native_tool {
             s.insert_str(
                 0,
@@ -341,19 +359,60 @@ impl Prepared {
         Ok(s)
     }
 }
-/// A launch's file to open and the folder it must be inside, both opened and resolved: the folder
-/// a folder other than `/` and the home folder, the file a regular file with no execute bit (a
-/// desktop may run an executable or a trusted .desktop file it is asked to open) inside it.
-fn open_within(file: &Path, within: &Path) -> Result<(OpenTarget, OpenTarget), String> {
-    let w = OpenTarget::open(within)?;
-    if !w.file.metadata().map_err(|e| e.to_string())?.is_dir() {
-        return Err("a launch's within folder is not a folder".into());
+/// The content types a launch may open: plain text and text data, which the desktop opens with a
+/// text editor or viewer. The desktop picks the app by type, so this is the limit that holds: an
+/// HTML, SVG, script or archive file, even named `.jsonl`, could open in an app that runs it.
+const OPEN_TYPES: &[&str] = &[
+    "text/plain",
+    "application/json",
+    "application/x-ndjson",
+    "application/jsonl",
+    "text/markdown",
+    "text/x-log",
+];
+/// The openers a launch that opens a file may run, with the arguments before the file (the
+/// execution program's `open` launch), and the folders they are taken from.
+const OPENERS: &[(&str, &[&str])] = &[("xdg-open", &[]), ("gio", &["open"])];
+const OPENER_FOLDERS: &[&str] = &[
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+    "/run/current-system/sw/bin",
+];
+/// How many bytes of a file its content type is guessed from: more than GIO reads (its sniff
+/// length is the longest shared-mime-info magic), so the guess sees at least what the opener's
+/// does.
+const SNIFF: usize = 65536;
+
+/// The content type of the file held open in f, as GIO guesses it from its name and first bytes:
+/// the same shared-mime-info rules `gio open` and xdg-open's helpers use.
+fn content_type(f: &OpenTarget) -> Result<String, String> {
+    use std::os::unix::fs::FileExt;
+    let mut b = vec![0u8; SNIFF];
+    let mut n = 0;
+    while n < b.len() {
+        match f.file.read_at(&mut b[n..], n as u64) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(e) => return Err(e.to_string()),
+        }
     }
-    let home = std::env::var_os("HOME").and_then(|h| fs::canonicalize(h).ok());
-    if w.identity.canonical == Path::new("/") || Some(&w.identity.canonical) == home.as_ref() {
-        return Err("a launch's within folder cannot be / or the home folder".into());
+    let name = f.identity.canonical.file_name().map(PathBuf::from);
+    Ok(gtk::gio::content_type_guess(name, &b[..n]).0.to_string())
+}
+/// Refused unless m (a file or folder's metadata) is the effective user's and no one else may
+/// write it: another user could otherwise replace what was confirmed.
+fn own(m: &fs::Metadata, what: &str) -> Result<(), String> {
+    if m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o022 != 0 {
+        return Err(format!("{what} must be your own, writable by no one else"));
     }
-    let f = OpenTarget::open(file)?;
+    Ok(())
+}
+/// The rules for a file a launch opens, held in f, inside folder w, both held open: a regular file
+/// with no execute bit (a desktop may run an executable it is asked to open), not a `.desktop`
+/// file, inside w, both the effective user's and writable by no one else, of a plain-text type.
+/// Its content type.
+fn open_file_rules(f: &OpenTarget, w: &OpenTarget) -> Result<String, String> {
     let m = f.file.metadata().map_err(|e| e.to_string())?;
     if !m.is_file() {
         return Err("the file a launch opens must be a regular file".into());
@@ -364,7 +423,109 @@ fn open_within(file: &Path, within: &Path) -> Result<(OpenTarget, OpenTarget), S
     if !f.identity.canonical.starts_with(&w.identity.canonical) {
         return Err("the file a launch opens must be inside its within folder".into());
     }
-    Ok((f, w))
+    let desktop = |p: &Path| {
+        p.extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("desktop"))
+    };
+    if desktop(&f.identity.selected) || desktop(&f.identity.canonical) {
+        return Err("a launch never opens a .desktop file".into());
+    }
+    own(&m, "the file a launch opens")?;
+    own(
+        &w.file.metadata().map_err(|e| e.to_string())?,
+        "a launch's within folder",
+    )?;
+    let t = content_type(f)?;
+    if !OPEN_TYPES.contains(&t.as_str()) {
+        return Err(format!(
+            "the file a launch opens must be plain text, not {t}"
+        ));
+    }
+    Ok(t)
+}
+/// A launch's file to open and the folder it must be inside, both opened and resolved, each named
+/// by its resolved path: the folder neither `/`, the home folder nor a folder above it, the file
+/// as `open_file_rules` says.
+fn open_within(file: &Path, within: &Path) -> Result<(OpenTarget, OpenTarget, String), String> {
+    let w = OpenTarget::open(within)?;
+    if !w.file.metadata().map_err(|e| e.to_string())?.is_dir() {
+        return Err("a launch's within folder is not a folder".into());
+    }
+    let home = std::env::var_os("HOME").and_then(|h| fs::canonicalize(h).ok());
+    if w.identity.canonical == Path::new("/")
+        || home
+            .as_ref()
+            .is_some_and(|h| h.starts_with(&w.identity.canonical))
+    {
+        return Err(
+            "a launch's within folder cannot be /, the home folder or a folder above it".into(),
+        );
+    }
+    let f = OpenTarget::open(file)?;
+    let t = open_file_rules(&f, &w)?;
+    if f.identity.selected != f.identity.canonical || w.identity.selected != w.identity.canonical {
+        return Err(
+            "a launch names the file it opens and its within folder by their resolved paths".into(),
+        );
+    }
+    Ok((f, w, t))
+}
+/// The rules again for a confirmed open x, with its file and folder held open: the same file and
+/// folder, its metadata unchanged (no write, no change of mode), the same content type.
+fn open_rules(f: &OpenTarget, w: &OpenTarget, x: &ExactOpen) -> Result<(), String> {
+    f.check()?;
+    w.check()?;
+    if Metadata::read(&f.file)? != x.metadata {
+        return Err("the file to open changed since it was confirmed; review again".into());
+    }
+    if open_file_rules(f, w)? != x.content_type {
+        return Err("the file to open changed its type since it was confirmed".into());
+    }
+    Ok(())
+}
+/// The shape a launch that opens file (resolved) must have: an opener of `OPENERS` taken from
+/// folders, executable (resolved) one of them, argv exactly the opener's arguments then the file,
+/// the file's folder as its cwd, no terminal program.
+fn open_shape(
+    folders: &[PathBuf],
+    executable: &Path,
+    argv: &[String],
+    cwd: &Path,
+    program: Option<&PathBuf>,
+    file: &Path,
+) -> Result<(), String> {
+    let flags = folders
+        .iter()
+        .flat_map(|d| {
+            OPENERS
+                .iter()
+                .map(move |(name, flags)| (d.join(name), *flags))
+        })
+        .find(|(p, _)| fs::canonicalize(p).is_ok_and(|p| p == executable))
+        .map(|(_, flags)| flags)
+        .ok_or_else(|| {
+            format!(
+                "a launch that opens a file runs xdg-open or gio from {}, not {}",
+                OPENER_FOLDERS.join(", "),
+                executable.display()
+            )
+        })?;
+    let mut want: Vec<String> = flags.iter().map(|f| f.to_string()).collect();
+    want.push(file.to_string_lossy().into_owned());
+    if argv != want.as_slice() {
+        return Err(format!(
+            "an open launch runs exactly {} {}",
+            executable.display(),
+            serde_json::to_string(&want).unwrap_or_default()
+        ));
+    }
+    if Some(cwd) != file.parent() {
+        return Err("an open launch runs in the folder of the file it opens".into());
+    }
+    if program.is_some() {
+        return Err("an open launch runs no terminal program".into());
+    }
+    Ok(())
 }
 pub(crate) fn escape_format_characters(text: &str) -> String {
     use gtk::glib::Unichar;
@@ -543,8 +704,21 @@ pub struct Confirmations {
     last_page: HashMap<String, Instant>,
     pub(crate) showing: std::collections::HashSet<String>,
     pub(crate) results: HashMap<String, Result<Option<String>, String>>,
+    /// The folders a launch that opens a file takes its opener from (`OPENER_FOLDERS`, and in a
+    /// native-test build the folder `PLUXY_APP_TEST_OPENERS` names, for the check's stand-in).
+    opener_folders: Vec<PathBuf>,
     #[cfg(test)]
     hashes: usize,
+}
+/// `OPENER_FOLDERS`, and in a native-test build the stand-in opener's folder.
+fn opener_folders() -> Vec<PathBuf> {
+    #[allow(unused_mut)]
+    let mut f: Vec<PathBuf> = OPENER_FOLDERS.iter().map(PathBuf::from).collect();
+    #[cfg(feature = "native-test")]
+    if let Some(d) = std::env::var_os("PLUXY_APP_TEST_OPENERS") {
+        f.push(d.into());
+    }
+    f
 }
 impl Confirmations {
     pub fn open(settings: PathBuf) -> Result<Self, String> {
@@ -600,6 +774,7 @@ impl Confirmations {
             last_page: HashMap::new(),
             showing: Default::default(),
             results: HashMap::new(),
+            opener_folders: opener_folders(),
             #[cfg(test)]
             hashes: 0,
         })
@@ -756,9 +931,19 @@ impl Confirmations {
             };
             let exact_opens = match &l.opens {
                 Some((file, within)) => {
-                    let (f, w) = open_within(file, within)?;
+                    let (f, w, content_type) = open_within(file, within)?;
+                    open_shape(
+                        &self.opener_folders,
+                        &e.identity.canonical,
+                        &l.argv,
+                        &c.identity.canonical,
+                        l.program.as_ref(),
+                        &f.identity.canonical,
+                    )?;
                     let x = ExactOpen {
                         file: f.identity.clone(),
+                        metadata: Metadata::read(&f.file)?,
+                        content_type,
                         within: w.identity.clone(),
                     };
                     opens = Some((f, w));

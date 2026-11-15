@@ -238,6 +238,9 @@ pub struct Request {
     /// The input's secret field whose secret the launch gets on its stdin (`stdin`), the private
     /// channel to a credential bridge: written, then closed.
     pub stdin: Option<String>,
+    /// Only the absolute entries of `PATH` (a launch that opens a file): a relative entry would
+    /// find programs in its working folder.
+    pub absolute_path: bool,
 }
 
 fn valid_name(n: &str) -> Result<(), String> {
@@ -499,6 +502,17 @@ pub fn environment(
     }
     for (n, v) in secrets {
         env.insert(n.clone(), OsString::from(v));
+    }
+    if request.absolute_path {
+        if let Some(v) = env.get_mut("PATH") {
+            let kept: Vec<String> = v
+                .to_string_lossy()
+                .split(':')
+                .filter(|e| e.starts_with('/'))
+                .map(String::from)
+                .collect();
+            *v = OsString::from(kept.join(":"));
+        }
     }
     env.into_iter().collect()
 }
