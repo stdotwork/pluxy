@@ -3,6 +3,7 @@
 // Claude Desktop's library folder.
 import { describe, expect, test } from "bun:test";
 import {
+  aliasCancelled,
   aliasState,
   fresh,
   keysOf,
@@ -74,6 +75,8 @@ describe("aliasState", () => {
   test("a row with no alias, or its model's own name, needs nothing from core", () => {
     expect(aliasState(row("gpt-6", ""), served)).toBe("none");
     expect(aliasState(row("gpt-6", " gpt-6 "), served)).toBe("none");
+    // Core matches the model's name whatever the case of its ASCII letters.
+    expect(aliasState(row("gpt-6", "GPT-6"), served)).toBe("none");
   });
   test("an alias core lists is served; one it does not list is offered for creating", () => {
     expect(aliasState(row("gpt-6", "claude-opus-5-x"), served)).toBe("served");
@@ -81,5 +84,13 @@ describe("aliasState", () => {
   });
   test("without core's list nothing is offered", () => {
     expect(aliasState(row("gpt-6", "claude-sonnet-5-x"), undefined)).toBe("unknown");
+  });
+});
+
+describe("aliasCancelled", () => {
+  test("only the app's own cancel is a cancel", () => {
+    expect(aliasCancelled("cancelled")).toBe(true);
+    expect(aliasCancelled("core did not add the alias to a: the request was cancelled")).toBe(false);
+    expect(aliasCancelled(undefined)).toBe(false);
   });
 });

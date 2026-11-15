@@ -12,15 +12,18 @@
 //! refused, never replaced; one every account already has is reported, unasked.
 //!
 //! Once written, core must list the alias on those accounts; otherwise (a prefix the accounts are
-//! asked with, an exclusion) each account's previous `model_alias` is put back. Clear integration
-//! and Restore Backup of the Claude Desktop tool leave an alias made here: core's config is not
-//! the tool's file. Linux only, as native confirmations.
+//! asked with, an exclusion, or core not answering) each account's previous `model_alias` is put
+//! back. Clear integration and Restore Backup of the Claude Desktop tool leave an alias made here:
+//! core's config is not the tool's file. Linux only, as native confirmations.
 
 use crate::client_keys::{connected, fresh};
 use crate::conn::Caller;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
+
+/// How long core may take to list an alias once it is written.
+const LISTED_WITHIN: Duration = Duration::from_secs(5);
 
 /// What an alias changes in core, worked out from its lists.
 #[derive(Debug, PartialEq)]
@@ -34,25 +37,34 @@ pub struct Plan {
     pub config: Vec<String>,
 }
 
+impl Plan {
+    /// The IDs of the accounts the alias is added to.
+    fn ids(&self) -> Vec<String> {
+        self.accounts.iter().map(|(id, _)| id.clone()).collect()
+    }
+}
+
 /// Whether s can be a model name or an alias: 1 to 256 printable characters, no spaces.
 fn name_ok(s: &str) -> bool {
     !s.is_empty() && s.len() <= 256 && s.bytes().all(|b| b.is_ascii_graphic())
 }
 
-/// The accounts core lists as serving name (`GET /models`); None when it serves no such model.
+/// The accounts core lists as serving name (`GET /models`), each once, empty IDs left out; None
+/// when it serves no such model.
 fn serving(models: &Value, name: &str) -> Option<Vec<String>> {
-    models["models"]
+    let m = models["models"]
         .as_array()?
         .iter()
-        .find(|m| m["id"] == name)
-        .map(|m| {
-            m["accounts"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|a| a.as_str().map(String::from))
-                .collect()
-        })
+        .find(|m| m["id"] == name)?;
+    let mut ids: Vec<String> = vec![];
+    for id in m["accounts"].as_array().into_iter().flatten() {
+        if let Some(id) = id.as_str().filter(|id| !id.is_empty()) {
+            if !ids.iter().any(|i| i == id) {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    Some(ids)
 }
 
 /// What making alias a name of model changes, from core's `GET /models` and `GET /accounts`
@@ -61,7 +73,8 @@ pub fn plan(model: &str, alias: &str, models: &Value, accounts: &Value) -> Resul
     if !name_ok(model) || !name_ok(alias) {
         return Err("a model and its alias are names of 1 to 256 characters with no spaces".into());
     }
-    if alias == model {
+    // Core matches a model's name regardless of case, so such an alias would rename nothing.
+    if alias.eq_ignore_ascii_case(model) {
         return Err(format!(
             "{alias} is the model's own name: no alias is needed"
         ));
@@ -109,6 +122,9 @@ pub fn plan(model: &str, alias: &str, models: &Value, accounts: &Value) -> Resul
         }
     }
     if p.accounts.is_empty() && p.have.is_empty() {
+        if p.config.is_empty() {
+            return Err(format!("core lists no account serving {model}"));
+        }
         return Err(format!(
             "{model} is served only by accounts set in core's config ({}): add the alias to their model_alias there",
             p.config.join(", ")
@@ -126,21 +142,30 @@ pub fn plan(model: &str, alias: &str, models: &Value, accounts: &Value) -> Resul
     Ok(p)
 }
 
+/// Account IDs as the native confirmation shows them: core's, so each control character is
+/// escaped and none can add a line to the dialog (`conn.rs`, shown_path).
+fn shown(ids: &[String]) -> String {
+    ids.iter()
+        .map(|id| crate::conn::shown_path(id))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The native confirmation's text: what core gets, where, and what stays.
 fn summary(origin: &str, model: &str, alias: &str, p: &Plan) -> String {
-    let ids: Vec<&str> = p.accounts.iter().map(|(id, _)| id.as_str()).collect();
-    let (which, list) = if ids.len() == 1 {
-        ("its account", ids[0].to_string())
+    let which = if p.accounts.len() == 1 {
+        "its account"
     } else {
-        ("its accounts", ids.join(", "))
+        "its accounts"
     };
+    let list = shown(&p.ids());
     let mut s = format!(
         "Add the model alias {alias} on the core at {origin}: requests for {alias} go to {model} on {which} {list}, added by login. {model} keeps its own name."
     );
     if !p.config.is_empty() {
         s.push_str(&format!(
             " The accounts set in core's config that serve {model} ({}) are not changed: add the alias there.",
-            p.config.join(", ")
+            shown(&p.config)
         ));
     }
     s.push_str(" Clear integration and Restore Backup leave this alias in core; remove it on the account's settings in core's panel.");
@@ -167,16 +192,18 @@ fn why(r: &crate::client::Reply) -> String {
         .unwrap_or_else(|| format!("core answered {}", r.status))
 }
 
+/// Core's reply to `GET path`, or why it gave none.
+fn get(caller: &Caller, path: &str) -> Result<Value, String> {
+    let r = caller.call("GET", path, None);
+    match (r.status, r.body.as_ref()) {
+        (200, Some(b)) => Ok(b.clone()),
+        _ => Err(format!("core did not answer GET {path}: {}", why(&r))),
+    }
+}
+
 /// Core's `GET /models` and `GET /accounts` replies.
 fn lists(caller: &Caller) -> Result<(Value, Value), String> {
-    let get = |path: &str| {
-        let r = caller.call("GET", path, None);
-        match (r.status, r.body.as_ref()) {
-            (200, Some(b)) => Ok(b.clone()),
-            _ => Err(format!("core did not answer GET {path}: {}", why(&r))),
-        }
-    };
-    Ok((get("/models")?, get("/accounts")?))
+    Ok((get(caller, "/models")?, get(caller, "/accounts")?))
 }
 
 /// Sets each account's model_alias back to the list it had; the accounts it could not set back.
@@ -195,17 +222,19 @@ fn put_back(caller: &Caller, done: &[(String, Value)]) -> Vec<String> {
 /// left alone, and whether it was there already.
 fn view(model: &str, alias: &str, p: &Plan, already: bool) -> Value {
     let mut on = p.have.clone();
-    on.extend(p.accounts.iter().map(|(id, _)| id.clone()));
+    on.extend(p.ids());
     json!({"model": model, "alias": alias, "accounts": on, "config_accounts": p.config, "already": already})
 }
+
+/// What a retry says, after a refusal that changed nothing.
+const AGAIN: &str = "Create the alias again.";
 
 /// Makes alias a name of model in the connected core, on the accounts added by login that serve
 /// it, once the person confirms. Run off the window's thread.
 pub fn create(app: &AppHandle, model: &str, alias: &str) -> Result<Value, String> {
     let (model, alias) = (model.trim(), alias.trim());
     let (pin, target) = connected(app)?;
-    let again = "Create the alias again.";
-    let (models, accounts) = lists(&fresh(app, &pin, again)?)?;
+    let (models, accounts) = lists(&fresh(app, &pin, AGAIN)?)?;
     let asked = plan(model, alias, &models, &accounts)?;
     if asked.accounts.is_empty() {
         return Ok(view(model, alias, &asked, true));
@@ -214,19 +243,26 @@ pub fn create(app: &AppHandle, model: &str, alias: &str) -> Result<Value, String
     if !crate::confirmation::confirm_app(app, what, pin.revision)? {
         return Err("cancelled".into());
     }
-    // Core as it is now: what the person confirmed, or nothing.
-    let caller = fresh(app, &pin, again)?;
+    write(fresh(app, &pin, AGAIN), model, alias, &asked, LISTED_WITHIN)
+}
+
+/// Adds the alias the person confirmed (asked) through caller, the connection as it was when
+/// they were asked (an error when it changed since, which sends nothing), if core's accounts are
+/// still as asked; then core must list it on them within wait, or each account's previous
+/// `model_alias` is put back.
+fn write(
+    caller: Result<Caller, String>,
+    model: &str,
+    alias: &str,
+    asked: &Plan,
+    wait: Duration,
+) -> Result<Value, String> {
+    let caller = caller?;
     let (models, accounts) = lists(&caller)?;
     let now = plan(model, alias, &models, &accounts)?;
-    let ids = |p: &Plan| {
-        p.accounts
-            .iter()
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>()
-    };
-    if ids(&now) != ids(&asked) || now.config != asked.config {
+    if now.ids() != asked.ids() || now.config != asked.config {
         return Err(format!(
-            "core's accounts changed while you were asked. {again}"
+            "core's accounts changed while you were asked. {AGAIN}"
         ));
     }
     let mut done: Vec<(String, Value)> = vec![];
@@ -244,18 +280,28 @@ pub fn create(app: &AppHandle, model: &str, alias: &str) -> Result<Value, String
         }
         done.push((id.clone(), list.clone()));
     }
-    // Core lists the alias on every account it was added to, or it is taken out again.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // Core lists the alias on every account it was added to, or it is taken out again: at once
+    // when core cannot be asked (not signed in, not reached), after wait when it does not list it.
+    let deadline = Instant::now() + wait;
     loop {
-        let on = lists(&caller).ok().and_then(|(m, _)| serving(&m, alias));
-        if on.is_some_and(|on| ids(&now).iter().all(|id| on.contains(id))) {
+        let models = match get(&caller, "/models") {
+            Ok(m) => m,
+            Err(e) => {
+                return Err(undone(
+                    &caller,
+                    &done,
+                    format!("whether core serves {alias} could not be read ({e})"),
+                ))
+            }
+        };
+        if serving(&models, alias).is_some_and(|on| now.ids().iter().all(|id| on.contains(id))) {
             return Ok(view(model, alias, &now, false));
         }
         if Instant::now() > deadline {
             return Err(undone(
                 &caller,
                 &done,
-                format!("core does not serve {alias} on {} with the alias added (a prefix those accounts are asked with, or an exclusion, may stop it)", ids(&now).join(", ")),
+                format!("core does not serve {alias} on {} with the alias added (a prefix those accounts are asked with, or an exclusion, may stop it)", now.ids().join(", ")),
             ));
         }
         std::thread::sleep(Duration::from_millis(200));

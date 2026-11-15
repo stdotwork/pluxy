@@ -23,6 +23,7 @@ import {
 } from "../../ui/kit/ui";
 import { Backups, type Reply, reply } from "./backups";
 import {
+  aliasCancelled,
   aliasState,
   FILES,
   fresh,
@@ -215,7 +216,7 @@ export function ClaudeDesktopPage() {
         config_accounts: string[];
         already: boolean;
       }>("core_alias_create", { model: r.model.trim(), alias: r.alias.trim() });
-      if (res.error?.message.includes("cancelled")) return { status: 200 };
+      if (aliasCancelled(res.error?.message)) return { status: 200 };
       const b = res.body;
       if (b) {
         const said = t(b.already ? "aliasAlready" : "aliasMade", {

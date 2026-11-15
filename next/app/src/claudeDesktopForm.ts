@@ -82,9 +82,18 @@ export const missingLibrary = (error: string | undefined) => !!error?.includes(M
  * does not list it), or unknown (core's list was not read). */
 export type AliasState = "none" | "served" | "missing" | "unknown";
 
+/** name with ASCII letters in lower case: core matches a model's name so, as the tool's Rust
+ * (`eq_ignore_ascii_case`) does. */
+const folded = (name: string) => name.replace(/[A-Z]/g, (c) => c.toLowerCase());
+
 export function aliasState(row: Row, served: ReadonlySet<string> | undefined): AliasState {
   const alias = row.alias.trim();
-  if (alias === "" || alias === row.model.trim()) return "none";
+  // An alias that is the model's own name in another case renames nothing in core.
+  if (alias === "" || folded(alias) === folded(row.model.trim())) return "none";
   if (!served) return "unknown";
   return served.has(alias) ? "served" : "missing";
 }
+
+/** Whether `core_alias_create`'s refusal is the person's cancel of its confirmation: exactly the
+ * app's "cancelled", not any message that mentions the word. */
+export const aliasCancelled = (error: string | undefined) => error === "cancelled";
