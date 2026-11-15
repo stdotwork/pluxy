@@ -148,7 +148,8 @@ unsafe fn judge(
     my_owner: PSID,
     others: Others,
 ) -> Result<(), String> {
-    let mine = |sid: PSID| EqualSid(sid, me) != 0 || EqualSid(sid, my_owner) != 0;
+    let same = |a: PSID, b: PSID| !a.is_null() && !b.is_null() && EqualSid(a, b) != 0;
+    let mine = |sid: PSID| same(sid, me) || same(sid, my_owner);
     if owner.is_null() || !mine(owner) {
         return Err("not owned by this user".into());
     }
@@ -195,4 +196,96 @@ unsafe fn judge(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW,
+        SDDL_REVISION_1,
+    };
+    use windows_sys::Win32::Security::{GetSecurityDescriptorDacl, GetSecurityDescriptorOwner};
+
+    /// This user, in the descriptors below; another user; both made up.
+    const ME: &str = "S-1-5-21-1000-2000-3000-1001";
+    const OTHER: &str = "S-1-5-21-1000-2000-3000-1002";
+
+    fn wide(s: &str) -> Vec<u16> {
+        std::ffi::OsStr::new(s)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+
+    /// Memory LocalAlloc'd by the conversions, freed when dropped.
+    struct Local(*mut core::ffi::c_void);
+    impl Drop for Local {
+        fn drop(&mut self) {
+            // SAFETY: allocated by the conversion that made it.
+            unsafe { LocalFree(self.0) };
+        }
+    }
+
+    fn sid(text: &str) -> Local {
+        let mut sid: PSID = null_mut();
+        // SAFETY: text is NUL-terminated; sid is written on success.
+        assert_ne!(
+            unsafe { ConvertStringSidToSidW(wide(text).as_ptr(), &mut sid) },
+            0
+        );
+        Local(sid)
+    }
+
+    /// judge on the owner and access list of the descriptor sddl (`ME` and `OTHER` in it are
+    /// replaced), for this user ME and the default owner my_owner.
+    fn judged(sddl: &str, my_owner: Option<&str>, others: Others) -> Result<(), String> {
+        let sddl = sddl.replace("ME", ME).replace("OTHER", OTHER);
+        let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+        // SAFETY: the string is NUL-terminated; sd is written on success.
+        let made = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                wide(&sddl).as_ptr(),
+                SDDL_REVISION_1,
+                &mut sd,
+                null_mut(),
+            )
+        };
+        assert_ne!(made, 0, "{sddl}: {}", std::io::Error::last_os_error());
+        let sd = Local(sd);
+        let (mut owner, mut dacl): (PSID, *mut ACL) = (null_mut(), null_mut());
+        let (mut defaulted, mut present) = (0, 0);
+        // SAFETY: sd is a valid descriptor; the outputs point into it.
+        unsafe {
+            assert_ne!(
+                GetSecurityDescriptorOwner(sd.0, &mut owner, &mut defaulted),
+                0
+            );
+            assert_ne!(
+                GetSecurityDescriptorDacl(sd.0, &mut present, &mut dacl, &mut defaulted),
+                0
+            );
+        }
+        let me = sid(ME);
+        let default_owner = my_owner.map(sid);
+        // SAFETY: every pointer is valid while sd, me and default_owner live.
+        unsafe {
+            judge(
+                owner,
+                dacl,
+                me.0,
+                default_owner.as_ref().map_or(null_mut(), |s| s.0),
+                others,
+            )
+        }
+    }
+
+    // A token whose default owner cannot be read as a SID is judged on its user alone.
+    #[test]
+    fn a_missing_default_owner_counts_as_no_one() {
+        assert!(judged("O:MED:P(A;;FA;;;ME)", None, Others::None).is_ok());
+        let e = judged("O:BAD:P(A;;FA;;;ME)", None, Others::None).unwrap_err();
+        assert!(e.contains("not owned"), "{e}");
+    }
 }
