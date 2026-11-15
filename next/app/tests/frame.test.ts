@@ -103,7 +103,6 @@ test("the wrapper waits while the app is not yet watching the frame's navigation
     url: "http://localhost:8401/p/",
     title: "Page",
     generation: "1",
-    native_frame_navigation: true,
   };
   const r = await shown([{ status: 503 }, { status: 503 }, { status: 200, info }]);
   expect(r).toEqual({ asked: 3, appended: true, src: "http://localhost:8401/p/", error: undefined });

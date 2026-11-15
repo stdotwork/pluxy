@@ -7,9 +7,6 @@ use url::Url;
 
 pub const SCHEME: &str = "pluxy-page";
 pub const MAX_SEND: usize = 256 << 10;
-/// The app closes a page's channel when its frame navigates on every platform, so the wrapper
-/// document need not report a second frame document itself (page/frame.js).
-const NATIVE_FRAME_NAVIGATION: bool = true;
 pub const MAX_CALL: usize = 64 << 10;
 pub const MAX_OPEN: usize = 16;
 pub const MAX_PACKAGE_PAGES: usize = 4;
@@ -770,10 +767,10 @@ fn serve_at(
             if !w.frames_watched {
                 return fail(503, "unavailable");
             }
-            let info = json!({"url": w.binding.url.as_str(), "title": w.binding.title, "generation": w.document.generation, "native_frame_navigation": NATIVE_FRAME_NAVIGATION});
+            let info = json!({"url": w.binding.url.as_str(), "title": w.binding.title, "generation": w.document.generation});
             #[cfg(feature = "native-test")]
             let info = if pages.ingress_fixture {
-                json!({"url":ingress_url().as_str(), "title":w.binding.title, "generation":w.document.generation, "native_frame_navigation": NATIVE_FRAME_NAVIGATION})
+                json!({"url":ingress_url().as_str(), "title":w.binding.title, "generation":w.document.generation})
             } else {
                 info
             };
@@ -1628,7 +1625,7 @@ mod tests {
             info["url"],
             "http://localhost:8401/test/alpha/hash/index.html"
         );
-        assert_eq!(info["native_frame_navigation"], true);
+        assert!(info.get("native_frame_navigation").is_none());
     }
 
     #[test]

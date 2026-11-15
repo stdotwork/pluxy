@@ -14,7 +14,6 @@ let port;
 const queue = [];
 let pumping = false;
 let generation;
-let nativeFrameNavigation = false;
 
 // One FIFO preserves mutation/read order. Only calls consume its bounded capacity;
 // the single hello and closed lifecycle messages always reach native admission.
@@ -76,11 +75,6 @@ async function pump() {
   pumping = false;
 }
 
-function closePort() {
-  port?.close();
-  port = undefined;
-}
-
 // The app's answers, delivered by the native side.
 Object.defineProperty(window, "__pluxyDeliver", {
   value: (m, documentGeneration) => {
@@ -113,12 +107,10 @@ window.addEventListener("message", (e) => {
   send("hello", d);
 });
 
+// A second load is a second frame document: the app sees its navigation and closes the
+// channel (lib.rs page_navigation), on every platform.
 frame.addEventListener("load", () => {
   loads++;
-  if (loads === 2 && !nativeFrameNavigation) {
-    closePort();
-    send("closed");
-  }
 });
 
 // On Windows the app answers 503 until it watches the frame's navigations, which takes a moment
@@ -129,8 +121,7 @@ for (let i = 0; r.status === 503 && i < 50; i++) {
   r = await fetch("/frame");
 }
 if (!r.ok) throw new Error(`the page's frame is unavailable (${r.status})`);
-const { url, title, generation: documentGeneration, native_frame_navigation } = await r.json();
-nativeFrameNavigation = native_frame_navigation === true;
+const { url, title, generation: documentGeneration } = await r.json();
 generation = documentGeneration;
 frame.title = title;
 frame.sandbox = "allow-scripts";
