@@ -1061,10 +1061,12 @@ impl Rect {
     }
 }
 
-/// Opens a webview for an extension page over rect of the window, and returns its label.
+/// Opens a webview for an extension page over rect of the window, and returns its label. Async:
+/// a synchronous command runs on the main thread, and making a WebView2 there from a command
+/// never returns on Windows.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-fn page_open(
+async fn page_open(
     webview: Webview,
     extension: String,
     page: String,
@@ -1090,10 +1092,11 @@ fn page_open(
 }
 
 /// Opens a webview for page of package id on this device, at the address its catalog gives.
+/// Async, as `page_open` is.
 #[tauri::command]
-fn device_page_open(
+async fn device_page_open(
     webview: Webview,
-    state: tauri::State<App>,
+    state: tauri::State<'_, App>,
     id: String,
     page: String,
     rect: Rect,
