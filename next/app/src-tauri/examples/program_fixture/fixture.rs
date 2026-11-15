@@ -42,7 +42,13 @@
 //!   for op `spawn`, a spawn request for that call), and answering with the host's answer;
 //! - `serve`, the client-key check's agent (`src/client_key_native.rs`): sends `GET /v1/models` to
 //!   the core at `base` (plain HTTP) with the secret delivered for `key` as its bearer token, writes
-//!   the status core answered to `out` and answers with it and its process ID.
+//!   the status core answered to `out` and answers with it and its process ID;
+//! - `export`, the save check's exporter (`src/save_native.rs`): reads the file `source` and hands
+//!   its bytes to the host's save service for the call, in `files` frames: `append` frames of at
+//!   most `chunk` bytes (default 700,000) at their offsets, then one `save` with `name` and the
+//!   input's `extra` fields; with `again`, a second `save` for the same call. It answers with the
+//!   host's answers: `{"appended": [...], "answer": ..., "again": ...}`, stopping at the first
+//!   refused append (with `save_anyway`, it still asks the `save` after it).
 //!
 //! Started with `AGENT` as its first argument it is the spawn check's agent instead (`agent`).
 //! Started as `x-terminal-emulator` (the launcher check's stand-in terminal, `terminal`) it writes
@@ -255,6 +261,52 @@ fn relay(input: &mut impl Read, output: &mut impl Write, f: &Value, n: u64) -> V
         }
     }
     json!({"error": {"code": "extension_unavailable", "message": "the host closed the pipe"}})
+}
+
+/// The save check's export for call f: `source`'s bytes in `append` frames at their offsets, then
+/// a `save` (and with `again`, a second); the host's answers.
+fn export(input: &mut impl Read, output: &mut impl Write, f: &Value, asked: &mut u64) -> Value {
+    use base64::Engine;
+    let i = &f["input"];
+    let bytes = std::fs::read(i["source"].as_str().unwrap_or_default()).unwrap_or_default();
+    let chunk = i["chunk"].as_u64().unwrap_or(700_000).max(1) as usize;
+    let mut files = |input: &mut dyn Read, op: &str, body: Value| {
+        *asked += 1;
+        let mut input = input;
+        ask(
+            &mut input,
+            &mut *output,
+            json!({"type": "files", "id": format!("v-{asked}"), "for": f["id"], "op": op, "input": body}),
+        )
+    };
+    let mut appended = Vec::new();
+    let b64 = base64::engine::general_purpose::STANDARD;
+    for (n, part) in bytes.chunks(chunk).enumerate() {
+        let a = files(
+            input,
+            "append",
+            json!({"offset": n * chunk, "data": b64.encode(part)}),
+        );
+        let refused = a.get("error").is_some();
+        appended.push(a);
+        if refused && i["save_anyway"] != true {
+            return json!({"appended": appended});
+        }
+        if refused {
+            break;
+        }
+    }
+    let mut save = json!({"name": i["name"]});
+    if let (Some(s), Some(extra)) = (save.as_object_mut(), i["extra"].as_object()) {
+        s.extend(extra.clone());
+    }
+    let answer = files(input, "save", save.clone());
+    let again = if i["again"] == true {
+        files(input, "save", save)
+    } else {
+        Value::Null
+    };
+    json!({"appended": appended, "answer": answer, "again": again})
 }
 
 /// Sends frame (a vault request or a call through the host) and waits for the host's answer
@@ -1129,6 +1181,13 @@ pub fn main() -> ! {
                             &error(&id, "invalid_request", "no secret was delivered for key"),
                         ),
                     },
+                    "export" | "sneak" => {
+                        let out = export(&mut input, &mut output, &f, &mut asked);
+                        write_frame(
+                            &mut output,
+                            &json!({"type": "result", "id": id, "output": out}),
+                        );
+                    }
                     "crash" => std::process::exit(3),
                     "flood" => {
                         for i in 0..2000 {

@@ -91,8 +91,17 @@ pub const BASE: &[&str] = &[
     "ALL_PROXY",
 ];
 /// Names a launch may never set, inherit or receive a secret in: the app's own and its tests'
-/// (`PLUXY_`), the dynamic loader's (`LD_`) and the AppImage runtime's.
-const NEVER_PREFIX: &[&str] = &["PLUXY_", "LD_", "MALLOC_"];
+/// (`PLUXY_`), the dynamic loader's (`LD_`) and the AppImage runtime's, and the .NET runtime's
+/// profiler and the legacy `COMPlus_` settings. Prefixes are upper case, as names are compared.
+const NEVER_PREFIX: &[&str] = &[
+    "PLUXY_",
+    "LD_",
+    "MALLOC_",
+    "CORECLR_",
+    "COR_PROFILER_PATH",
+    "DOTNET_PROFILER",
+    "COMPLUS_",
+];
 /// And names that make the dynamic loader, the C library or an interpreter load or run code of
 /// their own, like `LD_*`.
 const NEVER: &[&str] = &[
@@ -122,6 +131,13 @@ const NEVER: &[&str] = &[
     "JAVA_TOOL_OPTIONS",
     "_JAVA_OPTIONS",
     "JDK_JAVA_OPTIONS",
+    "DOTNET_STARTUP_HOOKS",
+    "COR_PROFILER",
+    "DOTNET_ADDITIONAL_DEPS",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "NODE_PATH",
+    "RUBYLIB",
 ];
 /// At most this many names in each of set, unset, inherit and secrets.
 const MAX_NAMES: usize = 64;
@@ -304,6 +320,14 @@ pub fn parse(
             ))
         }
     };
+    // A launch that names the program a terminal runs is a terminal launch. The process the host
+    // holds is then the terminal's own launcher, which many terminals (gnome-terminal, and konsole
+    // or kitty in single-instance mode) end at once after handing the work to a server process:
+    // stop and status would track a process that is gone, not the agent. So only direct launches
+    // are managed.
+    if lifetime == Lifetime::Managed && input.get("program").is_some() {
+        return Err("a terminal launch is detached only: a terminal may hand its session to a server process and exit, so the app could not stop it (only a direct launch can be managed)".into());
+    }
     let mut r = Request::default();
     if let Some(v) = input.get("stdin") {
         let field = v.as_str().ok_or("a launch's stdin names a secret field")?;

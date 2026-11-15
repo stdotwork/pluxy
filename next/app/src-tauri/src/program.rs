@@ -66,6 +66,7 @@
 //!
 //! A tool's `spawn` and `runtime` frames, for a host call it serves, go to the host's spawn service
 //! (`Host::set_spawner`, `spawn.rs`), on a thread of their own; their IDs count among its own calls.
+//! Its `files` frames go to the host's save service (`Host::set_saver`, `savefile.rs`) the same way.
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -338,6 +339,9 @@ pub type Route = Arc<dyn Fn(Outbound) -> Result<Value, CallError> + Send + Sync>
 pub type Spawner =
     Arc<dyn Fn(&Hop, &Arc<Context>, &Value, &Cancel) -> Result<Value, CallError> + Send + Sync>;
 
+/// Answers a tool's `files` frames (`Host::set_saver`), as a `Spawner` answers its `spawn` frames.
+pub type Saver = Spawner;
+
 /// The host-private services a tool reaches through the host (`Host::set_private`): the app's
 /// vault.
 pub trait Private: Send + Sync {
@@ -595,6 +599,7 @@ struct Run {
     route: Option<Route>,
     private: Option<Arc<dyn Private>>,
     spawner: Option<Spawner>,
+    saver: Option<Saver>,
     /// The describe call it is answering, while it does: its `vault` frames may name it.
     describing: Mutex<Option<(String, Vec<String>)>>,
     /// Its last stderr line, as logged: why it stopped, if it says.
@@ -692,6 +697,7 @@ struct Inner {
     route: OnceLock<Route>,
     private: OnceLock<Arc<dyn Private>>,
     spawner: OnceLock<Spawner>,
+    saver: OnceLock<Saver>,
     /// The home folder and the tools' data folders root tools get (`Host::set_tool_env`).
     env: OnceLock<ToolEnv>,
     /// Every call under way, by number, to cancel them all.
@@ -816,6 +822,7 @@ impl Host {
             route: OnceLock::new(),
             private: OnceLock::new(),
             spawner: OnceLock::new(),
+            saver: OnceLock::new(),
             env: OnceLock::new(),
             calls: Mutex::new(HashMap::new()),
             closing: AtomicBool::new(false),
@@ -837,6 +844,12 @@ impl Host {
     /// it, they are refused.
     pub fn set_spawner(&self, spawner: Spawner) {
         let _ = self.0.spawner.set(spawner);
+    }
+
+    /// Sets the host's save service, which answers tools' `files` frames. Without it, they are
+    /// refused.
+    pub fn set_saver(&self, saver: Saver) {
+        let _ = self.0.saver.set(saver);
     }
 
     /// Sets what tools get beyond the contract's three values: `HOME` and, made for each tool as
@@ -1668,6 +1681,7 @@ fn new_run(
         route: inner.route.get().cloned(),
         private: inner.private.get().cloned(),
         spawner: inner.spawner.get().cloned(),
+        saver: inner.saver.get().cloned(),
         describing: Mutex::new(None),
         last_line: Mutex::new(None),
     });
@@ -2299,7 +2313,7 @@ fn deliver(run: &Arc<Run>, frame: &[u8], said_hello: &mut bool) -> Result<(), St
             vault(run, id, &v);
             return Ok(());
         }
-        "spawn" | "runtime" => {
+        "spawn" | "runtime" | "files" => {
             spawn(run, id, &v);
             return Ok(());
         }
@@ -2423,9 +2437,10 @@ fn outbound(run: &Arc<Run>, id: &str, v: &Value) {
 
 /// A tool's `spawn` or `runtime` frame v with ID id, for a host call it serves (`for`): the host's
 /// spawn service answers it on a thread of its own (a stop waits for the runtime to end), and the
-/// answer goes back on the tool's stdin. Its ID counts among the tool's own calls (`outbound`),
-/// and the spawner gets the served call's cancel flags with the request's own; a tool that is
-/// stopping is answered nothing.
+/// answer goes back on the tool's stdin; a `files` frame goes to the host's save service the same
+/// way (a save waits for the person's answer in its dialog). Its ID counts among the tool's own
+/// calls (`outbound`), and the service gets the served call's cancel flags with the request's own;
+/// a tool that is stopping is answered nothing.
 fn spawn(run: &Arc<Run>, id: &str, v: &Value) {
     let refuse = |code: &str, message: String| {
         if run.ending() {
@@ -2452,7 +2467,7 @@ fn spawn(run: &Arc<Run>, id: &str, v: &Value) {
     let Some(serves) = v["for"].as_str() else {
         return refuse(
             "invalid_request",
-            "a spawn or runtime request names the host call it is for".into(),
+            "a spawn, runtime or files request names the host call it is for".into(),
         );
     };
     let Some((context, cancel, _)) = run.serving.lock().unwrap().get(serves).cloned() else {
@@ -2461,8 +2476,14 @@ fn spawn(run: &Arc<Run>, id: &str, v: &Value) {
             format!("{serves} is not a call {} is serving", run.spec.id),
         );
     };
-    let Some(spawner) = run.spawner.clone() else {
-        return refuse("unsupported", "this host spawns nothing".into());
+    let service = if v["type"] == "files" {
+        run.saver.clone().ok_or("this host saves no files")
+    } else {
+        run.spawner.clone().ok_or("this host spawns nothing")
+    };
+    let spawner = match service {
+        Ok(s) => s,
+        Err(why) => return refuse("unsupported", why.into()),
     };
     let flag = Arc::new(AtomicBool::new(false));
     {

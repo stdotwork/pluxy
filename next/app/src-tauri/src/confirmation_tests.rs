@@ -1019,6 +1019,68 @@ fn a_launch_that_opens_a_file_has_the_openers_shape() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn every_folder_between_an_opened_file_and_its_folder_must_be_the_persons_own() {
+    let (dir, mut c, a, opener, within, _) = open_fixture();
+    // A clean nested path passes.
+    let deep = within.join("sessions/2026/11");
+    fs::create_dir_all(&deep).unwrap();
+    for d in [within.join("sessions/2026"), deep.clone()] {
+        fs::set_permissions(&d, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let nested = deep.join("rollout.jsonl");
+    private(&nested, b"{}\n");
+    assert!(c
+        .prepare(opening(&a, &opener, &nested, &within), Origin::Import)
+        .is_ok());
+    // A folder between them that others may write is refused, whichever it is and however they
+    // may write it: the file and the folder itself are the person's own.
+    for (folder, mode) in [
+        (within.join("sessions"), 0o770),
+        (within.join("sessions/2026"), 0o707),
+        (deep.clone(), 0o777),
+    ] {
+        fs::set_permissions(&folder, fs::Permissions::from_mode(mode)).unwrap();
+        let e = c
+            .prepare(opening(&a, &opener, &nested, &within), Origin::Import)
+            .err()
+            .unwrap_or_else(|| panic!("{} at {mode:o} was accepted", folder.display()));
+        assert!(
+            e.contains("writable by no one else") && e.contains(&folder.display().to_string()),
+            "{}: {e}",
+            folder.display()
+        );
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    assert!(c
+        .prepare(opening(&a, &opener, &nested, &within), Origin::Import)
+        .is_ok());
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confirmed_open_is_refused_once_a_folder_between_its_file_and_folder_turns_writable() {
+    let (dir, mut c, a, opener, within, file) = open_fixture();
+    let sessions = within.join("sessions");
+    let ok = opening(&a, &opener, &file, &within);
+    let (id, t) = approve(&mut c, ok.clone(), false);
+    assert!(c.consume(&id, &t).is_ok());
+    // Made writable by the group after the confirmation: the file's own metadata did not change.
+    let (id, t) = approve(&mut c, ok.clone(), false);
+    fs::set_permissions(&sessions, fs::Permissions::from_mode(0o770)).unwrap();
+    let e = c.consume(&id, &t).err().unwrap();
+    assert!(e.contains("writable by no one else"), "{e}");
+    fs::set_permissions(&sessions, fs::Permissions::from_mode(0o700)).unwrap();
+    // Replaced by a link to another folder of its own.
+    let (id, t) = approve(&mut c, ok, false);
+    fs::rename(&sessions, within.join("moved")).unwrap();
+    std::os::unix::fs::symlink(within.join("moved"), &sessions).unwrap();
+    assert!(c.consume(&id, &t).is_err());
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn a_confirmed_open_is_refused_once_its_file_or_folder_changed() {
     let (dir, mut c, a, opener, within, file) = open_fixture();
     let ok = opening(&a, &opener, &file, &within);
