@@ -103,8 +103,10 @@
 // disabled mid-file; ingest is refused to everyone but the host and report to another package's page;
 // no hub or parser process is left when idle. The Codex parser (next/app-tools/usage-codex) then reads
 // a hand-written Codex home in the run's HOME the same way, with prompt canaries kept out of every
-// report, the hub's store and the app's output; so does the Oh My Pi parser (next/app-tools/usage-omp)
-// on an Oh My Pi home, and a disabled parser scans nothing.
+// report, the hub's store and the app's output; and the Claude Code parser (next/app-tools/usage-claude)
+// reads a hand-written Claude Code home in the run's HOME beside it, with the same canary checks; the Oh My Pi
+// parser (next/app-tools/usage-omp) does the same on an Oh My Pi home and the Pi parser (next/app-tools/usage-pi)
+// on a Pi home, and a disabled parser scans nothing.
 // The transaction library check (transactions.ts, transactions_native.rs) runs in one more
 // session with that build: the library's fixture writer (next/app-tools/lib/transactions, example
 // fixture-writer, built here) writes selected stow and chezmoi link targets after a native
@@ -1085,7 +1087,7 @@ async function runApp(
           reader
             ? "the session reader check's canary appeared on stdout/stderr"
             : usage
-              ? "the usage check's Codex or Oh My Pi prompt canary appeared on stdout/stderr"
+              ? "the usage check's Codex, Claude Code, Oh My Pi or Pi canary appeared on stdout/stderr"
               : "the vault or spawn check's key or a canary appeared on stdout/stderr",
         );
         return;
@@ -1992,9 +1994,14 @@ async function main(): Promise<number> {
   // and its fixture parser, each when its folder is there.
   if (existsSync(join(appTools, "Cargo.toml"))) {
     run("cargo", ["build", "--locked", "-p", "codex-sessions", "--target-dir", appToolsTarget], appTools);
-    const usageTools = ["agent-usage", "usage-fixture", "usage-codex", "usage-omp"].filter((t) =>
-      existsSync(join(appTools, t, "Cargo.toml")),
-    );
+    const usageTools = [
+      "agent-usage",
+      "usage-fixture",
+      "usage-codex",
+      "usage-claude",
+      "usage-omp",
+      "usage-pi",
+    ].filter((t) => existsSync(join(appTools, t, "Cargo.toml")));
     if (usageTools.length > 0) {
       run(
         "cargo",
