@@ -1084,9 +1084,10 @@ function opencodeExpected() {
   const fixture = { id: PARSER_ID, label: "Fixture", status: "archived", total: 1547, active_days: 4 };
   const codex = { id: CODEX_ID, label: "Codex", status: "active", total: 5930, active_days: 2 };
   const claude = { id: CLAUDE_ID, label: "Claude Code", status: "active", total: 8555, active_days: 2 };
-  // Oh My Pi and Pi, each disabled after its step: 3,295 and 2,995 in the seven days, over three days each.
-  const omp = { id: OMP_ID, label: "Oh My Pi", status: "archived", total: 3295, active_days: 3 };
-  const pi = { id: PI_ID, label: "Pi", status: "archived", total: 2995, active_days: 3 };
+  // Oh My Pi and Pi, each disabled after its step, over three days each: 3,295 and 2,995 in the seven
+  // days from their own sessions, plus each fork's own entry, 350 (its copied entries count once).
+  const omp = { id: OMP_ID, label: "Oh My Pi", status: "archived", total: 3645, active_days: 3 };
+  const pi = { id: PI_ID, label: "Pi", status: "archived", total: 3345, active_days: 3 };
   const opencode = (total: number) => ({
     id: OPENCODE_ID,
     label: "OpenCode",
@@ -1329,7 +1330,7 @@ export function buildUsageFixtures(
         },
         reports: claudeExpected(),
       },
-      // The Oh My Pi parser, enabled after the Claude Code one; the other sources its reports list are
+      // The Oh My Pi parser, enabled after the Codex one; the other sources its reports list are
       // the Claude Code and Codex sources (active) and the fixture parser (archived), as the steps before leave them.
       omp: {
         id: OMP_ID,
@@ -1337,12 +1338,12 @@ export function buildUsageFixtures(
         canaries: OMP_CANARIES,
         // A model name both the store and the reports must hold (the positive control of the canary search).
         model: "gpt-5.5-mini",
-        // Each sync's counts for the source: listed (one session in both roots, so twice), changed (to
-        // read), read, failed.
+        // Each sync's counts for the source: listed (one session in both roots, so twice, and a fork of it),
+        // changed (to read), read, failed.
         syncs: {
-          first: { listed: 4, changed: 3, read: 3, failed: 0 },
-          repeat: { listed: 4, changed: 0, read: 0, failed: 0 },
-          after: { listed: 4, changed: 1, read: 1, failed: 0 },
+          first: { listed: 5, changed: 4, read: 4, failed: 0 },
+          repeat: { listed: 5, changed: 0, read: 0, failed: 0 },
+          after: { listed: 5, changed: 1, read: 1, failed: 0 },
         },
         reports: ompExpected({
           now: NOW,
@@ -1363,9 +1364,9 @@ export function buildUsageFixtures(
         canaries: PI_CANARIES,
         model: "gpt-5.5-mini",
         syncs: {
-          first: { listed: 4, changed: 3, read: 3, failed: 0 },
-          repeat: { listed: 4, changed: 0, read: 0, failed: 0 },
-          after: { listed: 4, changed: 1, read: 1, failed: 0 },
+          first: { listed: 5, changed: 4, read: 4, failed: 0 },
+          repeat: { listed: 5, changed: 0, read: 0, failed: 0 },
+          after: { listed: 5, changed: 1, read: 1, failed: 0 },
         },
         reports: piExpected({
           now: NOW,
@@ -1374,7 +1375,7 @@ export function buildUsageFixtures(
           others: [
             { id: CLAUDE_ID, label: "Claude Code", status: "active", total: 8555, active_days: 2 },
             { id: CODEX_ID, label: "Codex", status: "active", total: 5930, active_days: 2 },
-            { id: OMP_ID, label: "Oh My Pi", status: "archived", total: 3295, active_days: 3 },
+            { id: OMP_ID, label: "Oh My Pi", status: "archived", total: 3645, active_days: 3 },
             { id: PARSER_ID, label: "Fixture", status: "archived", total: 1547, active_days: 4 },
           ],
         }),

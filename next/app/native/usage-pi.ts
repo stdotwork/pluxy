@@ -11,7 +11,10 @@
 //   --home-work-beta--, in `agent/sessions` only: a `usage` entry (Pi's cache warming) and, appended before
 //     the third sync, one more record;
 //   --home-work-gamma--, in `sessions` only: an earlier date, a model name in other letters, a line that
-//     is not JSON.
+//     is not JSON;
+//   --home-work-alpha-fork--, in `agent/sessions` only: a fork of the alpha session, Pi's `forkFrom`, which
+//     copies the parent's entries unchanged (same `id` and `timestamp`) into a new file, and one entry of
+//     its own: the copied entries count once, not in each file.
 //
 // The token-details cases: reasoning is part of output (never added), cache read and write are their own
 // fields (input is already net of them; the one-hour cache write is a part of the write), and a total of
@@ -40,12 +43,15 @@ const C_TOOL = "CANARY-PI-TOOL-OUTPUT-71bf";
 const C_THREE = "CANARY-PI-PROMPT-THREE-0d3a";
 const C_KEY = "CANARY-PI-KEY-c2f9";
 const C_ADDED = "CANARY-PI-PROMPT-ADDED-84e1";
-export const PI_CANARIES = [C_CWD, C_ONE, C_REPLY, C_TWO, C_TOOL, C_THREE, C_KEY, C_ADDED];
+/** In the name of each session folder, which Pi makes from the working folder: no file ID may hold it. */
+const C_FOLDER = "CANARY-PI-FOLDER-b53d";
+export const PI_CANARIES = [C_CWD, C_ONE, C_REPLY, C_TWO, C_TOOL, C_THREE, C_KEY, C_ADDED, C_FOLDER];
 
-const ONE = "--home-work-alpha--/2026-11-09T21-00-00-000Z_019c1000-0000-7000-8000-000000000001.jsonl";
-const TWO = "--home-work-beta--/2026-11-10T09-00-00-000Z_019c1000-0000-7000-8000-000000000002.jsonl";
-const THREE = "--home-work-gamma--/2026-11-04T10-00-00-000Z_019c1000-0000-7000-8000-000000000003.jsonl";
-const FOUR = "--home-work-delta--/2026-11-10T11-00-00-000Z_019c1000-0000-7000-8000-000000000004.jsonl";
+const ONE = `--home-work-alpha-${C_FOLDER}--/2026-11-09T21-00-00-000Z_019c1000-0000-7000-8000-000000000001.jsonl`;
+const TWO = `--home-work-beta-${C_FOLDER}--/2026-11-10T09-00-00-000Z_019c1000-0000-7000-8000-000000000002.jsonl`;
+const THREE = `--home-work-gamma-${C_FOLDER}--/2026-11-04T10-00-00-000Z_019c1000-0000-7000-8000-000000000003.jsonl`;
+const FORK = `--home-work-alpha-fork-${C_FOLDER}--/2026-11-10T13-00-00-000Z_019c1000-0000-7000-8000-000000000005.jsonl`;
+const FOUR = `--home-work-delta-${C_FOLDER}--/2026-11-10T11-00-00-000Z_019c1000-0000-7000-8000-000000000004.jsonl`;
 
 const header = (at: string, id: string) =>
   JSON.stringify({ type: "session", version: 3, id, timestamp: at, cwd: `/home/${C_CWD}`, apiKey: C_KEY });
@@ -156,6 +162,19 @@ const THREE_LINES = [
     totalTokens: 1200,
   }),
 ];
+/** The fork of the alpha session: its parent's entries as they are, then its own: 2026-11-10 13:05 UTC,
+ * 15:05 local: 200 + 50 + 100 = 350. */
+const FORK_LINES = [
+  header("2026-11-10T13:00:00.000Z", "019c1000-0000-7000-8000-000000000005"),
+  ...ONE_NEW.slice(1),
+  assistant("2026-11-10T13:05:00.000Z", "gpt-5.5-mini", {
+    input: 200,
+    output: 50,
+    cacheRead: 100,
+    cacheWrite: 0,
+    totalTokens: 350,
+  }),
+];
 /** A new session written while the parser is disabled: nothing must read it. */
 const FOUR_LINES = [
   header("2026-11-10T11:00:00.000Z", "019c1000-0000-7000-8000-000000000004"),
@@ -188,6 +207,7 @@ export function piHome(home: string) {
   put(plain, ONE, ONE_NEW);
   put(agent, TWO, TWO_LINES);
   put(plain, THREE, THREE_LINES);
+  put(agent, FORK, FORK_LINES);
   return {
     append: { path: join(agent, TWO), lines: TWO_APPEND },
     add: { path: join(plain, FOUR), lines: [...FOUR_LINES] },
@@ -247,27 +267,27 @@ export function piExpected(s: Shared) {
   };
   // Each model's total on each of the seven days, models most tokens first.
   const first = report(
-    [50, 35, 890, 0, 5, 995, 3],
-    [1150, 285, 920, 20, 5, 2395, 5],
+    [250, 85, 990, 0, 5, 1345, 4],
+    [1350, 335, 1020, 20, 5, 2745, 6],
     [
       ["claude-sonnet-4-5", [1200, 0, 0, 0, 0, 200, 75]],
-      ["gpt-5.5-mini", [0, 0, 0, 0, 0, 0, 800]],
+      ["gpt-5.5-mini", [0, 0, 0, 0, 0, 0, 1150]],
       ["gpt-5.5", [0, 0, 0, 0, 0, 0, 120]],
     ],
     "active",
-    { "2:12": 1200, "0:23": 200, "1:0": 75, "1:10": 120, "1:11": 800 },
+    { "2:12": 1200, "0:23": 200, "1:0": 75, "1:10": 120, "1:11": 800, "1:15": 350 },
   );
   const after = (status: string) =>
     report(
-      [450, 135, 990, 0, 35, 1595, 4],
-      [1550, 385, 1020, 20, 35, 2995, 6],
+      [650, 185, 1090, 0, 35, 1945, 5],
+      [1750, 435, 1120, 20, 35, 3345, 7],
       [
+        ["gpt-5.5-mini", [0, 0, 0, 0, 0, 0, 1750]],
         ["claude-sonnet-4-5", [1200, 0, 0, 0, 0, 200, 75]],
-        ["gpt-5.5-mini", [0, 0, 0, 0, 0, 0, 1400]],
         ["gpt-5.5", [0, 0, 0, 0, 0, 0, 120]],
       ],
       status,
-      { "2:12": 1200, "0:23": 200, "1:0": 75, "1:10": 120, "1:11": 800, "1:14": 600 },
+      { "2:12": 1200, "0:23": 200, "1:0": 75, "1:10": 120, "1:11": 800, "1:14": 600, "1:15": 350 },
     );
   return { first: [first], after: [after("active")], disabled: [after("archived")] };
 }
