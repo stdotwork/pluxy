@@ -7,8 +7,11 @@
     "tier": "native",
     "host_versions": [0],
     "programs": {
+      "darwin/amd64": "bin/usage-pi",
+      "darwin/arm64": "bin/usage-pi",
       "linux/amd64": "bin/usage-pi",
-      "linux/arm64": "bin/usage-pi"
+      "linux/arm64": "bin/usage-pi",
+      "windows/amd64": "bin/usage-pi.exe"
     },
     "operations": [
       {

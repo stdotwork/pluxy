@@ -2,7 +2,16 @@
 // the rows it fills from the tool's read-back, when Apply is allowed, and when it offers to create
 // Claude Desktop's library folder.
 import { describe, expect, test } from "bun:test";
-import { fresh, keysOf, MISSING_LIBRARY, missingLibrary, ready, rowsFrom } from "../src/claudeDesktopForm";
+import {
+  aliasCancelled,
+  aliasState,
+  fresh,
+  keysOf,
+  MISSING_LIBRARY,
+  missingLibrary,
+  ready,
+  rowsFrom,
+} from "../src/claudeDesktopForm";
 
 describe("keys", () => {
   test("lists plain secrets and this package's client keys from vault_secrets' answer", () => {
@@ -57,5 +66,31 @@ describe("missing library", () => {
     ).toBe(true);
     expect(missingLibrary("/home/x/.config/Claude-3p/configLibrary: No such file or directory")).toBe(false);
     expect(missingLibrary(undefined)).toBe(false);
+  });
+});
+
+describe("aliasState", () => {
+  const row = (model: string, alias: string) => ({ model, alias, one_m: false });
+  const served = new Set(["gpt-6", "claude-opus-5-x"]);
+  test("a row with no alias, or its model's own name, needs nothing from core", () => {
+    expect(aliasState(row("gpt-6", ""), served)).toBe("none");
+    expect(aliasState(row("gpt-6", " gpt-6 "), served)).toBe("none");
+    // Core matches the model's name whatever the case of its ASCII letters.
+    expect(aliasState(row("gpt-6", "GPT-6"), served)).toBe("none");
+  });
+  test("an alias core lists is served; one it does not list is offered for creating", () => {
+    expect(aliasState(row("gpt-6", "claude-opus-5-x"), served)).toBe("served");
+    expect(aliasState(row("gpt-6", " claude-sonnet-5-x "), served)).toBe("missing");
+  });
+  test("without core's list nothing is offered", () => {
+    expect(aliasState(row("gpt-6", "claude-sonnet-5-x"), undefined)).toBe("unknown");
+  });
+});
+
+describe("aliasCancelled", () => {
+  test("only the app's own cancel is a cancel", () => {
+    expect(aliasCancelled("cancelled")).toBe(true);
+    expect(aliasCancelled("core did not add the alias to a: the request was cancelled")).toBe(false);
+    expect(aliasCancelled(undefined)).toBe(false);
   });
 });

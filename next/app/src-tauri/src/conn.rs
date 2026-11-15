@@ -492,6 +492,18 @@ impl Caller {
             .map_err(|kind| format!("core could not be asked ({kind})"))
     }
 
+    /// A caller of the core at base with key, for unit tests against a local listener
+    /// (`core_aliases_tests.rs`, which is Linux only like `core_aliases.rs`).
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn for_test(base: &str, key: &str) -> Caller {
+        Caller {
+            client: Some(Client::new(base, None)),
+            key: Some(key.to_string()),
+            gone: None,
+            _hold: None,
+        }
+    }
+
     /// Calls as call does. A call core refused because a rotation replaced the key while it was
     /// on its way goes once more with the current key, to the same core: core refuses a key
     /// before acting, so nothing runs twice. The socket hold is let go before current runs:
@@ -2466,7 +2478,7 @@ mod tests {
 
 /// A path as the key dialog shows it: control characters escaped, so a file name cannot add
 /// lines to the dialog.
-fn shown_path(path: &str) -> String {
+pub(crate) fn shown_path(path: &str) -> String {
     path.chars()
         .map(|c| {
             if c.is_control() {

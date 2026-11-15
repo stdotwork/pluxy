@@ -329,6 +329,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one (Linux) |
 | `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key (Linux) |
 | `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it (Linux) |
+| `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it (Linux) |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
 | `privacy_get`, `privacy_set` | Reads or saves privacy mode |
@@ -942,9 +943,16 @@ are shown as such: Apply and Clear integration stay disabled, Restore Backup and
 reachable. The form keeps the
 old app's **Claude Desktop Models and Aliases** list: rows of **Original model**, **Alias (optional
 for Claude models)** and **1M**, **Add model** and **Remove model**, three Claude models to start
-with. Claude Desktop takes only Claude model names, so a non-Claude model needs an alias, which the
-core must serve the model under (the account's or extension's `model_alias`); the old app added it to
-the core's config itself, this page says so instead. The **Authentication Key** is one of the
+with. Claude Desktop takes only Claude model names, so a non-Claude model needs an alias, and Claude
+Desktop sends that alias to the core, which must serve the model under it too. For a row whose alias
+the core does not list (`GET /models`), the page offers **Create alias in core**: after a native
+confirmation naming the core, the alias, the model and the accounts, the app adds the alias through
+the management API (`PATCH /v0/management/accounts/{id}`, its `model_alias`) to every account added
+by login that serves the model. An account set in core's config is changed only in core's config,
+so it is named and left alone, and a model only such accounts serve is refused; so is an alias the
+core already serves for anything else. Clear integration and Restore Backup leave an alias made in
+core: the core's config is not the tool's file. The old app wrote the alias into the core's config
+file itself. The **Authentication Key** is one of the
 vault's secrets (a client key only when it is bound to this tool), or a new one through native key
 entry.
 

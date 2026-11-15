@@ -71,16 +71,14 @@ pub struct Store {
 impl Store {
     /// Opens (making it when missing) the store at path, readable only by this user.
     pub fn open(path: &Path) -> Result<Store, String> {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(path)
-            .map_err(|err| err.to_string())?;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|err| err.to_string())?;
+        // Made private before the store holds anything (create_new), and kept private after.
+        match pluxy_files::create_new_private(path) {
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            made => {
+                made.map_err(|err| err.to_string())?;
+            }
+        }
+        pluxy_files::make_private(path).map_err(|err| err.to_string())?;
         let db = Connection::open(path).map_err(e)?;
         db.execute_batch(
             "PRAGMA foreign_keys = ON;
