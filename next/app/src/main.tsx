@@ -16,6 +16,8 @@ import defaultTheme from "../../ui/themes/default.json";
 import paper from "../../ui/themes/paper.json";
 import terminal from "../../ui/themes/terminal.json";
 import { claudeCodePage } from "./claudeCode";
+import { claudeDesktopPage } from "./claudeDesktop";
+import { codexPage } from "./codex";
 import { ConnectionPage } from "./connection";
 import { type DeviceCatalog, device, newest } from "./device";
 import { DevicePage, devicePage } from "./devicePage";
@@ -23,6 +25,7 @@ import { appHost, type Connection, connectionGet, privacyGet, privacySet } from 
 import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
 import { ompPage } from "./omp";
+import { opencodePage } from "./opencode";
 import { UpdatesPage } from "./updates";
 import { ClosePrompt } from "./window";
 
@@ -124,6 +127,9 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       devicePage(loadDevice),
       launcherPage(),
       claudeCodePage(),
+      codexPage(),
+      claudeDesktopPage(),
+      opencodePage(),
       ompPage(),
       ...devicePages(catalog),
     ],

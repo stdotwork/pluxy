@@ -60,6 +60,7 @@ pub const COMMANDS: &[&str] = &[
     "vault_secret_remove",
     "client_key_capture",
     "client_key_enter",
+    "core_alias_create",
     "window_get",
     "window_set",
     "window_close",
