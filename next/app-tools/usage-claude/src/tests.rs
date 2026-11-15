@@ -367,6 +367,10 @@ fn reads_from_the_claude_home_and_names_no_folder_in_a_file_id() {
         &format!("{folder_id}/../{folder_id}/s-1.jsonl"),
         &format!("{folder_id}//s-1.jsonl"),
         &file.to_string_lossy(),
+        // What Windows reads as a folder and a name, or a drive.
+        &format!(r"{folder_id}\s-1.jsonl"),
+        r"-home-user-proj\s-1.jsonl",
+        "C:s-1.jsonl",
         "missing.jsonl",
     ] {
         assert_eq!(Claude.locate(&roots, bad), None, "{bad}");

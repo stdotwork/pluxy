@@ -10,6 +10,10 @@ publish.workspace = true
 pluxy-program = { path = "../lib/program" }
 serde_json = "1"
 
+# The launch checks are Linux's for now (execution refuses every operation elsewhere).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "=0.2.191"
+
 [features]
 # For the native test only (next/app/native/run.ts): an open launch also takes its opener from the
 # input's search_path, for the test's stand-in opener. Never in a release build.
