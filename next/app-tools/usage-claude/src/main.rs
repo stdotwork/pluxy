@@ -82,10 +82,13 @@ impl Parser for Claude {
     /// one whose name hashes to the ID's first part.
     fn locate(&self, roots: &[PathBuf], id: &str) -> Option<PathBuf> {
         let parts: Vec<&str> = id.split('/').collect();
-        if parts
-            .iter()
-            .any(|p| p.is_empty() || *p == "." || *p == "..")
-        {
+        // Each part must be one plain name: not empty, `.` or `..`, and nothing Windows reads as
+        // more (a `\\` separator, a drive or a full path).
+        let plain = |p: &&str| {
+            let mut c = Path::new(p).components();
+            matches!((c.next(), c.next()), (Some(std::path::Component::Normal(n)), None) if n == *p)
+        };
+        if !parts.iter().all(plain) {
             return None;
         }
         let wanted = |p: &Path| self.wanted(p);

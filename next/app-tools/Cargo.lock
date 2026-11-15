@@ -6,6 +6,7 @@ version = 4
 name = "agent-usage"
 version = "0.1.0"
 dependencies = [
+ "pluxy-files",
  "pluxy-program",
  "pluxy-usage",
  "rusqlite",
@@ -89,9 +90,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "claude-desktop"
+version = "0.1.0"
+dependencies = [
+ "pluxy-program",
+ "pluxy-transactions",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-sessions"
 version = "0.1.0"
 dependencies = [
+ "pluxy-files",
  "pluxy-program",
  "pluxy-sqlite-ro",
  "rusqlite",
@@ -329,9 +340,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
+name = "pluxy-files"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "pluxy-pi-sessions"
 version = "0.1.0"
 dependencies = [
+ "pluxy-files",
  "pluxy-program",
  "pluxy-usage",
  "serde_json",
@@ -348,7 +368,7 @@ dependencies = [
 name = "pluxy-sqlite-ro"
 version = "0.1.0"
 dependencies = [
- "libc",
+ "pluxy-files",
  "rusqlite",
 ]
 
@@ -367,6 +387,7 @@ dependencies = [
 name = "pluxy-usage"
 version = "0.1.0"
 dependencies = [
+ "pluxy-files",
  "pluxy-program",
  "serde_json",
 ]
@@ -612,6 +633,7 @@ dependencies = [
 name = "usage-codex"
 version = "0.1.0"
 dependencies = [
+ "pluxy-files",
  "pluxy-program",
  "pluxy-usage",
  "serde_json",
