@@ -16,6 +16,7 @@ import defaultTheme from "../../ui/themes/default.json";
 import paper from "../../ui/themes/paper.json";
 import terminal from "../../ui/themes/terminal.json";
 import { claudeCodePage } from "./claudeCode";
+import { claudeDesktopPage } from "./claudeDesktop";
 import { codexPage } from "./codex";
 import { ConnectionPage } from "./connection";
 import { type DeviceCatalog, device, newest } from "./device";
@@ -125,6 +126,7 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       launcherPage(),
       claudeCodePage(),
       codexPage(),
+      claudeDesktopPage(),
       ...devicePages(catalog),
     ],
     [shown, catalog, loadDevice],

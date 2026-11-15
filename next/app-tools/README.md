@@ -11,7 +11,7 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi, usage-opencode)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
-cargo build --release --locked -p claude-code   # likewise codex-setup and execution
+cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup and execution
 ```
 
 ## `lib/program`
@@ -531,6 +531,66 @@ whatever the files hold now. `preview` reads the files twice (the pins, then the
 another program wrote one in between, it reads again once, then refuses, so the values shown are
 always those of the files pinned. Codex's files carry no version, and none is assumed.
 
+## `claude-desktop`
+
+`pluxy/claude-desktop` sets up Claude Desktop to use pluxy's core as its third-party inference
+gateway and says how to start it, for the desktop app's Claude Desktop page (`../app/README.md`,
+"Claude Desktop"). It writes three files through `lib/transactions` (set `claude-desktop`, in this
+order), link-preserving and journalled like `claude-code`, with manual backups of all three. It
+exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: three selections (`file`, or `root` and `path`), by default `claude_desktop_config.json`, `configLibrary/00000000-0000-4000-8000-000000831700.json` and `configLibrary/_meta.json` in `~/.config/Claude-3p` (the app's `HOME`); `base_url` (optional): the core the state is checked against | The library's preview and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, `deployment_mode`, `applied_id`, `hybrid_pointer` and the model rows (`model`, `alias`, `one_m`); never the key. Files Claude Desktop would not take are pinned all the same, with `settings` `{"state": "refused", "reason"}`, so Restore Backup still reaches them. With no `targets` and nothing at `~/.config/Claude-3p/configLibrary`, refused with "Claude Desktop's configuration library does not exist yet" (what `folders` creates) |
+| `folders` | `write` | — | Creates `~/.config/Claude-3p/configLibrary` (mode 0700) when it does not exist: `created`, `folder` |
+| `apply` | `write`; secret `key` (value) | Three pins, `base_url`, `key`, `models`: 1 to 16 rows of `model` (what the core serves), `alias` (the name Claude Desktop uses; empty: the model's own) and `one_m` | The library's outcome |
+| `clear` | `write` | Three pins | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | Three pins | The library's outcome: the original bytes back, files that did not exist removed (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Claude Desktop", "kind": "direct", "program": "claude-desktop", "args": [], "cwd": <HOME>}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations, three files per version, diffed with `json_leaves` | The library's answers |
+
+The files and keys are Claude Desktop's own, as Anthropic's third-party documentation
+([configuration](https://claude.com/docs/third-party/claude-desktop/configuration),
+[where it reads it](https://claude.com/docs/third-party/claude-desktop/configuration-format),
+[gateway](https://claude.com/docs/third-party/claude-desktop/gateway),
+[Linux](https://code.claude.com/docs/en/desktop-linux), read 2026-11-14) and the code of its Linux
+package (`claude-desktop` 5.11492.5, the official apt repository) name them. What `apply` writes,
+keeping everything else in each file (keys in their order, numbers with their digits):
+
+- `claude_desktop_config.json`: `deploymentMode` `3p`, the sign-in choice Claude Desktop's own
+  chooser saves there. Claude Desktop reads it only from this third-party folder, so the standard
+  app's `~/.config/Claude/claude_desktop_config.json` (its MCP servers) is not touched;
+- the gateway profile: `inferenceProvider` `gateway`, `inferenceGatewayBaseUrl` (the core; Claude
+  Desktop calls `/v1/messages` below it), `inferenceGatewayApiKey` (the client key),
+  `inferenceGatewayAuthScheme` `bearer`, `inferenceCredentialKind` `static`,
+  `modelDiscoveryEnabled` and `bootstrapEnabled` `false`, `disableDeploymentModeChooser` `true`
+  and `inferenceModels`; `selfHostedUrl` (a session host, which would take inference elsewhere) is
+  removed. Each row becomes `{"name": <alias, else model>, "labelOverride": <model, when an alias
+  differs>, "anthropicFamilyTier", "isFamilyDefault", "supports1m", "prefer1m"}`: the first is
+  Claude Desktop's default model, the tier comes from the name (the first of each tier is its
+  default) and both 1M keys are set when the row's 1M switch is on;
+- `_meta.json`: `appliedId` names pluxy's profile (the old desktop app's ID, so its entry is
+  updated, not duplicated), `entries` gains `{"id", "name": "pluxy"}` and `hybridPointer`, which
+  would win over `appliedId`, is removed; the person's other configurations stay.
+
+Claude Desktop drops a gateway model whose name does not look like an Anthropic model (it must
+hold `claude`, `anthropic` or a family name such as `sonnet`, and no other family's, such as `gpt`
+or `gemini`), so `apply` refuses such a row: a non-Claude model needs an alias, and the core must
+serve the model under it (an account's or extension's `model_alias`; this package does not change
+the core's config). Clear's three-way merge brings back what Apply removed or replaced unless the
+person changed it since, with two rules of Claude Desktop's own: it seals the key in place with
+the device's keystore at its next launch, which is not the person's edit, so Clear still removes
+the key; and pluxy's entry leaves `_meta.json` unless the original had it. Every operation but
+`restore` refuses, before writing, a file Claude Desktop would not take: not strict JSON, not an
+object, a profile whose `inferenceModels` is not a list, or an index whose `entries` is not a list
+of configurations or whose `appliedId` is not a string. A missing file, or one of only white space,
+is an empty one, in Clear's merge too; a missing folder refuses the whole operation, before any
+file is written. The merge tells the three files apart by the whole set of values Apply wrote into
+each. A profile with `selfHostedUrl` set does not read back as configured. Apply writes each file
+owner-only (the library's rule: a key is in the profile, and the files sit beside it). None of these files has a
+version, and no minimum Claude Desktop version is assumed.
+
 ## `execution`
 
 `pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, a program
@@ -543,7 +603,7 @@ its vault at the spawn (`../app/app-host/README.md`, "Launches and managed runti
 | --- | --- | --- | --- |
 | `terminals` | `read` | `search_path`: the launch environment's PATH entries | `terminals`: Automatic first, then each terminal found, with its label and path |
 | `prepare` | `read` | `kind` (`terminal`, `direct` or `open`). For `terminal` and `direct`: `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path`. For `open`: `file`, `within` (the folder it must be inside), and optionally `search_path` | A launch's `executable`, `argv` and `cwd`; for a terminal the `program` it runs; for an open launch the `file` and `within` folder, resolved |
-| `launch` | `launch` | What `prepare` gave, with `lifetime`, `environment`, `stdin` and the secret field `key` (a reference only) | The host's answer to its spawn request: `lifetime`, and a managed runtime's `runtime` and `pid` |
+| `launch` | `launch` | What `prepare` gave, with `lifetime` (`detached`, the default, or `managed`: for a direct launch only, see below), `environment`, `stdin` and the secret field `key` (a reference only) | The host's answer to its spawn request: `lifetime`, and a managed runtime's `runtime` and `pid` |
 | `runtime` | `read` | `op` (`status`, `list`), `runtime` | The host's answer |
 | `control` | `write` | `op` (`stop`, `restart`), `runtime` | The host's answer |
 
@@ -556,6 +616,16 @@ running the program after `-e` unless noted. A terminal launch runs `<terminal> 
 <args>`; a direct one `<program> <args>`. The program must be an executable file, the working folder
 an existing absolute folder.
 
+A launch's `lifetime` is `detached` or `managed`, and **`managed` applies to direct launches only**.
+The host keeps and stops a managed runtime through the process it started, and for a terminal
+launch that is the terminal's own launcher, which many terminals end at once after handing the
+work to a server process (gnome-terminal's client hands off to `gnome-terminal-server`; konsole
+and kitty may in single-instance mode). Stop and status would track a process that is gone, not
+the agent. The host therefore refuses a `launch` that names a terminal's `program` with
+`lifetime: "managed"` (`invalid_request`, before the confirmation), whoever asks; a terminal
+launch is detached. To have the app stop an agent, launch it directly
+(`../app/app-host/README.md`, "Detached and managed").
+
 An **open** launch opens a file in the app the desktop opens its type with, as the old desktop
 app's "Edit with local app" did: it runs `xdg-open <file>`, or `gio open <file>` when there is no
 `xdg-open`, in the file's folder. The opener is taken only from `/usr/local/bin`, `/usr/bin`,
@@ -563,9 +633,11 @@ app's "Edit with local app" did: it runs `xdg-open <file>`, or `gio open <file>`
 native-test build of the program does, for the native test's stand-in opener). The caller names
 the file and the folder it may open files in (`within`), for the Codex session reader its
 sessions folder: both are resolved, links followed, and the file must be a regular file with no
-execute bit inside that folder, which must not be `/`, the home folder or a folder above it. The
-resolved file is the opener's argument. The app checks all of this again, and more (the file's
-content type, who owns and may write the file and folder, the launch's exact shape), shows the
+execute bit inside that folder, which must not be `/`, the home folder or a folder above it. That
+folder and every folder between it and the file must be the user's own and writable by neither
+group nor others (`prepare` refuses the call otherwise, so the caller learns before the person
+is asked). The resolved file is the opener's argument. The app checks all of this again, and more
+(the file's content type, who owns and may write the file, the launch's exact shape), shows the
 file, its type and the folder in its confirmation and binds them
 (`../app/app-host/README.md`, "Launches and managed runtimes"). Which app the opener then starts
 is the desktop's choice for the file's type: the confirmation names the opener, not that app.

@@ -53,13 +53,18 @@ pub const LOCK_FD_ENV: &str = "PLUXY_APP_INSTANCE_LOCK_FD";
 /// Where the first app says its socket is.
 const ADDRESS: &str = "address";
 /// What a launch sends to raise the first app, and nothing else is acted on.
+#[cfg(unix)]
 const MESSAGE: &[u8] = b"pluxy-activate 1\n";
+#[cfg(unix)]
 const OK: &[u8] = b"ok\n";
 /// Most bytes the first app reads from one connection.
+#[cfg(unix)]
 const MAX_MESSAGE: usize = 64;
 /// Longest the first app reads from one connection, in all.
+#[cfg(unix)]
 const READ_BOUND: Duration = Duration::from_secs(2);
 /// Connections the first app serves at once; more wait in the socket's queue.
+#[cfg(unix)]
 const MAX_CONNECTIONS: usize = 32;
 /// A socket path longer than this does not fit `sockaddr_un` everywhere.
 const MAX_SOCKET_PATH: usize = 100;
@@ -77,6 +82,7 @@ pub enum Start {
 /// The first app's hold on its profile, until it is dropped or the process ends.
 pub struct Instance {
     /// Held until the app ends, or `unlock`.
+    #[cfg_attr(not(unix), allow(dead_code))]
     lock: std::sync::Mutex<Option<File>>,
     #[cfg(unix)]
     dir: std::os::fd::OwnedFd,
@@ -989,8 +995,17 @@ mod tests {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
+    /// Where the tests' folders go. A socket path must fit in about 100 bytes, which macOS's
+    /// temporary folder (`/var/folders/..`, a link into `/private`) is too long for.
+    fn temp_base() -> PathBuf {
+        #[cfg(target_os = "macos")]
+        return PathBuf::from("/private/tmp");
+        #[cfg(not(target_os = "macos"))]
+        std::env::temp_dir()
+    }
+
     fn temp() -> Temp {
-        let d = std::env::temp_dir().join(format!(
+        let d = temp_base().join(format!(
             "pluxy-app-inst-{}",
             &crate::managed::random_key()[..12]
         ));
@@ -1322,7 +1337,13 @@ mod tests {
             };
             if r != 0 {
                 let e = io::Error::last_os_error();
-                assert_eq!(e.kind(), io::ErrorKind::WouldBlock, "{e}");
+                // A full queue refuses a connection: with WouldBlock on Linux, ConnectionRefused
+                // on macOS.
+                #[cfg(target_os = "macos")]
+                let full = io::ErrorKind::ConnectionRefused;
+                #[cfg(not(target_os = "macos"))]
+                let full = io::ErrorKind::WouldBlock;
+                assert_eq!(e.kind(), full, "{e}");
                 return held;
             }
             held.push(fd);

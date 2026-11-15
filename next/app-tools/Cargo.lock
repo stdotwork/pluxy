@@ -89,6 +89,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "claude-desktop"
+version = "0.1.0"
+dependencies = [
+ "pluxy-program",
+ "pluxy-transactions",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-sessions"
 version = "0.1.0"
 dependencies = [
@@ -157,6 +166,7 @@ dependencies = [
 name = "execution"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "pluxy-program",
  "serde_json",
 ]

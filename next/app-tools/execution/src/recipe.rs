@@ -4,7 +4,7 @@
 
 use pluxy_program::Error;
 use serde_json::{json, Value};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// A terminal: its ID (its program's name), its label and the arguments before the command it
@@ -171,11 +171,38 @@ fn open(input: &Value) -> Result<Value, Error> {
     open_from(input, &fields, &folders)
 }
 
+/// Refused unless every folder from file's parent up to and including within (both resolved, file
+/// inside within) is a real folder that is the effective user's and writable by neither group nor
+/// others, as the host requires: another user could otherwise rename a different file into place
+/// before the opener reads it. Told here so a tool learns it before the person is asked.
+fn folders_own(file: &Path, within: &Path) -> Result<(), Error> {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let me = unsafe { libc::geteuid() };
+    for d in file.ancestors().skip(1) {
+        let m = std::fs::symlink_metadata(d)
+            .map_err(|e| Error::not_found(format!("{}: {e}", d.display())))?;
+        if !m.is_dir() || m.uid() != me || m.permissions().mode() & 0o022 != 0 {
+            return Err(Error::invalid_request(format!(
+                "the folder {} of the file to open must be your own, writable by no one else",
+                d.display()
+            )));
+        }
+        if d == within {
+            return Ok(());
+        }
+    }
+    Err(Error::invalid_request(
+        "the file to open must be inside its within folder",
+    ))
+}
+
 /// An open launch: `<opener> <file>` (or `gio open <file>`) in the file's folder, the opener the
 /// first of `OPENERS` found in folders. It names the file (the resolved path, which is its
 /// argument) and the folder it must be inside (`within`, resolved), which the host checks, shows
-/// and binds again. The file must be a regular file with no execute bit inside that folder; the
-/// folder must not be `/`, the home folder or a folder above it. The input holds only fields.
+/// and binds again. The file must be a regular file with no execute bit inside that folder, and
+/// that folder and every folder between it and the file must be the user's own and writable by no
+/// one else; the folder must not be `/`, the home folder or a folder above it. The input holds
+/// only fields.
 fn open_from(input: &Value, fields: &[&str], folders: &[PathBuf]) -> Result<Value, Error> {
     if let Some((k, _)) = input
         .as_object()
@@ -227,6 +254,7 @@ fn open_from(input: &Value, fields: &[&str], folders: &[PathBuf]) -> Result<Valu
             "the file to open must be inside its within folder",
         ));
     }
+    folders_own(&file, &within)?;
     let (path, flags) = OPENERS
         .iter()
         .find_map(|(name, flags)| find(name, folders).map(|p| (p, *flags)))

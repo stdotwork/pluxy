@@ -8,17 +8,26 @@
 //! descriptor signed with a trusted publisher key; `artifact.rs` checks the signature, size and
 //! SHA-256 before anything is unpacked. Each installed file's digest is kept and checked again
 //! before the core starts. Nothing in this module needs Tauri.
+//!
+//! Installing and starting a version work from open folder and file descriptors, which exist on
+//! Unix systems only. Elsewhere the store refuses to open (`Store::open`), and what only an open
+//! store reaches is left out of the build.
+#![cfg_attr(not(unix), allow(dead_code, unused_imports))]
 
 use crate::artifact::{self, PublisherKeys, Tier, VerifiedArchive};
 use crate::managed::{random_key, write_private};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cell::Cell;
+#[cfg(unix)]
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
@@ -197,26 +206,34 @@ pub struct State {
     pub failed: Option<Failed>,
 }
 
+/// Why the store never opens off Unix.
+#[cfg(not(unix))]
+const UNSUPPORTED: &str = "the app's own core versions are supported on Linux only";
+
 /// The app's core versions, `<data>/cores`.
 #[derive(Clone, Debug)]
 pub struct Store {
     dir: PathBuf,
 }
 
+#[cfg(unix)]
 fn private_dir(path: &Path) -> io::Result<()> {
     fs::create_dir_all(path)?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 
 /// Makes a new private folder at path, failing if anything is already there.
+#[cfg(unix)]
 fn exclusive_dir(path: &Path) -> io::Result<()> {
     fs::DirBuilder::new().mode(0o700).create(path)
 }
 
+#[cfg(unix)]
 fn c_string(bytes: &[u8]) -> io::Result<CString> {
     CString::new(bytes).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "a name holds NUL"))
 }
 
+#[cfg(unix)]
 fn owned(fd: libc::c_int) -> io::Result<OwnedFd> {
     if fd < 0 {
         Err(io::Error::last_os_error())
@@ -226,6 +243,7 @@ fn owned(fd: libc::c_int) -> io::Result<OwnedFd> {
 }
 
 /// Opens the folder at path; a link there is refused.
+#[cfg(unix)]
 fn open_dir(path: &Path) -> io::Result<OwnedFd> {
     let c = c_string(path.as_os_str().as_bytes())?;
     owned(unsafe {
@@ -237,6 +255,7 @@ fn open_dir(path: &Path) -> io::Result<OwnedFd> {
 }
 
 /// Opens name in the folder dir, following no link.
+#[cfg(unix)]
 fn open_at(dir: &OwnedFd, name: &str, flags: libc::c_int, mode: u32) -> io::Result<OwnedFd> {
     let c = c_string(name.as_bytes())?;
     owned(unsafe {
@@ -251,6 +270,7 @@ fn open_at(dir: &OwnedFd, name: &str, flags: libc::c_int, mode: u32) -> io::Resu
 
 /// The folder holding rel's last part, beneath root, and that part's name: each folder on the
 /// way is opened from the one before it, following no link; with create, missing ones are made.
+#[cfg(unix)]
 fn parent_beneath(root: &OwnedFd, rel: &str, create: bool) -> io::Result<(OwnedFd, String)> {
     let parts: Vec<&str> = rel.split('/').collect();
     let (last, folders) = parts.split_last().expect("split gives one part");
@@ -295,6 +315,7 @@ fn remove_tree(path: &Path) {
 /// Makes the files under path read-only: this user may read them, and run the executable ones.
 /// Folders stay writable by this user only (0700), so the store, or the person, can still
 /// remove them; the digests checked before each start are what keep a version unchanged.
+#[cfg(unix)]
 fn lock(path: &Path) -> io::Result<()> {
     let m = fs::symlink_metadata(path)?;
     if m.is_dir() {
@@ -329,6 +350,7 @@ fn sha256_of(mut r: impl Read) -> io::Result<(String, u64)> {
 
 impl Store {
     /// The store in dir, made if missing.
+    #[cfg(unix)]
     pub fn open(dir: &Path) -> Result<Store, String> {
         let s = Store { dir: dir.into() };
         private_dir(&s.versions()).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -341,6 +363,7 @@ impl Store {
 
     /// Removes what an interrupted install left. Only when no change can be waiting: at the
     /// app's start.
+    #[cfg(unix)]
     pub fn clear_staging(&self) {
         remove_tree(&self.staging());
         let _ = private_dir(&self.staging());
@@ -450,6 +473,7 @@ impl Store {
 
     /// Checks every file of version id against the digests kept when it was installed, and opens
     /// its program: the core is started from this open file, not from its path again.
+    #[cfg(unix)]
     pub fn program(&self, id: &str) -> Result<File, String> {
         let r = self.record(id)?;
         let again = match r.kind {
@@ -523,6 +547,7 @@ impl Store {
 
     /// Finds version in source's index, copies its archive into the store and checks it against
     /// its signed descriptor, with a key keys trusts for that source. Nothing is unpacked yet.
+    #[cfg(unix)]
     pub fn stage(
         &self,
         keys: &impl PublisherKeys,
@@ -619,6 +644,7 @@ impl Store {
     }
 
     /// Unpacks a checked archive into a new version's folder, named after its version.
+    #[cfg(unix)]
     pub fn install(&self, mut staged: Staged) -> Result<String, String> {
         let verified = staged.verified.take().ok_or("already installed")?;
         let d = verified.descriptor().clone();
@@ -666,6 +692,7 @@ impl Store {
     /// last, so a version without a record is never used. A version installed again replaces
     /// its folder; until the new record is written, the old one no longer matches and the
     /// version does not start.
+    #[cfg(unix)]
     fn finish(&self, tmp: &Path, r: Record) -> Result<(), String> {
         let fail = |e: String| format!("installing core {}: {e}", r.id);
         lock(tmp).map_err(|e| fail(e.to_string()))?;
@@ -704,6 +731,7 @@ impl Store {
     }
 
     /// The core program at path, to adopt: its SHA-256 and size, for the person to confirm.
+    #[cfg(unix)]
     pub fn inspect(path: &Path) -> Result<(String, u64), String> {
         if !path.is_absolute() {
             return Err("the core program must be given as a full path".into());
@@ -726,6 +754,7 @@ impl Store {
     /// is the regular file of the size and SHA-256 the person confirmed. An adopted version that
     /// is still intact is kept; a damaged one is copied in again. Returns the version, and
     /// whether the program was copied in (false: the intact version was kept).
+    #[cfg(unix)]
     pub fn adopt(&self, path: &Path, sha256: &str, size: u64) -> Result<(String, bool), String> {
         artifact::decode_hex::<32>(sha256).map_err(|_| "not a SHA-256")?;
         let id = Self::adopted_id(sha256);
@@ -798,8 +827,40 @@ impl Store {
     }
 }
 
+/// What an open store does is Unix only (see the module's notes); off Unix none can be opened,
+/// so these only give the build their names.
+#[cfg(not(unix))]
+impl Store {
+    pub fn open(_: &Path) -> Result<Store, String> {
+        Err(UNSUPPORTED.into())
+    }
+
+    pub fn clear_staging(&self) {}
+
+    pub fn program(&self, _: &str) -> Result<File, String> {
+        Err(UNSUPPORTED.into())
+    }
+
+    pub fn stage(&self, _: &impl PublisherKeys, _: &str, _: &str) -> Result<Staged, String> {
+        Err(UNSUPPORTED.into())
+    }
+
+    pub fn install(&self, _: Staged) -> Result<String, String> {
+        Err(UNSUPPORTED.into())
+    }
+
+    pub fn inspect(_: &Path) -> Result<(String, u64), String> {
+        Err(UNSUPPORTED.into())
+    }
+
+    pub fn adopt(&self, _: &Path, _: &str, _: u64) -> Result<(String, bool), String> {
+        Err(UNSUPPORTED.into())
+    }
+}
+
 /// Opens the program at path (the person's choice, so a link there is followed) without
 /// blocking, and checks it is a regular, executable file of at most 512 MiB.
+#[cfg(unix)]
 fn open_program(path: &Path) -> Result<File, String> {
     let f = OpenOptions::new()
         .read(true)
@@ -925,6 +986,7 @@ impl<R: Read> Read for Bounded<R> {
 /// no links, devices or names that leave the folder, at most 10,000 entries, and at most limit
 /// bytes decompressed in all (headers and skipped data too), as provider releases are. Every
 /// file is made from the folder before it, following no links.
+#[cfg(unix)]
 fn unpack(archive: impl Read, dir: &Path, limit: u64) -> Result<Vec<FileRecord>, String> {
     let over = Rc::new(Cell::new(false));
     let bounded = Bounded {
@@ -1122,7 +1184,8 @@ impl ConfigSnapshot {
     }
 }
 
-#[cfg(test)]
+// The tests install and start versions through descriptors, which only Unix systems have.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

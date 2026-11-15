@@ -126,6 +126,33 @@ fn limit(v: libc::rlim_t) -> Value {
 }
 
 #[test]
+fn a_managed_terminal_launch_is_refused_and_a_managed_direct_launch_is_not() {
+    let none = |_: &str| false;
+    let direct =
+        json!({"executable": "/bin/agent", "argv": ["agent"], "cwd": "/", "lifetime": "managed"});
+    assert_eq!(parse(&direct, &none).unwrap().0, Lifetime::Managed);
+    // A launch naming the program a terminal runs is a terminal launch.
+    let terminal = json!({"executable": "/usr/bin/xterm", "argv": ["-e", "/bin/agent"], "cwd": "/",
+        "program": "/bin/agent", "lifetime": "managed"});
+    let refused = parse(&terminal, &none).unwrap_err();
+    assert!(
+        refused.contains("terminal launch is detached only"),
+        "{refused}"
+    );
+    // Detached, stated or by default, is what a terminal launch may be.
+    for lifetime in [json!("detached"), Value::Null] {
+        let mut ok = terminal.clone();
+        match lifetime {
+            Value::Null => {
+                ok.as_object_mut().unwrap().remove("lifetime");
+            }
+            l => ok["lifetime"] = l,
+        }
+        assert_eq!(parse(&ok, &none).unwrap().0, Lifetime::Detached);
+    }
+}
+
+#[test]
 fn a_launch_request_is_checked_and_its_review_shows_no_value_it_must_not() {
     let secret_field = |f: &str| f == "key";
     let ok = json!({"executable": "/x", "argv": [], "cwd": "/", "lifetime": "managed",
