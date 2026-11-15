@@ -1069,3 +1069,21 @@ fn a_bus_that_never_answers_holds_a_launch_no_longer_than_the_wait() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_open_launch_gets_only_the_absolute_path_entries() {
+    let snap = Snapshot::of(
+        &[("HOME", "/home/me"), ("PATH", ".:bin:/usr/bin::/bin")],
+        core_limit(),
+    );
+    let path = |r: &Request| {
+        environment(&snap, r, &[])
+            .into_iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.to_string_lossy().into_owned())
+    };
+    let mut r = Request::default();
+    assert_eq!(path(&r).as_deref(), Some(".:bin:/usr/bin::/bin"));
+    r.absolute_path = true;
+    assert_eq!(path(&r).as_deref(), Some("/usr/bin:/bin"));
+}

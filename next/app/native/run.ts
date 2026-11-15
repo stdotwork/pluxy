@@ -93,6 +93,12 @@
 // given its key in its environment, a final process given key, base URL and model, a credential
 // bridge given its key on stdin) get the key and the execution program only references. After
 // the app quits, the runner checks the launched agents still run, then ends them.
+// The open check (open.ts, open_native.rs) runs in one more session with that build: a stand-in
+// tool asks the execution program to prepare opening one of its files with the desktop's opener
+// and to launch it; the native confirmation names the opener, the file and the folder the tool may
+// open files in; cancelled nothing runs, confirmed the stand-in opener runs with exactly that file;
+// a file outside that folder (directly, through `..` or a link), an executable one, or a launch
+// naming no folder or the whole file system is refused before any confirmation.
 // The Codex session reader check (sessions.ts, sessions_native.rs) runs in one more session with
 // that build: the reader (next/app-tools/codex-sessions, built here) lists a copied Codex home
 // exactly as a hand-written expect file says, shows a session only after a native confirmation of
@@ -109,7 +115,9 @@
 // report, the hub's store and the app's output; and the Claude Code parser (next/app-tools/usage-claude)
 // reads a hand-written Claude Code home in the run's HOME beside it, with the same canary checks; the Oh My Pi
 // parser (next/app-tools/usage-omp) does the same on an Oh My Pi home and the Pi parser (next/app-tools/usage-pi)
-// on a Pi home, and a disabled parser scans nothing.
+// on a Pi home, and a disabled parser scans nothing; the OpenCode parser
+// (next/app-tools/usage-opencode) reads a hand-written OpenCode home (a database and JSON message files)
+// the same way, leaving the database unchanged.
 // The transaction library check (transactions.ts, transactions_native.rs) runs in one more
 // session with that build: the library's fixture writer (next/app-tools/lib/transactions, example
 // fixture-writer, built here) writes selected stow and chezmoi link targets after a native
@@ -165,6 +173,7 @@ import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
 import { runInstances } from "./instances";
 import { buildLauncherFixtures } from "./launcher";
+import { buildOpenFixtures } from "./open";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
@@ -192,6 +201,9 @@ const PAGE = "ext/test/probe/probe";
 /** Tauri's command check refusing a call (debug builds say where; release builds "by ACL"). */
 const REFUSED = /not allowed( on window|\. Permissions associated| by ACL)/;
 const TIMEOUT = 240_000;
+/** The usage hub's session runs every usage parser's step in turn, each waiting for its parser to stop
+ * when idle (it took 183 s with three parsers and 224 s with four), so it gets a limit of its own. */
+const USAGE_TIMEOUT = 480_000;
 
 type Mode = "managed" | "local" | "remote";
 /** What package.ts test wrote into its folder's test-package.json. */
@@ -602,11 +614,13 @@ interface Rotation {
  * stages. earlyExit: the app's setup waits for its core's exit callback before the app state
  * exists (PLUXY_APP_TEST_EARLY_EXIT), and only the recovery of that core is checked. admission:
  * the session checks only signed native-tier admission; program: only the program host and swap
- * checks; routing: only the cross-package routing check; vault: only the vault check. core:
- * the session runs only the core steps, against that core source. release: the app starts with
- * that release installed and selected. spawnCheck: only the spawn check. reader: only the session
- * reader check. launcherCheck: only the launcher check. transactions: only the transaction
- * library check. claudeCode: only the Claude Code setup and launcher check. */
+ * checks; routing: only the cross-package routing check; vault: only the vault check; reader: only
+ * the session reader check; transactions: only the transaction library check. core: the session
+ * runs only the core steps, against that core source. release: the app starts with that release
+ * installed and selected. spawnCheck: only the spawn check. launcherCheck: only the launcher check.
+ * claudeCode: only the Claude Code setup and launcher check. openCheck: only the check of a tool
+ * opening a file in the person's own app.
+ */
 async function runApp(
   mode: Mode,
   artifact: Artifact,
@@ -631,6 +645,7 @@ async function runApp(
   launcherCheck = false,
   transactions = false,
   claudeCode = false,
+  openCheck = false,
 ): Promise<string[]> {
   const { label, bin } = artifact;
   const root = rotation.root ?? mkdtempSync(join(tmpdir(), `pluxy-app-native-${mode}-`));
@@ -711,6 +726,7 @@ async function runApp(
       !core &&
       !spawnCheck &&
       !launcherCheck &&
+      !openCheck &&
       !reader &&
       !transactions &&
       !claudeCode &&
@@ -818,6 +834,18 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The open check's signed packages, stand-in opener, files, registry and trust profile.
+    const openDir = openCheck ? join(root, "open") : undefined;
+    if (openDir) {
+      mkdirSync(openDir);
+      const f = buildOpenFixtures(openDir, dirs.home, programFixture, executionProgram, executionManifest);
+      nonce = f.nonce;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     // The session reader check's signed reader, its registry and trust profile, the Codex home
     // and its canaries.
     const sessionsDir = reader ? join(root, "sessions") : undefined;
@@ -913,6 +941,7 @@ async function runApp(
       !spawnDir &&
       !sessionsDir &&
       !launcherDir &&
+      !openDir &&
       !usageDir &&
       !transactionsDir &&
       !claudeCodeDir
@@ -975,6 +1004,8 @@ async function runApp(
       ...(spawnDir ? { PLUXY_APP_TEST_SPAWN: spawnDir, ...spawnEnv } : {}),
       // The probe clicks the tray's Start… items through the real watcher's dbusmenu.
       ...(launcherDir ? { PLUXY_APP_TEST_LAUNCHER: launcherDir, PLUXY_APP_TEST_PROBE: probe } : {}),
+      // The only folder besides the system's a native-test build takes an opener from.
+      ...(openDir ? { PLUXY_APP_TEST_OPEN: openDir, PLUXY_APP_TEST_OPENERS: join(openDir, "bin") } : {}),
       ...(sessionsDir ? { PLUXY_APP_TEST_SESSIONS: sessionsDir } : {}),
       ...(transactionsDir ? { PLUXY_APP_TEST_TRANSACTIONS: transactionsDir } : {}),
       ...(claudeCodeDir ? { PLUXY_APP_TEST_CLAUDE_CODE: claudeCodeDir } : {}),
@@ -1050,7 +1081,7 @@ async function runApp(
           reader
             ? "the session reader check's canary appeared on stdout/stderr"
             : usage
-              ? "the usage check's Codex, Claude Code, Oh My Pi or Pi canary appeared on stdout/stderr"
+              ? "the usage check's Codex, Claude Code, Oh My Pi, Pi or OpenCode canary appeared on stdout/stderr"
               : "the vault or spawn check's key or a canary appeared on stdout/stderr",
         );
         return;
@@ -1116,10 +1147,11 @@ async function runApp(
     for (const stream of [proc.stdout, proc.stderr]) createInterface({ input: stream }).on("line", onLine);
     let stopping: Promise<void> | undefined;
     const code = await new Promise<number | null>((resolve) => {
+      const limit = usage ? USAGE_TIMEOUT : TIMEOUT;
       const timer = setTimeout(() => {
-        problems.push(`the app did not finish within ${TIMEOUT / 1000}s`);
+        problems.push(`the app did not finish within ${limit / 1000}s`);
         stopping = stopSession(pid);
-      }, TIMEOUT);
+      }, limit);
       // "close", not "exit": it comes after the output is read, so the "ready" line is not missed.
       proc.on("close", (c) => {
         clearTimeout(timer);
@@ -1287,6 +1319,16 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} launcher ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: launcher ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (openDir) {
+      const r = steps.get("open") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the open check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} open ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: open ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -1904,9 +1946,14 @@ async function main(): Promise<number> {
     ],
     tauri,
   );
-  // The execution program the launcher check installs, from its own workspace.
+  // The execution program the launcher check installs, from its own workspace. Its native-test
+  // feature lets an open launch take the open check's stand-in opener from a search path.
   if (existsSync(executionManifest))
-    run("cargo", ["build", "--locked", "-p", "execution", "--target-dir", appToolsTarget], appTools);
+    run(
+      "cargo",
+      ["build", "--locked", "-p", "execution", "--features", "native-test", "--target-dir", appToolsTarget],
+      appTools,
+    );
   // pluxy/claude-code, which the Claude Code check installs.
   if (existsSync(claudeCodeManifest))
     run("cargo", ["build", "--locked", "-p", "claude-code", "--target-dir", appToolsTarget], appTools);
@@ -1944,6 +1991,7 @@ async function main(): Promise<number> {
       "usage-claude",
       "usage-omp",
       "usage-pi",
+      "usage-opencode",
     ].filter((t) => existsSync(join(appTools, t, "Cargo.toml")));
     if (usageTools.length > 0) {
       run(
@@ -2292,6 +2340,35 @@ async function main(): Promise<number> {
           false,
           undefined,
           release,
+          false,
+          false,
+          false,
+          false,
+          false,
+          true,
+        )),
+      );
+      // The open check, on the same build.
+      p.push(
+        ...(await runApp(
+          "managed",
+          trusted,
+          updaterKey,
+          managed,
+          undefined,
+          false,
+          false,
+          undefined,
+          undefined,
+          {},
+          false,
+          false,
+          false,
+          false,
+          false,
+          undefined,
+          release,
+          false,
           false,
           false,
           false,
