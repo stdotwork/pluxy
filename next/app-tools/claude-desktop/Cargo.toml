@@ -1,0 +1,13 @@
+[package]
+name = "claude-desktop"
+version = "0.1.0"
+description = "Sets up and starts Claude Desktop for pluxy's desktop app"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pluxy-program = { path = "../lib/program" }
+pluxy-transactions = { path = "../lib/transactions" }
+# Keys keep their order and numbers their digits in the files it rewrites.
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
