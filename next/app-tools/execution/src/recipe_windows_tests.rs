@@ -230,16 +230,128 @@ fn files() -> (PathBuf, PathBuf, PathBuf) {
     (root, within, file)
 }
 
+/// A per-user `open` handler for `.jsonl` while it lives: `HKCU\Software\Classes\.jsonl` naming
+/// a class of the test's own, whose `open` command is command. Only on GitHub's runners, where no
+/// app opens `.jsonl`: elsewhere it would change the person's file types. Removed when dropped.
+struct JsonlHandler;
+
+const JSONL: &str = r"Software\Classes\.jsonl";
+const JSONL_CLASS: &str = r"Software\Classes\PluxyTest.jsonl";
+
+impl JsonlHandler {
+    fn register(command: &str) -> JsonlHandler {
+        use windows_sys::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
+        let set = |key: &str, value: &str| {
+            let (key, value) = (os::wide(key), os::wide(value));
+            // SAFETY: both strings are NUL-terminated; value's size is in bytes with its NUL.
+            let r = unsafe {
+                RegSetKeyValueW(
+                    HKEY_CURRENT_USER,
+                    key.as_ptr(),
+                    std::ptr::null(),
+                    REG_SZ,
+                    value.as_ptr().cast(),
+                    (value.len() * 2) as u32,
+                )
+            };
+            assert_eq!(r, 0, "setting {}", String::from_utf16_lossy(&key));
+        };
+        let handler = JsonlHandler;
+        set(JSONL, "PluxyTest.jsonl");
+        set(&format!(r"{JSONL_CLASS}\shell\open\command"), command);
+        associations_changed();
+        handler
+    }
+}
+
+impl Drop for JsonlHandler {
+    fn drop(&mut self) {
+        use windows_sys::Win32::System::Registry::{RegDeleteTreeW, HKEY_CURRENT_USER};
+        for key in [JSONL, JSONL_CLASS] {
+            // SAFETY: the key name is NUL-terminated.
+            unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, os::wide(key).as_ptr()) };
+        }
+        associations_changed();
+    }
+}
+
+/// Tells the shell the file types changed, as an installer does.
+fn associations_changed() {
+    use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
+    // SAFETY: SHCNE_ASSOCCHANGED takes no items.
+    unsafe {
+        SHChangeNotify(
+            SHCNE_ASSOCCHANGED as i32,
+            SHCNF_IDLIST,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+}
+
+/// Waits up to 20 seconds for path to hold want.
+fn arrives(path: &Path, want: &[u8]) -> bool {
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < end {
+        if std::fs::read(path).is_ok_and(|b| b == want) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
 #[test]
 fn an_open_launch_runs_the_execution_programs_open_mode_on_the_resolved_file() {
     let (root, within, file) = files();
     let named = within.join(r"sessions\..\sessions\rollout-a.jsonl");
     let i = json!({"kind": "open", "file": named, "within": within});
-    assert_eq!(
-        prepare(&i).unwrap(),
-        json!({"executable": me(), "argv": ["open", "--", s(&file)],
-            "cwd": s(&within.join("sessions")), "file": s(&file), "within": s(&within)})
-    );
+    let want = json!({"executable": me(), "argv": ["open", "--", s(&file)],
+        "cwd": s(&within.join("sessions")), "file": s(&file), "within": s(&within)});
+    let no_app = |r: Result<Value, pluxy_program::Error>| {
+        let e = r.unwrap_err();
+        assert_eq!(e.code, "not_found", "{}", e.message);
+        assert!(
+            e.message.starts_with("no app opens .jsonl"),
+            "{}",
+            e.message
+        );
+    };
+    if std::env::var_os("GITHUB_ACTIONS").is_none() {
+        // This computer's own file types decide.
+        if os::opens("jsonl") {
+            assert_eq!(prepare(&i).unwrap(), want);
+        } else {
+            no_app(prepare(&i));
+        }
+    } else {
+        // No app opens .jsonl on a new Windows: refused, as ShellExecuteExW with no dialog would
+        // report success and open nothing.
+        assert!(!os::opens("jsonl"));
+        no_app(prepare(&i));
+        // With a handler that copies the file it is given, the launch as prepared opens the file
+        // in it: the open mode's ShellExecuteExW, class .jsonl, verb open.
+        let copy = root.join("opened.jsonl");
+        let cmd = system32("cmd.exe");
+        let handler = JsonlHandler::register(&format!(
+            r#""{}" /D /C copy /Y "%1" "{}""#,
+            s(&cmd),
+            s(&copy)
+        ));
+        let prepared = prepare(&i).unwrap();
+        assert_eq!(prepared, want);
+        let argv: Vec<String> = prepared["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(crate::launch::main(&argv), 0);
+        assert!(arrives(&copy, b"{}\n"), "the handler did not get the file");
+        // Its type unregistered again: refused again.
+        drop(handler);
+        no_app(prepare(&i));
+    }
     std::fs::write(within.join(r"sessions\run.exe"), b"MZ").unwrap();
     std::fs::write(within.join(r"sessions\notes.html"), b"<p>").unwrap();
     for name in ["run.exe", "notes.html"] {
