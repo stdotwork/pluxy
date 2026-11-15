@@ -390,9 +390,12 @@ fn settings_version_access_lists_and_reparse_points_fail_closed() {
         assert!(!c.settings.exists());
     }
     fs::write(&c.settings, b"{}").unwrap();
+    // What the folder passes down is not protected, so a file made there is not private yet.
+    assert!(!private_path(&c.settings));
+    windows_files::protect(&c.settings, false).unwrap();
     assert!(
         private_path(&c.settings),
-        "the control: a fresh file is private"
+        "the control: a protected file is private"
     );
     windows_files::let_everyone_write(&c.settings);
     assert!(!private_path(&c.settings));

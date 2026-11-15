@@ -748,12 +748,14 @@ safely preserved. Newly created settings folders use mode 0700 and files use 060
 save, an existing folder owned by this user is tightened to 0700 if group/world-writable; a folder
 owned by another user is refused. Disabled persistence hides Remember. If saving fails after
 confirmation, the one-time token is still issued and a native notice/log reports the failure.
-On Windows the same checks read the access list instead of the mode: the file and folder must be
-owned by this user (or, for an elevated administrator, by the Administrators group, the owner such
-a process gives what it makes), and no entry may let anyone but this user, SYSTEM or the
-Administrators group write them; a missing access list is refused. A new or unsafe folder gets an
-access list of its own (this user and SYSTEM, inherited by what is made in it). Reparse points
-(symbolic links and junctions) are refused as symlinks are on Unix.
+On Windows the same checks read the owner and access list instead of the mode: the file and
+folder must be owned by this user, by the owner this process gives what it makes (for an elevated
+administrator, the Administrators group) or by SYSTEM, and have a protected access list (one that
+takes nothing from its folder's) whose allow entries are only this user's and SYSTEM's; a missing
+access list is refused. A new or unsafe folder, and each file the app saves, gets such a list
+(the folder's inherited by what is made in it). Reparse points (symbolic links and junctions) are
+refused as symlinks are on Unix. The app tools' file library (`next/app-tools/lib/files`) uses the
+same rule.
 
 An executable is opened before checking its canonical path, device/inode, size, mtime, ctime and
 mode (on Windows: the volume serial number and file index, size, last write and change times, and

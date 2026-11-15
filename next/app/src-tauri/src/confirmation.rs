@@ -709,7 +709,8 @@ fn private_file(file: &File) -> Result<(), String> {
     }
     Ok(())
 }
-/// Windows: a regular file this user owns that no one else may write (`confirmation_windows.rs`).
+/// Windows: a regular file with an accepted owner and a protected access list allowing only this
+/// user and SYSTEM (`confirmation_windows.rs`).
 #[cfg(windows)]
 fn private_file(file: &File) -> Result<(), String> {
     let m = file.metadata().map_err(|e| e.to_string())?;
@@ -734,8 +735,8 @@ fn open_settings(path: &Path) -> std::io::Result<File> {
         windows_files::open_no_follow(path)
     }
 }
-/// Creates new file tmp, readable and writable only by this user (on Windows, by the access list
-/// it inherits from the settings folder `secure_parent` made private).
+/// Creates new file tmp, readable and writable only by this user (on Windows `save` then gives it
+/// a protected access list of its own).
 fn create_private(tmp: &Path) -> std::io::Result<File> {
     let mut o = OpenOptions::new();
     o.write(true).create_new(true);
@@ -802,7 +803,7 @@ fn secure_parent(path: &Path, create: bool) -> Result<(), String> {
         Err(e) if e.contains("not owned") => Err(e),
         _ => {
             drop(f);
-            windows_files::tighten(dir)
+            windows_files::protect(dir, true)
         }
     }
 }
@@ -927,6 +928,9 @@ impl Confirmations {
         let tmp = dir.join(format!(".confirmation-{}", crate::managed::random_key()));
         let result = (|| {
             let mut f = create_private(&tmp).map_err(|e| e.to_string())?;
+            // What the folder passes down is not protected: the new file gets a list of its own.
+            #[cfg(windows)]
+            windows_files::protect(&tmp, false)?;
             #[cfg(windows)]
             private_file(&f)?;
             f.write_all(
