@@ -2482,6 +2482,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "plist",
  "pulldown-cmark",
  "pulldown-cmark-escape",
  "semver",
@@ -2497,6 +2498,7 @@ dependencies = [
  "url",
  "webkit2gtk",
  "windows",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
