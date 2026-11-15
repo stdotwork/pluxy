@@ -299,10 +299,12 @@ anything a caller passes. On top of the rules above:
   again, updated, rolled back). A clean stop (when idle, or a stop the host asked for, such as a
   disable) or a run of ten minutes starts a new count: with the 30-second idle stop, crashes in a
   row are those with no clean stop between them. A crash of a release that is draining is not
-  counted.
+  counted. A stop the host asks for while the tool is not running (crashed, quarantined or
+  incompatible) clears that state too: it reads as idle until its next call.
 - A call the tool received and did not answer (it crashed, was stopped, left a cancel unanswered
   or reached the drain limit) has an **unknown outcome**: its error says so, and it is never sent
-  again. The host keeps it until the package's next start, which carries the list in describe,
+  again. The host keeps it, recorded by the time the tool is reaped, until the package's next
+  start, which carries the list in describe,
   as `{"type":"call","id":"c-9","op":"describe","contract_version":0,"unknown":[{"id":"c-7","op":"apply","generation":1700000000}]}`
   (`generation` is the release's install time). A tool that writes must reconcile those calls
   with its own records before it answers describe. The describe that carries them waits for the
@@ -787,11 +789,11 @@ too, only to read backups (`backup.get`, `backup.list`) and to end the journals 
 
 | `op` | Fields | `output` |
 | --- | --- | --- |
-| `backup.put` | `label` (at most 64 characters), `data` (base64, at most 512 KiB) | `{"backup": "b-<hex>"}` |
+| `backup.put` | `label` (at most 64 characters, holding no secret or reference), `data` (base64, at most 512 KiB) | `{"backup": "b-<hex>"}` |
 | `backup.get` | `backup` | `{"backup", "label", "size", "created", "data"}` |
 | `backup.list` | none | `{"backups": [{"backup", "label", "size", "created"}]}` |
 | `backup.delete` | `backup` | `{}` |
-| `journal.begin` | `intent` (a JSON object of at most 16 KiB) | `{"journal": "j-<hex>"}` |
+| `journal.begin` | `intent` (a JSON object of at most 16 KiB, holding no secret or reference) | `{"journal": "j-<hex>"}` |
 | `journal.commit` | `journal` | `{"journal", "outcome": "committed"}` |
 | `journal.end` | `journal`, `outcome` (`committed` or `rolled_back`) | `{"journal", "outcome"}` |
 
@@ -801,7 +803,8 @@ its backups its records still name (the transaction library keeps 10 manual back
 began; in describe, any journal that describe named. The vault's folders are opened without
 following links, and files in a package's folder that its records do not name (a write cut
 short, a removal that failed) are removed the next time they are read. Errors, which never name
-another journal: `invalid_request` for bad fields or a journal ended already with another outcome,
+another journal: `invalid_request` for bad fields (an `intent` or a `label` that holds a secret's
+value or a reference, which the error names neither of) or a journal ended already with another outcome,
 `not_found` for another package's or an unknown ID (or a journal the tool may not end),
 `unavailable` when the vault cannot be read or written, a second journal is begun while one is
 open, or the package keeps 256 backups, `permission` for a `for` the tool is not serving or an
@@ -823,7 +826,10 @@ on the package's turn:
 The tool must reconcile each before it answers: look at what is on disk and end the journal as
 `committed` (the write took effect) or `rolled_back` (it did not, or the tool put the old bytes
 back), never by writing again. A start whose describe leaves one open fails, and so does one whose
-journals cannot be read (the status says why, in `journals_error`). Ending a journal
+journals cannot be read (the status says why, in `journals_error`) and one that cannot take its
+package's turn within the startup limit while the package has a journal open (`extension_unavailable`;
+it is never described with no journals, and is retried by the backoff). Calls of unknown outcome
+alone wait for a later start's turn. Ending a journal
 again with the same outcome is answered the same, with `"again": true`, because delivery may
 repeat; another outcome is refused. While one is open, no other journal begins. A swap's
 candidate is told of none, as of unknown outcomes. The window's `program_status` lists the

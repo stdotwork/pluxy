@@ -7,11 +7,11 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// renamed returns req as it goes to an account that knows its model as upstream: the model
+// Renamed returns req as it goes to an account that knows its model as upstream: the model
 // renamed, in the request and in the client's body when the body names it (a top-level
 // "model"), so a body passed through unchanged asks for the same model. Everything else in the
 // body stays byte for byte.
-func renamed(req llm.Request, upstream string) llm.Request {
+func Renamed(req llm.Request, upstream string) llm.Request {
 	if upstream == "" || upstream == req.Model {
 		return req
 	}

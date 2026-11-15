@@ -1,6 +1,7 @@
 import { useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { LoginMethod } from "../api";
 import { LoginFlow, suggestedAccountId, validAccountId } from "../loginFlow";
+import { usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import { Button, Empty, List, Notice, PageHead, useKit, useLoad } from "../ui";
@@ -31,6 +32,7 @@ interface MethodTile {
 /** onSuccess: called with the new account's ID once a sign-in adds it (Beginner Mode counts it). */
 export function AddAccountPage(props: { onSuccess?: (accountId: string) => void } = {}) {
   const { api } = useKit();
+  const p = usePrivacy();
   const methods = useLoad(api.loginMethods);
   const [accountId, setAccountId] = useState(suggestedAccountId);
   const [selected, setSelected] = useState<string>();
@@ -63,7 +65,7 @@ export function AddAccountPage(props: { onSuccess?: (accountId: string) => void 
       <div class="add-account stack">
         {methods.error && (
           <>
-            <Notice tone="danger">{methods.error}</Notice>
+            <Notice tone="danger">{p.text(methods.error)}</Notice>
             <div>
               <Button onClick={methods.reload}>{t("retry")}</Button>
             </div>

@@ -386,7 +386,7 @@ impl<'a> Transactions<'a> {
                     &t["applied"],
                     "retargeted",
                 );
-                remember_all(&mut state, "kept", k);
+                remember_kept(&mut state, k);
             }
             set_record(&mut state, set, None);
             self.save(&state)?;
@@ -413,8 +413,18 @@ impl<'a> Transactions<'a> {
             return Ok(json!({"outcome": "unchanged", "changed": []}));
         }
         for (original, mode, c) in &out {
-            let o = self.put_image("original", original.as_deref())?;
-            let a = self.put_image("applied", c.after.as_deref())?;
+            let put = self
+                .put_image("original", original.as_deref())
+                .and_then(|o| Ok((o, self.put_image("applied", c.after.as_deref())?)));
+            let (o, a) = match put {
+                Ok(p) => p,
+                Err(e) => {
+                    // The images already uploaded belong to no record: they would count
+                    // against the vault's limit for nothing.
+                    self.sweep(&state);
+                    return Err(e);
+                }
+            };
             targets.push(record(
                 &c.target.pin,
                 o,
@@ -551,6 +561,7 @@ impl<'a> Transactions<'a> {
         rec: Option<Option<Value>>,
         written: &mut dyn FnMut(usize),
     ) -> Result<Vec<Value>, Error> {
+        let covered: Vec<Value> = changes.iter().map(|c| json!(c.target.pin.target)).collect();
         let changes: Vec<Change> = changes
             .into_iter()
             .filter(|c| c.after != c.before)
@@ -561,35 +572,24 @@ impl<'a> Transactions<'a> {
             if let Some(rec) = rec {
                 set_record(&mut state, set, rec);
             }
+            // A restore that finds a file already at its original is done with the originals
+            // kept for it, as a restore that wrote it would be.
+            if op == "restore" {
+                drop_kept(&mut state, set, &covered);
+            }
             self.save(&state)?;
             self.sweep(&state);
             return Ok(changed);
         }
-        let mut files = Vec::new();
-        for c in &changes {
-            files.push(json!({
-                "pin": c.target.pin.to_json(),
-                "before": sha256_of(c.before.as_deref()),
-                "after": sha256_of(c.after.as_deref()),
-                "mode": c.mode,
-                "backup": self.put_image("before", c.before.as_deref())?,
-                "intended": self.put_image("intended", c.after.as_deref())?,
-            }));
-        }
-        let mut intent = json!({"kind": KIND, "op": op, "set": set, "files": files});
-        if let Some(rec) = rec {
-            intent["record"] = json!(rec);
-        }
-        if intent.to_string().len() > 16 << 10 {
-            self.sweep(&state);
-            return Err(Error::invalid_request(
-                "the operation names too much for one journal",
-            ));
-        }
-        let journal = self
-            .vault
-            .vault("journal.begin", fields(json!({"intent": intent})))?["journal"]
-            .clone();
+        let begun = self.begin(op, set, &changes, rec);
+        let (intent, journal) = match begun {
+            Ok(b) => b,
+            Err(e) => {
+                // Backups put for this operation are named by no state or journal.
+                self.sweep(&state);
+                return Err(e);
+            }
+        };
         let mut done: Vec<(usize, Option<Id>)> = Vec::new();
         let mut failure = None;
         for (i, c) in changes.iter().enumerate() {
@@ -640,6 +640,9 @@ impl<'a> Transactions<'a> {
         }
         if failure.is_none() {
             finish(&mut state, &intent, &journal);
+            if op == "restore" {
+                drop_kept(&mut state, set, &covered);
+            }
             if let Err(e) = self.save(&state) {
                 failure = Some((self.data.join(STATE), e));
             }
@@ -654,6 +657,42 @@ impl<'a> Transactions<'a> {
             .vault("journal.commit", fields(json!({"journal": journal})));
         self.sweep(&state);
         Ok(changed)
+    }
+
+    /// Puts each change's backups in the vault and begins the operation's journal: the intent and
+    /// the journal's ID.
+    fn begin(
+        &self,
+        op: &str,
+        set: &str,
+        changes: &[Change],
+        rec: Option<Option<Value>>,
+    ) -> Result<(Value, Value), Error> {
+        let mut files = Vec::new();
+        for c in changes {
+            files.push(json!({
+                "pin": c.target.pin.to_json(),
+                "before": sha256_of(c.before.as_deref()),
+                "after": sha256_of(c.after.as_deref()),
+                "mode": c.mode,
+                "backup": self.put_image("before", c.before.as_deref())?,
+                "intended": self.put_image("intended", c.after.as_deref())?,
+            }));
+        }
+        let mut intent = json!({"kind": KIND, "op": op, "set": set, "files": files});
+        if let Some(rec) = rec {
+            intent["record"] = json!(rec);
+        }
+        if intent.to_string().len() > 16 << 10 {
+            return Err(Error::invalid_request(
+                "the operation names too much for one journal",
+            ));
+        }
+        let journal = self
+            .vault
+            .vault("journal.begin", fields(json!({"intent": intent})))?["journal"]
+            .clone();
+        Ok((intent, journal))
     }
 
     /// Puts back the files done wrote, newest first, except those another program changed since,
@@ -691,7 +730,7 @@ impl<'a> Transactions<'a> {
                         &f["intended"],
                         "conflict",
                     );
-                    remember_all(state, "kept", k);
+                    remember_kept(state, k);
                 }
             } else if let Err(f) = c.target.replace(
                 Some(*id),
@@ -781,9 +820,12 @@ impl<'a> Transactions<'a> {
             for f in files {
                 let pin = Pin::from_json(&f["pin"])?;
                 let t = Target::pinned(&pin).ok();
-                if let Some(t) = &t {
-                    let _ = t.remove_temps();
-                }
+                // Also when the target cannot be opened now (a link, too big): a temporary file
+                // may hold the new bytes.
+                let _ = match &t {
+                    Some(t) => t.remove_temps(),
+                    None => Target::remove_temps_of(&pin),
+                };
                 now.push((pin, t));
             }
             let finished = committed
@@ -808,7 +850,7 @@ impl<'a> Transactions<'a> {
                             &f["intended"],
                             "conflict",
                         );
-                        remember_all(&mut state, "kept", k);
+                        remember_kept(&mut state, k);
                         conflicts.push(at.clone());
                     };
                     let Some(t) = t else {
@@ -914,12 +956,26 @@ fn finish(state: &mut Value, intent: &Value, journal: &Value) {
         .flatten()
         .map(|f| f["pin"]["target"].clone())
         .collect();
+    // A manual backup's restore keeps them: they stay restore's way back.
     if intent["op"] != RESTORE_BACKUP {
-        if let Some(a) = state["kept"].as_array_mut() {
-            a.retain(|k| !(k["set"] == set && written.contains(&k["target"])));
-        }
+        drop_kept(state, set, &written);
     }
     remember(state, "committed", journal.clone());
+}
+
+/// Forgets the images kept for these targets of set.
+fn drop_kept(state: &mut Value, set: &str, targets: &[Value]) {
+    if let Some(a) = state["kept"].as_array_mut() {
+        a.retain(|k| !(k["set"] == set && targets.contains(&k["target"])));
+    }
+}
+
+/// Appends a kept image unless state already has that very one: a reconcile delivered again
+/// (its journal could not be ended) must not keep an original twice.
+fn remember_kept(state: &mut Value, k: Value) {
+    if !state["kept"].as_array().is_some_and(|a| a.contains(&k)) {
+        remember_all(state, "kept", k);
+    }
 }
 
 fn set_record(state: &mut Value, set: &str, rec: Option<Value>) {
