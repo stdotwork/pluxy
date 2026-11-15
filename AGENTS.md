@@ -173,8 +173,11 @@ the maintainers' own machines instead:
 
 Each variable holds a runner label as JSON, for example `"self-hosted"` or
 `["self-hosted", "linux"]`. When a variable is not set, its jobs run on the GitHub runner they
-named before. Jobs from pull requests opened from a fork always run on GitHub's runners, so
-code from a fork never runs on the maintainers' machines.
+named before. Jobs from pull requests opened from a fork run on GitHub's runners. That check
+lives in the workflow files, which a fork can edit, so it is not the only guard: runs from
+forks need a maintainer's approval, and the maintainers' runner host cancels any run from a
+fork that asks for its runners. Before approving a fork's run, check whether it changes
+`.github/workflows/`.
 
 ## How changes flow
 
