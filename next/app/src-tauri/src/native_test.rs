@@ -34,7 +34,8 @@
 //!    `PLUXY_APP_TEST_CODEX`, only the Codex setup and launcher (`codex_native.rs`); with
 //!    `PLUXY_APP_TEST_SAVE`, only the host's save-file service (`save_native.rs`);
 //!    `PLUXY_APP_TEST_CLAUDE_DESKTOP`, only the Claude Desktop setup and launcher
-//!    (`claude_desktop_native.rs`);
+//!    (`claude_desktop_native.rs`); with `PLUXY_APP_TEST_OPENCODE`, only the OpenCode setup and
+//!    launcher (`opencode_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -94,6 +95,9 @@ mod launcher;
 #[cfg(target_os = "linux")]
 #[path = "open_native.rs"]
 mod open;
+#[cfg(target_os = "linux")]
+#[path = "opencode_native.rs"]
+mod opencode;
 #[cfg(target_os = "linux")]
 #[path = "program_native.rs"]
 mod program;
@@ -549,6 +553,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_CLAUDE_DESKTOP") {
         claude_desktop::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The OpenCode setup and launcher (opencode_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_OPENCODE") {
+        opencode::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
