@@ -245,7 +245,8 @@ fn a_private_folder_or_file_is_private_from_the_moment_it_is_made() {
 }
 
 /// Windows: an access list that is not protected (a later change to the folder's would reach it),
-/// or an owner other than this user or SYSTEM (who could change the list), is not private.
+/// or an owner other than this user, the owner this process gives what it makes or SYSTEM (who could
+/// change the list), is not private.
 #[cfg(windows)]
 #[test]
 fn an_inherited_list_or_another_owner_is_not_private() {
@@ -260,16 +261,14 @@ fn an_inherited_list_or_another_owner_is_not_private() {
     let file = folder.join("file");
     drop(create_new_private(&file).unwrap());
     assert!(is_private(&file).unwrap());
-    // Handed to the Administrators group, where this account may do so.
-    if icacls(&file, &["/setowner", "*S-1-5-32-544"]) {
-        assert!(
-            !is_private(&file).unwrap(),
-            "owned by the Administrators group"
-        );
+    // Handed to the Users group (which takes the restore privilege an elevated administrator
+    // has): taken back by make_private.
+    if icacls(&file, &["/setowner", "*S-1-5-32-545"]) {
+        assert!(!is_private(&file).unwrap(), "owned by the Users group");
         make_private(&file).unwrap();
         assert!(is_private(&file).unwrap());
     } else {
-        eprintln!("skipped: this account cannot hand a file to the Administrators group");
+        eprintln!("skipped: this account cannot hand a file to the Users group");
     }
     fs::remove_dir_all(dir).unwrap();
 }

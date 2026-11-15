@@ -1,12 +1,13 @@
 //! The file rules the app tools share on Linux, macOS and Windows.
 //!
 //! - **Private** files and folders are this user's alone: on Linux and macOS a file is 0600 and a
-//!   folder 0700; on Windows each is owned by this user (or SYSTEM, the system account, whose reach
-//!   matches root's) and carries a protected access list (one that takes nothing from its folder's)
-//!   that allows only this user and SYSTEM. A folder's list is inherited by what is made inside it;
+//!   folder 0700; on Windows each is owned by this user, by the owner this process gives what it
+//!   makes (its user, or for an elevated administrator the Administrators group), or by SYSTEM (the
+//!   system account, whose reach matches root's), and carries a protected access list (one that
+//!   takes nothing from its folder's) that allows only this user and SYSTEM. A folder's list is inherited by what is made inside it;
 //!   what is made that way is not private until it is made so, since its list is not protected.
-//!   A private file or folder is made with its owner and list in one step, so it is never open to
-//!   anyone else, even for a moment.
+//!   A private file or folder is made with its list in one step, so it is never open to anyone
+//!   else, even for a moment.
 //! - [`open_regular`] opens a file for reading without following a link and only if it is a
 //!   regular file, checked on the open handle: on Linux and macOS with `O_NOFOLLOW` and
 //!   `O_NONBLOCK` (a FIFO is refused, never waited on); on Windows the link itself is opened
@@ -90,17 +91,19 @@ pub fn create_new_private(path: &Path) -> io::Result<File> {
 }
 
 /// Makes the existing file or folder path private, through a handle that is path itself, not a
-/// link it names: 0600 or 0700 on Linux and macOS; on Windows owned by this user, with a protected
-/// access list allowing only this user and SYSTEM (a folder's inherited by what is made in it). A
-/// link, or anything but a file or folder, is refused; so is, on Windows, one owned by another
-/// account that this one may not take over.
+/// link it names: 0600 or 0700 on Linux and macOS; on Windows a protected access list allowing only
+/// this user and SYSTEM (a folder's inherited by what is made in it), and an owner other than those
+/// `is_private` accepts replaced by the owner this process gives what it makes. A link, or anything
+/// but a file or folder, is refused; so is, on Windows, one owned by another account that this one
+/// may not take over.
 pub fn make_private(path: &Path) -> io::Result<()> {
     imp::make_private(path)
 }
 
 /// Whether the file or folder path (not followed if it is a link) is private already: on Linux and
-/// macOS no group or other permission bit is set; on Windows this user or SYSTEM owns it and its
-/// access list is protected and allows no one but this user and SYSTEM.
+/// macOS no group or other permission bit is set; on Windows this user, the owner this process gives
+/// what it makes, or SYSTEM owns it, and its access list is protected and allows no one but this
+/// user and SYSTEM.
 pub fn is_private(path: &Path) -> io::Result<bool> {
     imp::is_private(path)
 }
@@ -268,11 +271,11 @@ mod imp {
     use windows_sys::Win32::Security::{
         CreateWellKnownSid, EqualSid, GetAce, GetSecurityDescriptorControl, GetTokenInformation,
         InitializeSecurityDescriptor, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
-        SetSecurityDescriptorOwner, TokenUser, WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACE_HEADER,
-        ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
+        TokenOwner, TokenUser, WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
+        DACL_SECURITY_INFORMATION, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
         PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
         SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE, SE_DACL_PROTECTED,
-        SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_QUERY, TOKEN_USER,
+        SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_INFORMATION_CLASS, TOKEN_QUERY,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateDirectoryW, CreateFileW, FileIdInfo, GetFileInformationByHandle,
@@ -469,7 +472,7 @@ mod imp {
     pub fn make_private(path: &Path) -> io::Result<()> {
         let base = FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC;
         // Taking the ownership needs WRITE_OWNER, which an owner does not always have; without it
-        // the file must be this user's or SYSTEM's already.
+        // the file must have an owner `is_private` accepts already.
         let (f, can_own) = match open_itself(path, base | WRITE_OWNER) {
             Ok(f) => (f, true),
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
@@ -479,23 +482,24 @@ mod imp {
         };
         let m = f.metadata()?;
         refuse_link(&m)?;
-        let user = User::current()?;
+        let user = TokenSid::user()?;
+        let default_owner = TokenSid::default_owner()?;
         let system = System::sid()?;
-        if !can_own {
-            let (owner, _sd) = owner_of(&f)?;
-            if !unsafe { EqualSid(owner, user.sid()) != 0 || EqualSid(owner, system.ptr()) != 0 } {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "owned by another account",
-                ));
-            }
+        let (owner, _sd) = owner_of(&f)?;
+        let take_over = !owner_accepted(owner, &user, &default_owner, &system);
+        if take_over && !can_own {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "owned by another account",
+            ));
         }
         let acl = private_acl(&user, &system, m.is_dir())?;
         let mut what = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
         let mut owner: PSID = null_mut();
-        if can_own {
+        // Handed to the owner this process gives what it makes, which it may always assign.
+        if take_over {
             what |= OWNER_SECURITY_INFORMATION;
-            owner = user.sid();
+            owner = default_owner.sid();
         }
         win32(unsafe {
             SetSecurityInfo(
@@ -510,33 +514,60 @@ mod imp {
         })
     }
 
-    /// The user this process runs as: its token's user SID, in a buffer that holds it.
-    struct User(Vec<u64>);
+    /// A SID this process's token names, in the buffer that holds it: its user, or its default
+    /// owner (the owner it gives what it makes: its user, or for an elevated administrator the
+    /// Administrators group).
+    struct TokenSid(Vec<u64>);
 
-    impl User {
-        fn current() -> io::Result<User> {
+    impl TokenSid {
+        fn user() -> io::Result<TokenSid> {
+            TokenSid::query(TokenUser)
+        }
+
+        fn default_owner() -> io::Result<TokenSid> {
+            TokenSid::query(TokenOwner)
+        }
+
+        fn query(class: TOKEN_INFORMATION_CLASS) -> io::Result<TokenSid> {
             let mut token: HANDLE = null_mut();
             if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
                 return Err(io::Error::last_os_error());
             }
             let mut len = 0u32;
-            unsafe { GetTokenInformation(token, TokenUser, null_mut(), 0, &mut len) };
-            // u64s keep TOKEN_USER's pointer field aligned.
+            unsafe { GetTokenInformation(token, class, null_mut(), 0, &mut len) };
+            // u64s keep the structure's pointer field aligned.
             let mut buf = vec![0u64; (len as usize).div_ceil(8).max(1)];
             let ok = unsafe {
-                GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), len, &mut len)
+                GetTokenInformation(token, class, buf.as_mut_ptr().cast(), len, &mut len)
             };
             let err = io::Error::last_os_error();
             unsafe { CloseHandle(token) };
             if ok == 0 {
                 return Err(err);
             }
-            Ok(User(buf))
+            Ok(TokenSid(buf))
         }
 
+        /// TOKEN_USER and TOKEN_OWNER both start with the SID's pointer.
         fn sid(&self) -> PSID {
-            unsafe { (*(self.0.as_ptr() as *const TOKEN_USER)).User.Sid }
+            unsafe { *(self.0.as_ptr() as *const PSID) }
         }
+    }
+
+    /// Whether owner is one a private file may have: this user, the owner this process gives what
+    /// it makes, or SYSTEM.
+    fn owner_accepted(
+        owner: PSID,
+        user: &TokenSid,
+        default_owner: &TokenSid,
+        system: &System,
+    ) -> bool {
+        !owner.is_null()
+            && unsafe {
+                EqualSid(owner, user.sid()) != 0
+                    || EqualSid(owner, default_owner.sid()) != 0
+                    || EqualSid(owner, system.ptr()) != 0
+            }
     }
 
     /// The SYSTEM account's SID.
@@ -576,7 +607,7 @@ mod imp {
 
     /// An access list allowing this user and SYSTEM everything, inherited by what is made in a
     /// folder.
-    fn private_acl(user: &User, system: &System, folder: bool) -> io::Result<Local<ACL>> {
+    fn private_acl(user: &TokenSid, system: &System, folder: bool) -> io::Result<Local<ACL>> {
         let inheritance = if folder {
             SUB_CONTAINERS_AND_OBJECTS_INHERIT
         } else {
@@ -603,20 +634,19 @@ mod imp {
         Ok(Local(acl))
     }
 
-    /// Runs make with security attributes for a private file or folder: owned by this user, with a
-    /// protected list allowing only this user and SYSTEM, so it is private from the moment it is
-    /// made.
+    /// Runs make with security attributes for a private file or folder: a protected list allowing
+    /// only this user and SYSTEM, so it is private from the moment it is made. No owner is named:
+    /// it gets the owner this process gives what it makes, as anything it makes does.
     fn with_private<T>(
         folder: bool,
         make: impl FnOnce(*const SECURITY_ATTRIBUTES) -> io::Result<T>,
     ) -> io::Result<T> {
-        let user = User::current()?;
+        let user = TokenSid::user()?;
         let system = System::sid()?;
         let acl = private_acl(&user, &system, folder)?;
         let mut sd = SECURITY_DESCRIPTOR::default();
         let psd: PSECURITY_DESCRIPTOR = (&mut sd as *mut SECURITY_DESCRIPTOR).cast();
         ok(unsafe { InitializeSecurityDescriptor(psd, SD_REVISION) })?;
-        ok(unsafe { SetSecurityDescriptorOwner(psd, user.sid(), 0) })?;
         ok(unsafe { SetSecurityDescriptorDacl(psd, 1, acl.0, 0) })?;
         ok(unsafe { SetSecurityDescriptorControl(psd, SE_DACL_PROTECTED, SE_DACL_PROTECTED) })?;
         let sa = SECURITY_ATTRIBUTES {
@@ -648,7 +678,8 @@ mod imp {
 
     pub fn is_private(path: &Path) -> io::Result<bool> {
         let f = open_itself(path, FILE_READ_ATTRIBUTES | READ_CONTROL)?;
-        let user = User::current()?;
+        let user = TokenSid::user()?;
+        let default_owner = TokenSid::default_owner()?;
         let system = System::sid()?;
         let mut owner: PSID = null_mut();
         let mut dacl: *mut ACL = null_mut();
@@ -670,11 +701,15 @@ mod imp {
             EqualSid(sid, user.sid()) != 0 || EqualSid(sid, system.ptr()) != 0
         };
         // Another owner could change the list; an unprotected list takes up what its folder's
-        // passes down later; no list at all allows everyone.
+        // passes down later; no list at all allows everyone. The list itself allows only this user
+        // and SYSTEM.
         let mut control = 0u16;
         let mut revision = 0u32;
         ok(unsafe { GetSecurityDescriptorControl(sd.0, &mut control, &mut revision) })?;
-        if owner.is_null() || !ours(owner) || control & SE_DACL_PROTECTED == 0 || dacl.is_null() {
+        if !owner_accepted(owner, &user, &default_owner, &system)
+            || control & SE_DACL_PROTECTED == 0
+            || dacl.is_null()
+        {
             return Ok(false);
         }
         for i in 0..u32::from(unsafe { (*dacl).AceCount }) {
