@@ -1358,6 +1358,7 @@ impl Connection {
     }
 
     #[cfg(feature = "native-test")]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn test_settings_path(&self) -> PathBuf {
         self.dirs.settings()
     }

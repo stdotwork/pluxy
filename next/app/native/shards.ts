@@ -39,10 +39,17 @@ export const SHARDS: Record<string, readonly string[]> = {
   release: ["release gate"],
 };
 
+/** The sessions of the Windows and macOS native test (platform.ts), which next-app-platforms.yml
+ * runs on the GitHub-hosted runners of those systems. They are not among the shards above: the
+ * Linux matrix of next-app.yml does not list them and never runs them. */
+export const PLATFORM_SHARDS: Record<string, readonly string[]> = {
+  platform: ["single instance", "login item", "window and tray"],
+};
+
 /** Every session, each named once across the shards. */
 export const SESSIONS: ReadonlySet<string> = (() => {
   const all = new Set<string>();
-  for (const [shard, names] of Object.entries(SHARDS))
+  for (const [shard, names] of [...Object.entries(SHARDS), ...Object.entries(PLATFORM_SHARDS)])
     for (const name of names) {
       if (all.has(name))
         throw new Error(`native/shards.ts: session ${name} is in more than one shard (${shard})`);
@@ -55,7 +62,9 @@ export const SESSIONS: ReadonlySet<string> = (() => {
  * are the job's place in CI's matrix (strategy.job-index, strategy.job-total), which must match
  * SHARDS, so that every shard here is a job there. */
 export function selectShard(shard?: string, index?: string, total?: string): ReadonlySet<string> {
-  if (!shard) return SESSIONS;
+  if (!shard) return new Set(Object.values(SHARDS).flat());
+  const platform = PLATFORM_SHARDS[shard];
+  if (platform) return new Set(platform);
   const names = Object.keys(SHARDS);
   const sessions = SHARDS[shard];
   if (!sessions) throw new Error(`no native test shard ${shard}; native/shards.ts has ${names.join(", ")}`);
