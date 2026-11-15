@@ -1,0 +1,12 @@
+[package]
+name = "usage-omp"
+version = "0.1.0"
+description = "The Oh My Pi usage parser for pluxy's usage hub: Oh My Pi's session files to token rows"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pluxy-pi-sessions = { path = "../lib/pi-sessions" }
+pluxy-program = { path = "../lib/program" }
+serde_json = "1"

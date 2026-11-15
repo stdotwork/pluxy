@@ -1,6 +1,7 @@
 package configdoc
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -97,5 +98,45 @@ func TestPassphraseHeaderIsSecret(t *testing.T) {
 	shown := r.Headers(map[string]string{"X-Passphrase": value})["X-Passphrase"]
 	if shown != r.Placeholder(value) || !strings.Contains(string(red), "X-Passphrase: "+shown) {
 		t.Errorf("GET /accounts shows %q; GET /config:\n%s", shown, red)
+	}
+}
+
+// A key named like a secret holds a secret whatever its shape, also when its name says "header":
+// header_token, auth_header_secret, header_api_key. Its value is hidden in GET /config and GET
+// /accounts and taken out of text (Doc.TextSecrets, SettingsSecrets), as the value of any other
+// secret key is. A real mapping of headers (extra_headers) keeps the headers rule: only its secret
+// headers are hidden.
+func TestHeaderNamedSecretKeysAreSecrets(t *testing.T) {
+	const keep = "fake-visible-trace-1"
+	for _, tc := range []struct{ name, key, value, secret string }{
+		{"scalar", "header_token", `"fake-header-token-1"`, "fake-header-token-1"},
+		{"prefixed", "auth_header_token", `"fake-header-token-2"`, "fake-header-token-2"},
+		{"list", "header_secret", `["fake-header-secret-3"]`, "fake-header-secret-3"},
+		{"mapping", "header_api_key", `{"value": "fake-header-secret-4"}`, "fake-header-secret-4"},
+	} {
+		settings := `{"` + tc.key + `": ` + tc.value + `, "extra_headers": {"X-Trace": "` + keep + `", "X-Api-Key": "fake-extra-key-5"}}`
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := NewRedactor().RedactSettings([]byte(settings))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(out), tc.secret) || strings.Contains(string(out), "fake-extra-key-5") || !strings.Contains(string(out), keep) {
+				t.Errorf("RedactSettings = %s, want %s and the secret header hidden and X-Trace kept", out, tc.secret)
+			}
+			if got := SettingsSecrets([]byte(settings)); !slices.Contains(got, tc.secret) || slices.Contains(got, keep) {
+				t.Errorf("SettingsSecrets = %q, want it to hold %s and not %s", got, tc.secret, keep)
+			}
+			cfg := `{"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-1"], "extension": {"accounts": [{"id": "a", "settings": ` + settings + `}]}}`
+			if got := mustParse(t, cfg, false).TextSecrets(); !slices.Contains(got, tc.secret) || slices.Contains(got, keep) {
+				t.Errorf("TextSecrets = %q, want it to hold %s and not %s", got, tc.secret, keep)
+			}
+			red, err := NewRedactor().Redact([]byte(cfg), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(red), tc.secret) {
+				t.Errorf("GET /config shows %s:\n%s", tc.secret, red)
+			}
+		})
 	}
 }

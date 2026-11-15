@@ -471,11 +471,31 @@ impl Caller {
         }
     }
 
+    /// Whether the core this caller reaches takes client key key: the status of core's client API
+    /// with it (`Client::client_key_status`), refused as call refuses once the app's core stopped.
+    pub fn client_key_status(&self, key: &str) -> Result<u16, String> {
+        if self
+            .gone
+            .as_ref()
+            .is_some_and(|g| g.load(std::sync::atomic::Ordering::SeqCst))
+        {
+            return Err("the app's core has stopped".into());
+        }
+        let c = self
+            .client
+            .as_ref()
+            .ok_or("the app is not connected to a core")?;
+        c.client_key_status(key)
+            .map_err(|kind| format!("core could not be asked ({kind})"))
+    }
+
     /// Calls as call does. A call core refused because a rotation replaced the key while it was
     /// on its way goes once more with the current key, to the same core: core refuses a key
-    /// before acting, so nothing runs twice.
+    /// before acting, so nothing runs twice. The socket hold is let go before current runs:
+    /// current waits for the connection lock, which a restart holds while it binds that very
+    /// address.
     pub fn call_or_retry(
-        &self,
+        mut self,
         method: &str,
         path: &str,
         body: Option<&Value>,
@@ -485,6 +505,7 @@ impl Caller {
         if r.status != 401 {
             return r;
         }
+        self._hold.take();
         let now = current();
         let same_core =
             now.client.as_ref().map(Client::base) == self.client.as_ref().map(Client::base);
@@ -1306,6 +1327,24 @@ impl Connection {
         Ok(())
     }
 
+    /// Changes each time the connection does (another core, mode or key).
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn signed_in(&self) -> bool {
+        self.key.is_some()
+    }
+
+    /// The core the connection reaches, as client keys are bound to it: its mode and origin.
+    #[cfg(target_os = "linux")]
+    pub fn target(&self) -> Option<crate::vault::CoreTarget> {
+        Some(crate::vault::CoreTarget {
+            mode: self.settings.mode?,
+            origin: self.client.as_ref()?.base().to_string(),
+        })
+    }
+
     pub fn caller(&self) -> Caller {
         Caller {
             client: self.client.clone(),
@@ -1564,6 +1603,38 @@ mod tests {
         );
         drop(caller);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A refused call lets go of the app's copy of the core's socket before it asks for the
+    /// current connection, which waits for the lock a restart holds while it binds that address.
+    #[test]
+    fn a_retrying_call_lets_go_of_the_socket_before_it_asks_for_the_connection() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let hold = std::sync::Arc::new(listener);
+        let probe = std::sync::Arc::downgrade(&hold);
+        let caller = Caller {
+            client: Some(Client::new("http://127.0.0.1:1", None)),
+            // Not signed in: refused with 401 before anything is sent.
+            key: None,
+            gone: None,
+            _hold: Some(hold),
+        };
+        let asked = std::cell::Cell::new(false);
+        let r = caller.call_or_retry("GET", "/status", None, || {
+            asked.set(true);
+            assert!(
+                probe.upgrade().is_none(),
+                "the socket was still held while the current connection was asked for"
+            );
+            Caller {
+                client: None,
+                key: None,
+                gone: None,
+                _hold: None,
+            }
+        });
+        assert!(asked.get());
+        assert_eq!(r.status, 401);
     }
 
     #[test]

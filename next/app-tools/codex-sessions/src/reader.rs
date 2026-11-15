@@ -155,6 +155,16 @@ fn open_read_only(path: &Path) -> Result<Db, String> {
     })
 }
 
+/// Whether the Codex home's folder `name` is a link: it is not scanned, as the files below it are
+/// not followed either (the Codex home itself may be a link).
+fn is_linked_folder(codex_home: &Path, name: &str) -> bool {
+    fs::symlink_metadata(codex_home.join(name)).is_ok_and(|m| m.file_type().is_symlink())
+}
+
+fn linked_folder_warning(codex_home: &Path, name: &str) -> String {
+    format!("Skipped {}: it is a link", codex_home.join(name).display())
+}
+
 /// Whether path is a regular file, not through a link.
 fn is_regular(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
@@ -173,7 +183,16 @@ fn sqlite_candidate(path: &Path) -> bool {
 pub fn discover_databases(codex_home: &Path) -> (Vec<PathBuf>, Vec<String>) {
     let mut candidates = Vec::new();
     let mut warnings = Vec::new();
-    if let Ok(entries) = fs::read_dir(codex_home.join("sqlite")) {
+    let linked = is_linked_folder(codex_home, "sqlite");
+    if linked {
+        warnings.push(linked_folder_warning(codex_home, "sqlite"));
+    }
+    let entries = if linked {
+        None
+    } else {
+        fs::read_dir(codex_home.join("sqlite")).ok()
+    };
+    if let Some(entries) = entries {
         for entry in entries.flatten() {
             let path = entry.path();
             // Links are skipped, as for rollouts.
@@ -376,6 +395,11 @@ fn rollout_sessions(codex_home: &Path, known: &HashSet<String>) -> (Vec<Summary>
         warnings.push(e);
         HashMap::new()
     });
+    for d in SESSION_DIRS {
+        if is_linked_folder(codex_home, d) {
+            warnings.push(linked_folder_warning(codex_home, d));
+        }
+    }
     let paths = match rollout_files(codex_home) {
         Ok(p) => p,
         Err(e) => {
@@ -671,7 +695,8 @@ fn automation_rows(
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(failed)
 }
 
-/// The `.jsonl` files under sessions/ and archived_sessions/, sorted; links are skipped.
+/// The `.jsonl` files under sessions/ and archived_sessions/, sorted; links are skipped, and so is
+/// either folder when it is itself a link.
 pub fn rollout_files(codex_home: &Path) -> Result<Vec<PathBuf>, String> {
     fn walk(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
         if !root.exists() {
@@ -699,7 +724,9 @@ pub fn rollout_files(codex_home: &Path) -> Result<Vec<PathBuf>, String> {
     }
     let mut files = Vec::new();
     for d in SESSION_DIRS {
-        walk(&codex_home.join(d), &mut files)?;
+        if !is_linked_folder(codex_home, d) {
+            walk(&codex_home.join(d), &mut files)?;
+        }
     }
     files.sort();
     Ok(files)
@@ -906,7 +933,7 @@ pub fn detail(
         let columns = table_columns(&c, "threads").unwrap_or_default();
         let title_col = optional_column(&columns, "title", optional_column(&columns, "name", "id"));
         let query = format!(
-            "SELECT {title_col}, {}, {}, {}, {}, {}, {} FROM threads WHERE id = ?1 LIMIT 1",
+            "SELECT {title_col}, {}, {}, {}, {}, {}, {} FROM threads WHERE id = ?1 OR id = ?2 LIMIT 1",
             optional_column(&columns, "cwd", "''"),
             optional_column(&columns, "model_provider", "''"),
             optional_column(&columns, "model", "''"),
@@ -921,7 +948,7 @@ pub fn detail(
         let Ok(mut statement) = c.prepare(&query) else {
             continue;
         };
-        let Ok(mut rows) = statement.query([&id]) else {
+        let Ok(mut rows) = statement.query([&id, &format!("local:{id}")]) else {
             continue;
         };
         let Ok(Some(row)) = rows.next() else { continue };
