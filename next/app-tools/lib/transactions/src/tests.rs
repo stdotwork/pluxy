@@ -1761,6 +1761,55 @@ fn wsl_dollar_paths_are_inside_a_distribution() {
     }
 }
 
+/// Windows: a path whose names Windows would read as another file (a stream, a device, a name it
+/// trims), or one in a device namespace, is refused, selected as a file, as a root or as a part of a
+/// root's path; the plain form of a path (`C:\…`) and the long form (`\\?\C:\…`) are both taken.
+#[cfg(windows)]
+#[test]
+fn windows_paths_that_name_another_file_are_refused() {
+    let t = Tmp::new();
+    let a = t.put("a.json", "{}\n");
+    for p in [
+        r"C:\x\a.json:stream",
+        r"C:\x\dir.\a.json",
+        r"C:\x\a.json.",
+        r"C:\x\a.json ",
+        r"C:\x\NUL",
+        r"C:\x\nul.json",
+        r"C:\x\COM1.json",
+        r"\\?\C:\x\aux.json",
+        r"\\.\C:\x\a.json",
+        r"\\?\GLOBALROOT\Device\HarddiskVolume1\x\a.json",
+        r"\\.\pipe\a.json",
+    ] {
+        let e = Target::resolve(&Selection::File(PathBuf::from(p)))
+            .err()
+            .unwrap();
+        assert!(e.message.contains("on Windows"), "{p}: {e}");
+        let e = Target::resolve(&Selection::Root {
+            root: PathBuf::from(p),
+            path: "x.json".into(),
+        })
+        .err()
+        .unwrap();
+        assert!(e.message.contains("on Windows"), "{p}: {e}");
+    }
+    for part in ["a.json:stream", "nul", "x.", "sub/con.json", "lpt1/x.json"] {
+        let e = Target::resolve(&Selection::Root {
+            root: t.0.clone(),
+            path: part.into(),
+        })
+        .err()
+        .unwrap();
+        assert!(e.message.contains("on Windows"), "{part}: {e}");
+    }
+    // Both forms of a good path resolve to the same target.
+    let long = Target::resolve(&Selection::File(a.clone())).unwrap();
+    let short = Target::resolve(&Selection::File(plain(&a))).unwrap();
+    assert_eq!(long.pin.target, short.pin.target);
+    assert_eq!(long.pin.target, a);
+}
+
 /// Windows: a selected file or root in a WSL distribution is refused before anything is opened.
 #[cfg(windows)]
 #[test]

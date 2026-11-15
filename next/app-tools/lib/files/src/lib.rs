@@ -154,6 +154,48 @@ pub fn rename_open(file: &File, folder: &File, name: &std::ffi::OsStr) -> io::Re
     imp::rename_open(file, folder, name)
 }
 
+/// Why Windows would not take name, one part of a path, as the file it names, or None when it
+/// would: a name ending in a dot or a blank (Windows drops them), one holding a character Windows
+/// reserves (`:`, which names a stream of a file, `/ * ? " < > |` or a control character), or a
+/// device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9`, `CONIN$`,
+/// `CONOUT$`, in any case, with or without an extension). A plain string check, the same on every
+/// platform.
+pub fn windows_name_problem(name: &str) -> Option<&'static str> {
+    if name.ends_with(['.', ' ']) {
+        return Some("it ends in a dot or a blank, which Windows drops");
+    }
+    if name
+        .chars()
+        .any(|c| c.is_control() || matches!(c, ':' | '/' | '*' | '?' | '"' | '<' | '>' | '|'))
+    {
+        return Some("it holds a character Windows reserves (a colon names a stream of a file)");
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .to_uppercase();
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix).is_some_and(|n| {
+            let mut c = n.chars();
+            matches!(
+                (c.next(), c.next()),
+                (Some('1'..='9' | '¹' | '²' | '³'), None)
+            )
+        })
+    };
+    if matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || numbered("COM")
+        || numbered("LPT")
+    {
+        return Some("it is a device name");
+    }
+    None
+}
+
 /// A lock file this process holds (macOS and Windows): no other process can take it while this
 /// lives. Dropping it releases and removes it.
 #[cfg(any(windows, target_os = "macos"))]

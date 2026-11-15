@@ -35,6 +35,48 @@ fn file_link(target: &Path, link: &Path) -> Option<()> {
 }
 
 #[test]
+fn names_windows_would_read_as_another_file_are_told() {
+    for ok in [
+        "settings.json",
+        ".claude",
+        "a b.json",
+        "com10",
+        "COM0",
+        "nulx.txt",
+        "lpt",
+        "con-fig",
+        "x.nul",
+    ] {
+        assert_eq!(windows_name_problem(ok), None, "{ok}");
+    }
+    for bad in [
+        "settings.json.",
+        "settings.json ",
+        "dir.",
+        "settings.json:stream",
+        "a:b",
+        "a*b",
+        "a?b",
+        "a|b",
+        "a\u{1}b",
+        "NUL",
+        "nul.json",
+        "Nul .json",
+        "CON",
+        "aux.txt",
+        "PRN",
+        "COM1",
+        "com9.log",
+        "LPT1",
+        "lpt²",
+        "conin$",
+        "CONOUT$.x",
+    ] {
+        assert!(windows_name_problem(bad).is_some(), "{bad}");
+    }
+}
+
+#[test]
 fn mtime_ns_is_the_modification_time() {
     let dir = temp("mtime");
     let path = dir.join("f");

@@ -329,7 +329,39 @@ fn absolute(p: &Path, what: &str) -> Result<(), Error> {
             p.display()
         )));
     }
-    not_in_wsl(p)
+    not_in_wsl(p)?;
+    windows_plain(p)
+}
+
+/// On Windows, refuses a path whose names Windows would read as another file (a stream, a device,
+/// a name it trims: see [`pluxy_files::windows_name_problem`]), or one in a device namespace
+/// (`\\.\…`, `\\?\GLOBALROOT\…`) rather than on a drive or a share.
+fn windows_plain(p: &Path) -> Result<(), Error> {
+    #[cfg(windows)]
+    for c in p.components() {
+        use std::path::Prefix;
+        let why = match c {
+            Component::Prefix(pre) => match pre.kind() {
+                Prefix::Disk(_)
+                | Prefix::VerbatimDisk(_)
+                | Prefix::UNC(..)
+                | Prefix::VerbatimUNC(..) => None,
+                Prefix::Verbatim(_) | Prefix::DeviceNS(_) => {
+                    Some("it is in a device namespace, not on a drive or a share")
+                }
+            },
+            Component::Normal(name) => pluxy_files::windows_name_problem(&name.to_string_lossy()),
+            _ => None,
+        };
+        if let Some(why) = why {
+            return Err(Error::invalid_request(format!(
+                "{} is not a path this program writes on Windows: {why}",
+                p.display()
+            )));
+        }
+    }
+    let _ = p;
+    Ok(())
 }
 
 /// Whether path is inside a WSL distribution as Windows reaches it (`\\wsl.localhost\…` or
@@ -415,6 +447,7 @@ fn canonical(p: &Path) -> Result<PathBuf, Error> {
         ))
     })?;
     not_in_wsl(&c)?;
+    windows_plain(&c)?;
     Ok(c)
 }
 
@@ -464,6 +497,14 @@ impl Target {
                     return Err(Error::invalid_request(format!(
                         "the path must stay inside the selected root, as /-separated parts with no . or .. and no backslash: {path:?}"
                     )));
+                }
+                #[cfg(windows)]
+                for part in &parts {
+                    if let Some(why) = pluxy_files::windows_name_problem(part) {
+                        return Err(Error::invalid_request(format!(
+                            "{part:?} in the path is not a name this program writes on Windows: {why}"
+                        )));
+                    }
                 }
                 let (rparent, rname) = (folder_of(root), root.file_name().unwrap_or_default());
                 let link = link_at(&open_dir(rparent)?, Path::new(rname), root)?;
