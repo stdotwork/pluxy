@@ -1925,6 +1925,99 @@ fn a_spawn_request_reaches_the_spawner_with_the_served_calls_cancel_and_not_afte
 }
 
 #[test]
+fn a_start_with_open_journals_that_cannot_take_its_turn_fails_instead_of_describing_none() {
+    let h = Arc::new(host(Value::Null));
+    let stub = private(&h, Stub::default());
+    stub.journals
+        .lock()
+        .unwrap()
+        .push(json!({"id": "j-7", "op": "apply",
+        "generation": 1, "began": 1, "intent": {"file": "/nonexistent"}}));
+    // An older release still holds the package's turn, past the startup limit (3 s here).
+    let held = || h.0.slots().entry(ID.to_string()).or_default().gate.clone();
+    let gate = held();
+    gate.turn.lock().unwrap().0 = true;
+    let started = Instant::now();
+    let caller = {
+        let h = Arc::clone(&h);
+        std::thread::spawn(move || h.call(ID, "report", json!({}), None))
+    };
+    // Released once the start has failed. A start that went on without the turn is served and
+    // its call waits for the turn, so it is released at a deadline well past the startup limit,
+    // and the call is answered.
+    let deadline = Instant::now() + fast().startup * 3;
+    while !caller.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    gate.turn.lock().unwrap().0 = false;
+    gate.turned.notify_all();
+    let e = caller.join().unwrap().unwrap_err();
+    assert_eq!(e.code, "extension_unavailable", "{e}");
+    assert!(
+        e.message
+            .contains("could not take its turn to reconcile 1 journal"),
+        "{e}"
+    );
+    assert!(started.elapsed() >= fast().startup);
+    // The journal was never described away: it is still open and no vault frame was taken.
+    assert_eq!(stub.journals.lock().unwrap().len(), 1);
+    assert!(stub.frames.lock().unwrap().is_empty());
+    // On a later start, with the turn free, it is told of and reconciled.
+    std::thread::sleep(fast().backoff + Duration::from_millis(100));
+    let out = h.call(ID, "report", json!({}), None).unwrap();
+    assert_eq!(out["reconciled"][0]["journal"], "j-7");
+    assert!(stub.journals.lock().unwrap().is_empty());
+    h.stop_all();
+}
+
+#[test]
+fn a_call_unanswered_when_its_tool_exits_is_known_to_the_slot_before_its_thread_wakes() {
+    let h = Arc::new(host(Value::Null));
+    let slow = call_in_thread(&h, "slow", json!({"ms": 8000}));
+    let run = || h.0.slots().get(ID).and_then(|s| s.run.clone());
+    until("the call is sent", 5, || {
+        run().is_some_and(|r| !r.pending.lock().unwrap().is_empty())
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    // Hold up the call's thread where it ends: it wakes only once the tool has been reaped, as
+    // it can when it is slow to get a processor.
+    let run = run().unwrap();
+    let stall = run.serving.lock().unwrap();
+    h.stop(ID);
+    until("the stop", 5, || h.status(ID).state == "stopped");
+    // The next start's describe looks now: the call is already of unknown outcome.
+    let known = h.status(ID).unknown;
+    assert_eq!(known.len(), 1, "the slot does not know the unanswered call");
+    assert_eq!(known[0].op, "slow");
+    drop(stall);
+    let e = slow.join().unwrap().unwrap_err();
+    assert!(e.unknown, "{e}");
+    // Recorded once, not again by its thread.
+    assert_eq!(h.status(ID).unknown.len(), 1);
+    // The next start reports it, and the tool serves.
+    summary(&h, &[]).unwrap();
+    assert!(h.status(ID).unknown.is_empty());
+    h.stop_all();
+}
+
+#[test]
+fn stopping_a_crashed_tool_that_is_not_running_reads_as_idle() {
+    let h = host(json!({"crash_on": "crash"}));
+    summary(&h, &[]).unwrap();
+    h.call(ID, "crash", json!({}), None).unwrap_err();
+    until("the crash", 5, || h.status(ID).state == "crashed");
+    assert_eq!(h.status(ID).crashes, 1);
+    h.stop(ID);
+    let s = h.status(ID);
+    assert_eq!(s.state, "idle");
+    assert_eq!(s.crashes, 0);
+    assert_eq!(s.retry_in_ms, None);
+    // Its next call starts it at once, with no backoff.
+    summary(&h, &[]).unwrap();
+    h.stop_all();
+}
+
+#[test]
 fn a_tool_gets_its_home_and_its_own_data_folder_and_a_planted_link_refuses_the_start() {
     use std::os::unix::fs::PermissionsExt;
     let base = Folder(package(Value::Null).dir);
