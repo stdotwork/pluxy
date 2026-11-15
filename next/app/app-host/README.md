@@ -588,7 +588,9 @@ program's name) and `cwd`, and may name:
   environment or a file. The confirmation names it; it is part of the environment revision;
 
 - `lifetime`: `detached` (the default: an agent or a terminal that is no longer the app's) or
-  `managed` (a runtime the app keeps and stops);
+  `managed` (a runtime the app keeps and stops). `managed` applies to direct launches only: a
+  launch that names a `program` (a terminal launch) may be detached only, and the host refuses
+  `managed` for it, before any confirmation ([Detached and managed](#detached-and-managed));
 - `environment`: `{"set": {NAME: value}, "unset": [NAME], "inherit": [NAME], "secrets": {NAME: <secret field>}}`,
   at most 64 names in each: variables set, session values removed, variables of the app's own
   environment passed on by name, and variables that get the secret of one of the launch's secret
@@ -662,6 +664,21 @@ A **detached** launch is started by a short-lived wrapper process, which starts 
 process group of its own with no parent-death signal and exits; the app reaps the wrapper. The app
 never signals a detached launch again: it runs on after its tool stops when idle, crashes, is
 swapped, disabled or removed, and after the app quits.
+
+Only a direct launch can be managed. For a terminal launch (one that names a `program`), the
+process the host holds is the terminal emulator's own launcher, and many terminals end it at once:
+gnome-terminal's `gnome-terminal` command is only a client that asks `gnome-terminal-server` to
+open the window and returns (the man page's `--wait` option, "wait until the terminal's child
+exits", exists for that reason), and konsole and kitty may do the same (kitty, run with
+`--single-instance`, opens its window in the first instance and quits at once). The
+agent then runs under that server, outside the process group the host signals, so a managed
+terminal launch's `status` would report a process that has exited and `stop` would stop nothing.
+A promise that holds for some terminals and silently fails for others is worse than none, so the
+host refuses `lifetime: "managed"` with a `program` (`invalid_request`, before the confirmation,
+for a new launch, a remembered one started again, or a launch another package asks for), and the
+Launcher page offers Managed for direct launches only. A terminal that keeps its process, such as
+xterm or foot, loses nothing the app promised before: launch the agent directly to have the app
+stop it.
 
 A **managed** runtime is the app's. It leads a process group of its own (never its tool's) and gets
 SIGTERM if the app dies without stopping it. The host keeps its live process (so its process ID is
