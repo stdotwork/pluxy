@@ -75,7 +75,7 @@ impl Core {
             .current_dir(next_dir())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .expect("go run ./e2e/panelcore");
         let mut line = String::new();

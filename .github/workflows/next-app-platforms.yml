@@ -93,8 +93,9 @@ jobs:
             export APPDATA="$(cygpath -w "$test_env/appdata")" LOCALAPPDATA="$(cygpath -w "$test_env/localappdata")"
             mkdir -p "$test_env/appdata" "$test_env/localappdata"
           fi
-          cargo test --locked 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
-          # Record the counts, and refuse a run that ran nothing.
+          cargo test --locked --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
+          # Record the counts, and refuse a run that ran nothing. (--no-fail-fast: one failing test
+          # binary does not hide the rest.)
           awk '/^test result:/ { p += $4; f += $6; i += $8 } END {
             printf "passed %d, failed %d, ignored %d\n", p, f, i
             if (p == 0) exit 1

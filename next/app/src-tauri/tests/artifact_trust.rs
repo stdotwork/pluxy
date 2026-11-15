@@ -65,7 +65,7 @@ impl Fixture {
             .unwrap()
             .success());
         let archive = fs::read(dir.join("package.tar.gz")).unwrap();
-        let descriptor = serde_json::to_vec(&json!({"id":"example/notes", "version":"0.1.0", "tier":"native", "platform":"linux/amd64", "size":archive.len(), "sha256":String::from_utf8(std::process::Command::new("sha256sum").arg(dir.join("package.tar.gz")).output().unwrap().stdout).unwrap().split_whitespace().next().unwrap()})).unwrap();
+        let descriptor = serde_json::to_vec(&json!({"id":"example/notes", "version":"0.1.0", "tier":"native", "platform":"linux/amd64", "size":archive.len(), "sha256":String::from_utf8(std::process::Command::new("sha256sum").current_dir(&dir).arg("package.tar.gz").output().unwrap().stdout).unwrap().split_whitespace().next().unwrap()})).unwrap();
         Self {
             dir,
             key,
