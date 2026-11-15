@@ -467,6 +467,9 @@ fn root_link(dir_link: fn(&Path, &Path), file_link: bool) {
         ("../outside.json", "path"),
         ("", "path"),
         ("a//b", "path"),
+        ("a\\b.json", "backslash"),
+        ("..\\outside.json", "backslash"),
+        ("sub\\up\\x.json", "backslash"),
     ] {
         if p == "inner.json" && !file_link {
             continue;

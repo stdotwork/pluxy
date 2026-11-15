@@ -457,9 +457,12 @@ impl Target {
                         .iter()
                         .any(|p| p.is_empty() || *p == "." || *p == "..")
                     || path.contains('\0')
+                    // A backslash is a separator on Windows: refused everywhere, so a part never
+                    // holds a `..` or a link the checks below would not see.
+                    || path.contains('\\')
                 {
                     return Err(Error::invalid_request(format!(
-                        "the path must stay inside the selected root, as parts with no . or ..: {path:?}"
+                        "the path must stay inside the selected root, as /-separated parts with no . or .. and no backslash: {path:?}"
                     )));
                 }
                 let (rparent, rname) = (folder_of(root), root.file_name().unwrap_or_default());
