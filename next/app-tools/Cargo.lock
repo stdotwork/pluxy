@@ -579,6 +579,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "usage-opencode"
+version = "0.1.0"
+dependencies = [
+ "pluxy-program",
+ "pluxy-usage",
+ "rusqlite",
+ "serde_json",
+]
+
+[[package]]
 name = "usage-pi"
 version = "0.1.0"
 dependencies = [
