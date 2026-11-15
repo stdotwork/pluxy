@@ -2478,6 +2478,7 @@ dependencies = [
  "gtk",
  "json-patch",
  "libc",
+ "plist",
  "pulldown-cmark",
  "pulldown-cmark-escape",
  "semver",

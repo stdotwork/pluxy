@@ -12,6 +12,12 @@
 //! - detail: a detail call from the same page asks a native confirmation naming the session and
 //!   "(shows content)"; cancelled, the page gets `forbidden` and nothing of the session; confirmed,
 //!   the page gets the detail `expect.json` says. The next detail page asks again (never remembered);
+//! - export: the page's export call of a session asks a native confirmation naming it and "(shows
+//!   content)" too; cancelled, the page gets `forbidden` and no save dialog shows; confirmed, the
+//!   real save dialog (GTK's, titled with the package) suggests `session-<id>-<UTC date>.jsonl`;
+//!   cancelled, nothing is written and the page hears `cancelled`; saved at a path typed in the
+//!   dialog, the file holds the rollout `expect.json` says, byte for byte, 0600, alone in its
+//!   folder, and the page hears only `saved` and the size;
 //! - open: the page's open call of a session asks the native confirmation of the launch it makes
 //!   through pluxy/execution (installed and enabled first, the reader's optional import), whose
 //!   text names the reader, execution, the rollout `expect.json` says (resolved), its content type,
@@ -27,12 +33,13 @@
 //!   process is left once it is;
 //! - sources: every file in the Codex home has the same bytes, kind and modification time as
 //!   before, and no file was added (no `-wal` or `-shm` beside the WAL database);
-//! - audit: neither canary of config.toml and auth.json reached a reply or any webview (DOM,
-//!   storage, callbacks, messages); the runner checks the app's stdout and stderr for them too.
+//! - audit: no canary (config.toml, auth.json, the rollout's text that only the export carries)
+//!   reached a reply or any webview (DOM, storage, callbacks, messages); the runner checks the
+//!   app's stdout and stderr for them too.
 //!
 //! One line on stderr: `native-test: sessions <JSON>`.
 
-use super::admission::{dialog_text, ok, press, require};
+use super::admission::{dialog_text, ok, press, require, x};
 use super::key_entry_test::{clean_webview, watch};
 use super::program::processes;
 use super::routing::{call, enable, install, showing, Page};
@@ -40,7 +47,7 @@ use super::{eval, log, wait_for};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
@@ -288,6 +295,220 @@ fn opened(
     Ok((replies, out))
 }
 
+/// The save dialog's title: it names the package that asks.
+const SAVE_TITLE: &str = "Save a file from pluxy/codex-sessions";
+
+/// The visible save dialog's X window, once it shows.
+fn chooser() -> Result<String, String> {
+    wait_for("the save dialog", || {
+        x(&[
+            "search",
+            "--onlyvisible",
+            "--name",
+            &format!("^{SAVE_TITLE}$"),
+        ])
+        .ok()
+        .and_then(|s| s.lines().last().map(String::from))
+    })
+}
+
+fn chooser_showing() -> bool {
+    x(&[
+        "search",
+        "--onlyvisible",
+        "--name",
+        &format!("^{SAVE_TITLE}$"),
+    ])
+    .is_ok_and(|s| !s.is_empty())
+}
+
+/// The name the visible save dialog suggests, read from GTK.
+fn suggested(app: &AppHandle) -> Result<String, String> {
+    use gtk::prelude::*;
+    chooser()?;
+    wait_for("the save dialog's name", || {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let mut name = None;
+            for w in gtk::Window::list_toplevels() {
+                if let Some(d) = w.downcast_ref::<gtk::FileChooserDialog>() {
+                    if d.is_visible() && d.title().as_deref() == Some(SAVE_TITLE) {
+                        name = d.current_name().map(|n| n.to_string());
+                    }
+                }
+            }
+            let _ = tx.send(name);
+        })
+        .ok()?;
+        rx.recv_timeout(Duration::from_secs(5)).ok().flatten()
+    })
+}
+
+/// Types path into the save dialog's name field and presses Return.
+fn choose(path: &Path) -> Result<(), String> {
+    let id = chooser()?;
+    x(&["windowfocus", "--sync", &id])?;
+    x(&["key", "--clearmodifiers", "ctrl+a"])?;
+    std::thread::sleep(Duration::from_millis(300));
+    x(&[
+        "type",
+        "--clearmodifiers",
+        "--delay",
+        "20",
+        &path.to_string_lossy(),
+    ])?;
+    std::thread::sleep(Duration::from_millis(300));
+    x(&["key", "--clearmodifiers", "Return"])?;
+    Ok(())
+}
+
+fn chooser_key(keys: &str) -> Result<(), String> {
+    let id = chooser()?;
+    x(&["windowfocus", "--sync", &id])?;
+    x(&["key", "--clearmodifiers", keys])?;
+    Ok(())
+}
+
+/// Today's date in UTC, from the system's `date`.
+fn utc_date() -> Result<String, String> {
+    let out = std::process::Command::new("date")
+        .args(["-u", "+%F"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim().into())
+}
+
+/// The names in dir, sorted.
+fn listing(dir: &Path) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map_err(|e| e.to_string())?
+        .map(|e| e.map(|e| e.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    names.sort();
+    Ok(names)
+}
+
+/// The page's export call for session, with its confirmation answered (accepted when confirm):
+/// the confirmation's text and the call's ID.
+fn export_asked(
+    page: &mut Page,
+    app: &AppHandle,
+    id: &str,
+    session: &str,
+    confirm: bool,
+) -> Result<(String, String), String> {
+    let call = page.send(id, "export", json!({"id": session}))?;
+    let text = dialog_text(app)?;
+    // A page's confirmation takes its answer only a second after it shows.
+    std::thread::sleep(Duration::from_millis(1100));
+    press(if confirm { "alt+o" } else { "alt+c" })?;
+    Ok((text, call))
+}
+
+/// The export of a session through the real save dialog: refused, cancelled and saved, each a
+/// call of the same page. Gives the replies it got, and what to log.
+fn exported(
+    page: &mut Page,
+    app: &AppHandle,
+    id: &str,
+    expect: &Value,
+) -> Result<(Vec<Value>, Value), String> {
+    let session = expect["id"].as_str().unwrap_or_default();
+    let want = expect["text"].as_str().unwrap_or_default().as_bytes();
+    require(
+        !session.is_empty() && !want.is_empty(),
+        "expect.json has no export",
+    )?;
+    let folder = std::fs::canonicalize(expect["folder"].as_str().unwrap_or_default())
+        .map_err(|e| e.to_string())?;
+    require(
+        listing(&folder)?.is_empty(),
+        "the export folder is not empty",
+    )?;
+    let mut replies = Vec::new();
+
+    // A cancelled confirmation: refused, and no save dialog.
+    let (text, call) = export_asked(page, app, id, session, false)?;
+    require(
+        text.contains(&format!("{id} export")) && text.contains("(shows content)"),
+        format!("the export confirmation should name {id} export (shows content): {text}"),
+    )?;
+    let r = page.reply(&call)?;
+    require(
+        r["error"]["code"] == "forbidden" && r.get("result").is_none(),
+        format!("the cancelled export should be refused as forbidden: {r}"),
+    )?;
+    require(
+        !chooser_showing(),
+        "a save dialog showed for a refused export",
+    )?;
+    require(listing(&folder)?.is_empty(), "a refused export left a file")?;
+    replies.push(r);
+    std::thread::sleep(Duration::from_millis(1100));
+
+    // A cancelled save dialog: nothing is written.
+    let before = utc_date()?;
+    let (text, call) = export_asked(page, app, id, session, true)?;
+    require(
+        text.contains("(shows content)"),
+        format!("each export call asks: {text}"),
+    )?;
+    let name = suggested(app)?;
+    let after = utc_date()?;
+    require(
+        [before, after]
+            .iter()
+            .any(|d| name == format!("session-{session}-{d}.jsonl")),
+        format!("the dialog suggests {name:?}, not session-{session}-<today, UTC>.jsonl"),
+    )?;
+    chooser_key("Escape")?;
+    let r = page.reply(&call)?;
+    require(
+        r["result"] == json!({"outcome": "cancelled"}),
+        format!("the cancelled save dialog: {r}"),
+    )?;
+    require(listing(&folder)?.is_empty(), "a cancelled save left a file")?;
+    replies.push(r);
+    std::thread::sleep(Duration::from_millis(1100));
+
+    // Saved where the person types: exactly the rollout's bytes.
+    let (_, call) = export_asked(page, app, id, session, true)?;
+    let path = folder.join("exported.jsonl");
+    suggested(app)?;
+    choose(&path)?;
+    let r = page.reply(&call)?;
+    require(
+        r["result"] == json!({"outcome": "saved", "size": want.len()}),
+        format!("the saved export: {r}"),
+    )?;
+    let got = std::fs::read(&path).map_err(|e| e.to_string())?;
+    require(
+        got == want,
+        format!(
+            "the saved file holds {} bytes, not the rollout's {} (or other bytes)",
+            got.len(),
+            want.len()
+        ),
+    )?;
+    let mode = std::fs::metadata(&path)
+        .map_err(|e| e.to_string())?
+        .permissions()
+        .mode()
+        & 0o7777;
+    require(
+        mode == 0o600,
+        format!("the saved file has mode {mode:o}, not 600"),
+    )?;
+    require(
+        listing(&folder)? == ["exported.jsonl"],
+        format!("the folder holds {:?}", listing(&folder)?),
+    )?;
+    replies.push(r);
+    std::thread::sleep(Duration::from_millis(1100));
+    Ok((replies, json!({"suggested": name, "size": want.len()})))
+}
+
 /// The list output without its warnings, and whether its warnings are the one about broken.
 fn list_checked(got: &Value, want: &Value, broken: &str, what: &str) -> Result<(), String> {
     let mut rest = got.clone();
@@ -435,6 +656,11 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         replies.push(r);
     }
     out["confirmations"] = json!(texts);
+    // Export: refused, cancelled and saved through the real save dialog.
+    let (more, shown) =
+        exported(&mut page, app, &id, &expect["export"]).map_err(|e| format!("export: {e}"))?;
+    replies.extend(more);
+    out["export"] = shown;
     // The reader's native-test build takes the stand-in opener's folder from its data folder.
     let data = app
         .path()
@@ -457,7 +683,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     let all = serde_json::to_string(&replies).map_err(|e| e.to_string())?;
     require(
         !canaries.iter().any(|c| all.contains(c.as_str())),
-        "a canary of config.toml or auth.json reached the page",
+        "a canary of config.toml, auth.json or the rollout reached the page",
     )?;
     clean_webview(page.webview(), &canary_refs)?;
     page.close(main)?;
