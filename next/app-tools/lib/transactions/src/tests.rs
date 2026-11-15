@@ -1705,6 +1705,123 @@ fn a_failed_operations_sweep_keeps_the_manual_backups() {
     );
 }
 
+/// One file selected twice is refused, also under two names: hard links to it.
+#[test]
+fn one_file_under_two_names_is_refused() {
+    let t = Tmp::new();
+    let a = t.put("x/a.json", "{}\n");
+    let b = t.at("x/b.json");
+    std::fs::hard_link(&a, &b).unwrap();
+    let (mem, data) = (Mem::default(), t.at("data"));
+    std::fs::create_dir(&data).unwrap();
+    let tx = Transactions::new(&mem, &data);
+    for sel in [
+        [Selection::File(a.clone()), Selection::File(a.clone())],
+        [Selection::File(a.clone()), Selection::File(b.clone())],
+    ] {
+        let e = tx.preview("s", &sel).unwrap_err();
+        assert!(e.message.contains("named twice"), "{e}");
+    }
+}
+
+/// Whether the folder dir ignores case (as macOS and Windows do by default); says so on stderr
+/// when it does not, so a test of case is seen to skip.
+fn ignores_case(dir: &Path) -> bool {
+    let probe = dir.join("case-probe");
+    std::fs::write(&probe, "").unwrap();
+    let ignores = dir.join("CASE-PROBE").exists();
+    std::fs::remove_file(&probe).unwrap();
+    if !ignores && cfg!(not(target_os = "linux")) {
+        eprintln!("skipped: this folder's file system does not ignore case");
+    }
+    ignores
+}
+
+/// Where the file system ignores case, a file selected in another case is written under its own
+/// name, never renamed to the selected spelling, and two spellings of one name are refused, the
+/// file there or not.
+#[test]
+fn a_file_selected_in_another_case_keeps_its_name() {
+    let t = Tmp::new();
+    let a = t.put("x/settings.json", "{}\n");
+    if !ignores_case(&t.at("x")) {
+        return;
+    }
+    let (mem, data) = (Mem::default(), t.at("data"));
+    std::fs::create_dir(&data).unwrap();
+    let tx = Transactions::new(&mem, &data);
+    let upper = t.at("x/SETTINGS.JSON");
+    for sel in [
+        Selection::File(upper.clone()),
+        Selection::Root {
+            root: t.at("x"),
+            path: "Settings.Json".into(),
+        },
+    ] {
+        let p = pins(&tx, "s", std::slice::from_ref(&sel));
+        assert_eq!(p[0].target, a);
+        tx.apply("s", &p, &values(json!({"k": 1})), &Json, &mut none)
+            .unwrap();
+        let p = pins(&tx, "s", std::slice::from_ref(&sel));
+        tx.clear("s", &p, &Json, &mut none).unwrap();
+        let names: Vec<_> = std::fs::read_dir(t.at("x"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["settings.json"]);
+    }
+    for sel in [
+        [Selection::File(a.clone()), Selection::File(upper.clone())],
+        [
+            Selection::File(t.at("x/new.json")),
+            Selection::File(t.at("x/New.JSON")),
+        ],
+    ] {
+        let e = tx.preview("s", &sel).unwrap_err();
+        assert!(e.message.contains("named twice"), "{e}");
+    }
+}
+
+/// Windows: a file selected by its short (8.3) name is written under its own long name.
+#[cfg(windows)]
+#[test]
+fn a_file_selected_by_its_short_name_keeps_its_long_name() {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    let t = Tmp::new();
+    let long = t.put("x/a-long-settings-name.json", "{}\n");
+    let wide: Vec<u16> = plain(&long).as_os_str().encode_wide().chain([0]).collect();
+    let mut buf = vec![0u16; 1024];
+    let n = unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
+            wide.as_ptr(),
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+        )
+    } as usize;
+    let short = PathBuf::from(std::ffi::OsString::from_wide(&buf[..n]));
+    if n == 0 || short.file_name() == long.file_name() {
+        eprintln!("skipped: this volume gives no short names");
+        return;
+    }
+    let (mem, data) = (Mem::default(), t.at("data"));
+    std::fs::create_dir(&data).unwrap();
+    let tx = Transactions::new(&mem, &data);
+    let short = t.at("x").join(short.file_name().unwrap());
+    let p = pins(&tx, "s", &[Selection::File(short.clone())]);
+    assert_eq!(p[0].target, long);
+    tx.apply("s", &p, &values(json!({"k": 1})), &Json, &mut none)
+        .unwrap();
+    let names: Vec<_> = std::fs::read_dir(t.at("x"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["a-long-settings-name.json"]);
+    let e = tx
+        .preview("s", &[Selection::File(long), Selection::File(short)])
+        .unwrap_err();
+    assert!(e.message.contains("named twice"), "{e}");
+}
+
 /// Windows reaches a WSL distribution's files as `\\wsl.localhost\<distribution>\…`: the Windows
 /// program refuses those (the package's Linux program serves them, inside the distribution).
 #[test]

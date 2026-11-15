@@ -922,10 +922,22 @@ impl<'a> Transactions<'a> {
     }
 }
 
-/// Refuses two pins of one target.
+/// Refuses two pins of one target: the same path, the same existing file (hard links, or one
+/// spelling a case-insensitive file system or a Windows short name takes as another), or, on macOS
+/// and Windows, whose file systems ignore case by default, names in one folder equal but for case.
 fn distinct(pins: &[Pin]) -> Result<(), Error> {
+    let name = |p: &Pin| {
+        p.target
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+    };
+    let same = |p: &Pin, q: &Pin| {
+        p.target == q.target
+            || (p.file_id.is_some() && p.file_id == q.file_id)
+            || (cfg!(not(target_os = "linux")) && p.parent_id == q.parent_id && name(p) == name(q))
+    };
     for (i, p) in pins.iter().enumerate() {
-        if pins[..i].iter().any(|q| q.target == p.target) {
+        if pins[..i].iter().any(|q| same(p, q)) {
             return Err(Error::invalid_request(format!(
                 "{} is named twice",
                 p.target.display()

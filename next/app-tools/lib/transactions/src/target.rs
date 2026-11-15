@@ -431,6 +431,48 @@ fn link_at(d: &Dir, name: &Path, at: &Path) -> Result<Option<(String, Id)>, Erro
     }
 }
 
+/// The name the file `name` in d has on disk, so an existing file is written under its own name:
+/// where the file system ignores case (as macOS and Windows do by default), or Windows reads a short
+/// (8.3) name, the selected spelling can name a file whose own name differs, and a rename to the
+/// selected spelling would change it. name itself when nothing is there (and on Linux).
+fn on_disk_name(d: &Dir, name: &Path, at: &Path) -> Result<PathBuf, Error> {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (d, at);
+        Ok(name.to_path_buf())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let fail = |e| io(&format!("{}", at.display()), e);
+        let id = match d.symlink_metadata(name) {
+            Ok(m) => Id::of(&m)?,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(name.to_path_buf()),
+            Err(e) => return Err(fail(e)),
+        };
+        let mut names = Vec::new();
+        for entry in d.entries().map_err(fail)? {
+            let n = entry.map_err(fail)?.file_name();
+            if n == name.as_os_str() {
+                return Ok(name.to_path_buf());
+            }
+            names.push(n);
+        }
+        // The same file under another spelling: those equal but for case first, then (for a
+        // short name) any.
+        let lower = |n: &std::ffi::OsStr| n.to_string_lossy().to_lowercase();
+        let wanted = lower(name.as_os_str());
+        let (alike, rest): (Vec<_>, Vec<_>) = names.into_iter().partition(|n| lower(n) == wanted);
+        for n in alike.into_iter().chain(rest) {
+            if let Ok(m) = d.symlink_metadata(&n) {
+                if Id::of(&m)? == id {
+                    return Ok(PathBuf::from(n));
+                }
+            }
+        }
+        Ok(name.to_path_buf())
+    }
+}
+
 /// The resolved, canonical path of an existing path.
 fn canonical(p: &Path) -> Result<PathBuf, Error> {
     let c = std::fs::canonicalize(p).map_err(|e| match e.kind() {
@@ -476,10 +518,15 @@ impl Target {
                 } else {
                     canonical(parent)?.join(name)
                 };
-                let tparent = folder_of(&target);
-                let dir = open_dir(tparent)?;
-                let parent_id = dir_id(&dir, tparent)?;
-                let name = PathBuf::from(target.file_name().unwrap_or_default());
+                let tparent = folder_of(&target).to_path_buf();
+                let dir = open_dir(&tparent)?;
+                let parent_id = dir_id(&dir, &tparent)?;
+                let name = on_disk_name(
+                    &dir,
+                    Path::new(target.file_name().unwrap_or_default()),
+                    &target,
+                )?;
+                let target = tparent.join(&name);
                 Target::finish(selection, link, None, target, dir, parent_id, name)
             }
             Selection::Root { root, path } => {
@@ -539,9 +586,11 @@ impl Target {
                 }
                 let parent_id = dir_id(&dir, &at)?;
                 let last = parts[parts.len() - 1];
+                let last = on_disk_name(&dir, Path::new(last), &at.join(last))?;
                 // Part by part: a long-form Windows path (`\\?\…`) takes `/` as a letter.
                 let mut target = croot.clone();
-                target.extend(&parts);
+                target.extend(&parts[..parts.len() - 1]);
+                target.push(&last);
                 Target::finish(
                     selection,
                     link,
@@ -549,7 +598,7 @@ impl Target {
                     target,
                     dir,
                     parent_id,
-                    PathBuf::from(last),
+                    last,
                 )
             }
         }
