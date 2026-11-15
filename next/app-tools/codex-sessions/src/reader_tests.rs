@@ -547,37 +547,32 @@ fn committed_rows_still_in_the_wal_are_read_and_nothing_is_written_beside_it() {
 static COPY_ROOT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
-fn a_database_whose_wal_or_shm_is_not_a_regular_file_is_skipped_with_a_warning() {
-    let root = Root::new("linked-sidecar");
-    let outside = Root::new("linked-sidecar-outside");
-    let db = root.join("sqlite/threads.db");
-    fs::create_dir_all(db.parent().unwrap()).unwrap();
+fn a_database_that_cannot_be_opened_is_a_warning_that_names_it_once_and_not_sqlites_uri() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = Root::new("unreadable");
+    let db = root.join("state_5.sqlite");
     sql(
         &db,
-        "PRAGMA journal_mode = WAL;
-         CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, updated_at_ms INTEGER);
-         INSERT INTO threads VALUES ('w', 'WAL thread', 5);",
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT); INSERT INTO threads VALUES ('x', 'Readable');",
     );
-    // The positive control: with no -wal or -shm beside it, it is read.
+    // The positive control: readable, it is listed with no warning.
     let page = list(&root, 0, 50);
     assert_eq!(page.sessions.len(), 1);
     assert!(page.warnings.is_empty(), "{:?}", page.warnings);
-    let elsewhere = outside.join("elsewhere");
-    write(&elsewhere, "");
-    for side in ["-wal", "-shm"] {
-        std::os::unix::fs::symlink(&elsewhere, sidecar(&db, side)).unwrap();
-        let page = list(&root, 0, 50);
-        assert!(page.databases.is_empty(), "{side}: {:?}", page.databases);
-        assert!(page.sessions.is_empty(), "{side} is a link");
-        assert!(
-            page.warnings
-                .iter()
-                .any(|w| w.starts_with("Skipped database ") && w.contains(side)),
-            "{side}: {:?}",
-            page.warnings
-        );
-        fs::remove_file(sidecar(&db, side)).unwrap();
+    fs::set_permissions(&db, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::File::open(&db).is_ok() {
+        return; // running as root: nothing is unreadable
     }
+    let page = list(&root, 0, 50);
+    fs::set_permissions(&db, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(page.sessions.is_empty());
+    let shown = db.to_string_lossy().into_owned();
+    assert_eq!(page.warnings.len(), 1, "{:?}", page.warnings);
+    let w = &page.warnings[0];
+    assert!(w.starts_with("Failed to open database "), "{w}");
+    // SQLite's own message repeats the file as a `file:` URI; only the page's name for it is shown.
+    assert_eq!(w.matches(&shown).count(), 1, "{w}");
+    assert!(!w.contains("file:"), "{w}");
 }
 
 #[test]
@@ -791,6 +786,7 @@ fn linked_session_folders_are_skipped_with_a_warning_each_and_real_ones_are_read
 
 #[test]
 fn a_database_with_a_linked_wal_or_shm_is_skipped_with_a_warning() {
+    let _lock = COPY_ROOT.lock().unwrap_or_else(|e| e.into_inner());
     let outside = Root::new("linked-wal-outside");
     // A real -wal beside the database is read (the control).
     let real = Root::new("real-wal");

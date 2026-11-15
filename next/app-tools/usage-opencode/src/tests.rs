@@ -457,6 +457,25 @@ fn a_wal_database_with_no_shm_is_read_without_making_one() {
 }
 
 #[test]
+fn an_error_from_a_database_that_cannot_be_opened_names_no_folder_and_no_uri() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = folder("unreadable-CANARY");
+    let (db, c) = wal_db(&d);
+    drop(c);
+    // The positive control: readable, it is read.
+    assert!(Cache::default().sessions(&db).is_ok());
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&db).is_err() {
+        // SQLite's own message for an open names the file as a `file:` URI.
+        let e = Cache::default().sessions(&db).err().unwrap();
+        assert!(e.starts_with("could not open the database"), "{e}");
+        assert!(!e.contains("CANARY") && !e.contains("file:"), "{e}");
+    }
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
 fn file_ids_hash_sessions_and_messages_and_find_their_files_again() {
     let p = OpenCode {
         db: Cache::default(),
