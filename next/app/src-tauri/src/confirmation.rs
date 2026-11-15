@@ -307,6 +307,7 @@ pub struct Prepared {
     cwd: Option<OpenTarget>,
     program: Option<OpenTarget>,
     /// The file a launch opens and its folder, held open.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     opens: Option<(OpenTarget, OpenTarget)>,
 }
 impl Prepared {
@@ -643,6 +644,7 @@ impl Authorized {
     }
     /// Refused once a reviewed target changed since it was confirmed: the executable replaced or
     /// written in place (its metadata), or the cwd replaced.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn recheck(&self) -> Result<(), String> {
         self.prepared.check()
     }
@@ -668,10 +670,12 @@ struct Approval {
 // create this only in their native event callbacks. DOM and IPC paths cannot create one.
 pub struct Gesture {
     created: Instant,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     origin: Origin,
 }
 impl Gesture {
     /// A click on one of the tray's Start… items, made in its menu event handler.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn tray() -> Gesture {
         Gesture {
             created: Instant::now(),
@@ -681,6 +685,7 @@ impl Gesture {
     /// The launcher's Start in the app's own window (`launcher_start`, after its caller check),
     /// naming a remembered launch of the host's own list: it can only start exactly that launch
     /// again, and anything changed asks.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn main_window() -> Gesture {
         Gesture {
             created: Instant::now(),
@@ -985,11 +990,13 @@ impl Confirmations {
     /// direct call of a launch. Never page data, and never a call with a tool hop
     /// (`prepare_import`). Those actions have no launch, except the router's, which may use a
     /// remembered approval after a native gesture.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Main)
     }
     /// `prepare_main` for a call a native gesture started: prepared with the gesture's origin
     /// (the window's launcher or the tray), which `remembered` may then use.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn prepare_gestured(
         &mut self,
         action: Action,
@@ -1390,6 +1397,7 @@ impl Confirmations {
         self.issued.get(token).map(|t| t.action.as_str())
     }
     /// Whether remembered approval id still stands.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn has_approval(&self, id: &str) -> bool {
         self.approvals.iter().any(|a| a.id == id)
     }
@@ -1468,7 +1476,7 @@ pub(crate) mod text {
 
     /// The access key of label, GTK mnemonic form, lower-cased: the letter after its first single
     /// `_`.
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    #[cfg_attr(not(any(test, feature = "native-test")), allow(dead_code))]
     pub(crate) fn access_key(label: &str) -> Option<char> {
         let mut chars = label.chars().peekable();
         while let Some(c) = chars.next() {

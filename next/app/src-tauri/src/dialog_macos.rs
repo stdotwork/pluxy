@@ -131,6 +131,7 @@ struct State {
     check: Option<Retained<NSButton>>,
     secret: Option<Retained<NSSecureTextField>>,
     /// Every text shown, for the native test.
+    #[cfg_attr(not(feature = "native-test"), allow(dead_code))]
     texts: Vec<String>,
     timers: Vec<Retained<NSTimer>>,
     done: bool,

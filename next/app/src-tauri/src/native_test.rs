@@ -66,6 +66,7 @@ mod backups;
 #[cfg(target_os = "linux")]
 #[path = "claude_code_native.rs"]
 mod claude_code;
+#[cfg(target_os = "linux")]
 #[path = "client_key_native.rs"]
 mod client_key;
 #[cfg(target_os = "linux")]
