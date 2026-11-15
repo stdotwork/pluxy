@@ -15,27 +15,19 @@
 //! `time_updated` (OpenCode updates a row's `time_updated` with every write), read through SQLite
 //! so a change still in the `-wal` is in it.
 //!
-//! The database is opened read-only and nothing is made beside it, by the rules of
-//! `codex-sessions` (`open_read_only`, copied here; a shared library can take both later): a WAL
-//! database whose `-shm` is missing would make SQLite create one, so it is opened immutable when
-//! its `-wal` is missing or empty, and else copied with its `-wal` into a private folder under the
-//! tool's data folder (`tmp`), read, and removed; a copy left by a process no longer running is
-//! removed then too. A database that is a link, or whose `-wal` or `-shm` is one, is not read.
-//! Errors name no folder.
+//! The database is opened by `pluxy-sqlite-ro`: read-only, nothing made beside it, a link or a
+//! `-wal` or `-shm` that is one not read, errors naming no folder.
 
 use crate::hash;
 use crate::message::{self, Out};
 use pluxy_program::Error;
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use pluxy_sqlite_ro::{open_read_only, Db};
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
 
-const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// The largest message data read, in bytes, as the old reader had it.
 const MAX_DATA: i64 = 16 << 20;
 /// Rows between looks at whether the job was cancelled.
@@ -67,7 +59,7 @@ impl Cache {
     fn with<T>(&self, path: &Path, f: impl FnOnce(&mut Open) -> T) -> Result<T, String> {
         let mut open = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if !open.contains_key(path) {
-            let db = open_read_only(path)?;
+            let db = open_read_only(path).map_err(|e| e.to_string())?;
             open.insert(path.to_path_buf(), Open { db, by_hash: None });
         }
         let o = open.get_mut(path).ok_or("no database")?;
@@ -312,160 +304,4 @@ fn read_session(c: &Connection, session: &str, out: &mut dyn Out) -> Result<(), 
     }
     tx.commit().map_err(internal)?;
     Ok(())
-}
-
-/// An open database, and the private copy it reads (removed once it is closed).
-pub struct Db {
-    connection: Connection,
-    _copy: Option<Copy>,
-}
-
-impl std::ops::Deref for Db {
-    type Target = Connection;
-    fn deref(&self) -> &Connection {
-        &self.connection
-    }
-}
-
-/// A private copy's folder, removed when dropped.
-struct Copy(PathBuf);
-
-impl Drop for Copy {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-/// Opens a database read-only, creating nothing beside it (see the module's notes).
-pub fn open_read_only(path: &Path) -> Result<Db, String> {
-    if !fs::symlink_metadata(path).is_ok_and(|m| m.is_file()) {
-        return Err("the database is not a regular file".into());
-    }
-    let shm = sidecar(path, "-shm");
-    let wal = sidecar(path, "-wal");
-    for (side, name) in [(&shm, "-shm"), (&wal, "-wal")] {
-        if fs::symlink_metadata(side).is_ok_and(|m| !m.is_file()) {
-            return Err(format!("the database's {name} is not a regular file"));
-        }
-    }
-    if !is_wal(path) || shm.exists() {
-        return Ok(Db {
-            connection: connect(path, false)?,
-            _copy: None,
-        });
-    }
-    if fs::metadata(&wal).map_or(0, |m| m.len()) == 0 {
-        return Ok(Db {
-            connection: connect(path, true)?,
-            _copy: None,
-        });
-    }
-    let copy = private_copy(path, &wal)
-        .map_err(|e| format!("could not copy the database to read its -wal: {e}"))?;
-    Ok(Db {
-        connection: connect(&copy.0.join("db"), false)?,
-        _copy: Some(copy),
-    })
-}
-
-/// Where private copies go: `tmp` in the tool's data folder, else the system's temporary folder.
-fn copy_root() -> (PathBuf, bool) {
-    match std::env::var_os("PLUXY_TOOL_DATA_DIR").filter(|d| !d.is_empty()) {
-        Some(d) => (PathBuf::from(d).join("tmp"), true),
-        None => (std::env::temp_dir(), false),
-    }
-}
-
-/// Copies db and its -wal into a new folder of this user's that no one else may use.
-fn private_copy(db: &Path, wal: &Path) -> std::io::Result<Copy> {
-    use std::os::unix::fs::DirBuilderExt;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(0);
-    let (root, own) = copy_root();
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&root)?;
-    if own {
-        prune(&root);
-    }
-    let dir = root.join(format!(
-        "wal-{}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::SeqCst)
-    ));
-    fs::DirBuilder::new().mode(0o700).create(&dir)?;
-    let copy = Copy(dir);
-    fs::copy(db, copy.0.join("db"))?;
-    fs::copy(wal, copy.0.join("db-wal"))?;
-    Ok(copy)
-}
-
-/// Removes the copies in root that a process no longer running left behind (cut short); the copies
-/// of this process and of every process still running stay.
-pub fn prune(root: &Path) {
-    let Ok(entries) = fs::read_dir(root) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let name = e.file_name();
-        let pid = name
-            .to_str()
-            .and_then(|n| n.strip_prefix("wal-"))
-            .and_then(|n| n.split('-').next())
-            .and_then(|p| p.parse::<u32>().ok());
-        if let Some(pid) = pid {
-            if pid != std::process::id() && !alive(pid) {
-                let _ = fs::remove_dir_all(e.path());
-            }
-        }
-    }
-}
-
-/// Whether process pid is running; true where that cannot be told (no `/proc`).
-fn alive(pid: u32) -> bool {
-    let proc = Path::new("/proc");
-    !proc.join("self").exists() || proc.join(pid.to_string()).exists()
-}
-
-/// A read-only connection to path (immutable when asked); errors name no path.
-fn connect(path: &Path, immutable: bool) -> Result<Connection, String> {
-    let mut uri = String::from("file:");
-    for b in path.as_os_str().as_encoded_bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
-                uri.push(*b as char)
-            }
-            _ => uri.push_str(&format!("%{b:02X}")),
-        }
-    }
-    uri.push_str("?mode=ro");
-    if immutable {
-        uri.push_str("&immutable=1");
-    }
-    let connection = Connection::open_with_flags(
-        &uri,
-        OpenFlags::SQLITE_OPEN_READ_ONLY
-            | OpenFlags::SQLITE_OPEN_NO_MUTEX
-            | OpenFlags::SQLITE_OPEN_URI,
-    )
-    .map_err(|e| format!("could not open the database: {e}"))?;
-    connection
-        .busy_timeout(SQLITE_BUSY_TIMEOUT)
-        .map_err(|e| format!("could not set the database's timeout: {e}"))?;
-    Ok(connection)
-}
-
-fn sidecar(path: &Path, suffix: &str) -> PathBuf {
-    let mut s = path.as_os_str().to_os_string();
-    s.push(suffix);
-    PathBuf::from(s)
-}
-
-/// Whether path is a SQLite database in WAL mode, by its header.
-fn is_wal(path: &Path) -> bool {
-    let mut header = [0u8; 20];
-    fs::File::open(path)
-        .and_then(|mut f| f.read_exact(&mut header))
-        .is_ok_and(|_| &header[..16] == b"SQLite format 3\0" && header[18] == 2)
 }

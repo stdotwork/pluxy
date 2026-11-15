@@ -12,6 +12,15 @@
 //! - detail: a detail call from the same page asks a native confirmation naming the session and
 //!   "(shows content)"; cancelled, the page gets `forbidden` and nothing of the session; confirmed,
 //!   the page gets the detail `expect.json` says. The next detail page asks again (never remembered);
+//! - open: the page's open call of a session asks the native confirmation of the launch it makes
+//!   through pluxy/execution (installed and enabled first, the reader's optional import), whose
+//!   text names the reader, execution, the rollout `expect.json` says (resolved), its content type,
+//!   the sessions folder (never the Codex home) and the opener, and offers no Remember; cancelled,
+//!   the page gets `forbidden` and the stand-in opener (the fixture program as `xdg-open`, which the
+//!   test tells the reader's native-test build to use) never runs; confirmed, it runs once with
+//!   exactly that file as its argument, in the file's folder, and the page hears only `opened`; a
+//!   session with no rollout file or a bad ID is refused before any confirmation, and the opener
+//!   ran once in all;
 //! - idle: once the page closes, no reader process is left after the idle stop;
 //! - the reader's own page: opened, it starts the reader with its list call;
 //! - disable: the reader runs (a list from the window) right before it is disabled, and no reader
@@ -123,6 +132,162 @@ fn detail(
     Ok((text, r))
 }
 
+/// The page's call of op with input, answered (a result or an error) with no native confirmation
+/// showing meanwhile.
+fn answered_unasked(page: &mut Page, id: &str, op: &str, input: Value) -> Result<Value, String> {
+    let call = page.send(id, op, input.clone())?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some(r) = eval(
+            page.webview(),
+            &format!("window.__route.replies[{}] ?? null", json!(call)),
+        )
+        .filter(|v| !v.is_null())
+        {
+            return Ok(r);
+        }
+        if showing() {
+            press("alt+c")?;
+            return Err(format!(
+                "the page's {op} {input} asked a native confirmation"
+            ));
+        }
+        if Instant::now() > deadline {
+            return Err(format!("the page's {op} {input}: no answer"));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// What the stand-in opener ran with, a line each time it ran.
+fn opener_ran(record: &Path) -> Vec<Value> {
+    std::fs::read_to_string(record)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}
+
+/// The page's open call of session, its confirmation answered (accepted when confirm): the
+/// confirmation's text and the call's ID.
+fn open_asked(
+    page: &mut Page,
+    app: &AppHandle,
+    id: &str,
+    session: &str,
+    confirm: bool,
+) -> Result<(String, String), String> {
+    let call = page.send(id, "open", json!({"id": session}))?;
+    let text = dialog_text(app)?;
+    // A confirmation of a tool chain takes its answer only a second after it shows.
+    std::thread::sleep(Duration::from_millis(1300));
+    press(if confirm { "alt+o" } else { "alt+c" })?;
+    Ok((text, call))
+}
+
+/// The open of a session in the person's own app: cancelled, confirmed, and the sessions that are
+/// refused before any confirmation. Gives the replies it got, and what to log.
+fn opened(
+    page: &mut Page,
+    app: &AppHandle,
+    id: &str,
+    open: &Value,
+) -> Result<(Vec<Value>, Value), String> {
+    let text_of = |k: &str| open[k].as_str().unwrap_or_default().to_string();
+    let (session, file, folder, within, opener) = (
+        text_of("id"),
+        text_of("file"),
+        text_of("folder"),
+        text_of("within"),
+        text_of("opener"),
+    );
+    let record = PathBuf::from(text_of("record"));
+    require(
+        !session.is_empty() && !file.is_empty() && !opener.is_empty(),
+        "expect.json has no open",
+    )?;
+    require(
+        opener_ran(&record).is_empty(),
+        "the stand-in opener ran before the open check",
+    )?;
+    let mut replies = Vec::new();
+    let mut out = json!({});
+
+    // A cancelled confirmation names the file, its type, the folder and the opener; nothing runs.
+    let (text, call) = open_asked(page, app, id, &session, false)?;
+    let head = format!("Opens the file {file} (");
+    let tail = format!(", inside {within}) with {opener}.");
+    require(
+        [id, "pluxy/execution", head.as_str(), tail.as_str()]
+            .iter()
+            .all(|w| text.contains(w)),
+        format!(
+            "the open confirmation should name {id}, pluxy/execution, {head}<type>{tail}: {text}"
+        ),
+    )?;
+    require(
+        !text.contains("Remember"),
+        "the open confirmation offers Remember",
+    )?;
+    out["type"] = json!(text
+        .split(&head)
+        .nth(1)
+        .and_then(|t| t.split(", inside").next())
+        .unwrap_or_default());
+    let r = page.reply(&call)?;
+    require(
+        r["error"]["code"] == "forbidden" && r.get("result").is_none(),
+        format!("the cancelled open should be refused as forbidden: {r}"),
+    )?;
+    replies.push(r);
+    std::thread::sleep(Duration::from_millis(1500));
+    require(
+        opener_ran(&record).is_empty(),
+        "the opener ran though the open was cancelled",
+    )?;
+
+    // Confirmed: the opener runs once, with exactly that file, in its folder.
+    std::thread::sleep(Duration::from_millis(1100));
+    let (_, call) = open_asked(page, app, id, &session, true)?;
+    let r = page.reply(&call)?;
+    require(
+        r["result"] == json!({"outcome": "opened"}),
+        format!("the confirmed open: {r}"),
+    )?;
+    replies.push(r);
+    let ran = wait_for("the opener's record", || {
+        opener_ran(&record).into_iter().next()
+    })?;
+    require(
+        ran["argv"] == json!([opener, file]) && ran["cwd"] == json!(folder),
+        format!("the opener ran with {ran}, not {opener} {file} in {folder}"),
+    )?;
+    out["opened"] = ran["argv"].clone();
+
+    // Refused before any confirmation, the opener not run again.
+    for (input, code) in open["refused"].as_array().into_iter().flatten().map(|c| {
+        (
+            c["id"].clone(),
+            c["code"].as_str().unwrap_or_default().to_string(),
+        )
+    }) {
+        let r = answered_unasked(page, id, "open", json!({"id": input}))?;
+        require(
+            r["error"]["code"] == json!(code) && r.get("result").is_none(),
+            format!("the open of {input} should be refused as {code}: {r}"),
+        )?;
+        replies.push(r);
+    }
+    require(
+        opener_ran(&record).len() == 1,
+        format!(
+            "the opener ran {} times, not once",
+            opener_ran(&record).len()
+        ),
+    )?;
+    Ok((replies, out))
+}
+
 /// The list output without its warnings, and whether its warnings are the one about broken.
 fn list_checked(got: &Value, want: &Value, broken: &str, what: &str) -> Result<(), String> {
     let mut rest = got.clone();
@@ -182,6 +347,19 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     let before = snapshot(&codex)?;
     let mut out = json!({"files": before.len()});
     watch(main)?;
+
+    // pluxy/execution first, which the reader imports (optionally): the open check's launch.
+    let execution = expect["execution"]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    install(
+        main,
+        "curated",
+        &execution,
+        expect["execution"]["version"].as_str().unwrap_or_default(),
+    )?;
+    enable(app, main, &execution)?;
 
     // Installed from the curated registry and enabled.
     install(
@@ -257,6 +435,25 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         replies.push(r);
     }
     out["confirmations"] = json!(texts);
+    // The reader's native-test build takes the stand-in opener's folder from its data folder.
+    let data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("tools/pluxy/codex-sessions");
+    let opener = PathBuf::from(expect["open"]["opener"].as_str().unwrap_or_default());
+    std::fs::write(
+        data.join("opener-folder"),
+        opener
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    )
+    .map_err(|e| format!("the reader's data folder {}: {e}", data.display()))?;
+    let (more, shown) =
+        opened(&mut page, app, &id, &expect["open"]).map_err(|e| format!("open: {e}"))?;
+    replies.extend(more);
+    out["open"] = shown;
     let all = serde_json::to_string(&replies).map_err(|e| e.to_string())?;
     require(
         !canaries.iter().any(|c| all.contains(c.as_str())),

@@ -1246,9 +1246,10 @@ The app's updater ([Application update](#application-update)) calls it.
   operation, and the app starts nothing itself yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
 - Vault: Linux only. Secrets are kept in a 0600 file in the app's data folder, not in the system
-  keyring, and only exact values are redacted. The window has no vault page yet; no secret is
-  bound to a core or client yet, and no agent is started with one: secrets reach only native
-  tools' pipes. Backups have no retention: a package keeps at most 256.
+  keyring, and only exact values are redacted. The window has no vault page yet. Secrets reach
+  native tools' pipes and the environment of a process a confirmed launch starts (the launching
+  tool holds only a reference); a client key is checked at each use, also at a launch's spawn and
+  each restart. Backups have no retention: a package keeps at most 256.
 - Access: Linux only (5.8 or later: grants record the `statx` mount ID); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
