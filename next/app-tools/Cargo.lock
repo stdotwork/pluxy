@@ -80,6 +80,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "claude-code"
+version = "0.1.0"
+dependencies = [
+ "pluxy-program",
+ "pluxy-transactions",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-sessions"
 version = "0.1.0"
 dependencies = [
@@ -131,6 +140,14 @@ checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "execution"
+version = "0.1.0"
+dependencies = [
+ "pluxy-program",
+ "serde_json",
 ]
 
 [[package]]

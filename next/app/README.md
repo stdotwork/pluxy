@@ -174,8 +174,8 @@ tray's Quit does. Minimize to Tray destroys the window and its webviews, so they
 while the app sits in the tray. A window that does not answer the question within three seconds
 (its page still loading, or busy) closes to the tray.
 
-The tray menu shows what the app is connected to, and has "Open pluxy" (a new window) and "Quit
-pluxy". In managed mode, "Start core", "Stop core" and "Restart core" control only the core the
+The tray menu shows what the app is connected to, and has "Open pluxy" (a new window), "Start…"
+(remembered launches, [The launcher](#the-launcher)) and "Quit pluxy". In managed mode, "Start core", "Stop core" and "Restart core" control only the core the
 app started. They work with the window closed and no renderer running. "Restart core" is
 enabled only while the core runs. While one of them runs, the tray says "Core working…",
 disables all three and refuses another click. They are disabled in local and remote modes, and
@@ -766,11 +766,78 @@ Confirm disabled for one second after mapping. Non-UTF-8 paths are refused befor
 Unicode format characters (including bidi and zero-width characters), control characters and
 Pango line separators (U+2028/U+2029) are displayed as escaped Unicode.
 
-Real launchers are added separately; this module contains no launcher. Host
+The launcher ([The launcher](#the-launcher)) is a caller of this module. Host
 callers must invalidate pending preparations/tokens when package, contract, environment or secret
 policy records change, and prepare a new action. Tokens and pending reviews expire after 60
 seconds, work once for their preparation, and fail on changed file identity or executable metadata.
 Revoking a remembered approval also invalidates its outstanding tokens.
+
+## The launcher
+
+The Launcher page and the tray's **Start…** menu start agents and terminals, drawn from host data
+(`src-tauri/src/launcher.rs`, `src/launcherPage.tsx`). They need the curated execution program
+`pluxy/execution` ([app tools](../app-tools/README.md#execution)), installed and enabled on the
+Device extensions page; without it the page says so.
+
+A **new launch** names a client label, a kind (in a terminal or directly), a program (a name found
+on the launch environment's `PATH`, or a full path), an optional executable override, arguments,
+a working folder (the page offers the client's eight most recently used), a terminal (**Automatic**
+or one found on `PATH`) and a lifetime (detached or managed). The execution program prepares the
+executable, argv and cwd; the app's native confirmation shows them in full, with the program a
+terminal runs, the lifetime and the environment, and offers **Remember this exact executable,
+argv and cwd**. A remembered launch joins the page's list (client, command, folder, the execution
+program's release that runs it) and the tray's Start… menu.
+
+**Start** on the page, or a click in the tray's Start… menu, starts a remembered launch again in
+one click, with no dialog, while it is exactly the launch remembered: the same executable and
+program (path, file identity and contents), argv, folder, environment, secrets and execution
+program release, from the same window. Anything changed asks again, and remembering it again
+replaces the old approval; a page's Start or a launch through another package always asks. One
+start of a launch per second; after each the app shows its launch notice ("Started …" or why it
+did not), unless **Show a notice after a one-click start** is off. **Forget** revokes the
+approval; so does revoking it in the tray's **Remembered launches…**, which also takes it out of
+the menu. The list, the recent folders and the notice setting are in `launcher.json` beside
+`connection.json`, readable only by your user; it holds no secret (a secret field holds a vault
+secret's ID), and a damaged file is moved aside as `launcher.json.corrupt-<time>`.
+
+Detached launches keep running after the app quits, each in a transient systemd scope of its own
+when a systemd user manager runs ([Launches](app-host/README.md#launches-and-managed-runtimes)). The
+page lists the managed runtimes the execution program started, with **Stop** and **Restart** (each
+confirmed natively, never remembered); disabling or removing a package with managed runtimes running
+asks first, and cancelling leaves both as they are.
+
+## Claude Code
+
+The Claude Code page sets up and starts Claude Code with this core (`src/claudeCode.tsx`). It needs
+the curated native tool `pluxy/claude-code` ([app tools](../app-tools/README.md#claude-code)) and,
+for **Start CLI**, the execution program, both installed and enabled on the Device extensions page.
+It is the window's own page, not an extension page: **Apply** gives the tool the client key, and
+only the window can name a vault secret for an operation (an extension page cannot pass secrets).
+
+**Read settings** previews the settings file: Claude Code's user settings
+(`~/.claude/settings.json`), a selected file (a link, as stow makes, is followed and kept) or a file
+in a selected folder; it shows whether pluxy's integration is applied, the file it writes to and
+whether a key is in it, never the key, and fills the form from the file. A file Claude Code would
+not take (not strict JSON, or another `$schema`) shows why instead of the form: Apply and Close
+configuration stay off, and Restore Backup stays reachable. Choosing another file drops the last
+preview, so read it again before a write. The form keeps the old
+app's controls: **Claude Code Model → Upstream Model** (Sonnet, Opus, Fable, Haiku, each with a
+**1M** switch; Fable follows Sonnet when empty), **Default model**, **Subagent model**, and under
+**Context and auto-compaction (advanced)** the **Auto-compact window**, **Auto-compact trigger**
+and **Disable auto-compaction**. Model fields suggest Claude Code's own models and aliases until the
+model picker lists the core's; Opus, Sonnet and Haiku each need one (not only `[1m]`), and the
+window and percentage are whole numbers. The **Authentication Key** is one of the vault's plain
+secrets or client keys captured for this tool (`src/claudeCodeForm.ts`), or a new one through native
+key entry (**Add key…**).
+
+**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
+**Close configuration** (Clear) and **Restore Backup** each call the tool with the file the last
+preview pinned (refused if the file changed since); the tool's native confirmation names the file it resolves to, the key's label for Apply, and that
+an edit made in the same instant by another program may be lost. **Start CLI** asks the tool for its
+recipe (`claude` in a terminal, no arguments) and starts it through the launcher in the chosen
+working directory (recently used ones offered), terminal and optional program path; the launcher's
+confirmation shows it in full. The key is not part of the launch: Claude Code reads it from its
+settings.
 
 ## Build and check
 

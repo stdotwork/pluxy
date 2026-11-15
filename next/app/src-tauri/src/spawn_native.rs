@@ -190,7 +190,7 @@ fn names(env: &Value) -> Vec<String> {
 
 /// The agent's environment holds exactly the selected session values the app has (but removed),
 /// with the app's values, and asked: no other variable of the app's.
-fn check_environment(
+pub(super) fn check_environment(
     env: &Value,
     asked: &[(&str, &str)],
     removed: &[&str],

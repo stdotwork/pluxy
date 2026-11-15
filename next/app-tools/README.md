@@ -11,6 +11,7 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
+cargo build --release --locked -p claude-code   # likewise execution
 ```
 
 ## `lib/program`
@@ -23,7 +24,7 @@ The program side of the contract, for any tool (`pluxy-program`):
 | `serve(input, output, identity, description, handler)` | `run` on any streams, for tests. |
 | `Handler::call(&Call)` | One call of a declared operation: its output or an `Error`. |
 | `Handler::reconcile(&Call, unknown, journals)` | Before `describe` is answered: the calls of unknown outcome and the open journals the host names. By default nothing. |
-| `Call` | `id`, `op`, `input`, `chain`, `secrets`, `job`; `cancelled()` and `check()`; `progress(value)`; `call(package, op, input)` (an import, through the host; cancelled with its call); `vault(op, fields)` (backups and journals); `jobs(op, input)` (a consumer's `registrations`, `start` or `cancel`); `batch(value)` (a producer's next batch, once the job's window has room) and `acked()`. |
+| `Call` | `id`, `op`, `input`, `chain`, `secrets`, `job`; `cancelled()` and `check()`; `progress(value)`; `call(package, op, input)` (an import, through the host; cancelled with its call); `vault(op, fields)` (backups and journals); `jobs(op, input)` (a consumer's `registrations`, `start` or `cancel`); `batch(value)` (a producer's next batch, once the job's window has room) and `acked()`; `spawn()` (asks the host to spawn the launch this call confirmed, naming nothing of it; cancelled with its call); `runtime(op, runtime)` (status, list, stop or restart of its package's managed runtimes). |
 | `Job` | The job a producer's call runs: `id`, `kind`, `window`. |
 | `Error` | The contract's error object: `invalid_request`, `unsupported`, `not_found`, `unavailable`, `internal`, `cancelled`, or any code. |
 | `read_frame`, `write_frame` | The framing: a four-byte big-endian length and UTF-8 JSON; a program's frames are at most `MAX_FRAME` (1 MiB). |
@@ -76,7 +77,7 @@ journal store of its own. Linux.
 | `preview(set, selections)` | Resolves and pins each selection: `{"set", "targets": [<pin>], "applied", "edited"}`. A pin names the selected path, its link's text, the file it resolves to, the identities (device and inode) of the link, the root, the file's folder and the file, and the file's SHA-256. A link inside a selected root, a part that leaves it (`..`, `.`, empty) and anything but a regular file are refused. A read: it asks nothing, and it reports a file's existence and SHA-256 for any path, so a writer must not export it to other packages. |
 | `apply(set, pins, image, merge, written)` | Writes each pinned target with what `image` makes of its bytes now, and records `set` as applied: its original images (with the person's edits since the last apply promoted into them by `merge`) and its applied images, as vault backups. A record none of whose selections still resolves to its target (a link pointed elsewhere) is replaced, its originals kept for restore. |
 | `clear(set, pins, merge, written)` | Each target becomes what `merge` makes of its original, its applied image and its bytes now: the writer's untouched values go, the person's edits stay. A pin of the recorded target file itself (named directly) reaches a record made through a link that now points elsewhere. |
-| `restore(set, pins, written)` | Puts the original bytes back with the original's mode (removing a file that did not exist). With no record for these targets, it puts back the originals kept for them: after a conflict, or after a new apply replaced a retargeted record. |
+| `restore(set, pins, written)` | Puts the original bytes back (removing a file that did not exist), keeping the mode the file has; a file that is gone comes back with the original's mode. With no record for these targets, it puts back the originals kept for them: after a conflict, or after a new apply replaced a retargeted record. |
 | `reconcile(journals)` | For `Handler::reconcile`: each open journal the host names, reconciled from what is on disk (below). |
 | `status()` | The applied sets, the originals kept for restore and the latest recovery reports. |
 | `Merge`, `Json`, `merge_value` | The three-way merge, and the one for JSON files (written with two-space indentation, keys in the file's order and numbers with their exact digits, through serde_json's `preserve_order` and `arbitrary_precision`; other formatting and comments are not kept, so a format that must keep them brings its own `Merge`). |
@@ -95,8 +96,12 @@ How a write goes:
 - Each file is written through a handle on its folder (cap-std), never by its path again: a new
   file beside it, written 0600, checked once more, given the old file's permission bits (setuid,
   setgid and sticky left out; 0600, or the original's, for a file that did not exist) and renamed
-  over it, the folder flushed, and the file checked to be the one written. The whole operation is
-  checked again at its end. At most 8 files of at most 256 KiB each.
+  over it, the folder flushed, and the file checked to be the one written. An apply writes a
+  writer's values, a key among them, so the file it writes is owner-only: the group's and others'
+  bits are taken away (an existing 0644 file becomes 0600); clear and restore keep the mode the
+  file has. A rolled-back write, in the call or by recovery, puts back the mode the file had
+  before it as well as its bytes: the file is left exactly as it was. The whole operation is checked again at its end. At most 8 files of at most
+  256 KiB each.
 - The written file is a new file: hard links to the old one keep the old bytes, and its owner,
   ACLs, extended attributes and security label are not copied.
 - Before the first write, the old bytes go into vault backups and the operation into a vault
@@ -189,14 +194,15 @@ read whole, line by line, when it changes, by the old desktop app's rules:
 
 Two responses that share a message ID and have no request ID (a gateway that reuses one ID) are
 one message within a file, as they were in the old app.
-
 ## `lib/pi-sessions`
 
 What the Pi and Oh My Pi usage parsers share (`pluxy-pi-sessions`): the two tools write the same
 session format, so one library reads it and each parser is a small program of its own. Their session
 files are `*.jsonl` under `~/.<tool>/agent/sessions` and `~/.<tool>/sessions` (the hub's `roots` name
-others), read-only. A file's ID is its path below the root it is under, so a session present under
-both roots is one file and the newer copy is read. Rules, by the tools' own sources:
+others), read-only. A file's ID is its path below the root it is under, with the first folder (the
+tool names it after the session's working folder) replaced by a hash of its name, so an ID names no
+folder of the person's; a session present under both roots is one file and the newer copy is read.
+Rules, by the tools' own sources:
 
 - an entry of type `message` has its usage in `message.usage`; an entry of type `usage` (Pi),
   `model_usage` (Oh My Pi), `compaction` or `branch_summary` (Pi) has it in its own `usage`. Nothing
@@ -210,12 +216,17 @@ both roots is one file and the newer copy is read. Rules, by the tools' own sour
 - the hour is the entry's `timestamp` (an ISO time), else the message's timestamp (milliseconds); an
   entry with neither readable is skipped (the old reader used the file's modification time, which a
   parser is not given);
-- every entry with a usage that holds a count is one sample, also one that adds nothing.
+- every entry with a usage that holds a count is one sample, also one that adds nothing;
+- an entry with an `id` and a `timestamp` is an event of [schema 2](agent-usage/README.md#schema-2),
+  its key a hash of the two, counted once by the hub whichever files hold it. A session a tool forks
+  or branches (Pi's and Oh My Pi's `forkFrom` and `createBranchedSession`) is a new file that starts
+  with copies of the parent's entries, `id` and `timestamp` unchanged, so a copied entry is the same
+  event in both files. The `id` alone is eight random hex digits, unique within one session only,
+  which is why the time is part of the key. An entry without either is a plain row, counted in each
+  file that has it, as at schema 1.
 
-A session a tool forks is a new file that starts with copies of the parent's entries, so the entries
-they share are counted in each file, as the old desktop app counted them: schema 1 keeps rows per file.
-Only counters, a model name and a time are read: no prompt, message, title, folder or key leaves the
-parser.
+Only counters, a model name, a time and the hashed key are read: no prompt, message, title, folder or
+raw entry ID leaves the parser.
 
 ## `usage-omp`
 
@@ -286,3 +297,74 @@ for it there): its `response_item` records become messages (user and assistant t
 the database's, else the last `turn_context`'s.
 
 The page renders every session's text as text, never as HTML.
+
+## `claude-code`
+
+`pluxy/claude-code` sets up Claude Code to use pluxy's core and says how to start it, for the
+desktop app's Claude Code page (`../app/README.md`, "Claude Code"). It writes one settings file
+through `lib/transactions` (set `claude-code`): link-preserving, journalled, the original and
+applied images in the host's vault. It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default `~/.claude/settings.json` in the app's `HOME` (refused, with no folder made, while `~/.claude` does not exist: Claude Code makes it when it first runs); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `settings`: `state` (`not-configured`, `configured`, `needs-update`, or `refused` with a `reason` for a file Claude Code would not take), `base_url`, `key_set`, each role's model and 1M switch, `startup_model`, `subagent_model`, `max_context_tokens`, `auto_compact_pct`, `disable_auto_compact`; never the key |
+| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `opus`, `sonnet`, `haiku`, `fable` (empty: follows Sonnet) with `<role>_1m`, `startup_model`, `subagent_model` (empty: removed), `max_context_tokens` (100000 to 1000000), `auto_compact_pct` (1 to 100), `disable_auto_compact` | The library's outcome |
+| `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Claude Code", "kind": "terminal", "program": "claude", "args": []}`, for the launcher |
+
+What `apply` writes, keeping everything else in the file (keys in its order, numbers with their
+digits), with Claude Code's own names
+([settings](https://code.claude.com/docs/en/settings), [environment variables](https://code.claude.com/docs/en/env-vars),
+[model configuration](https://code.claude.com/docs/en/model-config), read 2026-11-14):
+
+- in `env`: `ANTHROPIC_BASE_URL` (the core) and `ANTHROPIC_AUTH_TOKEN` (the client key, sent as a
+  bearer token); `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL`, each with `[1m]` when its 1M
+  switch is on (a model typed with `[1m]` counts as the switch); the `/model` picker's
+  `ANTHROPIC_DEFAULT_*_MODEL_NAME` and `_DESCRIPTION` ("Opus · <model>", "Auto-compact window: 1M",
+  "1M enabled · …"), and `ANTHROPIC_CUSTOM_MODEL_OPTION` with its name and description for the
+  Sonnet model, as the old app wrote them; `CLAUDE_CODE_SUBAGENT_MODEL`;
+  `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` (the picker lists the core's models);
+  `CLAUDE_CODE_AUTO_MODE_SERVER=0` (auto mode uses Claude Code's own classifier requests instead
+  of asking the server to review its actions, as the old app set it); `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (the
+  window, which beats every other window setting), `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` and
+  `DISABLE_AUTO_COMPACT` (`1` or `0`). `ANTHROPIC_API_KEY` is removed (it would win over the bearer
+  token) and so is `ANTHROPIC_MODEL` (it would win over `model`);
+- at the top level: `model` (the startup model, so `/model` can still change it; removed when
+  empty), `autoCompactWindow` and `autoCompactEnabled`.
+
+Clear's three-way merge brings back what Apply removed or replaced, unless the person changed it
+since. `CLAUDE_CODE_EFFORT_LEVEL` and per-model `modelSettings` are left alone. `apply` and `clear`
+refuse, before writing, a file Claude Code would not take as its own settings: not strict JSON (a
+comment, a trailing comma), not an object, an `env` that is not an object of strings, or a
+`$schema` other than `https://json.schemastore.org/claude-code-settings.json`. `preview` pins such
+a file all the same and reports it as `refused`, so Restore Backup can be reached: it puts the
+original back whatever the file holds now. A missing or empty file is an empty one. `preview`
+reads the file twice (the pins, then the values); when another program wrote it in between, it
+reads again once, then refuses, so the values shown are always those of the file pinned.
+
+## `execution`
+
+`pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, or a
+program run directly. The app's Launcher page and its tray's Start… menu use it, and so will client
+recipes. It never starts a process itself and never holds a secret's value: the host confirms each
+launch natively, spawns exactly what was confirmed when the program asks, and resolves secrets from
+its vault at the spawn (`../app/app-host/README.md`, "Launches and managed runtimes").
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `terminals` | `read` | `search_path`: the launch environment's PATH entries | `terminals`: Automatic first, then each terminal found, with its label and path |
+| `prepare` | `read` | `kind` (`terminal` or `direct`), `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path` | A launch's `executable`, `argv` and `cwd`, and for a terminal the `program` it runs |
+| `launch` | `launch` | What `prepare` gave, with `lifetime`, `environment`, `stdin` and the secret field `key` (a reference only) | The host's answer to its spawn request: `lifetime`, and a managed runtime's `runtime` and `pid` |
+| `runtime` | `read` | `op` (`status`, `list`), `runtime` | The host's answer |
+| `control` | `write` | `op` (`stop`, `restart`), `runtime` | The host's answer |
+
+It exports only `launch`, under export contract 1: another package never looks at, stops or restarts
+its runtimes, and the app asks before each `control` call. Terminals, in Automatic's order (the old
+desktop app's list): `x-terminal-emulator` (System terminal), `gnome-terminal` (`--`), `konsole`,
+`xfce4-terminal` (`-x`), `mate-terminal` (`-x`), `kitty`, `alacritty`, `ghostty` and `xterm`, each
+running the program after `-e` unless noted. A terminal launch runs `<terminal> <flag> <program>
+<args>`; a direct one `<program> <args>`. The program must be an executable file, the working folder
+an existing absolute folder.
+

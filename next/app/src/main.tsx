@@ -15,10 +15,12 @@ import { KitContext } from "../../ui/kit/ui";
 import defaultTheme from "../../ui/themes/default.json";
 import paper from "../../ui/themes/paper.json";
 import terminal from "../../ui/themes/terminal.json";
+import { claudeCodePage } from "./claudeCode";
 import { ConnectionPage } from "./connection";
 import { type DeviceCatalog, device, newest } from "./device";
 import { DevicePage, devicePage } from "./devicePage";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
+import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
 import { UpdatesPage } from "./updates";
 import { ClosePrompt } from "./window";
@@ -119,6 +121,8 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
         render: () => <UpdatesPage />,
       },
       devicePage(loadDevice),
+      launcherPage(),
+      claudeCodePage(),
       ...devicePages(catalog),
     ],
     [shown, catalog, loadDevice],
