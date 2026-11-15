@@ -1487,6 +1487,15 @@ async function runApp(
       const r = steps.get("claude_desktop") as { passed?: boolean } | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
       check(r?.passed === true, `the Claude Desktop check did not complete: ${failure}`);
+      // The core alias step's calls: no key of the app's core on any output line.
+      const cfg = JSON.parse(
+        readFileSync(join(dirs.data, artifact.identifier, "core", "config.json"), "utf8"),
+      );
+      const coreKeys = [cfg.management_key, ...(cfg.client_keys ?? [])].filter((k) => typeof k === "string");
+      check(
+        coreKeys.length > 1 && !output.some((line) => coreKeys.some((k) => line.includes(k))),
+        "a key of the app's core appeared on stdout/stderr",
+      );
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} claude-desktop ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: claude-desktop ${problems.length === 0 ? "ok" : "FAILED"}`);
