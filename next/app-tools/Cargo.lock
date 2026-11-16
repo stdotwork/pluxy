@@ -478,6 +478,7 @@ version = "0.1.0"
 dependencies = [
  "cap-std",
  "getrandom",
+ "libc",
  "pluxy-program",
  "serde_json",
  "sha2",
@@ -1049,6 +1050,15 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "wsl"
+version = "0.1.0"
+dependencies = [
+ "pluxy-program",
+ "serde_json",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "yaml-edit"
