@@ -49,12 +49,29 @@ test("the Dashboard sums up the requests core recorded and the accounts it holds
   await expect(stat(page, "Success rate").locator("strong")).toHaveText("75%");
   await expect(stat(page, "Success rate")).toContainText("Across 4 requests in the window");
 
-  // The current bucket is the table's first row, and holds all four requests: 3 and 1.
+  // Core counts in buckets that start at whole multiples of ten minutes, newest first in the
+  // table. The four requests were sent within seconds of each other, so they are in the newest
+  // bucket, or split between the newest two when a boundary fell between sending them and
+  // loading the page: the first two rows hold them all, and the other rows none.
   const table = page.getByRole("table", { name: "Requests in each 10-minute bucket" });
-  await expect(table.locator("tbody tr").first().locator("td")).toHaveText(["3", "1"]);
+  const sum = (rows: number[][]) => [0, 1].map((col) => rows.reduce((n, row) => n + (row[col] ?? 0), 0));
+  await expect
+    .poll(async () => {
+      const rows = await table
+        .locator("tbody tr")
+        .evaluateAll((trs) =>
+          trs.map((tr) => [...tr.querySelectorAll("td")].map((td) => Number(td.textContent))),
+        );
+      return { all: sum(rows), newestTwo: sum(rows.slice(0, 2)) };
+    })
+    .toEqual({ all: [3, 1], newestTwo: [3, 1] });
   const chart = page.locator('svg[data-part="chart"]');
-  await expect(chart.locator('[data-outcome="success"]')).toHaveCount(1);
-  await expect(chart.locator('[data-outcome="failure"]')).toHaveCount(1);
+  await expect(chart).toHaveAttribute(
+    "aria-label",
+    "4 requests over the last 200 minutes: 3 succeeded, 1 failed.",
+  );
+  await expect(chart.locator('[data-outcome="success"]')).not.toHaveCount(0);
+  await expect(chart.locator('[data-outcome="failure"]')).not.toHaveCount(0);
 
   // Credentials: what GET /accounts reports.
   const accounts = (
