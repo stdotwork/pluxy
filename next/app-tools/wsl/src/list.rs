@@ -72,12 +72,17 @@ pub fn names(output: &[u8]) -> Vec<String> {
     out
 }
 
-/// The error code `wsl.exe --list` gives when no distribution is installed: never translated,
-/// unlike the sentence before it.
-const NO_DISTRIBUTION: &str = "WSL_E_DEFAULT_DISTRO_NOT_FOUND";
+/// The error codes `wsl.exe --list` gives when nothing can be listed because nothing is installed:
+/// no distribution, or WSL itself not enabled (System32's `wsl.exe` is then a stub). Never
+/// translated, unlike the sentence before them. An old inbox `wsl.exe` of Windows 10 that prints
+/// no such code reads as `unavailable`, not as nothing installed.
+const NOT_INSTALLED: [&str; 2] = [
+    "WSL_E_DEFAULT_DISTRO_NOT_FOUND",
+    "WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED",
+];
 
 /// What `wsl.exe --list --quiet` answered, from its exit code and output: the names, or None when
-/// no distribution is installed (exit -1 with WSL's error code for that). The output of a listing
+/// nothing is installed (exit -1 with one of WSL's error codes for that). The output of a listing
 /// that failed is never read as names: its text may be a translated sentence.
 pub fn listing(
     code: i32,
@@ -87,7 +92,10 @@ pub fn listing(
     if code == 0 {
         return Ok(Some(names(stdout)));
     }
-    let said = |b: &[u8]| decode(b).contains(NO_DISTRIBUTION);
+    let said = |b: &[u8]| {
+        let text = decode(b);
+        NOT_INSTALLED.iter().any(|c| text.contains(c))
+    };
     if code == -1 && (said(stdout) || said(stderr)) {
         return Ok(None);
     }

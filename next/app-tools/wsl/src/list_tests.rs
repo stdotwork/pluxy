@@ -121,3 +121,17 @@ fn nuls_around_a_name_are_trimmed() {
     // A NUL inside a name is still refused.
     assert!(names(&utf16("Ub\0untu\r\n", true)).is_empty());
 }
+
+#[test]
+fn wsl_not_enabled_is_not_installed() {
+    // System32's wsl.exe on a Windows where the WSL feature is off: exit -1 and this code.
+    let msg = "The Windows Subsystem for Linux is not installed. You can install by running \
+               'wsl.exe --install'.\r\nError code: Wsl/WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED\r\n";
+    assert_eq!(listing(-1, &utf16(msg, false), b"").unwrap(), None);
+    assert_eq!(listing(-1, b"", msg.as_bytes()).unwrap(), None);
+    // The same code with another exit is not WSL's own answer.
+    assert_eq!(
+        listing(1, &utf16(msg, false), b"").unwrap_err().code,
+        "unavailable"
+    );
+}
