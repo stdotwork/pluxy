@@ -45,6 +45,7 @@
     "allow-device-registries",
     "allow-device-install",
     "allow-device-install-file",
+    "allow-device-install-wsl",
     "allow-device-enable",
     "allow-device-remove",
     "allow-device-rollback",

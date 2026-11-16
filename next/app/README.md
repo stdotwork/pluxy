@@ -322,6 +322,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_list` | This device's extension catalog |
 | `device_registries` | What the registries in `device-registries.json` offer this computer |
 | `device_install` | Installs or updates a package from one of those registries |
+| `device_install_wsl` | Installs a native tool's Linux build (`linux/amd64` or `linux/arm64`) for its active release, through a native confirmation ([Linux build for WSL](app-host/README.md#linux-build-for-wsl)) |
 | `device_install_file` | Opens the native file chooser and installs or updates the package chosen there (Linux) |
 | `device_enable`, `device_remove`, `device_rollback` | Enables or disables (a native tool only through its native confirmation), removes, or rolls back a package on this device |
 | `device_imports` | Allows a curated web package's native imports, through a native confirmation, or revokes them |

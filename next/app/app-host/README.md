@@ -26,6 +26,7 @@ them. App-only packages omit provider fields; no dummy provider is needed.
 | `config` | Optional settings, using the existing [config format](../../ui/extension-pages/README.md#config), with its own version. App settings belong to this device. |
 | `resources` | Web only: requested broker resources, each with an `id`, `kind` (`file` or `subtree`) and nonempty `operations` list. A declaration grants no access. |
 | `programs` | Native only: platform (`GOOS/GOARCH`) to relative executable path, as for provider programs. At least one entry is required. |
+| `environments` | Native only, optional: where else its program may run, each once. The only one is `wsl`: on Windows, its Linux program may run in a WSL distribution. Its releases must then publish `linux/amd64` and/or `linux/arm64` archives as well, which the app installs as the [Linux build for WSL](#linux-build-for-wsl). Any other value is refused. |
 | `operations` | Native only: declared operations, each with an `id`, plain `description`, `input_schema` and `output_schema` JSON objects, an optional `effect` (`read`, `write`, `launch` or `disclose`; absent means `write`) and optional `secrets`: at most four input fields that carry a secret, each `"value"` (the tool receives the secret) or `"reference"` (it receives only a reference to it; a `launch` operation's are references only); each must be a `string` property of the input schema. See [Secrets, references and the vault](#secrets-references-and-the-vault). At least one operation is required. |
 | `exports` | Native only, optional: `{"contract": <nonnegative integer>, "operations": [<declared IDs>]}`, the operations other packages may import and the version of that export contract. |
 | `imports` | Optional, both tiers: at most 16 entries `{"package": <ID>, "contract": [<accepted export contracts>], "operations": [<IDs>], "required": <bool, default true>, "secrets": [<IDs>]}`, one per package, never the package itself. `secrets` (native tools only) lists the imported operations it may pass secret references to. See [Calls between packages](#calls-between-packages). |
@@ -80,6 +81,26 @@ catalog builds one; it offers, read-only: ID, version, archive SHA-256 and size,
 source, signature, the root's public key, store folder, program path and the program's SHA-256
 (check the opened file against it before running it), operations, state versions, app
 contribution version and host contract.
+
+### Linux build for WSL
+
+A native tool that declares `"environments": ["wsl"]` may also run its Linux program in a WSL
+distribution. That program comes from the release's `linux/<arch>` archive, the Linux build,
+installed beside the device's own archive only when the person asks for it in the main window
+(`device_install_wsl`, for `linux/amd64` or `linux/arm64`). The tool must be enabled and confirmed
+for its active release. The Linux build is the active release's version from the registry the tool
+was installed from, signed by the same signer (publisher, key ID and source), with a signature
+that holds for that platform. Its manifest has the same ID and version, is a native tool for this
+host contract, declares `wsl`, declares the same operations, state, imports, exports, jobs and
+environments as the active release, and has a program for the platform whose mode in the archive
+lets it run. The app checks it as it checks any archive, then asks in a native confirmation that
+names the package, version, platform and the archive's SHA-256. Only once the person confirms is
+it kept in the same store, by its own SHA-256, and recorded on the package by platform; a cancel
+keeps nothing. Any change of the active release (an update, a rollback, a removal) drops every
+Linux build of the package, so a tool in WSL never runs another version than the device's; the
+next use in WSL asks again. Before each start in WSL the program host takes it as
+`device::admitted_linux_unlocked`, which checks the tool's own admission, the Linux build's
+signature for its platform and every one of its files again.
 
 ### Signed descriptor bytes
 
