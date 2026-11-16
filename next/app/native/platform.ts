@@ -1036,10 +1036,13 @@ async function update() {
   const local = windows ? join(process.env.LOCALAPPDATA as string, TEST_ID) : p.dir;
   let core: Awaited<ReturnType<typeof startCore>> | undefined;
   let feed: ReturnType<typeof startUpdateFeed> | undefined;
+  // The trust profile's home: on Windows a folder of its own under the runner's temporary folder,
+  // removed below; on macOS the profile's own, removed with it.
+  let home: string | undefined;
   try {
     if (windows && existsSync(local))
       throw new Error(`${local} exists: this is not a fresh runner, and the test would write over it`);
-    const home = privateHome(p);
+    home = privateHome(p);
     const nonce = writeUpdaterTrust(home, made.updater_pubkey);
     const work = privateFolder(join(root, "work"));
 
@@ -1211,8 +1214,10 @@ async function update() {
       if (proc.exitCode === null) await new Promise((r) => proc.once("exit", r));
     }
     await Bun.sleep(500);
-    if (windows) removeWhenFree(root, local);
-    else rmSync(root, { recursive: true, force: true });
+    if (windows) {
+      removeWhenFree(root, local);
+      if (home) removeWhenFree(home, local);
+    } else rmSync(root, { recursive: true, force: true });
     p.remove();
   }
 }
