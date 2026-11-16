@@ -260,15 +260,16 @@ func packTree(t *testing.T, dir string) map[string][]byte {
 	return files
 }
 
-// appToolManifest is the part of an app tool's manifest the pack test reads.
+// appToolManifest is the part of an app tool's manifest the pack test reads. An app tool's pages
+// are under app.ui, as the app reads them.
 type appToolManifest struct {
 	ID      string `json:"id"`
 	Version string `json:"version"`
-	UI      *struct {
-		Dir string `json:"dir"`
-	} `json:"ui"`
-	App struct {
+	App     struct {
 		Programs map[string]string `json:"programs"`
+		UI       *struct {
+			Dir string `json:"dir"`
+		} `json:"ui"`
 	} `json:"app"`
 }
 
@@ -302,24 +303,33 @@ func appToolManifests(t *testing.T) map[string]appToolManifest {
 	if len(manifests) < 10 {
 		t.Fatalf("only %d app tool manifests under ../app-tools", len(manifests))
 	}
+	withUI := 0
+	for _, m := range manifests {
+		if m.App.UI != nil {
+			withUI++
+		}
+	}
+	if withUI == 0 {
+		t.Fatal("no app tool manifest has app.ui: the pages check would check nothing")
+	}
 	return manifests
 }
 
-// archiveFiles reads a release archive: each regular file's mode and bytes, by name.
-func archiveFiles(t *testing.T, b []byte) map[string]struct {
+// packedFile is one file of a release archive: its mode and bytes.
+type packedFile struct {
 	mode int64
 	body []byte
-} {
+}
+
+// archiveFiles reads a release archive: each regular file's mode and bytes, by name.
+func archiveFiles(t *testing.T, b []byte) map[string]packedFile {
 	t.Helper()
 	gz, err := gzip.NewReader(bytes.NewReader(b))
 	if err != nil {
 		t.Fatal(err)
 	}
 	tr := tar.NewReader(gz)
-	files := map[string]struct {
-		mode int64
-		body []byte
-	}{}
+	files := map[string]packedFile{}
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -332,10 +342,7 @@ func archiveFiles(t *testing.T, b []byte) map[string]struct {
 		if err != nil {
 			t.Fatal(err)
 		}
-		files[h.Name] = struct {
-			mode int64
-			body []byte
-		}{h.Mode, body}
+		files[h.Name] = packedFile{h.Mode, body}
 	}
 }
 
@@ -428,10 +435,26 @@ func TestPackToolPacksAppTools(t *testing.T) {
 			if !bytes.Equal(files["pluxy-extension.json"].body, raw) {
 				t.Errorf("%s %s: the archive's manifest is not the tool's", id, platform)
 			}
-			if m.UI != nil && !slices.ContainsFunc(slices.Collect(maps.Keys(files)), func(n string) bool {
-				return strings.HasPrefix(n, m.UI.Dir+"/")
-			}) {
-				t.Errorf("%s %s: no file of its ui folder %s", id, platform, m.UI.Dir)
+			// Beside the manifest and the program, the archive holds exactly the files of the
+			// tool's app.ui folder, each with its bytes and its mode (0755 when any execute bit is
+			// set, else 0644).
+			want := map[string]packedFile{"pluxy-extension.json": {0o644, raw}, program: {0o755, files[program].body}}
+			if m.App.UI != nil {
+				maps.Copy(want, uiTree(t, filepath.Join("..", "app-tools", manifestFolder(t, id)), m.App.UI.Dir))
+			}
+			for name, w := range want {
+				g, ok := files[name]
+				switch {
+				case !ok:
+					t.Errorf("%s %s: the archive does not hold %s", id, platform, name)
+				case g.mode != w.mode || !bytes.Equal(g.body, w.body):
+					t.Errorf("%s %s: the archive holds %s with mode %o and %d bytes, want mode %o and the tool's %d bytes", id, platform, name, g.mode, len(g.body), w.mode, len(w.body))
+				}
+			}
+			for name := range files {
+				if _, ok := want[name]; !ok {
+					t.Errorf("%s %s: the archive holds %s, which is not the tool's", id, platform, name)
+				}
 			}
 		}
 	}
@@ -446,6 +469,44 @@ func TestPackToolPacksAppTools(t *testing.T) {
 	if err == nil || !bytes.Contains(got, []byte("pluxy/claude-code: its program for windows/amd64")) {
 		t.Errorf("packing without claude-code.exe: %v: %s", err, got)
 	}
+}
+
+// uiTree returns every file under dir/ui as the pack tool must pack it: by its slash-separated
+// path inside the package (ui/...), with 0755 when any execute bit is set, else 0644.
+func uiTree(t *testing.T, dir, ui string) map[string]packedFile {
+	t.Helper()
+	files := map[string]packedFile{}
+	root := filepath.Join(dir, filepath.FromSlash(ui))
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		body, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		mode := int64(0o644)
+		if info.Mode().Perm()&0o111 != 0 {
+			mode = 0o755
+		}
+		files[path.Join(ui, filepath.ToSlash(rel))] = packedFile{mode, body}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("%s holds no files", root)
+	}
+	return files
 }
 
 // manifestFolder returns the app-tools folder whose manifest has package ID id.
