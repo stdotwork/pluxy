@@ -49,6 +49,7 @@
 
 use crate::confirmation::{self, Authorized, Gesture};
 use crate::device::{self, Grant, Refused};
+use crate::environments::{Environment, Instance};
 use crate::program::{self, CallError, Cancel, Context, Hop, Outbound};
 use crate::spawn::{self, Lifetime};
 use crate::vault::{Holder, Vault};
@@ -84,6 +85,10 @@ struct Origin {
     save: Mutex<Option<(Holder, Vec<u8>)>>,
     /// The remembered approval that authorized the call's launch, or that its confirmation saved.
     approval: Arc<Mutex<Option<String>>>,
+    /// Where the call's target runs (only the window's own call chooses another environment than
+    /// this computer), and the line its native confirmation shows for where the action runs.
+    environment: Environment,
+    shown: Option<String>,
 }
 
 /// Who fills a call's secret fields: the window, with vault secret IDs; a page, never; a tool,
@@ -142,14 +147,82 @@ pub fn call_main_launch(
     input: Value,
     gesture: Option<Gesture>,
 ) -> Result<(Value, Option<String>), CallError> {
+    call_main_in(
+        app,
+        call,
+        &Instance::local(package),
+        op,
+        input,
+        gesture,
+        None,
+    )
+}
+
+/// `call_main_launch`, of instance: in a WSL environment the window chose, that the host has a
+/// record of, for a package that runs there (its Linux build installed for WSL), with that
+/// environment's line in the native confirmation; shown is the line to show instead (the
+/// launcher's, for a launch it starts in WSL through a tool on this computer).
+pub fn call_main_in(
+    app: &AppHandle,
+    call: program::Call,
+    instance: &Instance,
+    op: &str,
+    input: Value,
+    gesture: Option<Gesture>,
+    shown: Option<String>,
+) -> Result<(Value, Option<String>), CallError> {
+    let package = instance.package.as_str();
+    // The environment's record and its Linux platform, refused before anything starts when the
+    // host does not know it.
+    let record = match &instance.environment {
+        Environment::Local => None,
+        env => Some(
+            app.state::<App>()
+                .environments
+                .lock()
+                .unwrap()
+                .get(env)
+                .cloned()
+                .ok_or_else(|| {
+                    fail(
+                        "not_found",
+                        format!(
+                            "{} is not a WSL environment this app knows: add it again",
+                            env.label().unwrap_or_default()
+                        ),
+                    )
+                })?,
+        ),
+    };
     let grant = || {
-        app.state::<App>()
+        let st = app.state::<App>();
+        let mut g = st
             .device
             .lock()
             .unwrap()
             .main_grant(package, op, &roots())
-            .map_err(refused)
+            .map_err(refused)?;
+        // In WSL: the same release's Linux build, checked now, and its declaration of op.
+        if let Some(r) = &record {
+            let linux =
+                device::admitted_linux_unlocked(&st.device, package, &r.platform(), &roots())
+                    .map_err(|e| fail("extension_unavailable", e))?;
+            g.op = linux
+                .operations()
+                .iter()
+                .find(|o| o.id == op)
+                .cloned()
+                .ok_or_else(|| {
+                    fail(
+                        "permission",
+                        format!("{package}'s Linux build declares no operation {op}"),
+                    )
+                })?;
+            g.target = linux;
+        }
+        Ok(g)
     };
+    let shown = shown.or_else(|| record.as_ref().map(|r| r.confirmation_line()));
     let approval: Arc<Mutex<Option<String>>> = Arc::default();
     let origin = Origin {
         packages: vec![device::main_window()],
@@ -158,6 +231,8 @@ pub fn call_main_launch(
         launch: Mutex::new(None),
         save: Mutex::new(None),
         approval: Arc::clone(&approval),
+        environment: instance.environment.clone(),
+        shown,
     };
     let out = dispatch(
         app,
@@ -220,6 +295,8 @@ fn outbound(app: &AppHandle, o: Outbound) -> Result<Value, CallError> {
         launch: Mutex::new(None),
         save: Mutex::new(None),
         approval: Arc::default(),
+        environment: Environment::Local,
+        shown: None,
     };
     let filler = Filler::Tool {
         holder: Holder {
@@ -319,6 +396,8 @@ fn page_call(app: &AppHandle, label: &str, params: &Value) -> Result<Value, Call
                 launch: Mutex::new(None),
                 save: Mutex::new(None),
                 approval: Arc::default(),
+                environment: Environment::Local,
+                shown: None,
             };
             let chain = vec![Hop::Page {
                 id: caller.clone(),
@@ -495,6 +574,10 @@ fn dispatch(
         };
         input[f.field.as_str()] = Value::String(r);
     }
+    let instance = Instance {
+        package: grant.target.id().into(),
+        environment: origin.environment.clone(),
+    };
     let context = Context {
         chain,
         expect: Some((grant.target.sha256().into(), grant.target.installed_at())),
@@ -505,7 +588,7 @@ fn dispatch(
     };
     let r = app.state::<App>().programs.run_call_with(
         call,
-        grant.target.id(),
+        &instance,
         &grant.op.id,
         input,
         Arc::new(context),
@@ -655,6 +738,8 @@ fn start_job(
                     launch: Mutex::new(None),
                     save: Mutex::new(None),
                     approval: Arc::default(),
+                    environment: Environment::Local,
+                    shown: None,
                 };
                 let input = i["input"].clone();
                 // A job's operation has no secret fields (`device::Catalog` refuses them at install),
@@ -797,6 +882,8 @@ fn run_job(
                 launch: Mutex::new(None),
                 save: Mutex::new(None),
                 approval: Arc::default(),
+                environment: Environment::Local,
+                shown: None,
             }),
             feed: None,
             // A consumer busy past the startup limit fails the job rather than hold it.
@@ -814,7 +901,7 @@ fn run_job(
             .and_then(|call| {
                 programs.run_call_with(
                     call,
-                    &c.0,
+                    &Instance::local(&c.0),
                     &g.deliver.id,
                     envelope,
                     Arc::new(context),
@@ -836,7 +923,7 @@ fn run_job(
             let r = programs.begin_call(None).and_then(|registered| {
                 programs.run_call_with(
                     registered,
-                    &producer,
+                    &Instance::local(&producer),
                     &op,
                     input,
                     Arc::new(call),
@@ -1074,6 +1161,7 @@ fn authorize(
         native_tool: true,
         files: vec![],
         launch,
+        environment: origin.shown.clone(),
     };
     let refuse = |e: String| fail("permission", e);
     let st = app.state::<App>();

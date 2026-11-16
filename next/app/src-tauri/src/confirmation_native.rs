@@ -220,6 +220,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
                 environment_review: vec![],
                 secret_uses: vec![],
             }),
+            environment: None,
         };
         let id = ask(app, main, &a)?;
         let snapshot = || {

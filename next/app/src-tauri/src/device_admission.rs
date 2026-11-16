@@ -313,6 +313,7 @@ impl Admitted {
             native_tool: true,
             files: vec![self.program.clone()],
             launch: None,
+            environment: None,
         }
     }
 }

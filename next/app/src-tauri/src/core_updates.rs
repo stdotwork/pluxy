@@ -196,6 +196,7 @@ fn ask(app: &AppHandle, ask: Ask) -> Result<(), String> {
         native_tool: true,
         files,
         launch: None,
+        environment: None,
     };
     let id = {
         let mut c = st.confirmations.lock().unwrap();
