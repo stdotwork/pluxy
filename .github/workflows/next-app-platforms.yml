@@ -2,8 +2,9 @@ name: Next app platforms
 
 # Builds and unit-tests the desktop app's Rust crate on Windows and macOS, and runs the real app
 # there (next/app/native/platform.ts: a second launch raising the first, the login item, the
-# window and the tray; the test package and the release gate). The Linux native test (Xvfb,
-# portals) stays in next-app.yml.
+# window and the tray; the test package and the release gate; next/app/native/dialogs.ts: native
+# key entry, confirmations and key rotation). The Linux native test (Xvfb, portals) stays in
+# next-app.yml.
 
 on:
   workflow_dispatch:
@@ -298,3 +299,56 @@ jobs:
           PLUXY_APP_NATIVE_SHARD: ${{ matrix.shard }}
           PLUXY_APP_TEST_PACKAGE: ${{ runner.temp }}/test-package
         run: bun run test:native:platform
+
+  # The real app, built with the native-test feature, in local mode against a test core: its
+  # native key entry, confirmations and key rotation, worked through native input
+  # (native/dialogs.ts). Only on these disposable hosted runners: on Windows the app's folders are
+  # the account's own.
+  dialogs:
+    name: dialogs (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: next/app/src-tauri -> target
+          key: ${{ matrix.os }}-dialogs
+      - name: UI kit install
+        working-directory: next/ui
+        run: bun install --frozen-lockfile
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Build the window
+        run: bun run build
+      # Its counts (checks passed, expected failures, problems, native input by way) go to the
+      # job summary.
+      - name: Native dialogs session
+        run: bun native/dialogs.ts 2>&1 | tee "$RUNNER_TEMP/dialogs.log"
+      - name: Keep the session's log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dialogs-${{ matrix.os }}
+          path: ${{ runner.temp }}/dialogs.log
+          if-no-files-found: ignore
