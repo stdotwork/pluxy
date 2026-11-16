@@ -905,7 +905,8 @@ It exports nothing.
 
 Hermes Agent keeps its settings in `config.yaml` in its home folder: `HERMES_HOME`, else
 `~/.hermes` on Linux and macOS and `%LOCALAPPDATA%\hermes` on Windows (`AppData\Local\hermes` in
-the home folder when `LOCALAPPDATA` is not set: `_platform_default_hermes_home` in
+the home folder when `LOCALAPPDATA` is not set or is blank, as Hermes reads it, or is not a full
+path: `_platform_default_hermes_home` in
 `hermes_constants.py`, main at c664ffdbccd9, read 2026-11-17); with no `--profile` flag, a profile
 named in that folder's `active_profile` (other than `default`) makes the home its
 `profiles/<name>`. The tool's environment has no `HERMES_HOME`, so by default it uses that

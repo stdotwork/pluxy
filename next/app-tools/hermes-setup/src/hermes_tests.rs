@@ -323,11 +323,14 @@ fn the_default_file_follows_hermess_active_profile_on_each_system() {
         std::fs::write(root.join("active_profile"), "../x\n").unwrap();
         assert!(default_home(os, &vars).is_err());
     }
-    // Windows with no LOCALAPPDATA: AppData\Local in the home folder, as Hermes falls back.
-    assert_eq!(
-        default_home("windows", &env(&[("HOME", &home)])).unwrap(),
-        home.join("AppData").join("Local").join("hermes")
-    );
+    // Windows with no LOCALAPPDATA, a blank one (Hermes strips it) or one that is not a full path:
+    // AppData\Local in the home folder, as Hermes falls back.
+    let fallback = home.join("AppData").join("Local").join("hermes");
+    assert_eq!(default_home("windows", &env(&[("HOME", &home)])).unwrap(), fallback);
+    for bad in ["  ", "AppData\\Local", "relative"] {
+        let vars = env(&[("HOME", &home), ("LOCALAPPDATA", Path::new(bad))]);
+        assert_eq!(default_home("windows", &vars).unwrap(), fallback, "{bad:?}");
+    }
     assert!(default_home("linux", &env(&[("LOCALAPPDATA", &local)])).is_err());
     std::fs::remove_dir_all(&home).unwrap();
     std::fs::remove_dir_all(&local).unwrap();

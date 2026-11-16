@@ -42,13 +42,21 @@ fn home_of(var: Var) -> Result<PathBuf, Error> {
 /// The Hermes home with no HERMES_HOME (the tool's environment has none) on os, as Hermes picks
 /// it (`hermes_constants.py`, `_platform_default_hermes_home`): `~/.hermes` on Linux and macOS;
 /// on Windows `hermes` in `%LOCALAPPDATA%`, or in `AppData\Local` in the home folder when that is
-/// not set.
+/// not set, blank or not a full path.
 fn hermes_root(os: &str, var: Var) -> Result<PathBuf, Error> {
     if os != "windows" {
         return Ok(home_of(var)?.join(".hermes"));
     }
-    let local = match var("LOCALAPPDATA").filter(|v| !v.is_empty()) {
-        Some(v) => PathBuf::from(v),
+    // Stripped of blanks as Hermes strips it, and only a full path: a relative one would name a
+    // folder under wherever the tool runs.
+    let local = var("LOCALAPPDATA")
+        .map(|v| match v.to_str() {
+            Some(t) => PathBuf::from(t.trim()),
+            None => PathBuf::from(v),
+        })
+        .filter(|p| p.is_absolute());
+    let local = match local {
+        Some(l) => l,
         None => home_of(var)?.join("AppData").join("Local"),
     };
     Ok(local.join("hermes"))
