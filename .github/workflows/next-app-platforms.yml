@@ -11,8 +11,8 @@ on:
   # builds changed (see the changes job there).
   workflow_call:
     inputs:
-      # ci.yml sets this when the change reaches only the Go core: the native jobs build and run
-      # just the app (next/app and the kit in next/ui), never the core.
+      # ci.yml sets this when the change touches neither next/app, next/ui nor the workflows: the
+      # native jobs build and run just the app and the kit, never the Go core.
       skip-native:
         type: boolean
         default: false

@@ -27,12 +27,13 @@ jobs:
   # Each output says whether a workflow's paths were touched, using the paths that workflow's
   # own pull_request trigger had. A change to this file runs them all.
   # next-app-platforms (the Windows and macOS jobs) is the exception: it runs only for a change to
-  # what those jobs build. That is next/app, next/ui (the kit the window is built from), go.mod and
-  # go.sum, and the Go packages the app's tests build and run: e2e/panelcore, e2e/testext and
-  # cmd/pluxy, with everything they import on Linux, Windows and macOS. `go list` works the
-  # packages out from the code being tested, so a new import counts at once. Its native jobs build
-  # and run only the app, never the Go core, so a change that reaches only those Go packages skips
-  # them (next-app-platforms-native).
+  # what those jobs build or read. That is next/app, next/ui (the kit the window is built from),
+  # the protocol's app-manifest cases the app's Rust tests read, go.mod and go.sum, and the Go
+  # packages the app's tests build and run: e2e/panelcore, e2e/testext and cmd/pluxy, with
+  # everything they import on Linux, Windows and macOS. `go list` works the packages out from the
+  # code being tested, so a new import counts at once. Its native jobs build and run only the app
+  # and the kit, so a change that reaches none of next/app, next/ui and the workflows skips them
+  # (next-app-platforms-native).
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -90,7 +91,8 @@ jobs:
             case $path in next/* | .github/workflows/next-ci.yml) run[next-ci]=true ;; esac
             case $path in next/* | .github/workflows/next-app.yml) run[next-app]=true ;; esac
             case $path in
-              next/app/* | next/ui/* | next/go.mod | next/go.sum | .github/workflows/next-app-platforms.yml)
+              next/app/* | next/ui/* | next/protocol/testdata/app-manifests/* | next/go.mod | next/go.sum | \
+                .github/workflows/next-app-platforms.yml)
                 run[next-app-platforms]=true ;;
               # Any other file in next/ may be in one of those Go packages: the go-packages step
               # decides.
@@ -136,7 +138,12 @@ jobs:
             done
           done | sort -u > "$RUNNER_TEMP/dirs"
           # Repository paths of the package folders; a file anywhere under one counts (embedded files).
-          sed -e '/^$/d' -e "s|^$PWD|next|" "$RUNNER_TEMP/dirs" > "$RUNNER_TEMP/prefixes"
+          while IFS= read -r dir; do
+            case $dir in
+              "$PWD") echo next ;;
+              "$PWD"/*) echo "next/${dir#"$PWD"/}" ;;
+            esac
+          done < "$RUNNER_TEMP/dirs" > "$RUNNER_TEMP/prefixes"
           echo "$(wc -l < "$RUNNER_TEMP/prefixes") package folders"
           hit=false
           while IFS= read -r -d '' path; do
