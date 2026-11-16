@@ -127,8 +127,10 @@ jobs:
   # times that for the sessions still being added.
   native:
     # Pinned: the package names below are Ubuntu 24.04's, and so are the file paths the native
-    # test starts services from (next/app/native/services.ts).
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    # test starts services from (next/app/native/services.ts). Always on GitHub's runners, never
+    # PLUXY_LINUX_RUNNER: the document portal needs /dev/fuse, which the maintainers' runner
+    # containers don't get (FUSE in a container needs extra privilege).
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
