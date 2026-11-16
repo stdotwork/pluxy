@@ -137,6 +137,10 @@ jobs:
           cargo build --locked --target x86_64-unknown-linux-musl -p pluxy-transactions --example fixture-writer
           cp target/x86_64-unknown-linux-musl/debug/examples/fixture-writer lib/transactions/examples/fixture-writer/pluxy-extension.json /c/pluxy-wsl/writer/
           printf '{"theme": "light"}\n' > /c/pluxy-wsl/drive/settings.json
+      - name: Windows test before any distribution is installed
+        run: |
+          cargo test --locked -p wsl --test real_wsl -- --ignored --exact distros_before_any_distribution_is_installed_says_not_installed 2>&1 | tee "$RUNNER_TEMP/no-distro.log"
+          grep -q '^test result: ok. 1 passed' "$RUNNER_TEMP/no-distro.log"
       - name: Set up the distributions
         shell: pwsh
         timeout-minutes: 40
@@ -239,7 +243,7 @@ jobs:
       - name: Windows tests against the distributions
         run: |
           status=0
-          cargo test --locked -p wsl --test real_wsl -- --ignored --test-threads=1 2>&1 | tee "$RUNNER_TEMP/real-wsl.log" || status=$?
+          cargo test --locked -p wsl --test real_wsl -- --ignored --skip distros_before_any_distribution_is_installed --test-threads=1 2>&1 | tee "$RUNNER_TEMP/real-wsl.log" || status=$?
           # Five tests, each run and passed: none may be skipped or missing.
           awk '/^test result:/ { p += $4; f += $6; i += $8 } END {
             printf "pluxy/wsl real-WSL tests: passed %d, failed %d, ignored %d\n", p, f, i

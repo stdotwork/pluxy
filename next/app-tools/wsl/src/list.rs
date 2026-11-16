@@ -71,6 +71,32 @@ pub fn names(output: &[u8]) -> Vec<String> {
     out
 }
 
+/// The error code `wsl.exe --list` gives when no distribution is installed: never translated,
+/// unlike the sentence before it.
+const NO_DISTRIBUTION: &str = "WSL_E_DEFAULT_DISTRO_NOT_FOUND";
+
+/// What `wsl.exe --list --quiet` answered, from its exit code and output: the names, or None when
+/// no distribution is installed (exit -1 with WSL's error code for that). The output of a listing
+/// that failed is never read as names: its text may be a translated sentence.
+pub fn listing(
+    code: i32,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<Option<Vec<String>>, pluxy_program::Error> {
+    if code == 0 {
+        return Ok(Some(names(stdout)));
+    }
+    let said = |b: &[u8]| decode(b).contains(NO_DISTRIBUTION);
+    if code == -1 && (said(stdout) || said(stderr)) {
+        return Ok(None);
+    }
+    Err(pluxy_program::Error::unavailable(format!(
+        "wsl.exe --list failed (exit {code}): {} {}",
+        decode(stdout).trim(),
+        decode(stderr).trim()
+    )))
+}
+
 #[cfg(test)]
 #[path = "list_tests.rs"]
 mod tests;

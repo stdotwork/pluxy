@@ -140,6 +140,18 @@ fn as_root(script: &str) -> String {
     out
 }
 
+/// Run by the WSL job before it installs any distribution (and skipped by name after).
+#[test]
+#[ignore = "needs WSL with no distribution installed (the WSL job, before its setup)"]
+fn distros_before_any_distribution_is_installed_says_not_installed() {
+    let mut p = pluxy_wsl();
+    assert_eq!(
+        p.ok("distros", json!({})),
+        json!({"distros": [], "installed": false})
+    );
+    p.end();
+}
+
 #[test]
 #[ignore = "needs real WSL distributions (the WSL job)"]
 fn distros_lists_both_distributions_with_the_default_and_their_version() {

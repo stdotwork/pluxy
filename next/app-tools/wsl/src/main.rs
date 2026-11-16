@@ -119,18 +119,9 @@ mod os {
         let out = exec::wsl(&args(&["--list", "--quiet"]), 64 << 10, LIST_TIME, &|| {
             call.cancelled()
         })?;
-        let names = list::names(&out.stdout);
-        if out.code == -1 && names.is_empty() {
-            // No distribution is installed (WSL says so with its own error).
+        let Some(names) = list::listing(out.code, &out.stdout, &out.stderr)? else {
             return Ok(json!({"distros": [], "installed": false}));
-        }
-        if out.code != 0 {
-            return Err(Error::unavailable(format!(
-                "wsl.exe --list failed (exit {}): {}",
-                out.code,
-                out.text()
-            )));
-        }
+        };
         let (known, default) = exec::registry();
         let distros: Vec<Value> = names
             .iter()

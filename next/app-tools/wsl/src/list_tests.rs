@@ -80,3 +80,34 @@ fn distribution_names_never_start_like_an_option() {
     assert!(!distro_ok("-d"));
     assert!(!distro_ok("--exec"));
 }
+
+#[test]
+fn no_distribution_is_known_by_wsls_error_code_in_any_language() {
+    // What wsl.exe --list says with no distribution, in Japanese and in English: a sentence (one
+    // that passes the name rules) and WSL's own error code, which is never translated.
+    for msg in [
+        "Linux 用 Windows サブシステムには、ディストリビューションがインストールされていません。\r\n\
+         Error code: Wsl/WSL_E_DEFAULT_DISTRO_NOT_FOUND\r\n",
+        "Windows Subsystem for Linux has no installed distributions\r\n\
+         Error code: Wsl/WSL_E_DEFAULT_DISTRO_NOT_FOUND\r\n",
+    ] {
+        assert_eq!(listing(-1, &utf16(msg, false), b"").unwrap(), None, "{msg}");
+    }
+    // Any other failure is an error, whatever its text looks like; the output of a failed
+    // listing is never read as names.
+    let e = listing(
+        -1,
+        &utf16("Ubuntu\r\nError code: Wsl/Service/E_UNEXPECTED\r\n", false),
+        b"",
+    )
+    .unwrap_err();
+    assert_eq!(e.code, "unavailable");
+    assert!(e.message.contains("E_UNEXPECTED"), "{e}");
+    assert_eq!(listing(1, b"", b"").unwrap_err().code, "unavailable");
+    // A listing that worked.
+    assert_eq!(
+        listing(0, &utf16("Ubuntu\r\n", true), b"").unwrap(),
+        Some(vec!["Ubuntu".to_string()])
+    );
+    assert_eq!(listing(0, b"", b"").unwrap(), Some(vec![]));
+}
