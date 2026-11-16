@@ -58,28 +58,25 @@ fn the_launch_runs_the_program_found_in_the_folder_found_as_the_user() {
     );
     // The launch is exactly pluxy/execution's launch input, which takes no other field: the host
     // passes it on as it is, and applies kind itself.
-    let execution: Value =
-        serde_json::from_str(include_str!("../../execution/pluxy-extension.json")).unwrap();
-    let schema = execution["app"]["operations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|o| o["id"] == "launch")
-        .unwrap()["input_schema"]
-        .clone();
-    assert_eq!(schema["additionalProperties"], false);
-    for k in v["launch"].as_object().unwrap().keys() {
-        assert!(
-            schema["properties"].get(k).is_some(),
-            "execution's launch takes no {k}"
-        );
-    }
-    for k in schema["required"].as_array().unwrap() {
-        assert!(
-            v["launch"].get(k.as_str().unwrap()).is_some(),
-            "{k} is missing"
-        );
-    }
+    assert_eq!(fits_execution_launch(&v["launch"]), Ok(()));
+    // Negative controls on the same check: a field of another type, an item of another type, a
+    // field execution does not take, a required one missing.
+    let mut bad = v["launch"].clone();
+    bad["argv"] = json!("-d Ubuntu");
+    assert!(fits_execution_launch(&bad).unwrap_err().contains("argv"));
+    let mut bad = v["launch"].clone();
+    bad["argv"][0] = json!(1);
+    assert!(fits_execution_launch(&bad)
+        .unwrap_err()
+        .contains("an item of argv"));
+    let mut bad = v["launch"].clone();
+    bad["kind"] = json!("terminal");
+    assert!(fits_execution_launch(&bad)
+        .unwrap_err()
+        .contains("takes no kind"));
+    let mut bad = v["launch"].clone();
+    bad.as_object_mut().unwrap().remove("cwd");
+    assert!(fits_execution_launch(&bad).unwrap_err().contains("cwd"));
     let a = r.resolve_args("Ubuntu", "bob");
     assert_eq!(
         a[..9],
@@ -180,4 +177,46 @@ fn the_script_finds_programs_on_the_path_and_checks_overrides_and_folders() {
         );
     }
     std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// Whether launch fits pluxy/execution's launch input schema: only fields it takes, each of its
+/// type (and an array's items of theirs), every required one present.
+fn fits_execution_launch(launch: &Value) -> Result<(), String> {
+    let execution: Value =
+        serde_json::from_str(include_str!("../../execution/pluxy-extension.json")).unwrap();
+    let schema = &execution["app"]["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["id"] == "launch")
+        .unwrap()["input_schema"];
+    assert_eq!(schema["additionalProperties"], false);
+    let type_of = |v: &Value| match v {
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+        Value::Number(_) => "number",
+        Value::Bool(_) => "boolean",
+        Value::Null => "null",
+    };
+    for (k, field) in launch.as_object().unwrap() {
+        let want = &schema["properties"][k];
+        if !want.is_object() {
+            return Err(format!("execution's launch takes no {k}"));
+        }
+        if want["type"] != type_of(field) {
+            return Err(format!("{k} is {}, not {}", type_of(field), want["type"]));
+        }
+        for item in field.as_array().into_iter().flatten() {
+            if want["items"]["type"] != type_of(item) {
+                return Err(format!("an item of {k} is {}", type_of(item)));
+            }
+        }
+    }
+    for k in schema["required"].as_array().unwrap() {
+        if launch.get(k.as_str().unwrap()).is_none() {
+            return Err(format!("{k} is missing"));
+        }
+    }
+    Ok(())
 }
