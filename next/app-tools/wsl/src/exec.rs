@@ -64,6 +64,10 @@ pub fn wsl_exe() -> Option<PathBuf> {
         .filter(|p| p.is_file())
 }
 
+#[cfg(test)]
+#[path = "exec_tests.rs"]
+mod tests;
+
 /// Keeps this program's own standard handles (the host's pipes) from being inherited by what it
 /// starts: a `wsl.exe` left running must never hold the host's pipes open.
 pub fn keep_own_handles() {
@@ -125,6 +129,9 @@ fn once(
         .ok_or_else(|| Error::unavailable("Windows' folder is unknown"))?;
     let mut child = Command::new(exe)
         .args(args)
+        // Windows' own folder, not wherever the app started this tool: `--exec` without `--cd`
+        // starts the Linux side there.
+        .current_dir(exe.parent().unwrap_or(windows))
         .env_clear()
         .env("SystemRoot", windows)
         .env("WINDIR", windows)

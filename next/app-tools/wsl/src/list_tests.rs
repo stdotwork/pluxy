@@ -111,3 +111,13 @@ fn no_distribution_is_known_by_wsls_error_code_in_any_language() {
     );
     assert_eq!(listing(0, b"", b"").unwrap(), Some(vec![]));
 }
+
+#[test]
+fn nuls_around_a_name_are_trimmed() {
+    assert_eq!(
+        names(&utf16("Ubuntu\0\r\n\0Other\0\0\r\n", true)),
+        ["Ubuntu", "Other"]
+    );
+    // A NUL inside a name is still refused.
+    assert!(names(&utf16("Ub\0untu\r\n", true)).is_empty());
+}

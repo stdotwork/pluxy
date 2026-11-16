@@ -58,12 +58,13 @@ pub fn user_ok(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'_' || *c == b'-')
 }
 
-/// The distribution names in `wsl.exe --list --quiet` output, in its order: each line trimmed,
+/// The distribution names in `wsl.exe --list --quiet` output, in its order: each line trimmed
+/// (of white space, byte-order marks and NULs),
 /// names this program refuses and Docker's own left out, each once.
 pub fn names(output: &[u8]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for line in decode(output).lines() {
-        let name = line.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+        let name = line.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}' || c == '\0');
         if distro_ok(name) && !HIDDEN.contains(&name) && !out.iter().any(|n| n == name) {
             out.push(name.to_string());
         }
