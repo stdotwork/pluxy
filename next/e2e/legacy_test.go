@@ -172,12 +172,15 @@ func TestTodaysConfigAndAuthFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := string(example)
-	cfg = replaceOnce(t, cfg, "\n  host: \"\"\n", "\n  host: \"127.0.0.1\"\n")
-	cfg = replaceOnce(t, cfg, "\n  port: 8317\n", "\n  port: "+strconv.Itoa(freePort(t))+"\n")
-	cfg = replaceOnce(t, cfg, "\n  secret-key: \"\"\n", "\n  secret-key: \""+managementKey+"\"\n")
-	cfg = replaceOnce(t, cfg, "\n  auth-dir: \"~/.cli-proxy-api\"\n", "\n  auth-dir: \""+authDir+"\"\n")
-	cfg += `
+	// cfg is the config of the start that succeeded, so the reload below keeps its port.
+	var cfg string
+	cfgFor := func(port int) []byte {
+		cfg = string(example)
+		cfg = replaceOnce(t, cfg, "\n  host: \"\"\n", "\n  host: \"127.0.0.1\"\n")
+		cfg = replaceOnce(t, cfg, "\n  port: 8317\n", "\n  port: "+strconv.Itoa(port)+"\n")
+		cfg = replaceOnce(t, cfg, "\n  secret-key: \"\"\n", "\n  secret-key: \""+managementKey+"\"\n")
+		cfg = replaceOnce(t, cfg, "\n  auth-dir: \"~/.cli-proxy-api\"\n", "\n  auth-dir: \""+authDir+"\"\n")
+		cfg += `
 openai-compatibility:
   - name: "local"
     base-url: "` + u.URL + `/v1"
@@ -186,8 +189,10 @@ openai-compatibility:
     models:
       - name: "gpt-4o"
 `
+		return []byte(cfg)
+	}
 	path := filepath.Join(work, "config.yaml")
-	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+	if err := os.WriteFile(path, cfgFor(freePort(t)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	bundled := bundledRegistry(t, map[string]string{
@@ -222,7 +227,7 @@ openai-compatibility:
 		t.Error("the import changed today's auth folder")
 	}
 
-	base, logs := runCoreFile(t, path, "-bundled", bundled)
+	base, _, logs := startOnFreePort(t, filepath.Join(binDir, "pluxy"), path, cfgFor, "-bundled", bundled)
 	// Everything the example sets is supported, off or at today's default.
 	if all := logs.waitFor(t, "config revision 1 active"); strings.Contains(all, "not supported yet, ignored") {
 		t.Errorf("core named settings it does not support:\n%s", all)
