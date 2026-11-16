@@ -1684,7 +1684,7 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     // The program's digest at install, from the fixture's own bytes.
     assert_eq!(a.program_sha256(), digest(&tool_bytes("1.0.0")));
     // The person asks in the main window; the tool is what runs.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let action = a.confirmation();
         assert_eq!(action.chain.len(), 1);
@@ -2551,7 +2551,7 @@ fn dependencies_cycles_consent_and_grants() {
     // An optional import may be missing.
     enable(&mut c, "pluxy/opt", &roots).unwrap();
     let a = candidate(&c, "pluxy/relay", &roots).unwrap();
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let what = a.confirmation().what;
         assert!(
@@ -2617,7 +2617,7 @@ fn dependencies_cycles_consent_and_grants() {
     assert!(e.message.contains("Unverified"), "{e:?}");
     let consent = c.consent_candidate("pluxy/guide", &roots).unwrap();
     assert_eq!(consent.targets.len(), 1);
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let what = c
             .consent_confirmation("pluxy/guide", &consent, &roots)
@@ -2736,7 +2736,7 @@ fn registrations_and_job_grants_are_the_catalogs() {
     let me = ("pluxy/jhub", hub.sha256(), hub.installed_at());
     let src = c.admitted("pluxy/jsrc", &roots).unwrap();
     let named = ("pluxy/jsrc", src.sha256(), src.installed_at());
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let what = src.confirmation().what;
         assert!(
