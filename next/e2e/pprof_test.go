@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -63,6 +64,19 @@ func runPprof(t *testing.T, bin string, cfg map[string]any) (string, string, *co
 	return base, path, logs
 }
 
+// runPprofFreePort is runPprof for a config whose pprof section listens on a free port. It returns
+// that port too. The start is retried on another port when the one picked is taken first.
+func runPprofFreePort(t *testing.T, bin string, cfg map[string]any) (string, string, int, *coreLog) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	base, port, logs := startOnFreePort(t, bin, path, func(port int) []byte {
+		cfg["pprof"] = map[string]any{"enable": true, "addr": fmt.Sprintf("127.0.0.1:%d", port)}
+		b, _ := json.Marshal(cfg)
+		return b
+	}, noWatch...)
+	return base, path, port, logs
+}
+
 var pprofClient = &http.Client{Timeout: 10 * time.Second}
 
 // pprofGet GETs url and returns the status and the body.
@@ -122,8 +136,8 @@ func TestPprofDefaultBuildSaysItHasNoProfiling(t *testing.T) {
 
 // With the setting on, the profiling pages answer on their own loopback listener, and only there.
 func TestPprofServesOnItsOwnLoopbackListener(t *testing.T) {
-	addr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
-	base, _, logs := runPprof(t, pprofBinary(t), pprofCfg(t, map[string]any{"enable": true, "addr": addr}))
+	base, _, port, logs := runPprofFreePort(t, pprofBinary(t), pprofCfg(t, nil))
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	logs.waitFor(t, "pprof: listening on http://"+addr)
 
 	code, body := pprofGet(t, "http://"+addr+"/debug/pprof/")
@@ -157,10 +171,9 @@ func TestPprofRefusesNonLoopbackAddressAtLoad(t *testing.T) {
 // A reload that sets a non-loopback address, or an address another program holds, is refused: the
 // old listener keeps serving and the active revision stays.
 func TestPprofReloadRefusedKeepsListener(t *testing.T) {
-	port := freePort(t)
+	cfg := pprofCfg(t, nil)
+	base, path, port, logs := runPprofFreePort(t, pprofBinary(t), cfg)
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	cfg := pprofCfg(t, map[string]any{"enable": true, "addr": addr})
-	base, path, logs := runPprof(t, pprofBinary(t), cfg)
 	logs.waitFor(t, "pprof: listening on http://"+addr)
 
 	check := func(what, wantErr string) {

@@ -356,10 +356,11 @@ func TestUpstreamHeadersImportedAndSecret(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(authDir, "kimi-2.json"), file2, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := `config-version: 8
+	cfg := func(port int) []byte {
+		return []byte(`config-version: 8
 server:
   host: "127.0.0.1"
-  port: ` + strconv.Itoa(freePort(t)) + `
+  port: ` + strconv.Itoa(port) + `
 management:
   secret-key: "` + managementKey + `"
 access:
@@ -392,9 +393,10 @@ api-keys:
         - name: m-compat
       keys:
         - api-key: ` + upstreamKey + `
-`
+`)
+	}
 	path := filepath.Join(work, "config.yaml")
-	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+	if err := os.WriteFile(path, cfg(freePort(t)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out, err := exec.Command(filepath.Join(binDir, "pluxy"), "-config", path, "-import-auth", authDir).CombinedOutput()
@@ -412,7 +414,7 @@ api-keys:
 		"pluxy/claude":            filepath.Join("claude", "claude"),
 		"pluxy/kimi":              filepath.Join("kimi", "kimi"),
 	})
-	base, logs := runCoreFile(t, path, "-bundled", bundled)
+	base, _, logs := startOnFreePort(t, filepath.Join(binDir, "pluxy"), path, cfg, "-bundled", bundled)
 	logs.waitFor(t, "config revision 1 active")
 
 	var replies []string
