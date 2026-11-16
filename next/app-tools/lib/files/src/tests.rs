@@ -726,7 +726,11 @@ fn a_program_is_a_file_this_system_would_start_by_its_path() {
         assert!(!executable(&named("tool.cmd")));
         assert!(!executable(&named("tool.exe.txt")));
         // Named a program but not one: a script, an empty file, a single byte.
-        for (name, bytes) in [("script.exe", &b"#!/bin/sh"[..]), ("empty.exe", b""), ("short.com", b"M")] {
+        for (name, bytes) in [
+            ("script.exe", &b"#!/bin/sh"[..]),
+            ("empty.exe", b""),
+            ("short.com", b"M"),
+        ] {
             let p = dir.join(name);
             fs::write(&p, bytes).unwrap();
             assert!(!executable(&p), "{name}");

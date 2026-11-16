@@ -326,7 +326,10 @@ fn the_default_file_follows_hermess_active_profile_on_each_system() {
     // Windows with no LOCALAPPDATA, a blank one (Hermes strips it) or one that is not a full path:
     // AppData\Local in the home folder, as Hermes falls back.
     let fallback = home.join("AppData").join("Local").join("hermes");
-    assert_eq!(default_home("windows", &env(&[("HOME", &home)])).unwrap(), fallback);
+    assert_eq!(
+        default_home("windows", &env(&[("HOME", &home)])).unwrap(),
+        fallback
+    );
     for bad in ["  ", "AppData\\Local", "relative"] {
         let vars = env(&[("HOME", &home), ("LOCALAPPDATA", Path::new(bad))]);
         assert_eq!(default_home("windows", &vars).unwrap(), fallback, "{bad:?}");
