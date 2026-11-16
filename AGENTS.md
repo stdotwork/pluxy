@@ -146,7 +146,8 @@ app; they are not part of the routine checks above.
 
 Workflows live in `.github/workflows/`, one set per folder, each limited to its folder's paths.
 Pull requests and merge-queue groups run them through `ci.yml`, whose `gate` job is the one
-required check; pushes to `main` and manual runs start them directly.
+required check; otherwise each workflow's own triggers start it (pushes to `main`,
+manual runs or tags, as its file says).
 
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
@@ -160,6 +161,7 @@ required check; pushes to `main` and manual runs start them directly.
 | `next-app-tools-platforms.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/app-tools/` or the workflow | The app tools on `windows-latest` and `macos-latest` (clippy and tests, with the counts in the job summary), leaving out the tools not yet ported (the workflow's `NOT_PORTED`; `next/app-tools/README.md` names them), and the `WSL 2` and `WSL 1` jobs, which run the real-WSL tests on GitHub-hosted `windows-latest`. The workflow file says what each job checks |
 | `next-corpus.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/` or `core/` | Builds `core/` and runs the corpus against both cores live; the report is in the job summary |
 | `next-release.yml` | `next-v*` tags; PRs touching `next/Dockerfile`, `next/.dockerignore`, `next/compose.example.yaml`, `next/cmd/pluxy-pack/` or the workflow | PRs: builds the container image (amd64, and arm64 without running it), starts it with a temporary config, polls `/healthz`, checks the panel and the bundled packages, and packs every extension for the release platforms. Tags: also uploads the archives and `registry.json` to the GitHub release and pushes the image to `ghcr.io` once the checks pass |
+| `next-app-tools-pack.yml` | PRs and merge-queue groups (through `ci.yml`) touching the app tools' manifests or workspace, `next/cmd/pluxy-pack/` or the workflow; `next-v*` tags | Builds the app tools on each platform's own runner and packs them with `pluxy-pack -app-tools`, uploading nothing; the workflow file has the detail |
 
 When you add a workflow, add a row here. A workflow that must pass before a merge to `main`
 runs through `ci.yml`: give it a `workflow_call` trigger instead of a `pull_request` one, add a
@@ -177,7 +179,7 @@ the maintainers' own machines instead:
 - `PLUXY_WINDOWS_RUNNER` takes the Windows leg of the `tools` job in
   `next-app-tools-platforms.yml`. The `app` job in `next-app-platforms.yml` (its registry tests
   only run on GitHub's runners), macOS jobs, the `native` job in `next-app-platforms.yml` and the
-  release workflows always stay on GitHub's runners.
+  workflows a tag starts always stay on GitHub's runners.
 
 Each variable holds a runner label as JSON, for example `"self-hosted"` or
 `["self-hosted", "linux"]`. When a variable is not set, its jobs run on the GitHub runner they

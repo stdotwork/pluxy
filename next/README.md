@@ -18,7 +18,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | Path | What it is |
 | --- | --- |
 | `cmd/pluxy` | The core program. |
-| `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index. |
+| `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index; packs the desktop app's native tools with `-app-tools`. |
 | `protocol/` | The extension protocol: [README](protocol/README.md), [tutorial](protocol/TUTORIAL.md), wire types and framing. |
 | `llm/` | The internal model of a request and its streamed reply, shared by core and extensions. |
 | `sdk/` | Go SDK for writing extensions. |
@@ -301,6 +301,19 @@ and platform, and `dist/bundled/index.json`, which pins each archive's SHA-256 a
 the same sources twice gives byte-identical archives and index. `-platforms` defaults to the host
 platform; `-extensions codex,claude` packs only those extension folders, by folder name or
 package ID. `go run ./cmd/pluxy-pack -h` lists the flags.
+
+With `-app-tools <folder>` it packs the desktop app's native tools under `app-tools/` instead
+(not the test fixture `usage-fixture`), each for the platforms among `-platforms` that its
+manifest names. It builds nothing: Rust tools are built on each platform's own runner, and it
+takes each program from `<folder>/<goos>-<goarch>/<program file name>`, failing when one is
+missing. It writes `dist/app-tools/<publisher>-<name>-<version>-<goos>-<goarch>.tar.gz` and
+`dist/app-tools/index.json`, an index for the app's device registries (no `protocol`). The app
+installs a native tool only with a curated signature, which this does not add, so nothing
+publishes these yet; `.github/workflows/next-app-tools-pack.yml` builds and packs them to check:
+
+```bash
+go run ./cmd/pluxy-pack -out dist -app-tools programs -platforms linux/amd64,windows/amd64
+```
 
 Core installs and enables every package the bundled index lists on its first start with an
 empty packages folder:
