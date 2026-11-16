@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { PROFILE_FILE } from "./admission";
 import { makeProfile } from "./profile";
+import { shotEnv } from "./shots";
 
 export interface UpdateRun {
   /** package.ts test's test-package.json. */
@@ -66,6 +67,7 @@ export async function runUpdate(o: UpdateRun): Promise<{ problems: string[]; set
       { mode: 0o600 },
     );
     env.PLUXY_TEST_TRUST_NONCE = nonce;
+    Object.assign(env, shotEnv("update"));
     const session = [
       process.execPath,
       join(import.meta.dir, "session.ts"),

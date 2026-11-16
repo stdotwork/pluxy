@@ -236,11 +236,25 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         let before = snapshot();
         // Observe the actual channel response after main has handled the claim, not merely
         // the POST completing at ingress. A valid config.get on the same route is the control.
-        main.eval("window.__claimReplies = {}; const originalPost = MessagePort.prototype.postMessage; MessagePort.prototype.postMessage = function(data, ...rest) { if (data?.id === 'spoof-confirm' || data?.id === 'confirm-control') window.__claimReplies[data.id] = data; return originalPost.call(this, data, ...rest); }").map_err(|e| e.to_string())?;
-        page.eval("fetch('/frame').then(r => r.json()).then(info => fetch('/send', {method: 'POST', body: JSON.stringify({generation: info.generation, type: 'call', data: {v: 0, id: 'confirm-control', method: 'config.get', params: null}})}))").map_err(|e| e.to_string())?;
+        // The window passes a call on to its channel through a MessagePort too: each id seen,
+        // call or reply, is kept apart, to tell on a timeout which side never answered.
+        main.eval("window.__claimReplies = {}; window.__claimSeen = []; const originalPost = MessagePort.prototype.postMessage; MessagePort.prototype.postMessage = function(data, ...rest) { if (data?.id === 'spoof-confirm' || data?.id === 'confirm-control') { window.__claimReplies[data.id] = data; window.__claimSeen.push({id: data.id, reply: 'result' in data || 'error' in data}); } return originalPost.call(this, data, ...rest); }").map_err(|e| e.to_string())?;
+        page.eval("window.__controlSent = null; fetch('/frame').then(r => r.json()).then(info => fetch('/send', {method: 'POST', body: JSON.stringify({generation: info.generation, type: 'call', data: {v: 0, id: 'confirm-control', method: 'config.get', params: null}})})).then(async r => window.__controlSent = {status: r.status, body: await r.text()}, e => window.__controlSent = {error: String(e)})").map_err(|e| e.to_string())?;
         let control = wait_for("positive page channel control", || {
             eval(main, "window.__claimReplies['confirm-control'] ?? null")
                 .filter(|v| v.get("result").is_some() || v.get("error").is_some())
+        })
+        .map_err(|e| {
+            let st = app.state::<crate::App>();
+            let channel = st.pages.lock().unwrap().channel_state(page.label());
+            format!(
+                "{e}: {}",
+                serde_json::json!({
+                    "sent": eval(page, "window.__controlSent"),
+                    "window_seen": eval(main, "window.__claimSeen"),
+                    "native": channel,
+                })
+            )
         })?;
         require(
             control.get("result").is_some(),

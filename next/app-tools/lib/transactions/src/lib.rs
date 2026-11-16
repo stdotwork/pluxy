@@ -28,22 +28,29 @@ mod b64;
 mod backups;
 mod merge;
 mod target;
+#[cfg(feature = "toml")]
+pub mod toml;
+#[cfg(feature = "yaml")]
+pub mod yaml;
 
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, feature = "toml"))]
+mod toml_tests;
+#[cfg(all(test, feature = "yaml"))]
+mod yaml_tests;
 
 pub use backups::{backup_call, backup_operations, json_leaves, Leaves, KEEP_BACKUPS};
 pub use merge::{merge_value, Json, Merge};
 pub use target::{
-    pin_schema, sha256, sha256_of, Failed, Id, Pin, Selection, Target, WriteMode, MAX_FILE,
+    pin_schema, sha256, sha256_of, Failed, Id, Mode, Pin, Selection, Target, WriteMode, MAX_FILE,
 };
 
 use cap_std::ambient_authority;
-use cap_std::fs::{Dir, OpenOptions};
+use cap_std::fs::Dir;
 use pluxy_program::{Call, Error};
 use serde_json::{json, Map, Value};
-use std::io::{ErrorKind, Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
 /// The `kind` of the journals this library begins.
@@ -111,14 +118,14 @@ fn check_set(set: &str) -> Result<(), Error> {
     }
 }
 
-/// One file of an operation: its target, its bytes and permission bits now, the bytes it gets,
-/// and the permission bits a file it creates gets (else 0600).
+/// One file of an operation: its target, its bytes and permissions now, the bytes it gets, and the
+/// permissions a file it creates gets (else a new file's, see [`Mode`]).
 struct Change {
     target: Target,
     before: Option<Vec<u8>>,
-    mode: Option<u32>,
+    mode: Option<Mode>,
     after: Option<Vec<u8>>,
-    after_mode: Option<u32>,
+    after_mode: Option<Mode>,
 }
 
 /// Where a pin is, as records name it: the selection and the target.
@@ -135,13 +142,13 @@ fn place(pin: &Pin) -> Value {
 fn record(
     pin: &Pin,
     original: Option<String>,
-    original_mode: Option<u32>,
+    original_mode: Option<&Mode>,
     applied: Option<String>,
     applied_sha: Option<String>,
 ) -> Value {
     let mut r = place(pin);
     r["original"] = json!(original);
-    r["original_mode"] = json!(original_mode);
+    r["original_mode"] = json!(original_mode.map(Mode::to_json));
     r["applied"] = json!(applied);
     r["applied_sha256"] = json!(applied_sha);
     r
@@ -196,30 +203,55 @@ pub struct Transactions<'a> {
 
 impl<'a> Transactions<'a> {
     pub fn new(vault: &'a dyn Vault, data: impl Into<PathBuf>) -> Transactions<'a> {
-        Transactions {
-            vault,
-            data: data.into(),
-        }
+        // Without trailing separators: `link/` would make the data folder's checks follow a link.
+        let data: PathBuf = data.into().components().collect();
+        Transactions { vault, data }
     }
 
     // ---- state file
 
-    fn data_folder(&self) -> Result<Dir, Error> {
-        Dir::open_ambient_dir(&self.data, ambient_authority())
-            .map_err(|e| Error::unavailable(format!("the data folder: {e}")))
+    /// The data folder, opened: None when it does not exist yet, unless make is set; then it is
+    /// made (private: 0700 on Unix, with any folders missing above it), as at the first state
+    /// write. Nothing is made before that, so a preview leaves no trace (in WSL the host cannot
+    /// make it at start). A link there, or a folder another user owns, is refused; on Windows also
+    /// one that another user may write.
+    fn data_folder(&self, make: bool) -> Result<Option<Dir>, Error> {
+        let bad = |e: &dyn std::fmt::Display| Error::unavailable(format!("the data folder: {e}"));
+        let m = match std::fs::symlink_metadata(&self.data) {
+            Ok(m) => m,
+            Err(e) if e.kind() == ErrorKind::NotFound && !make => return Ok(None),
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                make_data_folder(&self.data).map_err(|e| bad(&e))?;
+                std::fs::symlink_metadata(&self.data).map_err(|e| bad(&e))?
+            }
+            Err(e) => return Err(bad(&e)),
+        };
+        if !m.is_dir() || m.file_type().is_symlink() || !users_own(&self.data, &m) {
+            return Err(Error::unavailable(format!(
+                "the data folder {} is not a folder of this user's (a link, or another's)",
+                self.data.display()
+            )));
+        }
+        let before = data_folder_id(&self.data, &m).map_err(|e| bad(&e))?;
+        let d = Dir::open_ambient_dir(&self.data, ambient_authority()).map_err(|e| bad(&e))?;
+        if opened_id(&d).map_err(|e| bad(&e))? != before {
+            return Err(bad(&"it was replaced while it was opened"));
+        }
+        Ok(Some(d))
     }
 
     fn load(&self) -> Result<Value, Error> {
-        let d = self.data_folder()?;
+        let empty = || json!({"version": 1, "sets": {}, "committed": [], "recovered": []});
+        let Some(d) = self.data_folder(false)? else {
+            return Ok(empty());
+        };
         let mut bytes = Vec::new();
         match d.open(STATE) {
             Ok(f) => f
                 .into_std()
                 .read_to_end(&mut bytes)
                 .map_err(|e| Error::unavailable(format!("the state file: {e}")))?,
-            Err(e) if e.kind() == ErrorKind::NotFound => {
-                return Ok(json!({"version": 1, "sets": {}, "committed": [], "recovered": []}))
-            }
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(empty()),
             Err(e) => return Err(Error::unavailable(format!("the state file: {e}"))),
         };
         let v: Value = serde_json::from_slice(&bytes)
@@ -233,18 +265,15 @@ impl<'a> Transactions<'a> {
     }
 
     fn save(&self, state: &Value) -> Result<(), Error> {
-        let d = self.data_folder()?;
+        let d = self
+            .data_folder(true)?
+            .ok_or_else(|| Error::internal("the data folder was not made"))?;
         let tmp = format!(".{STATE}.{}.tmp", target::random_hex()?);
         let bytes = serde_json::to_vec(state).map_err(|e| Error::internal(e.to_string()))?;
         let r = (|| -> std::io::Result<()> {
-            let mut f = d
-                .open_with(&tmp, OpenOptions::new().write(true).create_new(true))?
-                .into_std();
-            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-            f.write_all(&bytes)?;
-            f.sync_all()?;
-            d.rename(&tmp, &d, STATE)?;
-            d.open(".")?.sync_all()
+            let f = target::write_private_temp(&d, Path::new(&tmp), &bytes)?;
+            target::rename_temp(f, &d, Path::new(&tmp), Path::new(STATE))?;
+            target::sync_dir(&d)
         })();
         r.map_err(|e| {
             let _ = d.remove_file(&tmp);
@@ -397,7 +426,7 @@ impl<'a> Transactions<'a> {
         for (i, c) in changes.into_iter().enumerate() {
             let after = image(i, &c.target.pin, c.before.as_deref())?;
             let (original, original_mode) = if rec.is_null() {
-                (c.before.clone(), c.mode)
+                (c.before.clone(), c.mode.clone())
             } else {
                 let t = &rec["targets"][i];
                 let o = merge.merge(
@@ -405,7 +434,7 @@ impl<'a> Transactions<'a> {
                     self.get(&t["applied"])?.as_deref(),
                     c.before.as_deref(),
                 )?;
-                (o, t["original_mode"].as_u64().map(|m| m as u32))
+                (o, Mode::from_json(&t["original_mode"]))
             };
             out.push((original, original_mode, Change { after, ..c }));
         }
@@ -428,7 +457,7 @@ impl<'a> Transactions<'a> {
             targets.push(record(
                 &c.target.pin,
                 o,
-                *mode,
+                mode.as_ref(),
                 a,
                 sha256_of(c.after.as_deref()),
             ));
@@ -487,7 +516,7 @@ impl<'a> Transactions<'a> {
             for (i, c) in changes.iter_mut().enumerate() {
                 let t = &rec["targets"][i];
                 let original = self.get(&t["original"])?;
-                c.after_mode = t["original_mode"].as_u64().map(|m| m as u32);
+                c.after_mode = Mode::from_json(&t["original_mode"]);
                 c.after = match merge {
                     Some(m) => m.merge(
                         original.as_deref(),
@@ -518,7 +547,7 @@ impl<'a> Transactions<'a> {
         };
         for (c, k) in changes.iter_mut().zip(found) {
             c.after = self.get(&k["original"])?;
-            c.after_mode = k["original_mode"].as_u64().map(|m| m as u32);
+            c.after_mode = Mode::from_json(&k["original_mode"]);
         }
         // The set's own record, for other targets, stays as it is.
         self.run(op, set, changes, None, written)
@@ -598,7 +627,7 @@ impl<'a> Transactions<'a> {
                 Some(c.target.pin.file_id),
                 &from,
                 c.after.as_deref(),
-                c.after_mode,
+                c.after_mode.as_ref(),
                 // An apply writes the writer's values, a key among them: owner-only.
                 if op == "apply" {
                     WriteMode::OwnerOnly
@@ -674,7 +703,7 @@ impl<'a> Transactions<'a> {
                 "pin": c.target.pin.to_json(),
                 "before": sha256_of(c.before.as_deref()),
                 "after": sha256_of(c.after.as_deref()),
-                "mode": c.mode,
+                "mode": c.mode.as_ref().map(Mode::to_json),
                 "backup": self.put_image("before", c.before.as_deref())?,
                 "intended": self.put_image("intended", c.after.as_deref())?,
             }));
@@ -736,7 +765,7 @@ impl<'a> Transactions<'a> {
                 Some(*id),
                 &after,
                 c.before.as_deref(),
-                c.mode,
+                c.mode.as_ref(),
                 WriteMode::Exact,
             ) {
                 failed.push(format!(
@@ -873,12 +902,12 @@ impl<'a> Transactions<'a> {
                         }
                         Err(e) => return Err(e),
                     };
-                    let mode = f["mode"].as_u64().map(|m| m as u32);
+                    let mode = Mode::from_json(&f["mode"]);
                     t.replace(
                         None,
                         &t.pin.sha256,
                         before.as_deref(),
-                        mode,
+                        mode.as_ref(),
                         WriteMode::Exact,
                     )
                     .map_err(|f| f.error)?;
@@ -928,10 +957,22 @@ impl<'a> Transactions<'a> {
     }
 }
 
-/// Refuses two pins of one target.
+/// Refuses two pins of one target: the same path, the same existing file (hard links, or one
+/// spelling a case-insensitive file system or a Windows short name takes as another), or, on macOS
+/// and Windows, whose file systems ignore case by default, names in one folder equal but for case.
 fn distinct(pins: &[Pin]) -> Result<(), Error> {
+    let name = |p: &Pin| {
+        p.target
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+    };
+    let same = |p: &Pin, q: &Pin| {
+        p.target == q.target
+            || (p.file_id.is_some() && p.file_id == q.file_id)
+            || (cfg!(not(target_os = "linux")) && p.parent_id == q.parent_id && name(p) == name(q))
+    };
     for (i, p) in pins.iter().enumerate() {
-        if pins[..i].iter().any(|q| q.target == p.target) {
+        if pins[..i].iter().any(|q| same(p, q)) {
             return Err(Error::invalid_request(format!(
                 "{} is named twice",
                 p.target.display()
@@ -1006,4 +1047,66 @@ fn remember_all(state: &mut Value, key: &str, v: Value) {
         state[key] = json!([]);
     }
     state[key].as_array_mut().expect("an array").push(v);
+}
+
+/// Makes the data folder, private, with any folders missing above it.
+#[cfg(unix)]
+fn make_data_folder(data: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(data)
+}
+
+/// Makes the data folder, private (an access list of this user and SYSTEM only), with any
+/// folders missing above it (those as their folder passes down).
+#[cfg(windows)]
+fn make_data_folder(data: &Path) -> std::io::Result<()> {
+    if let Some(above) = data.parent() {
+        std::fs::create_dir_all(above)?;
+    }
+    match pluxy_files::create_private_dir(data) {
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),
+        r => r,
+    }
+}
+
+/// Whether the data folder (m, its metadata) is this user's: owned by this user.
+#[cfg(unix)]
+fn users_own(_data: &Path, m: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: geteuid has no preconditions.
+    m.uid() == unsafe { libc::geteuid() }
+}
+
+/// Whether the data folder is this user's: owned by this user (or SYSTEM or the Administrators)
+/// and writable by no one else.
+#[cfg(windows)]
+fn users_own(data: &Path, _m: &std::fs::Metadata) -> bool {
+    pluxy_files::others_may_write(data).is_ok_and(|others| !others)
+}
+
+#[cfg(unix)]
+fn data_folder_id(_data: &Path, m: &std::fs::Metadata) -> std::io::Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    Ok((m.dev(), m.ino()))
+}
+
+#[cfg(unix)]
+fn opened_id(d: &Dir) -> std::io::Result<(u64, u64)> {
+    use cap_std::fs::MetadataExt;
+    let m = d.dir_metadata()?;
+    Ok((m.dev(), m.ino()))
+}
+
+/// The data folder's identity now (not following a link): its metadata holds none on Windows.
+#[cfg(windows)]
+fn data_folder_id(data: &Path, _m: &std::fs::Metadata) -> std::io::Result<pluxy_files::Id> {
+    pluxy_files::id_of_path(data)
+}
+
+#[cfg(windows)]
+fn opened_id(d: &Dir) -> std::io::Result<pluxy_files::Id> {
+    pluxy_files::id_of(&d.try_clone()?.into_std_file())
 }

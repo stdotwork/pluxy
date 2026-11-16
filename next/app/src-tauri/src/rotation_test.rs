@@ -233,14 +233,26 @@ fn sign_in(app: &AppHandle, main: &Webview, key: &str, keep: bool) -> Result<(),
     )?;
     // The window learns of a sign-in from its own key-entry call, which this one bypasses, and
     // may have shown the signed-out state meanwhile: tell it the connection changed, as the app
-    // does, and wait for its signed-in shell.
+    // does, and wait for its signed-in shell. The window takes the change by making its shell
+    // anew (`main.tsx`, `key={generation}`), closing the pages the old one had open, so the wait
+    // is for a new shell: the old one may still be signed in (`sign_out` above is the window's
+    // own call, which does not change what it shows), and a page opened in it is closed again.
+    let old_shell = eval(
+        main,
+        "(window.__rotationNav = document.querySelector('[data-part=nav]')) !== null",
+    );
     use tauri::Emitter;
     app.emit_to(tauri::EventTarget::webview(MAIN), "pluxy-connection", ())
         .map_err(|e| e.to_string())?;
-    wait_for("the window's signed-in shell", || {
-        eval(main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
-    })
-    .map(|_| ())
+    wait_for("the window's new signed-in shell", || {
+        eval(
+            main,
+            "(() => { const n = document.querySelector('[data-part=nav]'); return n !== null && n !== window.__rotationNav; })()",
+        )
+        .filter(|v| v == true)
+    })?;
+    log("rotation_sign_in", json!({"old_shell": old_shell}));
+    Ok(())
 }
 
 /// Makes the folder of connection.json read-only until dropped, so saving the settings fails.
@@ -469,11 +481,23 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<Webview, String> 
                 .first()
                 .cloned()
         })?;
-        let page_view = wait_for("the extension page", || app.get_webview(&label))?;
+        // Which pages are bound, and which webviews there are: to tell, on a failure here, the
+        // page waited for from the one the window shows.
+        let pages_now = || {
+            let mut bound = app.state::<App>().pages.lock().unwrap().labels();
+            bound.sort();
+            let mut webviews: Vec<String> = app.webviews().into_keys().collect();
+            webviews.sort();
+            json!({"label": label, "bound": bound, "webviews": webviews})
+        };
+        let page_view = wait_for("the extension page", || app.get_webview(&label))
+            .map_err(|e| format!("{e}: {}", pages_now()))?;
         wait_for("the extension page's frame", || {
             eval(&page_view, "document.querySelector('iframe')?.src ?? null")
                 .filter(|v| v.is_string())
-        })?;
+        })
+        .map_err(|e| format!("{e}: {}", pages_now()))?;
+        log("rotation_page", pages_now());
         watch(&page_view)?;
         start_rotation(&main)?;
         answer(app, &target, SAYS_SESSION, confirm_key())?;

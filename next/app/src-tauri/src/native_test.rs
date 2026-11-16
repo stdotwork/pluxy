@@ -30,13 +30,17 @@
 //!    program and the launcher (`launcher_native.rs`); with `PLUXY_APP_TEST_OPEN`, only a tool's
 //!    opening of a file in the person's own app (`open_native.rs`); with
 //!    `PLUXY_APP_TEST_CLAUDE_CODE`, only the Claude Code setup and launcher
-//!    (`claude_code_native.rs`), with its backup browser (`backups_native.rs`); with
+//!    (`claude_code_native.rs`), with its backup browser (`backups_native.rs`) and Beginner Mode's
+//!    guided setup (`easy_mode_native.rs`); with
 //!    `PLUXY_APP_TEST_CODEX`, only the Codex setup and launcher (`codex_native.rs`); with
 //!    `PLUXY_APP_TEST_SAVE`, only the host's save-file service (`save_native.rs`);
 //!    `PLUXY_APP_TEST_CLAUDE_DESKTOP`, only the Claude Desktop setup and launcher
 //!    (`claude_desktop_native.rs`); with `PLUXY_APP_TEST_OPENCODE`, only the OpenCode setup and
 //!    launcher (`opencode_native.rs`); with `PLUXY_APP_TEST_OMP`, only the Oh My Pi setup and
-//!    launcher (`omp_native.rs`);
+//!    launcher (`omp_native.rs`); with `PLUXY_APP_TEST_GROK`, only the Grok Build setup and
+//!    launcher (`grok_native.rs`); with `PLUXY_APP_TEST_HERMES`, only the Hermes Agent setup and
+//!    launcher (`hermes_native.rs`); with `PLUXY_APP_TEST_PI`, only the Pi setup and launcher
+//!    (`pi_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -85,6 +89,15 @@ mod codex;
 mod core_updates;
 #[path = "device_native.rs"]
 mod device;
+#[cfg(target_os = "linux")]
+#[path = "easy_mode_native.rs"]
+mod easy_mode;
+#[cfg(target_os = "linux")]
+#[path = "grok_native.rs"]
+mod grok;
+#[cfg(target_os = "linux")]
+#[path = "hermes_native.rs"]
+mod hermes;
 #[path = "native_ingress.rs"]
 mod ingress;
 #[cfg(target_os = "linux")]
@@ -102,6 +115,9 @@ mod open;
 #[cfg(target_os = "linux")]
 #[path = "opencode_native.rs"]
 mod opencode;
+#[cfg(target_os = "linux")]
+#[path = "pi_native.rs"]
+mod pi;
 #[cfg(target_os = "linux")]
 #[path = "program_native.rs"]
 mod program;
@@ -166,6 +182,46 @@ const OFFSITE: &[&str] = &[
 
 /// Each navigation a page webview's handler decided, in order (lib.rs page_navigation).
 static NAVIGATIONS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+
+/// The page webviews whose app document took the window's welcome (lib.rs deliver_page).
+static WELCOMED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// A message the page webview label's app document took (`__pluxyDeliver` answered true).
+pub fn page_delivered(label: &str, msg: &Value) {
+    if msg["type"] == "welcome" {
+        WELCOMED.lock().unwrap().push(label.to_string());
+    }
+}
+
+/// Waits until page label's channel is open: its frame's hello admitted, and the window's
+/// welcome taken by the page's app document, which hands the frame its port at once. Only then
+/// does the native side admit the page's calls and the window answer them; a page whose frame
+/// has an address may not have loaded it yet. A timeout says which side never answered.
+pub(crate) fn channel_open(app: &AppHandle, main: &Webview, label: &str) -> Result<(), String> {
+    let state = || {
+        app.state::<App>()
+            .pages
+            .lock()
+            .unwrap()
+            .channel_state(label)
+    };
+    let welcomed = || WELCOMED.lock().unwrap().iter().any(|l| l == label);
+    wait_for("the page's channel", || {
+        let s = state();
+        (s["hello"] == true && s["welcome"] == true && s["closed"] == false && welcomed())
+            .then_some(())
+    })
+    .map_err(|e| {
+        let phase = eval(
+            main,
+            "document.querySelector('[data-part=extension-frame]')?.dataset.phase ?? null",
+        );
+        format!(
+            "{e}: {}",
+            json!({"label": label, "native": state(), "welcome_taken": welcomed(), "window_phase": phase})
+        )
+    })
+}
 
 /// Records a page webview's navigation and whether it was allowed.
 pub fn navigated(label: &str, url: &Url, allowed: bool) {
@@ -781,6 +837,30 @@ fn run(app: &AppHandle) -> Result<(), String> {
         crate::quit(app);
         return Ok(());
     }
+    // The Grok Build setup and launcher (grok_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_GROK") {
+        grok::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The Hermes Agent setup and launcher (hermes_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_HERMES") {
+        hermes::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The Pi setup and launcher (pi_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_PI") {
+        pi::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
     // The read-only Codex session reader (sessions_native.rs), in a session of its own.
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_SESSIONS") {
@@ -876,6 +956,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
         log("page", r);
         #[cfg(target_os = "linux")]
         log("page_allocation", shrunk_page(app, &main, &label));
+        // The confirmation checks call through the page's channel.
+        channel_open(app, &main, &label)?;
         crate::confirmation::native::run(app, &main, &wv)?;
 
         // The page's own report, written through the channel into its settings.

@@ -1387,6 +1387,7 @@ fn deliver_page(app: &AppHandle, label: &str, generation: &str, msg: Value) -> R
             #[cfg(feature = "native-test")]
             if result == "true" {
                 native_test::privacy::delivered(&sent);
+                native_test::page_delivered(&callback_label, &sent);
             }
             finish_page_delivery(
                 &callback_app,
