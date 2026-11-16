@@ -167,6 +167,46 @@ const OFFSITE: &[&str] = &[
 /// Each navigation a page webview's handler decided, in order (lib.rs page_navigation).
 static NAVIGATIONS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
 
+/// The page webviews whose app document took the window's welcome (lib.rs deliver_page).
+static WELCOMED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// A message the page webview label's app document took (`__pluxyDeliver` answered true).
+pub fn page_delivered(label: &str, msg: &Value) {
+    if msg["type"] == "welcome" {
+        WELCOMED.lock().unwrap().push(label.to_string());
+    }
+}
+
+/// Waits until page label's channel is open: its frame's hello admitted, and the window's
+/// welcome taken by the page's app document, which hands the frame its port at once. Only then
+/// does the native side admit the page's calls and the window answer them; a page whose frame
+/// has an address may not have loaded it yet. A timeout says which side never answered.
+pub(crate) fn channel_open(app: &AppHandle, main: &Webview, label: &str) -> Result<(), String> {
+    let state = || {
+        app.state::<App>()
+            .pages
+            .lock()
+            .unwrap()
+            .channel_state(label)
+    };
+    let welcomed = || WELCOMED.lock().unwrap().iter().any(|l| l == label);
+    wait_for("the page's channel", || {
+        let s = state();
+        (s["hello"] == true && s["welcome"] == true && s["closed"] == false && welcomed())
+            .then_some(())
+    })
+    .map_err(|e| {
+        let phase = eval(
+            main,
+            "document.querySelector('[data-part=extension-frame]')?.dataset.phase ?? null",
+        );
+        format!(
+            "{e}: {}",
+            json!({"label": label, "native": state(), "welcome_taken": welcomed(), "window_phase": phase})
+        )
+    })
+}
+
 /// Records a page webview's navigation and whether it was allowed.
 pub fn navigated(label: &str, url: &Url, allowed: bool) {
     NAVIGATIONS
@@ -877,6 +917,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
         log("page", r);
         #[cfg(target_os = "linux")]
         log("page_allocation", shrunk_page(app, &main, &label));
+        // The confirmation checks call through the page's channel.
+        channel_open(app, &main, &label)?;
         crate::confirmation::native::run(app, &main, &wv)?;
 
         // The page's own report, written through the channel into its settings.
