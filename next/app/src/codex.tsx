@@ -64,7 +64,7 @@ const t = strings("codex", {
   configured: "Configured",
   needsUpdate: "Configuration Modified",
   providerChange:
-    "Codex lists past conversations by provider. After Apply, conversations started with {provider} stay hidden from resume until their history is synced; history sync is offered in session management and is never done automatically.",
+    "Codex lists past conversations by provider. After Apply, conversations started with {provider} stay hidden from resume. The app does not sync or change past conversations.",
   profile: "The active Codex profile {profile} may override these settings.",
   model: "Model",
   modelHint: "The model Codex starts with; one of the catalog's models.",
