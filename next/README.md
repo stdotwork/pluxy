@@ -1813,10 +1813,10 @@ included), `reasoning_tokens`, `cached_tokens`, `cache_creation_tokens` and `tot
 plus output). A token count the upstream did not report is absent, not 0. A streamed reply
 that fails after it began keeps its `status` 200 with `failed` true; a client that goes away is
 recorded as `cancelled`, with no `status` when nothing had reached it. A WebSocket turn is
-recorded before its closing messages are written (the `.done` messages that end its output, then
-`response.completed` or `response.incomplete`), so a client that has the last of them finds the
-turn in the record; a client that goes away while they are written leaves the turn recorded as
-finished, with the tokens the upstream reported.
+recorded before its last message (`response.completed` or `response.incomplete`) is written, so
+a client that has that message finds the turn in the record; a client that goes away while it
+is written leaves the turn recorded as finished, with the tokens the upstream reported. For a
+reply core translates, that holds for the `.done` messages written just before it too.
 
 The record lives in memory and is gone after a restart. It keeps the last `max_events` requests
 (default 10000, at most 200000) and none recorded (when the request ended) longer ago than
