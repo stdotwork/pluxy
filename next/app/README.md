@@ -899,7 +899,7 @@ Code page it is the window's own page, because **Apply** gives the tool the clie
 (`~/.codex`), selected files (links followed and kept), or a selected folder (such as a
 `CODEX_HOME`); it shows the status, the files it writes to, whether a key is in config.toml and the
 provider Codex uses now. When that provider is not pluxy's, it says that Codex hides conversations
-of another provider from resume until their history is synced, which session management offers;
+of another provider from resume, and that the app does not sync or change past conversations;
 nothing is rewritten. Files Codex would not take (config.toml not TOML, for example, or a catalog
 with no models list) show why instead of the form: Apply and Close configuration stay off, and
 Restore Backup and the backups stay reachable. Choosing other files drops the last preview, so read
