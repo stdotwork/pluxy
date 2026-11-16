@@ -167,7 +167,8 @@ counts the system text, each message's role and text, reasoning, tool calls and 
 tools' names, descriptions and parameters, and the tool choice; images and files add nothing.
 `token_count_estimate` (top level, default `true`) turns the estimate off: core then answers an
 error saying the account cannot count. When every account tried can count, an error from an
-upstream that counts (a 400, 401 or 429) stays an error.
+upstream that counts (a 400, 401 or 429) stays an error, and so does a refusal under
+`drop_policy` `"reject"`.
 
 A model name may end in a thinking setting in brackets, as today's core reads it: a level
 (`gpt-5(high)`; `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), `none`, `auto`, or a token
@@ -567,15 +568,21 @@ not Claude Code is not made to look like Claude Code.
 the model takes them, by Anthropic's documented limits for the `anthropic-version` translated
 requests are sent with (`2023-06-01`):
 
-- Claude 4.7 and later, and any `claude-` model name the extension does not know as an older
-  model: neither is sent.
+- Claude 4.7 and later: one of them alone is sent only at its default (`temperature` 1, `top_p`
+  0.99); when both are set, neither is sent.
+- A `claude-` model name the extension does not know as a Claude version (such as
+  `claude-mythos-preview`): neither is sent.
 - An older Claude model with thinking on: `temperature` is sent only at 1, `top_p` only from 0.95.
 - An older Claude model, with thinking on or off: `top_p` is left out when `temperature` is sent
   too, since Claude refuses the two together.
-- A model name that does not start with `claude-`: both go as the client sent them.
+- Any other model name: both go as the client sent them.
 
-Each one left out is reported as dropped, so `drop_policy` `"reject"` refuses the request. A
-Messages client's own sampling settings go upstream as it wrote them. Today's core leaves both out
+The model name is read in lower case, without a Bedrock prefix (`anthropic.`, or `us.`, `eu.`,
+`apac.` or `global.` before it), a context window in brackets (`[1m]`) or a Vertex AI version
+after `@`; the same reading decides the thinking settings above, so Claude Mythos models get
+thinking from a reasoning effort too. Each one left out is reported as dropped, so
+`drop_policy` `"reject"` refuses the request, a token count included. A Messages client's own
+sampling settings go upstream as it wrote them. Today's core leaves both out
 of every translated request, on every model.
 
 Every request, a Messages client's or a translated one, also gets the betas its body needs, after

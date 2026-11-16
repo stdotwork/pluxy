@@ -1,5 +1,5 @@
 {
-  "description": "Stop sequences and max_tokens reach a Claude upstream as stop_sequences and max_tokens; temperature and top_p are left out, as a Claude model name not known as an older model (claude-test) is treated as Claude 4.7 or later, which refuses them; the text reply comes back as Chat content.",
+  "description": "Stop sequences and max_tokens reach a Claude upstream as stop_sequences and max_tokens; temperature and top_p are left out, as they are for any claude- name not known as a Claude version (claude-test), since Claude 4.7 and later refuse non-default values and both together; the text reply comes back as Chat content.",
   "source": [
     "core/internal/translator/claude/openai/chat-completions/claude_openai_request.go",
     "core/internal/translator/claude/openai/chat-completions/claude_openai_response.go"

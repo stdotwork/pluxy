@@ -34,12 +34,22 @@ func TestBuildBodyDropsRefusedSampling(t *testing.T) {
 		effort               string
 		wantSent, wantLosses []string
 	}{
-		// Rule 1: Claude 4.7 and later, and claude- names not known as older models.
+		// Rule 1: Claude 4.7 and later take a default alone, never both; claude- names not known
+		// as a Claude version get neither.
 		{"4.7 both", "claude-opus-4-7", fp(0.5), fp(0.9), "", nil, []string{"temperature", "top_p"}},
 		{"5.5 defaults", "claude-sonnet-5-5", fp(1), fp(0.99), "", nil, []string{"temperature", "top_p"}},
-		{"5 top_p alone", "claude-haiku-5-5-20261001", nil, fp(0.99), "high", nil, []string{"top_p"}},
-		{"unknown claude name", "claude-mythos-5", fp(0.2), nil, "", nil, []string{"temperature"}},
+		{"5.5 default top_p alone", "claude-haiku-5-5-20261001", nil, fp(0.99), "high", []string{"top_p"}, nil},
+		{"5.5 default temperature alone", "claude-sonnet-5-5", fp(1), nil, "", []string{"temperature"}, nil},
+		{"5.5 top_p alone", "claude-haiku-5-5", nil, fp(0.9), "", nil, []string{"top_p"}},
+		{"Mythos 5", "claude-mythos-5", fp(0.2), nil, "", nil, []string{"temperature"}},
 		{"unplaced claude name", "claude-test", fp(0.5), fp(0.9), "", nil, []string{"temperature", "top_p"}},
+		{"unplaced claude name, default", "claude-mythos-preview", fp(1), nil, "", nil, []string{"temperature"}},
+		// The name as Claude's own and other platforms write it.
+		{"context window suffix", "claude-opus-4-7[1m]", fp(0.5), nil, "", nil, []string{"temperature"}},
+		{"Vertex AI version", "claude-opus-4-7@20260416", fp(0.5), nil, "", nil, []string{"temperature"}},
+		{"Bedrock profile", "us.anthropic.claude-opus-4-7", fp(0.5), nil, "", nil, []string{"temperature"}},
+		{"upper case", "Claude-Opus-4-7", fp(0.5), nil, "", nil, []string{"temperature"}},
+		{"Vertex AI 4.0, both", "claude-sonnet-4@20250514", fp(0.5), fp(0.9), "", []string{"temperature"}, []string{"top_p"}},
 		// Rule 2: an older model with thinking on.
 		{"4.5 budget thinking", "claude-sonnet-4-5", fp(0.5), fp(0.9), "high", nil, []string{"temperature", "top_p"}},
 		{"4.6 adaptive thinking", "claude-opus-4-6", fp(0.7), nil, "medium", nil, []string{"temperature"}},
@@ -54,6 +64,7 @@ func TestBuildBodyDropsRefusedSampling(t *testing.T) {
 		{"4.1 top_p alone", "claude-opus-4-1-20250805", nil, fp(0.9), "", []string{"top_p"}, nil},
 		// Rule 4: a model name that is not Claude's.
 		{"other model", "glm-5", fp(0.5), fp(0.9), "", []string{"temperature", "top_p"}, nil},
+		{"claude inside another name", "my-claude-model", fp(0.5), fp(0.9), "", []string{"temperature", "top_p"}, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			body, tr, err := buildBody(samplingRequest(c.model, c.temperature, c.topP, c.effort))
