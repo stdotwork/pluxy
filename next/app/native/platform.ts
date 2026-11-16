@@ -27,8 +27,9 @@
 // - bundle release gate: the release command (package.ts release) passes a clean release build and
 //   a clean bundle of this system's kind around it, and refuses a bundle holding the test-feature
 //   dev app, the test package renamed and the test package itself.
-// - update: the test package, installed from its bundle into a folder of this user's and connected
-//   to a test core (`go run ./e2e/panelcore`), updates itself to its signed newer version and back,
+// - app update (the update shard): the test package, installed from its bundle into a folder of
+//   this user's and connected to a test core (`go run ./e2e/panelcore`), updates itself to its
+//   signed newer version and back,
 //   and refuses the rest, with update-cases.ts's cases (the same as Linux's update session): no
 //   updater trust; this system's crafted installs (Windows: an .msi- and a setup-program-patched
 //   program, a folder Everyone may change; macOS: the program outside its bundle, a bundle its
@@ -1231,7 +1232,7 @@ async function main() {
     ["window and tray", windowAndTray],
     ["bundle", bundle],
     ["bundle release gate", bundleReleaseGate],
-    ["update", update],
+    ["app update", update],
   ];
   for (const [name, body] of sessions) {
     if (!runsSession(name)) continue;
