@@ -973,7 +973,7 @@ host's vault, and its manual backups (the backup browser). It exports nothing.
 | `clear` | `write` | Three pins | The library's outcome (the values Apply wrote go, edits made since stay) and `adapter_removed` |
 | `restore` | `write` | Three pins | The library's outcome (the original bytes back: Restore Backup) and `adapter_removed` |
 | `status` | `read` | — | The library's status |
-| `recipe` | `read` | — | `{"client": "Pi", "kind": "terminal", "program": <~/.pi/agent/bin/pi, else ~/.local/bin/pi, when an executable file is there, else "pi">, "args": []}`, for the launcher. On Windows always `pi` from the PATH: `pi.dev/install.ps1` makes `pi.cmd` launchers, not npm's shims |
+| `recipe` | `read` | — | `{"client": "Pi", "kind": "terminal", "program": <~/.pi/agent/bin/pi, else ~/.local/bin/pi, when an executable file is there, else "pi">, "args": []}`, for the launcher. On Windows always `pi` from the PATH: `pi.dev/install.ps1` makes `pi.cmd` launchers, not npm's shims, so starting a Pi installed that way is refused at launch (`execution` runs a batch file only as an npm, pnpm or Yarn shim), while an npm install of Pi starts; setting Pi up works either way |
 | `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), the three files per version, diffed by setting name | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
 
 Pi keeps its user settings in its agent folder, `~/.pi/agent` on every system (`getAgentDir` in
