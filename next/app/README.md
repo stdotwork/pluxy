@@ -1136,6 +1136,18 @@ A client joins the list by being an agent page: a window page that names the pac
 (`AgentPage` in `src/easyMode.tsx`), listed in `agentPages` in `src/agentPages.ts`. The list itself
 (`src/easyModeItems.ts`) has no per-client code.
 
+### Manage Clients
+
+The navigation lists a client's page only while the person wants it there. By default (automatic) it
+lists the clients whose tool is installed on this device, enabled or not, with the installed ones
+first; a tool a registry only offers is not listed, since Beginner Mode is where it is installed. The
+**Manage Clients** page (Control group) has a checkbox for every client with a search box, **Restore
+automatic display** and **Save**; Save is off for an empty selection ("Keep at least one client
+visible."). The choice is kept in the window's prefs (`pluxy.agent-clients`, on this device, like the
+theme), and saving automatic removes it. Whichever client page is open stays listed while it is
+open, so hiding it never strands the person. Beginner Mode still offers every client, and the list
+logic is in `src/clientListItems.ts`.
+
 ## Build and check
 
 Bun `1.4.3`, a stable Rust toolchain (CI uses 1.97.0), and on Linux the WebKitGTK 4.1 and
