@@ -1,0 +1,767 @@
+{
+  "manifest_version": 1,
+  "id": "pluxy/grok-setup",
+  "version": "0.1.0",
+  "app": {
+    "version": 0,
+    "tier": "native",
+    "host_versions": [
+      0
+    ],
+    "programs": {
+      "linux/amd64": "bin/grok-setup",
+      "linux/arm64": "bin/grok-setup"
+    },
+    "operations": [
+      {
+        "id": "preview",
+        "description": "Pin Grok Build's config (by default ~/.grok/config.toml, or a selected file or a file in a selected folder) and read its values back, never the key",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "base_url": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "set",
+            "targets",
+            "applied",
+            "edited",
+            "settings"
+          ]
+        }
+      },
+      {
+        "id": "apply",
+        "description": "Point Grok Build at pluxy's core: write a model entry for each listed model of the core (its address, the client key, the Chat Completions API and its context window) and make one of them the default model in the previewed config, keeping everything else in it. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "effect": "write",
+        "secrets": {
+          "key": "value"
+        },
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "selected": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "link": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "identity": {
+                    "type": "object",
+                    "properties": {
+                      "link": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "root": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "parent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "file": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      }
+                    },
+                    "required": [
+                      "link",
+                      "parent",
+                      "file"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "selected",
+                  "link",
+                  "target",
+                  "identity",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "base_url": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 2048
+            },
+            "key": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "models": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 240
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 0,
+                    "maxLength": 240
+                  },
+                  "context_window": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100000000
+                  }
+                },
+                "required": [
+                  "model",
+                  "name",
+                  "context_window"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "targets",
+            "base_url",
+            "key",
+            "model",
+            "models"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "clear",
+        "description": "Clear the Grok Build integration: take the values Apply wrote out of the previewed config, keeping the edits made since. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "effect": "write",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "selected": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "link": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "identity": {
+                    "type": "object",
+                    "properties": {
+                      "link": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "root": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "parent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "file": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      }
+                    },
+                    "required": [
+                      "link",
+                      "parent",
+                      "file"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "selected",
+                  "link",
+                  "target",
+                  "identity",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "targets"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "restore",
+        "description": "Restore Backup: put the previewed config's original bytes back, as it was before the first Apply. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "effect": "write",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "selected": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "link": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "identity": {
+                    "type": "object",
+                    "properties": {
+                      "link": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "root": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "parent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "file": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      }
+                    },
+                    "required": [
+                      "link",
+                      "parent",
+                      "file"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "selected",
+                  "link",
+                  "target",
+                  "identity",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "targets"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "backup-list",
+        "description": "List the manual backups: each one's ID, when it was saved, and its files' paths, presence and sizes",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "backup-diff",
+        "description": "Show which settings restoring a manual backup would add, change or remove, by name only, never a value",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "backup": {
+              "type": "string",
+              "minLength": 34,
+              "maxLength": 34
+            }
+          },
+          "required": [
+            "backup"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "backup-create",
+        "description": "Manual Backup: keep the previewed files as they are on disk now (or that they do not exist) in the app's vault. The newest 10 manual backups are kept; saving another deletes the oldest.",
+        "effect": "write",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "selected": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "link": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "identity": {
+                    "type": "object",
+                    "properties": {
+                      "link": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "root": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "parent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "file": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      }
+                    },
+                    "required": [
+                      "link",
+                      "parent",
+                      "file"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "selected",
+                  "link",
+                  "target",
+                  "identity",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "targets"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "backup-restore",
+        "description": "Restore this version: put the manual backup's contents back in the previewed files, replacing what they hold now; files absent in the backup are removed. No automatic backup is created. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "effect": "write",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "backup": {
+              "type": "string",
+              "minLength": 34,
+              "maxLength": 34
+            },
+            "targets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "selected": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "link": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "identity": {
+                    "type": "object",
+                    "properties": {
+                      "link": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "root": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "parent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "file": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      }
+                    },
+                    "required": [
+                      "link",
+                      "parent",
+                      "file"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "selected",
+                  "link",
+                  "target",
+                  "identity",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "backup",
+            "targets"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "backup-delete",
+        "description": "Delete this version: delete only this manual backup. The current configuration and other backups are unchanged.",
+        "effect": "write",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "backup": {
+              "type": "string",
+              "minLength": 34,
+              "maxLength": 34
+            }
+          },
+          "required": [
+            "backup"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "status",
+        "description": "Show the applied config, the originals kept for restore and the latest recovery reports",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "recipe",
+        "description": "How the launcher starts Grok Build: grok in a terminal, with no arguments",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "client",
+            "kind",
+            "program",
+            "args"
+          ]
+        }
+      }
+    ],
+    "state": {
+      "version": 0,
+      "readable_versions": [
+        0
+      ]
+    }
+  }
+}

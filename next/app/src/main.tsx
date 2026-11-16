@@ -15,17 +15,14 @@ import { KitContext } from "../../ui/kit/ui";
 import defaultTheme from "../../ui/themes/default.json";
 import paper from "../../ui/themes/paper.json";
 import terminal from "../../ui/themes/terminal.json";
-import { claudeCodePage } from "./claudeCode";
-import { claudeDesktopPage } from "./claudeDesktop";
-import { codexPage } from "./codex";
+import { agentPages } from "./agentPages";
 import { ConnectionPage } from "./connection";
 import { type DeviceCatalog, device, newest } from "./device";
 import { DevicePage, devicePage } from "./devicePage";
+import { easyModePage } from "./easyMode";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
 import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
-import { ompPage } from "./omp";
-import { opencodePage } from "./opencode";
 import { UpdatesPage } from "./updates";
 import { ClosePrompt } from "./window";
 
@@ -106,9 +103,11 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
     };
   }, []);
   const themes = useMemo(() => new ThemeState(host, document, [defaultTheme, terminal, paper]), [host]);
-  const pages: PageDef[] = useMemo(
-    () => [
+  const pages: PageDef[] = useMemo(() => {
+    const agents = agentPages();
+    return [
       ...corePages(),
+      easyModePage(agents, catalog, loadDevice),
       {
         id: "connection",
         title: "Connection",
@@ -126,15 +125,10 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       },
       devicePage(loadDevice),
       launcherPage(),
-      claudeCodePage(),
-      codexPage(),
-      claudeDesktopPage(),
-      opencodePage(),
-      ompPage(),
+      ...agents,
       ...devicePages(catalog),
-    ],
-    [shown, catalog, loadDevice],
-  );
+    ];
+  }, [shown, catalog, loadDevice]);
 
   // Not connected or not signed in (or the app's own core did not start): the Connection page,
   // where the person can fix the address or give the key, and this device's extensions, which

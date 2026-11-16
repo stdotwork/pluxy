@@ -7,7 +7,6 @@
 // key's value never reaches this webview. Labels follow the old app's Agents page.
 
 import { useEffect, useId, useState } from "preact/hooks";
-import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
 import {
   Button,
@@ -33,7 +32,9 @@ import {
   type ReadBack,
   type Secret,
 } from "./codexForm";
+import type { AgentPage } from "./easyMode";
 import { connectionGet } from "./host";
+import { keptTerminal, useDeviceChanged } from "./startCli";
 
 const t = strings("codex", {
   title: "Codex",
@@ -64,7 +65,7 @@ const t = strings("codex", {
   configured: "Configured",
   needsUpdate: "Configuration Modified",
   providerChange:
-    "Codex lists past conversations by provider. After Apply, conversations started with {provider} stay hidden from resume until their history is synced; history sync is offered in session management and is never done automatically.",
+    "Codex lists past conversations by provider. After Apply, conversations started with {provider} stay hidden from resume. The app does not sync or change past conversations.",
   profile: "The active Codex profile {profile} may override these settings.",
   model: "Model",
   modelHint: "The model Codex starts with; one of the catalog's models.",
@@ -315,8 +316,10 @@ function Launch(props: { available: boolean }) {
   const terminals = useLoad(() =>
     reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
   );
+  useDeviceChanged(terminals.reload);
   const action = useAction(state.reload);
   const recent = state.data?.history.Codex ?? [];
+  const shownTerminal = keptTerminal(terminal, terminals.data?.terminals);
   const go = (target: "cli" | "app" | "service", extra: Record<string, unknown>, program?: string) =>
     action.run(async () => {
       const recipe = await tool<Record<string, unknown>>("recipe", {
@@ -342,7 +345,7 @@ function Launch(props: { available: boolean }) {
         {terminals.data && (
           <Choices
             label={t("terminal")}
-            value={terminal}
+            value={shownTerminal}
             choices={terminals.data.terminals.map((x) => ({ value: x.id, label: x.label }))}
             onChange={setTerminal}
           />
@@ -353,7 +356,7 @@ function Launch(props: { available: boolean }) {
           onClick={() =>
             go("cli", {
               cwd: cwd.trim(),
-              terminal,
+              terminal: shownTerminal,
               ...(override.trim() ? { override: override.trim() } : {}),
             })
           }
@@ -703,8 +706,9 @@ export function CodexPage() {
   );
 }
 
-export const codexPage = (): PageDef => ({
+export const codexPage = (): AgentPage => ({
   id: "codex",
+  package: PACKAGE,
   group: "control",
   title: t("title"),
   short: t("short"),

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -207,12 +206,10 @@ func TestStartupAccountCheck(t *testing.T) {
 // token in its base_url's query, from the errors of a check and of a request that quote it: the
 // check result, the client's reply, core's log and its error log hold [redacted] instead.
 func TestSettingsSecretIsRedacted(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	closed := ln.Addr().String() // nothing listens there once it is closed
-	ln.Close()
+	// Nothing listens on port 1, and a test run, not being root, cannot bind it. A port taken
+	// from 127.0.0.1:0 and closed again could be the one core binds next, for its own listener or
+	// its extension pages, which answer the check with 404 ("not_checked") instead of refusing it.
+	const closed = "127.0.0.1:1"
 	const secret = "sk-settings-token-e2e"
 	cfg := map[string]any{
 		"listen":         "127.0.0.1:0",

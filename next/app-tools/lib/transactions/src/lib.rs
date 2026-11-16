@@ -28,9 +28,17 @@ mod b64;
 mod backups;
 mod merge;
 mod target;
+#[cfg(feature = "toml")]
+pub mod toml;
+#[cfg(feature = "yaml")]
+pub mod yaml;
 
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, feature = "toml"))]
+mod toml_tests;
+#[cfg(all(test, feature = "yaml"))]
+mod yaml_tests;
 
 pub use backups::{backup_call, backup_operations, json_leaves, Leaves, KEEP_BACKUPS};
 pub use merge::{merge_value, Json, Merge};
@@ -195,30 +203,55 @@ pub struct Transactions<'a> {
 
 impl<'a> Transactions<'a> {
     pub fn new(vault: &'a dyn Vault, data: impl Into<PathBuf>) -> Transactions<'a> {
-        Transactions {
-            vault,
-            data: data.into(),
-        }
+        // Without trailing separators: `link/` would make the data folder's checks follow a link.
+        let data: PathBuf = data.into().components().collect();
+        Transactions { vault, data }
     }
 
     // ---- state file
 
-    fn data_folder(&self) -> Result<Dir, Error> {
-        Dir::open_ambient_dir(&self.data, ambient_authority())
-            .map_err(|e| Error::unavailable(format!("the data folder: {e}")))
+    /// The data folder, opened: None when it does not exist yet, unless make is set; then it is
+    /// made (private: 0700 on Unix, with any folders missing above it), as at the first state
+    /// write. Nothing is made before that, so a preview leaves no trace (in WSL the host cannot
+    /// make it at start). A link there, or a folder another user owns, is refused; on Windows also
+    /// one that another user may write.
+    fn data_folder(&self, make: bool) -> Result<Option<Dir>, Error> {
+        let bad = |e: &dyn std::fmt::Display| Error::unavailable(format!("the data folder: {e}"));
+        let m = match std::fs::symlink_metadata(&self.data) {
+            Ok(m) => m,
+            Err(e) if e.kind() == ErrorKind::NotFound && !make => return Ok(None),
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                make_data_folder(&self.data).map_err(|e| bad(&e))?;
+                std::fs::symlink_metadata(&self.data).map_err(|e| bad(&e))?
+            }
+            Err(e) => return Err(bad(&e)),
+        };
+        if !m.is_dir() || m.file_type().is_symlink() || !users_own(&self.data, &m) {
+            return Err(Error::unavailable(format!(
+                "the data folder {} is not a folder of this user's (a link, or another's)",
+                self.data.display()
+            )));
+        }
+        let before = data_folder_id(&self.data, &m).map_err(|e| bad(&e))?;
+        let d = Dir::open_ambient_dir(&self.data, ambient_authority()).map_err(|e| bad(&e))?;
+        if opened_id(&d).map_err(|e| bad(&e))? != before {
+            return Err(bad(&"it was replaced while it was opened"));
+        }
+        Ok(Some(d))
     }
 
     fn load(&self) -> Result<Value, Error> {
-        let d = self.data_folder()?;
+        let empty = || json!({"version": 1, "sets": {}, "committed": [], "recovered": []});
+        let Some(d) = self.data_folder(false)? else {
+            return Ok(empty());
+        };
         let mut bytes = Vec::new();
         match d.open(STATE) {
             Ok(f) => f
                 .into_std()
                 .read_to_end(&mut bytes)
                 .map_err(|e| Error::unavailable(format!("the state file: {e}")))?,
-            Err(e) if e.kind() == ErrorKind::NotFound => {
-                return Ok(json!({"version": 1, "sets": {}, "committed": [], "recovered": []}))
-            }
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(empty()),
             Err(e) => return Err(Error::unavailable(format!("the state file: {e}"))),
         };
         let v: Value = serde_json::from_slice(&bytes)
@@ -232,7 +265,9 @@ impl<'a> Transactions<'a> {
     }
 
     fn save(&self, state: &Value) -> Result<(), Error> {
-        let d = self.data_folder()?;
+        let d = self
+            .data_folder(true)?
+            .ok_or_else(|| Error::internal("the data folder was not made"))?;
         let tmp = format!(".{STATE}.{}.tmp", target::random_hex()?);
         let bytes = serde_json::to_vec(state).map_err(|e| Error::internal(e.to_string()))?;
         let r = (|| -> std::io::Result<()> {
@@ -1012,4 +1047,66 @@ fn remember_all(state: &mut Value, key: &str, v: Value) {
         state[key] = json!([]);
     }
     state[key].as_array_mut().expect("an array").push(v);
+}
+
+/// Makes the data folder, private, with any folders missing above it.
+#[cfg(unix)]
+fn make_data_folder(data: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(data)
+}
+
+/// Makes the data folder, private (an access list of this user and SYSTEM only), with any
+/// folders missing above it (those as their folder passes down).
+#[cfg(windows)]
+fn make_data_folder(data: &Path) -> std::io::Result<()> {
+    if let Some(above) = data.parent() {
+        std::fs::create_dir_all(above)?;
+    }
+    match pluxy_files::create_private_dir(data) {
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),
+        r => r,
+    }
+}
+
+/// Whether the data folder (m, its metadata) is this user's: owned by this user.
+#[cfg(unix)]
+fn users_own(_data: &Path, m: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: geteuid has no preconditions.
+    m.uid() == unsafe { libc::geteuid() }
+}
+
+/// Whether the data folder is this user's: owned by this user (or SYSTEM or the Administrators)
+/// and writable by no one else.
+#[cfg(windows)]
+fn users_own(data: &Path, _m: &std::fs::Metadata) -> bool {
+    pluxy_files::others_may_write(data).is_ok_and(|others| !others)
+}
+
+#[cfg(unix)]
+fn data_folder_id(_data: &Path, m: &std::fs::Metadata) -> std::io::Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    Ok((m.dev(), m.ino()))
+}
+
+#[cfg(unix)]
+fn opened_id(d: &Dir) -> std::io::Result<(u64, u64)> {
+    use cap_std::fs::MetadataExt;
+    let m = d.dir_metadata()?;
+    Ok((m.dev(), m.ino()))
+}
+
+/// The data folder's identity now (not following a link): its metadata holds none on Windows.
+#[cfg(windows)]
+fn data_folder_id(data: &Path, _m: &std::fs::Metadata) -> std::io::Result<pluxy_files::Id> {
+    pluxy_files::id_of_path(data)
+}
+
+#[cfg(windows)]
+fn opened_id(d: &Dir) -> std::io::Result<pluxy_files::Id> {
+    pluxy_files::id_of(&d.try_clone()?.into_std_file())
 }

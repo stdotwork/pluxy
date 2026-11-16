@@ -11,15 +11,19 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi, usage-opencode)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
-cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup, execution, omp-setup and opencode
+cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup, execution, omp-setup, opencode, grok-setup, hermes-setup and pi-setup
+cargo build --release --locked -p wsl           # pluxy/wsl, for Windows (bin/pluxy-wsl.exe)
 ```
 
-Platforms: every tool runs on Linux. The usage hub, the usage parsers, `codex-sessions`,
-`execution`, `lib/transactions` with its `fixture-writer`, `claude-code` and `codex-setup` also
-build and are tested on Windows and macOS (`.github/workflows/next-app-tools-platforms.yml`), and
-their manifests name programs for `darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does
-not run native tools on those systems yet. `claude-desktop`, `opencode` and `omp-setup` are Linux
-only for now.
+Platforms: every tool but `wsl` runs on Linux. The usage hub, the usage parsers,
+`codex-sessions`, `execution`, `lib/transactions` with its `fixture-writer`, `claude-code` and
+`codex-setup` also build and are tested on Windows and macOS
+(`.github/workflows/next-app-tools-platforms.yml`), and their manifests name programs for
+`darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does not run native tools on those
+systems yet. `wsl` is a Windows tool (`windows/amd64`, `windows/arm64`; on other systems it builds
+and answers every operation `unsupported`); that workflow's WSL jobs run it, and `lib/program` and
+`lib/transactions` built for Linux, against real WSL distributions. `claude-desktop`, `opencode`,
+`omp-setup`, `grok-setup`, `hermes-setup` and `pi-setup` are Linux only for now.
 
 ## `lib/files`
 
@@ -81,6 +85,7 @@ The program side of the contract, for any tool (`pluxy-program`):
 | `Error` | The contract's error object: `invalid_request`, `unsupported`, `not_found`, `unavailable`, `internal`, `cancelled`, or any code. |
 | `read_frame`, `write_frame` | The framing: a four-byte big-endian length and UTF-8 JSON; a program's frames are at most `MAX_FRAME` (1 MiB). |
 | `MAX_BATCH` | The largest batch a producer may send, 48 KiB of JSON. |
+| `environment` | `PLUXY_ENVIRONMENT`, which the host sets when it runs a package's Linux program in a WSL distribution: `wsl:<distribution>:<user>`. `Identity::from_env` (so `run`) then checks that `WSL_DISTRO_NAME` is that distribution and that the effective user ID's name in `/etc/passwd` is that user; otherwise the program stops before hello with `pluxy expected WSL <d>/<u>, this is <d'>/<u'>`, so a record of a distribution or user made again under the same name, or a routing mistake, runs nothing. Anywhere but Linux the variable is refused. |
 
 Each call runs on a thread of its own that ends with the call; the thread that reads stdin
 routes cancels, the answers to a call's own calls, vault and jobs frames, and a job's acks. An
@@ -173,7 +178,7 @@ journal store of its own. Linux, macOS and Windows (below for what differs on Wi
 | Item | What it does |
 | --- | --- |
 | `Selection` | What the person selected: `File(path)`, a config file that may be a link (as stow makes), or `Root { root, path }`, a file inside a root folder that may be a link (as chezmoi can make), `path` being slash-separated parts inside it (a backslash is refused, as it separates parts on Windows). |
-| `Transactions::new(vault, data)` | The operations for one call: `vault` is the `Call` (or any `Vault`), `data` the tool's data folder (`data_dir()`, `PLUXY_TOOL_DATA_DIR`), where the state file `transactions.json` (private) keeps each set's targets and backup IDs, the originals kept for restore, and the journals left open. |
+| `Transactions::new(vault, data)` | The operations for one call: `vault` is the `Call` (or any `Vault`), `data` the tool's data folder (`data_dir()`, `PLUXY_TOOL_DATA_DIR`), where the state file `transactions.json` (private) keeps each set's targets and backup IDs, the originals kept for restore, and the journals left open. A data folder that does not exist yet reads as an empty state, and the first write of the state file makes it (private, with any missing folders above it: 0700 on Linux and macOS; on Windows the folders above it get what their folder passes down), so a preview or status leaves nothing behind; in WSL the host cannot make it before the program starts. A link there, or a folder another user owns, is refused (on Windows also one another user may write). |
 | `preview(set, selections)` | Resolves and pins each selection: `{"set", "targets": [<pin>], "applied", "edited"}`. A pin names the selected path, its link's text, the file it resolves to, the identities (device and inode; on Windows the volume serial number and 64-bit file index) of the link, the root, the file's folder and the file, and the file's SHA-256. A link inside a selected root, a part that leaves it (`..`, `.`, empty) and anything but a regular file are refused. A read: it asks nothing, and it reports a file's existence and SHA-256 for any path, so a writer must not export it to other packages. |
 | `apply(set, pins, image, merge, written)` | Writes each pinned target with what `image` makes of its bytes now, and records `set` as applied: its original images (with the person's edits since the last apply promoted into them by `merge`) and its applied images, as vault backups. A record none of whose selections still resolves to its target (a link pointed elsewhere) is replaced, its originals kept for restore. |
 | `clear(set, pins, merge, written)` | Each target becomes what `merge` makes of its original, its applied image and its bytes now: the writer's untouched values go, the person's edits stay. A pin of the recorded target file itself (named directly) reaches a record made through a link that now points elsewhere. |
@@ -190,6 +195,7 @@ journal store of its own. Linux, macOS and Windows (below for what differs on Wi
 | `backup_delete(set, id)` | Deletes version `id` from the state file and the vault. |
 | `backup_call(call, tx, set, leaves)`, `backup_operations(files)` | The backup browser's standard operations, which every writer exports with exactly these manifest entries (`files` targets per version) and serves with `backup_call`: `backup-list`, `backup-diff` (reads), `backup-create`, `backup-restore`, `backup-delete` (writes, each confirmed). The app's shared backup browser (`../app/src/backups.tsx`) calls them. |
 | `Leaves`, `json_leaves` | A writer's reading of its file into settings for a diff (path and value, in file order; None when it cannot read it), and the one for JSON files: objects by key, arrays and other values as one setting each. |
+| `toml` (feature `toml`), `yaml` (feature `yaml`) | The in-place editors of config files, shared by the setup tools, each behind its own cargo feature so a tool compiles only the parser it uses (both are off by default). `toml` (toml_edit, pinned) reads a file as a document that keeps its comments and formatting, sets a key where it stands (`set`, `table_mut`) and makes Clear's three-way merge into the file as it is now (`merge`, `leaves`); a tool gives it its own `parse` and the opening words of its refusals. `yaml` (saphyr and yaml-edit) reads a file as YAML 1.2 into a JSON value (`parse`), edits only the keys whose values differ through a lossless tree and reads the result again (`edit`), and is a `Merge` for Clear (`Yamls`); a tool gives it the program's name for the one refusal that names it. What a tool writes and refuses stays in the tool. |
 
 How a write goes:
 
@@ -227,6 +233,16 @@ How a write goes:
   otherwise puts back, from the backups, each file that holds the new bytes, leaving any file
   another program changed since (or whose backup is gone), its original kept for restore, and
   ends it rolled back. It never writes the new bytes again, and repeating it changes nothing more.
+
+In a WSL distribution (`PLUXY_ENVIRONMENT` set, see `lib/program`), a selection on a Windows drive is
+refused (`This file is on a Windows drive; set it up from Windows local.`) when it resolves, before
+anything is read, and so is a journalled target's folder or file at recovery. A path is on a Windows drive
+when the mount holding it in `/proc/self/mountinfo` is of type `drvfs`, `9p` or `virtiofs`, or is
+mounted directly in the folder WSL mounts drives in (the folder holding a one-letter drive mount,
+such as `/mnt`), as `/mnt/wsl` is. Checked are the selected path's folder, the folder of the file
+written and the file itself (a file can be a mount of its own), and at recovery the pinned folder
+and file. Without metadata, a drive keeps no owner-only
+permission bits, and Windows' own writer sets those files up.
 
 Other programs do not take part in these checks: a write between the last check and the rename,
 or after the final check, is not seen, and several files are journalled, not written atomically.
@@ -796,6 +812,197 @@ name, so a key equal to a set variable's name would be replaced. The model is on
 commas (a role's fallbacks), not starting with `@` (a role) or `*`. Restore Backup puts the
 originals back whatever the files hold now.
 
+## `grok-setup`
+
+`pluxy/grok-setup` sets up Grok Build (xAI's coding CLI, `grok`) to use pluxy's core and says how to
+start it, for the desktop app's Grok Build page (`../app/README.md`, "Grok Build"). It writes one
+file, Grok Build's user config, through `lib/transactions` (set `grok`): link-preserving,
+journalled, the original and applied images in the host's vault, and its manual backups. It exports
+nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default `~/.grok/config.toml` in the app's `HOME`; `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, `default` (`models.default` as the file has it), `model` (the default's model when it is pluxy's entry), `models` (pluxy's entries: `model`, else the one the entry's name says, `name`, `context_window`), `legacy` (how many `cpa-gui/` entries an older app left); for a file Grok Build would not take, `{state: "refused", reason}`, the file still pinned; never the key |
+| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key` (refused when it holds a `$`: Grok Build expands `$NAME` in its strings), `model` (the default: one of `models`), `models`: 1 to 256 of `{model, name, context_window}` (`name` empty: the model) | The library's outcome |
+| `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Grok Build", "kind": "terminal", "program": …, "args": []}`, for the launcher: `program` is `~/.grok/bin/grok` when that is an executable file (where Grok Build's install script puts it, often not on a desktop session's PATH), else `grok` |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed by TOML setting path | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+What `apply` writes, editing the file in place with `toml_edit` (comments, formatting, order and
+everything else kept), with Grok Build's own keys (its configuration reference,
+`docs/user-guide/26-config-reference.md` in xai-org/grok-build, and Grok Build 1.0.77 run offline
+on a temporary home, read 2026-11-14):
+
+- `models.default` = `pluxy/<model>`;
+- one table `[model."pluxy/<model>"]` per listed model, setting `model`, `base_url` (the core's
+  address with `/v1`), `name` (shown in Grok Build's model picker), `api_key` (the client key; a
+  model's own key wins over a signed-in session and `XAI_API_KEY`, so the person's login stays), `api_backend =
+  "chat_completions"` (the OpenAI Chat Completions API, as the old app wrote) and `context_window`
+  (it drives auto-compaction; the page offers 200000, the old app's default). Other keys the person
+  added to such a table stay; pluxy's tables for models no longer listed are removed. Entries of
+  the person's own and an older app's `cpa-gui/` entries are left as they are.
+
+Clear's three-way merge (TOML, values compared whatever their formatting) brings back the person's
+default model, unless they changed it since, and removes the untouched entries; a value the person
+changed in a pluxy entry stays. A file Apply created and nothing else changed is removed. Apply
+leaves the file owner-only (0600: it holds the key); Clear and Restore Backup keep the mode it has.
+The state is `configured` only when every pluxy entry is whole (a `model`, `api_backend =
+"chat_completions"`, a key and the default's `base_url`); an entry missing any of them reads as
+`needs-update`, so the page offers Repair Connection. A preview reads the file again once if it
+changed between the pin and the read, and refuses if it changed again. Apply and Clear refuse,
+before writing, a file Grok Build would not take or Apply cannot edit (a preview still pins it and
+reports it refused, so Restore Backup reaches it): not UTF-8 or not TOML (Grok Build itself refuses such a file), `models` or `model` not a
+table, `models.default` not a string, or a `model."pluxy/…"` entry not a table. Grok Build has no
+version or schema field, and no version bound is assumed. A missing or empty file is an empty one.
+The tool's environment has no `GROK_HOME`: a person who moved Grok Build's folder selects the file
+or folder. A project's `.grok/config.toml` cannot hold models (Grok Build reads only MCP, plugin
+and permission settings there), so only the user config is written.
+
+## `hermes-setup`
+
+`pluxy/hermes-setup` sets up Hermes Agent to use pluxy's core and says how to start it, for the
+desktop app's Hermes Agent page (`../app/README.md`, "Hermes Agent"). It writes Hermes Agent's
+`config.yaml` through `lib/transactions` (set `hermes`, one target): link-preserving, journalled,
+the original and applied images in the host's vault, and its manual backups (the backup browser).
+It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`); or `folder`: a Hermes home folder (what `HERMES_HOME` names; it may be a link), whose `config.yaml` is used; by default `config.yaml` in the home Hermes uses (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`), `base_url` (the provider's `api`), `key_set`, `provider` (`model.provider`), `model` (`model.default`, when the provider is pluxy's), `legacy` (the old desktop app's `cpa-gui` provider is there); or, for a file Hermes would not take, `state` `refused` and `reason`; never the key |
+| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `model` (one model ID) | The library's outcome |
+| `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Hermes Agent", "kind": "terminal", "program": <~/.local/bin/hermes when an executable file is there, else "hermes">, "args": []}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed by setting name (the file's YAML read as its value) | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+Hermes Agent keeps its settings in `config.yaml` in its home folder: `HERMES_HOME`, else
+`~/.hermes`; with no `--profile` flag, a profile named in `~/.hermes/active_profile` (other than
+`default`) makes the home `~/.hermes/profiles/<name>`. The tool's environment has no
+`HERMES_HOME`, so by default it uses `~/.hermes/config.yaml`, or the active profile's
+`config.yaml` (a name that is not a profile ID, or a profile folder that is not there, refuses: the
+person selects the folder); a person who sets `HERMES_HOME` selects that folder. Hermes's own checks
+that a profile folder is a live profile are not repeated. Read at source (NousResearch/hermes-agent
+at tag v0.23.1, 3b4215785882, 2026-11-09): `hermes_constants.py`, `hermes_yaml.py`,
+`hermes_cli/config.py`, `config_providers.py`, `config_version_stamp.py`, `runtime_provider_custom.py`,
+`providers.py`, `model_setup_flows_custom.py`, `main.py` (profiles), `setup-hermes.sh` and
+`website/docs/user-guide/configuring-models.md`.
+
+What `apply` writes, as `hermes model` does for a provider of the `providers:` map:
+
+- `providers.pluxy`: `api` (the core's address with `/v1`), `api_key` (the client key),
+  `transport` `chat_completions` and `default_model` (the model). Keys there that Hermes would read
+  before these, or in their place, are removed: `api_mode`, `key_env`, `api_key_env`, `key_cmd`,
+  the address as `base_url` or `url`, `model`, the camelCase spellings `baseUrl`, `apiKey`,
+  `apiMode`, `keyEnv`, `apiKeyEnv` and `defaultModel`, and `enabled` when it is not `true`; a
+  preview shows such a file as needing an update. Its other members, such as the person's per-model `models` metadata or
+  `extra_headers`, and every other provider stay. Hermes lists the core's models from its
+  `/v1/models` itself, so no `models` map is written.
+- `model`: `provider` `custom:pluxy` (Hermes's name for that entry), `default` (the model) and
+  `api_mode` `chat_completions`; an earlier endpoint's `base_url`, `api_key`, `key_env` and
+  `api_key_env` there are removed (`key_env` would win over the entry's key). A `model:` written as
+  plain text, the default model, becomes a mapping, as Hermes itself does. Everything else stays.
+
+The file is edited in place through a lossless YAML tree (yaml-edit; the library's YAML
+editor, shared with `omp-setup`): comments, key order, quoting and indentation stay, and only keys whose values change
+are touched. It is read as YAML 1.2 (saphyr) and every edited file is read again and must hold
+exactly the intended value, else nothing is written. Hermes reads it with YAML 1.1 rules (ruamel),
+which take some plain words and numbers differently, so the key and the model pluxy writes are
+refused when a YAML 1.1 reader takes them for anything but text (a boolean such as `yes`, `on` or
+`n` in YAML 1.1's spellings, a null, `=`, an integer in decimal, binary, octal, hex or sexagesimal
+form, a float, `.inf`, `.nan` or a timestamp; a hex key or a UUID is text), when they hold `${`
+(Hermes expands it from the environment) or spaces. Clear's three-way merge brings back what Apply replaced unless the
+person changed it since, and edits only what differs; a file Apply created that holds nothing else
+is removed. An old desktop app's `custom_providers` entry named `cpa-gui` (or a `providers.cpa-gui`)
+is left alone. `apply` and `clear` refuse, before writing, a file Hermes would not take, or would
+not take pluxy's values in; `preview` pins it all the same and reports it `refused` with the reason,
+so Restore Backup and the backups still reach it: not UTF-8, not YAML (a repeated key too), more than one document, a
+top level that is not a mapping, a tag, `providers` or `providers.pluxy` not a mapping, `model` not
+a mapping or text, `model.provider` or `model.default` not text. A missing or empty file, or one
+whose document is only `null`, is an empty one (apply gives it a mapping); a `null`
+`providers.pluxy` is an absent one. A preview reads the file once more if it changed between its pin
+and its read, and refuses if it changed again. `_config_version` is not checked: Hermes reads every version's `providers:` and treats a
+file without one as current. Restore Backup puts the original back whatever the file holds now.
+
+## `pi-setup`
+
+`pluxy/pi-setup` sets up Pi to use pluxy's core, installs, updates and uninstalls the CLIProxyAPI
+provider plugin Pi needs for it, and says how to start Pi, for the desktop app's Pi page
+(`../app/README.md`, "Pi"). It writes Pi's files through `lib/transactions` (set `pi`, targets in
+this order, all in one agent folder: `cliproxyapi.json`, `settings.json`,
+`cliproxyapi-models.json`): link-preserving, journalled, the original and applied images in the
+host's vault, and its manual backups (the backup browser). It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: the three files' selections (`file`, which may be a link, as stow makes; or `root` and `path`), in one folder; or `folder`: an agent folder (it may be a link, as chezmoi can make; a link inside it is refused, so linked files are selected as `targets`); by default the three files in `~/.pi/agent` in the app's `HOME` (below), which must exist (Pi makes it when it first runs); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `pi`: `state` (`not-configured`: the plugin is not listed; `configured`; `needs-update`), `base_url` (cliproxyapi.json's), `key_set`, `provider` (the plugin's provider ID), `default_provider`, `model` (Pi's default model), `registered` (settings.json lists pluxy's plugin), `legacy` (it lists an older app's npm copy), `adapter`: `installed`, `version`, `bundled`, `update`, `foreign` (a folder of that name pluxy did not install); never the key. Files Pi would not take are pinned all the same, so Restore Backup and the backups reach them: `state` is `refused`, `reason` says why, and `adapter` is still there. A file another program writes between the preview's two reads is read again once, else the preview is refused |
+| `apply` | `write`; secret `key` (value) | Three pins, `base_url`, `key`, `model` (one model ID) | The library's outcome and `adapter`: `installed` or `kept` |
+| `update` | `write` | `folder`: the agent folder | `{"outcome": "updated", "version"}` |
+| `uninstall` | `write` | Three pins | The library's outcome and `adapter_removed` |
+| `clear` | `write` | Three pins | The library's outcome (the values Apply wrote go, edits made since stay) and `adapter_removed` |
+| `restore` | `write` | Three pins | The library's outcome (the original bytes back: Restore Backup) and `adapter_removed` |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Pi", "kind": "terminal", "program": <~/.pi/agent/bin/pi, else ~/.local/bin/pi, when an executable file is there, else "pi">, "args": []}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), the three files per version, diffed by setting name | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+Pi keeps its user settings in its agent folder, `~/.pi/agent` (`PI_CODING_AGENT_DIR` moves it; the
+tool's environment does not have it, so a person who uses it selects that folder): `settings.json`
+holds Pi's settings, among them `packages` (npm, git or local Pi packages), `defaultProvider` and
+`defaultModel`; Pi reads it as strict JSON. Pi talks to pluxy's core through the CLIProxyAPI
+provider plugin, which reads `cliproxyapi.json` in the same folder (`baseUrl`, `apiKey`, and
+optional `providerId`, `providerName`, `fast` and `pause`; `CLIPROXYAPI_*` variables in Pi's
+environment win over it), registers the provider `cliproxyapi`, lists the core's Codex catalog
+(`/v1/models?client_version=pi`), sends requests to `/backend-api/codex/responses` and caches the
+list in `cliproxyapi-models.json`. Read at source: earendil-works/pi at 17d6ca759a07 (Pi 1.5.2,
+2026-11-14): `packages/coding-agent/src/config.ts`, `core/settings-manager.ts`,
+`core/package-manager.ts`, `core/extensions/loader.ts` and `docs/settings.md`, `docs/packages.md`,
+`docs/quickstart.md`; the plugin, npm `@router-for-me/pi-cliproxyapi-provider` 1.4.25.
+
+**The plugin.** The old desktop app ran `pi install npm:@router-for-me/pi-cliproxyapi-provider`,
+which fetches whatever the npm registry serves. This tool never runs Pi or npm and fetches
+nothing: it carries a reviewed copy of that plugin (`pi-setup/adapter/`, MIT, its `LICENSE` kept)
+in its signed program, and writes it into the agent folder as a local Pi package,
+`pluxy-cliproxyapi-provider/`, with a marker file `.pluxy-adapter.json` (this package and the
+copy's version, `1.4.25-pluxy.1`). Pi loads a local package from its folder and never installs or
+updates it. **Update** replaces pluxy's copy with the one the installed tool carries (a newer
+plugin comes with a new pluxy/pi-setup); the page offers it when the installed copy's version
+differs. A folder of that name without pluxy's marker is someone else's: Apply and Update refuse,
+and nothing removes it. The review read the plugin's network, process, file and code-loading calls
+(it starts no processes; it fetches the core's model list and `https://models.dev/api.json` for
+prices) and found one hole, patched in the copy: the plugin wrote a patched copy of a Pi module to
+a fixed name in the shared temporary folder and imported it, so another user of the machine who
+made that folder first could run code as the Pi user; the copy keeps it in its own folder's
+`.cache` (mode 0700) instead. The plugin declares Pi `>=0.82.0` (`@earendil-works/pi-coding-agent`);
+the tool cannot run `pi --version`, so it does not check.
+
+What `apply` writes:
+
+- the plugin, when pluxy's copy is not in the agent folder;
+- in `cliproxyapi.json`, `baseUrl` (the core's address, without a final `/` or `/v1`) and `apiKey`
+  (the client key, which the plugin sends as a bearer token); the other keys stay;
+- in `settings.json`, the local package `./pluxy-cliproxyapi-provider` in `packages` (the relative
+  form Pi itself writes; an entry the person narrowed stays as it is), without an older app's
+  `npm:@router-for-me/pi-cliproxyapi-provider` entry (both would register the same provider and
+  commands; its npm files stay), `defaultProvider` (cliproxyapi.json's `providerId`, else
+  `cliproxyapi`) and `defaultModel`; the other packages and settings stay;
+- `cliproxyapi-models.json` is removed, so the plugin lists the core's models afresh.
+
+Files are written back as JSON with two-space indentation; key order and numbers' digits stay.
+Clear's three-way merge brings back what Apply replaced unless the person changed it since; on top,
+pluxy's plugin never stays listed, an entry Apply took out of `packages` comes back, and a model
+cache Apply removed is removed again when there was none before Apply (else the plugin's newer one
+stays). **Uninstall** takes only the plugin's entry out of `settings.json` (through `apply`, so
+Clear and Restore Backup still work afterward) and removes its folder; the connection settings stay,
+as in the old app. Clear, Restore Backup and Uninstall remove pluxy's plugin folder once
+`settings.json` no longer lists it. `preview` and `apply` refuse, before writing, a file Pi or the
+plugin would not take: `settings.json` or `cliproxyapi.json` not strict JSON (a byte order mark
+too) or not an object, `packages` not a list of package sources (a string, or an object with a
+string `source`), `defaultProvider`, `defaultModel`, `baseUrl`, `apiKey` or `providerId` not text.
+Clear and Uninstall refuse such files too; Restore Backup still puts the originals back. A missing file is an empty one; the cache is not checked (Apply removes it). Apply writes the files owner-only (the library takes away the group's and others' bits), since `cliproxyapi.json` holds the key. Neither file has a
+version field, so none is checked. The key may not hold spaces; the model is one ID without spaces.
+
 ## `execution`
 
 `pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, a program
@@ -913,3 +1120,44 @@ LaunchServices must have an app for it.
 On both, an app launch carries nothing but the app (no environment, standard input, secret or
 managed lifetime), and a terminal launch takes no standard input: the execution program refuses
 either before the host is asked.
+
+## `wsl`
+
+`pluxy/wsl` (program `bin/pluxy-wsl.exe`, Windows only: on any other system every operation answers
+`unsupported`) tells pluxy's desktop app which WSL distributions and users there are, checks one,
+and prepares launches inside it. The app sets a client up in a distribution by running the client
+package's own Linux program there, through `wsl.exe`; this tool only reads. It writes nothing
+anywhere and never starts a launch. It runs only Windows' own `wsl.exe`, from System32 as
+`GetSystemDirectoryW` reports it: with no window, empty standard input, an environment of
+`SystemRoot`, `WINDIR` and `WSL_UTF8=1` only, its output read while it runs and capped, and a
+deadline after which it is ended through its own handle (10 seconds to list, 60 for a run inside a
+distribution, which may have to start). The call's cancel ends it too. WSL 1 sometimes refuses a
+launch with `0xd0000225` before anything runs; such a run is tried again, up to three times, two
+seconds apart, within the deadline. Inside a distribution it runs one fixed `sh -c` script per
+operation, with no login shell and no rc file; names reach a script only as `wsl.exe`'s `-d` and
+`-u` values or as the script's arguments.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `distros` | `read` | none | `distros`: each distribution's `name`, `default` (true for WSL's default) and `version` (1, 2 or null); `installed`: false when WSL is missing or not enabled, or no distribution pluxy can use is installed (no `wsl.exe` in System32; a listing that names none, as the `wsl.exe` on GitHub's windows-latest answers with no distribution; or `wsl.exe --list` failing with WSL's error code `WSL_E_DEFAULT_DISTRO_NOT_FOUND` or `WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED`; an old inbox `wsl.exe` of Windows 10 that prints no code answers `unavailable` instead). From `wsl.exe --list --quiet`, which starts no distribution, and the registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`), read only for the default mark and the version (the WSL 2 bit, `0x8`, of each distribution's `Flags`, as `wsl.exe --list --verbose` reports it; its `Version` value is the registration's format, not the WSL version) |
+| `users` | `read` | `distro` | `users`: root (last) and each person's account (user ID 1000 to 59999, a login shell, an absolute home), each with `name`, `uid`, `home`, `default`, `root`; `default`: the user the distribution starts as; `arch` (`amd64` or `arm64`); `wsl` (the version). Starts the distribution and reads `getent passwd` (else `/etc/passwd`) as its default user |
+| `check` | `read` | `distro`, `user` | As that user: `distro`, `user`, `uid`, `home`, `arch`, `wsl`; `drives`, each Windows drive mounted (`letter`, `path`, and `exec`: false on a `noexec` mount); `automount`, the folder WSL mounts drives in (that of drive C, with a trailing `/`; null with none). Refused when it ran as another user or in another distribution |
+| `prepare` | `read` | `distro`, `user`, `kind` (`terminal` or `direct`), `program` (a name found on the user's PATH as `wsl.exe --exec` gives it) or `override` (a full Linux path), `args`, `cwd` (a Linux folder; default the user's home) | `launch`, exactly `pluxy/execution`'s `launch` input: `executable` (System32's `wsl.exe`), `argv` (`-d <distro> -u <user> --cd <folder> --exec <program> <args>`), `cwd` (the person's home folder on Windows, from `HOME`) and `program`; and `kind` beside it, which the host applies before it calls execution (`terminal`: a console window of its own, no standard input, no managed lifetime) |
+
+Names are checked before `wsl.exe` runs: a distribution name as the old app accepted one (not
+empty, `.` or `..`; none of `\ / : * ? " < > |`, no control character, no trailing dot or space), at
+most 64 characters and not starting with `-`; Docker Desktop's `docker-desktop` and
+`docker-desktop-data` are hidden and refused; a user name is a POSIX portable name
+(`[a-z_][a-z0-9_-]*[$]?`, at most 32 bytes). A missing distribution or user is `not_found` (WSL 1
+reports a missing user as a connection error, so its message says the user was not found or could
+not be started). `prepare` finds the program and checks the folder inside the distribution as the
+user; a program that only a shell profile puts on the PATH (such as one nvm installs) is not found
+by name, and is given by its full path. The program it names is not pinned: it is found again when
+the launch starts.
+
+Tests: unit tests on every system (decoding UTF-16 and UTF-8 `wsl.exe` output, hidden and refused
+names, the users and mounts read, the `prepare` script run by `/bin/sh` on Linux and macOS);
+`tests/real_wsl.rs`, run by the platforms workflow's WSL job with `--ignored` against Windows' own
+`wsl.exe` and real distributions under WSL 2 and WSL 1, including the fixture writer's Linux program
+run in a distribution as the host runs one, its hello refused for another user or distribution.
+No test stands in for `wsl.exe`.
