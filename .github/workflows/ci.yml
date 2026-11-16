@@ -1,0 +1,154 @@
+name: CI
+
+# The checks every pull request and every merge-queue group must pass. The `gate` job is the one
+# check `main` requires. A required check from a path-filtered workflow would stay pending forever
+# on a change outside its paths, and `merge_group` events take no path filter. So this workflow
+# always runs: it works out which folders the change touches, runs those folders' workflows as
+# reusable workflows, and `gate` passes only when every one it ran passed. Each of those
+# workflows also runs by itself on pushes to `main` and by hand.
+
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Lists the files the change touches: for a pull request, the same three-dot diff its path
+  # filters used (base...head); for a merge group, everything the group adds to the base branch,
+  # including the PRs queued ahead of it. (The group's base_sha is its parent commit, which is the
+  # group ahead of it in the queue when groups build side by side.)
+  # Each output says whether a workflow's paths were touched, using the paths that workflow's
+  # own pull_request trigger had. A change to this file runs them all.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.paths.outputs.core }}
+      app: ${{ steps.paths.outputs.app }}
+      next-ci: ${{ steps.paths.outputs.next-ci }}
+      next-app: ${{ steps.paths.outputs.next-app }}
+      next-app-platforms: ${{ steps.paths.outputs.next-app-platforms }}
+      next-app-tools-platforms: ${{ steps.paths.outputs.next-app-tools-platforms }}
+      next-corpus: ${{ steps.paths.outputs.next-corpus }}
+    steps:
+      # Full history for the merge base, without file contents: the diff needs only trees.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: .github
+          persist-credentials: false
+      - name: Work out which workflows to run
+        id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = merge_group ]; then
+            range=("refs/remotes/origin/${GROUP_BASE_REF#refs/heads/}...$GROUP_HEAD")
+          else
+            range=("$PR_BASE...$PR_HEAD")
+          fi
+          # --no-renames lists a renamed file under its old and its new path, as path filters see it;
+          # -z keeps git from quoting unusual paths.
+          git diff --no-renames --name-only -z "${range[@]}" > "$RUNNER_TEMP/changed"
+          echo "$(tr -cd '\0' < "$RUNNER_TEMP/changed" | wc -c) changed files"
+          declare -A run=()
+          for w in core app next-ci next-app next-app-platforms next-app-tools-platforms next-corpus; do run[$w]=false; done
+          while IFS= read -r -d '' path; do
+            case $path in
+              .github/workflows/ci.yml) for w in "${!run[@]}"; do run[$w]=true; done ;;
+            esac
+            case $path in core/* | .github/workflows/core-pr-test-build.yml) run[core]=true ;; esac
+            case $path in extensions/app/* | .github/workflows/app-ci.yml) run[app]=true ;; esac
+            case $path in next/* | .github/workflows/next-ci.yml) run[next-ci]=true ;; esac
+            case $path in next/* | .github/workflows/next-app.yml) run[next-app]=true ;; esac
+            case $path in next/* | .github/workflows/next-app-platforms.yml) run[next-app-platforms]=true ;; esac
+            case $path in next/app-tools/* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
+            case $path in next/* | core/* | .github/workflows/next-corpus.yml) run[next-corpus]=true ;; esac
+          done < "$RUNNER_TEMP/changed"
+          for w in "${!run[@]}"; do
+            echo "$w=${run[$w]}" | tee -a "$GITHUB_OUTPUT"
+          done
+
+  core:
+    name: Core CI
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
+    uses: ./.github/workflows/core-pr-test-build.yml
+
+  app:
+    name: App CI
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    uses: ./.github/workflows/app-ci.yml
+
+  next-ci:
+    name: Next CI
+    needs: changes
+    if: needs.changes.outputs.next-ci == 'true'
+    uses: ./.github/workflows/next-ci.yml
+
+  next-app:
+    name: Next app
+    needs: changes
+    if: needs.changes.outputs.next-app == 'true'
+    uses: ./.github/workflows/next-app.yml
+
+  next-app-platforms:
+    name: Next app platforms
+    needs: changes
+    if: needs.changes.outputs.next-app-platforms == 'true'
+    uses: ./.github/workflows/next-app-platforms.yml
+
+  next-app-tools-platforms:
+    name: Next app tools platforms
+    needs: changes
+    if: needs.changes.outputs.next-app-tools-platforms == 'true'
+    uses: ./.github/workflows/next-app-tools-platforms.yml
+
+  next-corpus:
+    name: Next corpus
+    needs: changes
+    if: needs.changes.outputs.next-corpus == 'true'
+    uses: ./.github/workflows/next-corpus.yml
+
+  # The required check. It runs even when the run is cancelled (always()), so a cancelled run
+  # fails it instead of leaving it skipped, which would count as passing. It passes only when
+  # the changes job passed and every workflow it chose passed; a workflow it did not choose
+  # must have been skipped.
+  gate:
+    if: always()
+    needs:
+      - changes
+      - core
+      - app
+      - next-ci
+      - next-app
+      - next-app-platforms
+      - next-app-tools-platforms
+      - next-corpus
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every chosen workflow passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
+          jq -e '.changes.result == "success" and (.changes.outputs as $run |
+            del(.changes) | to_entries | length > 0 and all(.[];
+              if $run[.key] == "true" then .value.result == "success"
+              elif $run[.key] == "false" then .value.result == "skipped"
+              else false end))' <<<"$NEEDS" > /dev/null
