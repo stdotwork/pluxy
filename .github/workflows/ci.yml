@@ -25,7 +25,8 @@ jobs:
   # including the PRs queued ahead of it. (The group's base_sha is its parent commit, which is the
   # group ahead of it in the queue when groups build side by side.)
   # Each output says whether a workflow's paths were touched, using the paths that workflow's
-  # own pull_request trigger had. A change to this file runs them all.
+  # own pull_request trigger had. A change to this file runs them all. next-app-tools-wsl is not a
+  # workflow: it says whether next-app-tools-platforms.yml runs its WSL jobs.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -35,6 +36,7 @@ jobs:
       next-app: ${{ steps.paths.outputs.next-app }}
       next-app-platforms: ${{ steps.paths.outputs.next-app-platforms }}
       next-app-tools-platforms: ${{ steps.paths.outputs.next-app-tools-platforms }}
+      next-app-tools-wsl: ${{ steps.paths.outputs.next-app-tools-wsl }}
       next-corpus: ${{ steps.paths.outputs.next-corpus }}
     steps:
       # Full history for the merge base, without file contents: the diff needs only trees.
@@ -65,7 +67,7 @@ jobs:
           git diff --no-renames --name-only -z "${range[@]}" > "$RUNNER_TEMP/changed"
           echo "$(tr -cd '\0' < "$RUNNER_TEMP/changed" | wc -c) changed files"
           declare -A run=()
-          for w in core app next-ci next-app next-app-platforms next-app-tools-platforms next-corpus; do run[$w]=false; done
+          for w in core app next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-wsl next-corpus; do run[$w]=false; done
           while IFS= read -r -d '' path; do
             case $path in
               .github/workflows/ci.yml) for w in "${!run[@]}"; do run[$w]=true; done ;;
@@ -76,6 +78,12 @@ jobs:
             case $path in next/* | .github/workflows/next-app.yml) run[next-app]=true ;; esac
             case $path in next/* | .github/workflows/next-app-platforms.yml) run[next-app-platforms]=true ;; esac
             case $path in next/app-tools/* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
+            # What the WSL jobs build and run: pluxy/wsl, pluxy-program, pluxy-transactions (with its
+            # fixture writer) and pluxy-files, which it depends on, and the workspace's manifest and lock.
+            case $path in
+              next/app-tools/wsl/* | next/app-tools/lib/program/* | next/app-tools/lib/transactions/* | next/app-tools/lib/files/* | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock | .github/workflows/next-app-tools-platforms.yml)
+                run[next-app-tools-wsl]=true ;;
+            esac
             case $path in next/* | core/* | .github/workflows/next-corpus.yml) run[next-corpus]=true ;; esac
           done < "$RUNNER_TEMP/changed"
           for w in "${!run[@]}"; do
@@ -117,6 +125,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.next-app-tools-platforms == 'true'
     uses: ./.github/workflows/next-app-tools-platforms.yml
+    with:
+      wsl: ${{ needs.changes.outputs.next-app-tools-wsl == 'true' }}
 
   next-corpus:
     name: Next corpus
@@ -127,7 +137,9 @@ jobs:
   # The required check. It runs even when the run is cancelled (always()), so a cancelled run
   # fails it instead of leaving it skipped, which would count as passing. It passes only when
   # the changes job passed and every workflow it chose passed; a workflow it did not choose
-  # must have been skipped.
+  # must have been skipped. A job a chosen workflow skips itself (next-app-tools-platforms' WSL
+  # jobs when next-app-tools-wsl is false) is not one of these: the workflow's result is still
+  # its own, and only success passes.
   gate:
     if: always()
     needs:

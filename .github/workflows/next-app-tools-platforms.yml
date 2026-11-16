@@ -10,6 +10,11 @@ on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
   # its paths below are touched.
   workflow_call:
+    inputs:
+      wsl:
+        description: Run the WSL jobs. ci.yml passes false when nothing they build or run changed.
+        type: boolean
+        default: true
   workflow_dispatch:
   push:
     branches:
@@ -94,6 +99,10 @@ jobs:
   # run and pass; a skipped or missing one fails it.
   wsl:
     name: WSL ${{ matrix.wsl }}
+    # Pushes to main and manual runs always run it; ci.yml decides for pull requests and merge
+    # groups. (On those events there is no wsl input, and an expression's null equals false, so
+    # the event is checked, not inputs.wsl != false.)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || inputs.wsl
     runs-on: windows-latest
     timeout-minutes: 90
     strategy:
