@@ -435,9 +435,9 @@ fn private_dir(p: &Path) -> Result<(), String> {
     fs::set_permissions(p, fs::Permissions::from_mode(0o700))
         .map_err(|e| format!("{}: {e}", p.display()))
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn private_dir(p: &Path) -> Result<(), String> {
-    fs::create_dir_all(p).map_err(|e| format!("{}: {e}", p.display()))
+    crate::private_windows::create_private_dir_all(p).map_err(|e| format!("{}: {e}", p.display()))
 }
 
 /// Removes a store or staging folder, whose files and folders are read-only.
@@ -485,11 +485,13 @@ fn freeze(dir: &Path, root: bool) -> Result<(), String> {
     sync_dir(dir)
 }
 
-/// Flushes a folder's entries to disk, so a file renamed into it stays after a power loss.
+/// Flushes a folder's entries to disk, so a file renamed into it stays after a power loss. Not on
+/// Windows: it has no call that flushes a folder (one cannot be opened for writing its data), and
+/// NTFS journals the rename into it; each file is flushed before it is renamed into place.
 fn sync_dir(dir: &Path) -> Result<(), String> {
     #[cfg(unix)]
     fs::File::open(dir)
-        .and_then(|f| f.sync_all())
+        .and_then(|f| crate::vault::sync_folder(&f))
         .map_err(|e| format!("{}: {e}", dir.display()))?;
     #[cfg(not(unix))]
     let _ = dir;

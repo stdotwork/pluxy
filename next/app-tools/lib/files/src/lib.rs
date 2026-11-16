@@ -113,6 +113,20 @@ pub fn is_private(path: &Path) -> io::Result<bool> {
     imp::is_private(path)
 }
 
+/// Whether anyone but this user may change the file or folder path (not followed if it is a link),
+/// on Windows: its owner is not this user, the owner this process gives what it makes, SYSTEM or
+/// the Administrators group; or it has no access list (which allows everyone); or an allow entry
+/// that applies to it gives a write-type right (write or append data, add or delete what a folder
+/// holds, delete, change its access list or owner, generic write or all) to an account other than
+/// this user, SYSTEM or Administrators (whose reach matches root's). Entries only inherited by what
+/// a folder holds do not count; an allow entry of any other kind counts as one that may write.
+/// Inherited lists are accepted as they are (unlike [`is_private`]), so a folder in the user's
+/// profile, which allows SYSTEM and Administrators, is one that no one else may change.
+#[cfg(windows)]
+pub fn others_may_write(path: &Path) -> io::Result<bool> {
+    imp::others_may_write(path)
+}
+
 /// A lock file this process holds (macOS and Windows): no other process can take it while this
 /// lives. Dropping it releases and removes it.
 #[cfg(any(windows, target_os = "macos"))]
@@ -281,8 +295,8 @@ mod imp {
     use windows_sys::Win32::Security::{
         CreateWellKnownSid, EqualSid, GetAce, GetSecurityDescriptorControl, GetTokenInformation,
         InitializeSecurityDescriptor, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
-        TokenOwner, TokenUser, WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
-        DACL_SECURITY_INFORMATION, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
+        TokenOwner, TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid, ACCESS_ALLOWED_ACE,
+        ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
         PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
         SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE, SE_DACL_PROTECTED,
         SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_INFORMATION_CLASS, TOKEN_QUERY,
@@ -665,6 +679,83 @@ mod imp {
             )
         })?;
         Ok((owner, Local(sd)))
+    }
+
+    /// `INHERIT_ONLY_ACE` (winnt.h): an entry only passed down, not applied to the object itself.
+    const INHERIT_ONLY: u8 = 0x08;
+    /// The write-type rights: `FILE_WRITE_DATA`, `FILE_APPEND_DATA`, `FILE_DELETE_CHILD`,
+    /// `DELETE`, `WRITE_DAC`, `WRITE_OWNER`, `GENERIC_ALL`, `GENERIC_WRITE`.
+    const WRITE_RIGHTS: u32 =
+        0x2 | 0x4 | 0x40 | 0x1_0000 | 0x4_0000 | 0x8_0000 | 0x1000_0000 | 0x4000_0000;
+
+    /// The Administrators group's SID.
+    fn administrators() -> io::Result<System> {
+        let mut s = System([0; SECURITY_MAX_SID_SIZE.div_ceil(8) as usize]);
+        let mut len = SECURITY_MAX_SID_SIZE;
+        ok(unsafe {
+            CreateWellKnownSid(
+                WinBuiltinAdministratorsSid,
+                null_mut(),
+                s.0.as_mut_ptr().cast(),
+                &mut len,
+            )
+        })?;
+        Ok(s)
+    }
+
+    pub fn others_may_write(path: &Path) -> io::Result<bool> {
+        let f = open_itself(path, FILE_READ_ATTRIBUTES | READ_CONTROL)?;
+        let user = TokenSid::user()?;
+        let default_owner = TokenSid::default_owner()?;
+        let system = System::sid()?;
+        let admins = administrators()?;
+        let mut owner: PSID = null_mut();
+        let mut dacl: *mut ACL = null_mut();
+        let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+        win32(unsafe {
+            GetSecurityInfo(
+                handle(&f),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                &mut owner,
+                null_mut(),
+                &mut dacl,
+                null_mut(),
+                &mut sd,
+            )
+        })?;
+        let _sd = Local(sd);
+        let trusted = |sid: PSID| unsafe {
+            EqualSid(sid, user.sid()) != 0
+                || EqualSid(sid, system.ptr()) != 0
+                || EqualSid(sid, admins.ptr()) != 0
+        };
+        if !(owner_accepted(owner, &user, &default_owner, &system)
+            || (!owner.is_null() && unsafe { EqualSid(owner, admins.ptr()) } != 0))
+            || dacl.is_null()
+        {
+            return Ok(true);
+        }
+        for i in 0..u32::from(unsafe { (*dacl).AceCount }) {
+            let mut ace: *mut core::ffi::c_void = null_mut();
+            if unsafe { GetAce(dacl, i, &mut ace) } == 0 {
+                return Ok(true);
+            }
+            let header = unsafe { &*(ace as *const ACE_HEADER) };
+            if header.AceFlags & INHERIT_ONLY != 0 || header.AceType == ACCESS_DENIED {
+                continue;
+            }
+            if header.AceType != ACCESS_ALLOWED {
+                return Ok(true);
+            }
+            let allowed = unsafe { &*(ace as *const ACCESS_ALLOWED_ACE) };
+            let sid = unsafe { std::ptr::addr_of!((*(ace as *const ACCESS_ALLOWED_ACE)).SidStart) }
+                as PSID;
+            if allowed.Mask & WRITE_RIGHTS != 0 && !trusted(sid) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub fn is_private(path: &Path) -> io::Result<bool> {
