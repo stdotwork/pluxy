@@ -105,3 +105,25 @@ func TestPackAppToolsRefusesTwoToolsWithOneProgramName(t *testing.T) {
 		t.Fatalf("three tools with their own programs: %v", err)
 	}
 }
+
+// A program that is a link in the programs folder is refused, not followed; and -extensions
+// naming no app tool says app tool.
+func TestPackAppToolsRefusesALinkedProgramAndNamesAppTools(t *testing.T) {
+	root, programs := appToolsTree(t, map[string]string{"a": "bin/a"})
+	built := filepath.Join(programs, "linux-amd64", "a")
+	elsewhere := filepath.Join(t.TempDir(), "a")
+	if err := os.Rename(built, elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, built); err != nil {
+		t.Skipf("this account cannot make a symbolic link: %v", err)
+	}
+	err := packAppTools(root, t.TempDir(), programs, []string{"linux/amd64"}, "", io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "is not a regular file (a link or other)") {
+		t.Fatalf("a linked program: %v", err)
+	}
+	err = packAppTools(root, t.TempDir(), programs, []string{"linux/amd64"}, "nosuch", io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "-extensions: no app tool is named nosuch; the app tools are: a (pluxy/a)") {
+		t.Fatalf("-extensions nosuch: %v", err)
+	}
+}

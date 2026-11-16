@@ -135,7 +135,7 @@ func packAppTools(root, out, programs string, platforms []string, only string, s
 	if err != nil {
 		return err
 	}
-	tools, err = selectExtensions(tools, only)
+	tools, err = selectExtensions(tools, only, "app tool")
 	if err != nil {
 		return err
 	}
@@ -165,12 +165,14 @@ func packAppTools(root, out, programs string, platforms []string, only string, s
 			}
 			builtBy[key] = tool.manifest.ID
 			built := filepath.Join(programs, goos+"-"+goarch, path.Base(program))
-			info, err := os.Stat(built)
+			// Not following a link: the program packed is the file built there, not what a link
+			// left in the programs folder points to.
+			info, err := os.Lstat(built)
 			if err != nil {
 				return fmt.Errorf("%s: its program for %s: %w", tool.manifest.ID, platform, err)
 			}
 			if !info.Mode().IsRegular() {
-				return fmt.Errorf("%s: its program for %s, %s, is not a regular file", tool.manifest.ID, platform, built)
+				return fmt.Errorf("%s: its program for %s, %s, is not a regular file (a link or other)", tool.manifest.ID, platform, built)
 			}
 			archive, err := tool.archive(program, built)
 			if err != nil {

@@ -115,7 +115,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	extensions, err = selectExtensions(extensions, *extensionsFlag)
+	extensions, err = selectExtensions(extensions, *extensionsFlag, "extension")
 	if err != nil {
 		return err
 	}
@@ -307,7 +307,7 @@ func (m *manifest) validate() error {
 
 // selectExtensions filters extensions by the comma-separated folder names or package IDs in
 // list.
-func selectExtensions(extensions []extension, list string) ([]extension, error) {
+func selectExtensions(extensions []extension, list, kind string) ([]extension, error) {
 	var names []string
 	for _, name := range strings.Split(list, ",") {
 		if name = strings.TrimSpace(name); name != "" {
@@ -336,7 +336,7 @@ func selectExtensions(extensions []extension, list string) ([]extension, error) 
 		for _, ext := range extensions {
 			known = append(known, ext.name+" ("+ext.manifest.ID+")")
 		}
-		return nil, fmt.Errorf("-extensions: no extension is named %s; the extensions are: %s", strings.Join(unknown, ", "), strings.Join(known, ", "))
+		return nil, fmt.Errorf("-extensions: no %s is named %s; the %ss are: %s", kind, strings.Join(unknown, ", "), kind, strings.Join(known, ", "))
 	}
 	return chosen, nil
 }
