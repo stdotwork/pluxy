@@ -73,11 +73,10 @@ mod startup;
 pub mod trust;
 #[cfg(all(target_os = "linux", feature = "native-test"))]
 mod update_native;
-#[cfg(unix)]
 mod updater;
 mod updates;
 pub mod vault;
-#[cfg(all(windows, feature = "artifact-test-trust"))]
+#[cfg(windows)]
 mod win_acl;
 pub mod window;
 
@@ -163,8 +162,7 @@ struct App {
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
     rotation_open: AtomicBool,
-    /// The app's own update (`updater.rs`).
-    #[cfg(unix)]
+    /// The app's own update (`updater/`).
     updater: updater::State,
 }
 
@@ -2922,18 +2920,15 @@ pub fn run() {
     let context = tauri::generate_context!();
     // The updater plugin exists only when the updater gate passes, before anything else runs: a
     // build without updater trust never loads it.
-    #[cfg(unix)]
     let gate = trust::updater_gate(
         context.config(),
         std::path::Path::new(&std::env::var_os("HOME").unwrap_or_default()),
     );
     let builder = tauri::Builder::default();
-    #[cfg(unix)]
     let builder = match &gate {
         Ok(key) => builder.plugin(tauri_plugin_updater::Builder::new().pubkey(key).build()),
         Err(_) => builder,
     };
-    #[cfg(unix)]
     let updater_plugin = gate.map(|_| ());
     let app = builder
         .invoke_handler(tauri::generate_handler![
@@ -2998,13 +2993,9 @@ pub fn run() {
             window_close,
             privacy_get,
             privacy_set,
-            #[cfg(unix)]
             updater::app_update_get,
-            #[cfg(unix)]
             updater::app_update_start,
-            #[cfg(unix)]
             updater::app_update_cancel,
-            #[cfg(unix)]
             updater::app_update_rollback,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
@@ -3196,7 +3187,6 @@ pub fn run() {
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
                 rotation_open: AtomicBool::new(false),
-                #[cfg(unix)]
                 updater: updater::State::new(updater_plugin.clone()),
             });
             let handle = app.handle().clone();
@@ -3281,9 +3271,7 @@ pub fn run() {
                 show_in_dock(&handle, false);
             }
             // A version an update installed accepts itself, which the earlier one waits for.
-            #[cfg(unix)]
             updater::accept(&handle);
-            #[cfg(unix)]
             updater::record_started_from(&handle);
             #[cfg(feature = "native-test")]
             native_test::start(handle);
@@ -3502,7 +3490,6 @@ mod tests {
         ] {
             assert!(all.iter().any(|a| a == c), "{c} missing from {all:?}");
         }
-        #[cfg(unix)]
         assert!(all.iter().any(|a| a == "plugin:updater|check"));
         assert!(all.iter().all(|c| !c.contains("__app-acl__")));
         assert!(all.len() > 100, "{} plugin commands", all.len());

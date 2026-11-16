@@ -241,6 +241,17 @@ not answer within 20 seconds, or at once if the first could not listen. A socket
 behind is removed by the next app, which holds the lock.
 The lock is not inherited by the app's core.
 
+An update or rollback ([Application update](#application-update)) hands the profile to the
+version it starts without the profile ever being free. On Linux and macOS the app hands that
+version the lock itself (its open file, which the new version adopts). On Windows a lock cannot be
+handed on, so the app stops listening, writes `instance/successor.json` (a random nonce, the
+program's path and its SHA-256) and starts the new version with that nonce in
+`PLUXY_APP_SUCCESSOR`. A launch that finds the lock held, its nonce in that record (at most five
+minutes old), and itself the program the record names, byte for byte, removes the record and is
+the app at once: it listens, so a later launch raises its window, while it waits for the lock,
+which the earlier version holds until it ends. Without the lock within 120 seconds it exits. Any
+other launch is an ordinary later launch.
+
 ## Privacy mode
 
 The navigation's **Privacy mode** toggle masks account e-mail addresses and identifiers where
@@ -462,7 +473,7 @@ takes a new format number, which this app refuses.
 | `published` | RFC 3339 in UTC, ending in `Z`, on a day its month has; second 60 (a leap second) is refused |
 | `notes` | Optional Markdown, at most 64 KiB |
 | `notes_url` | Optional `https://` address with a host and no user name or password, at most 2048 bytes as given and once normalised (percent-encoded) |
-| `update` | Optional, app releases only: signed update artifacts by the updater's target name; the app reads `linux-x86_64-appimage`. Each is `{"url": <https address, as notes_url>, "signature": <Tauri updater signature, base64, at most 4096 characters>, "size": <exact bytes, 1 to 1 GiB>}` |
+| `update` | Optional, app releases only: signed update artifacts by the updater's target name; the app reads `linux-x86_64-appimage` (an AppImage), `windows-x86_64-exe` (the program) and `darwin-aarch64-app` or `darwin-x86_64-app` (the app bundle as a `.app.tar.gz`). Each is `{"url": <https address, as notes_url>, "signature": <Tauri updater signature, base64, at most 4096 characters>, "size": <exact bytes, 1 to 1 GiB>}` |
 
 The whole feed is at most 1 MiB. The feed is not signed: https is its only protection, and
 nothing in it is trusted as markup. Signed update artifacts have their own signatures. Production
@@ -473,19 +484,42 @@ feed addresses, keys and formats are decided at release; until then there is no 
 Version Management's Application Update card offers **Update Now** when the feed's latest app
 release on the chosen channel is newer than the running version and has an artifact for this
 system, and says why not otherwise. It uses the stock Tauri updater plugin
-(`tauri-plugin-updater` 2.14.1) for its release check and signature check only, and replaces the
-AppImage itself, in this order (`src-tauri/src/updater.rs`):
+(`tauri-plugin-updater` 2.14.1) for its release check and signature check only, never for
+installing, and puts the new version in place itself (`src-tauri/src/updater/`). What it replaces
+is the installed copy:
+
+- Linux: the AppImage (`updater/appimage.rs`);
+- Windows: the program of a folder bundle, a folder of yours holding the one self-contained
+  `.exe` (`updater/exe.rs`);
+- macOS: the `.app` bundle (`updater/app.rs`).
+
+In this order:
 
 1. The updater gate ([below](#the-updater-gate)) must pass. The plugin is registered only when
    the gate passes as the app starts, and the gate runs again before each use: a build without
    updater trust never loads it and says the updater is not configured.
-2. The installation must be an AppImage this updater can replace: the bundle type Tauri's bundler
-   compiles into the program is AppImage, `APPIMAGE` names an absolute regular file (not a link)
-   of this user's that no one else can write to, in such a folder, with a type-2 AppImage header,
-   and the program runs from inside it (`APPDIR`). A .deb or .rpm install is refused with how to
-   update through the package manager, and anything else as an unknown format, before anything is
-   downloaded, even when the feed has a signed update. The stock plugin would itself run
-   `pkexec dpkg -i` or `rpm -U` for those.
+2. The installation must be one this updater can replace, or nothing is downloaded, even when the
+   feed has a signed update:
+   - Linux: the bundle type Tauri's bundler compiles into the program is AppImage, `APPIMAGE`
+     names an absolute regular file (not a link) of this user's that no one else can write to, in
+     such a folder, with a type-2 AppImage header, and the program runs from inside it (`APPDIR`).
+     A .deb or .rpm install is refused with how to update through the package manager, and
+     anything else as an unknown format. The stock plugin would itself run `pkexec dpkg -i` or
+     `rpm -U` for those.
+   - Windows: the program carries no bundle type (an MSI or NSIS setup patches one in: such a copy
+     is refused with how to update through its installer), is on a fixed local drive (not a
+     network share or a mapped drive), and it and its folder are plain (no link or junction),
+     yours, and writable by no one else (SYSTEM and Administrators aside). The stock plugin would
+     run the installer for those, and nothing here does: no installer, `msiexec`, elevation,
+     scheduled task or service.
+   - macOS: the program runs as `<name>.app/Contents/MacOS/<program>` of a bundle whose
+     `Info.plist` names this app's identifier and that program; the bundle is not running from a
+     translocated copy (macOS runs an app opened from Downloads or a disk image from a read-only
+     copy: move it into a folder such as Applications first); the bundle and its folder are yours
+     and writable by no one else; and the volume is APFS, which swaps two folders in one step. The
+     stock plugin would ask for an administrator's password when it cannot write the bundle;
+     nothing here does (no `osascript`, `sudo`, `installer` or `authopen`), and the quarantine
+     attribute is neither added nor removed.
 3. The plugin restores the release from the feed (`restore_update`): its default comparison
    allows only a version newer than the running one, and the signature must carry the announced
    version. No custom comparison is set, so the feed can never offer a downgrade.
@@ -493,27 +527,49 @@ AppImage itself, in this order (`src-tauri/src/updater.rs`):
    certificate roots), exactly the announced size, showing progress. A server that sends nothing
    for 30 seconds fails the download; **Cancel Download** stops it within that time and changes
    nothing.
-5. The plugin checks the signature against the compiled updater key; the bytes must be a type-2
-   AppImage.
-6. The running version's AppImage is kept in the app's data folder (`updates/kept/`, the last
-   three versions), pinned by its SHA-256 in `updates/history.json`, and `updates/pending.json`
-   records the install. The app records the AppImage's digest as it starts; if the file has
-   changed since, nothing is kept or installed and the page asks for a restart first. Then the app
-   writes the new AppImage over the old one in one step: a temporary file in the same folder,
-   flushed to disk, renamed over it, and the folder flushed.
+5. The plugin checks the signature against the compiled updater key. Then the bytes must be this
+   system's: a type-2 AppImage; a 64-bit Windows program (not a library) for this processor; or,
+   on macOS, a `.app.tar.gz` holding one `<name>.app` folder of folders and regular files only (no
+   links, devices, `..`, absolute paths, or setuid, setgid or sticky bits; at most 4096 entries
+   and 1 GiB), unpacked into a new folder of yours next to the bundle (`.pluxy-update-<hex>`),
+   whose `Info.plist` names this app's identifier and program and the announced version
+   (`CFBundleShortVersionString`), with a program for this Mac.
+6. The running version's copy is kept in the app's data folder (`updates/kept/`, the last three
+   versions), pinned in `updates/history.json` by its SHA-256 (on macOS, a digest of the bundle's
+   whole tree: every folder, file, size, content digest and execute bit), and
+   `updates/pending.json` records the install. The app records that digest as it starts; if the
+   installed copy has changed since, nothing is kept or installed and the page asks for a restart
+   first. Then the new version goes in place:
+   - Linux: a temporary file in the same folder, flushed to disk, renamed over the AppImage, and
+     the folder flushed: the AppImage is the old one or the new one.
+   - Windows: a running program can be renamed but not replaced, so the new program is written
+     next to it and flushed, the running one is renamed aside (`.pluxy-old-<hex>.exe`) and the new
+     one renamed into its place, each rename written through to disk (a file a virus scanner holds
+     is waited out for 5 seconds); if the second rename fails, the first is undone. Between the
+     two renames the folder has no program under its name: should the computer lose power right
+     then, rename the `.pluxy-old-<hex>.exe` beside it back (or copy the kept copy from
+     `updates/kept/`). What is left aside is removed once the new version runs and the old one has
+     ended.
+   - macOS: the unpacked bundle and the installed one swap places in one step (`renamex_np` with
+     `RENAME_SWAP`): the bundle is the old one or the new one. The old one, now in the
+     `.pluxy-update-<hex>` folder, is removed once the new version runs and the old one has ended.
 7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
-   that order; detached launches run on) and hides its window, but keeps its profile lock and
-   hands it to the new AppImage it starts, so no other launch takes the profile meanwhile; the
-   tray stays responsive while it waits. It waits up to 90 seconds for the new version to accept
-   itself: once it has started, with the installed file's digest the one
-   pinned, it writes `updates/accepted.json`. If it ends first or does not accept in time, the kept
-   copy (checked against its digest) is put back the same way, the page later says the update
-   failed, and the earlier version starts again with the lock. If the kept copy cannot be put back,
-   nothing is started, and the page says which file in `updates/kept/` to copy over the AppImage.
+   that order; detached launches run on) and hides its window, but keeps its profile and starts the
+   new version as its successor, handing the profile over so no other launch takes it meanwhile
+   ([One app per profile](#one-app-per-profile)); the tray stays responsive while it waits. On
+   macOS the new version's program is started directly, not through Launch Services. The app
+   holds that process (on Linux and macOS in a process group of its own, on Windows by its process
+   handle, outside the app's own jobs) and waits up to 90 seconds for it to accept itself: once it
+   has started, with the installed copy's digest the one pinned, it writes
+   `updates/accepted.json`, and the app lets it go and exits. If it ends first or does not accept
+   in time, the app ends that process (and only it, with what it started), puts the kept copy
+   (checked against its digest) back the same way, the page later says the update failed, and the
+   earlier version starts again with the profile. If the kept copy cannot be put back, nothing is
+   started, and the page says which copy in `updates/kept/` to put in place of the installed one.
 
 **Roll back to <version>…** lists versions that ran here and were kept. It restores only such a
 copy, only while it still has its pinned digest, and only after the native confirmation (with
-the version, digest and file); then the same restart and acceptance follow. It passes the
+the version, digest and installed copy); then the same restart and acceptance follow. It passes the
 updater gate first, as Update Now does, so a build without updater trust refuses it. A version
 never installed here, or a kept copy that changed, is refused without a dialog. While its
 confirmation is open, Update Now and other rollbacks wait.
@@ -1403,14 +1459,19 @@ The app's updater ([Application update](#application-update)) calls it.
   session's summary counts which way each input went.
 - No installer or bundled core yet: the only packages are the test AppImage, the test folder
   bundle (Windows) and the test app bundle (macOS), which are not for release.
-  The app updates only itself, only as an AppImage, on Linux x86_64, and only with test updater
-  trust until release keys exist. Rollback keeps the last three versions that ran on this
-  profile; a new version that hangs is stopped after 90 seconds and the earlier one put back, but
-  one that crashes later, after accepting itself, is not. If the old app itself is killed during
-  those 90 seconds, nothing puts the earlier version back: copy the newest file in
-  `updates/kept/` in the app's data folder over the AppImage to run it again.
-- Changing the release feed needs the native confirmation, so it works on Linux only, and so
-  does opening an address in the browser.
+  The app updates only itself: as an AppImage on Linux x86_64, as a folder bundle's program on
+  Windows x86_64 and as an app bundle on macOS, and only with test updater trust until release
+  keys exist. The native test updates it on Linux, on Windows and on Apple silicon Macs; Intel
+  Macs and Windows on ARM are built for but not run, and how a stock Mac's Gatekeeper and privacy
+  prompts or Windows SmartScreen treat an updated copy is not tested (the app's own download
+  carries no quarantine or Mark of the Web). Rollback keeps the last three versions that ran on
+  this profile; a new version that hangs is stopped after 90 seconds and the earlier one put back,
+  but one that crashes later, after accepting itself, is not. If the old app itself is killed
+  during those 90 seconds, nothing puts the earlier version back: put the newest copy in
+  `updates/kept/` in the app's data folder in place of the installed one to run it again. On
+  Windows a new version waits at most 120 seconds for the old one to end and free the profile,
+  then exits.
+- Opening an address in the browser works on Linux only.
 - Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
   the renderer writes alignment as inline style, which the notes' policy refuses.
 - The app's own core comes only from a local index file for now; an https source joins with the
