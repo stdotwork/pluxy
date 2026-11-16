@@ -55,18 +55,20 @@ func startManaged(t *testing.T, isYAML bool, keys ...string) *mcore {
 	manifest := filepath.Join(binDir, "pluxy-extension.json")
 	dir := t.TempDir()
 	c := &mcore{yaml: isYAML}
-	var content []byte
+	var content func(port int) []byte
 	if isYAML {
 		c.path = filepath.Join(dir, "config.yaml")
-		var b strings.Builder
-		b.WriteString("# core config for the e2e test\nserver:\n  host: 127.0.0.1\n  port: " + strconv.Itoa(freePort(t)) + "\naccess:\n  api-keys:\n")
-		for _, k := range keys {
-			fmt.Fprintf(&b, "    - %q\n", k)
+		content = func(port int) []byte {
+			var b strings.Builder
+			b.WriteString("# core config for the e2e test\nserver:\n  host: 127.0.0.1\n  port: " + strconv.Itoa(port) + "\naccess:\n  api-keys:\n")
+			for _, k := range keys {
+				fmt.Fprintf(&b, "    - %q\n", k)
+			}
+			fmt.Fprintf(&b, "management:\n  secret-key: %q\n", managementKey)
+			b.WriteString("routing:\n  strategy: round-robin # how accounts are picked\n")
+			fmt.Fprintf(&b, "extension:\n  manifest: %q\n  accounts:\n    - id: upstream-1\n      settings:\n        base_url: %q\n      credential:\n        kind: api_key\n        api_key: %q\n", manifest, u.URL+"/v1", upstreamKey)
+			return []byte(b.String())
 		}
-		fmt.Fprintf(&b, "management:\n  secret-key: %q\n", managementKey)
-		b.WriteString("routing:\n  strategy: round-robin # how accounts are picked\n")
-		fmt.Fprintf(&b, "extension:\n  manifest: %q\n  accounts:\n    - id: upstream-1\n      settings:\n        base_url: %q\n      credential:\n        kind: api_key\n        api_key: %q\n", manifest, u.URL+"/v1", upstreamKey)
-		content = []byte(b.String())
 	} else {
 		c.path = filepath.Join(dir, "config.json")
 		cfg := map[string]any{
@@ -83,13 +85,11 @@ func startManaged(t *testing.T, isYAML bool, keys ...string) *mcore {
 				}},
 			},
 		}
-		content, _ = json.MarshalIndent(cfg, "", "  ")
-		content = append(content, '\n')
+		b, _ := json.MarshalIndent(cfg, "", "  ")
+		b = append(b, '\n')
+		content = func(int) []byte { return b }
 	}
-	if err := os.WriteFile(c.path, content, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	c.base, _ = runCoreFile(t, c.path, noWatch...)
+	c.base, _, _ = startOnFreePort(t, filepath.Join(binDir, "pluxy"), c.path, content, noWatch...)
 	return c
 }
 

@@ -815,8 +815,12 @@ of the bytes or the chosen path is logged, and the answers carry neither.
 
 ## Secrets, references and the vault
 
-The app keeps a host-private **vault** in its data folder (`vault`, owner-only: 0700, files
-0600): the secrets the person entered, and each native tool's backups and journals. It is never a
+The app keeps a host-private **vault** in its data folder (`vault`; on Windows in its local data
+folder, which does not roam with the profile), owner-only: on Linux and macOS folders 0700 and
+files 0600 of the user; on Windows a protected access list whose allow entries name only the user
+and SYSTEM, set as each folder and file is made, and an owner that is the user, the token's default
+owner (Administrators for an elevated account) or SYSTEM, checked at each read. It holds the
+secrets the person entered, and each native tool's backups and journals. It is never a
 folder a package names or reads through the host, and no window or page API gives its paths, a
 secret's value, a backup's bytes or a journal's intent. A native tool has the user's full access
 and could read it directly: this separates APIs and storage, it is not an operating-system
