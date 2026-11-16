@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 cap-std = "=4.0.3"
 getrandom = "0.3"
+libc = "=0.2.191"
 pluxy-program = { path = "../program" }
 # Keys keep their order and numbers their digits in the files the library rewrites.
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }

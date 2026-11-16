@@ -12,14 +12,18 @@ cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi, usage-opencode)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
 cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup, execution, omp-setup, opencode, grok-setup, hermes-setup and pi-setup
+cargo build --release --locked -p wsl           # pluxy/wsl, for Windows (bin/pluxy-wsl.exe)
 ```
 
-Platforms: every tool runs on Linux. The usage hub, the usage parsers, `codex-sessions` and
-`execution` also build and are tested on Windows and macOS
+Platforms: every tool but `wsl` runs on Linux. The usage hub, the usage parsers,
+`codex-sessions` and `execution` also build and are tested on Windows and macOS
 (`.github/workflows/next-app-tools-platforms.yml`), and their manifests name programs for
 `darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does not run native tools on those
-systems yet. `lib/transactions`, `claude-code`, `claude-desktop` and `codex-setup` are Linux only
-for now.
+systems yet. `wsl` is a Windows tool (`windows/amd64`, `windows/arm64`; on other systems it builds
+and answers every operation `unsupported`); that workflow's WSL jobs run it, and `lib/program` and
+`lib/transactions` built for Linux, against real WSL distributions. `lib/transactions`,
+`claude-code`, `claude-desktop`, `codex-setup`, `opencode`, `omp-setup`, `grok-setup`,
+`hermes-setup` and `pi-setup` are Linux only for now.
 
 ## `lib/files`
 
@@ -69,6 +73,7 @@ The program side of the contract, for any tool (`pluxy-program`):
 | `Error` | The contract's error object: `invalid_request`, `unsupported`, `not_found`, `unavailable`, `internal`, `cancelled`, or any code. |
 | `read_frame`, `write_frame` | The framing: a four-byte big-endian length and UTF-8 JSON; a program's frames are at most `MAX_FRAME` (1 MiB). |
 | `MAX_BATCH` | The largest batch a producer may send, 48 KiB of JSON. |
+| `environment` | `PLUXY_ENVIRONMENT`, which the host sets when it runs a package's Linux program in a WSL distribution: `wsl:<distribution>:<user>`. `Identity::from_env` (so `run`) then checks that `WSL_DISTRO_NAME` is that distribution and that the effective user ID's name in `/etc/passwd` is that user; otherwise the program stops before hello with `pluxy expected WSL <d>/<u>, this is <d'>/<u'>`, so a record of a distribution or user made again under the same name, or a routing mistake, runs nothing. Anywhere but Linux the variable is refused. |
 
 Each call runs on a thread of its own that ends with the call; the thread that reads stdin
 routes cancels, the answers to a call's own calls, vault and jobs frames, and a job's acks. An
@@ -161,7 +166,7 @@ journal store of its own. Linux.
 | Item | What it does |
 | --- | --- |
 | `Selection` | What the person selected: `File(path)`, a config file that may be a link (as stow makes), or `Root { root, path }`, a file inside a root folder that may be a link (as chezmoi can make), `path` being slash-separated parts inside it. |
-| `Transactions::new(vault, data)` | The operations for one call: `vault` is the `Call` (or any `Vault`), `data` the tool's data folder (`data_dir()`, `PLUXY_TOOL_DATA_DIR`), where the state file `transactions.json` (0600) keeps each set's targets and backup IDs, the originals kept for restore, and the journals left open. |
+| `Transactions::new(vault, data)` | The operations for one call: `vault` is the `Call` (or any `Vault`), `data` the tool's data folder (`data_dir()`, `PLUXY_TOOL_DATA_DIR`), where the state file `transactions.json` (0600) keeps each set's targets and backup IDs, the originals kept for restore, and the journals left open. A data folder that does not exist yet reads as an empty state, and the first write of the state file makes it (0700, with any missing folders above it), so a preview or status leaves nothing behind; in WSL the host cannot make it before the program starts. A link there, or a folder another user owns, is refused. |
 | `preview(set, selections)` | Resolves and pins each selection: `{"set", "targets": [<pin>], "applied", "edited"}`. A pin names the selected path, its link's text, the file it resolves to, the identities (device and inode) of the link, the root, the file's folder and the file, and the file's SHA-256. A link inside a selected root, a part that leaves it (`..`, `.`, empty) and anything but a regular file are refused. A read: it asks nothing, and it reports a file's existence and SHA-256 for any path, so a writer must not export it to other packages. |
 | `apply(set, pins, image, merge, written)` | Writes each pinned target with what `image` makes of its bytes now, and records `set` as applied: its original images (with the person's edits since the last apply promoted into them by `merge`) and its applied images, as vault backups. A record none of whose selections still resolves to its target (a link pointed elsewhere) is replaced, its originals kept for restore. |
 | `clear(set, pins, merge, written)` | Each target becomes what `merge` makes of its original, its applied image and its bytes now: the writer's untouched values go, the person's edits stay. A pin of the recorded target file itself (named directly) reaches a record made through a link that now points elsewhere. |
@@ -216,6 +221,16 @@ How a write goes:
   otherwise puts back, from the backups, each file that holds the new bytes, leaving any file
   another program changed since (or whose backup is gone), its original kept for restore, and
   ends it rolled back. It never writes the new bytes again, and repeating it changes nothing more.
+
+In a WSL distribution (`PLUXY_ENVIRONMENT` set, see `lib/program`), a selection on a Windows drive is
+refused (`This file is on a Windows drive; set it up from Windows local.`) when it resolves, before
+anything is read, and so is a journalled target's folder or file at recovery. A path is on a Windows drive
+when the mount holding it in `/proc/self/mountinfo` is of type `drvfs`, `9p` or `virtiofs`, or is
+mounted directly in the folder WSL mounts drives in (the folder holding a one-letter drive mount,
+such as `/mnt`), as `/mnt/wsl` is. Checked are the selected path's folder, the folder of the file
+written and the file itself (a file can be a mount of its own), and at recovery the pinned folder
+and file. Without metadata, a drive keeps no owner-only
+permission bits, and Windows' own writer sets those files up.
 
 Other programs do not take part in these checks: a write between the last check and the rename,
 or after the final check, is not seen, and several files are journalled, not written atomically.
@@ -1065,3 +1080,44 @@ LaunchServices must have an app for it.
 On both, an app launch carries nothing but the app (no environment, standard input, secret or
 managed lifetime), and a terminal launch takes no standard input: the execution program refuses
 either before the host is asked.
+
+## `wsl`
+
+`pluxy/wsl` (program `bin/pluxy-wsl.exe`, Windows only: on any other system every operation answers
+`unsupported`) tells pluxy's desktop app which WSL distributions and users there are, checks one,
+and prepares launches inside it. The app sets a client up in a distribution by running the client
+package's own Linux program there, through `wsl.exe`; this tool only reads. It writes nothing
+anywhere and never starts a launch. It runs only Windows' own `wsl.exe`, from System32 as
+`GetSystemDirectoryW` reports it: with no window, empty standard input, an environment of
+`SystemRoot`, `WINDIR` and `WSL_UTF8=1` only, its output read while it runs and capped, and a
+deadline after which it is ended through its own handle (10 seconds to list, 60 for a run inside a
+distribution, which may have to start). The call's cancel ends it too. WSL 1 sometimes refuses a
+launch with `0xd0000225` before anything runs; such a run is tried again, up to three times, two
+seconds apart, within the deadline. Inside a distribution it runs one fixed `sh -c` script per
+operation, with no login shell and no rc file; names reach a script only as `wsl.exe`'s `-d` and
+`-u` values or as the script's arguments.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `distros` | `read` | none | `distros`: each distribution's `name`, `default` (true for WSL's default) and `version` (1, 2 or null); `installed`: false when WSL is missing or not enabled, or no distribution pluxy can use is installed (no `wsl.exe` in System32; a listing that names none, as the `wsl.exe` on GitHub's windows-latest answers with no distribution; or `wsl.exe --list` failing with WSL's error code `WSL_E_DEFAULT_DISTRO_NOT_FOUND` or `WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED`; an old inbox `wsl.exe` of Windows 10 that prints no code answers `unavailable` instead). From `wsl.exe --list --quiet`, which starts no distribution, and the registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`), read only for the default mark and the version (the WSL 2 bit, `0x8`, of each distribution's `Flags`, as `wsl.exe --list --verbose` reports it; its `Version` value is the registration's format, not the WSL version) |
+| `users` | `read` | `distro` | `users`: root (last) and each person's account (user ID 1000 to 59999, a login shell, an absolute home), each with `name`, `uid`, `home`, `default`, `root`; `default`: the user the distribution starts as; `arch` (`amd64` or `arm64`); `wsl` (the version). Starts the distribution and reads `getent passwd` (else `/etc/passwd`) as its default user |
+| `check` | `read` | `distro`, `user` | As that user: `distro`, `user`, `uid`, `home`, `arch`, `wsl`; `drives`, each Windows drive mounted (`letter`, `path`, and `exec`: false on a `noexec` mount); `automount`, the folder WSL mounts drives in (that of drive C, with a trailing `/`; null with none). Refused when it ran as another user or in another distribution |
+| `prepare` | `read` | `distro`, `user`, `kind` (`terminal` or `direct`), `program` (a name found on the user's PATH as `wsl.exe --exec` gives it) or `override` (a full Linux path), `args`, `cwd` (a Linux folder; default the user's home) | `launch`, exactly `pluxy/execution`'s `launch` input: `executable` (System32's `wsl.exe`), `argv` (`-d <distro> -u <user> --cd <folder> --exec <program> <args>`), `cwd` (the person's home folder on Windows, from `HOME`) and `program`; and `kind` beside it, which the host applies before it calls execution (`terminal`: a console window of its own, no standard input, no managed lifetime) |
+
+Names are checked before `wsl.exe` runs: a distribution name as the old app accepted one (not
+empty, `.` or `..`; none of `\ / : * ? " < > |`, no control character, no trailing dot or space), at
+most 64 characters and not starting with `-`; Docker Desktop's `docker-desktop` and
+`docker-desktop-data` are hidden and refused; a user name is a POSIX portable name
+(`[a-z_][a-z0-9_-]*[$]?`, at most 32 bytes). A missing distribution or user is `not_found` (WSL 1
+reports a missing user as a connection error, so its message says the user was not found or could
+not be started). `prepare` finds the program and checks the folder inside the distribution as the
+user; a program that only a shell profile puts on the PATH (such as one nvm installs) is not found
+by name, and is given by its full path. The program it names is not pinned: it is found again when
+the launch starts.
+
+Tests: unit tests on every system (decoding UTF-16 and UTF-8 `wsl.exe` output, hidden and refused
+names, the users and mounts read, the `prepare` script run by `/bin/sh` on Linux and macOS);
+`tests/real_wsl.rs`, run by the platforms workflow's WSL job with `--ignored` against Windows' own
+`wsl.exe` and real distributions under WSL 2 and WSL 1, including the fixture writer's Linux program
+run in a distribution as the host runs one, its hello refused for another user or distribution.
+No test stands in for `wsl.exe`.

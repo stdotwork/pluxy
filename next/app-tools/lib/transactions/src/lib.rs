@@ -204,30 +204,61 @@ pub struct Transactions<'a> {
 
 impl<'a> Transactions<'a> {
     pub fn new(vault: &'a dyn Vault, data: impl Into<PathBuf>) -> Transactions<'a> {
-        Transactions {
-            vault,
-            data: data.into(),
-        }
+        // Without trailing separators: `link/` would make the data folder's checks follow a link.
+        let data: PathBuf = data.into().components().collect();
+        Transactions { vault, data }
     }
 
     // ---- state file
 
-    fn data_folder(&self) -> Result<Dir, Error> {
-        Dir::open_ambient_dir(&self.data, ambient_authority())
-            .map_err(|e| Error::unavailable(format!("the data folder: {e}")))
+    /// The data folder, opened: None when it does not exist yet, unless make is set; then it is
+    /// made (0700, with any folders missing above it), as at the first state write. Nothing is
+    /// made before that, so a preview leaves no trace (in WSL the host cannot make it at start).
+    /// A link there, or a folder another user owns, is refused.
+    fn data_folder(&self, make: bool) -> Result<Option<Dir>, Error> {
+        use cap_std::fs::MetadataExt as _;
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+        let bad = |e: &dyn std::fmt::Display| Error::unavailable(format!("the data folder: {e}"));
+        let m = match std::fs::symlink_metadata(&self.data) {
+            Ok(m) => m,
+            Err(e) if e.kind() == ErrorKind::NotFound && !make => return Ok(None),
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                std::fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(&self.data)
+                    .map_err(|e| bad(&e))?;
+                std::fs::symlink_metadata(&self.data).map_err(|e| bad(&e))?
+            }
+            Err(e) => return Err(bad(&e)),
+        };
+        // SAFETY: geteuid has no preconditions.
+        if !m.is_dir() || m.uid() != unsafe { libc::geteuid() } {
+            return Err(Error::unavailable(format!(
+                "the data folder {} is not a folder of this user's (a link, or another's)",
+                self.data.display()
+            )));
+        }
+        let d = Dir::open_ambient_dir(&self.data, ambient_authority()).map_err(|e| bad(&e))?;
+        let now = d.dir_metadata().map_err(|e| bad(&e))?;
+        if (now.dev(), now.ino()) != (m.dev(), m.ino()) {
+            return Err(bad(&"it was replaced while it was opened"));
+        }
+        Ok(Some(d))
     }
 
     fn load(&self) -> Result<Value, Error> {
-        let d = self.data_folder()?;
+        let empty = || json!({"version": 1, "sets": {}, "committed": [], "recovered": []});
+        let Some(d) = self.data_folder(false)? else {
+            return Ok(empty());
+        };
         let mut bytes = Vec::new();
         match d.open(STATE) {
             Ok(f) => f
                 .into_std()
                 .read_to_end(&mut bytes)
                 .map_err(|e| Error::unavailable(format!("the state file: {e}")))?,
-            Err(e) if e.kind() == ErrorKind::NotFound => {
-                return Ok(json!({"version": 1, "sets": {}, "committed": [], "recovered": []}))
-            }
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(empty()),
             Err(e) => return Err(Error::unavailable(format!("the state file: {e}"))),
         };
         let v: Value = serde_json::from_slice(&bytes)
@@ -241,7 +272,9 @@ impl<'a> Transactions<'a> {
     }
 
     fn save(&self, state: &Value) -> Result<(), Error> {
-        let d = self.data_folder()?;
+        let d = self
+            .data_folder(true)?
+            .ok_or_else(|| Error::internal("the data folder was not made"))?;
         let tmp = format!(".{STATE}.{}.tmp", target::random_hex()?);
         let bytes = serde_json::to_vec(state).map_err(|e| Error::internal(e.to_string()))?;
         let r = (|| -> std::io::Result<()> {
