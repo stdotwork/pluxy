@@ -40,7 +40,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: core/go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: core/go.sum
       - name: Refresh models catalog
         run: bash .github/scripts/refresh-model-catalogs.sh

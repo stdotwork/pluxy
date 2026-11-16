@@ -45,7 +45,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: next/go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: |
             next/go.mod
             core/go.sum
