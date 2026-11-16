@@ -2,6 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -53,5 +57,51 @@ func TestAppManifestValidateRefusesWhatTheAppRefuses(t *testing.T) {
 		if err := check(platform, "bin/t", "pages"); err == nil || !strings.Contains(err.Error(), "GOOS/GOARCH") {
 			t.Errorf("platform %q: %v, want refused", platform, err)
 		}
+	}
+}
+
+// appToolsTree makes a root with app-tools/<name>/pluxy-extension.json for each tool (its
+// program for linux/amd64), and a programs folder with each program built.
+func appToolsTree(t *testing.T, tools map[string]string) (root, programs string) {
+	t.Helper()
+	root, programs = t.TempDir(), t.TempDir()
+	for name, program := range tools {
+		b, err := json.Marshal(map[string]any{
+			"manifest_version": 1, "id": "pluxy/" + name, "version": "0.1.0",
+			"app": map[string]any{"tier": "native", "programs": map[string]string{"linux/amd64": program}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(root, "app-tools", name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, manifestFile), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		built := filepath.Join(programs, "linux-amd64")
+		if err := os.MkdirAll(built, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(built, path.Base(program)), []byte(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root, programs
+}
+
+// Two tools naming the same program file name for one platform are refused: the programs folder
+// holds one file by that name, so one tool would be packed with the other's program.
+func TestPackAppToolsRefusesTwoToolsWithOneProgramName(t *testing.T) {
+	root, programs := appToolsTree(t, map[string]string{"a": "bin/tool", "b": "other/tool", "c": "bin/c"})
+	err := packAppTools(root, t.TempDir(), programs, []string{"linux/amd64"}, "", io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "pluxy/a and pluxy/b both name the program file tool for linux/amd64") {
+		t.Fatalf("two tools with the program tool: %v", err)
+	}
+	// Positive control: the same tools without the clash pack.
+	root, programs = appToolsTree(t, map[string]string{"a": "bin/tool", "b": "bin/b", "c": "bin/c"})
+	if err := packAppTools(root, t.TempDir(), programs, []string{"linux/amd64"}, "", io.Discard); err != nil {
+		t.Fatalf("three tools with their own programs: %v", err)
 	}
 }

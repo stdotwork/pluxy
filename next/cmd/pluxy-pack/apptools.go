@@ -145,6 +145,9 @@ func packAppTools(root, out, programs string, platforms []string, only string, s
 	}
 	ix := index{RegistryVersion: 0, Packages: map[string]indexPackage{}}
 	count := 0
+	// The programs folder holds one file per name and platform: two tools naming the same program
+	// file name for one platform would both be packed with whichever was built last.
+	builtBy := map[string]string{}
 	for _, tool := range tools {
 		if _, ok := ix.Packages[tool.manifest.ID]; ok {
 			return fmt.Errorf("two app tools have the package ID %s", tool.manifest.ID)
@@ -156,6 +159,11 @@ func packAppTools(root, out, programs string, platforms []string, only string, s
 				continue
 			}
 			goos, goarch, _ := strings.Cut(platform, "/")
+			key := platform + " " + path.Base(program)
+			if other, ok := builtBy[key]; ok {
+				return fmt.Errorf("%s and %s both name the program file %s for %s", other, tool.manifest.ID, path.Base(program), platform)
+			}
+			builtBy[key] = tool.manifest.ID
 			built := filepath.Join(programs, goos+"-"+goarch, path.Base(program))
 			info, err := os.Stat(built)
 			if err != nil {
