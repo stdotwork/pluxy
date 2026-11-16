@@ -65,6 +65,8 @@ mod update_native;
 mod updater;
 mod updates;
 pub mod vault;
+#[cfg(all(windows, feature = "artifact-test-trust"))]
+mod win_acl;
 pub mod window;
 
 pub use command_names::COMMANDS;

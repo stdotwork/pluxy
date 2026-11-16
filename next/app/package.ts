@@ -1,8 +1,10 @@
 // The app's two package commands. Run from next/app (the front end built first, bun run build):
 //
-//   bun package.ts test <out-dir>        the test package: a disposable Linux AppImage for checks
-//   bun package.ts release [AppImage...] the release gate: builds the release app and checks it
-//                                        and each AppImage given; it uploads nothing
+//   bun package.ts test <out-dir>        the test package: a disposable Linux AppImage, Windows
+//                                        folder bundle or macOS app bundle, for checks only
+//   bun package.ts release [artifact...] the release gate: builds the release app and checks it
+//                                        and each artifact given (an AppImage, a Windows folder
+//                                        bundle or a macOS app bundle); it uploads nothing
 //
 // test builds with tauri build --debug, the native-test and artifact-test-trust features and a test
 // config overlay given with --config: identifier dev.pluxy.desktop.test, product name "pluxy Test",
@@ -16,6 +18,21 @@
 // {"appimage": <path>, "updater_pubkey": <key>, "binary": <path>,
 //  "update": {"appimage": <path>, "version": <version>, "signature": <signature>}}.
 //
+// On Windows and macOS test makes no installer and no disk image: the same two debug builds with
+// the same overlay, but no Tauri bundle on Windows (whose only bundles are installers) and the
+// `app` bundle on macOS. Windows: each build's program goes into a folder of its own,
+// <out-dir>/pluxy Test/pluxy-app-test.exe and <out-dir>/update/pluxy Test/pluxy-app-test.exe, a
+// plain folder bundle; the update is that exe, signed. macOS: each build's app bundle is copied
+// to <out-dir>/pluxy Test.app and <out-dir>/update/pluxy Test.app; the update is the second
+// bundle as a .app.tar.gz the test makes itself (one top folder, no macOS metadata), signed; the
+// first bundle's program is also copied out of it to <out-dir>/pluxy-app-test. Both write
+// <out-dir>/test-package.json: {"bundle": <folder or .app>, "program": <the app executable in
+// it>, "binary": <a copy of it outside the bundle on macOS, the program on Windows>,
+// "updater_pubkey": <key>, "update": {"bundle": <path>, "payload": <path>, "target": <the feed's
+// target name>, "version": <version>, "signature": <signature>}}. Nothing needs downloading
+// there, so the builds run in the caller's environment, Cargo offline after `cargo fetch` and
+// every proxy variable pointing at a closed port.
+//
 // Tauri's AppImage bundler runs tools it downloads when they are missing from its tools folder.
 // test puts pinned copies there first (BUNDLER_TOOLS, each checked against its SHA-256), gives the
 // AppImage plugin the pinned AppImage runtime (LDAI_RUNTIME_FILE), and runs the build in a cleared
@@ -28,8 +45,9 @@
 // release builds with tauri build --no-bundle: the release profile, no features, no overlay and no
 // bundle format. Then the release validator (src-tauri/examples/validate-release-config.rs, a debug
 // tooling build with the same config and features) checks that build's own snapshots, the staged
-// trust folder, the built binary and each AppImage given; it unpacks an AppImage into a private
-// temporary folder and never runs it. The last line says `release-package: valid`,
+// trust folder, the built binary (pluxy-app.exe on Windows) and each artifact given; it unpacks an
+// AppImage into a private temporary folder, reads every file of a bundle folder, and never runs
+// either. The last line says `release-package: valid`,
 // `release-package: refused: <reason>` or, when it could not check, `release-package: failed:
 // <reason>`; the exit code is 0 only for valid.
 
@@ -45,7 +63,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { arch, homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { appImageHeader, type Pin, pinnedBytes, runtimeBytes } from "./native/appimage";
 import { signUpdate, updaterKey } from "./native/minisign";
@@ -54,6 +72,12 @@ const app = import.meta.dir;
 const tauriDir = join(app, "src-tauri");
 const targetDir = resolve(tauriDir, process.env.CARGO_TARGET_DIR || "target");
 const tauri = join(app, "node_modules", ".bin", "tauri");
+/** The Tauri CLI as a command: the package's own script, which Windows cannot start by itself, is
+ * run by this Bun on Windows and macOS. */
+const tauriCommand: string[] =
+  process.platform === "linux"
+    ? [tauri]
+    : [process.execPath, join(app, "node_modules", "@tauri-apps", "cli", "tauri.js")];
 const version: string = JSON.parse(readFileSync(join(tauriDir, "tauri.conf.json"), "utf8")).version;
 
 function run(cmd: string, args: string[], cwd: string, env?: Record<string, string>) {
@@ -135,9 +159,10 @@ function isolatedEnv(work: string, runtime: string, callerCargo: string): Record
 }
 
 async function testPackage(outDir: string) {
+  if (process.platform === "win32" || process.platform === "darwin") return bundleTestPackage(outDir);
   if (process.platform !== "linux" || process.arch !== "x64") {
     throw new Error(
-      `the test package is an x86_64 Linux AppImage; this is ${process.platform} ${process.arch}`,
+      `the test package is an x86_64 Linux AppImage, a Windows folder bundle or a macOS app bundle; this is ${process.platform} ${process.arch}`,
     );
   }
   mkdirSync(outDir, { recursive: true });
@@ -232,6 +257,130 @@ async function testPackage(outDir: string) {
   }
 }
 
+/** The feed's target name for the update on Windows and macOS (the app's updater, updater.rs). */
+function bundleTarget(): string {
+  if (process.platform === "win32" && arch() === "x64") return "windows-x86_64-exe";
+  if (process.platform === "darwin" && arch() === "arm64") return "darwin-aarch64-app";
+  if (process.platform === "darwin" && arch() === "x64") return "darwin-x86_64-app";
+  throw new Error(`no test package for ${process.platform} ${arch()}`);
+}
+
+/** The Windows folder bundle or macOS app bundle test package (see the top of this file). */
+async function bundleTestPackage(outDir: string) {
+  const windows = process.platform === "win32";
+  const target = bundleTarget();
+  mkdirSync(outDir, { recursive: true });
+  const work = mkdtempSync(join(outDir, "config-"));
+  try {
+    const callerCargo = resolve(tauriDir, process.env.CARGO_HOME || join(homedir(), ".cargo"));
+    run("cargo", ["fetch", "--locked"], tauriDir, { ...process.env, CARGO_HOME: callerCargo } as Record<
+      string,
+      string
+    >);
+    const closed = "http://127.0.0.1:9";
+    const env: Record<string, string> = {
+      ...(process.env as Record<string, string>),
+      CARGO_HOME: callerCargo,
+      CARGO_TARGET_DIR: targetDir,
+      CARGO_NET_OFFLINE: "true",
+      NO_PROXY: "",
+      no_proxy: "",
+    };
+    for (const name of ["http_proxy", "https_proxy", "all_proxy"]) {
+      env[name] = closed;
+      env[name.toUpperCase()] = closed;
+    }
+    const key = updaterKey();
+    const name = "pluxy Test";
+    const exe = windows ? "pluxy-app-test.exe" : "pluxy-app-test";
+    // One build at each version, its bundle copied into folder; the second rebuilds only the
+    // app's own crate.
+    const build = (v: string, folder: string): string => {
+      const overlay = join(work, `tauri.test.${v}.conf.json`);
+      writeFileSync(
+        overlay,
+        JSON.stringify({
+          version: v,
+          identifier: "dev.pluxy.desktop.test",
+          productName: name,
+          mainBinaryName: "pluxy-app-test",
+          bundle: windows ? { active: false } : { active: true, targets: ["app"] },
+          plugins: { updater: { pubkey: key.pubkey } },
+        }),
+      );
+      run(
+        tauriCommand[0] as string,
+        [
+          ...tauriCommand.slice(1),
+          "build",
+          "--ci",
+          "--debug",
+          "--features",
+          "native-test,artifact-test-trust",
+          "--config",
+          overlay,
+          ...(windows ? ["--no-bundle"] : []),
+        ],
+        app,
+        env,
+      );
+      mkdirSync(folder, { recursive: true });
+      if (windows) {
+        const bundle = join(folder, name);
+        mkdirSync(bundle);
+        copyFileSync(join(targetDir, "debug", exe), join(bundle, exe));
+        return bundle;
+      }
+      const bundle = join(folder, `${name}.app`);
+      // ditto keeps the bundle as it is (modes, the program's signature), without extended
+      // attributes, resource forks or quarantine.
+      run(
+        "ditto",
+        [
+          "--norsrc",
+          "--noextattr",
+          "--noqtn",
+          join(targetDir, "debug", "bundle", "macos", `${name}.app`),
+          bundle,
+        ],
+        app,
+      );
+      return bundle;
+    };
+    const bundle = build(version, outDir);
+    const updateBundle = build(UPDATE_VERSION, join(outDir, "update"));
+    const program = windows ? join(bundle, exe) : join(bundle, "Contents", "MacOS", exe);
+    const binary = windows ? program : join(outDir, exe);
+    if (!windows) copyFileSync(program, binary);
+    let payload: string;
+    if (windows) {
+      payload = join(updateBundle, exe);
+    } else {
+      payload = join(outDir, `pluxy-test_${UPDATE_VERSION}_${arch()}.app.tar.gz`);
+      run("tar", ["--no-mac-metadata", "-czf", payload, "-C", join(outDir, "update"), `${name}.app`], app, {
+        ...(process.env as Record<string, string>),
+        COPYFILE_DISABLE: "1",
+      });
+    }
+    const signature = signUpdate(key, readFileSync(payload), basename(payload), UPDATE_VERSION);
+    writeFileSync(
+      join(outDir, "test-package.json"),
+      JSON.stringify({
+        bundle,
+        program,
+        binary,
+        updater_pubkey: key.pubkey,
+        update: { bundle: updateBundle, payload, target, version: UPDATE_VERSION, signature },
+      }),
+    );
+    console.log(
+      `test package: ${bundle} (${windows ? "folder bundle" : "app bundle"}); update ${payload} for ${target}`,
+    );
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
 /** The build's OUT_DIR whose receipt the built binary carries: its snapshots describe that build. */
 function snapshots(binary: string): string {
   const bytes = readFileSync(binary);
@@ -248,12 +397,13 @@ function snapshots(binary: string): string {
 }
 
 function releasePackage(appImages: string[]): boolean {
-  run(tauri, ["build", "--ci", "--no-bundle"], app);
-  const binary = join(targetDir, "release", "pluxy-app");
+  run(tauriCommand[0] as string, [...tauriCommand.slice(1), "build", "--ci", "--no-bundle"], app);
+  const exe = process.platform === "win32" ? ".exe" : "";
+  const binary = join(targetDir, "release", `pluxy-app${exe}`);
   const out = snapshots(binary);
   run("cargo", ["build", "--locked", "--example", "validate-release-config"], tauriDir);
   const validator = spawnSync(
-    join(targetDir, "debug", "examples", "validate-release-config"),
+    join(targetDir, "debug", "examples", `validate-release-config${exe}`),
     [
       join(out, "app-tauri-config.json"),
       join(out, "app-package-trust.json"),
@@ -283,7 +433,7 @@ try {
   } else if (command === "release") {
     process.exitCode = releasePackage(args) ? 0 : 1;
   } else {
-    console.error("usage: bun package.ts test <out-dir> | bun package.ts release [AppImage...]");
+    console.error("usage: bun package.ts test <out-dir> | bun package.ts release [artifact...]");
     process.exitCode = 2;
   }
 } catch (e) {
