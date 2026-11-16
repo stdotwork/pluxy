@@ -1466,3 +1466,33 @@ fn the_runtimes_file_is_private() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_launch_through_wsl_exe_passes_on_the_variables_it_sets_and_nothing_else() {
+    let root = Path::new(r"C:\Windows");
+    for yes in [
+        r"C:\Windows\System32\wsl.exe",
+        r"c:\windows\system32\WSL.EXE",
+        r"\\?\C:\Windows\System32\wsl.exe",
+    ] {
+        assert!(is_wsl_exe(Path::new(yes), Some(root)), "{yes}");
+    }
+    for no in [
+        r"C:\Windows\SysWOW64\wsl.exe",
+        r"C:\tools\wsl.exe",
+        r"C:\Windows\System32\wslg.exe",
+        "wsl.exe",
+    ] {
+        assert!(!is_wsl_exe(Path::new(no), Some(root)), "{no}");
+    }
+    assert!(!is_wsl_exe(Path::new(r"C:\Windows\System32\wsl.exe"), None));
+    assert_eq!(wslenv(&Request::default()), None);
+    let (_, r) = parse(
+        &serde_json::json!({"environment": {"set": {"MODE": "x"}, "inherit": ["LANG"],
+            "secrets": {"API_KEY": "key"}}, "key": "s"}),
+        &|f| f == "key",
+    )
+    .unwrap();
+    // Set and secret names cross; inherited Windows values do not.
+    assert_eq!(wslenv(&r).as_deref(), Some("MODE/u:API_KEY/u"));
+}

@@ -19,6 +19,7 @@
 //! per launch per second; each shows a host-owned notice of
 //! what started, unless that is turned off. Where the program host runs (`native_stack`).
 
+use crate::environments::{Environment, Instance, Record};
 use crate::{confirmation, route, spawn, App};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -62,6 +63,12 @@ struct Entry {
     input: Value,
     #[serde(default)]
     used: u64,
+    /// A launch in WSL: the line its confirmation showed (part of what its approval names), and
+    /// the folder in the distribution it starts in (its input's cwd is a Windows folder).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shown: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -171,8 +178,20 @@ impl Launcher {
     /// Keeps approval for a launch of client with input: the entry with that input gets it (a
     /// launch remembered again after a change), or a new one. Its ID, and the approval it
     /// replaced, which the caller revokes.
-    fn keep(&mut self, client: &str, input: &Value, approval: &str) -> (String, Option<String>) {
-        if let Some(e) = self.store.entries.iter().find(|e| e.input == *input) {
+    fn keep(
+        &mut self,
+        client: &str,
+        input: &Value,
+        wsl: Option<(&str, &str)>,
+        approval: &str,
+    ) -> (String, Option<String>) {
+        let (shown, folder) = (wsl.map(|w| w.0.to_string()), wsl.map(|w| w.1.to_string()));
+        if let Some(e) = self
+            .store
+            .entries
+            .iter()
+            .find(|e| e.input == *input && e.shown == shown)
+        {
             let id = e.id.clone();
             let old = self.replace(&id, approval);
             if let Some(e) = self.store.entries.iter_mut().find(|e| e.id == id) {
@@ -195,6 +214,8 @@ impl Launcher {
             approval: approval.to_string(),
             input: input.clone(),
             used: now_ms(),
+            shown,
+            folder,
         });
         (id, None)
     }
@@ -261,7 +282,20 @@ fn call(
     input: Value,
     gesture: Option<confirmation::Gesture>,
 ) -> Result<(Value, Option<String>), String> {
-    let (app, op) = (app.clone(), op.to_string());
+    call_of(app, PACKAGE, op, input, gesture, None)
+}
+
+/// `call`, of package (the execution program, or `pluxy/wsl` to prepare a launch in WSL), with
+/// shown as the line its confirmation shows for where the launch runs.
+fn call_of(
+    app: &AppHandle,
+    package: &str,
+    op: &str,
+    input: Value,
+    gesture: Option<confirmation::Gesture>,
+    shown: Option<String>,
+) -> Result<(Value, Option<String>), String> {
+    let (app, op, instance) = (app.clone(), op.to_string(), Instance::local(package));
     std::thread::Builder::new()
         .name("pluxy-launcher".into())
         .spawn(move || {
@@ -270,7 +304,7 @@ fn call(
                 .programs
                 .begin_call(None)
                 .map_err(|e| e.to_string())?;
-            route::call_main_launch(&app, call, PACKAGE, &op, input, gesture)
+            route::call_main_in(&app, call, &instance, &op, input, gesture, shown)
                 .map_err(|e| e.to_string())
         })
         .map_err(|e| e.to_string())?
@@ -337,12 +371,15 @@ pub fn terminals(app: &AppHandle) -> Result<Value, String> {
 /// A new launch from the window's launcher (`FIELDS`): prepared by the execution program, then
 /// its `launch` call, which always asks a native confirmation (offering Remember). A launch the
 /// person remembered joins the launcher's list (and the tray's Start… menu).
-pub fn launch(app: &AppHandle, req: &Value) -> Result<Value, String> {
+pub fn launch(app: &AppHandle, req: &Value, environment: &Environment) -> Result<Value, String> {
     let m = req.as_object().ok_or("a launch is an object")?;
     if let Some(k) = m.keys().find(|k| !FIELDS.contains(&k.as_str())) {
         return Err(format!("a launch has no field {k}"));
     }
     let client = plain("client", req["client"].as_str().unwrap_or_default(), 128)?;
+    if !environment.is_local() {
+        return launch_in_wsl(app, req, &client, environment);
+    }
     let cwd = req["cwd"]
         .as_str()
         .ok_or("a launch names its cwd")?
@@ -370,7 +407,146 @@ pub fn launch(app: &AppHandle, req: &Value) -> Result<Value, String> {
     let (entry, old) = {
         let mut l = st.launcher.lock().unwrap();
         l.remember_folder(&client, &cwd);
-        let kept = approval.map(|a| l.keep(&client, &input, &a));
+        let kept = approval.map(|a| l.keep(&client, &input, None, &a));
+        l.save()?;
+        kept.map_or((None, None), |(id, old)| (Some(id), old))
+    };
+    revoke_superseded(app, old);
+    refresh_tray(app);
+    Ok(json!({"entry": entry, "output": output}))
+}
+
+/// The launcher's name of client's launches in WSL environment: its recent folders and its
+/// remembered launches go by it. `Claude Code (WSL Ubuntu/bob)`.
+pub fn client_in(client: &str, environment: &Environment) -> String {
+    match environment {
+        Environment::Local => client.to_string(),
+        Environment::Wsl { distro, user } => format!("{client} (WSL {distro}/{user})"),
+    }
+}
+
+/// What the launcher asks `pluxy/wsl` to prepare for a launch in record's environment: req's kind,
+/// program or override, arguments and folder (in the distribution). A launch there opens in the
+/// Windows console, so it names no terminal.
+fn wsl_prepare_input(req: &Value, record: &Record) -> Result<Value, String> {
+    if req.get("terminal").is_some() {
+        return Err("a launch in WSL opens in the Windows console: it names no terminal".into());
+    }
+    let mut input = json!({"distro": record.distro, "user": record.user});
+    for k in ["kind", "program", "override", "args", "cwd"] {
+        if let Some(v) = req.get(k) {
+            input[k] = v.clone();
+        }
+    }
+    Ok(input)
+}
+
+/// The `launch` input of a launch `pluxy/wsl` prepared ({launch, kind}), with req's lifetime,
+/// environment, stdin and key, and its kind applied first (execution sees `wsl.exe` as a direct
+/// launch): a terminal launch takes no standard input (its input is the keyboard) and is detached
+/// only; a detached launch with no standard input gets a console window of its own. The Linux
+/// program is not passed as `program`: the host cannot open a file inside the distribution to
+/// check it, so it is shown in the argv and named in the confirmation's line instead. Gives the
+/// input and the Linux program.
+fn wsl_launch_input(prepared: &Value, req: &Value) -> Result<(Value, String), String> {
+    let kind = prepared["kind"].as_str().unwrap_or_default();
+    if kind != "terminal" && kind != "direct" {
+        return Err("pluxy/wsl prepared a launch of no known kind".into());
+    }
+    let mut input = prepared["launch"]
+        .as_object()
+        .cloned()
+        .ok_or("pluxy/wsl prepared no launch")?;
+    let program = input
+        .remove("program")
+        .and_then(|p| p.as_str().map(String::from))
+        .ok_or("pluxy/wsl prepared a launch with no program")?;
+    if kind == "terminal" {
+        if req.get("stdin").is_some() {
+            return Err(
+                "a terminal launch takes no standard input: its input is the keyboard".into(),
+            );
+        }
+        if req.get("lifetime").and_then(Value::as_str) == Some("managed") {
+            return Err(
+                "a terminal launch is detached only: closing its console window ends it".into(),
+            );
+        }
+    }
+    for k in ["lifetime", "environment", "stdin", "key"] {
+        if let Some(v) = req.get(k) {
+            input.insert(k.into(), v.clone());
+        }
+    }
+    Ok((Value::Object(input), program))
+}
+
+/// The line the confirmation of a launch in record's environment shows above its review.
+fn wsl_launch_line(record: &Record, program: &str) -> String {
+    format!(
+        "Starts in WSL: distribution {}, user {} ({}). The program inside WSL ({program}) is found \
+         when it starts; pluxy does not check it.",
+        record.distro, record.user, record.home
+    )
+}
+
+/// `launch`, in a WSL environment the host has a record of: prepared by `pluxy/wsl` (its
+/// `prepare`, in the distribution as the user), then execution's `launch` of that `wsl.exe`
+/// command, confirmed with the environment's line.
+fn launch_in_wsl(
+    app: &AppHandle,
+    req: &Value,
+    client: &str,
+    environment: &Environment,
+) -> Result<Value, String> {
+    let record = app
+        .state::<App>()
+        .environments
+        .lock()
+        .unwrap()
+        .get(environment)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "{} is not a WSL environment this app knows: add it again",
+                environment.label().unwrap_or_default()
+            )
+        })?;
+    let (prepared, _) = call_of(
+        app,
+        crate::environments::WSL_PACKAGE,
+        "prepare",
+        wsl_prepare_input(req, &record)?,
+        None,
+        None,
+    )?;
+    let (input, program) = wsl_launch_input(&prepared, req)?;
+    let line = wsl_launch_line(&record, &program);
+    // The folder in the distribution it starts in: `--cd`'s argument.
+    let argv: Vec<&str> = input["argv"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let folder = argv
+        .iter()
+        .position(|a| *a == "--cd")
+        .and_then(|i| argv.get(i + 1))
+        .map(|f| f.to_string())
+        .ok_or("pluxy/wsl prepared a launch with no folder")?;
+    let (output, approval) = call_of(
+        app,
+        PACKAGE,
+        "launch",
+        input.clone(),
+        None,
+        Some(line.clone()),
+    )?;
+    let client = client_in(client, environment);
+    let st = app.state::<App>();
+    let (entry, old) = {
+        let mut l = st.launcher.lock().unwrap();
+        l.remember_folder(&client, &folder);
+        let kept = approval.map(|a| l.keep(&client, &input, Some((&line, &folder)), &a));
         l.save()?;
         kept.map_or((None, None), |(id, old)| (Some(id), old))
     };
@@ -399,7 +575,14 @@ pub fn start(app: &AppHandle, id: &str, gesture: confirmation::Gesture) -> Resul
         l.last.insert(id.to_string(), Instant::now());
         e
     };
-    let r = call(app, "launch", entry.input.clone(), Some(gesture));
+    let r = call_of(
+        app,
+        PACKAGE,
+        "launch",
+        entry.input.clone(),
+        Some(gesture),
+        entry.shown.clone(),
+    );
     let i = &entry.input;
     let what = format!(
         "{}: {} {} in {}",
@@ -415,7 +598,7 @@ pub fn start(app: &AppHandle, id: &str, gesture: confirmation::Gesture) -> Resul
             _ => None,
         };
         if r.is_ok() {
-            if let Some(cwd) = i["cwd"].as_str() {
+            if let Some(cwd) = entry.folder.as_deref().or(i["cwd"].as_str()) {
                 l.remember_folder(&entry.client, cwd);
             }
             let _ = l.save();
