@@ -700,7 +700,7 @@ pub trait Opened: Send + Sync {
     fn recheck(&self) -> Result<(), String>;
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 impl Opened for crate::confirmation::Authorized {
     fn executable(&self) -> &File {
         crate::confirmation::Authorized::executable(self).expect("a launch's executable")

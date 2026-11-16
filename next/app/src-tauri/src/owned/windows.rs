@@ -380,6 +380,8 @@ impl Command {
 
     /// Keeps the program's pin (and its folder's) for as long as the returned child is held, not
     /// only until it runs. Tools and managed processes only.
+    // No caller outside the tests yet.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn keep_program(&mut self) -> &mut Self {
         self.keep_program = true;
         self
@@ -388,6 +390,8 @@ impl Command {
     /// Keeps pin, another file the process uses by its path (`pin_other`), from being written,
     /// renamed or removed for as long as the returned child is held. Tools and managed processes
     /// only.
+    // No caller outside the tests yet.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn keep(&mut self, pin: Pinned) -> &mut Self {
         self.kept.push(pin);
         self

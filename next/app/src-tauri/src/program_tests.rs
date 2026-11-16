@@ -2174,19 +2174,18 @@ fn stopping_a_crashed_tool_that_is_not_running_reads_as_idle() {
     h.stop_all();
 }
 
-// Linux only: the vault, which makes a tool's data folder, is Linux's for now.
-#[cfg(target_os = "linux")]
 #[test]
 fn a_tool_gets_its_home_and_its_own_data_folder_and_a_planted_link_refuses_the_start() {
-    use std::os::unix::fs::PermissionsExt;
     let base = Folder(package(Value::Null).dir);
     let home = base.0.join("home");
     let tools = base.0.join("data").join("tools");
+    let system = base.0.join("system");
     std::fs::create_dir_all(&home).unwrap();
     let h = host(Value::Null);
     h.set_tool_env(ToolEnv {
         home: home.clone(),
         tools: tools.clone(),
+        system: vec![("SystemRoot", system)],
     });
     let a = summary(&h, &["one"]).unwrap();
     assert_eq!(
@@ -2196,29 +2195,51 @@ fn a_tool_gets_its_home_and_its_own_data_folder_and_a_planted_link_refuses_the_s
             "PLUXY_APP_ARTIFACT_SHA256",
             "PLUXY_APP_CONTRACT_VERSIONS",
             "PLUXY_EXTENSION_ID",
-            "PLUXY_TOOL_DATA_DIR"
+            "PLUXY_TOOL_DATA_DIR",
+            "SystemRoot"
         ])
     );
     assert_eq!(
         (a["home"].clone(), a["data_dir"].clone()),
-        (json!(home), json!(tools.join("pluxy/test")))
+        (json!(home), json!(tools.join("pluxy").join("test")))
     );
-    for dir in [tools.clone(), tools.join("pluxy"), tools.join("pluxy/test")] {
+    for dir in [
+        tools.clone(),
+        tools.join("pluxy"),
+        tools.join("pluxy").join("test"),
+    ] {
         let m = std::fs::symlink_metadata(&dir).unwrap();
         assert!(m.is_dir(), "{}", dir.display());
-        assert_eq!(m.permissions().mode() & 0o777, 0o700, "{}", dir.display());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(m.permissions().mode() & 0o777, 0o700, "{}", dir.display());
+        }
+        #[cfg(windows)]
+        assert!(
+            crate::private_windows::tests::private(&dir),
+            "{}",
+            dir.display()
+        );
     }
     h.stop_all();
 
-    // A link planted where the publisher's folder goes: the start is refused, and nothing is
-    // made where it points.
+    // A link planted where the publisher's folder goes (a junction on Windows): the start is
+    // refused, and nothing is made where it points.
     let elsewhere = base.0.join("elsewhere");
     std::fs::create_dir_all(&elsewhere).unwrap();
     let tools = base.0.join("data2").join("tools");
     std::fs::create_dir_all(&tools).unwrap();
+    #[cfg(unix)]
     std::os::unix::fs::symlink(&elsewhere, tools.join("pluxy")).unwrap();
+    #[cfg(windows)]
+    crate::private_windows::tests::junction(&elsewhere, &tools.join("pluxy"));
     let h = host(Value::Null);
-    h.set_tool_env(ToolEnv { home, tools });
+    h.set_tool_env(ToolEnv {
+        home,
+        tools,
+        system: Vec::new(),
+    });
     let e = summary(&h, &["one"]).unwrap_err();
     assert!(e.message.contains("data folder"), "{e:?}");
     assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none());

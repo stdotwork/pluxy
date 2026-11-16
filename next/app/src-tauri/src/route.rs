@@ -1259,7 +1259,10 @@ fn spawn_frame(
     }
 }
 
-/// The host's save service for tools' `files` frames (`program::Host::set_saver`).
+/// The host's save service for tools' `files` frames (`program::Host::set_saver`). Linux only for
+/// now: the save dialog (`savefile.rs`) is GTK's; elsewhere the host has none and refuses the
+/// frames ("this host saves no files").
+#[cfg(target_os = "linux")]
 pub fn saver(app: AppHandle) -> program::Saver {
     Arc::new(move |tool, context, frame, cancel| save_frame(&app, tool, context, frame, cancel))
 }
@@ -1271,6 +1274,7 @@ pub fn saver(app: AppHandle) -> program::Saver {
 /// package, and saves them there. One save per call: once asked, the call's bytes are gone, whatever
 /// the answer. Refused unless the tool still runs its package's admitted release, as its own calls
 /// are; a page or tool never names the path.
+#[cfg(target_os = "linux")]
 fn save_frame(
     app: &AppHandle,
     tool: &Hop,
