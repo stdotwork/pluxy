@@ -9,8 +9,11 @@
       0
     ],
     "programs": {
+      "darwin/amd64": "bin/opencode",
+      "darwin/arm64": "bin/opencode",
       "linux/amd64": "bin/opencode",
-      "linux/arm64": "bin/opencode"
+      "linux/arm64": "bin/opencode",
+      "windows/amd64": "bin/opencode.exe"
     },
     "operations": [
       {

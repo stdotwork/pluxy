@@ -241,6 +241,40 @@ pub fn take_lock(path: &Path) -> io::Result<Option<Lock>> {
     imp::take_lock(path)
 }
 
+/// Whether path (a link followed) is a program someone may start by its path: on Linux and macOS
+/// a regular file with an execute permission bit; on Windows, which has no such bit and starts a
+/// file as a program by its name's extension, a regular file named `….exe` or `….com` (in any
+/// case).
+pub fn executable(path: &Path) -> bool {
+    let Ok(m) = fs::metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    let program = {
+        use std::os::unix::fs::PermissionsExt;
+        m.permissions().mode() & 0o111 != 0
+    };
+    #[cfg(windows)]
+    let program = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("exe") || e.eq_ignore_ascii_case("com"));
+    m.is_file() && program
+}
+
+/// Flushes the folder path, so a rename or removal in it lasts. On Windows this does nothing: the
+/// file system logs a folder's entries itself, and a folder cannot be flushed through a handle
+/// opened to read it.
+pub fn sync_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    return File::open(path).and_then(|d| d.sync_all());
+    #[cfg(windows)]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
 #[cfg(unix)]
 mod imp {
     use super::*;

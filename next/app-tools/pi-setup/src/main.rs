@@ -19,7 +19,6 @@ use pluxy_transactions::{
     backup_call, data_dir, json_leaves, sha256_of, Pin, Selection, Target, Transactions,
 };
 use serde_json::{json, Value};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// The one set this tool applies: the adapter's config, Pi's settings and the adapter's model
@@ -210,22 +209,27 @@ fn tidy(agent: &Path, settings: &Pin) -> Result<bool, Error> {
     adapter::remove(agent)
 }
 
-/// Whether path is a file someone may run.
-fn executable(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+/// Where Pi's installer puts `pi` on os, in the order the launcher looks: on Linux and macOS
+/// (`pi.dev/install.sh`) its fallback in Pi's own folder first, then `~/.local/bin` (where it
+/// usually goes). On Windows `pi.dev/install.ps1` makes `pi.cmd` launchers, which are not npm's
+/// shims, so none is named: `pi` is found on the PATH.
+fn installed(os: &str, home: &Path) -> Vec<PathBuf> {
+    match os {
+        "windows" => Vec::new(),
+        _ => vec![home.join(".pi/agent/bin/pi"), home.join(".local/bin/pi")],
+    }
 }
 
 /// How the launcher starts Pi: `pi` in a terminal, with no arguments or variables (the old app's
-/// launch). The installer's fallback in Pi's own folder comes first, then `~/.local/bin` (where
-/// the installer usually puts it, often not on a desktop session's PATH), then `pi` from the PATH.
-fn recipe() -> Result<Value, Error> {
-    let home = home()?;
-    let program = [home.join(".pi/agent/bin/pi"), home.join(".local/bin/pi")]
+/// launch): the first installed copy this system runs (often not on a desktop session's PATH),
+/// else `pi` from the PATH.
+fn recipe(os: &str, home: &Path) -> Value {
+    let program = installed(os, home)
         .into_iter()
-        .find(|p| executable(p))
+        .find(|p| pluxy_files::executable(p))
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "pi".to_string());
-    Ok(json!({"client": "Pi", "kind": "terminal", "program": program, "args": []}))
+    json!({"client": "Pi", "kind": "terminal", "program": program, "args": []})
 }
 
 impl Handler for Pi {
@@ -348,7 +352,7 @@ impl Handler for Pi {
                 Ok(v)
             }
             "status" => Transactions::new(call, data_dir()?).status(),
-            "recipe" => recipe(),
+            "recipe" => Ok(recipe(std::env::consts::OS, &home()?)),
             op => Err(Error::unsupported(format!("no operation {op}"))),
         }
     }
