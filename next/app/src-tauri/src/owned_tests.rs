@@ -47,6 +47,13 @@ enum Part {
 /// list says so.
 const ALLOWED: &[(&str, Part, &str, usize, &str)] = &[
     (
+        "dialog_windows.rs",
+        Part::Code,
+        "WM_CLOSE",
+        1,
+        "the native dialog's own window procedure answers a WM_CLOSE sent to it (its close box, Alt+F4) by cancelling; it sends none",
+    ),
+    (
         "instance/win.rs",
         Part::Code,
         "OpenProcess",
