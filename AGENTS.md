@@ -171,7 +171,9 @@ By default every job runs on GitHub's own runners. Two repository variables send
 the maintainers' own machines instead:
 
 - `PLUXY_LINUX_RUNNER` takes the Linux jobs of `core-pr-test-build.yml`, `app-ci.yml`,
-  `next-app.yml` and `next-corpus.yml`. `next-ci.yml` stays on GitHub's runners.
+  `next-app.yml` and `next-corpus.yml`, except `next-app.yml`'s native test shards: the
+  document portal they start needs `/dev/fuse`, which the runner containers don't get.
+  `next-ci.yml` stays on GitHub's runners.
 - `PLUXY_WINDOWS_RUNNER` takes the Windows leg of the `tools` job in
   `next-app-tools-platforms.yml`. The `app` job in `next-app-platforms.yml` (its registry tests
   only run on GitHub's runners), macOS jobs, the `native` job in `next-app-platforms.yml` and the
