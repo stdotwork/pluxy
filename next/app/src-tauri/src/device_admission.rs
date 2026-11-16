@@ -470,7 +470,7 @@ pub(super) fn native_release(
         use std::os::unix::fs::PermissionsExt;
         m.is_file() && m.permissions().mode() & 0o111 != 0
     });
-    // Windows starts programs only (`.exe`, starting `MZ`), never a script by its name.
+    // Windows starts programs only (`.exe` or `.com`, starting `MZ`), never a script by its name.
     #[cfg(windows)]
     let executable = meta.is_ok_and(|m| m.is_file()) && {
         let path = staged.join(program);

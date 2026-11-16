@@ -5,7 +5,7 @@ The signature verifier is shared Rust code in `src-tauri/src/artifact.rs`. The d
 installs page-only web packages and curated signed native tools on this device
 ([extensions on this device](../README.md#extensions-on-this-device)), grants signed web
 packages files through [Access](#access-for-web-packages), and runs an admitted tool's program
-on demand through the program host (`src-tauri/src/program.rs`, Linux).
+on demand through the program host (`src-tauri/src/program.rs`; Linux, Windows and macOS).
 Core recognizes app contributions to refuse app-only packages and use only the provider part of
 a mixed package. Start with the [tutorial](TUTORIAL.md).
 
@@ -348,8 +348,8 @@ router, the program host, the launch service and the launcher (`program.rs`, `ro
   roam with the profile, made private by its access list as the vault's folders are.
 - On Windows an installed package's files and folders are read-only by their access lists: the
   user and SYSTEM may read and run them, no one may write, delete or add to them, as 0444 and
-  0500 make them on Linux and macOS. A native release's program must be a `.exe` starting `MZ`
-  when it is installed.
+  0500 make them on Linux and macOS. A native release's program must be a `.exe` or `.com` file
+  starting `MZ` when it is installed.
 - Saving files (`files` frames, [Saving files](#saving-files)) stays Linux only: elsewhere the
   host refuses them, as a host with no save service does.
 

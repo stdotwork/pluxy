@@ -313,7 +313,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `page_open`, `page_place`, `page_close` | Opens an extension page's webview over part of the window, moves it, closes it |
 | `page_send` | Passes the window's channel messages to a page's webview |
 | `confirmation_request` | Opens native review for an opaque action ID already prepared by native code; returns no approval or token |
-| `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches (Linux) |
+| `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches |
 | `release_get`, `release_check` | The release feed's view (versions, dates, status); `release_check` reads the feed first ("Check for Updates") |
 | `release_channel_set` | Picks the Stable or the Preview (latest) channel |
 | `release_source_set` | Asks to change or remove the feed's address; opens a native confirmation (Linux) and applies nothing itself |
@@ -337,12 +337,12 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key (Linux) |
 | `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it (Linux) |
 | `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it (Linux) |
-| `launcher_state` | The launcher's state: whether the execution program can be used, the remembered launches with their source, the recent folders and the notice setting (Linux) |
-| `launcher_terminals` | The terminals the execution program finds, Automatic first (Linux) |
-| `launcher_launch` | A new launch, prepared by the execution program; it always opens the native confirmation (Linux) |
-| `launcher_start` | Starts a remembered launch again in one click, from the window only, with its remembered approval (Linux) |
-| `launcher_forget` | Forgets a remembered launch, revoking its approval (Linux) |
-| `launcher_settings` | Whether a one-click start shows a launch notice (Linux) |
+| `launcher_state` | The launcher's state: whether the execution program can be used, the remembered launches with their source, the recent folders and the notice setting |
+| `launcher_terminals` | The terminals the execution program finds, Automatic first |
+| `launcher_launch` | A new launch, prepared by the execution program; it always opens the native confirmation |
+| `launcher_start` | Starts a remembered launch again in one click, from the window only, with its remembered approval |
+| `launcher_forget` | Forgets a remembered launch, revoking its approval |
+| `launcher_settings` | Whether a one-click start shows a launch notice |
 | `app_update_get` | The Application Update card's state |
 | `app_update_start` | **Update Now**: downloads, checks and installs the newer release, then restarts the app; the window hears `pluxy-app-update` as it goes |
 | `app_update_cancel` | **Cancel Download** |

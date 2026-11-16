@@ -45,7 +45,7 @@
 //! but the call; the host spawns exactly the confirmed launch, once (`spawner`). A tool's `runtime`
 //! frames reach only its own package's managed runtimes.
 //!
-//! Linux only, as the program host.
+//! Linux, Windows and macOS, as the program host (`native_stack`).
 
 use crate::confirmation::{self, Authorized, Gesture};
 use crate::device::{self, Grant, Refused};
