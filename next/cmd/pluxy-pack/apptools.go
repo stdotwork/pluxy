@@ -94,10 +94,10 @@ func (m *appManifest) validate() error {
 	}
 	for platform, program := range m.App.Programs {
 		goos, goarch, ok := strings.Cut(platform, "/")
-		if !ok || goos == "" || goarch == "" {
+		if !ok || goos == "" || goarch == "" || strings.Contains(goarch, "/") {
 			return fmt.Errorf("app.programs: %q is not of the form GOOS/GOARCH", platform)
 		}
-		if program == "" || !filepath.IsLocal(filepath.FromSlash(program)) || strings.Contains(program, `\`) {
+		if !storePath(program) {
 			return fmt.Errorf("program for %s must be a path inside the package folder", platform)
 		}
 		if exe := strings.HasSuffix(program, ".exe"); exe != (goos == "windows") {
@@ -105,11 +105,26 @@ func (m *appManifest) validate() error {
 		}
 	}
 	if m.App.UI != nil {
-		if m.App.UI.Dir == "" || !filepath.IsLocal(filepath.FromSlash(m.App.UI.Dir)) || strings.Contains(m.App.UI.Dir, `\`) {
+		if !storePath(m.App.UI.Dir) {
 			return errors.New("app.ui.dir must be a folder inside the package folder")
 		}
 	}
 	return nil
+}
+
+// storePath reports whether p is a path the app keeps inside a package folder, as the app's
+// store_path checks archive entries and the ui folder: slash-separated parts, none empty, `.` or
+// `..`, and no backslash, NUL or `:` (a drive or a stream on Windows).
+func storePath(p string) bool {
+	if p == "" || strings.ContainsAny(p, "\\\x00:") {
+		return false
+	}
+	for _, part := range strings.Split(p, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // packAppTools packs the app tools for each of platforms their manifests name, from the
