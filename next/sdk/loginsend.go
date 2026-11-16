@@ -21,12 +21,14 @@ import (
 // that did. A connection refused, a failed DNS lookup, a failed TLS handshake and a timeout
 // while connecting all happen before any header is written, so they report false.
 //
-// Through a client whose transport is wrapped in Upstream, the request goes out on a new
-// connection, which is closed after it. A server may close a kept-alive connection while it is
-// idle, and a request written to it before the client sees the close fails after it was written,
-// so it would count as sent though the server never read it. On a new connection the answer
-// matches what the server got; the cost is one more connection and TLS handshake per request.
-// Through any other transport the request may still go out on such a connection.
+// Through a client whose transport is wrapped in Upstream, the request goes through a copy of the
+// transport made for it alone, with keep-alives off: it dials its own connection, which no other
+// request uses and which is closed once the request failed or its response body is closed. A
+// server may close a kept-alive connection while it is idle, and a request written to it before
+// the client sees the close fails after it was written, so it would count as sent though the
+// server never read it. On its own connection the answer matches what the server got; the cost
+// is one more connection and TLS handshake per request. Through any other transport the request
+// may still go out on such a connection.
 //
 // A trace that is already on req's context keeps working: both traces are called.
 func TrackSend(req *http.Request) (*http.Request, func() bool) {
@@ -35,8 +37,8 @@ func TrackSend(req *http.Request) (*http.Request, func() bool) {
 }
 
 // TrackSendContext does what TrackSend does for every request made with the returned context,
-// new connection included. Use it when the request is made by a function you call but do not own.
-// The function it returns reports whether any of those requests may have been written.
+// each on its own connection. Use it when the request is made by a function you call but do not
+// own. The function it returns reports whether any of those requests may have been written.
 func TrackSendContext(ctx context.Context) (context.Context, func() bool) {
 	var sent atomic.Bool
 	mark := func() { sent.Store(true) }
@@ -48,7 +50,8 @@ func TrackSendContext(ctx context.Context) (context.Context, func() bool) {
 	return context.WithValue(httptrace.WithClientTrace(ctx, trace), newConnKey{}, true), sent.Load
 }
 
-// newConnKey marks the context of a tracked request: Upstream sends it on a new connection.
+// newConnKey marks the context of a tracked request: Upstream sends it through a transport made
+// for it alone.
 type newConnKey struct{}
 
 func wantsNewConn(ctx context.Context) bool {

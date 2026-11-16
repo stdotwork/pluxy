@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,9 +23,8 @@ import (
 
 // Upstream wraps an extension's upstream transport. Without a proxy it delegates to base
 // unchanged, preserving its connection pool, HTTP versions and timeout settings, except for a
-// request tracked with TrackSend (see below). A call whose account has a proxy (Info.ProxyURL)
-// goes through a copy of base that sends every request through that proxy, one copy per proxy,
-// kept for reuse. A call whose account has headers
+// tracked request (see below). A call whose account has a proxy (Info.ProxyURL) goes through a
+// copy of base that sends every request through that proxy, one copy per proxy, kept for reuse. A call whose account has headers
 // (Info.Headers) sends each of them on every request, in place of any value the extension set
 // for the same name. A call with payload rules (Info.Payload, protocol minor version 14) has them
 // applied to each request whose body is JSON, after everything else changed it (see
@@ -34,9 +34,12 @@ import (
 // reports them to core before the call's terminal event; a response body is recorded as it is
 // read, its start and end only. Use the handler's context on requests so the transport can
 // access UpstreamInfo and core's cancellation: a request without it uses no proxy, no headers
-// and no payload rules and is not recorded. A request tracked with TrackSend or
-// TrackSendContext goes through a copy of base (or of its copy for the proxy) with keep-alives
-// off, so it never reuses an idle connection and leaves none behind.
+// and no payload rules and is not recorded. A request tracked with TrackSend or TrackSendContext
+// goes through a copy of base made for it alone, through the account's proxy if it has one, with
+// keep-alives off: it dials its own connection, which no other request uses, and the copy closes
+// what it opened once the request failed or its response body is closed. The copies use
+// base.Clone, which does not carry protocols registered on base with RegisterProtocol: proxied
+// and tracked requests go without them.
 // base must be non-nil and must not be changed after use.
 func Upstream(base *http.Transport) http.RoundTripper {
 	upstreamUsed.Store(true)
@@ -86,7 +89,13 @@ type upstreamTransport struct {
 
 func (t upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	info, _ := UpstreamInfo(req.Context())
-	rt, err := t.transport(info.ProxyURL, wantsNewConn(req.Context()))
+	var rt http.RoundTripper
+	var err error
+	if wantsNewConn(req.Context()) {
+		rt, err = t.oneShot(info.ProxyURL)
+	} else {
+		rt, err = t.transport(info.ProxyURL)
+	}
 	if err != nil {
 		if req.Body != nil {
 			req.Body.Close()
@@ -211,13 +220,121 @@ func payloadRoot(ctx context.Context) string {
 	return root
 }
 
-// transport returns the transport for requests through proxy ("" for none), with keep-alives
-// off when newConn is set.
-func (t upstreamTransport) transport(proxy string, newConn bool) (*http.Transport, error) {
-	if proxy == "" && !newConn {
+// transport returns the transport for requests through proxy ("" for none).
+func (t upstreamTransport) transport(proxy string) (*http.Transport, error) {
+	if proxy == "" {
 		return t.base, nil
 	}
-	return t.proxies.get(t.base, proxy, newConn)
+	return t.proxies.get(t.base, proxy)
+}
+
+// oneShot returns the transport for one tracked request: a copy of base, through proxy ("" for
+// none), with keep-alives off. Nothing else uses it, so no request shares its connection: an
+// HTTP/2 connection of a shared transport stays open to the next request when a request on it
+// was cancelled before it was written.
+func (t upstreamTransport) oneShot(proxy string) (http.RoundTripper, error) {
+	c := t.base.Clone()
+	if proxy != "" {
+		u, err := parseProxy(proxy)
+		if err != nil {
+			return nil, err
+		}
+		c.Proxy = http.ProxyURL(u)
+	}
+	c.DisableKeepAlives = true
+	// net/http turns HTTP/2 on by itself only for a transport without its own dialer; the copy
+	// gets one below, so it asks for HTTP/2 when base would have used it.
+	if c.Protocols == nil && c.TLSNextProto == nil && c.TLSClientConfig == nil && c.Dial == nil && c.DialContext == nil &&
+		c.DialTLS == nil && c.DialTLSContext == nil {
+		c.ForceAttemptHTTP2 = true
+	}
+	conns := &dialedConns{}
+	dial := c.DialContext
+	if dial == nil {
+		if d := c.Dial; d != nil {
+			dial = func(_ context.Context, network, addr string) (net.Conn, error) { return d(network, addr) }
+		} else {
+			dial = (&net.Dialer{}).DialContext
+		}
+	}
+	c.Dial, c.DialContext = nil, conns.wrap(dial)
+	if d := c.DialTLS; d != nil && c.DialTLSContext == nil {
+		c.DialTLSContext = func(_ context.Context, network, addr string) (net.Conn, error) { return d(network, addr) }
+	}
+	if c.DialTLSContext != nil {
+		c.DialTLS, c.DialTLSContext = nil, conns.wrap(c.DialTLSContext)
+	}
+	return oneShotTransport{c, conns}, nil
+}
+
+// oneShotTransport sends one request and closes every connection it dialed once the request
+// failed or the response body is closed. Closing idle connections is not enough: an HTTP/2
+// request cancelled before it was written gives back its hold on the connection only after
+// RoundTrip has returned, and the connection is then left open.
+type oneShotTransport struct {
+	t     *http.Transport
+	conns *dialedConns
+}
+
+func (o oneShotTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := o.t.RoundTrip(req)
+	if err != nil {
+		o.done()
+		return nil, err
+	}
+	resp.Body = &closingBody{ReadCloser: resp.Body, done: o.done}
+	return resp, nil
+}
+
+// done stops any dial still running and closes every connection dialed, now and later.
+func (o oneShotTransport) done() {
+	o.t.CloseIdleConnections()
+	o.conns.closeAll()
+}
+
+type closingBody struct {
+	io.ReadCloser
+	done func()
+}
+
+func (b *closingBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.done()
+	return err
+}
+
+// dialedConns keeps the connections a transport dialed, to close them all.
+type dialedConns struct {
+	mu     sync.Mutex
+	closed bool
+	conns  []net.Conn
+}
+
+func (d *dialedConns) wrap(dial func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if d.closed {
+			c.Close()
+			return nil, net.ErrClosed
+		}
+		d.conns = append(d.conns, c)
+		return c, nil
+	}
+}
+
+func (d *dialedConns) closeAll() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.closed = true
+	for _, c := range d.conns {
+		c.Close()
+	}
+	d.conns = nil
 }
 
 // CloseIdleConnections preserves http.Client.CloseIdleConnections through the wrapper.
@@ -230,34 +347,23 @@ func (t upstreamTransport) CloseIdleConnections() {
 // past this many the pool starts over rather than grow with every proxy a reload names.
 const maxProxies = 32
 
-// proxyPool holds a client's copies of its base transport: one for each proxy, and one with
-// keep-alives off for each proxy (or none) that a tracked request went through.
+// proxyPool holds a client's transports for each proxy.
 type proxyPool struct {
 	mu sync.Mutex
-	by map[poolKey]*http.Transport
+	by map[string]*http.Transport
 }
 
-type poolKey struct {
-	proxy   string
-	newConn bool
-}
-
-// get returns the transport through proxy ("" for none, as base sends), with keep-alives off
-// when newConn is set: a copy of base made the first time. A proxy that does not parse fails the
-// request instead of sending it without one.
-func (p *proxyPool) get(base *http.Transport, proxy string, newConn bool) (*http.Transport, error) {
+// get returns the transport through proxy, a copy of base made the first time. A proxy that
+// does not parse fails the request instead of sending it without one.
+func (p *proxyPool) get(base *http.Transport, proxy string) (*http.Transport, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	key := poolKey{proxy, newConn}
-	if t := p.by[key]; t != nil {
+	if t := p.by[proxy]; t != nil {
 		return t, nil
 	}
-	var u *url.URL
-	if proxy != "" {
-		var err error
-		if u, err = protocol.ParseProxyURL(proxy); err != nil {
-			return nil, fmt.Errorf("the account's proxy_url %w", err)
-		}
+	u, err := parseProxy(proxy)
+	if err != nil {
+		return nil, err
 	}
 	if len(p.by) >= maxProxies {
 		for _, t := range p.by {
@@ -266,7 +372,7 @@ func (p *proxyPool) get(base *http.Transport, proxy string, newConn bool) (*http
 		p.by = nil
 	}
 	if p.by == nil {
-		p.by = map[poolKey]*http.Transport{}
+		p.by = map[string]*http.Transport{}
 	}
 	t := base.Clone()
 	// A transport the pool drops while a request still uses it must close its own idle
@@ -274,19 +380,21 @@ func (p *proxyPool) get(base *http.Transport, proxy string, newConn bool) (*http
 	if t.IdleConnTimeout <= 0 {
 		t.IdleConnTimeout = defaultIdleConnTimeout
 	}
-	if u != nil {
-		// net/http speaks to http and https proxies (CONNECT for https targets) and to socks5 and
-		// socks5h ones, and fills in Proxy-Authorization or SOCKS5 authentication from the user
-		// name and password. It resolves target host names at a SOCKS5 proxy for both schemes.
-		t.Proxy = http.ProxyURL(u)
-	}
-	if newConn {
-		// Every request dials its own connection, over HTTP/1.1 and HTTP/2, and closes it after
-		// the reply.
-		t.DisableKeepAlives = true
-	}
-	p.by[key] = t
+	// net/http speaks to http and https proxies (CONNECT for https targets) and to socks5 and
+	// socks5h ones, and fills in Proxy-Authorization or SOCKS5 authentication from the user name
+	// and password. It resolves target host names at a SOCKS5 proxy for both schemes.
+	t.Proxy = http.ProxyURL(u)
+	p.by[proxy] = t
 	return t, nil
+}
+
+// parseProxy parses an account's proxy URL. Its error holds no part of the URL.
+func parseProxy(proxy string) (*url.URL, error) {
+	u, err := protocol.ParseProxyURL(proxy)
+	if err != nil {
+		return nil, fmt.Errorf("the account's proxy_url %w", err)
+	}
+	return u, nil
 }
 
 func (p *proxyPool) closeIdle() {

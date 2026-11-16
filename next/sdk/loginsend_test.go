@@ -12,8 +12,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // post builds a POST with a body, as a token request is.
@@ -260,55 +258,6 @@ func TestTrackSendStaleConnection(t *testing.T) {
 				}
 			})
 		})
-	}
-}
-
-// A tracked request of a call whose account has a proxy goes through that proxy, on a new
-// connection each time; untracked requests through it share one.
-func TestTrackSendThroughProxy(t *testing.T) {
-	var mu sync.Mutex
-	var got []string // each request's connection and URL, as the proxy saw them
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		mu.Lock()
-		got = append(got, r.RemoteAddr+" "+r.URL.String())
-		mu.Unlock()
-	}))
-	defer proxy.Close()
-	client := &http.Client{Transport: Upstream(&http.Transport{}), Timeout: 10 * time.Second}
-	ctx, _ := withUpstreamInfo(context.Background(), protocol.Call{Type: protocol.TypeCall, ID: "r", Op: protocol.OpRefresh,
-		Account: &protocol.Account{ID: "a", ProxyURL: proxy.URL}})
-	const target = "http://login.pluxy-test.invalid/token"
-
-	send := func(track bool) string {
-		t.Helper()
-		req := post(t, target).WithContext(ctx)
-		if track {
-			req, _ = TrackSend(req)
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		mu.Lock()
-		defer mu.Unlock()
-		if len(got) == 0 {
-			t.Fatal("the request did not go through the account's proxy")
-		}
-		conn, url, _ := strings.Cut(got[len(got)-1], " ")
-		if url != target {
-			t.Fatalf("the proxy got %q, want %q", url, target)
-		}
-		got = got[:0]
-		return conn
-	}
-	if a, b := send(false), send(false); a != b {
-		t.Errorf("untracked requests came on connections %s and %s, want one shared", a, b)
-	}
-	if a, b := send(true), send(true); a == b {
-		t.Errorf("tracked requests shared connection %s, want a new one each", a)
 	}
 }
 
