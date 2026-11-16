@@ -607,12 +607,8 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			completed = marshalItems(output)
 			break
 		}
-		if err := sw.Write(ev); err != nil {
-			return false
-		}
-		if m != nil {
-			m.sent = http.StatusOK // the turn's reply has begun
-		}
+		// The turn is recorded before its last message is written: a client that has read that
+		// message may ask for the usage record next.
 		if ev.Terminal() {
 			if chosen == wsModeHTTP && httpTurn.Warmup {
 				// A warmup reaches no upstream: nothing to record.
@@ -620,6 +616,14 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			} else if ev.Type == llm.EventFinish {
 				m.finish(ev)
 			}
+		}
+		if err := sw.Write(ev); err != nil {
+			return false
+		}
+		if m != nil {
+			m.sent = http.StatusOK // the turn's reply has begun
+		}
+		if ev.Terminal() {
 			break
 		}
 		ev = stream.Next()
