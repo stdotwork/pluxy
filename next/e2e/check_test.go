@@ -163,10 +163,11 @@ func TestStartupAccountCheck(t *testing.T) {
 			}
 		}
 	}
+	// Core logs a check before the listing shows it, but the test reads core's log from a pipe and
+	// the two checks finish in either order: wait for each line, not for one and then look for the
+	// other.
+	logs.waitFor(t, `account "good": check passed: the upstream lists 2 models`)
 	all := logs.waitFor(t, `account "bad": check failed: auth`)
-	if !strings.Contains(all, `account "good": check passed: the upstream lists 2 models`) {
-		t.Errorf("core did not log the good account's check; log:\n%s", all)
-	}
 	if strings.Contains(all, "sk-revoked") || strings.Contains(all, "sk-good") {
 		t.Errorf("core logged an upstream key; log:\n%s", all)
 	}
