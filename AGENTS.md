@@ -150,7 +150,7 @@ required check; pushes to `main` and manual runs start them directly.
 
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
-| `ci.yml` | Every PR and every merge-queue group | Works out which folders the change touches (for a PR, the diff against its base; for a group, everything it adds to `main`), runs the workflows below whose paths it touches as reusable workflows, and runs `gate`, which passes only when every workflow it chose passed. A change to `ci.yml` runs them all. `next-release.yml` is not among them |
+| `ci.yml` | Every PR and every merge-queue group | Works out which folders the change touches (for a PR, the diff against its base; for a group, everything it adds to `main`), runs the workflows below whose paths it touches as reusable workflows, and runs `gate`, which passes only when every workflow it chose passed. A change to `ci.yml` runs them all. `next-release.yml` and `next-app-tools-pack.yml` are not among them |
 | `core-pr-test-build.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `core/` | Refreshes the model catalog, then `go build ./cmd/server`, `go vet ./...` and `go test ./...` |
 | `core-release.yaml` | `core-v*` tags | Builds release archives and creates the GitHub release |
 | `app-ci.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `extensions/app/` | Front end: `bun run check`, `bun test`, `bun run build`; Rust: `cargo check --locked`, `cargo test --locked` |
@@ -160,6 +160,7 @@ required check; pushes to `main` and manual runs start them directly.
 | `next-app-tools-platforms.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/app-tools/` or the workflow | The app tools on `windows-latest` and `macos-latest`: `cargo clippy` and `cargo test --locked` with an empty temporary home, the passed, failed and ignored counts and the tests that skipped a part the account may not do in the job summary; `claude-desktop`, `opencode` and `omp-setup` are left out until they are ported |
 | `next-corpus.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/` or `core/` | Builds `core/` and runs the corpus against both cores live; the report is in the job summary |
 | `next-release.yml` | `next-v*` tags; PRs touching `next/Dockerfile`, `next/.dockerignore`, `next/compose.example.yaml`, `next/cmd/pluxy-pack/` or the workflow | PRs: builds the container image (amd64, and arm64 without running it), starts it with a temporary config, polls `/healthz`, checks the panel and the bundled packages, and packs every extension for the release platforms. Tags: also uploads the archives and `registry.json` to the GitHub release and pushes the image to `ghcr.io` once the checks pass |
+| `next-app-tools-pack.yml` | `next-v*` tags; PRs touching an app tool's `pluxy-extension.json`, `next/app-tools/Cargo.toml` or `Cargo.lock`, `next/cmd/pluxy-pack/` or the workflow | Builds each app tool's program on each platform's own runner (`ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-latest` for both macOS architectures, `windows-latest`), for the platforms its manifest names, then packs them with `pluxy-pack -app-tools` and checks one archive per tool and named platform and the index. Uploads nothing: the app installs a native tool only with a curated signature, which no release makes yet |
 
 When you add a workflow, add a row here. A workflow that must pass before a merge to `main`
 runs through `ci.yml`: give it a `workflow_call` trigger instead of a `pull_request` one, add a
@@ -174,8 +175,8 @@ the maintainers' own machines instead:
   `next-app.yml` and `next-corpus.yml`. `next-ci.yml` stays on GitHub's runners.
 - `PLUXY_WINDOWS_RUNNER` takes the Windows leg of the `tools` job in
   `next-app-tools-platforms.yml`. The `app` job in `next-app-platforms.yml` (its registry tests
-  only run on GitHub's runners), macOS jobs, the `native` job in `next-app-platforms.yml` and the
-  release workflows always stay on GitHub's runners.
+  only run on GitHub's runners), macOS jobs, the `native` job in `next-app-platforms.yml`, the
+  release workflows and `next-app-tools-pack.yml` always stay on GitHub's runners.
 
 Each variable holds a runner label as JSON, for example `"self-hosted"` or
 `["self-hosted", "linux"]`. When a variable is not set, its jobs run on the GitHub runner they
