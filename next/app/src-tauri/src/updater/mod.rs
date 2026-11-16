@@ -1250,16 +1250,19 @@ pub(super) mod tests {
         fs::remove_dir_all(&tmp).unwrap();
     }
 
-    /// A successor that runs for 30 seconds and never accepts.
-    fn sleeper() -> (Successor, PathBuf) {
+    /// A successor that runs for 30 seconds and never accepts. On Windows a copy of PING.EXE in a
+    /// folder of the test's own (name): tests run in parallel, and a running copy cannot be
+    /// replaced by another test's.
+    fn sleeper(name: &str) -> (Successor, PathBuf) {
         #[cfg(unix)]
         {
+            let _ = name;
             let s = Successor::start(Path::new("/bin/sleep"), &["30".into()], None, None).unwrap();
             (s, PathBuf::new())
         }
         #[cfg(windows)]
         {
-            let tmp = temp("sleeper");
+            let tmp = temp(&format!("sleeper-{name}"));
             let exe = tmp.join("ping.exe");
             fs::copy(r"C:\Windows\System32\PING.EXE", &exe).unwrap();
             let env: Vec<(OsString, OsString)> = std::env::vars_os().collect();
@@ -1273,7 +1276,7 @@ pub(super) mod tests {
     // ended and the earlier one is not put back over it.
     #[test]
     fn a_receipt_at_the_deadline_is_accepted_and_the_successor_not_ended() {
-        let (next, _tmp) = sleeper();
+        let (next, _tmp) = sleeper("receipt");
         let calls = std::cell::Cell::new(0);
         let accepted = || {
             calls.set(calls.get() + 1);
@@ -1305,7 +1308,7 @@ pub(super) mod tests {
 
     #[test]
     fn a_version_that_never_accepts_is_ended_at_the_deadline() {
-        let (next, _tmp) = sleeper();
+        let (next, _tmp) = sleeper("never");
         let past = Instant::now() - Duration::from_secs(1);
         let started = Instant::now();
         let r = await_acceptance(next, past, || false);
