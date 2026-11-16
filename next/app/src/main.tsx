@@ -24,6 +24,7 @@ import { DevicePage, devicePage } from "./devicePage";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
 import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
+import { ompPage } from "./omp";
 import { opencodePage } from "./opencode";
 import { UpdatesPage } from "./updates";
 import { ClosePrompt } from "./window";
@@ -129,6 +130,7 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       codexPage(),
       claudeDesktopPage(),
       opencodePage(),
+      ompPage(),
       ...devicePages(catalog),
     ],
     [shown, catalog, loadDevice],
