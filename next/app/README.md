@@ -1569,8 +1569,12 @@ app supported there:
   Claude Code and Codex setup tools build and pass their tests there, and `pluxy/wsl` lists WSL
   distributions and users ([app tools](../app-tools/README.md)).
 
-Still refused at run time there: a native tool's `files` frames (saving a file), Access, the
-vault's secret entry and list, client keys and core aliases, the app's own core
+Access gives no page anything there: approving a signer and making a grant are Linux only, so no
+signer or grant can be made. On Windows its commands and a page's Access calls are refused; on
+macOS its list, revocation and a page's calls answer, with nothing granted.
+
+Still refused at run time there: a native tool's `files` frames (saving a file), the vault's
+secret entry and list, client keys and core aliases, the app's own core
 (on Windows the store of its versions does not open, so nothing installs or starts; on macOS the
 store opens, but installing, adopting and rolling back a version need the native confirmation,
 which core changes have on Linux only, so no version is installed and none starts), installing a
@@ -1595,7 +1599,8 @@ in the browser. The app updates itself only as a Linux AppImage.
   native tools' pipes and the environment of a process a confirmed launch starts (the launching
   tool holds only a reference); a client key is checked at each use, also at a launch's spawn and
   each restart. Backups have no retention: a package keeps at most 256.
-- Access: Linux only (5.8 or later: grants record the `statx` mount ID); web packages only; reads only (no writes or watchers); a signature only
+- Access: signers and grants can be made on Linux only (5.8 or later: grants record the `statx`
+  mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
 - The native test runs on Linux, except its platform, package and dialogs sessions, which CI
