@@ -202,9 +202,26 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | One app per profile, startup preferences, close and window preferences | Kept | | [README](README.md#one-app-per-profile) |
 | Privacy mode | Kept | | [README](README.md#privacy-mode) |
 | Release feed, release notes, channels, signed app update and rollback | Kept | | [README](README.md#version-management-and-release-notes) |
-| Portable replacement helper, upstream release addresses, the kernel version picker and preset mirrors | Dropped | The app updates only through the signed updater, from a feed address the person sets; the version picker could not be reached in the old app | — |
+| Portable replacement helper, upstream release addresses, the kernel version picker and preset mirrors | Dropped | The app updates only through the signed updater, from a feed address the person sets, which replaces the old app's core-version page (its `versions` page) | — |
 | MCP server and skills management | Dropped | The owner's decision; app packages are not agent skills | — |
 | Windows and macOS | Deferred | Later platform work. Some groundwork is merged (native key entry and confirmations, login items, one app per profile, test packages), but no native tool runs there | [README](README.md#platforms) |
+
+### Smaller old features not carried
+
+| Old app feature | Decision | Why | Where now |
+| --- | --- | --- | --- |
+| Model health sweep ("Check All") | Dropped | One click would spend a request on every model; the account's Test checks one model and says it spends one request | The account's Test |
+| Reverse proxy ("External access") | Dropped | Core serves TLS itself, so a second forwarder in the app is not needed | `listen` and the TLS settings in core's config |
+| Follow system proxy | Dropped | Core sends provider credentials through a proxy only when told to, so it does not read the system's or the environment's; set `proxy_url` once | `proxy_url` in core's config, or on an account's Edit form |
+| Browser choice for login links | Dropped | The sign-in link is shown, and can be copied or opened in any browser the person chooses | — |
+| Codex "Allow parallel tool calls" in the model catalog editor | Dropped | The new catalog editor has no such field | — |
+| Windows title bar and window materials | Dropped | Decoration with per-version rules that needs native code | — |
+| Thinking and Fast aliases ("Model Aliases") | Deferred | The same effect exists in config: a thinking suffix such as `gpt-5(high)`, a payload rule, or an account's model alias; no form yet | Core's config, in the Source tab |
+| Open-folder buttons | Deferred | Small value, and a new native action | — |
+| Installed and version badges on clients | Deferred | The client list says which clients can be set up; badges for what is installed come later | [README](README.md#beginner-mode) |
+| Languages (English, Simplified and Traditional Chinese, Japanese) | Deferred | English only for now; the string layer is ready for more | — |
+| Allow-LAN switch | Deferred | Exposing a service that holds provider credentials to the network is a choice that should be a visible edit. By hand: set `listen` to `0.0.0.0:<port>` in the Source tab and restart; the management API stays on this machine | `listen` in core's config |
+| Usage page of core requests (ranges, trend, analysis, request details, data management) | Kept in part | Totals and chart are on the Dashboard, and the panel's Usage page lists requests with a CSV export; prices and the storage cap are dropped, and analysis is not built | Dashboard and Usage in the panel |
 
 ## Evidence
 
