@@ -279,6 +279,7 @@ import { buildSaveFixtures } from "./save";
 import { missingPrerequisites } from "./services";
 import { buildSessionsFixtures } from "./sessions";
 import { SESSIONS, selectShard } from "./shards";
+import { shotEnv } from "./shots";
 import { buildSpawnFixtures } from "./spawn";
 import { buildTransactionsFixtures } from "./transactions";
 import { runUpdate } from "./update";
@@ -1338,6 +1339,7 @@ async function runApp(
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
+      ...shotEnv(`${currentSession}-${mode}`),
       PLUXY_APP_TEST_ROTATED_FILE: rotatedFile,
       ...(rotation.coreConfig ? { PLUXY_APP_TEST_CORE_CONFIG: rotation.coreConfig } : {}),
       ...(rotation.restart ? { PLUXY_APP_TEST_ROTATION_RESTART: "1" } : {}),
