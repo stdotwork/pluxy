@@ -155,13 +155,16 @@ inside the granted folder; for `resources.list`, empty or absent means the folde
 | --- | --- |
 | `bad_request` | Parameters of the wrong shape or unknown, an undeclared resource or operation, a `path` with a `file` resource |
 | `not_granted` | No grant for this package, release, source and signer, or the operation is not granted |
-| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, a file or folder on another mount than the granted folder (such as one mounted inside it), or not a regular file |
+| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, a file or folder on another mount than the granted folder (such as one mounted inside it), not a regular file, or a grant whose target has come to be, hold or lie inside one of the app's own folders (the app README's Access section) |
 | `changed` | The chosen link, where it resolves, or the target (its identity or its mount) changed since it was granted; it stays refused until granted again |
 | `unavailable` | The file is gone, cannot be reached for now (permissions, an I/O error, too many open files), or the document portal no longer offers it; the grant stays, and a later call may read |
 | `revoked` | The grant was revoked while the call was in flight |
 
 The native ingress limits of every page channel call apply to these too. Grants are bound to the
-package's source, release digest and approved signer: a new release asks again.
+package's source, release digest and approved signer: a new release asks again. No grant reaches
+the app's own folders (its settings, data, vault, packages and caches): the app refuses to grant
+one, anything inside one or a folder holding one, so the vault below stays out of every page's
+reach.
 
 ## App program contract v0
 
@@ -349,7 +352,9 @@ Each operation has an effect: `read` (runs with no question asked), `write` (ask
 confirmation each call), `launch` (asks a native confirmation of the exact launch) or `disclose`
 (shows content the tool reads, such as a session's messages: asks a native confirmation each
 call, as `write` does; dialogs and the Device page say it "shows content"). Every effect but an
-exact `read` asks, and only a launch's confirmation can be remembered. A launch operation's input
+exact `read` asks, and only a launch's confirmation can be remembered. A `disclose` call may also
+hand the person one file of what it shows, through the host's save dialog
+([Saving files](#saving-files)). A launch operation's input
 schema must require `executable`, `argv` and `cwd`.
 
 ### Enabling a native tool with imports
@@ -549,8 +554,14 @@ program's name) and `cwd`, and may name:
   refuses, before any dialog:
   - a file that is not a regular file, has an execute bit, is named `.desktop`, or does not
     resolve inside the folder;
-  - a file or folder that is not the person's own or that someone else may write (group or
-    world write bits): another user could replace it before the opener reads it;
+  - a file, the folder it must be inside, or any folder between the two (from the file's
+    parent up to and including that folder) that is not the person's own (the effective
+    user's) or that someone else may write (group or world write bits), or that is not a
+    real folder (a link): another user could replace the file, or rename another into its
+    place, before the opener reads it. The spawn checks every one of these again, by its
+    resolved path and without following links, so a folder made writable or turned into a
+    link since the confirmation is refused. Folders above the one it must be inside are not
+    checked;
   - a folder that is `/`, the home folder or a folder above it;
   - a file whose content type is not plain text (`text/plain`, `application/json`,
     `application/x-ndjson`, `application/jsonl`, `text/markdown` or `text/x-log`). The type is
@@ -577,7 +588,9 @@ program's name) and `cwd`, and may name:
   environment or a file. The confirmation names it; it is part of the environment revision;
 
 - `lifetime`: `detached` (the default: an agent or a terminal that is no longer the app's) or
-  `managed` (a runtime the app keeps and stops);
+  `managed` (a runtime the app keeps and stops). `managed` applies to direct launches only: a
+  launch that names a `program` (a terminal launch) may be detached only, and the host refuses
+  `managed` for it, before any confirmation ([Detached and managed](#detached-and-managed));
 - `environment`: `{"set": {NAME: value}, "unset": [NAME], "inherit": [NAME], "secrets": {NAME: <secret field>}}`,
   at most 64 names in each: variables set, session values removed, variables of the app's own
   environment passed on by name, and variables that get the secret of one of the launch's secret
@@ -588,10 +601,13 @@ program's name) and `cwd`, and may name:
   `GLIBC_TUNABLES`, `LOCPATH`, `NLSPATH`, `HOSTALIASES`, `RES_OPTIONS`, `NODE_OPTIONS`, `BASH_ENV`,
   `ENV`, `SHELLOPTS`, `BASHOPTS`, `PROMPT_COMMAND`, `PS4`, `PYTHONSTARTUP`, `PYTHONINSPECT`,
   `PERL5OPT`, `PERL5DB`, `PERL5LIB`, `RUBYOPT`, `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`,
-  `JDK_JAVA_OPTIONS`), in any case. A name that looks like a credential (containing `TOKEN`,
-  `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `APIKEY` or `_KEY_`, ending in `_KEY`, or starting
-  `TAURI_SIGNING_`, in any case) cannot be inherited: such a value reaches a launch only as a vault
-  secret, through `secrets`. `SSH_AUTH_SOCK`, a socket path, can be inherited.
+  `JDK_JAVA_OPTIONS`, `DOTNET_STARTUP_HOOKS`, `COR_PROFILER`, `DOTNET_ADDITIONAL_DEPS`,
+  `PYTHONPATH`, `PYTHONHOME`, `NODE_PATH`, `RUBYLIB`, and the prefixes `CORECLR_*`,
+  `COR_PROFILER_PATH*`, `DOTNET_PROFILER*` and `COMPlus_*`), in any case. A name that looks like a
+  credential (containing `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `APIKEY` or `_KEY_`,
+  ending in `_KEY`, or starting `TAURI_SIGNING_`, in any case) cannot be inherited: such a value
+  reaches a launch only as a vault secret, through `secrets`. `SSH_AUTH_SOCK`, a socket path, can
+  be inherited.
 
 The native confirmation shows the lifetime and each variable: its name, a set value, "inherited
 from the app's environment", "removed", or the secret's label and ID; never an inherited value or
@@ -610,8 +626,9 @@ The frame names nothing else: the host spawns exactly the launch it confirmed fo
 that tool's release, once, and answers `{"lifetime":"detached"}` or
 `{"lifetime":"managed","runtime":"rt-<hex>","pid":1234}`. A second spawn for the call, a spawn for
 a call that confirmed no launch, and one for a call the tool is not serving are refused with
-`permission`; a launch whose executable or cwd changed since its confirmation, or whose secret was
-removed from the vault, fails with `unavailable`. The call the spawn served may then end: what it
+`permission`; a launch whose executable or cwd changed since its confirmation, or whose secret is
+refused now (removed from the vault, or a client key that no longer passes its checks, see
+[Client keys](#client-keys)), fails with `unavailable`. The call the spawn served may then end: what it
 started does not end with it.
 
 ### What a launch gets
@@ -632,7 +649,8 @@ started does not end with it.
   but those the launch removes. When the app runs as an AppImage, entries inside its own folder
   are taken out of `PATH`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. Then come the variables the launch
   inherits by name, those it sets, and its secrets, which the host resolves from the vault at the
-  spawn: the tool that asked holds references only. No shell is run to read a login environment.
+  spawn, each checked then as a delivery to the tool whose launch it is: the tool that asked holds
+  references only. No shell is run to read a login environment.
 - A process given a secret's value has its core file size limits set to 1, soft and hard, and so
   does every process it starts: the kernel writes no core file for it and runs no core dump
   handler. A limit of 0 would not do: with 0 the kernel still runs a `|` handler from
@@ -646,6 +664,21 @@ A **detached** launch is started by a short-lived wrapper process, which starts 
 process group of its own with no parent-death signal and exits; the app reaps the wrapper. The app
 never signals a detached launch again: it runs on after its tool stops when idle, crashes, is
 swapped, disabled or removed, and after the app quits.
+
+Only a direct launch can be managed. For a terminal launch (one that names a `program`), the
+process the host holds is the terminal emulator's own launcher, and many terminals end it at once:
+gnome-terminal's `gnome-terminal` command is only a client that asks `gnome-terminal-server` to
+open the window and returns (the man page's `--wait` option, "wait until the terminal's child
+exits", exists for that reason), and konsole and kitty may do the same (kitty, run with
+`--single-instance`, opens its window in the first instance and quits at once). The
+agent then runs under that server, outside the process group the host signals, so a managed
+terminal launch's `status` would report a process that has exited and `stop` would stop nothing.
+A promise that holds for some terminals and silently fails for others is worse than none, so the
+host refuses `lifetime: "managed"` with a `program` (`invalid_request`, before the confirmation,
+for a new launch, a remembered one started again, or a launch another package asks for), and the
+Launcher page offers Managed for direct launches only. A terminal that keeps its process, such as
+xterm or foot, loses nothing the app promised before: launch the agent directly to have the app
+stop it.
 
 A **managed** runtime is the app's. It leads a process group of its own (never its tool's) and gets
 SIGTERM if the app dies without stopping it. The host keeps its live process (so its process ID is
@@ -663,19 +696,21 @@ update controls the runtimes its package started. While serving a call, a tool s
 | `list` | `{"runtimes": [<status>...]}`: its package's runtimes |
 | `status` | `{"runtime", "package", "state", "pid", "started", "restarts", "executable", "argv"}`, with `exit` once it ended; `state` is `running`, `stopping`, `exited` or `unknown` |
 | `stop` | the status once it has been reaped: SIGTERM to its process group, SIGKILL to the group after five seconds, or as soon as its leader exits |
-| `restart` | the status once it runs again: stopped as above, then the same confirmed launch started again, unless its executable or cwd changed since it was confirmed (launch it again) or a secret it gets was removed |
+| `restart` | the status once it runs again: stopped as above, then the same confirmed launch started again, unless its executable or cwd changed since it was confirmed (launch it again) or a secret it gets is refused now (removed, or a client key that no longer passes its checks) |
 
 Another package's runtime is `not_found`, as one that never was. A package keeps at most eight
 runtimes, running or ended (those reported `unknown` do not count); the oldest ended one that is
 not being restarted makes room. A runtime whose leader exits on its
 own has the rest of its group killed as it is reaped. The window's `program_status` lists the
-package's runtimes too. The app's quit stops every managed runtime (and starts none after).
+package's runtimes too. The app's quit stops every managed runtime (and starts none after: a
+start or restart under way is either running already, and stopped with the rest, or refused).
 Disabling or removing the package retires its runtimes, since nothing could control them then:
 each is stopped, its confirmed launch is dropped (enabling the package again does not bring it
 back: `restart` is refused, and a new launch needs a new confirmation), no runtime starts for the
-package until it is enabled again (a start or restart under way when it is disabled is stopped as
-it starts and refused), and a removed package's entries go once they have been reaped. A tool's
-idle stop, crash or swap stops none.
+package until it is enabled again (a start or restart under way when it is disabled is stopped if
+it started already, and refused otherwise, also when the package is enabled again before it
+would start), and a removed package's entries go once they have been reaped, those of a start or
+restart under way too. A tool's idle stop, crash or swap stops none.
 
 A tool's `spawn` and `runtime` requests are refused once the tool is stopping, and unless it still
 runs its package's enabled, admitted release, as its own calls are. A spawn is refused, and starts
@@ -717,6 +752,66 @@ limit of 0 the kernel writes no core file, but still runs a `|` core dump handle
 (systemd-coredump keeps no core then, and records the app's environment in the journal). Unlike a
 launch given a secret, the app keeps the vault's secrets in its memory, not in its environment, so
 that record holds no secret.
+
+## Saving files
+
+A native tool saves a file for the person only through the host, and only where the person
+chooses it in a native save dialog: neither a page nor a tool ever names the path. The tool asks
+while it serves a call of one of its `disclose` operations, which the person confirmed for that
+call (from the window, a page or another tool); the file's bytes go from the tool's pipe to the
+host and the chosen file, never through a page. That is how a page offers an export: it calls its
+tool's `disclose` operation, and the tool hands over what it read. A call of any other effect, a
+job and a delivery cannot save. There is no page channel method for it.
+
+The tool sends `files` frames for the call it serves, as it sends `spawn` frames, and the host
+answers each on its stdin with a `result` or `error` frame of that ID:
+
+```json
+{"type":"files","id":"f-1","for":"c-2","op":"append","input":{"offset":0,"data":"<base64>"}}
+{"type":"files","id":"f-2","for":"c-2","op":"save","input":{"name":"session-019a.jsonl"}}
+```
+
+- `append` adds bytes (`data`, standard base64) at `offset`, which must be the number of bytes
+  so far; it answers `{"size": <bytes so far>}`. A frame is at most 1 MiB, so a larger file takes
+  several. At most 64 MiB in all: the append that would pass it is refused with
+  `invalid_request`, and the bytes so far are dropped.
+- `save` names the file name to suggest, nothing else; the host shows the native save dialog,
+  titled `Save a file from <package>` and holding the suggested name, and answers
+  `{"outcome": "saved", "size": <bytes>}` or `{"outcome": "cancelled"}`. A name holding `/`, `\`
+  or NUL (a path) and an input with any other field are refused with `invalid_request`; control
+  and format characters (such as U+202E) become `_`, leading dots and spaces are dropped and the
+  name is cut to 255 bytes. One save per call: once a `save` passes those checks, whatever the
+  answer, every later `append` or `save` for the call is refused with `permission`, and so is a
+  `files` frame for a call whose operation is not `disclose`.
+
+The dialog is GTK's file chooser in save mode, as the Access chooser (the desktop portal's with
+`GTK_USE_PORTAL=1` or inside a sandbox), with its own overwrite question: an existing file is
+replaced only after the person answers Replace. One save dialog shows at a time; a `save` while
+another shows is refused with `unavailable`. Cancelling it writes nothing; so does the call it
+serves ending (cancelled, its page closing, the window closing), which closes the dialog.
+
+The host opens the chosen folder once, as the dialog answers, and writes into that opened folder.
+The folder must be one no other user can change: owned by the person (the app's effective user)
+or root, and not writable by group or others unless it is sticky (as `/tmp`). Otherwise another
+user could put a file at the chosen name after GTK's question, and the host cannot tell what GTK
+asked. The chosen name must hold nothing or a regular file of the person's: a link, a folder,
+another user's file or anything else there is refused (`unavailable`), since writing through a
+link would write a file the dialog did not show.
+
+The host writes the file atomically beside the chosen one: a temporary file in the same folder,
+opened relative to that folder without following a link, mode 0600, the bytes and an fsync. Then it
+checks that the tool still runs its package's admitted release (a release disabled, removed or
+swapped out while the dialog was open saves nothing), that the opened folder is still the one at the
+chosen path and still the person's, and that the name is still what the dialog answered (an
+existing file by its device, inode, size and modification and change times). A link, another or a
+changed file or a folder now at the name, a file that appeared where there was none, or a moved or
+replaced folder is refused with `permission`, and the temporary file is removed. Then a replaced
+file's permission bits are set on the new one, and it is renamed over the chosen name, and the
+folder is synced. A new file never replaces anything: it is renamed with `RENAME_NOREPLACE`, or on
+a file system without it, hard-linked at the name (which fails if something is there) and the
+temporary file removed; on a file system with neither, the save is refused (`unavailable`). For an
+overwrite, the check and the rename are two steps, and a change between them is not caught. Nothing
+of the bytes or the chosen path is logged, and the answers carry neither.
 
 ## Secrets, references and the vault
 
@@ -796,7 +891,19 @@ it is put in the call frame:
 - The app must be connected to the core the key belongs to. This is checked before anything is
   sent, so the key never goes to another core.
 - Before its value is delivered, that core must still take it: the app asks core's client API
-  (`GET /v1/models`) with the key, and a key core no longer has (deleted on core) is refused.
+  (`GET /v1/models`) with the key, and a key core no longer has (deleted on core) is refused. Once
+  core has answered, the app checks again that its connection has not changed meanwhile (no
+  switch, sign-out or key change) and that the secret is still in the vault.
+
+A launch's secret that its `environment` or `stdin` gives to the process it starts is a value
+delivered to the tool whose launch it is, though that tool holds only a reference. Its checks are made before the
+native confirmation and before the call, like any delivery's, and again each time the host turns
+the reference into a value: at the spawn, and at a managed runtime's start and every restart. A
+key deleted on core, bound to a core the app is not connected to then, or bound to another tool
+refuses that spawn, start or restart; no value from an earlier check stands for it. Once all of a
+launch's secrets have values, right before the process is started, the host checks once more that
+each is still in the vault and that the connection is the one each client key was checked on. A
+key deleted on core in the moment between core's answer and the start is not seen.
 
 ```json
 {"id":"s-<hex>","label":"Claude Code","client_key":{"core":{"mode":"managed","origin":"http://127.0.0.1:8400"},

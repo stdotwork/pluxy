@@ -7,8 +7,11 @@
     "tier": "native",
     "host_versions": [0],
     "programs": {
+      "darwin/amd64": "bin/codex-sessions",
+      "darwin/arm64": "bin/codex-sessions",
       "linux/amd64": "bin/codex-sessions",
-      "linux/arm64": "bin/codex-sessions"
+      "linux/arm64": "bin/codex-sessions",
+      "windows/amd64": "bin/codex-sessions.exe"
     },
     "operations": [
       {
@@ -48,6 +51,30 @@
         }
       },
       {
+        "id": "export",
+        "description": "Save one Codex session's rollout, its raw JSONL, as a file the person names in a save dialog",
+        "effect": "disclose",
+        "input_schema": {
+          "type": "object",
+          "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 134 } },
+          "required": ["id"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object", "required": ["outcome"] }
+      },
+      {
+        "id": "open",
+        "description": "Open one Codex session's rollout, its raw JSONL, in the app the desktop opens its type with, after the person confirms the launch",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 134 } },
+          "required": ["id"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object", "required": ["outcome"] }
+      },
+      {
         "id": "settings",
         "description": "Set the Codex home folder the reader reads (empty: the default, ~/.codex)",
         "effect": "write",
@@ -59,6 +86,9 @@
         },
         "output_schema": { "type": "object", "required": ["codex_home", "custom"] }
       }
+    ],
+    "imports": [
+      { "package": "pluxy/execution", "contract": [1], "operations": ["prepare", "launch"], "required": false }
     ],
     "state": { "version": 0, "readable_versions": [0] },
     "ui": {

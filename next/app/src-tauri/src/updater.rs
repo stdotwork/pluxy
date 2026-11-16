@@ -213,9 +213,7 @@ pub fn provenance(app: &AppHandle) -> Result<PathBuf, String> {
                 .into())
         }
     }
-    let env = app.env();
-    let appimage = env
-        .appimage
+    let appimage = env_appimage(app)
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .ok_or("This AppImage does not say where it is (APPIMAGE is not set). Install the new version by hand.")?;
@@ -240,8 +238,7 @@ pub fn provenance(app: &AppHandle) -> Result<PathBuf, String> {
         ));
     }
     // The program that runs is the one inside that AppImage.
-    let inside = env
-        .appdir
+    let inside = env_appdir(app)
         .map(PathBuf::from)
         .and_then(|d| d.canonicalize().ok())
         .zip(
@@ -380,11 +377,34 @@ fn claim(task: &Mutex<Task>, cancel: &AtomicBool, t: Task) -> Result<(), String>
     Ok(())
 }
 
+/// The AppImage this process runs from, if it does: Tauri's `Env` knows it on Linux only, so
+/// elsewhere nothing is an AppImage and every check that needs one refuses.
+#[cfg(target_os = "linux")]
+fn env_appimage(app: &AppHandle) -> Option<OsString> {
+    app.env().appimage
+}
+
+#[cfg(not(target_os = "linux"))]
+fn env_appimage(_: &AppHandle) -> Option<OsString> {
+    None
+}
+
+/// The folder the AppImage is mounted at, under the same rule as `env_appimage`.
+#[cfg(target_os = "linux")]
+fn env_appdir(app: &AppHandle) -> Option<OsString> {
+    app.env().appdir
+}
+
+#[cfg(not(target_os = "linux"))]
+fn env_appdir(_: &AppHandle) -> Option<OsString> {
+    None
+}
+
 /// Hashes, once, the AppImage this process started from. Call after the app state exists.
 pub fn record_started_from(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
-        let digest = match app.env().appimage {
+        let digest = match env_appimage(&app) {
             Some(p) => fs::read(&p)
                 .map(|b| sha256(&b))
                 .map_err(|e| format!("{}: {e}", Path::new(&p).display())),
@@ -857,7 +877,7 @@ pub fn accept(app: &AppHandle) {
         return;
     };
     let running = app.package_info().version.to_string();
-    let here = app.env().appimage.map(PathBuf::from);
+    let here = env_appimage(app).map(PathBuf::from);
     if running != p.to.version
         || here.as_deref() != Some(p.appimage.as_path())
         || fs::read(&p.appimage).map(|b| sha256(&b)).ok().as_deref() != Some(p.to.sha256.as_str())

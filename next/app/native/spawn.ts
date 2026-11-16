@@ -3,8 +3,10 @@
 // tool (src-tauri/examples/program_fixture, which run.ts builds) in their own signed packages:
 //
 // - pluxy/launcher: start (launch; its `key` is a secret passed as a reference only), runtime
-//   (read) and crash (read: it exits at once);
-// - pluxy/other: runtime (read), to try to control the launcher's runtimes.
+//   (read) and crash (read: it exits at once); it exports start;
+// - pluxy/other: runtime (read), to try to control the launcher's runtimes, and relay (read; its
+//   `key` is a secret passed as a reference only), to pass its own reference on to the launcher's
+//   start, which it imports with secret references allowed (spawn_keys_native.rs).
 //
 // The agent the launches start is that fixture program too, copied to `agent` (it is the agent
 // when its first argument says so). keys.json holds the key the check types into native key
@@ -36,6 +38,8 @@ const start = {
       key: str,
       record: str,
       again: { type: "boolean" },
+      hold: str,
+      stdin: str,
     },
     required: ["executable", "argv", "cwd"],
     additionalProperties: false,
@@ -65,9 +69,31 @@ const crash = {
   output_schema: object,
 };
 
+const relay = {
+  id: "relay",
+  description: "Pass a launch on to another package, with this call's key reference",
+  effect: "read",
+  secrets: { key: "reference" },
+  input_schema: {
+    type: "object",
+    properties: { package: str, op: str, input: object, key: str, key_as: str },
+    required: ["package", "op", "input", "key", "key_as"],
+    additionalProperties: false,
+  },
+  output_schema: object,
+};
+
 const PACKAGES: Package[] = [
-  native("pluxy/launcher", "1.0.0", { operations: [start, runtime, crash] }),
-  native("pluxy/other", "1.0.0", { operations: [runtime] }),
+  native("pluxy/launcher", "1.0.0", {
+    operations: [start, runtime, crash],
+    exports: { contract: 1, operations: ["start"] },
+  }),
+  native("pluxy/other", "1.0.0", {
+    operations: [runtime, relay],
+    imports: [
+      { package: "pluxy/launcher", contract: [1], operations: ["start"], secrets: ["start"], required: true },
+    ],
+  }),
 ];
 
 export interface Spawn {

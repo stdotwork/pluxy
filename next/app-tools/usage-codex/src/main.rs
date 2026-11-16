@@ -13,7 +13,6 @@ mod tests;
 use pluxy_program::{run, Call, Error, Handler};
 use pluxy_usage::{produce, scan, LineReader, Parser, Sink};
 use serde_json::Value;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 struct Codex;
@@ -63,13 +62,7 @@ impl Parser for Codex {
                 let path = pluxy_usage::locate(roots, path.to_str()?, &wanted)?;
                 Some((std::fs::symlink_metadata(&path).ok()?, path))
             })
-            .map(|(m, path)| {
-                let ns = m
-                    .mtime()
-                    .saturating_mul(1_000_000_000)
-                    .saturating_add(m.mtime_nsec());
-                (ns, path)
-            })
+            .map(|(m, path)| (pluxy_files::mtime_ns(&m), path))
             .collect();
         if found.is_empty() {
             let (all, _) = scan(roots, &wanted, &|| false).ok()?;
