@@ -386,7 +386,14 @@ fn tree(dir: &Path) -> Vec<(String, Vec<u8>)> {
             if p.is_dir() {
                 stack.push(p);
             } else {
-                let rel = p.strip_prefix(dir).unwrap().to_string_lossy().into_owned();
+                // Joined with `/` on every system, as the adapter's own file names are.
+                let rel = p
+                    .strip_prefix(dir)
+                    .unwrap()
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
                 out.push((rel, std::fs::read(&p).unwrap()));
             }
         }
