@@ -154,12 +154,13 @@ jobs:
       # and the permission store; xdg-desktop-portal-gtk is the backend; ayatana-indicator-application's
       # service owns org.kde.StatusNotifierWatcher. squashfs-tools builds the smoke AppImage.
       # xdotool sends real input through the X server (XTEST), for native dialog checks.
-      - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools and xdotool
+      # ImageMagick's import takes the screenshots each session keeps (native/shots.ts).
+      - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools, xdotool and ImageMagick
         working-directory: .
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
-            xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool
+            xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool imagemagick
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -198,7 +199,17 @@ jobs:
           PLUXY_APP_NATIVE_SHARD: ${{ matrix.shard }}
           PLUXY_APP_NATIVE_SHARD_INDEX: ${{ strategy.job-index }}
           PLUXY_APP_NATIVE_SHARD_TOTAL: ${{ strategy.job-total }}
+          PLUXY_APP_TEST_SHOTS: ${{ runner.temp }}/native-shots
         run: bun run test:native
+      # Each session's last screen, for a PR to link as proof of what the app showed. Kept 7 days.
+      - name: Upload the native test screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-screenshots-${{ matrix.shard }}
+          path: ${{ runner.temp }}/native-shots
+          retention-days: 7
+          if-no-files-found: ignore
 
   # The workflow's one result, under the name of the single job before the split: it fails when
   # the checks or any native shard did not pass.
