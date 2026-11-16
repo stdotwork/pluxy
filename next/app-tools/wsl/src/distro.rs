@@ -141,13 +141,16 @@ pub fn drive(m: &Mount) -> Option<char> {
 /// and the folder WSL mounts them in (the automount root, with a trailing `/`; that of drive C
 /// when there are several, else the first; null with none).
 pub fn drives(mountinfo: &str) -> (Value, Value) {
+    // Of mounts stacked on one folder, the last is the one seen there (as pluxy-transactions
+    // reads them).
+    let all = mounts(mountinfo);
     let mut list = Vec::new();
     let mut root = Value::Null;
-    for m in mounts(mountinfo) {
-        let Some(letter) = drive(&m) else { continue };
-        if list.iter().any(|d: &Value| d["path"] == m.point.as_str()) {
+    for (i, m) in all.iter().enumerate() {
+        if all[i + 1..].iter().any(|later| later.point == m.point) {
             continue;
         }
+        let Some(letter) = drive(m) else { continue };
         let parent = &m.point[..m.point.len() - 1];
         if root.is_null() || letter == 'c' {
             root = json!(parent);

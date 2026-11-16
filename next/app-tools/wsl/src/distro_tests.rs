@@ -143,3 +143,18 @@ fn failures_say_whether_the_distribution_or_the_user_is_missing() {
     let e = failure(127, "sh: getent: not found", "Ubuntu", None);
     assert_eq!(e.code, "unavailable");
 }
+
+#[test]
+fn of_mounts_stacked_on_one_folder_the_last_counts() {
+    // A tmpfs mounted over the drive at /mnt/c: it is no drive now. A noexec mount over /mnt/d.
+    let stacked = "\
+1 0 8:32 / / rw - ext4 /dev/sdc rw
+2 1 0:52 / /mnt/c rw - 9p C:\\134 rw,aname=drvfs
+3 1 0:53 / /mnt/d rw - 9p D:\\134 rw,aname=drvfs
+4 2 0:54 / /mnt/c rw - tmpfs none rw
+5 3 0:55 / /mnt/d rw,noexec - 9p D:\\134 rw,aname=drvfs
+";
+    let (d, root) = drives(stacked);
+    assert_eq!(d, json!([{"letter": "d", "path": "/mnt/d", "exec": false}]));
+    assert_eq!(root, "/mnt/");
+}
