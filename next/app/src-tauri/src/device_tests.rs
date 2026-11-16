@@ -3032,7 +3032,7 @@ fn installed_releases_are_read_only_on_windows() {
 }
 
 /// Runs f on this thread with a copy of the process's token without the backup, restore and
-/// take-ownership privileges: as an account that is not an administrator. Windows' own
+/// take-ownership privileges (the same user and groups, Administrators included). Windows' own
 /// `DeleteFileW` and `CreateDirectoryW` open with backup intent, which those privileges, where a
 /// process has them enabled (as an administrator's may), let past any access list, as root passes
 /// a Unix mode.
