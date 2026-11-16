@@ -82,7 +82,7 @@ pub enum Start {
 
 /// The first app's hold on its profile, until it is dropped or the process ends.
 pub struct Instance {
-    /// Held until the app ends, or `unlock`.
+    /// Held until this value is dropped or the process ends.
     #[cfg_attr(not(unix), allow(dead_code))]
     lock: std::sync::Mutex<Option<File>>,
     dir: fsx::Dir,
