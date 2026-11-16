@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
 	"io"
@@ -108,6 +110,62 @@ func TestTrackSendOwnConnection(t *testing.T) {
 		}
 		target.waitAllClosed(t)
 	})
+}
+
+// A tracked request speaks the HTTP version the base transport would: HTTP/2 when net/http turns
+// it on for base by itself, and HTTP/1.1 when base turned it off or has a TLS config of its own.
+func TestTrackSendKeepsBaseProtocol(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
+
+	for _, c := range []struct {
+		name string
+		base func() *http.Transport
+		want int
+	}{
+		{"a zero transport", func() *http.Transport {
+			// net/http gives a zero transport its TLS config, offering h2, on first use (here
+			// Clone); the test then trusts the server's certificate in it.
+			base := &http.Transport{}
+			_ = base.Clone()
+			base.TLSClientConfig.RootCAs = roots
+			return base
+		}, 2},
+		{"HTTP/2 turned off with an empty TLSNextProto", func() *http.Transport {
+			return &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots},
+				TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{}}
+		}, 1},
+		{"a TLS config of its own", func() *http.Transport {
+			return &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots}}
+		}, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			client := &http.Client{Transport: Upstream(c.base()), Timeout: 10 * time.Second}
+			for _, track := range []bool{false, true} {
+				req := post(t, srv.URL+"/token")
+				sent := func() bool { return false }
+				if track {
+					req, sent = TrackSend(req)
+				}
+				resp, err := client.Do(req)
+				if err != nil {
+					t.Fatalf("tracked %v: %v (counted as sent: %v)", track, err, sent())
+				}
+				_, _ = io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+				if resp.ProtoMajor != c.want {
+					t.Errorf("tracked %v: protocol = %s, want HTTP/%d", track, resp.Proto, c.want)
+				}
+			}
+		})
+	}
 }
 
 // A tracked request of a call whose account has a proxy goes through that proxy, on a new

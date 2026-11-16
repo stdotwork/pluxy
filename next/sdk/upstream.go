@@ -242,10 +242,11 @@ func (t upstreamTransport) oneShot(proxy string) (http.RoundTripper, error) {
 		c.Proxy = http.ProxyURL(u)
 	}
 	c.DisableKeepAlives = true
-	// net/http turns HTTP/2 on by itself only for a transport without its own dialer; the copy
-	// gets one below, so it asks for HTTP/2 when base would have used it.
-	if c.Protocols == nil && c.TLSNextProto == nil && c.TLSClientConfig == nil && c.Dial == nil && c.DialContext == nil &&
-		c.DialTLS == nil && c.DialTLSContext == nil {
+	// net/http turns HTTP/2 on by itself only for a transport without its own dialer or TLS
+	// config, and the copy gets a dialer below and base's TLS config, which net/http may have
+	// made for base. So the copy asks for HTTP/2 when base turned it on: Clone has set base up,
+	// and then base has an "h2" entry in TLSNextProto that the copy does not carry.
+	if c.Protocols == nil && c.TLSNextProto == nil && !c.ForceAttemptHTTP2 && t.base.TLSNextProto["h2"] != nil {
 		c.ForceAttemptHTTP2 = true
 	}
 	conns := &dialedConns{}
