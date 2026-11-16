@@ -1,6 +1,6 @@
 // The signed application update scenario's cases, the same on every system: the Linux native
 // session (update-session.ts, which update.ts runs for run.ts's `update` session) and the Windows
-// and macOS one (platform.ts's `update` session) both serve the fake https feed made here, launch
+// and macOS one (platform.ts's `app update` session) both serve the fake https feed made here, launch
 // the test package on one profile (update_native.rs drives the app from inside), and check what
 // the app reported against what they saw themselves with the checks here:
 //
