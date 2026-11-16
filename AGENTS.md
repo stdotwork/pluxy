@@ -174,7 +174,8 @@ the maintainers' own machines instead:
 
 Each variable holds a runner label as JSON, for example `"self-hosted"` or
 `["self-hosted", "linux"]`. When a variable is not set, its jobs run on the GitHub runner they
-named before.
+named before. Jobs on the maintainers' runners restore caches but don't save them (the uplink
+is slow).
 
 Only these events can use the maintainers' runners: pushes, manual runs, and pull requests from
 branches of this repository, except Dependabot's. Every other event, including pull requests from
