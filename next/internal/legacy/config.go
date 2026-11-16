@@ -977,7 +977,9 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 			return nil, fmt.Errorf("%s.models must be a list", path)
 		}
 		var models []any
-		public := map[string]bool{}
+		public := map[string]string{} // the name clients use, to the upstream name kept for it
+		var pooled []string           // the names clients use that later entries repeat, in order
+		dropped := map[string][]string{}
 		for _, m := range list {
 			e, ok := m.(tree)
 			if !ok {
@@ -991,18 +993,34 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 			if err != nil {
 				return nil, err
 			}
-			// The name clients use is the alias, else the name; the first entry for a name
-			// wins, as in today's core.
+			// The name clients use is the alias, else the name; the first entry for a name wins.
+			// Today's core does the same in every section but openai-compatibility, where
+			// entries that share an alias are a pool its requests rotate over and fall back
+			// through; this core serves the first and names the others in a note.
 			name, alias = strings.TrimSpace(name), strings.TrimSpace(alias)
-			if name == "" || public[cmp.Or(alias, name)] {
+			if name == "" {
 				continue
 			}
-			public[cmp.Or(alias, name)] = true
+			pub := cmp.Or(alias, name)
+			if kept, seen := public[pub]; seen {
+				if f.v8 == "openai-compatibility" && kept != name && !slices.Contains(dropped[pub], name) {
+					if dropped[pub] == nil {
+						pooled = append(pooled, pub)
+					}
+					dropped[pub] = append(dropped[pub], name)
+				}
+				continue
+			}
+			public[pub] = name
 			if alias == "" || alias == name {
 				models = append(models, name)
 			} else {
 				models = append(models, map[string]any{"name": name, "alias": alias})
 			}
+		}
+		for _, pub := range pooled {
+			x.notes = append(x.notes, fmt.Sprintf("config.yaml: %s key %s: models: the alias %q lists %d upstream models, which today's core rotates over as a pool; this core does not pool models yet and serves only the first, %q; dropped: %s",
+				display(path), id, pub, len(dropped[pub])+1, public[pub], quoteAll(dropped[pub])))
 		}
 		if len(models) > 0 {
 			a["models"] = models
@@ -1466,6 +1484,15 @@ func lookup(path string) (rule, bool) {
 
 // display is how a setting is named in a notice.
 func display(path string) string { return strings.ReplaceAll(path, "[]", "") }
+
+// quoteAll writes names as quoted strings separated by commas.
+func quoteAll(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = strconv.Quote(n)
+	}
+	return strings.Join(q, ", ")
+}
 
 func isZero(v any) bool {
 	switch v := v.(type) {

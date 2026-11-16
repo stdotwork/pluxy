@@ -647,6 +647,47 @@ openai-compatibility:
 	}
 }
 
+// Entries of an openai-compatibility group that share an alias are a pool in today's core. The
+// import keeps the first and names the alias and every member it drops; a model listed twice
+// loses nothing and is not named, and in the other sections, where today's core also takes the
+// first entry, nothing is named.
+func TestAliasPoolIsNamedOnImport(t *testing.T) {
+	r := translate(t, `
+codex-api-key:
+  - api-key: k1
+    base-url: https://codex.example.com
+    models:
+      - {name: up-a, alias: pub-a}
+      - {name: up-c, alias: pub-a}
+openai-compatibility:
+  - name: compat
+    base-url: https://compat.example.com/v1
+    api-key-entries: [{api-key: k2}]
+    models:
+      - {name: deepseek-v3.1, alias: claude-opus-4.66}
+      - {name: glm-5, alias: claude-opus-4.66}
+      - {name: kimi-k2.5, alias: claude-opus-4.66}
+      - {name: glm-5, alias: claude-opus-4.66}
+      - {name: plain}
+      - {name: plain}
+`)
+	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
+	equalJSON(t, exts[OpenAICompatible].(map[string]any)["accounts"], `[{
+		"id": "compat", "models": [{"name": "deepseek-v3.1", "alias": "claude-opus-4.66"}, "plain"],
+		"settings": {"base_url": "https://compat.example.com/v1"},
+		"credential": {"kind": "api_key", "api_key": "k2"}
+	}]`)
+	n := notices(r)
+	for _, want := range []string{`openai-compatibility key compat`, `alias "claude-opus-4.66"`, `lists 3 upstream models`, `does not pool models yet`, `serves only the first, "deepseek-v3.1"`, `dropped: "glm-5", "kimi-k2.5"`} {
+		if !strings.Contains(n, want) {
+			t.Errorf("notices lack %q:\n%s", want, n)
+		}
+	}
+	if strings.Count(n, "claude-opus-4.66") != 1 || strings.Contains(n, "plain") || strings.Contains(n, "pub-a") {
+		t.Errorf("notices name more than the one pool:\n%s", n)
+	}
+}
+
 // server.tls (older spelling tls) becomes the tls section when it is enabled.
 func TestTLS(t *testing.T) {
 	want := map[string]any{"enable": true, "cert": "certs/c.pem", "key": "/etc/k.pem"}
