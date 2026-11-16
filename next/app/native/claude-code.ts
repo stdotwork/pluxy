@@ -39,7 +39,7 @@ export interface ClaudeCode {
   registries: { name: string; url: string }[];
   /** PLUXY_TEST_TRUST_NONCE for the app: the marker's nonce. */
   nonce: string;
-  /** The key and the login canary: neither may show in the app's output. */
+  /** The key, the login canary and the guided sign-in's API key: none may show in the app's output. */
   canaries: string[];
   /** The folder to put first on the app's PATH. */
   bin: string;
@@ -122,7 +122,7 @@ function env(first: string[]): string {
 }
 
 /** The files and links in home, and what the check expects of them, by hand. */
-function configs(home: string, login: string) {
+function configs(home: string, login: string, guided: string) {
   const claude = join(home, ".claude");
   const settings = join(claude, "settings.json");
   const credentials = join(claude, ".credentials.json");
@@ -160,6 +160,10 @@ function configs(home: string, login: string) {
   symlinkSync(chezmoi, rootLink);
   put(unknown, unknownBytes);
   put(broken, brokenBytes);
+  // Beginner Mode's file: the person's own setting, which the guide's apply keeps.
+  const easy = join(home, "easy", "settings.json");
+  const easyBytes = '{\n  "env": {\n    "API_TIMEOUT_MS": "1"\n  }\n}\n';
+  put(easy, easyBytes);
 
   const tail = '  "autoCompactWindow": 1000000,\n  "autoCompactEnabled": true\n}\n';
   return {
@@ -171,6 +175,13 @@ function configs(home: string, login: string) {
     root: { link: rootLink, text: chezmoi, file: join(chezmoi, "settings.json") },
     unknown,
     broken,
+    // Beginner Mode's check: its file, and the account its guided sign-in adds with test/alpha's
+    // API-key method.
+    easy: {
+      settings: easy,
+      account: "guided-account",
+      api_key: guided,
+    },
     settings_input: SETTINGS,
     bytes: {
       original,
@@ -179,6 +190,7 @@ function configs(home: string, login: string) {
       keep,
       unknown: unknownBytes,
       broken: brokenBytes,
+      easy: easyBytes,
       stow: stowOriginal,
       // The person's API key goes (it would win over the bearer token), their timeout stays, the
       // startup model replaces theirs, the setting the check does not know keeps its digits.
@@ -277,6 +289,8 @@ export function buildClaudeCodeFixtures(
 
   const key = `pluxy-claude-code-key-${randomBytes(16).toString("hex")}`;
   const login = `pluxy-claude-login-${randomBytes(16).toString("hex")}`;
+  // The API key Beginner Mode's guided sign-in types: like the key, never in the app's output.
+  const guided = `pluxy-guided-login-${randomBytes(16).toString("hex")}`;
   writeFileSync(join(root, "keys.json"), JSON.stringify({ key }));
   writeFileSync(
     join(root, "expect.json"),
@@ -289,9 +303,9 @@ export function buildClaudeCodeFixtures(
       terminal: join(bin, "x-terminal-emulator"),
       claude: join(bin, "claude"),
       override: join(root, "override", "claude"),
-      ...configs(home, login),
+      ...configs(home, login, guided),
     }),
   );
   const nonce = writeTrustProfile(home, [curatedFile], publicKey);
-  return { registries: [{ name: "curated", url: curatedFile }], nonce, canaries: [key, login], bin };
+  return { registries: [{ name: "curated", url: curatedFile }], nonce, canaries: [key, login, guided], bin };
 }

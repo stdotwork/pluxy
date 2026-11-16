@@ -140,7 +140,9 @@
 // replaced target refuses, settings of another schema refuse; its recipe starts a stand-in terminal
 // and claude through the launcher with no key in argv or environment; the key and a login canary
 // stay out of every window answer, confirmation and the app's output, and removing the package
-// leaves no process.
+// leaves no process. Then Beginner Mode (easy_mode_native.rs) signs in with test/alpha's API-key
+// method in its Add Account and installs, enables, applies and starts Claude Code through the
+// guide; a cancelled apply keeps the file and the guide cannot answer the enable confirmation.
 // The Codex check (codex.ts, codex_native.rs) runs in one more session with that build:
 // pluxy/codex-setup (next/app-tools/codex, built here) with the execution program imports the
 // core's served models into catalog entries, applies, clears and restores Codex's config.toml and
@@ -193,6 +195,35 @@
 // comes first) in a terminal through the launcher with no key in argv or environment; the key and
 // a login canary stay out of every window answer, confirmation and the app's output, and removing
 // the package leaves no process.
+// The Grok Build check (grok.ts, grok_native.rs) runs in one more session with that build:
+// pluxy/grok-setup (next/app-tools/grok-setup, built here) with the execution program applies,
+// clears and restores Grok Build's config.toml in the run's HOME to hand-written bytes, after a
+// native confirmation naming the file and the key's label, keeping comments, the person's own
+// models and later edits; through a stow link and a chezmoi-style root it changes only the
+// target, a replaced target refuses, files Grok Build would not take refuse; a manual backup holds
+// the file; its recipe starts a stand-in terminal and grok through the launcher with no key in
+// argv or environment; the key and a login canary stay out of every window answer, confirmation
+// and the app's output, and removing the package leaves no process.
+// The Hermes Agent check (hermes.ts, hermes_native.rs) runs in one more session with that build:
+// pluxy/hermes-setup (next/app-tools/hermes-setup, built here) with the execution program applies,
+// clears and restores Hermes Agent's config.yaml in the run's HOME to hand-written bytes, after a
+// native confirmation naming the file and the key's label, keeping the person's later edits and
+// their .env and auth.json; through a stow link and a chezmoi-style root it changes only the target,
+// a replaced target refuses, files Hermes Agent would not take refuse; its recipe starts a stand-in
+// hermes (from the PATH, then from the installer's place) in a terminal through the launcher with no
+// key in argv or environment; the key and a login canary stay out of every window answer,
+// confirmation and the app's output, and removing the package leaves no process.
+// The Pi check (pi.ts, pi_native.rs) runs in one more session with that build: pluxy/pi-setup
+// (next/app-tools/pi-setup, built here) with the execution program applies, clears and restores Pi's
+// settings and cliproxyapi files in the run's HOME to hand-written bytes, after a native confirmation
+// naming the three files and the key's label, keeping the person's later edits; the adapter folder
+// is installed, updated and removed with them, and a folder whose adapter is not pluxy's refuses an
+// apply; through a stow link and a chezmoi-style root it changes only the target, a replaced target
+// refuses, files Pi would not take are reported refused, Clear refuses them and Restore
+// Backup still puts them back; its recipe starts a stand-in pi (from the PATH, then
+// from ~/.local/bin, then from Pi's own bin folder, which comes first) in a terminal through the
+// launcher with no key in argv or environment; the key and a login canary stay out of every window
+// answer, confirmation and the app's output, and removing the package leaves no process.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -235,11 +266,14 @@ import { buildClaudeDesktopFixtures } from "./claude-desktop";
 import { buildCodexFixtures } from "./codex";
 import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
+import { buildGrokFixtures } from "./grok";
+import { buildHermesFixtures } from "./hermes";
 import { runInstances } from "./instances";
 import { buildLauncherFixtures } from "./launcher";
 import { buildOmpFixtures } from "./omp";
 import { buildOpenFixtures } from "./open";
 import { buildOpenCodeFixtures } from "./opencode";
+import { buildPiFixtures } from "./pi";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
@@ -706,7 +740,9 @@ interface Rotation {
  * opening a file in the person's own app. codex: only the Codex setup and launcher check.
  * save: only the save-file check.
  * claudeDesktop: only the Claude Desktop setup and launcher check. opencode: only the OpenCode
- * setup and launcher check. omp: only the Oh My Pi setup and launcher check.
+ * setup and launcher check. omp: only the Oh My Pi setup and launcher check. grok: only the Grok
+ * Build setup and launcher check. hermes: only the Hermes Agent setup and launcher check. pi: only
+ * the Pi setup and launcher check.
  */
 async function runApp(
   mode: Mode,
@@ -738,6 +774,9 @@ async function runApp(
   claudeDesktop = false,
   opencode = false,
   omp = false,
+  grok = false,
+  hermes = false,
+  pi = false,
 ): Promise<string[]> {
   if (currentSession === undefined)
     throw new Error(
@@ -830,6 +869,9 @@ async function runApp(
       !claudeDesktop &&
       !opencode &&
       !omp &&
+      !grok &&
+      !hermes &&
+      !pi &&
       !usage &&
       !save &&
       suite !== "access"
@@ -1122,6 +1164,65 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The Grok Build check's signed packages, Grok Build's files in HOME, its stand-in terminal and
+    // grok, its registry and trust profile, and its key and login canary.
+    const grokDir = grok ? join(root, "grok") : undefined;
+    if (grokDir) {
+      mkdirSync(grokDir);
+      const f = buildGrokFixtures(
+        grokDir,
+        dirs.home,
+        grokProgram,
+        grokManifest,
+        executionProgram,
+        executionManifest,
+      );
+      nonce = f.nonce;
+      canaries = f.canaries;
+      launcherBin = f.bin;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
+    // The Hermes Agent check's signed packages, Hermes Agent's files in HOME, its stand-in terminal
+    // and hermes, its registry and trust profile, and its key and login canary.
+    const hermesDir = hermes ? join(root, "hermes") : undefined;
+    if (hermesDir) {
+      mkdirSync(hermesDir);
+      const f = buildHermesFixtures(
+        hermesDir,
+        dirs.home,
+        hermesProgram,
+        hermesManifest,
+        executionProgram,
+        executionManifest,
+      );
+      nonce = f.nonce;
+      canaries = f.canaries;
+      launcherBin = f.bin;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
+    // The Pi check's signed packages, Pi's files in HOME, its stand-in terminal and pi, its
+    // registry and trust profile, and its key and login canary.
+    const piDir = pi ? join(root, "pi") : undefined;
+    if (piDir) {
+      mkdirSync(piDir);
+      const f = buildPiFixtures(piDir, dirs.home, piProgram, piManifest, executionProgram, executionManifest);
+      nonce = f.nonce;
+      canaries = f.canaries;
+      launcherBin = f.bin;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -1157,7 +1258,10 @@ async function runApp(
       !codexDir &&
       !claudeDesktopDir &&
       !opencodeDir &&
-      !ompDir
+      !ompDir &&
+      !grokDir &&
+      !hermesDir &&
+      !piDir
     ) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
@@ -1228,6 +1332,9 @@ async function runApp(
       ...(claudeDesktopDir ? { PLUXY_APP_TEST_CLAUDE_DESKTOP: claudeDesktopDir } : {}),
       ...(opencodeDir ? { PLUXY_APP_TEST_OPENCODE: opencodeDir } : {}),
       ...(ompDir ? { PLUXY_APP_TEST_OMP: ompDir } : {}),
+      ...(grokDir ? { PLUXY_APP_TEST_GROK: grokDir } : {}),
+      ...(hermesDir ? { PLUXY_APP_TEST_HERMES: hermesDir } : {}),
+      ...(piDir ? { PLUXY_APP_TEST_PI: piDir } : {}),
       ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
       ...(saveDir ? { PLUXY_APP_TEST_SAVE: saveDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
@@ -1611,6 +1718,36 @@ async function runApp(
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode} omp ${JSON.stringify(r ?? {})}`);
       console.log(`${mode}: omp ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (grok) {
+      const r = steps.get("grok") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the Grok Build check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} grok ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: grok ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (hermes) {
+      const r = steps.get("hermes") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the Hermes Agent check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} hermes ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: hermes ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (pi) {
+      const r = steps.get("pi") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the Pi check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} pi ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: pi ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
     }
 
@@ -2238,6 +2375,15 @@ const opencodeProgram = join(appToolsTarget, "debug", "opencode");
 /** pluxy/omp-setup (next/app-tools/omp-setup) and its manifest, for the Oh My Pi check. */
 const ompManifest = join(appTools, "omp-setup", "pluxy-extension.json");
 const ompProgram = join(appToolsTarget, "debug", "omp-setup");
+/** pluxy/grok-setup (next/app-tools/grok-setup) and its manifest, for the Grok Build check. */
+const grokManifest = join(appTools, "grok-setup", "pluxy-extension.json");
+const grokProgram = join(appToolsTarget, "debug", "grok-setup");
+/** pluxy/hermes-setup (next/app-tools/hermes-setup) and its manifest, for the Hermes Agent check. */
+const hermesManifest = join(appTools, "hermes-setup", "pluxy-extension.json");
+const hermesProgram = join(appToolsTarget, "debug", "hermes-setup");
+/** pluxy/pi-setup (next/app-tools/pi-setup) and its manifest, for the Pi check. */
+const piManifest = join(appTools, "pi-setup", "pluxy-extension.json");
+const piProgram = join(appToolsTarget, "debug", "pi-setup");
 /** The transaction library's fixture writer the transaction library check packs. */
 const fixtureWriter = join(appToolsTarget, "debug", "examples", "fixture-writer");
 let appImage = ""; // the smoke AppImage the sessions run
@@ -2339,6 +2485,15 @@ async function main(): Promise<number> {
   // pluxy/omp-setup, which the Oh My Pi check installs.
   if (existsSync(ompManifest))
     run("cargo", ["build", "--locked", "-p", "omp-setup", "--target-dir", appToolsTarget], appTools);
+  // pluxy/grok-setup, which the Grok Build check installs.
+  if (existsSync(grokManifest))
+    run("cargo", ["build", "--locked", "-p", "grok-setup", "--target-dir", appToolsTarget], appTools);
+  // pluxy/hermes-setup, which the Hermes Agent check installs.
+  if (existsSync(hermesManifest))
+    run("cargo", ["build", "--locked", "-p", "hermes-setup", "--target-dir", appToolsTarget], appTools);
+  // pluxy/pi-setup, which the Pi check installs.
+  if (existsSync(piManifest))
+    run("cargo", ["build", "--locked", "-p", "pi-setup", "--target-dir", appToolsTarget], appTools);
   // The build without artifact-test-trust, kept aside before the build with it replaces it. The
   // device check needs the one (a normal build refuses the curated native tool), the admission
   // session and the updater gate's identifier check the other (its features are the test
@@ -2943,6 +3098,117 @@ async function main(): Promise<number> {
             false,
             undefined,
             release,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
+      // The Grok Build setup and launcher check, on the same build.
+      if (runsSession("grok"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
+      // The Hermes Agent setup and launcher check, on the same build.
+      if (runsSession("hermes"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
+      // The Pi setup and launcher check, on the same build.
+      if (runsSession("pi"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
+            false,
             false,
             false,
             false,
