@@ -479,7 +479,7 @@ func TestProxyTransportClosesIdleConnections(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			base := &http.Transport{IdleConnTimeout: c.base}
-			rt, err := (&proxyPool{}).get(base, "http://127.0.0.1:3128")
+			rt, err := (&proxyPool{}).get(base, "http://127.0.0.1:3128", false)
 			if err != nil {
 				t.Fatal(err)
 			}
