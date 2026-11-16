@@ -10,6 +10,12 @@ on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when what it
   # builds changed (see the changes job there).
   workflow_call:
+    inputs:
+      # ci.yml sets this when the change reaches only the Go core: the native jobs build and run
+      # just the app (next/app and the kit in next/ui), never the core.
+      skip-native:
+        type: boolean
+        default: false
   workflow_dispatch:
   # Not on every push to main: the merge queue already ran this on the exact tree it merges, and
   # the hosted macOS pool is short enough that re-runs on main starved the queue's own jobs. One
@@ -124,8 +130,10 @@ jobs:
   # The package shard builds the test package first (package.ts test: a folder bundle on Windows,
   # an app bundle on macOS, never an installer), then the dev app, since the package's builds
   # rename the program they make in target/debug.
+  # A schedule or manual run has no inputs: null is not true, so it runs these.
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
+    if: inputs.skip-native != true
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

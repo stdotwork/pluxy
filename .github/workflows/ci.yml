@@ -30,7 +30,9 @@ jobs:
   # what those jobs build. That is next/app, next/ui (the kit the window is built from), go.mod and
   # go.sum, and the Go packages the app's tests build and run: e2e/panelcore, e2e/testext and
   # cmd/pluxy, with everything they import on Linux, Windows and macOS. `go list` works the
-  # packages out from the code being tested, so a new import counts at once.
+  # packages out from the code being tested, so a new import counts at once. Its native jobs build
+  # and run only the app, never the Go core, so a change that reaches only those Go packages skips
+  # them (next-app-platforms-native).
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -41,6 +43,7 @@ jobs:
       # Set by the paths step, or else by the go-packages step, which runs only when the paths
       # step left it open.
       next-app-platforms: ${{ steps.paths.outputs.next-app-platforms || steps.go-packages.outputs.next-app-platforms }}
+      next-app-platforms-native: ${{ steps.paths.outputs.next-app-platforms-native }}
       next-app-tools-platforms: ${{ steps.paths.outputs.next-app-tools-platforms }}
       next-corpus: ${{ steps.paths.outputs.next-corpus }}
     steps:
@@ -73,9 +76,14 @@ jobs:
           echo "$(tr -cd '\0' < "$RUNNER_TEMP/changed" | wc -c) changed files"
           declare -A run=()
           for w in core app next-ci next-app next-app-platforms next-app-tools-platforms next-corpus; do run[$w]=false; done
+          native=false
           while IFS= read -r -d '' path; do
             case $path in
               .github/workflows/ci.yml) for w in "${!run[@]}"; do run[$w]=true; done ;;
+            esac
+            case $path in
+              next/app/* | next/ui/* | .github/workflows/next-app-platforms.yml | .github/workflows/ci.yml)
+                native=true ;;
             esac
             case $path in core/* | .github/workflows/core-pr-test-build.yml) run[core]=true ;; esac
             case $path in extensions/app/* | .github/workflows/app-ci.yml) run[app]=true ;; esac
@@ -98,6 +106,7 @@ jobs:
           for w in "${!run[@]}"; do
             echo "$w=${run[$w]}" | tee -a "$GITHUB_OUTPUT"
           done
+          echo "next-app-platforms-native=$native" | tee -a "$GITHUB_OUTPUT"
       # The checkout above has only .github; go list needs next/ as tested.
       - name: Check out next/
         if: steps.paths.outputs.next-app-platforms == ''
@@ -168,6 +177,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.next-app-platforms == 'true'
     uses: ./.github/workflows/next-app-platforms.yml
+    with:
+      skip-native: ${{ needs.changes.outputs.next-app-platforms-native != 'true' }}
 
   next-app-tools-platforms:
     name: Next app tools platforms
