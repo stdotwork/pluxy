@@ -52,6 +52,9 @@ export const PLATFORM_SHARDS: Record<string, readonly string[]> = {
   // The test package and the release gate on these systems: a job of its own, since it builds the
   // test package twice and the release app.
   package: ["bundle", "bundle release gate"],
+  // The application update (update-cases.ts): a job of its own, since it builds the test package,
+  // runs a test core, and its route restarts the app four times.
+  update: ["update"],
 };
 
 /** Every session, each named once across the shards. */

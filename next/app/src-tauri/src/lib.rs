@@ -61,7 +61,7 @@ pub mod recovery;
 pub mod release;
 #[cfg(debug_assertions)]
 pub mod release_config;
-#[cfg(all(target_os = "linux", feature = "native-test"))]
+#[cfg(feature = "native-test")]
 mod release_native;
 #[cfg(target_os = "linux")]
 pub mod route;
@@ -71,7 +71,7 @@ pub mod savefile;
 pub mod spawn;
 mod startup;
 pub mod trust;
-#[cfg(all(target_os = "linux", feature = "native-test"))]
+#[cfg(feature = "native-test")]
 mod update_native;
 mod updater;
 mod updates;
