@@ -7,8 +7,8 @@ name: Next app platforms
 # next-app.yml.
 
 on:
-  # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
-  # its paths below are touched.
+  # Pull requests and merge-queue groups run this through ci.yml, which runs it only when what it
+  # builds changed (see the changes job there).
   workflow_call:
   workflow_dispatch:
   # Not on every push to main: the merge queue already ran this on the exact tree it merges, and

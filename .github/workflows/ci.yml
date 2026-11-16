@@ -26,6 +26,11 @@ jobs:
   # group ahead of it in the queue when groups build side by side.)
   # Each output says whether a workflow's paths were touched, using the paths that workflow's
   # own pull_request trigger had. A change to this file runs them all.
+  # next-app-platforms (the Windows and macOS jobs) is the exception: it runs only for a change to
+  # what those jobs build. That is next/app, next/ui (the kit the window is built from), go.mod and
+  # go.sum, and the Go packages the app's tests build and run: e2e/panelcore, e2e/testext and
+  # cmd/pluxy, with everything they import on Linux, Windows and macOS. `go list` works the
+  # packages out from the code being tested, so a new import counts at once.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -33,7 +38,9 @@ jobs:
       app: ${{ steps.paths.outputs.app }}
       next-ci: ${{ steps.paths.outputs.next-ci }}
       next-app: ${{ steps.paths.outputs.next-app }}
-      next-app-platforms: ${{ steps.paths.outputs.next-app-platforms }}
+      # Set by the paths step, or else by the go-packages step, which runs only when the paths
+      # step left it open.
+      next-app-platforms: ${{ steps.paths.outputs.next-app-platforms || steps.go-packages.outputs.next-app-platforms }}
       next-app-tools-platforms: ${{ steps.paths.outputs.next-app-tools-platforms }}
       next-corpus: ${{ steps.paths.outputs.next-corpus }}
     steps:
@@ -74,13 +81,63 @@ jobs:
             case $path in extensions/app/* | .github/workflows/app-ci.yml) run[app]=true ;; esac
             case $path in next/* | .github/workflows/next-ci.yml) run[next-ci]=true ;; esac
             case $path in next/* | .github/workflows/next-app.yml) run[next-app]=true ;; esac
-            case $path in next/* | .github/workflows/next-app-platforms.yml) run[next-app-platforms]=true ;; esac
+            case $path in
+              next/app/* | next/ui/* | next/go.mod | next/go.sum | .github/workflows/next-app-platforms.yml)
+                run[next-app-platforms]=true ;;
+              # Any other file in next/ may be in one of those Go packages: the go-packages step
+              # decides.
+              next/*) printf '%s\0' "$path" >> "$RUNNER_TEMP/next-other" ;;
+            esac
             case $path in next/app-tools/* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
             case $path in next/* | core/* | .github/workflows/next-corpus.yml) run[next-corpus]=true ;; esac
           done < "$RUNNER_TEMP/changed"
+          if [ "${run[next-app-platforms]}" = false ] && [ -s "$RUNNER_TEMP/next-other" ]; then
+            unset 'run[next-app-platforms]'
+            echo "next-app-platforms: left to the go-packages step"
+          fi
           for w in "${!run[@]}"; do
             echo "$w=${run[$w]}" | tee -a "$GITHUB_OUTPUT"
           done
+      # The checkout above has only .github; go list needs next/ as tested.
+      - name: Check out next/
+        if: steps.paths.outputs.next-app-platforms == ''
+        run: git sparse-checkout add next
+      - name: Set up Go
+        if: steps.paths.outputs.next-app-platforms == ''
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: false
+      # Fails, and so fails the gate, when go list cannot load those packages.
+      - name: Work out whether the platform jobs build a changed file
+        id: go-packages
+        if: steps.paths.outputs.next-app-platforms == ''
+        working-directory: next
+        run: |
+          set -euo pipefail
+          # Every system and architecture the platform jobs and this check run on, with and without
+          # cgo, so a file kept to one of them by a build constraint counts too.
+          for os in linux windows darwin; do
+            for arch in amd64 arm64; do
+              for cgo in 0 1; do
+                GOOS=$os GOARCH=$arch CGO_ENABLED=$cgo go list -deps \
+                  -f '{{if and .Module .Module.Main}}{{.Dir}}{{end}}' \
+                  ./e2e/panelcore ./e2e/testext ./cmd/pluxy
+              done
+            done
+          done | sort -u > "$RUNNER_TEMP/dirs"
+          # Repository paths of the package folders; a file anywhere under one counts (embedded files).
+          sed -e '/^$/d' -e "s|^$PWD|next|" "$RUNNER_TEMP/dirs" > "$RUNNER_TEMP/prefixes"
+          echo "$(wc -l < "$RUNNER_TEMP/prefixes") package folders"
+          hit=false
+          while IFS= read -r -d '' path; do
+            # go build and go run leave out test files.
+            case $path in *_test.go) continue ;; esac
+            while IFS= read -r dir; do
+              case $path in "$dir"/*) hit=true; echo "$path is in $dir"; break 2 ;; esac
+            done < "$RUNNER_TEMP/prefixes"
+          done < "$RUNNER_TEMP/next-other"
+          echo "next-app-platforms=$hit" | tee -a "$GITHUB_OUTPUT"
 
   core:
     name: Core CI
