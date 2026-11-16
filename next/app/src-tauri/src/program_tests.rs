@@ -150,7 +150,7 @@ impl Private for Stub {
     fn test_carries(&self, _: &str) -> (bool, bool) {
         (false, false)
     }
-    fn journals(&self, _: &str) -> Result<Vec<Value>, String> {
+    fn journals(&self, _: &Instance) -> Result<Vec<Value>, String> {
         if self.unreadable {
             return Err("its records are damaged".into());
         }
@@ -159,6 +159,7 @@ impl Private for Stub {
     fn frame(
         &self,
         tool: &Hop,
+        _: &Instance,
         op: &str,
         describing: Option<&[String]>,
         r: &Value,
@@ -265,6 +266,8 @@ fn release(mode: Value, version: &str, generation: u64) -> Spec {
         dir,
         operations: operations(),
         state_version: 0,
+        environment: Environment::Local,
+        wsl: None,
     }
 }
 
@@ -281,9 +284,10 @@ impl Drop for Folder {
 fn host_gated(spec: Spec, limits: Limits, before: impl Fn(&str) + Send + Sync + 'static) -> Host {
     let folder = Folder(spec.dir.clone());
     Host::for_tests(
-        Box::new(move |id| {
+        Box::new(move |instance: &Instance| {
             let _ = &folder;
-            before(id);
+            let id = instance.key();
+            before(&id);
             if id == ID {
                 Ok(spec.clone())
             } else {
@@ -1067,7 +1071,7 @@ fn a_call_allowed_for_another_release_is_refused() {
     let e = h
         .run_call_with(
             h.begin_call(None).unwrap(),
-            ID,
+            &Instance::local(ID),
             "summary",
             json!({"items": []}),
             ctx(&"ab".repeat(32), 2),
@@ -1078,7 +1082,7 @@ fn a_call_allowed_for_another_release_is_refused() {
     let e = h
         .run_call_with(
             h.begin_call(None).unwrap(),
-            ID,
+            &Instance::local(ID),
             "summary",
             json!({"items": []}),
             ctx(&"cd".repeat(32), 1),
@@ -1088,7 +1092,7 @@ fn a_call_allowed_for_another_release_is_refused() {
     assert_eq!(e.code, "extension_unavailable", "{e}");
     let ok = h.run_call_with(
         h.begin_call(None).unwrap(),
-        ID,
+        &Instance::local(ID),
         "summary",
         json!({"items": ["a"]}),
         ctx(&"ab".repeat(32), 1),
@@ -1794,7 +1798,7 @@ fn a_call_with_a_bounded_turn_gives_up_waiting_for_a_busy_package() {
     let e = h
         .run_call_with(
             h.begin_call(None).unwrap(),
-            ID,
+            &Instance::local(ID),
             "summary",
             json!({"items": []}),
             Arc::new(Context {
@@ -1845,7 +1849,7 @@ fn a_call_delivers_its_secrets_in_its_frame_and_the_tool_reaches_the_vault_only_
     let out = h
         .run_call_with(
             call,
-            ID,
+            &Instance::local(ID),
             "apply",
             json!({"key": "r-1", "file": file}),
             Arc::new(context),
@@ -3260,4 +3264,79 @@ fn lifetime_a_launch_gets_exactly_its_arguments_working_folder_and_environment()
     ) {
         check(&agent);
     }
+}
+
+/// The record of a WSL environment, as `pluxy/wsl`'s check gives it.
+fn wsl_record(user: &str) -> crate::environments::Record {
+    crate::environments::Record::from_check(
+        "Ubuntu",
+        user,
+        &json!({"distro": "Ubuntu", "user": user, "uid": 1001, "home": format!("/home/{user}"),
+            "arch": "amd64", "automount": "/mnt/",
+            "drives": [{"letter": "c", "path": "/mnt/c", "exec": true}]}),
+        0,
+    )
+    .unwrap()
+}
+
+fn call_in(h: &Host, instance: &Instance) -> Result<Value, CallError> {
+    h.run_call_with(
+        h.begin_call(None).unwrap(),
+        instance,
+        "summary",
+        json!({"items": []}),
+        Arc::new(Context::main()),
+        Cancel::default(),
+    )
+}
+
+#[test]
+fn an_instance_in_wsl_has_its_own_slot_and_starts_only_from_its_own_record() {
+    let local = package(Value::Null);
+    let bob = wsl_record("bob");
+    let in_wsl = Spec {
+        environment: bob.environment(),
+        wsl: Some(bob.clone()),
+        ..local.clone()
+    };
+    let folder = Folder(local.dir.clone());
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let (l, w, seen) = (local.clone(), in_wsl.clone(), Arc::clone(&asked));
+    // The record for alice names bob's instance: a routing mistake.
+    let h = Host::for_tests(
+        Box::new(move |i: &Instance| {
+            let _ = &folder;
+            seen.lock().unwrap().push(i.key());
+            if i.environment.is_local() {
+                Ok(l.clone())
+            } else {
+                Ok(w.clone())
+            }
+        }),
+        fast(),
+    );
+    let alice_i = Instance {
+        package: ID.into(),
+        environment: wsl_record("alice").environment(),
+    };
+    let (pid, _) = pids(&summary(&h, &[]).unwrap());
+    let _held = h.lease(ID).unwrap();
+    // Off Windows nothing runs in WSL; the local tool runs on, its own slot untouched.
+    #[cfg(unix)]
+    {
+        let bob_i = Instance {
+            package: ID.into(),
+            environment: bob.environment(),
+        };
+        let e = call_in(&h, &bob_i).unwrap_err();
+        assert!(e.message.contains("WSL runs on Windows only"), "{e:?}");
+        assert!(h.status_in(&bob_i).last.unwrap().contains("Windows only"));
+    }
+    let e = call_in(&h, &alice_i).unwrap_err();
+    assert!(e.message.contains("names"), "{e:?}");
+    assert_eq!(h.status(ID).state, "active");
+    assert_eq!(h.status(ID).pid, Some(pid as u32));
+    assert!(h.status(ID).last.is_none());
+    let asked = asked.lock().unwrap().clone();
+    assert!(asked.contains(&ID.to_string()) && asked.contains(&alice_i.key()));
 }

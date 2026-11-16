@@ -224,3 +224,20 @@ fn records_are_kept_in_their_file_one_per_distribution_and_user() {
     assert!(Environments::open(file).all().is_empty());
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn what_wsl_exe_printed_instead_of_a_frame_reads_as_text() {
+    let utf16: Vec<u8> = "Error: 0xd0000225\r\nError code: Wsl/Service/0xd0000225\r\n"
+        .encode_utf16()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
+    let said = wsl_said(&utf16);
+    assert_eq!(said, "Error: 0xd0000225 Error code: Wsl/Service/0xd0000225");
+    assert!(wsl_refused_start(&said));
+    assert_eq!(
+        wsl_said(b"There is no distribution with the supplied name.\n"),
+        "There is no distribution with the supplied name."
+    );
+    assert!(!wsl_refused_start("User not found."));
+    assert_eq!(wsl_said(&[b'x'; 2000]).chars().count(), 512);
+}

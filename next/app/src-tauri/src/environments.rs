@@ -523,6 +523,38 @@ impl Environments {
     }
 }
 
+/// Starts of a tool in WSL tried again after WSL itself refused them, and the pause before each.
+pub const WSL_RETRIES: u32 = 2;
+pub const WSL_RETRY_PAUSE: Duration = Duration::from_secs(2);
+
+/// Whether a start's error is WSL 1's own refusal to start the program (`0xd0000225`: nothing
+/// ran), which a second try usually gets past, as `pluxy/wsl` retries it.
+pub fn wsl_refused_start(error: &str) -> bool {
+    error.contains("0xd0000225")
+}
+
+/// What `wsl.exe` printed on the tool's stdout instead of a frame, as text: UTF-16 (its usual
+/// form) when the bytes hold a NUL, else UTF-8; white space trimmed, at most 512 characters.
+pub fn wsl_said(bytes: &[u8]) -> String {
+    let text = if bytes.contains(&0) {
+        let units: Vec<u16> = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    };
+    let text: String = text
+        .trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}' || c == '\0')
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    text.chars().take(512).collect()
+}
+
 pub fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
