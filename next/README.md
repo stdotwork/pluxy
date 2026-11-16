@@ -1,10 +1,10 @@
 # next: the new pluxy core
 
-A new core for pluxy, built from scratch beside today's core, the Go proxy in `core/`. (In this
-README and in the corpus, "today's core" and "the old core" mean that core, and `core/...` paths
-are files in it. Once `core/` is removed from the repository, they mean `core/` at the last commit
-that still has it; the commit will be named here when that happens.) Core receives client requests and
-hands them to **provider extensions**: separate programs, one per kind of upstream, that core
+A new core for pluxy, built from scratch to replace the old core, the Go proxy that was in `core/`.
+(In this README and in the corpus, "today's core" and "the old core" mean that core, and `core/...`
+paths are files in it as they are at commit `d62c5bbf15c5369c5723600655f7682890fddd0b`, the last commit
+that changed `core/`. The folder has since been removed from the repository.) Core receives client
+requests and hands them to **provider extensions**: separate programs, one per kind of upstream, that core
 starts and talks to over a local socket. Today it serves OpenAI Chat Completions, OpenAI
 Responses, Anthropic Messages and Gemini GenerateContent (streamed and not, over HTTP) through the
 OpenAI-compatible API-key provider, which talks to an upstream that speaks any of them. A request
