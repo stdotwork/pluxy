@@ -2,7 +2,8 @@ name: Next app platforms
 
 # Builds and unit-tests the desktop app's Rust crate on Windows and macOS, and runs the real app
 # there (next/app/native/platform.ts: a second launch raising the first, the login item, the
-# window and the tray). The Linux native test (Xvfb, portals) stays in next-app.yml.
+# window and the tray; the test package and the release gate). The Linux native test (Xvfb,
+# portals) stays in next-app.yml.
 
 on:
   workflow_dispatch:
@@ -77,6 +78,10 @@ jobs:
       - name: Clippy
         working-directory: next/app/src-tauri
         run: cargo clippy --locked --all-targets -- -D warnings
+      # The test hooks and the test trust (the test package's features) build here too.
+      - name: Clippy, test features
+        working-directory: next/app/src-tauri
+        run: cargo clippy --locked --all-targets --features native-test,artifact-test-trust -- -D warnings
       # Unit tests, and each connection mode against a real core with fake extensions, with an
       # empty temporary home.
       - name: Rust tests
@@ -100,13 +105,26 @@ jobs:
             printf "passed %d, failed %d, ignored %d\n", p, f, i
             if (p == 0) exit 1
           }' "$RUNNER_TEMP/cargo-test.log" | tee -a "$GITHUB_STEP_SUMMARY"
+      # The test trust built in: the trust profile and the updater gate, the release gate (which
+      # must refuse a test build), and on Windows the access-list check of the profile
+      # (src/win_acl.rs).
+      - name: Artifact signature and test trust controls
+        working-directory: next/app/src-tauri
+        run: |
+          cargo test --locked --features artifact-test-trust --test artifact_trust --test release_config
+          if [ "$RUNNER_OS" = Windows ]; then
+            cargo test --locked --features artifact-test-trust --lib win_acl::
+          fi
 
   # The real app on a hosted Windows and macOS runner, as a person would use it, with the system's
   # own tools reading back what it leaves in the registry or the LaunchAgents folder. The runner's
   # user is thrown away after the job; the test removes what it made as well. The sessions are named
-  # in next/app/native/shards.ts (PLATFORM_SHARDS); the summary has the counts.
+  # in next/app/native/shards.ts (PLATFORM_SHARDS), one job per shard; the summary has the counts.
+  # The package shard builds the test package first (package.ts test: a folder bundle on Windows,
+  # an app bundle on macOS, never an installer), then the dev app, since the package's builds
+  # rename the program they make in target/debug.
   native:
-    name: native (${{ matrix.os }})
+    name: native (${{ matrix.os }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -114,6 +132,9 @@ jobs:
         os:
           - windows-latest
           - macos-latest
+        shard:
+          - platform
+          - package
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -127,7 +148,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: next/app/src-tauri -> target
-          key: ${{ matrix.os }}-native
+          key: ${{ matrix.os }}-native-${{ matrix.shard }}
       - name: UI kit install
         working-directory: next/ui
         run: bun install --frozen-lockfile
@@ -135,10 +156,16 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Build the window
         run: bun run build
+      - name: Test package
+        if: matrix.shard == 'package'
+        run: bun run package:test "$RUNNER_TEMP/test-package"
       # The app with the test hooks (never in a release build): the one the checks start.
       - name: Build the app for the native test
         working-directory: next/app/src-tauri
         run: cargo build --locked --features native-test
       - name: Native test
         timeout-minutes: 40
+        env:
+          PLUXY_APP_NATIVE_SHARD: ${{ matrix.shard }}
+          PLUXY_APP_TEST_PACKAGE: ${{ runner.temp }}/test-package
         run: bun run test:native:platform

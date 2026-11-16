@@ -55,12 +55,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: next/go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: next/go.mod
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.3'
+          no-cache: ${{ runner.environment != 'github-hosted' }}
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.97.0
         with:
@@ -160,12 +161,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: next/go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: next/go.mod
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.3'
+          no-cache: ${{ runner.environment != 'github-hosted' }}
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.97.0
         with:
@@ -180,7 +182,7 @@ jobs:
           # release shard builds everything the others do and the release app too, so it alone
           # saves it.
           shared-key: app
-          save-if: ${{ matrix.shard == 'release' }}
+          save-if: ${{ runner.environment == 'github-hosted' && matrix.shard == 'release' }}
       # The app builds the UI kit from next/ui, with its copy of preact.
       - name: UI kit install
         working-directory: next/ui

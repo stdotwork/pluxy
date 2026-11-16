@@ -525,6 +525,43 @@ fn make_private_open_refuses_what_is_not_on_a_disk() {
     assert!(make_private_open(&nul).is_err());
 }
 
+/// Windows: a folder in the user's temporary folder may be changed by no one but the user, SYSTEM
+/// and Administrators. Letting everyone read it changes nothing; letting everyone write it, or
+/// handing it to the Users group, lets others change it; an entry only passed down to what it
+/// holds does not apply to the folder itself.
+#[cfg(windows)]
+#[test]
+fn a_folder_others_may_change_is_told_apart() {
+    let dir = temp("others");
+    assert!(!others_may_write(&dir).unwrap(), "the user's own");
+    let folder = |name: &str, grant: &[&str]| {
+        let d = dir.join(name);
+        fs::create_dir(&d).unwrap();
+        assert!(icacls(&d, grant));
+        d
+    };
+    let read = folder("read", &["/grant", "*S-1-1-0:(R)"]);
+    assert!(!others_may_write(&read).unwrap(), "everyone may read");
+    let write = folder("write", &["/grant", "*S-1-1-0:(W)"]);
+    assert!(others_may_write(&write).unwrap(), "everyone may write");
+    let below = folder("below", &["/grant", "*S-1-1-0:(OI)(CI)(IO)(W)"]);
+    assert!(!others_may_write(&below).unwrap(), "only what it holds");
+    assert!(others_may_write(&below.join("x")).is_err(), "no such file");
+    fs::create_dir(below.join("x")).unwrap();
+    assert!(others_may_write(&below.join("x")).unwrap(), "what it holds");
+    let owned = dir.join("owned");
+    fs::create_dir(&owned).unwrap();
+    if icacls(&owned, &["/setowner", "*S-1-5-32-545"]) {
+        assert!(
+            others_may_write(&owned).unwrap(),
+            "owned by the Users group"
+        );
+    } else {
+        eprintln!("skipped: this account cannot hand a folder to the Users group");
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn a_lock_is_made_held_and_taken_only_once_released() {
