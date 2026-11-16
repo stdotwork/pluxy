@@ -908,6 +908,20 @@ settings. The card's terminal list loads again whenever this device's packages c
 list no longer offers falls back to Automatic (`src/startCli.ts`). Every client page's Start CLI
 does the same.
 
+**In WSL** (Windows): the page's **Environment / configuration directory** block
+(`src/environmentBlock.tsx`, shared by client pages) chooses **Windows local** or **WSL
+subsystem**, then a **Distribution** and a **User**. Choosing WSL lists the distributions without
+starting any (`pluxy/wsl`, which must be installed and enabled); reading a distribution's users
+starts it, which the block says. Picking a user has the app check that distribution and user and
+keep its record ([Tools in WSL](app-host/README.md#tools-in-wsl-windows)); **Detect again** lists
+them again. Every call of the page then goes to Claude Code's Linux build running in that
+distribution as that user, so the default file is that user's `~/.claude/settings.json` and typed
+paths are paths in the distribution (a `\\wsl.localhost\<distribution>\…` or `\\wsl$\…` path of the
+chosen distribution becomes its Linux path; any other network path is refused there). The first
+use asks to **Install the Linux build for WSL**, in its own native confirmation. **Start CLI**
+starts Claude Code in that distribution through the launcher, in the Windows console. The page
+keeps its last choice for the window; the app checks it against its records on every call.
+
 **Backup and restore** (`src/backups.tsx`, the backup browser every writer's page shows) keeps
 manual backups of the previewed file in the app's vault through the tool's standard backup
 operations ([app tools](../app-tools/README.md#libtransactions)). It shows once the file has been
