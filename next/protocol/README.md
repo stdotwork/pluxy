@@ -293,14 +293,12 @@ such endpoint, or not for this request's format) answers with code `unsupported`
 to an extension whose describe reports `protocol_minor` 2 or more and lists it in `operations`;
 for any other, core treats the account as one that cannot count. Core routes a count like a
 request: the same accounts, blocks and retries. An extension does not estimate: when the count
-gets no answer and an account tried answered `unsupported`, core answers the client with its own
-estimate (unless the config turns `token_count_estimate` off, then with the last error). When no
-account tried answered `unsupported`, any other error, such as an upstream's 400 or 429, reaches
-the client as it is. A refusal under `drop_policy` `reject` (an `unsupported` error with `dropped`)
-is not an account that cannot count. When every account tried answered with such a refusal or
-another error, the last error reaches the client as it is; when any account tried answered
-`unsupported` without `dropped` (one that cannot count, or an extension before 0.16, which sends
-no `dropped`), core still answers with its estimate.
+gets no answer and an account tried answered `unsupported` with a scope other than `request` and
+without `dropped` (one that cannot count, or a drop refusal from an extension before 0.16, which
+sends no `dropped`), core answers the client with its own estimate (unless the config turns
+`token_count_estimate` off, then with the last error). Otherwise the last error reaches the client
+as it is: an upstream's 400 or 429, a refusal under `drop_policy` `reject` (an `unsupported` error
+with `dropped`), or an `unsupported` error with scope `request`.
 
 ### `models`
 
@@ -801,7 +799,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | Field | Meaning |
 | --- | --- |
 | `code` | One of the codes below. |
-| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
+| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, `dropped`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
 | `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. For `login` and `refresh` calls, see [Errors in login and refresh calls](#errors-in-login-and-refresh-calls). |

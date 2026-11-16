@@ -30,11 +30,11 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	if err := countRefusal(call.Request); err != nil {
-		return err
-	}
 	token, _, err := bearer(call.Account.Credential)
 	if err != nil {
+		return err
+	}
+	if err := countRefusal(call.Request); err != nil {
 		return err
 	}
 	body, native, err := countBody(call.Request)
@@ -90,13 +90,10 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 
 // countRefusal returns the refusal generating req would give under the reject drop policy, or
 // nil. A count is rebuilt as Messages, but generating sends a request in a format Kimi has an API
-// for as it came and rebuilds any other as Chat Completions (upstreamFor, buildBody), so the
+// for as it came and rebuilds any other as Chat Completions (upstreamFor, passesThrough), so the
 // count refuses on what the Chat rebuild drops, not on what the Messages rebuild drops.
 func countRefusal(req llm.Request) error {
-	if req.DropPolicy != llm.DropReject {
-		return nil
-	}
-	if n := req.Native; n != nil && n.Format == upstreamFor(req).format {
+	if req.DropPolicy != llm.DropReject || passesThrough(req, upstreamFor(req)) {
 		return nil
 	}
 	_, _, err := encodeChat(req)

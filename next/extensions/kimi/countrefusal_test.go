@@ -1,20 +1,42 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// Under the reject drop policy a count refuses exactly what generating the same request would:
-// a Gemini request is generated as Chat Completions, which has no place for a model turn's
-// thought, so its count is refused naming it; JSON output, which Chat Completions carries but
-// the count's Messages body does not, is no reason to refuse.
-func TestCountRefusalFollowsGenerating(t *testing.T) {
-	gemini := func(body string, policy string) llm.Request {
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// Under the reject drop policy a count refuses exactly what generating the same request would,
+// before anything is sent. A Gemini request is generated as Chat Completions, which has no place
+// for a model turn's thought, so its count is refused naming it, as generating refuses it. JSON
+// output, which Chat Completions carries but the count's Messages body does not, is no reason to
+// refuse; nor is a thought in a Chat, Responses or Messages request, whose body goes to Kimi as it
+// came. Those counts are sent (the upstream here refuses them).
+func TestCountTokensRefusesAsGenerating(t *testing.T) {
+	var sent int
+	old := client.Transport
+	client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		sent++
+		return &http.Response{StatusCode: 400, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"error":{"type":"invalid_request_error","message":"upstream says no"}}`)), Request: r}, nil
+	})
+	t.Cleanup(func() { client.Transport = old })
+
+	gemini := func(body, policy string) llm.Request {
 		t.Helper()
 		req, err := geminigenerate.ParseRequest("kimi-k2", false, []byte(body))
 		if err != nil {
@@ -23,24 +45,47 @@ func TestCountRefusalFollowsGenerating(t *testing.T) {
 		req.DropPolicy = policy
 		return req
 	}
+	// as gives a request the native body of another format, keeping its items.
+	as := func(req llm.Request, format, body string) llm.Request {
+		req.Native = &llm.Native{Format: format, Body: json.RawMessage(body)}
+		return req
+	}
+	count := func(req llm.Request) (*llm.Error, int) {
+		t.Helper()
+		sent = 0
+		call := sdk.Call{Account: protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-kimi-test"}}, Request: req}
+		var e *llm.Error
+		if err := countTokens(context.Background(), call, nil); !errors.As(err, &e) {
+			t.Fatalf("err = %v, want an *llm.Error", err)
+		}
+		return e, sent
+	}
 	const thought = `{"contents":[{"role":"user","parts":[{"text":"Hi"}]},{"role":"model","parts":[{"text":"secret","thought":true},{"text":"Hello."}]},{"role":"user","parts":[{"text":"Again."}]}]}`
 	const jsonOut = `{"contents":[{"role":"user","parts":[{"text":"Hi"}]}],"generationConfig":{"responseMimeType":"application/json"}}`
 
-	err := countRefusal(gemini(thought, llm.DropReject))
-	var e *llm.Error
-	if !errors.As(err, &e) || e.Code != llm.CodeUnsupported || !slices.Equal(e.Dropped, []string{"contents[1].parts[0]"}) {
-		t.Fatalf("thought under reject: err = %+v, want unsupported with dropped [contents[1].parts[0]]", err)
+	refused := gemini(thought, llm.DropReject)
+	e, n := count(refused)
+	if e.Code != llm.CodeUnsupported || !slices.Equal(e.Dropped, []string{"contents[1].parts[0]"}) || n != 0 {
+		t.Fatalf("thought under reject: error %+v after %d requests, want unsupported with dropped [contents[1].parts[0]] and nothing sent", e, n)
 	}
-	if _, _, gen := buildBody(gemini(thought, llm.DropReject), upChat, nil); gen == nil || gen.Error() != err.Error() {
-		t.Errorf("generating refuses with %v, counting with %v; want the same refusal", gen, err)
+	if _, _, gen := buildBody(refused, upstreamFor(refused), nil); gen == nil || gen.Error() != e.Error() {
+		t.Errorf("generating refuses with %v, counting with %v; want the same refusal", gen, e)
 	}
 	for name, req := range map[string]llm.Request{
 		"thought under report":    gemini(thought, llm.DropReport),
 		"JSON output, reject":     gemini(jsonOut, llm.DropReject),
-		"Messages client, reject": {Model: "kimi-k2", DropPolicy: llm.DropReject, Native: &llm.Native{Format: llm.FormatAnthropicMessages}},
+		"Chat client, reject":     as(refused, llm.FormatOpenAIChat, `{"model":"kimi-k2","messages":[{"role":"user","content":"Hi"}]}`),
+		"Responses, reject":       as(refused, llm.FormatOpenAIResponses, `{"model":"kimi-k2","input":"Hi"}`),
+		"Messages client, reject": as(refused, llm.FormatAnthropicMessages, `{"model":"kimi-k2","max_tokens":10,"messages":[{"role":"user","content":"Hi"}]}`),
 	} {
-		if err := countRefusal(req); err != nil {
-			t.Errorf("%s: err = %v, want none", name, err)
+		if e, n := count(req); e.Dropped != nil || !strings.Contains(e.Message, "upstream says no") || n != 1 {
+			t.Errorf("%s: error %+v after %d requests, want the count sent once and the upstream's refusal", name, e, n)
 		}
+	}
+	// A missing credential is reported first, as generating reports it.
+	noKey := sdk.Call{Account: protocol.Account{ID: "a"}, Request: refused}
+	var auth *llm.Error
+	if err := countTokens(context.Background(), noKey, nil); !errors.As(err, &auth) || auth.Code != llm.CodeAuth {
+		t.Errorf("no credential: err = %v, want auth", err)
 	}
 }
