@@ -62,6 +62,23 @@ func effortOf(effort string) string {
 	return "high"
 }
 
+// encodeChat rebuilds req as Chat Completions, as generating does for a client whose format Kimi
+// has no API for (only Chat Completions is rebuilt: Responses and Messages clients get their own
+// API), and returns what that drops. Under the reject drop policy it refuses a request it would
+// drop part of.
+func encodeChat(req llm.Request) ([]byte, []llm.Loss, error) {
+	b, losses, err := openaichat.EncodeRequest(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	tr := &llm.Translation{Losses: losses}
+	if req.DropPolicy == llm.DropReject && tr.Dropped() {
+		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: tr.DroppedPaths(),
+			Message: "Chat Completions cannot carry parts of this request"}
+	}
+	return b, losses, nil
+}
+
 // buildBody returns the request body for up and how it was built. turn, when not nil, puts kept
 // thinking back into a Messages body (replay.go).
 func buildBody(req llm.Request, up upstream, turn *replayTurn) ([]byte, *llm.Translation, error) {
@@ -75,16 +92,11 @@ func buildBody(req llm.Request, up upstream, turn *replayTurn) ([]byte, *llm.Tra
 		}
 	}
 	if body == nil {
-		// Only Chat Completions is rebuilt: Responses and Messages clients get their own API.
-		b, losses, err := openaichat.EncodeRequest(req)
+		b, losses, err := encodeChat(req)
 		if err != nil {
 			return nil, nil, err
 		}
 		body, tr.Losses = b, losses
-		if req.DropPolicy == llm.DropReject && tr.Dropped() {
-			return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: tr.DroppedPaths(),
-				Message: "Chat Completions cannot carry parts of this request"}
-		}
 	}
 	m, err := decodeObject(body)
 	if err != nil {
