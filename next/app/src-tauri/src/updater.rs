@@ -680,9 +680,10 @@ fn restore(dir: &Path, p: &Pending) -> Result<(), String> {
     outcome
 }
 
-/// After an install: the app stops as Quit stops it (its tools and its own core), keeping its
-/// profile lock and its tray; a thread of its own then starts the new version, hands it the
-/// lock, and waits for it to accept itself (`supervise`) before the app exits.
+/// After an install: the app stops as Quit stops it (its tools, its managed runtimes and its own
+/// core, in that order; detached launches run on), keeping its profile lock and its tray; a
+/// thread of its own then starts the new version, hands it the lock, and waits for it to accept
+/// itself (`supervise`) before the app exits.
 fn restart_into(app: &AppHandle, restart: Restart) {
     set_task(app, |t| t.phase = "restarting");
     let app = app.clone();
@@ -695,9 +696,7 @@ fn restart_into(app: &AppHandle, restart: Restart) {
         crate::remember_window(&app);
         #[cfg(target_os = "linux")]
         st.confirmations.lock().unwrap().invalidate();
-        #[cfg(target_os = "linux")]
-        st.programs.stop_all();
-        st.conn.lock().unwrap().stop_core();
+        crate::stop_owned(&st);
         // Hidden, not closed: closing the last window would end the app before the wait does.
         if let Some(w) = app.get_window(crate::WINDOW) {
             let _ = w.hide();
