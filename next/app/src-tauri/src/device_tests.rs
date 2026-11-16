@@ -3501,6 +3501,20 @@ fn a_linux_build_is_recorded_only_once_confirmed() {
     assert_eq!(store_names(&d), before);
     let a = candidate(&c, "pluxy/tool", &roots).unwrap();
     c.admit_checked(&a, &roots).unwrap();
+    // A staged file changed while it was being confirmed: nothing is recorded.
+    #[cfg(unix)]
+    {
+        let l = stage_wsl(&c, "pluxy/tool", wsl_platform(), &roots).unwrap();
+        thaw(&l.candidate.staged);
+        let tool = l.candidate.staged.join("bin").join("tool-linux");
+        fs::remove_file(&tool).unwrap();
+        fs::write(&tool, "\x7fELF changed\n").unwrap();
+        let e = c.commit_linux(l, &roots).unwrap_err();
+        assert!(e.contains("changed since they were installed"), "{e}");
+        assert!(c.get("pluxy/tool").unwrap().linux.is_empty());
+        assert!(staging_names(&d).is_empty());
+        assert_eq!(store_names(&d), before);
+    }
 
     // Confirmed: recorded on the package, in the store by its digest, kept with the catalog.
     let r = install_wsl(&mut c, "pluxy/tool", &roots);
@@ -3823,6 +3837,28 @@ fn a_linux_build_is_checked_again_each_time_it_is_admitted() {
         .admitted_linux_record("pluxy/tool", p, &roots)
         .unwrap_err();
     assert!(e.contains("is not installed: install it for WSL"), "{e}");
+    // Signed by the root's other key, which verifies, but is not the active release's signer.
+    {
+        use ed25519_dalek::Signer;
+        let mut other_signer = r.clone();
+        let s = other_signer.signed.as_mut().unwrap();
+        let k2 = &x.keys["k2"];
+        s.key_id = "k2".into();
+        s.public_key = hex(k2.verifying_key().as_bytes());
+        s.signature = hex(&k2.sign(s.descriptor.as_bytes()).to_bytes());
+        c.packages
+            .get_mut("pluxy/tool")
+            .unwrap()
+            .linux
+            .insert(p.into(), other_signer);
+        let e = c
+            .admitted_linux_record("pluxy/tool", p, &roots)
+            .unwrap_err();
+        assert!(
+            e.contains("is not signed by the signer of its active release"),
+            "{e}"
+        );
+    }
     c.packages
         .get_mut("pluxy/tool")
         .unwrap()

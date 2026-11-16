@@ -788,7 +788,7 @@ pub struct LinuxTarget {
 #[derive(Debug)]
 pub struct LinuxCandidate {
     target: LinuxTarget,
-    candidate: Candidate,
+    pub(super) candidate: Candidate,
 }
 
 impl LinuxCandidate {
