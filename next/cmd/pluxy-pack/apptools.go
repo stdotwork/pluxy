@@ -20,18 +20,18 @@ import (
 var appToolFixtures = []string{"usage-fixture"}
 
 // appManifest is the part of an app tool's manifest (manifest_version 1, next/app/app-host) the
-// pack tool reads.
+// pack tool reads. An app tool's pages are under app.ui, where the app reads them.
 type appManifest struct {
 	ManifestVersion int    `json:"manifest_version"`
 	ID              string `json:"id"`
 	Version         string `json:"version"`
-	UI              *struct {
-		Version int    `json:"version"`
-		Dir     string `json:"dir"`
-	} `json:"ui,omitempty"`
-	App *struct {
+	App             *struct {
 		Tier     string            `json:"tier"`
 		Programs map[string]string `json:"programs"`
+		UI       *struct {
+			Version int    `json:"version"`
+			Dir     string `json:"dir"`
+		} `json:"ui,omitempty"`
 	} `json:"app"`
 }
 
@@ -67,7 +67,7 @@ func loadAppTools(root string) ([]extension, error) {
 			ID:       m.ID,
 			Version:  m.Version,
 			Programs: m.App.Programs,
-			UI:       m.UI,
+			UI:       m.App.UI,
 		}}
 		tools = append(tools, e)
 	}
@@ -104,9 +104,9 @@ func (m *appManifest) validate() error {
 			return fmt.Errorf("program for %s is %s: a .exe on Windows and only there", platform, program)
 		}
 	}
-	if m.UI != nil && m.UI.Dir != "" {
-		if !filepath.IsLocal(filepath.FromSlash(m.UI.Dir)) || strings.Contains(m.UI.Dir, `\`) {
-			return errors.New("ui.dir must be a folder inside the package folder")
+	if m.App.UI != nil {
+		if m.App.UI.Dir == "" || !filepath.IsLocal(filepath.FromSlash(m.App.UI.Dir)) || strings.Contains(m.App.UI.Dir, `\`) {
+			return errors.New("app.ui.dir must be a folder inside the package folder")
 		}
 	}
 	return nil
