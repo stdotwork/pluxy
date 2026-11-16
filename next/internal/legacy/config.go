@@ -442,6 +442,82 @@ func plain(v any) any {
 	return v
 }
 
+// asText returns a literal's text, and anything else as plain does: a text field of a setting
+// that goes across as it is, which this core's own check then reads.
+func asText(v any) any {
+	if l, ok := v.(literal); ok {
+		return l.text
+	}
+	return plain(v)
+}
+
+// each returns the list v with f applied to each item, or v as plain does when it is not a
+// list.
+func each(v any, f func(any) any) any {
+	list, ok := v.([]any)
+	if !ok {
+		return plain(v)
+	}
+	out := make([]any, len(list))
+	for i, e := range list {
+		out[i] = f(e)
+	}
+	return out
+}
+
+// payloadRules returns payload rules as today's core's typed decoder reads them
+// (config.PayloadConfig): a rule's params, and a model's match and not-match, hold values;
+// a model's name, protocol, from-protocol, headers, exist and not-exist, and a filter rule's
+// params, are text as written. Anything else goes across as it is, for payload.Validate.
+func payloadRules(rules tree) tree {
+	model := func(v any) any {
+		m, ok := v.(tree)
+		if !ok {
+			return plain(v)
+		}
+		out := tree{}
+		for k, f := range m {
+			switch h, isMap := f.(tree); {
+			case k == "name", k == "protocol", k == "from-protocol":
+				out[k] = asText(f)
+			case k == "exist", k == "not-exist":
+				out[k] = each(f, asText)
+			case k == "headers" && isMap:
+				hs := tree{}
+				for name, val := range h {
+					hs[name] = asText(val)
+				}
+				out[k] = hs
+			default:
+				out[k] = plain(f)
+			}
+		}
+		return out
+	}
+	out := tree{}
+	for list, v := range rules {
+		out[list] = each(v, func(e any) any {
+			r, ok := e.(tree)
+			if !ok {
+				return plain(e)
+			}
+			o := tree{}
+			for k, f := range r {
+				switch {
+				case k == "models":
+					o[k] = each(f, model)
+				case k == "params" && list == "filter":
+					o[k] = each(f, asText)
+				default:
+					o[k] = plain(f)
+				}
+			}
+			return o
+		})
+	}
+	return out
+}
+
 // Translate turns the contents of a config.yaml written for today's core into this core's
 // config. It fails only where today's core would refuse the file too (it is not a mapping, a
 // key appears twice, config-version is not 8) or a value has the wrong type.
@@ -801,13 +877,15 @@ func (x *translator) options() error {
 		}
 		x.out["proxy_url"] = proxy
 	}
-	// The payload rules keep today's names, so they go across as they are; the config's own
-	// check (payload.Validate) refuses what this core cannot apply.
+	// The payload rules keep today's names, so they go across as they are, read as today's
+	// core reads them (payloadRules); the config's own check (payload.Validate) refuses what
+	// this core cannot apply.
 	if rules, _ := get(x.t, "requests.payload"); rules != nil {
-		if _, isMap := rules.(tree); !isMap {
+		m, isMap := rules.(tree)
+		if !isMap {
 			return errors.New("requests.payload must be a mapping")
 		}
-		x.out["payload"] = plain(rules)
+		x.out["payload"] = payloadRules(m)
 	}
 	return nil
 }

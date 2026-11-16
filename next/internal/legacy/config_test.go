@@ -3,8 +3,10 @@ package legacy
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -565,6 +567,42 @@ func TestTextKeptAsWritten(t *testing.T) {
 	} {
 		t.Run(s, func(t *testing.T) {
 			r := translate(t, `
+server:
+  host: `+s+`
+  tls:
+    enable: true
+    cert: `+s+`
+    key: `+s+`
+  trusted-proxies:
+    - `+s+`
+routing:
+  strategy: `+s+`
+  session-affinity: true
+  session-affinity-ttl: `+s+`
+observability:
+  pprof:
+    enable: true
+    addr: `+s+`
+requests:
+  payload:
+    override:
+      - models:
+          - name: `+s+`
+            protocol: `+s+`
+            from-protocol: `+s+`
+            headers:
+              X-H: `+s+`
+            exist:
+              - `+s+`
+            not-exist:
+              - `+s+`
+        params:
+          p: x
+    filter:
+      - models:
+          - name: m
+        params:
+          - `+s+`
 access:
   api-keys:
     - `+s+`
@@ -572,10 +610,14 @@ management:
   secret-key: `+s+`
 oauth:
   auth-dir: `+s+`
+  providers:
+    codex:
+      signin-with-chatgpt-identifier: `+s+`
   model-alias:
     claude:
       - name: `+s+`
         alias: alias-1
+        display-name: `+s+`
       - name: name-2
         alias: `+s+`
   excluded-models:
@@ -603,12 +645,25 @@ api-keys:
 `)
 			lower := strings.ToLower(s)
 			want := map[string]any{
-				"listen": ":8317", "routing": map[string]any{"request_retry": 0},
+				"listen":          net.JoinHostPort(s, "8317"),
+				"tls":             map[string]any{"enable": true, "cert": s, "key": s},
+				"trusted_proxies": []any{s},
+				// Not a duration, so the default hour, as in today's core.
+				"routing": map[string]any{"request_retry": 0, "session_affinity": map[string]any{"ttl_ms": 3600000}},
+				"pprof":   map[string]any{"enable": true, "addr": s},
+				"payload": map[string]any{
+					"override": []any{map[string]any{
+						"models": []any{map[string]any{"name": s, "protocol": s, "from-protocol": s, "headers": map[string]any{"X-H": s},
+							"exist": []any{s}, "not-exist": []any{s}}},
+						"params": map[string]any{"p": "x"},
+					}},
+					"filter": []any{map[string]any{"models": []any{map[string]any{"name": "m"}}, "params": []any{s}}},
+				},
 				"client_keys":    []any{s},
 				"management_key": s,
 				"extensions": map[string]any{
 					Claude: map[string]any{
-						"model_alias":     []any{map[string]any{"name": s, "alias": "alias-1"}, map[string]any{"name": "name-2", "alias": s}},
+						"model_alias":     []any{map[string]any{"name": s, "alias": "alias-1", "display_name": s}, map[string]any{"name": "name-2", "alias": s}},
 						"excluded_models": []any{lower},
 						"accounts": []any{map[string]any{
 							"id": "claude-api-key-1", "credential": map[string]any{"kind": "api_key", "api_key": s},
@@ -628,11 +683,30 @@ api-keys:
 				t.Fatal(err)
 			}
 			equalJSON(t, r.Config, string(wb))
-			if r.AuthDir != s {
-				t.Errorf("AuthDir = %q, want %q", r.AuthDir, s)
+			if r.AuthDir != s || r.Import.SIWCIdentifier != s {
+				t.Errorf("AuthDir = %q, SIWCIdentifier = %q, want %q", r.AuthDir, r.Import.SIWCIdentifier, s)
+			}
+			if n := notices(r); !strings.Contains(n, fmt.Sprintf("routing.strategy %q is not known", s)) {
+				t.Errorf("notices do not name the strategy %q:\n%s", s, n)
+			}
+			// A quota response mode no such text is valid for is refused, naming the text as
+			// written.
+			y := "routing: {cooldown: {quota-response-mode: " + s + "}}"
+			if _, err := Translate([]byte(y)); err == nil || !strings.Contains(err.Error(), strconv.Quote(s)) {
+				t.Errorf("%s: err = %v, want it to name %q", y, err, s)
+			}
+			// No such text is a proxy URL either, so a proxy-url is refused (its error does not
+			// show a value that is not a URL, so it cannot show which text was read).
+			for _, y := range []string{"requests: {proxy-url: " + s + "}", "claude-api-key: [{api-key: k, proxy-url: " + s + "}]"} {
+				if _, err := Translate([]byte(y)); err == nil || !strings.Contains(err.Error(), "proxy-url") {
+					t.Errorf("%s: err = %v, want a proxy-url error", y, err)
+				}
 			}
 		})
 	}
+	// Payload values (a rule's params, a model's match) are values, as in today's core.
+	r0 := translate(t, "payload:\n  override:\n    - models: [{name: m, match: [{a: 0123}]}]\n      params: {p: 0123, q: true, r: 1e5}\n")
+	equalJSON(t, r0.Config["payload"], `{"override": [{"models": [{"name": "m", "match": [{"a": 83}]}], "params": {"p": 83, "q": true, "r": 100000}}]}`)
 	// Null is no text, as in today's core: no key, so no account.
 	r := translate(t, "access: {api-keys: [k]}\nclaude-api-key:\n  - api-key: ~\n")
 	if _, ok := r.Config["extensions"]; ok {
