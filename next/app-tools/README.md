@@ -2,8 +2,10 @@
 
 Native programs that pluxy's desktop app runs on demand, as curated first-party native tools, and
 the libraries they share. This is a cargo workspace of its own (its own `Cargo.lock`), never linked
-into the desktop app. The app runs a tool only while something calls it and stops it when idle; a
-tool keeps no process or thread after its calls end. The contract the tools speak is the app
+into the desktop app. The app starts a tool only for a call and stops it 30 seconds after its last
+call ends; a stopped tool leaves no process or thread. What a launch starts is not the tool's: a
+detached launch runs on, and a managed runtime runs until it is stopped, its package is disabled
+or removed, or the app quits or restarts for an update. The contract the tools speak is the app
 program contract v0 in [`../app/app-host/README.md`](../app/app-host/README.md), which stays the
 reference: this folder implements it, it does not change it.
 
@@ -1006,9 +1008,10 @@ version field, so none is checked. The key may not hold spaces; the model is one
 ## `execution`
 
 `pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, a program
-run directly, or a file opened in the person's own app. The app's Launcher page and its tray's
-Start… menu use it, and so will client recipes and tools that open one of their files. It never starts a process itself and never holds a secret's value: the host confirms each
-launch natively, spawns exactly what was confirmed when the program asks, and resolves secrets from
+run directly, or a file opened in the person's own app. The app's Launcher page, its tray's
+Start… menu and the client pages' Start CLI and Start App use it, and so does the Codex session
+reader to open a session's file. It never starts a process itself and never holds a secret's
+value: the host confirms each launch natively, spawns exactly what was confirmed when the program asks, and resolves secrets from
 its vault at the spawn (`../app/app-host/README.md`, "Launches and managed runtimes").
 
 | Operation | Effect | Input | Output |
@@ -1125,8 +1128,10 @@ either before the host is asked.
 
 `pluxy/wsl` (program `bin/pluxy-wsl.exe`, Windows only: on any other system every operation answers
 `unsupported`) tells pluxy's desktop app which WSL distributions and users there are, checks one,
-and prepares launches inside it. The app sets a client up in a distribution by running the client
-package's own Linux program there, through `wsl.exe`; this tool only reads. It writes nothing
+and prepares launches inside it. It is groundwork for the later WSL support: the app does not run
+native tools on Windows yet, so it does not use this tool, and its side (setting a client up in a
+distribution by running the client package's own Linux program there, through `wsl.exe`) is not
+built. This tool only reads. It writes nothing
 anywhere and never starts a launch. It runs only Windows' own `wsl.exe`, from System32 as
 `GetSystemDirectoryW` reports it: with no window, empty standard input, an environment of
 `SystemRoot`, `WINDIR` and `WSL_UTF8=1` only, its output read while it runs and capped, and a
