@@ -158,8 +158,8 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Kimi Code, OpenClaw, ZCode, DeepSeek Harness, WorkBuddy, Antigravity CLI, Copilot CLI and VSCode Copilot setup and launch | Deferred | The rebuild covers the main clients first; these follow later | Not in the app yet |
 | Client setup inside WSL distributions | Deferred | Part of the later Windows work | `pluxy/wsl` lists distributions and users and prepares launches, but the app's side is not built |
 | Executable and folder overrides, terminal choice and recent working folders | Kept | They let a launch use the person's own install and folders | Each client's Start CLI and the Launcher page |
-| Showing, hiding, searching and resetting the list of clients | Not built | Planned to keep, but no change built it; each client is its own page in the navigation | Not in the app |
-| Codex's OAuth sign-in method and its OpenAI provider-identity switch | Dropped | The core takes no ChatGPT login from a client, so the sign-in could not reach it | Codex uses a client key |
+| Showing, hiding, searching and resetting the list of clients | Kept: being built (P8-clientlist) | The person chooses which clients the navigation shows | Not in the app yet: all eight client pages always show |
+| Codex's OAuth sign-in method and its OpenAI provider-identity switch | Deferred | Not built now: the core takes no ChatGPT login from a client, so the sign-in could not reach it. A later change could add a separate Codex profile for it | Codex uses a client key |
 | Codex model catalog fetched silently | Dropped | The catalog changes only when the person asks | **Import models from core** on the Codex page |
 | Pi's provider plugin installed with `pi install` from npm | Replaced | npm serves whatever is published at that moment | A reviewed copy carried by `pluxy/pi-setup` |
 | Claude Desktop model aliases written into the core's config file | Replaced | A setup tool does not edit the core's files | **Create alias in core**, through the management API |
