@@ -3340,3 +3340,9 @@ fn an_instance_in_wsl_has_its_own_slot_and_starts_only_from_its_own_record() {
     let asked = asked.lock().unwrap().clone();
     assert!(asked.contains(&ID.to_string()) && asked.contains(&alice_i.key()));
 }
+
+// The program host and the spawn service against a real WSL distribution (`wsl_real_*`, ignored
+// but in the WSL jobs of next-app-tools-platforms.yml).
+#[cfg(windows)]
+#[path = "wsl_real_tests.rs"]
+mod wsl_real;
