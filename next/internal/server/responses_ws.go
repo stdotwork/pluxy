@@ -411,7 +411,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	if g.RequestLog != nil && g.RequestLog.All {
-		ctx = turnTrace.captureUpstream(ctx)
+		ctx = turnTrace.captureUpstream(ctx, g.RequestLog.Redact)
 	}
 	turn := &wsTurn{cancel: cancel}
 	var opened []Session // sessions this turn opened

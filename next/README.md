@@ -1913,17 +1913,23 @@ message refused before it starts a turn (an unknown type, no model, an `input` t
 list) is answered on the socket and not written. A reply over 1 MiB keeps its first 256 KiB and its last 768
 KiB, with a line saying how many bytes were left out between them. While only error logs are
 written, every request keeps its reply's start and end until it ends, in case it fails, so an
-error log keeps less of a reply: the first 32 KiB and the last 96 KiB.
+error log keeps less of a reply: the first 32 KiB and the last 96 KiB. A secret cut in two at
+that line would not be recognised, so the bytes beside it that could be part of one are left
+out too, and counted with the rest: on each side, the run of letters, digits and `-_.~+/=%\`
+(what a key or token is spelled with, escapes included), and any part of 4 bytes or more of a
+secret the log removes, in a form it knows. Where a long reply is one such run, such as base64
+data, all of that run beside the line goes.
 
 A request log also holds what the provider extension sent upstream and what came back: between
 the client's request and its reply, an `=== UPSTREAM REQUEST ===` section (the account, time, the
 whole URL, method, headers and body) and an `=== UPSTREAM RESPONSE ===` section (time, status,
 headers and body, or the error that kept a response from coming) for each upstream request, so a
 refused attempt and the retry on another account show as two pairs. Each body keeps its first 32
-KiB and its last 96 KiB, a streamed reply recorded as the extension reads it, without holding it
-back; when a request made more than two upstream requests, the first and the last are kept, with
-a line saying how many were left out between them. A Responses WebSocket turn that opens the
-upstream socket holds its handshake; the messages on that socket are not written. This needs an
+KiB and its last 96 KiB, less what beside the cut could be part of a secret, as for the reply, a
+streamed reply recorded as the extension reads it, without holding it back; when a request made
+more than two upstream requests, the first and the last are kept, with a line saying how many
+were left out between them. A Responses WebSocket turn that opens the upstream socket holds its
+handshake; the messages on that socket are not written. This needs an
 extension that implements [protocol](protocol/README.md#upstream-capture) 0.13; it is captured
 only while `logs.request_log` is on, so error logs written with it off have no upstream sections,
 and with it off nothing is recorded or sent.

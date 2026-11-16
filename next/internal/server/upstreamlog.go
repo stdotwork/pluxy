@@ -22,12 +22,13 @@ type upstreamLog struct {
 	mu          sync.Mutex
 	first, last []byte
 	between     int
+	redact      *protocol.Redactor // the config's secrets, which a cut body could split in two (trimGap)
 }
 
 // captureUpstream returns ctx asking the request's calls to capture their upstream exchanges
-// into t's request log.
-func (t *trace) captureUpstream(ctx context.Context) context.Context {
-	t.upstream = &upstreamLog{}
+// into t's request log, whose secrets are redact's.
+func (t *trace) captureUpstream(ctx context.Context, redact *protocol.Redactor) context.Context {
+	t.upstream = &upstreamLog{redact: redact}
 	return host.WithCapture(ctx, t.upstream.add)
 }
 
@@ -39,7 +40,7 @@ func (u *upstreamLog) add(account string, d protocol.Diagnostic) {
 		if i > 0 && i == len(d.Upstream)-1 && u.first != nil {
 			u.between += d.UpstreamLeftOut // the call left them out before its last
 		}
-		b := formatExchange(account, x)
+		b := formatExchange(account, x, u.redact)
 		if u.first == nil {
 			u.first = b
 			continue
@@ -75,7 +76,7 @@ const (
 // formatExchange writes one exchange as an UPSTREAM REQUEST and an UPSTREAM RESPONSE section.
 // What the extension sent is held to the bounds, whatever it sent: secrets by name are masked
 // again here, and core's own redaction runs over the whole file when it is written.
-func formatExchange(account string, x protocol.UpstreamExchange) []byte {
+func formatExchange(account string, x protocol.UpstreamExchange, redact *protocol.Redactor) []byte {
 	var b bytes.Buffer
 	b.WriteString("=== UPSTREAM REQUEST ===\n")
 	fmt.Fprintf(&b, "Account: %s\n", oneLine(account))
@@ -83,7 +84,7 @@ func formatExchange(account string, x protocol.UpstreamExchange) []byte {
 	fmt.Fprintf(&b, "URL: %s\nMethod: %s\n", oneLine(upstreamURL(x.Request.URL)), oneLine(x.Request.Method))
 	writeUpstreamHeaders(&b, x.Request.Headers, x.Request.HeadersLeftOut)
 	b.WriteString("\n")
-	writeBody(&b, x.Request.CapturedBody)
+	writeBody(&b, x.Request.CapturedBody, redact)
 	b.WriteString("\n\n=== UPSTREAM RESPONSE ===\n")
 	switch r := x.Response; {
 	case r != nil:
@@ -94,7 +95,7 @@ func formatExchange(account string, x protocol.UpstreamExchange) []byte {
 		if r.Status == http.StatusSwitchingProtocols {
 			b.WriteString("[the connection switched protocols: its messages are not logged]")
 		} else {
-			writeBody(&b, r.CapturedBody)
+			writeBody(&b, r.CapturedBody, redact)
 		}
 	case x.Error != "":
 		fmt.Fprintf(&b, "Error: %s\n", oneLine(x.Error))
@@ -190,10 +191,10 @@ func writeUpstreamHeaders(b *bytes.Buffer, h map[string][]string, leftOut int) {
 }
 
 // writeBody writes a captured body as the client side's capture does: all of it, or its start and
-// its end with a line saying how many bytes were left out between them. A secret cut in two at the
-// gap would not be recognised by the redaction, so the run of characters a secret could be made
-// of on each side of the gap is left out too.
-func writeBody(b *bytes.Buffer, c protocol.CapturedBody) {
+// its end with a line saying how many bytes were left out between them. A secret of redact's cut
+// in two at the gap would not be recognised by the redaction, so what could be part of one on
+// each side of the gap is left out too (trimGap).
+func writeBody(b *bytes.Buffer, c protocol.CapturedBody, redact *protocol.Redactor) {
 	head, end := c.Body, c.BodyEnd
 	if end == "" && len(head) > protocol.CapturedHead+protocol.CapturedEnd {
 		head, end = head[:protocol.CapturedHead], head[len(head)-protocol.CapturedEnd:]
@@ -210,12 +211,27 @@ func writeBody(b *bytes.Buffer, c protocol.CapturedBody) {
 		b.WriteString(end)
 		return
 	}
-	h := strings.TrimRightFunc(head, secretChar)
-	e := strings.TrimLeftFunc(end, secretChar)
+	h, e := trimGap(redact, head, end)
 	skipped += int64(len(head) - len(h) + len(end) - len(e))
 	b.WriteString(h)
 	fmt.Fprintf(b, "\n[... %d bytes not logged ...]\n", skipped)
 	b.WriteString(e)
+}
+
+// trimGap returns head and end, the start and the end of a body with bytes left out between them,
+// without what beside the gap could be part of a secret cut in two, which the redaction cannot
+// recognise as neither part is the whole secret: on each side, the run of characters a key or a
+// token is spelled with, escapes included (secretChar), and a part of at least 4 bytes of one of
+// r's secrets in a form r knows, whatever its characters (Redactor.TrimCut), until neither finds
+// more.
+func trimGap(r *protocol.Redactor, head, end string) (string, string) {
+	for {
+		h, e := r.TrimCut(strings.TrimRightFunc(head, secretChar), strings.TrimLeftFunc(end, secretChar))
+		if len(h) == len(head) && len(e) == len(end) {
+			return h, e
+		}
+		head, end = h, e
+	}
 }
 
 // secretChar reports whether r can be part of a secret as text carries one: a key, a token, and

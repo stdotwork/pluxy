@@ -53,14 +53,15 @@ type capture struct {
 	written   int64
 	headLimit int
 	tailLimit int
+	redact    *protocol.Redactor // the secrets a cut could split in two (trimGap)
 }
 
 // newCapture returns a capture for l's request logs.
 func (l *RequestLog) newCapture() *capture {
 	if l.All {
-		return &capture{headLimit: loggedHead, tailLimit: loggedTail}
+		return &capture{headLimit: loggedHead, tailLimit: loggedTail, redact: l.Redact}
 	}
-	return &capture{headLimit: errorLoggedHead, tailLimit: errorLoggedTail}
+	return &capture{headLimit: errorLoggedHead, tailLimit: errorLoggedTail, redact: l.Redact}
 }
 
 func (c *capture) Write(p []byte) (int, error) {
@@ -87,16 +88,20 @@ func (c *capture) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// bytes returns what was kept, with a note where bytes in the middle were left out.
+// bytes returns what was kept, with a note where bytes in the middle were left out. Beside the
+// note it leaves out what could be part of a secret cut in two there, which the redaction could
+// not recognise (trimGap), and counts it with the bytes left out.
 func (c *capture) bytes() []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := slices.Clone(c.head)
-	kept := int64(len(c.head) + len(c.tail))
-	if skipped := c.written - kept; skipped > 0 {
-		out = fmt.Appendf(out, "\n[... %d bytes not logged ...]\n", skipped)
+	tail := append(slices.Clone(c.tail[c.at:]), c.tail[:c.at]...)
+	skipped := c.written - int64(len(c.head)+len(tail))
+	if skipped <= 0 {
+		return append(slices.Clone(c.head), tail...)
 	}
-	return append(append(out, c.tail[c.at:]...), c.tail[:c.at]...)
+	head, end := trimGap(c.redact, string(c.head), string(tail))
+	skipped += int64(len(c.head) - len(head) + len(tail) - len(end))
+	return fmt.Appendf([]byte(head), "\n[... %d bytes not logged ...]\n%s", skipped, end)
 }
 
 // recorder is the client's ResponseWriter, keeping the reply's status, headers and body for
@@ -397,7 +402,7 @@ func logged(w http.ResponseWriter, r *http.Request, g *Generation, h func(w http
 	at := time.Now()
 	r, t := requestTrace(r)
 	if g.RequestLog.All {
-		r = r.WithContext(t.captureUpstream(r.Context()))
+		r = r.WithContext(t.captureUpstream(r.Context(), g.RequestLog.Redact))
 	}
 	rec := &recorder{ResponseWriter: w, body: g.RequestLog.newCapture()}
 	h(rec, r)
