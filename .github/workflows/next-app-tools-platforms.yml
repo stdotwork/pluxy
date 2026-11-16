@@ -109,6 +109,9 @@ jobs:
       PLUXY_WSL_TEST_WRITER: /mnt/c/pluxy-wsl/writer/fixture-writer
       PLUXY_WSL_TEST_WRITER_DIR: /mnt/c/pluxy-wsl/writer
       PLUXY_WSL_TEST_DRIVE_DIR: /mnt/c/pluxy-wsl/drive
+      # Git Bash rewrites values that look like POSIX paths (/mnt/c/...) into Windows paths under
+      # its own folder when it starts a Windows program such as cargo; these are Linux paths.
+      MSYS2_ENV_CONV_EXCL: PLUXY_WSL_TEST_
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -246,6 +249,9 @@ jobs:
           if ($failed) { exit 1 }
       - name: Windows tests against the distributions
         run: |
+          # What a Windows program sees of a Linux path variable, as set and without the exclusion.
+          cmd //c "echo PLUXY_WSL_TEST_WRITER_DIR=%PLUXY_WSL_TEST_WRITER_DIR%"
+          env -u MSYS2_ENV_CONV_EXCL cmd //c "echo without MSYS2_ENV_CONV_EXCL: PLUXY_WSL_TEST_WRITER_DIR=%PLUXY_WSL_TEST_WRITER_DIR%"
           status=0
           cargo test --locked -p wsl --test real_wsl -- --ignored --skip distros_before_any_distribution_is_installed --test-threads=1 2>&1 | tee "$RUNNER_TEMP/real-wsl.log" || status=$?
           # Five tests, each run and passed: none may be skipped or missing.
