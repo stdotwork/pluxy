@@ -3,24 +3,20 @@ name: Next app tools pack
 # Builds the desktop app's native tools (next/app-tools) on each platform's own runner and packs
 # them with `pluxy-pack -app-tools`, as a release would: one archive for each tool and each
 # platform its manifest names, and the app's registry index. It uploads nothing: the app installs
-# a native tool only with a curated signature, which no release makes yet. A pull request runs it
-# when a tool's manifest, the tools' workspace, the pack tool or this workflow changes; a next-v*
-# tag runs it too. Like next-release.yml, it runs on its own, not through ci.yml.
+# a native tool only with a curated signature, which no release makes yet. Pull requests and
+# merge-queue groups run it through ci.yml when a tool's manifest, the tools' workspace, the pack
+# tool or this workflow changes; a next-v* tag runs it by itself.
 
 on:
+  workflow_call:
   push:
     tags:
       - 'next-v*'
-  pull_request:
-    paths:
-      - 'next/app-tools/*/pluxy-extension.json'
-      - 'next/app-tools/Cargo.toml'
-      - 'next/app-tools/Cargo.lock'
-      - 'next/cmd/pluxy-pack/**'
-      - '.github/workflows/next-app-tools-pack.yml'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A literal name: called from ci.yml, github.workflow is the caller's name, the same for every
+  # workflow it calls.
+  group: next-app-tools-pack-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
