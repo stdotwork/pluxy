@@ -206,8 +206,10 @@ name = "execution"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "pluxy-files",
  "pluxy-program",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -444,6 +446,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f59006ce1e204c30956638535b74d317bca99477b9356dfaec54c37f6f600ab"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "pi-setup"
+version = "0.1.0"
+dependencies = [
+ "pluxy-program",
+ "pluxy-transactions",
+ "serde_json",
 ]
 
 [[package]]

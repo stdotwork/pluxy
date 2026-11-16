@@ -26,6 +26,7 @@ export const SHARDS: Record<string, readonly string[]> = {
     "omp",
     "grok",
     "hermes",
+    "pi",
   ],
   // About 7 minutes.
   app: [
@@ -51,6 +52,9 @@ export const SHARDS: Record<string, readonly string[]> = {
  * Linux matrix of next-app.yml does not list them and never runs them. */
 export const PLATFORM_SHARDS: Record<string, readonly string[]> = {
   platform: ["single instance", "login item", "window and tray"],
+  // The test package and the release gate on these systems: a job of its own, since it builds the
+  // test package twice and the release app.
+  package: ["bundle", "bundle release gate"],
 };
 
 /** Every session, each named once across the shards. */

@@ -492,10 +492,11 @@ AppImage itself, in this order (`src-tauri/src/updater.rs`):
    changed since, nothing is kept or installed and the page asks for a restart first. Then the app
    writes the new AppImage over the old one in one step: a temporary file in the same folder,
    flushed to disk, renamed over it, and the folder flushed.
-7. The app stops as Quit does (its native tools and its own core stop) and hides its window, but
-   keeps its profile lock and hands it to the new AppImage it starts, so no other launch takes the
-   profile meanwhile; the tray stays responsive while it waits. It waits up to 90 seconds for
-   the new version to accept itself: once it has started, with the installed file's digest the one
+7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
+   that order; detached launches run on) and hides its window, but keeps its profile lock and
+   hands it to the new AppImage it starts, so no other launch takes the profile meanwhile; the
+   tray stays responsive while it waits. It waits up to 90 seconds for the new version to accept
+   itself: once it has started, with the installed file's digest the one
    pinned, it writes `updates/accepted.json`. If it ends first or does not accept in time, the kept
    copy (checked against its digest) is put back the same way, the page later says the update
    failed, and the earlier version starts again with the lock. If the kept copy cannot be put back,
@@ -1079,6 +1080,44 @@ terminal and optional program path. Each launch's confirmation shows it in full;
 part of a launch: Hermes Agent reads it from its config file. Hermes Agent's desktop app is not
 offered: its Linux packages are not released.
 
+## Pi
+
+The Pi page sets up and starts Pi with this core (`src/pi.tsx`). It needs the curated native tool
+`pluxy/pi-setup` ([app tools](../app-tools/README.md#pi-setup)) and, for **Start CLI**, the
+execution program, both installed and enabled on the Device extensions page. Like the Claude Code
+page it is the window's own page, because **Apply** gives the tool the client key.
+
+Pi reaches the core through the CLIProxyAPI provider plugin. The tool carries a reviewed copy of
+it and installs it as a local Pi package in Pi's agent folder; it never runs `pi install` or npm.
+**Read settings** previews Pi's files, `cliproxyapi.json`, `settings.json` and the plugin's model
+cache `cliproxyapi-models.json`, in its agent folder (`~/.pi/agent`) or in a selected agent folder
+(the one `PI_CODING_AGENT_DIR` names; the folder may be a link, as chezmoi can make), or as the
+linked files in a folder (links, as stow makes, are followed and kept). Files Pi would not take
+are still read: the page says why, leaves Apply, Clear and Uninstall off, and keeps Restore Backup
+and the backups. It shows whether the plugin is
+installed and its version (with **Update available** when the tool carries another), whether
+pluxy's integration is applied, the files it writes to, whether a key is in `cliproxyapi.json` and
+Pi's default provider and model, never the key; it warns when `settings.json` still lists the npm
+copy an older app installed, or when a folder of the plugin's name is not pluxy's. **Model** is the
+model Pi starts with through this core (the core's served models are suggested; **Refresh models**
+reloads them; the plugin itself lists the core's Codex catalog in Pi). The **Authentication Key**
+is one of the vault's secrets, or a new one through native key entry (**Add key…**).
+
+**Install Pi Plugin** (or **Connect in One Click**, **Update Configuration** / **Repair
+Connection** once installed) installs the plugin when it is not there and writes the core's
+address, the key and Pi's defaults. **Plugin management** has **Update Pi Plugin** (the tool's copy
+replaces the installed one) and **Uninstall Pi Plugin** (its entry and folder go; the connection
+settings stay). **Clear integration** and **Restore Backup** also remove the plugin's folder once
+`settings.json` no longer lists it. Each of these previews the files again and calls the tool,
+whose native confirmation names the files it resolves to (or the agent folder, for Update), the
+key's label for Apply, and that an edit made in the same instant by another program may be lost;
+everything else in the files stays. **Backup and restore** is the shared backup browser. **Start
+CLI** asks the tool for its recipe (`pi` in a terminal, no arguments; `~/.pi/agent/bin/pi` or
+`~/.local/bin/pi`, where Pi's installer puts it, when one exists) and starts it through the
+launcher in the chosen working directory (recently used ones offered), terminal and optional
+program path. The key is not part of a launch: the plugin reads it from `cliproxyapi.json`. Pi has
+no desktop app.
+
 ## Build and check
 
 Bun `1.4.3`, a stable Rust toolchain (CI uses 1.97.0), and on Linux the WebKitGTK 4.1 and
@@ -1350,8 +1389,9 @@ The base `tauri.conf.json` keeps bundling off. Two commands build packages, from
 after `bun run build`; both use the Tauri CLI pinned in `package.json`:
 
 ```bash
-bun run package:test <out-dir>          # the test package: a disposable AppImage for checks
-bun run package:release [AppImage...]   # the release gate: builds and checks; uploads nothing
+bun run package:test <out-dir>          # the test package, for checks: an AppImage (Linux), a
+                                        # folder bundle (Windows) or an app bundle (macOS)
+bun run package:release [artifact...]   # the release gate: builds and checks; uploads nothing
 ```
 
 `package:test` is for checks only, never for release. It builds a debug app with the
@@ -1375,10 +1415,25 @@ Cargo offline after `cargo fetch --locked`, and every proxy variable pointing at
 the build. Afterwards the tools folder must hold only the pinned tools and the bundler's own two
 plugin scripts. The AppImage's type is still checked on the output.
 
+On Windows and macOS `package:test` makes no installer and no disk image. It builds the same two
+debug apps with the same overlay, with no Tauri bundle on Windows (whose bundles are all
+installers) and the `app` bundle on macOS. On Windows each build's program goes into a plain
+folder bundle of its own, `<out-dir>/pluxy Test/pluxy-app-test.exe` and
+`<out-dir>/update/pluxy Test/pluxy-app-test.exe`, and the update is that second exe, signed. On
+macOS each build's bundle is copied to `<out-dir>/pluxy Test.app` and
+`<out-dir>/update/pluxy Test.app` (with `ditto`, keeping modes and the program's signature, no
+extended attributes or quarantine), and the update is the second bundle as a `.app.tar.gz` made
+by the command (one top folder, no macOS metadata), signed; no signing identity or notarization
+is used. `test-package.json` names the bundle, the program in it, the public key and the update
+(its bundle, payload, feed target `windows-x86_64-exe` or `darwin-aarch64-app`, version and
+signature). Nothing is downloaded there, so the builds run in the caller's environment, Cargo
+offline after `cargo fetch --locked` and every proxy variable pointing at a closed port.
+
 `package:release` turns on no bundle format: release formats are not chosen yet. It builds the
 release app with no features and no overlay (`tauri build --no-bundle`), finds that build's
 snapshots by its receipt, and runs the [release validator](#validate-release-inputs) on them,
-the staged trust folder (`src-tauri/trust`), the built binary and each AppImage given. Its last
+the staged trust folder (`src-tauri/trust`), the built binary (`pluxy-app.exe` on Windows) and
+each artifact given: an AppImage, a Windows folder bundle or a macOS app bundle. Its last
 line says `release-package: valid`, `release-package: refused: <reason>` or, when it could not
 check, `release-package: failed: <reason>`.
 
@@ -1400,8 +1455,11 @@ The app's updater ([Application update](#application-update)) calls it.
   `close_range` with `CLOSE_RANGE_CLOEXEC`); a confirmed launch-class call is passed to its
   operation, and the app starts nothing itself yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
-- Vault: Linux only. Secrets are kept in a 0600 file in the app's data folder, not in the system
-  keyring, and only exact values are redacted. The window has no vault page yet. Secrets reach
+- Vault: Linux only. Its storage is built and unit tested on Windows (in the local data folder,
+  private by its access list) and macOS too, but not used there yet. Secrets are kept in a file
+  only the user may read (0600 on Linux and macOS) in the app's data folder, not in the system
+  keyring, and only exact values are redacted. On macOS the modes are checked, not extended access
+  lists. The window has no vault page yet. Secrets reach
   native tools' pipes and the environment of a process a confirmed launch starts (the launching
   tool holds only a reference); a client key is checked at each use, also at a launch's spawn and
   each restart. Backups have no retention: a package keeps at most 256.
@@ -1413,7 +1471,8 @@ The app's updater ([Application update](#application-update)) calls it.
   (confirmations, key entry, process ownership, starting the app's own core) stay Linux only
   and refuse at run time. On Windows the page document's address is
   `http://pluxy-page.localhost/`.
-- No installer or bundled core yet: the only package is the test AppImage, which is not for release.
+- No installer or bundled core yet: the only packages are the test AppImage, the test folder
+  bundle (Windows) and the test app bundle (macOS), which are not for release.
   The app updates only itself, only as an AppImage, on Linux x86_64, and only with test updater
   trust until release keys exist. Rollback keeps the last three versions that ran on this
   profile; a new version that hangs is stopped after 90 seconds and the earlier one put back, but
@@ -1468,7 +1527,10 @@ private temporary HOME with a runner-created trust marker. A temporary HOME alon
 Private signing keys are generated at runtime and kept only in temporary fixture directories.
 Tauri updater signatures have their own format; descriptor signatures cannot replace them.
 
-The runner creates a private mode-0700 temporary HOME, calls `trust::write_test_marker(home)`,
+The runner creates a private mode-0700 temporary HOME (on Windows: a folder owned by the user
+whose access list lets in only the user, SYSTEM and Administrators, given to the app as HOME;
+the profile's files there must be ones no one else can change), calls
+`trust::write_test_marker(home)`,
 passes its returned per-run random nonce to the child as `PLUXY_TEST_TRUST_NONCE`, and writes
 `.pluxy-test-trust-roots.json` there. Both marker and nonce must match; TMPDIR grants no trust:
 
@@ -1501,9 +1563,18 @@ plus the trust and feature snapshots, in Cargo's `OUT_DIR`. A digest of all thre
 the app. The validator compares its own compiled inputs and requires the matching receipt in an
 artifact. Supply the actual app executable along with every package. The validator streams each
 regular file for test markers, test identifiers and Tauri updater keys or signatures. Each
-artifact must be a well-formed ELF executable (type, machine and program headers inside the
-file) or a type-2 AppImage, and carry the build's receipt itself; anything else is refused,
-since it cannot be looked inside. An AppImage (found by its header,
+artifact must be a well-formed executable, ELF (type, machine and program headers inside the
+file), PE (an executable image for x86, x86-64 or arm64, its optional header inside the file) or
+Mach-O (a 64-bit x86-64 or arm64 executable, library or bundle with its load commands inside the
+file, or a universal file of such parts), or a type-2 AppImage, a Windows folder bundle or a
+macOS app bundle (a folder named `*.app`), and carry the build's receipt itself; anything else
+is refused, since it cannot be looked inside. A bundle folder is read in place, every entry
+checked as an AppImage's are below, and its app executable is `<mainBinaryName>.exe` at its top,
+a PE file, or `Contents/MacOS/<mainBinaryName>`, a Mach-O file. An app bundle's
+`Contents/Info.plist` must be a property list (XML or binary) naming `dev.pluxy.desktop` as
+`CFBundleIdentifier` and the app executable as `CFBundleExecutable`; it is decoded and every
+key, string and data in it checked for test markers. An app bundle's archive
+(`.app.tar.gz`) is refused like any compressed file. An AppImage (found by its header,
 never run) must have its squashfs image where its runtime's header ends, with nothing after it
 but zero padding under 4 KiB. `unsquashfs` (package `squashfs-tools`) first lists the image
 (only folders, regular files and links; at most 100,000 entries, 32 folders deep and 2 GiB

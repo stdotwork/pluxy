@@ -28,6 +28,7 @@ import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
 import { ompPage } from "./omp";
 import { opencodePage } from "./opencode";
+import { piPage } from "./pi";
 import { UpdatesPage } from "./updates";
 import { ClosePrompt } from "./window";
 
@@ -135,6 +136,7 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       ompPage(),
       grokPage(),
       hermesPage(),
+      piPage(),
       ...devicePages(catalog),
     ],
     [shown, catalog, loadDevice],

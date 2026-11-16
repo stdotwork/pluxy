@@ -11,14 +11,15 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi, usage-opencode)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
-cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup, execution, omp-setup, opencode, grok-setup and hermes-setup
+cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup, execution, omp-setup, opencode, grok-setup, hermes-setup and pi-setup
 ```
 
-Platforms: every tool runs on Linux. The usage hub, the usage parsers and `codex-sessions` also
-build and are tested on Windows and macOS (`.github/workflows/next-app-tools-platforms.yml`), and
-their manifests name programs for `darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does
-not run native tools on those systems yet. `lib/transactions`, `claude-code`, `claude-desktop` and `codex-setup` are
-Linux only for now, and `execution` refuses every operation outside Linux.
+Platforms: every tool runs on Linux. The usage hub, the usage parsers, `codex-sessions` and
+`execution` also build and are tested on Windows and macOS
+(`.github/workflows/next-app-tools-platforms.yml`), and their manifests name programs for
+`darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does not run native tools on those
+systems yet. `lib/transactions`, `claude-code`, `claude-desktop` and `codex-setup` are Linux only
+for now.
 
 ## `lib/files`
 
@@ -870,6 +871,83 @@ whose document is only `null`, is an empty one (apply gives it a mapping); a `nu
 and its read, and refuses if it changed again. `_config_version` is not checked: Hermes reads every version's `providers:` and treats a
 file without one as current. Restore Backup puts the original back whatever the file holds now.
 
+## `pi-setup`
+
+`pluxy/pi-setup` sets up Pi to use pluxy's core, installs, updates and uninstalls the CLIProxyAPI
+provider plugin Pi needs for it, and says how to start Pi, for the desktop app's Pi page
+(`../app/README.md`, "Pi"). It writes Pi's files through `lib/transactions` (set `pi`, targets in
+this order, all in one agent folder: `cliproxyapi.json`, `settings.json`,
+`cliproxyapi-models.json`): link-preserving, journalled, the original and applied images in the
+host's vault, and its manual backups (the backup browser). It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: the three files' selections (`file`, which may be a link, as stow makes; or `root` and `path`), in one folder; or `folder`: an agent folder (it may be a link, as chezmoi can make; a link inside it is refused, so linked files are selected as `targets`); by default the three files in `~/.pi/agent` in the app's `HOME` (below), which must exist (Pi makes it when it first runs); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `pi`: `state` (`not-configured`: the plugin is not listed; `configured`; `needs-update`), `base_url` (cliproxyapi.json's), `key_set`, `provider` (the plugin's provider ID), `default_provider`, `model` (Pi's default model), `registered` (settings.json lists pluxy's plugin), `legacy` (it lists an older app's npm copy), `adapter`: `installed`, `version`, `bundled`, `update`, `foreign` (a folder of that name pluxy did not install); never the key. Files Pi would not take are pinned all the same, so Restore Backup and the backups reach them: `state` is `refused`, `reason` says why, and `adapter` is still there. A file another program writes between the preview's two reads is read again once, else the preview is refused |
+| `apply` | `write`; secret `key` (value) | Three pins, `base_url`, `key`, `model` (one model ID) | The library's outcome and `adapter`: `installed` or `kept` |
+| `update` | `write` | `folder`: the agent folder | `{"outcome": "updated", "version"}` |
+| `uninstall` | `write` | Three pins | The library's outcome and `adapter_removed` |
+| `clear` | `write` | Three pins | The library's outcome (the values Apply wrote go, edits made since stay) and `adapter_removed` |
+| `restore` | `write` | Three pins | The library's outcome (the original bytes back: Restore Backup) and `adapter_removed` |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Pi", "kind": "terminal", "program": <~/.pi/agent/bin/pi, else ~/.local/bin/pi, when an executable file is there, else "pi">, "args": []}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), the three files per version, diffed by setting name | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+Pi keeps its user settings in its agent folder, `~/.pi/agent` (`PI_CODING_AGENT_DIR` moves it; the
+tool's environment does not have it, so a person who uses it selects that folder): `settings.json`
+holds Pi's settings, among them `packages` (npm, git or local Pi packages), `defaultProvider` and
+`defaultModel`; Pi reads it as strict JSON. Pi talks to pluxy's core through the CLIProxyAPI
+provider plugin, which reads `cliproxyapi.json` in the same folder (`baseUrl`, `apiKey`, and
+optional `providerId`, `providerName`, `fast` and `pause`; `CLIPROXYAPI_*` variables in Pi's
+environment win over it), registers the provider `cliproxyapi`, lists the core's Codex catalog
+(`/v1/models?client_version=pi`), sends requests to `/backend-api/codex/responses` and caches the
+list in `cliproxyapi-models.json`. Read at source: earendil-works/pi at 17d6ca759a07 (Pi 1.5.2,
+2026-11-14): `packages/coding-agent/src/config.ts`, `core/settings-manager.ts`,
+`core/package-manager.ts`, `core/extensions/loader.ts` and `docs/settings.md`, `docs/packages.md`,
+`docs/quickstart.md`; the plugin, npm `@router-for-me/pi-cliproxyapi-provider` 1.4.25.
+
+**The plugin.** The old desktop app ran `pi install npm:@router-for-me/pi-cliproxyapi-provider`,
+which fetches whatever the npm registry serves. This tool never runs Pi or npm and fetches
+nothing: it carries a reviewed copy of that plugin (`pi-setup/adapter/`, MIT, its `LICENSE` kept)
+in its signed program, and writes it into the agent folder as a local Pi package,
+`pluxy-cliproxyapi-provider/`, with a marker file `.pluxy-adapter.json` (this package and the
+copy's version, `1.4.25-pluxy.1`). Pi loads a local package from its folder and never installs or
+updates it. **Update** replaces pluxy's copy with the one the installed tool carries (a newer
+plugin comes with a new pluxy/pi-setup); the page offers it when the installed copy's version
+differs. A folder of that name without pluxy's marker is someone else's: Apply and Update refuse,
+and nothing removes it. The review read the plugin's network, process, file and code-loading calls
+(it starts no processes; it fetches the core's model list and `https://models.dev/api.json` for
+prices) and found one hole, patched in the copy: the plugin wrote a patched copy of a Pi module to
+a fixed name in the shared temporary folder and imported it, so another user of the machine who
+made that folder first could run code as the Pi user; the copy keeps it in its own folder's
+`.cache` (mode 0700) instead. The plugin declares Pi `>=0.82.0` (`@earendil-works/pi-coding-agent`);
+the tool cannot run `pi --version`, so it does not check.
+
+What `apply` writes:
+
+- the plugin, when pluxy's copy is not in the agent folder;
+- in `cliproxyapi.json`, `baseUrl` (the core's address, without a final `/` or `/v1`) and `apiKey`
+  (the client key, which the plugin sends as a bearer token); the other keys stay;
+- in `settings.json`, the local package `./pluxy-cliproxyapi-provider` in `packages` (the relative
+  form Pi itself writes; an entry the person narrowed stays as it is), without an older app's
+  `npm:@router-for-me/pi-cliproxyapi-provider` entry (both would register the same provider and
+  commands; its npm files stay), `defaultProvider` (cliproxyapi.json's `providerId`, else
+  `cliproxyapi`) and `defaultModel`; the other packages and settings stay;
+- `cliproxyapi-models.json` is removed, so the plugin lists the core's models afresh.
+
+Files are written back as JSON with two-space indentation; key order and numbers' digits stay.
+Clear's three-way merge brings back what Apply replaced unless the person changed it since; on top,
+pluxy's plugin never stays listed, an entry Apply took out of `packages` comes back, and a model
+cache Apply removed is removed again when there was none before Apply (else the plugin's newer one
+stays). **Uninstall** takes only the plugin's entry out of `settings.json` (through `apply`, so
+Clear and Restore Backup still work afterward) and removes its folder; the connection settings stay,
+as in the old app. Clear, Restore Backup and Uninstall remove pluxy's plugin folder once
+`settings.json` no longer lists it. `preview` and `apply` refuse, before writing, a file Pi or the
+plugin would not take: `settings.json` or `cliproxyapi.json` not strict JSON (a byte order mark
+too) or not an object, `packages` not a list of package sources (a string, or an object with a
+string `source`), `defaultProvider`, `defaultModel`, `baseUrl`, `apiKey` or `providerId` not text.
+Clear and Uninstall refuse such files too; Restore Backup still puts the originals back. A missing file is an empty one; the cache is not checked (Apply removes it). Apply writes the files owner-only (the library takes away the group's and others' bits), since `cliproxyapi.json` holds the key. Neither file has a
+version field, so none is checked. The key may not hold spaces; the model is one ID without spaces.
+
 ## `execution`
 
 `pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, a program
@@ -925,3 +1003,65 @@ A call from another package (a tool's import, or a page's) may prepare only an o
 terminal or direct preparation answers whether programs and folders exist, so only the app's own
 window asks for those.
 
+### On Windows and macOS
+
+There the execution program is also the terminal and the opener of the launches it prepares: the
+app runs it, as the confirmed launch, with arguments that name a launch mode, and it runs that
+mode instead of serving operations (as a tool it gets no arguments). A launch's `lifetime` and the
+host's checks are as on Linux.
+
+**Windows.** The terminals are `powershell` (PowerShell, Automatic's first), `cmd` (Command
+Prompt) and `console` (Console window). A terminal launch runs `<execution> terminal --with <kind>
+-- <program> <args>`, which the app starts in a new console: Windows shows it in the person's
+default terminal app (Windows Terminal, or the console host). The execution program runs the
+program there in the launch's folder and environment, leaving Ctrl+C to it, says how it ended,
+and then waits for Enter (`console`) or stays at a `cmd.exe /D` or `powershell.exe -NoLogo
+-NoProfile` prompt, both from the System32 folder Windows reports (never the launch's
+`SystemRoot`). There is no Windows Terminal kind:
+`wt.exe` splits its command line its own way, so the arguments confirmed would not be the ones
+it runs.
+
+A program is a PE image (`.exe` or `.com` starting with `MZ`), looked up as `<name>.com`,
+`.exe`, `.bat`, `.cmd` in each search path folder in turn. A batch file runs only as an npm, pnpm
+or Yarn command shim the execution program can read: it becomes what the shim runs, Node
+(`node.exe` beside the shim, else on the search path) with the shim's script and arguments, or
+the shim's own program; any other batch file is refused, since `cmd.exe` would read the
+arguments its own way. For the same reason `cmd.exe`, `wt.exe`, `conhost.exe` and the other
+programs that read their command line their own way start only with no arguments. The program (for a
+shim, what it runs) and the working folder are judged and confirmed by their final paths, links
+and short names resolved, so a link to `cmd.exe` is `cmd.exe`. Paths are shown
+and confirmed in their plain form (`C:\…`, not `\\?\C:\…`), and a path whose plain form would
+name another file (a name ending in a dot or a blank, a device name such as `NUL`) is refused.
+
+A direct launch may name a packaged app as `shell:AppsFolder\<AppUserModelID>` (such as the Codex
+app), with no arguments: `<execution> app -- <AppUserModelID>` starts it through the shell. An
+open launch runs `<execution> open -- <file>`, which opens the file with the app Windows has for
+its extension (`ShellExecuteExW`, verb `open`, the extension as its class, no dialog). The file
+must be `.txt`, `.json`, `.jsonl`, `.ndjson`, `.md` or `.log`, on a local drive, with no
+alternate data stream and a path shorter than 260 UTF-16 units, and some app must open its type:
+`prepare` checks that (the shell would report success and open nothing). Its folders must be real
+folders (no link, junction or other reparse point) writable by no one but the user, SYSTEM and
+Administrators.
+
+**macOS.** The terminal is Terminal (iTerm2 and Ghostty are not offered yet). A terminal launch
+runs `<execution> terminal --with terminal --app <Terminal.app> -- <program> <args>`. It makes a
+private folder in the per-user temporary folder with a Unix socket and a `.command` file, has
+Terminal open the file (`/usr/bin/open -a`), and hands the program, arguments, folder and
+environment over the socket to the first connection from this user; the file only runs
+`<execution> attach <socket>`, so nothing of the launch is written to a file or read by a shell.
+In the window, the program runs with the launch's environment and the window's own `TERM…`,
+`LC_TERMINAL…` and `PATH`. When macOS holds `open` back for 20 seconds (a quarantine or a
+permission prompt), the launch fails as blocked; when no window takes it within 60 seconds, as
+expired. A launch whose hand-over would be over 1 MiB (the program, arguments, folder and
+environment) is refused before Terminal opens.
+
+A direct launch may name an application bundle (`….app`) in `/Applications`, `~/Applications` or
+`/System/Applications`, with no arguments: it runs `/usr/bin/open -a <bundle>`. An open launch
+runs `/usr/bin/open <file>`, which opens the file in the app LaunchServices has for its type. The
+types are Windows' and Linux's, the file must carry no attribute that can choose another app
+(`com.apple.FinderInfo`, `com.apple.ResourceFork`, `com.apple.LaunchServices.OpenWith`), and
+LaunchServices must have an app for it.
+
+On both, an app launch carries nothing but the app (no environment, standard input, secret or
+managed lifetime), and a terminal launch takes no standard input: the execution program refuses
+either before the host is asked.
