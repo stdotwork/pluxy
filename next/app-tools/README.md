@@ -673,7 +673,8 @@ pages (read 2026-11-17) name these folders and `configLibrary` in them; the olde
 `%APPDATA%\Claude-3p` (before 1.5186.0), is not read, as Claude Desktop moves it at its next start.
 They do not name `claude_desktop_config.json`; Claude Desktop is one app on all three systems (its
 [installation](https://claude.com/docs/third-party/claude-desktop/installation) page), and the tool
-takes that file beside `configLibrary` on macOS and Windows as its Linux package keeps it.
+takes that file beside `configLibrary` on macOS and Windows as its Linux package keeps it. This is
+not checked on a real macOS or Windows install yet.
 
 The files and keys are Claude Desktop's own, as Anthropic's third-party documentation
 ([configuration](https://claude.com/docs/third-party/claude-desktop/configuration),
