@@ -347,9 +347,10 @@ func archiveFiles(t *testing.T, b []byte) map[string]packedFile {
 }
 
 // The pack tool packs every app tool (but the test fixture) for each platform its manifest
-// names among those asked, from the programs built beforehand, with the program at the path the
-// manifest names and the manifest's own bytes, and an index of the app's registry form that pins
-// each archive; a platform a manifest does not name is left out, and a missing program fails.
+// names among those asked, from the programs built beforehand: each archive holds the manifest's
+// own bytes, the program at the path the manifest names and the files of its app.ui folder, and
+// an index of the app's registry form pins each archive. A platform a manifest does not name is
+// left out, a missing program fails, and packing twice gives the same bytes.
 func TestPackToolPacksAppTools(t *testing.T) {
 	manifests := appToolManifests(t)
 	platforms := []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"}
@@ -375,6 +376,11 @@ func TestPackToolPacksAppTools(t *testing.T) {
 	bin := buildPackTool(t)
 	out := t.TempDir()
 	runPack(t, bin, out, "-app-tools", programs, "-platforms", strings.Join(platforms, ","))
+	again := t.TempDir()
+	runPack(t, bin, again, "-app-tools", programs, "-platforms", strings.Join(platforms, ","))
+	if a, b := packTree(t, filepath.Join(out, "app-tools")), packTree(t, filepath.Join(again, "app-tools")); !maps.EqualFunc(a, b, bytes.Equal) {
+		t.Error("two packs of the app tools differ")
+	}
 
 	dest := filepath.Join(out, "app-tools")
 	b, err := os.ReadFile(filepath.Join(dest, "index.json"))
