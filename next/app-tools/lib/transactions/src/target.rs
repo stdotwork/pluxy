@@ -411,15 +411,35 @@ pub(crate) fn on_windows_drive(mountinfo: &str, path: &Path) -> bool {
         .any(|r| parent == Some(r) && r != Path::new("/"))
 }
 
-/// In WSL (the host set `PLUXY_ENVIRONMENT`), refuses paths (resolved folders) on a Windows drive:
+#[cfg(test)]
+thread_local! {
+    /// Unit tests only: this thread runs as in WSL, with these mounts (`/proc/self/mountinfo` text).
+    pub(crate) static WSL_MOUNTS: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// In WSL (the host set `PLUXY_ENVIRONMENT`), the mounts now; None elsewhere.
+fn wsl_mounts() -> Result<Option<String>, Error> {
+    #[cfg(test)]
+    if let Some(m) = WSL_MOUNTS.with(|m| m.borrow().clone()) {
+        return Ok(Some(m));
+    }
+    if std::env::var_os("PLUXY_ENVIRONMENT").is_none_or(|v| v.is_empty()) {
+        return Ok(None);
+    }
+    std::fs::read_to_string("/proc/self/mountinfo")
+        .map(Some)
+        .map_err(|e| io("/proc/self/mountinfo", e))
+}
+
+/// In WSL (the host set `PLUXY_ENVIRONMENT`), refuses paths (resolved folders, and the file itself,
+/// which may be a mount of its own) on a Windows drive:
 /// without its metadata mode, a drive keeps no owner-only permission bits, and Windows' own
 /// writer already sets up its files.
 pub(crate) fn refuse_windows_drive(paths: &[&Path]) -> Result<(), Error> {
-    if std::env::var_os("PLUXY_ENVIRONMENT").is_none_or(|v| v.is_empty()) {
+    let Some(info) = wsl_mounts()? else {
         return Ok(());
-    }
-    let info = std::fs::read_to_string("/proc/self/mountinfo")
-        .map_err(|e| io("/proc/self/mountinfo", e))?;
+    };
     if paths.iter().any(|p| on_windows_drive(&info, p)) {
         return Err(Error::invalid_request(
             "This file is on a Windows drive; set it up from Windows local.",
@@ -458,7 +478,7 @@ impl Target {
                     cparent.join(name)
                 };
                 let tparent = target.parent().unwrap_or(Path::new("/"));
-                refuse_windows_drive(&[&cparent, tparent])?;
+                refuse_windows_drive(&[&cparent, tparent, &target])?;
                 let dir = open_dir(tparent)?;
                 let parent_id = dir_id(&dir, tparent)?;
                 let name = PathBuf::from(target.file_name().unwrap_or_default());
@@ -512,11 +532,11 @@ impl Target {
                     }
                     dir = next;
                 }
-                // A folder inside the root may be a mount of its own.
-                refuse_windows_drive(&[&at])?;
+                let target = croot.join(path);
+                // A folder inside the root, or the file itself, may be a mount of its own.
+                refuse_windows_drive(&[&at, &target])?;
                 let parent_id = dir_id(&dir, &at)?;
                 let last = parts[parts.len() - 1];
-                let target = croot.join(path);
                 Target::finish(
                     selection,
                     link,
@@ -594,7 +614,7 @@ impl Target {
     /// pinned one.
     pub fn pinned(pin: &Pin) -> Result<Target, Error> {
         let folder = pin.target.parent().unwrap_or(Path::new("/"));
-        refuse_windows_drive(&[&canonical(folder)?])?;
+        refuse_windows_drive(&[&canonical(folder)?, &pin.target])?;
         let dir = open_dir(folder)?;
         if dir_id(&dir, folder)? != pin.parent_id {
             return Err(changed(&pin.target, "its folder was replaced"));

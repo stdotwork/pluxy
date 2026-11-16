@@ -226,7 +226,8 @@ anything is read, and so is a journalled target's folder at recovery. A path is 
 when the mount holding it in `/proc/self/mountinfo` is of type `drvfs`, `9p` or `virtiofs`, or is
 mounted directly in the folder WSL mounts drives in (the folder holding a one-letter drive mount,
 such as `/mnt`), as `/mnt/wsl` is. Checked are the selected path's folder, the folder of the file
-written and, at recovery, the pinned folder. Without metadata, a drive keeps no owner-only
+written and the file itself (a file can be a mount of its own), and at recovery the pinned folder
+and file. Without metadata, a drive keeps no owner-only
 permission bits, and Windows' own writer sets those files up.
 
 Other programs do not take part in these checks: a write between the last check and the rename,

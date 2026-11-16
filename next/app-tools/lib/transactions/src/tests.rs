@@ -1725,3 +1725,133 @@ fn wsl_real_the_first_write_makes_the_data_folder_and_files_are_the_users() {
     tx.restore("s", &pins, &mut none).unwrap();
     assert_eq!(read(&target).unwrap(), "{\"theme\": \"light\"}\n");
 }
+
+/// Runs f as if in WSL with these mounts (`/proc/self/mountinfo` lines after the root's).
+fn in_wsl<T>(mounts: &[(&Path, &str)], f: impl FnOnce() -> T) -> T {
+    let mut text = String::from("1 0 8:1 / / rw - ext4 /dev/sda rw\n");
+    for (i, (point, fstype)) in mounts.iter().enumerate() {
+        let point = point.to_str().unwrap().replace(' ', "\\040");
+        text.push_str(&format!(
+            "{} 1 0:{} / {point} rw - {fstype} C:\\134 rw\n",
+            i + 2,
+            50 + i
+        ));
+    }
+    target::WSL_MOUNTS.with(|m| *m.borrow_mut() = Some(text));
+    let out = f();
+    target::WSL_MOUNTS.with(|m| *m.borrow_mut() = None);
+    out
+}
+
+const ON_DRIVE: &str = "This file is on a Windows drive; set it up from Windows local.";
+
+#[test]
+fn in_wsl_a_file_mounted_from_a_windows_drive_is_refused_even_alone() {
+    let t = Tmp::new();
+    let file = t.put("home/settings.json", "{}\n");
+    let other = t.put("home/other.json", "{}\n");
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, t.at("data"));
+    // The file itself is a mount of a drive's file (its folder is not).
+    let e = in_wsl(&[(&file, "9p")], || {
+        tx.preview("s", &[Selection::File(file.clone())])
+    })
+    .unwrap_err();
+    assert_eq!(e.message, ON_DRIVE);
+    let e = in_wsl(&[(&file, "drvfs")], || {
+        tx.preview(
+            "s",
+            &[Selection::Root {
+                root: t.at("home"),
+                path: "settings.json".into(),
+            }],
+        )
+    })
+    .unwrap_err();
+    assert_eq!(e.message, ON_DRIVE);
+    // Positive control on the same route: the file beside it.
+    let p = in_wsl(&[(&file, "9p")], || {
+        tx.preview("s", &[Selection::File(other.clone())])
+    })
+    .unwrap();
+    assert_eq!(p["targets"][0]["target"], json!(other));
+}
+
+#[test]
+fn in_wsl_a_root_on_a_windows_drive_is_refused() {
+    let t = Tmp::new();
+    t.put("drive/settings.json", "{}\n");
+    t.put("home/settings.json", "{}\n");
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, t.at("data"));
+    let root = |r: &str| Selection::Root {
+        root: t.at(r),
+        path: "settings.json".into(),
+    };
+    let drive = t.at("drive");
+    let e = in_wsl(&[(&drive, "9p")], || tx.preview("s", &[root("drive")])).unwrap_err();
+    assert_eq!(e.message, ON_DRIVE);
+    // A mount in the folder that holds a drive mount (as /mnt/wsl beside /mnt/c), and a root
+    // that is a link to the drive.
+    let c = t.at("mnt/c");
+    std::fs::create_dir_all(&c).unwrap();
+    std::os::unix::fs::symlink(&drive, t.at("home/to-drive")).unwrap();
+    let e = in_wsl(&[(&c, "9p"), (&drive, "tmpfs")], || {
+        tx.preview(
+            "s",
+            &[Selection::Root {
+                root: t.at("drive"),
+                path: "settings.json".into(),
+            }],
+        )
+    });
+    // drive is not in mnt/, so a tmpfs there is a Linux folder.
+    assert!(e.is_ok(), "{e:?}");
+    let wslmnt = t.at("mnt/wsl");
+    std::fs::create_dir_all(&wslmnt).unwrap();
+    std::fs::write(wslmnt.join("settings.json"), "{}\n").unwrap();
+    let e = in_wsl(&[(&c, "9p"), (&wslmnt, "tmpfs")], || {
+        tx.preview(
+            "s",
+            &[Selection::Root {
+                root: wslmnt.clone(),
+                path: "settings.json".into(),
+            }],
+        )
+    })
+    .unwrap_err();
+    assert_eq!(e.message, ON_DRIVE);
+    let e = in_wsl(&[(&drive, "9p")], || {
+        tx.preview(
+            "s",
+            &[Selection::Root {
+                root: t.at("home/to-drive"),
+                path: "settings.json".into(),
+            }],
+        )
+    })
+    .unwrap_err();
+    assert_eq!(e.message, ON_DRIVE);
+    // Positive control: the root in the home.
+    assert!(in_wsl(&[(&drive, "9p")], || tx.preview("s", &[root("home")])).is_ok());
+}
+
+#[test]
+fn in_wsl_recovery_does_not_touch_a_journalled_target_now_on_a_windows_drive() {
+    let t = Tmp::new();
+    let file = t.put("home/settings.json", "{}\n");
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, t.at("data"));
+    let p = tx.preview("s", &[Selection::File(file.clone())]).unwrap();
+    let pin = Pin::from_json(&p["targets"][0]).unwrap();
+    // Its folder, or the file itself, mounted from a drive since.
+    for point in [t.at("home"), file.clone()] {
+        let e = in_wsl(&[(&point, "9p")], || Target::pinned(&pin).map(|_| ())).unwrap_err();
+        assert_eq!(e.message, ON_DRIVE, "{}", point.display());
+    }
+    assert!(
+        in_wsl(&[(&t.at("elsewhere"), "9p")], || Target::pinned(&pin)
+            .map(|_| ()))
+        .is_ok()
+    );
+}
