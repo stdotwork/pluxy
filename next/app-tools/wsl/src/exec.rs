@@ -129,8 +129,8 @@ fn once(
         .ok_or_else(|| Error::unavailable("Windows' folder is unknown"))?;
     let mut child = Command::new(exe)
         .args(args)
-        // Windows' own folder, not wherever the app started this tool: `--exec` without `--cd`
-        // starts the Linux side there.
+        // System32, not wherever the app started this tool: `--exec` without `--cd` starts the
+        // Linux side there.
         .current_dir(exe.parent().unwrap_or(windows))
         .env_clear()
         .env("SystemRoot", windows)

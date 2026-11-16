@@ -43,8 +43,9 @@ fn names_that_are_not_safe_are_left_out_and_each_name_is_listed_once() {
 #[test]
 fn nothing_installed_gives_no_names() {
     assert!(names(b"").is_empty());
-    // What WSL prints when there is no distribution: a sentence, which is not a name (it has a
-    // trailing period).
+    // What WSL prints when there is no distribution. The English sentence happens to fail the name
+    // rules (a trailing period), a translated one may not: `listing` decides by WSL's error code
+    // and never reads a failed listing's output as names (below).
     let msg = utf16(
         "Windows Subsystem for Linux has no installed distributions.\r\n",
         false,
