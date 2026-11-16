@@ -1,9 +1,9 @@
 //! The native test's check of signed native-tier admission (native-test builds with
 //! `artifact-test-trust` only). It drives the real app as the person would: the window's own
-//! commands, the Device extensions page and the real GTK native confirmation (X input from
-//! `xdotool`), against archives, three local registries and the run's test trust profile that
-//! `native/admission.ts` built (the archives' SHA-256 digests are in `expect.json`, computed there,
-//! not by the app). Every refusal goes through `device_install` with a positive control on that
+//! commands, the Device extensions page and the real native confirmation (on Linux GTK's, with X
+//! input from `xdotool`; on Windows and macOS worked through `ui_driver.rs`), against archives,
+//! three local registries and the run's test trust profile that `native/admission.ts` built (the
+//! archives' SHA-256 digests are in `expect.json`, computed there, not by the app). Every refusal goes through `device_install` with a positive control on that
 //! route:
 //!
 //! - `untrusted` (no root names it) lists the curated signed `pluxy/tool` entry, digest and all:
@@ -26,6 +26,7 @@ use super::{eval, log, wait_for};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Manager, Webview};
@@ -33,7 +34,29 @@ use tauri::{AppHandle, Manager, Webview};
 static CALLS: AtomicU64 = AtomicU64::new(0);
 const DIALOG: &str = "pluxy native confirmation";
 const FULL_ACCESS: &str = "full access to your user account";
+/// The fixture's program in bin/ (`native/admission.ts`): a program image on Windows.
+const TOOL: &str = if cfg!(windows) { "tool.exe" } else { "tool" };
 
+/// The app the dialog helpers work on, where they take none (`press`): set as the session
+/// starts. Linux's helpers find the dialog through the X server instead.
+#[cfg(not(target_os = "linux"))]
+static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+/// Keeps the app for the dialog helpers (Windows and macOS).
+pub(super) fn set_app(app: &AppHandle) {
+    #[cfg(not(target_os = "linux"))]
+    let _ = APP.set(app.clone());
+    #[cfg(target_os = "linux")]
+    let _ = app;
+}
+
+#[cfg(not(target_os = "linux"))]
+fn app() -> Result<&'static AppHandle, String> {
+    APP.get()
+        .ok_or_else(|| "the native test did not keep its app".to_string())
+}
+
+#[cfg(target_os = "linux")]
 pub(super) fn x(args: &[&str]) -> Result<String, String> {
     let out = Command::new("xdotool")
         .args(args)
@@ -48,6 +71,7 @@ pub(super) fn x(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().into())
 }
 
+#[cfg(target_os = "linux")]
 pub(super) fn dialog() -> Result<String, String> {
     wait_for("the native confirmation", || {
         x(&["search", "--onlyvisible", "--name", &format!("^{DIALOG}$")])
@@ -56,6 +80,14 @@ pub(super) fn dialog() -> Result<String, String> {
     })
 }
 
+/// Waits for the native confirmation; its title.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn dialog() -> Result<String, String> {
+    super::ui::wait_shown(app()?, DIALOG)?;
+    Ok(DIALOG.to_string())
+}
+
+#[cfg(target_os = "linux")]
 pub(super) fn press(keys: &str) -> Result<(), String> {
     let id = dialog()?;
     x(&["windowfocus", "--sync", &id])?;
@@ -63,7 +95,40 @@ pub(super) fn press(keys: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether the native confirmation is showing now.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn shown() -> bool {
+    app().is_ok_and(|app| super::ui::shown(app, DIALOG))
+}
+
+/// Presses an access key (`alt+<letter>`) in the native confirmation, as Linux's xdotool keys
+/// name it: through the UI driver, which on macOS clicks the button it names.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn press(keys: &str) -> Result<(), String> {
+    let letter = keys
+        .strip_prefix("alt+")
+        .and_then(|l| l.chars().next())
+        .filter(|_| keys.len() == "alt+".len() + 1)
+        .ok_or_else(|| format!("{keys:?} is not an access key"))?;
+    let app = app()?;
+    super::ui::wait_shown(app, DIALOG)?;
+    super::ui::press(app, DIALOG, super::ui::Key::Access(letter))
+}
+
+/// The text the visible native confirmation shows, one line per label.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn dialog_text(app: &AppHandle) -> Result<String, String> {
+    super::ui::wait_shown(app, DIALOG)?;
+    wait_for("the native confirmation's text", || {
+        super::ui::texts(app, DIALOG)
+            .ok()
+            .map(|t| t.join("\n"))
+            .filter(|t| !t.is_empty())
+    })
+}
+
 /// The text the visible native confirmation shows, read from its GTK labels.
+#[cfg(target_os = "linux")]
 pub(super) fn dialog_text(app: &AppHandle) -> Result<String, String> {
     use gtk::prelude::*;
     fn labels(w: &gtk::Widget, out: &mut String) {
@@ -194,7 +259,15 @@ pub(super) fn store(app: &AppHandle) -> Result<BTreeSet<String>, String> {
     })
 }
 
+/// Replaces a trust profile file as the runner wrote it: private, owned, not a link (on Windows a
+/// protected access list of this user and SYSTEM, `managed::write_private`).
+#[cfg(not(unix))]
+fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    crate::managed::write_private(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// Replaces a trust profile file as the runner wrote it: private, owned, not a link.
+#[cfg(unix)]
 fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -398,7 +471,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     require(
         a.sha256() == tool
             && a.dir() == store_dir
-            && a.program() == store_dir.join("bin").join("tool")
+            && a.program() == store_dir.join("bin").join(TOOL)
             && a.program().is_file()
             && a.program_sha256() == digest("program")
             && a.signed().source == curated

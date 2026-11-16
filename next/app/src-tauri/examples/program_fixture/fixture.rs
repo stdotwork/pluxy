@@ -209,6 +209,30 @@ fn error(id: &Value, code: &str, message: &str) -> Value {
     json!({"type": "error", "id": id, "error": {"code": code, "message": message}})
 }
 
+/// What it sees of itself on Windows, where it has no process group or descriptors to list: the
+/// system folders it was given (`system`), whether it runs in a job (`job`) and whether each of
+/// its standard input, output and error is a pipe (`std_pipes`).
+#[cfg(windows)]
+fn windows_seen(out: &mut Value) {
+    use windows_sys::Win32::Storage::FileSystem::{GetFileType, FILE_TYPE_PIPE};
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let mut system = serde_json::Map::new();
+    for k in ["APPDATA", "LOCALAPPDATA", "SystemRoot"] {
+        let v = std::env::var_os(k).map(|v| v.to_string_lossy().into_owned());
+        system.insert(k.into(), json!(v));
+    }
+    out["system"] = Value::Object(system);
+    let mut in_job = 0;
+    let ok = unsafe { IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut in_job) };
+    out["job"] = json!(ok != 0 && in_job != 0);
+    out["std_pipes"] = json!([STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
+        .map(|which| unsafe { GetFileType(GetStdHandle(which)) } == FILE_TYPE_PIPE));
+}
+
 /// The file descriptors open in this process, but for the one listing them.
 fn fds() -> Vec<u32> {
     #[cfg(target_os = "macos")]
@@ -1192,6 +1216,10 @@ pub fn main() -> ! {
                                     .map(|a| a.to_string_lossy().into_owned()),
                             })
                         });
+                        #[cfg(windows)]
+                        if mode.output.is_none() {
+                            windows_seen(&mut out);
+                        }
                         if let Some(n) = mode.pad {
                             out["pad"] = json!("x".repeat(n));
                         }

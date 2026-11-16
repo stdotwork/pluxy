@@ -1,7 +1,7 @@
 //! The native test's check of declared jobs and source registration (native-test builds with
 //! `artifact-test-trust` only), run after the routing check in its session, with the signed tools
 //! `native/routing.ts` built (their digests are in `expect.json`, worked out there, not by the
-//! app). It drives the real app through the window's own commands and the real GTK native
+//! app). It drives the real app through the window's own commands and the real native
 //! confirmations: the window calls the consumer pluxy/jobs-hub, whose `jobs` operation asks the
 //! host's job service, and reads back what the host delivered to its `take` operation (`report`).
 //! Each refusal has a positive control on the same route:

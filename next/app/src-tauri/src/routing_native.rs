@@ -1,6 +1,6 @@
 //! The native test's check of cross-package routing and import authorization (native-test builds
 //! with `artifact-test-trust` only). It drives the real app through the window's own commands,
-//! real page webviews and the real GTK native confirmations, with the signed tools and web
+//! real page webviews and the real native confirmations, with the signed tools and web
 //! packages `native/routing.ts` built (their digests and the expected answers are in
 //! `expect.json`, worked out there, not by the app). Each refusal has a positive control on the
 //! same route, and the target's call count shows a refused call never reached it:
@@ -50,6 +50,13 @@ const GUIDE: &str = "pluxy/guide";
 const VIEWER: &str = "example/hub-viewer";
 
 /// Whether a native confirmation is showing now.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn showing() -> bool {
+    super::admission::shown()
+}
+
+/// Whether a native confirmation is showing now.
+#[cfg(target_os = "linux")]
 pub(super) fn showing() -> bool {
     super::admission::x(&[
         "search",
@@ -250,7 +257,8 @@ impl Page {
         self.reply(&id)
     }
 
-    /// The page's webview.
+    /// The page's webview (for the vault, sessions and usage checks, which run on Linux only).
+    #[cfg(target_os = "linux")]
     pub(super) fn webview(&self) -> &Webview {
         &self.wv
     }

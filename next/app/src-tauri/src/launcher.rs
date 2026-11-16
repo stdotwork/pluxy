@@ -550,6 +550,21 @@ pub fn tray_start(app: &AppHandle, item: &str) {
     });
 }
 
+/// The tray's Start… items as they are now, each item's ID, label and whether it can be clicked;
+/// none before the tray is built. For the native test, which reads what `refresh_tray` made.
+#[cfg(feature = "native-test")]
+pub fn tray_items() -> Option<Vec<(String, String, bool)>> {
+    let menu = START.lock().unwrap().clone()?;
+    menu.items()
+        .ok()?
+        .into_iter()
+        .map(|i| {
+            let m = i.as_menuitem()?;
+            Some((m.id().0.clone(), m.text().ok()?, m.is_enabled().ok()?))
+        })
+        .collect()
+}
+
 /// The file in the app's config folder.
 pub fn file(config: &Path) -> PathBuf {
     config.join(FILE)

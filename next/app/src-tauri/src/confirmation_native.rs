@@ -136,7 +136,6 @@ fn trusted_start(app: &tauri::AppHandle, a: &Action) -> Result<(bool, String), S
 /// Shows a native window titled title with one button and presses it with native input: its
 /// press handler calls f with a gesture made there, as a trusted native launcher's would. For
 /// other native checks that start a trusted call (`routing_native.rs`).
-#[cfg(target_os = "linux")]
 pub(crate) fn click(
     app: &tauri::AppHandle,
     title: &str,
