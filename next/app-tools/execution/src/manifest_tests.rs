@@ -56,6 +56,7 @@ fn stopping_or_restarting_a_runtime_is_a_write_and_reading_them_is_not() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn only_the_window_alone_is_not_an_import() {
     assert!(!super::imported(&[json!({"kind": "main"})]));

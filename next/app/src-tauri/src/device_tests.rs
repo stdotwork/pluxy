@@ -161,6 +161,12 @@ fn ids_versions_and_paths() {
     assert!(local_path("a/b.html"));
 }
 
+/// Where page webviews address the asset scheme: Windows serves custom schemes over http.
+#[cfg(windows)]
+const ASSET_BASE: &str = "http://pluxy-app.localhost/";
+#[cfg(not(windows))]
+const ASSET_BASE: &str = "pluxy-app://localhost/";
+
 #[test]
 fn install_swap_failed_candidate_rollback_and_remove() {
     let root = temp();
@@ -176,10 +182,7 @@ fn install_swap_failed_candidate_rollback_and_remove() {
     let (url, folder, title) = c.page("example/notes", "p").unwrap();
     assert_eq!(
         url,
-        format!(
-            "pluxy-app://localhost/example/notes/{}/index.html",
-            digest(&v1)
-        )
+        format!("{ASSET_BASE}example/notes/{}/index.html", digest(&v1))
     );
     assert!(url.starts_with(&folder) && title == "P");
     assert_eq!(
@@ -600,7 +603,8 @@ fn names_with_a_drive_or_stream_never_reach_the_store() {
     h.set_entry_type(tar::EntryType::Directory);
     h.set_size(0);
     h.set_mode(0o755);
-    h.set_path("D:").unwrap();
+    // The name is written as bytes: the tar crate refuses to set a drive path on Windows.
+    h.as_old_mut().name[..2].copy_from_slice(b"D:");
     h.set_cksum();
     b.append(&h, std::io::empty()).unwrap();
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -1739,6 +1743,7 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     })
     .unwrap_err();
     assert!(e.contains("changed while its files were checked"), "{e}");
+    #[cfg(unix)]
     let c = m.into_inner().unwrap();
 
     // A changed file in the store: no longer admitted.

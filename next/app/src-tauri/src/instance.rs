@@ -35,8 +35,14 @@
 //!
 //! This runs first in the app's setup, before the managed core, the tray or any webview.
 //!
-//! shortcut: the socket is Unix-only; where there is none (Windows) a second launch fails with
-//! an error and does not raise the first's window. Upgrade with a named pipe there.
+//! On macOS this is the Unix path above: the runtime folder is the temporary folder of the user,
+//! whose path can be too long for a socket, so the last candidate is `pluxy-app-<uid>` in `/tmp`.
+//!
+//! On Windows (`instance/win.rs`) the lock is the same file lock (`LockFileEx`, which the system
+//! drops when the holder ends), and the socket is a named pipe, `\\.\pipe\pluxy-app-<digest>`,
+//! that only this user can open: the pipe is made as the first of its name, refuses remote
+//! clients, and grants access to this user's SID alone. A later launch checks that the pipe's
+//! server is a process of its own user before it sends the message.
 
 use std::fs::File;
 use std::io;
@@ -77,9 +83,9 @@ pub enum Start {
 /// The first app's hold on its profile, until it is dropped or the process ends.
 pub struct Instance {
     /// Held until the app ends, or `unlock`.
+    #[cfg_attr(not(unix), allow(dead_code))]
     lock: std::sync::Mutex<Option<File>>,
-    #[cfg(unix)]
-    dir: std::os::fd::OwnedFd,
+    dir: fsx::Dir,
     /// Names this profile's socket: a digest of its instance folder.
     key: String,
     listening: OnceLock<ipc::Listening>,
@@ -88,20 +94,37 @@ pub struct Instance {
 
 /// The folders, in order, where the first app may put its socket: `pluxy-app` in
 /// `XDG_RUNTIME_DIR` (when set), then `pluxy-app-<uid>` in the temporary folder. Links in those
-/// are resolved here: [`Instance::listen`] refuses a folder with a link above it.
+/// are resolved here: [`Instance::listen`] refuses a folder with a link above it. On macOS the
+/// temporary folder is too deep for a socket (`/private/var/folders/..`), so `/tmp` follows it.
+/// On Windows the one "folder" is the named pipes' own: `\\.\pipe`.
+#[cfg(unix)]
 pub fn socket_dirs() -> Vec<PathBuf> {
     let resolved = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
+    let uid = unsafe { libc::geteuid() };
     let mut dirs = Vec::new();
     if let Some(r) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
         if r.is_absolute() {
             dirs.push(resolved(r).join("pluxy-app"));
         }
     }
-    #[cfg(unix)]
-    dirs.push(
-        resolved(std::env::temp_dir()).join(format!("pluxy-app-{}", unsafe { libc::geteuid() })),
-    );
+    dirs.push(resolved(std::env::temp_dir()).join(format!("pluxy-app-{uid}")));
+    #[cfg(target_os = "macos")]
+    dirs.push(resolved(PathBuf::from("/tmp")).join(format!("pluxy-app-{uid}")));
     dirs
+}
+#[cfg(windows)]
+pub fn socket_dirs() -> Vec<PathBuf> {
+    vec![PathBuf::from(r"\\.\pipe")]
+}
+
+/// The name of this profile's socket (a file) or pipe, in one of [`socket_dirs`].
+#[cfg(unix)]
+fn socket_name(key: &str) -> String {
+    format!("{key}.sock")
+}
+#[cfg(windows)]
+fn socket_name(key: &str) -> String {
+    format!("pluxy-app-{key}")
 }
 
 /// Takes the profile's lock, or has the app that holds it raise its window. `dir` is a folder of
@@ -144,7 +167,6 @@ fn start_with(dir: &Path, deadline: Instant, inherited: Option<i32>) -> Result<S
                     .map_err(|e| format!("cannot remove the stale address: {e}"))?;
                 return Ok(Start::First(Instance {
                     lock: std::sync::Mutex::new(Some(lock)),
-                    #[cfg(unix)]
                     dir: d,
                     key,
                     listening: OnceLock::new(),
@@ -201,7 +223,7 @@ impl Instance {
         }
         let mut last = io::Error::other("no folder for the socket");
         for dir in dirs {
-            let socket = dir.join(format!("{}.sock", self.key));
+            let socket = dir.join(socket_name(&self.key));
             if socket.as_os_str().len() > MAX_SOCKET_PATH {
                 last =
                     io::Error::other(format!("the socket path {} is too long", socket.display()));
@@ -209,7 +231,6 @@ impl Instance {
             }
             match ipc::listen(dir, &socket) {
                 Ok(listener) => {
-                    #[cfg(unix)]
                     fsx::write_address(&self.dir, socket.as_os_str().as_encoded_bytes())?;
                     let listening = listener.serve(socket, on_activate)?;
                     let _ = self.listening.set(listening);
@@ -218,7 +239,6 @@ impl Instance {
                 Err(e) => last = io::Error::new(e.kind(), format!("{}: {e}", socket.display())),
             }
         }
-        #[cfg(unix)]
         let _ = fsx::write_address(&self.dir, b"");
         Err(last)
     }
@@ -234,7 +254,6 @@ impl Instance {
         if self.released.swap(true, Ordering::SeqCst) {
             return;
         }
-        #[cfg(unix)]
         let _ = fsx::remove(&self.dir, ADDRESS);
         if let Some(l) = self.listening.get() {
             l.stop();
@@ -271,6 +290,9 @@ mod fsx {
     use std::os::unix::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
 
+    /// A handle on the instance folder.
+    pub type Dir = OwnedFd;
+
     fn cstr(s: &[u8]) -> io::Result<CString> {
         CString::new(s).map_err(|_| io::ErrorKind::InvalidInput.into())
     }
@@ -289,7 +311,7 @@ mod fsx {
 
     /// Makes `dir` (and any missing parent) for this user only, and opens it: not through a link,
     /// and only if it is this user's. Closes it to others if it was open.
-    pub fn open_dir(dir: &Path) -> io::Result<OwnedFd> {
+    pub fn open_dir(dir: &Path) -> io::Result<Dir> {
         use std::os::unix::fs::DirBuilderExt;
         std::fs::DirBuilder::new()
             .recursive(true)
@@ -471,36 +493,10 @@ mod fsx {
     }
 }
 
-#[cfg(not(unix))]
-mod fsx {
-    use std::fs::{File, OpenOptions};
-    use std::io;
-    use std::path::{Path, PathBuf};
-
-    pub struct Dir(PathBuf);
-
-    pub fn open_dir(dir: &Path) -> io::Result<Dir> {
-        std::fs::create_dir_all(dir)?;
-        Ok(Dir(dir.to_path_buf()))
-    }
-
-    pub fn open_lock(dir: &Dir) -> io::Result<File> {
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(dir.0.join(super::LOCK))
-    }
-
-    pub fn read_address(_: &Dir) -> io::Result<Option<PathBuf>> {
-        Ok(None)
-    }
-
-    pub fn remove(_: &Dir, _: &str) -> io::Result<()> {
-        Ok(())
-    }
-}
+#[cfg(windows)]
+mod win;
+#[cfg(windows)]
+use win::{fsx, ipc};
 
 #[cfg(unix)]
 mod ipc {
@@ -846,7 +842,7 @@ mod ipc {
         s.write_all(what)
     }
 
-    /// Connects without blocking, within `deadline`. A full queue is `WouldBlock`, at once.
+    /// Connects without blocking, within `deadline`. A full queue is `WouldBlock` (a refusal on macOS), at once.
     fn connect(socket: &Path, deadline: Instant) -> io::Result<UnixStream> {
         let (addr, len) = address(socket)?;
         let fd = new_socket()?;
@@ -939,40 +935,6 @@ mod ipc {
     }
 }
 
-#[cfg(not(unix))]
-mod ipc {
-    use std::io;
-    use std::path::{Path, PathBuf};
-    use std::time::Instant;
-
-    pub struct Listener;
-    pub struct Listening {
-        pub socket: PathBuf,
-    }
-
-    impl Listening {
-        pub fn stop(&self) {}
-    }
-
-    impl Listener {
-        pub fn serve(
-            self,
-            _: PathBuf,
-            _: impl Fn() -> bool + Send + 'static,
-        ) -> io::Result<Listening> {
-            Err(io::ErrorKind::Unsupported.into())
-        }
-    }
-
-    pub fn listen(_: &Path, _: &Path) -> io::Result<Listener> {
-        Err(io::ErrorKind::Unsupported.into())
-    }
-
-    pub fn activate(_: &Path, _: Instant) -> io::Result<()> {
-        Err(io::ErrorKind::Unsupported.into())
-    }
-}
-
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -989,8 +951,17 @@ mod tests {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
+    /// Where the tests' folders go. A socket path must fit in about 100 bytes, which macOS's
+    /// temporary folder (`/var/folders/..`, a link into `/private`) is too long for.
+    fn temp_base() -> PathBuf {
+        #[cfg(target_os = "macos")]
+        return PathBuf::from("/private/tmp");
+        #[cfg(not(target_os = "macos"))]
+        std::env::temp_dir()
+    }
+
     fn temp() -> Temp {
-        let d = std::env::temp_dir().join(format!(
+        let d = temp_base().join(format!(
             "pluxy-app-inst-{}",
             &crate::managed::random_key()[..12]
         ));
@@ -1250,6 +1221,47 @@ mod tests {
         assert_eq!(n.load(Ordering::SeqCst), 1);
     }
 
+    /// The folders the app really uses (`socket_dirs`, from the real temporary folder) hold a
+    /// socket whatever the profile's path: on macOS the temporary folder is too deep for one, and
+    /// the last folder, `/tmp`'s, is the one that takes it.
+    #[test]
+    fn the_real_socket_folders_take_a_socket_for_a_long_profile_path() {
+        let t = temp();
+        let dir = t.0.join("x".repeat(120)).join("instance");
+        let i = first(&dir);
+        let n = Arc::new(AtomicUsize::new(0));
+        let c = n.clone();
+        i.listen(&socket_dirs(), move || {
+            c.fetch_add(1, Ordering::SeqCst);
+            true
+        })
+        .unwrap();
+        let sock = socket_of(&i);
+        assert!(
+            sock.as_os_str().len() <= MAX_SOCKET_PATH,
+            "{}",
+            sock.display()
+        );
+        assert!(
+            sock.parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("pluxy-app"),
+            "{}",
+            sock.display()
+        );
+        assert!(matches!(
+            start(&dir, Duration::from_secs(5)).unwrap(),
+            Start::Raised
+        ));
+        assert_eq!(n.load(Ordering::SeqCst), 1);
+        drop(i);
+        assert!(!sock.exists());
+    }
+
     /// When the first app has nowhere to listen, a later launch says so at once instead of
     /// waiting out its bound.
     #[test]
@@ -1322,7 +1334,13 @@ mod tests {
             };
             if r != 0 {
                 let e = io::Error::last_os_error();
-                assert_eq!(e.kind(), io::ErrorKind::WouldBlock, "{e}");
+                // A full queue refuses a connection: with WouldBlock on Linux, ConnectionRefused
+                // on macOS.
+                #[cfg(target_os = "macos")]
+                let full = io::ErrorKind::ConnectionRefused;
+                #[cfg(not(target_os = "macos"))]
+                let full = io::ErrorKind::WouldBlock;
+                assert_eq!(e.kind(), full, "{e}");
                 return held;
             }
             held.push(fd);

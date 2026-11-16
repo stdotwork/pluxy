@@ -224,9 +224,8 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 	if tlsConfig != nil {
 		scheme = "https"
 	}
-	fmt.Fprintf(os.Stderr, "pluxy: listening on %s://%s\n", scheme, ln.Addr())
-	fmt.Fprintf(os.Stderr, "pluxy: extension pages on http://%s\n", pagesLn.Addr())
-
+	// Signals are handled before core says where it listens: whatever started it may ask it to
+	// stop (or reload) as soon as it has said so, and must find it draining, not killed.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if watch > 0 {
@@ -240,6 +239,9 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 			_ = c.Reload("SIGHUP") // a failure is logged and shown in status
 		}
 	}()
+
+	fmt.Fprintf(os.Stderr, "pluxy: listening on %s://%s\n", scheme, ln.Addr())
+	fmt.Fprintf(os.Stderr, "pluxy: extension pages on http://%s\n", pagesLn.Addr())
 
 	errc := make(chan error, 2)
 	go func() {

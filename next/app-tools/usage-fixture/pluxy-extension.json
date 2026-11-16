@@ -7,8 +7,11 @@
     "tier": "native",
     "host_versions": [0],
     "programs": {
+      "darwin/amd64": "bin/usage-fixture",
+      "darwin/arm64": "bin/usage-fixture",
       "linux/amd64": "bin/usage-fixture",
-      "linux/arm64": "bin/usage-fixture"
+      "linux/arm64": "bin/usage-fixture",
+      "windows/amd64": "bin/usage-fixture.exe"
     },
     "operations": [
       {
