@@ -9,8 +9,11 @@
       0
     ],
     "programs": {
+      "darwin/amd64": "bin/fixture-writer",
+      "darwin/arm64": "bin/fixture-writer",
       "linux/amd64": "bin/fixture-writer",
-      "linux/arm64": "bin/fixture-writer"
+      "linux/arm64": "bin/fixture-writer",
+      "windows/amd64": "bin/fixture-writer.exe"
     },
     "operations": [
       {

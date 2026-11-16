@@ -500,14 +500,17 @@ dependencies = [
 name = "pluxy-transactions"
 version = "0.1.0"
 dependencies = [
+ "cap-primitives",
  "cap-std",
  "getrandom",
  "libc",
+ "pluxy-files",
  "pluxy-program",
  "saphyr",
  "serde_json",
  "sha2",
  "toml_edit",
+ "windows-sys 0.61.2",
  "yaml-edit",
 ]
 
