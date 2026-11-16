@@ -1,13 +1,14 @@
-//! The program served as the app runs it, over pipes: on Linux it answers; on any other system it
-//! refuses every operation as unsupported.
+//! The program served as the app runs it, over pipes: it answers on Linux, Windows and macOS, with
+//! each system's terminals, and on Windows and macOS refuses a terminal launch with standard input
+//! before it asks the host.
 
 use super::Execution;
 use pluxy_program::{read_frame, serve, write_frame, Description, Identity, MAX_INBOUND};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::Arc;
 
-#[test]
-fn every_operation_is_refused_off_linux_and_answered_on_linux() {
+/// The replies to calls, served as the app runs the program.
+fn served(calls: &[Value]) -> Vec<Value> {
     let (in_r, mut in_w) = std::io::pipe().unwrap();
     let (mut out_r, out_w) = std::io::pipe().unwrap();
     let description =
@@ -19,19 +20,56 @@ fn every_operation_is_refused_off_linux_and_answered_on_linux() {
     let served =
         std::thread::spawn(move || serve(in_r, out_w, &identity, description, Arc::new(Execution)));
     assert_eq!(read_frame(&mut out_r).unwrap().unwrap()["type"], "hello");
-    let call = json!({"type": "call", "id": "c-1", "op": "terminals",
-        "input": {"search_path": []}});
-    write_frame(&mut in_w, &call, MAX_INBOUND).unwrap();
-    let reply = read_frame(&mut out_r).unwrap().unwrap();
+    let replies = calls
+        .iter()
+        .map(|c| {
+            write_frame(&mut in_w, c, MAX_INBOUND).unwrap();
+            read_frame(&mut out_r).unwrap().unwrap()
+        })
+        .collect();
     drop(in_w);
     served.join().unwrap().unwrap();
-    if cfg!(target_os = "linux") {
-        assert_eq!(reply["type"], "result", "{reply}");
+    replies
+}
+
+#[test]
+fn the_terminals_are_this_systems() {
+    let call = json!({"type": "call", "id": "c-1", "op": "terminals",
+        "input": {"search_path": []}});
+    let reply = &served(&[call])[0];
+    assert_eq!(reply["type"], "result", "{reply}");
+    let ids: Vec<&str> = reply["output"]["terminals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap())
+        .collect();
+    let want: &[&str] = if cfg!(windows) {
+        &["automatic", "powershell", "cmd", "console"]
+    } else if cfg!(target_os = "macos") {
+        &["automatic", "terminal"]
     } else {
-        assert_eq!(
-            reply,
-            json!({"type": "error", "id": "c-1", "error": {"code": "unsupported",
-                "message": "pluxy/execution runs on Linux only for now"}})
-        );
-    }
+        // Linux's are those on the search path: none here.
+        &["automatic"]
+    };
+    assert_eq!(ids, want);
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn a_terminal_launch_with_standard_input_is_refused_before_the_host_is_asked() {
+    let me = super::recipe::os::this_program().unwrap();
+    let call = json!({"type": "call", "id": "c-1", "op": "launch", "input": {
+        "executable": me, "argv": ["terminal", "--with", "automatic", "--", me],
+        "cwd": std::env::temp_dir(), "stdin": "key"}});
+    let reply = &served(&[call])[0];
+    assert_eq!(reply["type"], "error", "{reply}");
+    assert_eq!(reply["error"]["code"], "invalid_request", "{reply}");
+    assert!(
+        reply["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no standard input"),
+        "{reply}"
+    );
 }

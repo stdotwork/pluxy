@@ -10,9 +10,24 @@ publish.workspace = true
 pluxy-program = { path = "../lib/program" }
 serde_json = "1"
 
-# The launch checks are Linux's for now (execution refuses every operation elsewhere).
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "=0.2.191"
+
+# Windows' and macOS' launch checks and private folders.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+pluxy-files = { path = "../lib/files" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
+  "Win32_System_Console",
+  "Win32_System_Registry",
+  "Win32_System_SystemInformation",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [features]
 # For the native test only (next/app/native/run.ts): an open launch also takes its opener from the

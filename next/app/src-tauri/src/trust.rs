@@ -215,7 +215,7 @@ pub fn write_test_marker(home: &Path) -> Result<String, String> {
     let marker = Marker {
         nonce: nonce.clone(),
         format: 1,
-        home: home.to_string_lossy().into(),
+        home: shown(&home),
         purpose: "pluxy-artifact-test-trust".into(),
     };
     let mut options = fs::OpenOptions::new();
@@ -231,7 +231,6 @@ pub fn write_test_marker(home: &Path) -> Result<String, String> {
 }
 #[cfg(feature = "artifact-test-trust")]
 fn check_profile(home: &Path) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
     let real = home.canonicalize().map_err(|e| e.to_string())?;
     let process_home = std::env::var_os("HOME").ok_or("test trust requires HOME")?;
     if std::path::PathBuf::from(process_home)
@@ -241,6 +240,24 @@ fn check_profile(home: &Path) -> Result<(), String> {
     {
         return Err("test trust profile must be the process HOME".into());
     }
+    private_profile(home)?;
+    let marker: Marker = serde_json::from_slice(&read_bounded(&home.join(MARKER_FILE))?)
+        .map_err(|e| e.to_string())?;
+    if marker.format != 1
+        || marker.home != shown(&real)
+        || marker.purpose != "pluxy-artifact-test-trust"
+        || crate::artifact::decode_hex::<32>(&marker.nonce).is_err()
+        || std::env::var("PLUXY_TEST_TRUST_NONCE").as_deref() != Ok(marker.nonce.as_str())
+    {
+        return Err("test trust profile marker mismatch".into());
+    }
+    Ok(())
+}
+/// The test HOME is a folder of this user's that no one else can use, and the profile's files in
+/// it are this user's plain files no one else can change.
+#[cfg(all(feature = "artifact-test-trust", unix))]
+fn private_profile(home: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
     let meta = fs::symlink_metadata(home).map_err(|e| e.to_string())?;
     if !meta.is_dir() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
         return Err("test HOME must be a private owned directory".into());
@@ -253,17 +270,30 @@ fn check_profile(home: &Path) -> Result<(), String> {
             );
         }
     }
-    let marker: Marker = serde_json::from_slice(&read_bounded(&home.join(MARKER_FILE))?)
-        .map_err(|e| e.to_string())?;
-    if marker.format != 1
-        || marker.home != real.to_string_lossy()
-        || marker.purpose != "pluxy-artifact-test-trust"
-        || crate::artifact::decode_hex::<32>(&marker.nonce).is_err()
-        || std::env::var("PLUXY_TEST_TRUST_NONCE").as_deref() != Ok(marker.nonce.as_str())
-    {
-        return Err("test trust profile marker mismatch".into());
+    Ok(())
+}
+/// The same rule on Windows, read from owners and access lists (`win_acl`).
+#[cfg(all(feature = "artifact-test-trust", windows))]
+fn private_profile(home: &Path) -> Result<(), String> {
+    use crate::win_acl::{check, Others};
+    check(home, true, Others::None)
+        .map_err(|e| format!("test HOME must be a private owned directory ({e})"))?;
+    for name in [MARKER_FILE, PROFILE_FILE] {
+        check(&home.join(name), false, Others::Read).map_err(|e| {
+            format!("test trust files must be owned regular files, not writable by others ({e})")
+        })?;
     }
     Ok(())
+}
+/// A canonical path as the marker records it: on Windows, a drive path without the `\\?\`
+/// prefix canonicalize adds (`\\?\C:\..` is shown as `C:\..`), as the runner writes it.
+#[cfg(any(debug_assertions, feature = "artifact-test-trust"))]
+fn shown(real: &Path) -> String {
+    let text = real.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => text.into_owned(),
+    }
 }
 pub(crate) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
     use std::io::Read;

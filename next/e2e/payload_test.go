@@ -276,9 +276,10 @@ payload:
 // removed (its filter runs after its default-raw). No notice calls payload unsupported.
 func TestPayloadExampleConfigYAML(t *testing.T) {
 	up := newPayloadUpstream(t, false)
-	cfg := `
+	cfg := func(port int) []byte {
+		return []byte(`
 host: 127.0.0.1
-port: ` + strconv.Itoa(freePort(t)) + `
+port: ` + strconv.Itoa(port) + `
 access:
   api-keys:
     - "` + clientKey + `"
@@ -304,17 +305,15 @@ api-keys:
         - name: gemini-2.5-pro
       keys:
         - api-key: ` + upstreamKey + `
-requests:` + strings.ReplaceAll(examplePayload, "\n", "\n  ")
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
-		t.Fatal(err)
+requests:` + strings.ReplaceAll(examplePayload, "\n", "\n  "))
 	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
 	bundled := bundledRegistry(t, map[string]string{
 		"pluxy/codex":  filepath.Join("codex", "codex"),
 		"pluxy/claude": filepath.Join("claude", "claude"),
 		"pluxy/gemini": filepath.Join("gemini", "gemini"),
 	})
-	base, logs := runCoreFile(t, path, "-bundled", bundled)
+	base, _, logs := startOnFreePort(t, filepath.Join(binDir, "pluxy"), path, cfg, "-bundled", bundled)
 	logs.waitFor(t, "config revision 1 active")
 	logs.mu.Lock()
 	for _, line := range logs.lines {

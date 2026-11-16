@@ -299,6 +299,22 @@ const TEST_PRODUCT = "pluxy Test";
 const commands = [
   ...readFileSync(join(tauri, "src", "command_names.rs"), "utf8").matchAll(/^\s+"(\w+)",$/gm),
 ].map((m) => m[1] as string);
+/** Every command of the plugins the build registers, from the ACL manifests Tauri's build
+ * writes (as lib.rs plugin_commands reads them); read once the app is built. */
+function pluginCommands(): string[] {
+  const manifests = JSON.parse(readFileSync(join(tauri, "gen", "schemas", "acl-manifests.json"), "utf8"));
+  const all = new Set<string>();
+  for (const [plugin, manifest] of Object.entries<{
+    permissions?: Record<string, { commands?: { allow?: string[]; deny?: string[] } }>;
+  }>(manifests)) {
+    if (plugin === "__app-acl__") continue;
+    const name = plugin.replace(/^core:/, "");
+    for (const p of Object.values(manifest.permissions ?? {}))
+      for (const c of [...(p.commands?.allow ?? []), ...(p.commands?.deny ?? [])])
+        all.add(`plugin:${name}|${c}`);
+  }
+  return [...all];
+}
 const PAGE = "ext/test/probe/probe";
 /** Tauri's command check refusing a call (debug builds say where; release builds "by ACL"). */
 const REFUSED = /not allowed( on window|\. Permissions associated| by ACL)/;
@@ -1948,7 +1964,10 @@ async function runApp(
       `the page webview after the window shrank: ${JSON.stringify(allocation)}`,
     );
     console.log(`${mode} page_allocation ${JSON.stringify(allocation)}`);
-    for (const cmd of commands) check(page?.calls[cmd], `the page webview's probe did not try ${cmd}`);
+    const plugins = pluginCommands();
+    check(plugins.length > 0, "no plugin commands in Tauri's ACL manifests");
+    for (const cmd of [...commands, ...plugins])
+      check(page?.calls[cmd], `the page webview's probe did not try ${cmd}`);
     for (const [cmd, c] of Object.entries(page?.calls ?? {})) {
       check(!c.ok && REFUSED.test(c.detail), `${cmd} from the page webview: ${JSON.stringify(c)}`);
     }
@@ -1965,6 +1984,49 @@ async function runApp(
       const fine = r.status === "blocked" || (r.status === "attempted" && what === "native message handler");
       check(fine, `from the page's frame, "${what}" ${r.status}: ${r.detail}`);
     }
+
+    // The frame's calls through a Tauri bridge of its own: it has none, and none succeeds.
+    const invoked = steps.get("frame_invoke") as Probe | undefined;
+    check(invoked?.internals === false, `the page's frame has a Tauri bridge: ${JSON.stringify(invoked)}`);
+    for (const cmd of [...commands, ...plugins])
+      check(invoked?.calls?.[cmd], `the page's frame did not try ${cmd}`);
+    for (const [cmd, c] of Object.entries(invoked?.calls ?? {}))
+      check(!c.ok, `${cmd} from the page's frame: ${JSON.stringify(c)}`);
+
+    // The frame's navigations off its site, each from a page of its own (native_test.rs
+    // frame_offsite): each stopped where the evidence shows, refused by the app's navigation
+    // handler or first by the app document's frame-src; none allowed, nothing reaching the page
+    // scheme's probe address, the frame still there and the channel open.
+    type OffsiteTry = {
+      url: string;
+      error?: unknown;
+      stopped?: string | null;
+      refused?: boolean;
+      allowed?: unknown[];
+      replaced?: unknown[];
+      stayed?: boolean;
+      open?: boolean;
+    };
+    const offsite = steps.get("frame_offsite") as { tried?: OffsiteTry[]; probe_hits?: number } | undefined;
+    check(
+      offsite?.tried?.length === 4,
+      `the page's frame did not try to leave its site: ${JSON.stringify(offsite)}`,
+    );
+    check(offsite?.probe_hits === 0, `an off-site try reached the page scheme: ${JSON.stringify(offsite)}`);
+    for (const t of offsite?.tried ?? []) {
+      const seen = JSON.stringify(t);
+      check(t.error == null, `the page's frame could not try ${t.url}: ${seen}`);
+      check(
+        (t.stopped === "hook" && t.refused === true) || t.stopped === "frame-src",
+        `nothing shows where ${t.url} stopped: ${seen}`,
+      );
+      check(t.allowed?.length === 0, `the app allowed the frame to ${t.url}: ${seen}`);
+      check(
+        t.stayed === true && t.open === true,
+        `the page's frame or channel did not hold for ${t.url}: ${seen}`,
+      );
+    }
+    console.log(`${label} frame_offsite ${JSON.stringify(offsite)}`);
 
     for (const [step, expected] of [
       ["ingress_site", { attempts: 1, arrivals: 0, blocked: true }],
