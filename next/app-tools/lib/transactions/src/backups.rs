@@ -17,7 +17,7 @@
 //! journal like any write (a file it did not have is removed), makes no automatic backup, leaves
 //! the set's record as it is and keeps the originals kept for restore.
 
-use crate::{b64, Pin, Selection, Target};
+use crate::{b64, Mode, Pin, Selection, Target};
 use crate::{check_set, fields, remember_all, Change, Transactions, MAX_TARGETS};
 use pluxy_program::{Call, Error};
 use serde_json::{json, Value};
@@ -160,7 +160,7 @@ impl Transactions<'_> {
                 f["backup"] = json!(id);
                 f["exists"] = json!(bytes.is_some());
                 f["size"] = json!(data.len());
-                f["mode"] = json!(mode);
+                f["mode"] = json!(mode.as_ref().map(Mode::to_json));
                 files.push(f);
             }
             Ok(())
@@ -322,7 +322,7 @@ impl Transactions<'_> {
                 None
             };
             // Used only for a file that must be made again: a file there keeps its own bits.
-            c.after_mode = f["mode"].as_u64().map(|m| m as u32);
+            c.after_mode = Mode::from_json(&f["mode"]);
         }
         self.run(crate::RESTORE_BACKUP, set, changes, None, written)
             .map(|changed| json!({"outcome": "restored", "changed": changed}))
