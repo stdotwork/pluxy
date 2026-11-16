@@ -8,3 +8,5 @@ export function appUpdateIndicatorState(
   if (processing) return 'processing';
   return appHasUpdate || coreHasUpdate ? 'available' : null;
 }
+
+// merge-queue scratch B: never merged to main
