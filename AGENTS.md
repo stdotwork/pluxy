@@ -178,7 +178,7 @@ the maintainers' own machines instead:
 - `PLUXY_WINDOWS_RUNNER` takes the Windows leg of the `tools` job in
   `next-app-tools-platforms.yml`. The `app` job in `next-app-platforms.yml` (its registry tests
   only run on GitHub's runners), macOS jobs, the `native` job in `next-app-platforms.yml` and the
-  release workflows always stay on GitHub's runners.
+  workflows a tag starts always stay on GitHub's runners.
 
 Each variable holds a runner label as JSON, for example `"self-hosted"` or
 `["self-hosted", "linux"]`. When a variable is not set, its jobs run on the GitHub runner they
