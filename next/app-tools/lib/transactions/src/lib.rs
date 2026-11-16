@@ -196,10 +196,9 @@ pub struct Transactions<'a> {
 
 impl<'a> Transactions<'a> {
     pub fn new(vault: &'a dyn Vault, data: impl Into<PathBuf>) -> Transactions<'a> {
-        Transactions {
-            vault,
-            data: data.into(),
-        }
+        // Without trailing separators: `link/` would make the data folder's checks follow a link.
+        let data: PathBuf = data.into().components().collect();
+        Transactions { vault, data }
     }
 
     // ---- state file

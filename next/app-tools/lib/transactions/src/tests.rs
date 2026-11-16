@@ -1855,3 +1855,31 @@ fn in_wsl_recovery_does_not_touch_a_journalled_target_now_on_a_windows_drive() {
         .is_ok()
     );
 }
+
+#[test]
+fn a_link_where_the_data_folder_goes_is_refused_with_a_trailing_slash_too() {
+    let t = Tmp::new();
+    std::fs::create_dir(t.at("elsewhere")).unwrap();
+    std::os::unix::fs::symlink(t.at("elsewhere"), t.at("data")).unwrap();
+    for data in [
+        format!("{}/", t.at("data").display()),
+        format!("{}//", t.at("data").display()),
+    ] {
+        let mem = Mem::default();
+        let e = Transactions::new(&mem, PathBuf::from(&data))
+            .status()
+            .unwrap_err();
+        assert!(
+            e.message.contains("not a folder of this user's"),
+            "{data}: {e}"
+        );
+    }
+    // A real folder named with a trailing slash still works.
+    std::fs::create_dir(t.at("real")).unwrap();
+    let mem = Mem::default();
+    let data = PathBuf::from(format!("{}/", t.at("real").display()));
+    assert_eq!(
+        Transactions::new(&mem, data).status().unwrap()["sets"],
+        json!({})
+    );
+}
