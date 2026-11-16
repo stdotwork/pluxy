@@ -214,7 +214,7 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Reverse proxy ("External access") | Dropped | Core serves TLS itself, so a second forwarder in the app is not needed | `listen` and the TLS settings in core's config |
 | Follow system proxy | Dropped | Core sends provider credentials through a proxy only when told to, so it does not read the system's or the environment's; set `proxy_url` once | `proxy_url` in core's config, or on an account's Edit form |
 | Browser choice for login links | Dropped | The sign-in link is shown, and can be copied or opened in any browser the person chooses | — |
-| Codex "Allow parallel tool calls" in the model catalog editor | Dropped | The new catalog editor has no such field | — |
+| Codex "Allow parallel tool calls" in the model catalog editor | Dropped | Codex no longer reads it: `supports_parallel_tool_calls` is not in Codex's model information, so the setting would change nothing | — |
 | Windows title bar and window materials | Dropped | Decoration with per-version rules that needs native code | — |
 | Thinking and Fast aliases ("Model Aliases") | Deferred | The same effect exists in config: a thinking suffix such as `gpt-5(high)`, a payload rule, or an account's model alias; no form yet | Core's config, in the Source tab |
 | Open-folder buttons | Deferred | Small value, and a new native action | — |
