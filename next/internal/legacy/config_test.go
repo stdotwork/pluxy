@@ -554,6 +554,124 @@ claude-api-key:
 	}`)
 }
 
+// A text setting written as a scalar YAML reads as something else (a number in any base, an
+// exponent, infinity, true, a date, a number too big for 64 bits) is its text as written, as
+// today's core's typed decoder keeps it: its loader (config.LoadConfigOptional) reads each of
+// these into its string fields unchanged.
+func TestTextKeptAsWritten(t *testing.T) {
+	for _, s := range []string{
+		"0123", "1e5", "0x1F", "0o17", "0b101", ".inf", ".NaN", "true", "False", "12:30", "1_000", "+12", "1.0", "-0",
+		"2001-12-14", "9223372036854775808", "123456789012345678901234567890",
+	} {
+		t.Run(s, func(t *testing.T) {
+			r := translate(t, `
+access:
+  api-keys:
+    - `+s+`
+management:
+  secret-key: `+s+`
+oauth:
+  auth-dir: `+s+`
+  model-alias:
+    claude:
+      - name: `+s+`
+        alias: alias-1
+      - name: name-2
+        alias: `+s+`
+  excluded-models:
+    claude:
+      - `+s+`
+claude-api-key:
+  - api-key: `+s+`
+    prefix: `+s+`
+    base-url: `+s+`
+    headers:
+      X-A: `+s+`
+    models:
+      - name: `+s+`
+        alias: alias-4
+      - name: name-3
+        alias: `+s+`
+    excluded-models:
+      - `+s+`
+api-keys:
+  codex:
+    - name: `+s+`
+      base-url: https://codex.example.com
+      keys:
+        - api-key: `+s+`
+`)
+			lower := strings.ToLower(s)
+			want := map[string]any{
+				"listen": ":8317", "routing": map[string]any{"request_retry": 0},
+				"client_keys":    []any{s},
+				"management_key": s,
+				"extensions": map[string]any{
+					Claude: map[string]any{
+						"model_alias":     []any{map[string]any{"name": s, "alias": "alias-1"}, map[string]any{"name": "name-2", "alias": s}},
+						"excluded_models": []any{lower},
+						"accounts": []any{map[string]any{
+							"id": "claude-api-key-1", "credential": map[string]any{"kind": "api_key", "api_key": s},
+							"prefix": s, "settings": map[string]any{"base_url": s}, "headers": map[string]any{"X-A": s},
+							"models":          []any{map[string]any{"name": s, "alias": "alias-4"}, map[string]any{"name": "name-3", "alias": s}},
+							"excluded_models": []any{lower},
+						}},
+					},
+					Codex: map[string]any{"accounts": []any{map[string]any{
+						"id": AccountID(s), "credential": map[string]any{"kind": "api_key", "api_key": s},
+						"settings": map[string]any{"base_url": "https://codex.example.com"},
+					}}},
+				},
+			}
+			wb, err := json.Marshal(want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			equalJSON(t, r.Config, string(wb))
+			if r.AuthDir != s {
+				t.Errorf("AuthDir = %q, want %q", r.AuthDir, s)
+			}
+		})
+	}
+	// Null is no text, as in today's core: no key, so no account.
+	r := translate(t, "access: {api-keys: [k]}\nclaude-api-key:\n  - api-key: ~\n")
+	if _, ok := r.Config["extensions"]; ok {
+		t.Errorf("api-key: ~ made an account: %v", r.Config["extensions"])
+	}
+}
+
+// Aliases and merge keys read as yaml.v3 reads them, text kept as written through them: a key's
+// own field wins over a merged one, and an earlier mapping of a merged list over a later one. A
+// file yaml.v3 refuses (repeated keys, excessive aliasing) is refused.
+func TestAliasesAndMergeKeys(t *testing.T) {
+	r := translate(t, `
+x-first: &first {base-url: 0x1F, prefix: first}
+x-second: &second {base-url: second, prefix: second, proxy-url: "http://proxy.example:8080"}
+claude-api-key:
+  - <<: [*first, *second]
+    api-key: &k 0123
+    prefix: own
+access: {api-keys: [*k]}
+`)
+	equalJSON(t, r.Config, `{
+		"listen": ":8317", "routing": {"request_retry": 0},
+		"client_keys": ["0123"],
+		"extensions": {"pluxy/claude": {"accounts": [{"id": "claude-api-key-1", "credential": {"kind": "api_key", "api_key": "0123"},
+			"prefix": "own", "proxy_url": "http://proxy.example:8080", "settings": {"base_url": "0x1F"}}]}}
+	}`)
+	bomb := "a: &a [x, x, x, x, x, x, x, x, x, x]\n"
+	for i, prev := 1, "a"; i < 9; i++ {
+		name := string(rune('a' + i))
+		bomb += name + ": &" + name + " [" + strings.Repeat("*"+prev+", ", 9) + "*" + prev + "]\n"
+		prev = name
+	}
+	for _, y := range []string{"claude-api-key: [{api-key: 0123, api-key: 0124}]", bomb} {
+		if _, err := Translate([]byte(y)); err == nil {
+			t.Errorf("%.60q: no error", y)
+		}
+	}
+}
+
 // A key with no api-key (today's core serves an upstream that needs none) is not supported
 // yet: it adds no account and is named, and the rest of the file still loads.
 func TestKeysWithoutAPIKey(t *testing.T) {

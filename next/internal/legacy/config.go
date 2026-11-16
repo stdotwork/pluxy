@@ -347,14 +347,117 @@ var rules = map[string]rule{
 // tree is a decoded YAML mapping.
 type tree = map[string]any
 
+// literal is a scalar YAML reads as something other than text (a number, true or false, a
+// date): its value as yaml.v3 decodes it into any, and its text as written. Today's core
+// decodes its config into typed fields, so a text setting gets the text (api-key: 0123 is
+// "0123", not 83) and a number or true-or-false setting gets the value.
+type literal struct {
+	value any
+	text  string
+}
+
+// node decodes a YAML value as yaml.v3 decodes it into any, except that a scalar YAML reads
+// as something other than text is a literal. yaml.v3 itself resolves aliases and merge keys
+// and refuses repeated keys in each mapping.
+type node struct{ v any }
+
+func (d *node) UnmarshalYAML(n *yaml.Node) error {
+	switch {
+	case n.Kind == yaml.MappingNode && stringMap(n):
+		var m map[string]node
+		if err := n.Decode(&m); err != nil {
+			return err
+		}
+		t := make(tree, len(m))
+		for k, e := range m {
+			t[k] = e.v
+		}
+		d.v = t
+	case n.Kind == yaml.SequenceNode:
+		var list []node
+		if err := n.Decode(&list); err != nil {
+			return err
+		}
+		out := make([]any, len(list))
+		for i, e := range list {
+			out[i] = e.v
+		}
+		d.v = out
+	case n.Kind == yaml.ScalarNode:
+		var v any
+		if err := n.Decode(&v); err != nil {
+			return err
+		}
+		if _, isText := v.(string); isText || v == nil {
+			d.v = v
+		} else {
+			d.v = literal{value: v, text: n.Value}
+		}
+	default:
+		// A mapping with a key that is not text: as yaml.v3 decodes it into any (which the
+		// translation then refuses where it wants a mapping).
+		return n.Decode(&d.v)
+	}
+	return nil
+}
+
+// stringMap reports whether yaml.v3 decodes the mapping n into a map with text keys
+// (yaml.v3's isStringMap).
+func stringMap(n *yaml.Node) bool {
+	for i := 0; i < len(n.Content); i += 2 {
+		if t := n.Content[i].ShortTag(); t != "!!str" && t != "!!merge" {
+			return false
+		}
+	}
+	return true
+}
+
+// value returns v, or a literal's value.
+func value(v any) any {
+	if l, ok := v.(literal); ok {
+		return l.value
+	}
+	return v
+}
+
+// plain returns v with each literal below it replaced by its value: v as yaml.v3 decodes it
+// into any, for settings that go across as they are.
+func plain(v any) any {
+	switch v := v.(type) {
+	case literal:
+		return v.value
+	case tree:
+		out := make(tree, len(v))
+		for k, c := range v {
+			out[k] = plain(c)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, c := range v {
+			out[i] = plain(c)
+		}
+		return out
+	}
+	return v
+}
+
 // Translate turns the contents of a config.yaml written for today's core into this core's
 // config. It fails only where today's core would refuse the file too (it is not a mapping, a
 // key appears twice, config-version is not 8) or a value has the wrong type.
 func Translate(b []byte) (*Result, error) {
-	var root any
-	if err := yaml.Unmarshal(b, &root); err != nil {
+	// The first decode refuses what yaml.v3 refuses (repeated keys, an alias that contains
+	// itself, excessive aliasing) with its own errors, before the second, which decodes each
+	// mapping and list on its own and so does not see those limits.
+	var check any
+	if err := yaml.Unmarshal(b, &check); err != nil {
 		return nil, err
 	}
+	var doc node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	root := doc.v
 	t, ok := root.(tree)
 	if !ok {
 		if root == nil {
@@ -382,13 +485,13 @@ type translator struct {
 
 func (x *translator) run() error {
 	if v, ok := get(x.t, "config-version"); ok {
-		if n, isInt := v.(int); !isInt || n != 8 {
+		if n, isInt := value(v).(int); !isInt || n != 8 {
 			return errors.New("unsupported config-version (expected 8)")
 		}
 	}
 	for _, k := range newKeys {
 		if v, ok := x.t[k]; ok {
-			x.out[k] = v
+			x.out[k] = plain(v)
 			delete(x.t, k)
 		}
 	}
@@ -656,7 +759,7 @@ func (x *translator) options() error {
 	} else if on {
 		x.res.Import.InjectXSearch = true
 	}
-	switch v, _ := get(x.t, "multimedia.disable-image-generation"); v {
+	switch v, _ := get(x.t, "multimedia.disable-image-generation"); value(v) {
 	case nil, false, "false", "":
 	case true, "true":
 		x.res.Import.ImageGenerationTool = false
@@ -704,7 +807,7 @@ func (x *translator) options() error {
 		if _, isMap := rules.(tree); !isMap {
 			return errors.New("requests.payload must be a mapping")
 		}
-		x.out["payload"] = rules
+		x.out["payload"] = plain(rules)
 	}
 	return nil
 }
@@ -937,14 +1040,14 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 	key, _ := scalar(field(g, k, "api-key"), path)
 	a := map[string]any{"id": id, "credential": map[string]any{"kind": "api_key", "api_key": strings.TrimSpace(key)}}
 	if p := field(g, k, "priority"); p != nil {
-		n, ok := p.(int)
+		n, ok := value(p).(int)
 		if !ok {
 			return nil, fmt.Errorf("%s.priority must be a whole number", path)
 		}
 		a["priority"] = n
 	}
 	if d := field(g, k, "disable-cooling"); d != nil {
-		on, ok := d.(bool)
+		on, ok := value(d).(bool)
 		if !ok {
 			return nil, fmt.Errorf("%s.disable-cooling must be true or false", path)
 		}
@@ -956,7 +1059,7 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		rr = g["request-retry"]
 	}
 	if rr != nil {
-		n, ok := rr.(int)
+		n, ok := value(rr).(int)
 		if !ok {
 			return nil, fmt.Errorf("%s.request-retry must be a whole number", path)
 		}
@@ -965,7 +1068,7 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		}
 	}
 	if w := k["weight"]; w != nil {
-		n, ok := w.(int)
+		n, ok := value(w).(int)
 		if !ok || n < 0 || n > 1_000_000 {
 			return nil, fmt.Errorf("%s: weight must be a whole number from 0 to 1000000", path)
 		}
@@ -1418,7 +1521,7 @@ func rulesBelow(path string) bool {
 func switchedOff(m tree) bool {
 	for _, k := range []string{"enabled", "enable"} {
 		if v, ok := m[k]; ok {
-			return v != true
+			return value(v) != true
 		}
 	}
 	return false
@@ -1441,7 +1544,7 @@ func asksNothing(path string, v any) bool {
 	case []any:
 		return len(v) == 0
 	}
-	if d, ok := defaults[path]; ok && d == v {
+	if d, ok := defaults[path]; ok && d == value(v) {
 		return true
 	}
 	return isZero(v)
@@ -1468,7 +1571,7 @@ func lookup(path string) (rule, bool) {
 func display(path string) string { return strings.ReplaceAll(path, "[]", "") }
 
 func isZero(v any) bool {
-	switch v := v.(type) {
+	switch v := value(v).(type) {
 	case nil:
 		return true
 	case bool:
@@ -1561,18 +1664,10 @@ func merge(cur, old any) any {
 	return c
 }
 
+// str reads the text setting at path (see scalar).
 func str(t tree, path string) (string, error) {
-	v, ok := get(t, path)
-	if !ok || v == nil {
-		return "", nil
-	}
-	switch v := v.(type) {
-	case string:
-		return v, nil
-	case int:
-		return strconv.Itoa(v), nil
-	}
-	return "", fmt.Errorf("%s must be text", path)
+	v, _ := get(t, path)
+	return scalar(v, path)
 }
 
 func integer(t tree, path string) (int, error) {
@@ -1580,7 +1675,7 @@ func integer(t tree, path string) (int, error) {
 	if !ok || v == nil {
 		return 0, nil
 	}
-	switch v := v.(type) {
+	switch v := value(v).(type) {
 	case int:
 		return v, nil
 	case string:
@@ -1609,28 +1704,23 @@ func stringList(v any, path string) ([]string, error) {
 	return out, nil
 }
 
-// scalar reads a text setting as today's core's typed decoder does: a number written without
-// quotes is its digits.
-//
-// shortcut: the digits are Go's rendering of the decoded number, so an unquoted number YAML
-// reads differently from its text (a leading zero, an exponent) is not kept as written;
-// decode yaml.Node scalars when such keys turn up.
+// scalar reads a text setting as today's core's typed decoder does: a scalar is its text as
+// written, whatever YAML reads it as (api-key: 0123 is "0123", true is "true"), and absent or
+// null is empty.
 func scalar(v any, path string) (string, error) {
 	switch v := v.(type) {
 	case nil:
 		return "", nil
 	case string:
 		return v, nil
-	case int:
-		return strconv.Itoa(v), nil
-	case float64:
-		return strconv.FormatFloat(v, 'f', -1, 64), nil
+	case literal:
+		return v.text, nil
 	}
 	return "", fmt.Errorf("%s must be text", path)
 }
 
-// headers reads a headers mapping as today's core does (upheader.Import): each value is text,
-// a number or true or false, written as text.
+// headers reads a headers mapping as today's core does (upheader.Import): each value is a
+// scalar, read as its text (see scalar).
 func headers(v any, path string) (map[string]string, []string, error) {
 	if v == nil {
 		return nil, nil, nil
@@ -1641,7 +1731,7 @@ func headers(v any, path string) (map[string]string, []string, error) {
 	}
 	text := map[string]string{}
 	for k, val := range m {
-		s, err := headerText(val, path+"."+k)
+		s, err := scalar(val, path+"."+k)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1654,25 +1744,21 @@ func headers(v any, path string) (map[string]string, []string, error) {
 	return h, dynamic, nil
 }
 
-// headerText returns a header value, as YAML decodes it, as text: text, a number, or true or false.
-func headerText(v any, path string) (string, error) {
-	if b, isBool := v.(bool); isBool {
-		return strconv.FormatBool(b), nil
+// HeaderText returns a header value of a provider section of a config.yaml as the header core
+// sends: its text as written, without the spaces around it (upheader.Import). ok is false for
+// a value core refuses.
+func HeaderText(n *yaml.Node) (text string, ok bool) {
+	var d node
+	if n.Decode(&d) != nil {
+		return "", false
 	}
-	return scalar(v, path)
-}
-
-// HeaderText returns a header value of a provider section of a config.yaml, as YAML decodes it,
-// as the header core sends: written as text, without the spaces around it (upheader.Import).
-// ok is false for a value core refuses.
-func HeaderText(v any) (text string, ok bool) {
-	s, err := headerText(v, "")
+	s, err := scalar(d.v, "")
 	return strings.TrimSpace(s), err == nil
 }
 
 // boolean_ reads a true or false setting; absent is false.
 func boolean_(v any, path string) (bool, error) {
-	switch v := v.(type) {
+	switch v := value(v).(type) {
 	case nil:
 		return false, nil
 	case bool:
