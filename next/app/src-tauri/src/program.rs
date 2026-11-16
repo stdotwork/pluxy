@@ -68,6 +68,7 @@
 //! (`Host::set_spawner`, `spawn.rs`), on a thread of their own; their IDs count among its own calls.
 //! Its `files` frames go to the host's save service (`Host::set_saver`, `savefile.rs`) the same way.
 
+use crate::managed::{start_when_free, BUSY_PAUSE};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -2018,7 +2019,7 @@ fn supervise(
     program: std::fs::File,
     spawned: Sender<Result<(), String>>,
 ) {
-    let child = cmd.spawn();
+    let child = start_when_free(BUSY_PAUSE, || cmd.spawn());
     drop(program);
     let mut child: Child = match child {
         Ok(c) => c,

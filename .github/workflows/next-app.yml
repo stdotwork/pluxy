@@ -1,11 +1,10 @@
 name: Next app
 
 on:
+  # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
+  # its paths below are touched.
+  workflow_call:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'next/**'
-      - '.github/workflows/next-app.yml'
   push:
     branches:
       - main
@@ -14,7 +13,9 @@ on:
       - '.github/workflows/next-app.yml'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A literal name: called from ci.yml, github.workflow is the caller's name, the same for every
+  # workflow it calls.
+  group: next-app-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -29,10 +30,12 @@ jobs:
   # format, clippy and tests, and the app tools.
   checks:
     # Pinned: the package names below are Ubuntu 24.04's.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Check the runner is Ubuntu 24.04
         working-directory: .
         run: |
@@ -53,12 +56,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: next/go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: next/go.mod
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.3'
+          no-cache: ${{ runner.environment != 'github-hosted' }}
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.97.0
         with:
@@ -123,7 +127,9 @@ jobs:
   # times that for the sessions still being added.
   native:
     # Pinned: the package names below are Ubuntu 24.04's, and so are the file paths the native
-    # test starts services from (next/app/native/services.ts).
+    # test starts services from (next/app/native/services.ts). Always on GitHub's runners, never
+    # PLUXY_LINUX_RUNNER: the document portal needs /dev/fuse, which the maintainers' runner
+    # containers don't get (FUSE in a container needs extra privilege).
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -132,6 +138,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Check the runner is Ubuntu 24.04
         working-directory: .
         run: |
@@ -156,12 +164,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: next/go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: next/go.mod
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.3'
+          no-cache: ${{ runner.environment != 'github-hosted' }}
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.97.0
         with:
@@ -176,7 +185,7 @@ jobs:
           # release shard builds everything the others do and the release app too, so it alone
           # saves it.
           shared-key: app
-          save-if: ${{ matrix.shard == 'release' }}
+          save-if: ${{ runner.environment == 'github-hosted' && matrix.shard == 'release' }}
       # The app builds the UI kit from next/ui, with its copy of preact.
       - name: UI kit install
         working-directory: next/ui
@@ -196,7 +205,7 @@ jobs:
   app:
     if: ${{ !cancelled() }}
     needs: [checks, native]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - name: Every job passed
         working-directory: .

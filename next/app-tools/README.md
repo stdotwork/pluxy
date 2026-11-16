@@ -12,13 +12,18 @@ cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi, usage-opencode)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
 cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup, execution, omp-setup, opencode, grok-setup, hermes-setup and pi-setup
+cargo build --release --locked -p wsl           # pluxy/wsl, for Windows (bin/pluxy-wsl.exe)
 ```
 
-Platforms: every tool runs on Linux. The usage hub, the usage parsers and `codex-sessions` also
-build and are tested on Windows and macOS (`.github/workflows/next-app-tools-platforms.yml`), and
-their manifests name programs for `darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does
-not run native tools on those systems yet. `lib/transactions`, `claude-code`, `claude-desktop` and `codex-setup` are
-Linux only for now, and `execution` refuses every operation outside Linux.
+Platforms: every tool but `wsl` runs on Linux. The usage hub, the usage parsers,
+`codex-sessions` and `execution` also build and are tested on Windows and macOS
+(`.github/workflows/next-app-tools-platforms.yml`), and their manifests name programs for
+`darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does not run native tools on those
+systems yet. `wsl` is a Windows tool (`windows/amd64`, `windows/arm64`; on other systems it builds
+and answers every operation `unsupported`); that workflow's WSL jobs run it, and `lib/program` and
+`lib/transactions` built for Linux, against real WSL distributions. `lib/transactions`,
+`claude-code`, `claude-desktop`, `codex-setup`, `opencode`, `omp-setup`, `grok-setup`,
+`hermes-setup` and `pi-setup` are Linux only for now.
 
 ## `lib/files`
 
@@ -68,6 +73,7 @@ The program side of the contract, for any tool (`pluxy-program`):
 | `Error` | The contract's error object: `invalid_request`, `unsupported`, `not_found`, `unavailable`, `internal`, `cancelled`, or any code. |
 | `read_frame`, `write_frame` | The framing: a four-byte big-endian length and UTF-8 JSON; a program's frames are at most `MAX_FRAME` (1 MiB). |
 | `MAX_BATCH` | The largest batch a producer may send, 48 KiB of JSON. |
+| `environment` | `PLUXY_ENVIRONMENT`, which the host sets when it runs a package's Linux program in a WSL distribution: `wsl:<distribution>:<user>`. `Identity::from_env` (so `run`) then checks that `WSL_DISTRO_NAME` is that distribution and that the effective user ID's name in `/etc/passwd` is that user; otherwise the program stops before hello with `pluxy expected WSL <d>/<u>, this is <d'>/<u'>`, so a record of a distribution or user made again under the same name, or a routing mistake, runs nothing. Anywhere but Linux the variable is refused. |
 
 Each call runs on a thread of its own that ends with the call; the thread that reads stdin
 routes cancels, the answers to a call's own calls, vault and jobs frames, and a job's acks. An
@@ -160,7 +166,7 @@ journal store of its own. Linux.
 | Item | What it does |
 | --- | --- |
 | `Selection` | What the person selected: `File(path)`, a config file that may be a link (as stow makes), or `Root { root, path }`, a file inside a root folder that may be a link (as chezmoi can make), `path` being slash-separated parts inside it. |
-| `Transactions::new(vault, data)` | The operations for one call: `vault` is the `Call` (or any `Vault`), `data` the tool's data folder (`data_dir()`, `PLUXY_TOOL_DATA_DIR`), where the state file `transactions.json` (0600) keeps each set's targets and backup IDs, the originals kept for restore, and the journals left open. |
+| `Transactions::new(vault, data)` | The operations for one call: `vault` is the `Call` (or any `Vault`), `data` the tool's data folder (`data_dir()`, `PLUXY_TOOL_DATA_DIR`), where the state file `transactions.json` (0600) keeps each set's targets and backup IDs, the originals kept for restore, and the journals left open. A data folder that does not exist yet reads as an empty state, and the first write of the state file makes it (0700, with any missing folders above it), so a preview or status leaves nothing behind; in WSL the host cannot make it before the program starts. A link there, or a folder another user owns, is refused. |
 | `preview(set, selections)` | Resolves and pins each selection: `{"set", "targets": [<pin>], "applied", "edited"}`. A pin names the selected path, its link's text, the file it resolves to, the identities (device and inode) of the link, the root, the file's folder and the file, and the file's SHA-256. A link inside a selected root, a part that leaves it (`..`, `.`, empty) and anything but a regular file are refused. A read: it asks nothing, and it reports a file's existence and SHA-256 for any path, so a writer must not export it to other packages. |
 | `apply(set, pins, image, merge, written)` | Writes each pinned target with what `image` makes of its bytes now, and records `set` as applied: its original images (with the person's edits since the last apply promoted into them by `merge`) and its applied images, as vault backups. A record none of whose selections still resolves to its target (a link pointed elsewhere) is replaced, its originals kept for restore. |
 | `clear(set, pins, merge, written)` | Each target becomes what `merge` makes of its original, its applied image and its bytes now: the writer's untouched values go, the person's edits stay. A pin of the recorded target file itself (named directly) reaches a record made through a link that now points elsewhere. |
@@ -177,6 +183,7 @@ journal store of its own. Linux.
 | `backup_delete(set, id)` | Deletes version `id` from the state file and the vault. |
 | `backup_call(call, tx, set, leaves)`, `backup_operations(files)` | The backup browser's standard operations, which every writer exports with exactly these manifest entries (`files` targets per version) and serves with `backup_call`: `backup-list`, `backup-diff` (reads), `backup-create`, `backup-restore`, `backup-delete` (writes, each confirmed). The app's shared backup browser (`../app/src/backups.tsx`) calls them. |
 | `Leaves`, `json_leaves` | A writer's reading of its file into settings for a diff (path and value, in file order; None when it cannot read it), and the one for JSON files: objects by key, arrays and other values as one setting each. |
+| `toml` (feature `toml`), `yaml` (feature `yaml`) | The in-place editors of config files, shared by the setup tools, each behind its own cargo feature so a tool compiles only the parser it uses (both are off by default). `toml` (toml_edit, pinned) reads a file as a document that keeps its comments and formatting, sets a key where it stands (`set`, `table_mut`) and makes Clear's three-way merge into the file as it is now (`merge`, `leaves`); a tool gives it its own `parse` and the opening words of its refusals. `yaml` (saphyr and yaml-edit) reads a file as YAML 1.2 into a JSON value (`parse`), edits only the keys whose values differ through a lossless tree and reads the result again (`edit`), and is a `Merge` for Clear (`Yamls`); a tool gives it the program's name for the one refusal that names it. What a tool writes and refuses stays in the tool. |
 
 How a write goes:
 
@@ -214,6 +221,16 @@ How a write goes:
   otherwise puts back, from the backups, each file that holds the new bytes, leaving any file
   another program changed since (or whose backup is gone), its original kept for restore, and
   ends it rolled back. It never writes the new bytes again, and repeating it changes nothing more.
+
+In a WSL distribution (`PLUXY_ENVIRONMENT` set, see `lib/program`), a selection on a Windows drive is
+refused (`This file is on a Windows drive; set it up from Windows local.`) when it resolves, before
+anything is read, and so is a journalled target's folder or file at recovery. A path is on a Windows drive
+when the mount holding it in `/proc/self/mountinfo` is of type `drvfs`, `9p` or `virtiofs`, or is
+mounted directly in the folder WSL mounts drives in (the folder holding a one-letter drive mount,
+such as `/mnt`), as `/mnt/wsl` is. Checked are the selected path's folder, the folder of the file
+written and the file itself (a file can be a mount of its own), and at recovery the pinned folder
+and file. Without metadata, a drive keeps no owner-only
+permission bits, and Windows' own writer sets those files up.
 
 Other programs do not take part in these checks: a write between the last check and the rename,
 or after the final check, is not seen, and several files are journalled, not written atomically.
@@ -848,8 +865,8 @@ What `apply` writes, as `hermes model` does for a provider of the `providers:` m
   `api_key_env` there are removed (`key_env` would win over the entry's key). A `model:` written as
   plain text, the default model, becomes a mapping, as Hermes itself does. Everything else stays.
 
-The file is edited in place through a lossless YAML tree (yaml-edit; the same code as
-`omp-setup`): comments, key order, quoting and indentation stay, and only keys whose values change
+The file is edited in place through a lossless YAML tree (yaml-edit; the library's YAML
+editor, shared with `omp-setup`): comments, key order, quoting and indentation stay, and only keys whose values change
 are touched. It is read as YAML 1.2 (saphyr) and every edited file is read again and must hold
 exactly the intended value, else nothing is written. Hermes reads it with YAML 1.1 rules (ruamel),
 which take some plain words and numbers differently, so the key and the model pluxy writes are
@@ -1001,3 +1018,106 @@ A call from another package (a tool's import, or a page's) may prepare only an o
 terminal or direct preparation answers whether programs and folders exist, so only the app's own
 window asks for those.
 
+### On Windows and macOS
+
+There the execution program is also the terminal and the opener of the launches it prepares: the
+app runs it, as the confirmed launch, with arguments that name a launch mode, and it runs that
+mode instead of serving operations (as a tool it gets no arguments). A launch's `lifetime` and the
+host's checks are as on Linux.
+
+**Windows.** The terminals are `powershell` (PowerShell, Automatic's first), `cmd` (Command
+Prompt) and `console` (Console window). A terminal launch runs `<execution> terminal --with <kind>
+-- <program> <args>`, which the app starts in a new console: Windows shows it in the person's
+default terminal app (Windows Terminal, or the console host). The execution program runs the
+program there in the launch's folder and environment, leaving Ctrl+C to it, says how it ended,
+and then waits for Enter (`console`) or stays at a `cmd.exe /D` or `powershell.exe -NoLogo
+-NoProfile` prompt, both from the System32 folder Windows reports (never the launch's
+`SystemRoot`). There is no Windows Terminal kind:
+`wt.exe` splits its command line its own way, so the arguments confirmed would not be the ones
+it runs.
+
+A program is a PE image (`.exe` or `.com` starting with `MZ`), looked up as `<name>.com`,
+`.exe`, `.bat`, `.cmd` in each search path folder in turn. A batch file runs only as an npm, pnpm
+or Yarn command shim the execution program can read: it becomes what the shim runs, Node
+(`node.exe` beside the shim, else on the search path) with the shim's script and arguments, or
+the shim's own program; any other batch file is refused, since `cmd.exe` would read the
+arguments its own way. For the same reason `cmd.exe`, `wt.exe`, `conhost.exe` and the other
+programs that read their command line their own way start only with no arguments. The program (for a
+shim, what it runs) and the working folder are judged and confirmed by their final paths, links
+and short names resolved, so a link to `cmd.exe` is `cmd.exe`. Paths are shown
+and confirmed in their plain form (`C:\…`, not `\\?\C:\…`), and a path whose plain form would
+name another file (a name ending in a dot or a blank, a device name such as `NUL`) is refused.
+
+A direct launch may name a packaged app as `shell:AppsFolder\<AppUserModelID>` (such as the Codex
+app), with no arguments: `<execution> app -- <AppUserModelID>` starts it through the shell. An
+open launch runs `<execution> open -- <file>`, which opens the file with the app Windows has for
+its extension (`ShellExecuteExW`, verb `open`, the extension as its class, no dialog). The file
+must be `.txt`, `.json`, `.jsonl`, `.ndjson`, `.md` or `.log`, on a local drive, with no
+alternate data stream and a path shorter than 260 UTF-16 units, and some app must open its type:
+`prepare` checks that (the shell would report success and open nothing). Its folders must be real
+folders (no link, junction or other reparse point) writable by no one but the user, SYSTEM and
+Administrators.
+
+**macOS.** The terminal is Terminal (iTerm2 and Ghostty are not offered yet). A terminal launch
+runs `<execution> terminal --with terminal --app <Terminal.app> -- <program> <args>`. It makes a
+private folder in the per-user temporary folder with a Unix socket and a `.command` file, has
+Terminal open the file (`/usr/bin/open -a`), and hands the program, arguments, folder and
+environment over the socket to the first connection from this user; the file only runs
+`<execution> attach <socket>`, so nothing of the launch is written to a file or read by a shell.
+In the window, the program runs with the launch's environment and the window's own `TERM…`,
+`LC_TERMINAL…` and `PATH`. When macOS holds `open` back for 20 seconds (a quarantine or a
+permission prompt), the launch fails as blocked; when no window takes it within 60 seconds, as
+expired. A launch whose hand-over would be over 1 MiB (the program, arguments, folder and
+environment) is refused before Terminal opens.
+
+A direct launch may name an application bundle (`….app`) in `/Applications`, `~/Applications` or
+`/System/Applications`, with no arguments: it runs `/usr/bin/open -a <bundle>`. An open launch
+runs `/usr/bin/open <file>`, which opens the file in the app LaunchServices has for its type. The
+types are Windows' and Linux's, the file must carry no attribute that can choose another app
+(`com.apple.FinderInfo`, `com.apple.ResourceFork`, `com.apple.LaunchServices.OpenWith`), and
+LaunchServices must have an app for it.
+
+On both, an app launch carries nothing but the app (no environment, standard input, secret or
+managed lifetime), and a terminal launch takes no standard input: the execution program refuses
+either before the host is asked.
+
+## `wsl`
+
+`pluxy/wsl` (program `bin/pluxy-wsl.exe`, Windows only: on any other system every operation answers
+`unsupported`) tells pluxy's desktop app which WSL distributions and users there are, checks one,
+and prepares launches inside it. The app sets a client up in a distribution by running the client
+package's own Linux program there, through `wsl.exe`; this tool only reads. It writes nothing
+anywhere and never starts a launch. It runs only Windows' own `wsl.exe`, from System32 as
+`GetSystemDirectoryW` reports it: with no window, empty standard input, an environment of
+`SystemRoot`, `WINDIR` and `WSL_UTF8=1` only, its output read while it runs and capped, and a
+deadline after which it is ended through its own handle (10 seconds to list, 60 for a run inside a
+distribution, which may have to start). The call's cancel ends it too. WSL 1 sometimes refuses a
+launch with `0xd0000225` before anything runs; such a run is tried again, up to three times, two
+seconds apart, within the deadline. Inside a distribution it runs one fixed `sh -c` script per
+operation, with no login shell and no rc file; names reach a script only as `wsl.exe`'s `-d` and
+`-u` values or as the script's arguments.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `distros` | `read` | none | `distros`: each distribution's `name`, `default` (true for WSL's default) and `version` (1, 2 or null); `installed`: false when WSL is missing or not enabled, or no distribution pluxy can use is installed (no `wsl.exe` in System32; a listing that names none, as the `wsl.exe` on GitHub's windows-latest answers with no distribution; or `wsl.exe --list` failing with WSL's error code `WSL_E_DEFAULT_DISTRO_NOT_FOUND` or `WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED`; an old inbox `wsl.exe` of Windows 10 that prints no code answers `unavailable` instead). From `wsl.exe --list --quiet`, which starts no distribution, and the registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`), read only for the default mark and the version (the WSL 2 bit, `0x8`, of each distribution's `Flags`, as `wsl.exe --list --verbose` reports it; its `Version` value is the registration's format, not the WSL version) |
+| `users` | `read` | `distro` | `users`: root (last) and each person's account (user ID 1000 to 59999, a login shell, an absolute home), each with `name`, `uid`, `home`, `default`, `root`; `default`: the user the distribution starts as; `arch` (`amd64` or `arm64`); `wsl` (the version). Starts the distribution and reads `getent passwd` (else `/etc/passwd`) as its default user |
+| `check` | `read` | `distro`, `user` | As that user: `distro`, `user`, `uid`, `home`, `arch`, `wsl`; `drives`, each Windows drive mounted (`letter`, `path`, and `exec`: false on a `noexec` mount); `automount`, the folder WSL mounts drives in (that of drive C, with a trailing `/`; null with none). Refused when it ran as another user or in another distribution |
+| `prepare` | `read` | `distro`, `user`, `kind` (`terminal` or `direct`), `program` (a name found on the user's PATH as `wsl.exe --exec` gives it) or `override` (a full Linux path), `args`, `cwd` (a Linux folder; default the user's home) | `launch`, exactly `pluxy/execution`'s `launch` input: `executable` (System32's `wsl.exe`), `argv` (`-d <distro> -u <user> --cd <folder> --exec <program> <args>`), `cwd` (the person's home folder on Windows, from `HOME`) and `program`; and `kind` beside it, which the host applies before it calls execution (`terminal`: a console window of its own, no standard input, no managed lifetime) |
+
+Names are checked before `wsl.exe` runs: a distribution name as the old app accepted one (not
+empty, `.` or `..`; none of `\ / : * ? " < > |`, no control character, no trailing dot or space), at
+most 64 characters and not starting with `-`; Docker Desktop's `docker-desktop` and
+`docker-desktop-data` are hidden and refused; a user name is a POSIX portable name
+(`[a-z_][a-z0-9_-]*[$]?`, at most 32 bytes). A missing distribution or user is `not_found` (WSL 1
+reports a missing user as a connection error, so its message says the user was not found or could
+not be started). `prepare` finds the program and checks the folder inside the distribution as the
+user; a program that only a shell profile puts on the PATH (such as one nvm installs) is not found
+by name, and is given by its full path. The program it names is not pinned: it is found again when
+the launch starts.
+
+Tests: unit tests on every system (decoding UTF-16 and UTF-8 `wsl.exe` output, hidden and refused
+names, the users and mounts read, the `prepare` script run by `/bin/sh` on Linux and macOS);
+`tests/real_wsl.rs`, run by the platforms workflow's WSL job with `--ignored` against Windows' own
+`wsl.exe` and real distributions under WSL 2 and WSL 1, including the fixture writer's Linux program
+run in a distribution as the host runs one, its hello refused for another user or distribution.
+No test stands in for `wsl.exe`.
