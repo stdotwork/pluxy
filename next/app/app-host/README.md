@@ -168,8 +168,9 @@ reach.
 
 ## App program contract v0
 
-The Rust program host implements this contract on Linux; [The Linux host](#the-linux-host) says
-what it adds and what is still to come. It adds no provider operation and does not change
+The Rust program host implements this contract on Linux, Windows and macOS; [The Linux host](#the-linux-host)
+says what it adds and what is still to come, and [Windows and macOS](#windows-and-macos) how those
+differ. It adds no provider operation and does not change
 provider wire version 0.7. Start a verified absolute executable directly in its immutable
 package folder, with a cleared environment and only required platform values. Pass selected
 home/config/context explicitly; do not inherit shell credentials.
@@ -335,10 +336,24 @@ Still to come: deleting a tool's data folder from the Device page.
 
 ### Windows and macOS
 
-The host and the launch service (`program.rs`, `spawn.rs`) build and pass their tests on Windows
-and macOS, but the app does not start native tools there yet: enabling a package, its router and
-its confirmations are still Linux only. A tool that needs a data folder is refused there until
-the vault is. Every process the app starts goes through `src/owned/`, which is the only code in
+The app runs native tools on Windows and macOS as on Linux: enabling a package, its imports, the
+router, the program host, the launch service and the launcher (`program.rs`, `route.rs`,
+`spawn.rs`, `launcher.rs`) are built and wired there, under the rules of
+[The Linux host](#the-linux-host), with these differences:
+
+- On Windows a tool's `HOME` is the profile folder the person's clients use (`USERPROFILE`), and
+  it also gets `SystemRoot` (parts of Windows refuse to load without it), `APPDATA` and
+  `LOCALAPPDATA`, each as the app's own environment has it and only when it is a full path. Its
+  data folder is under the app's local data folder (`<app local data>/tools`), which does not
+  roam with the profile, made private by its access list as the vault's folders are.
+- On Windows an installed package's files and folders are read-only by their access lists: the
+  user and SYSTEM may read and run them, no one may write, delete or add to them, as 0444 and
+  0500 make them on Linux and macOS. A native release's program must be a `.exe` starting `MZ`
+  when it is installed.
+- Saving files (`files` frames, [Saving files](#saving-files)) stays Linux only: elsewhere the
+  host refuses them, as a host with no save service does.
+
+Every process the app starts goes through `src/owned/`, which is the only code in
 the app that signals or ends a process, and only one the app started and still holds: an unreaped
 child on Linux and macOS, the process handle and its job object on Windows. `owned_tests.rs`
 checks the sources for any other call that could end a process.
@@ -360,7 +375,7 @@ a WSL distribution.
 
 ## Calls between packages
 
-The Linux host routes every call of a native tool's operation, whoever makes it: the main window
+The host routes every call of a native tool's operation, whoever makes it: the main window
 (`program_call`), a page (its `native.call` method) or another native tool (a `call` frame on its
 pipe). Each call is checked against the catalog as it is at that moment, and the host, never the
 call, says who the caller is: the window, the page's webview and its package release, or the

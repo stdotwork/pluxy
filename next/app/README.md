@@ -317,14 +317,14 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_install` | Installs or updates a package from one of those registries |
 | `device_install_file` | Opens the native file chooser and installs or updates the package chosen there (Linux) |
 | `device_enable`, `device_remove`, `device_rollback` | Enables or disables (a native tool only through its native confirmation), removes, or rolls back a package on this device |
-| `device_imports` | Allows a curated web package's native imports, through a native confirmation, or revokes them (Linux) |
+| `device_imports` | Allows a curated web package's native imports, through a native confirmation, or revokes them |
 | `device_page_open` | Opens a webview for a page of a package on this device, at the address its catalog keeps |
 | `access_list` | The approved signers and every grant of Access |
 | `access_signer` | Opens a native confirmation to approve a device package's signer for its source |
 | `access_grant` | Opens the native file chooser for a package's declared resource, then a native confirmation, and keeps the grant |
 | `access_revoke` | Revokes a grant, answering once the reads under it have finished |
-| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given (Linux) |
-| `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, its vault journals, open and recently ended, or why they cannot be read, and its managed runtimes, running, ended or `unknown` (left running by a run of the app that did not stop them) (Linux) |
+| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given |
+| `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, its vault journals, open and recently ended, or why they cannot be read, and its managed runtimes, running, ended or `unknown` (left running by a run of the app that did not stop them) |
 | `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID (Linux) |
 | `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one (Linux) |
 | `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key (Linux) |
@@ -584,23 +584,24 @@ records that admission against the release, source, signer and key. Disabling, u
 back or removing it ends the admission, so a new release asks again. A native release replaces
 another only if it reads the state version the other writes.
 
-The program host (`src-tauri/src/program.rs`, Linux) runs an admitted tool only on demand: at its
+The program host (`src-tauri/src/program.rs`; on Linux, Windows and macOS) runs an admitted tool only on demand: at its
 first call from the window, from what `Catalog::admitted` returns then, after checking the
 admission, the root, the signature and every installed file again. It opens the program, checks
 its SHA-256 against the record and runs that opened file, in its package folder, with a cleared
-environment, only its three private pipes, a process group of its own and a parent-death signal,
-from a supervisor thread that stays until the tool has been reaped. Calls follow [app program
+environment, only its three private pipes, a process group of its own (on Windows a job object)
+and on Linux a parent-death signal, from a supervisor thread that stays until the tool has been reaped. Calls follow [app program
 contract v0](app-host/README.md#app-program-contract-v0), one at a time. When the last call
 ends, the tool stops after 30 seconds idle; closing the window cancels its calls, so their tools
 stop when idle. Any change to its package (disable, update, roll back, remove) and quitting the
 app stop it at once, and once the app is quitting no call starts a tool. Stopping closes its
 stdin, kills its whole process group after five seconds and reaps it: no process or thread of it
-is left. If the app itself dies, the tool gets SIGTERM and nothing kills its group, so a tool must
-end the processes it started when its input ends and on SIGTERM. Pages, including the tool's own,
+is left. If the app itself dies, the tool gets SIGTERM on Linux, sees its input close on macOS,
+and ends with its job on Windows ([Windows and macOS](app-host/README.md#windows-and-macos)), so
+a tool must end the processes it started when its input ends and on SIGTERM. Pages, including the tool's own,
 have no program command and no route to its pipes; they reach operations only through the router,
 below.
 
-Every call of a native tool's operation goes through the router (`src-tauri/src/route.rs`, Linux):
+Every call of a native tool's operation goes through the router (`src-tauri/src/route.rs`):
 from the window, from a page (its `native.call` method, answered in the page's own webview) and
 from another native tool (a call on its pipe). The router checks each call against the catalog at
 that moment: a tool calls only what it imports and its target exports, under an accepted export
@@ -1368,8 +1369,9 @@ The app's updater ([Application update](#application-update)) calls it.
 ## Limits
 
 - Device extensions: no production trust roots (so no curated source outside tests) or settings
-  yet, and native tools run on Linux only (5.11 or later: the program host needs
-  `close_range` with `CLOSE_RANGE_CLOEXEC`); a confirmed launch-class call is passed to its
+  yet, and native tools run on Linux (5.11 or later: the program host needs `close_range` with
+  `CLOSE_RANGE_CLOEXEC`), Windows and macOS, where a tool's `files` frames (saving a file) are
+  refused; a confirmed launch-class call is passed to its
   operation, and the app starts nothing itself yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
 - Vault: Linux only. Its storage is built and unit tested on Windows (in the local data folder,
@@ -1387,9 +1389,10 @@ The app's updater ([Application update](#application-update)) calls it.
   and macOS, CI builds the app's crate, runs clippy and the Rust tests, and runs those sessions
   (`.github/workflows/next-app-platforms.yml`). The dialogs session (`native/dialogs.ts`) runs the
   app in local mode against a test core, with the window's and page's command probes, the native
-  confirmations, key entry and key rotation. Starting native tools and launches stays Linux only
-  and refuses at run time. How the app starts, holds and stops processes there is built and tested
-  ([Windows and macOS](app-host/README.md#windows-and-macos)), and the app's own core starts on
+  confirmations, key entry and key rotation. The app starts native tools and launches there, and
+  how it starts, holds and stops processes is built and unit tested
+  ([Windows and macOS](app-host/README.md#windows-and-macos)), but no native session starts a
+  tool on those systems yet; and the app's own core starts on
   macOS; on Windows its core store does not build yet. On Windows the page document's address is
   `http://pluxy-page.localhost/`.
 - The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
