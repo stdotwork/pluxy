@@ -61,7 +61,7 @@ platform code of its own for them:
   plain string check the same on every platform.
 - `executable` says whether a path (a link followed) is a program someone may start by its path:
   on Linux and macOS a regular file with an execute bit, on Windows a regular file named `….exe` or
-  `….com`. `sync_dir` flushes a folder, so a rename in it lasts (on Windows it does nothing, as in
+  `….com` that starts with `MZ` (a PE image), as `execution` requires. `sync_dir` flushes a folder, so a rename in it lasts (on Windows it does nothing, as in
   `lib/transactions`).
 - `open_regular` opens a file for reading only if it is a regular file, checked on the open handle,
   without following a link: on Linux and macOS with `O_NOFOLLOW` and `O_NONBLOCK` (a FIFO is

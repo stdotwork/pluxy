@@ -244,22 +244,31 @@ pub fn take_lock(path: &Path) -> io::Result<Option<Lock>> {
 /// Whether path (a link followed) is a program someone may start by its path: on Linux and macOS
 /// a regular file with an execute permission bit; on Windows, which has no such bit and starts a
 /// file as a program by its name's extension, a regular file named `….exe` or `….com` (in any
-/// case).
+/// case) that is a PE image (starts with `MZ`), the rule the execution program launches by.
 pub fn executable(path: &Path) -> bool {
     let Ok(m) = fs::metadata(path) else {
         return false;
     };
+    if !m.is_file() {
+        return false;
+    }
     #[cfg(unix)]
-    let program = {
+    {
         use std::os::unix::fs::PermissionsExt;
         m.permissions().mode() & 0o111 != 0
-    };
+    }
     #[cfg(windows)]
-    let program = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("exe") || e.eq_ignore_ascii_case("com"));
-    m.is_file() && program
+    {
+        use std::io::Read;
+        let named = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("exe") || e.eq_ignore_ascii_case("com"));
+        let mut magic = [0u8; 2];
+        named
+            && File::open(path).is_ok_and(|mut f| f.read_exact(&mut magic).is_ok())
+            && magic == *b"MZ"
+    }
 }
 
 /// Flushes the folder path, so a rename or removal in it lasts. On Windows this does nothing: the

@@ -720,11 +720,17 @@ fn a_program_is_a_file_this_system_would_start_by_its_path() {
     }
     #[cfg(windows)]
     {
-        // The name's extension, in any case, and nothing else.
+        // A PE image (starting MZ) named by its extension, in any case, and nothing else.
         assert!(executable(&named("tool.exe")));
         assert!(executable(&named("tool.COM")));
         assert!(!executable(&named("tool.cmd")));
         assert!(!executable(&named("tool.exe.txt")));
+        // Named a program but not one: a script, an empty file, a single byte.
+        for (name, bytes) in [("script.exe", &b"#!/bin/sh"[..]), ("empty.exe", b""), ("short.com", b"M")] {
+            let p = dir.join(name);
+            fs::write(&p, bytes).unwrap();
+            assert!(!executable(&p), "{name}");
+        }
     }
     fs::remove_dir_all(dir).unwrap();
 }
