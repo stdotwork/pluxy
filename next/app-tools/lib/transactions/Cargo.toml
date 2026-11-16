@@ -13,6 +13,16 @@ pluxy-program = { path = "../program" }
 # Keys keep their order and numbers their digits in the files the library rewrites.
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 sha2 = "=0.10.9"
+# The in-place config editors, each behind its own feature so a tool compiles only the parser it uses.
+# feature `toml`: config.toml files, edited in place with comments, formatting and tables it does not know kept.
+toml_edit = { version = "=0.25.19", optional = true }
+# feature `yaml`: YAML files are read as YAML 1.2 and edited in place, keeping comments and formatting.
+saphyr = { version = "0.3.4", optional = true }
+yaml-edit = { version = "0.3.6", default-features = false, optional = true }
+
+[features]
+toml = ["dep:toml_edit"]
+yaml = ["dep:saphyr", "dep:yaml-edit"]
 
 [[example]]
 name = "fixture-writer"

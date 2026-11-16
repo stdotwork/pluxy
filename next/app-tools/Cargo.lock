@@ -128,7 +128,6 @@ dependencies = [
  "pluxy-program",
  "pluxy-transactions",
  "serde_json",
- "toml_edit",
 ]
 
 [[package]]
@@ -277,7 +276,6 @@ dependencies = [
  "pluxy-program",
  "pluxy-transactions",
  "serde_json",
- "toml_edit",
 ]
 
 [[package]]
@@ -310,9 +308,7 @@ version = "0.1.0"
 dependencies = [
  "pluxy-program",
  "pluxy-transactions",
- "saphyr",
  "serde_json",
- "yaml-edit",
 ]
 
 [[package]]
@@ -424,9 +420,7 @@ version = "0.1.0"
 dependencies = [
  "pluxy-program",
  "pluxy-transactions",
- "saphyr",
  "serde_json",
- "yaml-edit",
 ]
 
 [[package]]
@@ -509,8 +503,11 @@ dependencies = [
  "cap-std",
  "getrandom",
  "pluxy-program",
+ "saphyr",
  "serde_json",
  "sha2",
+ "toml_edit",
+ "yaml-edit",
 ]
 
 [[package]]
