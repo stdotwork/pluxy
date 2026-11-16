@@ -1440,12 +1440,14 @@ The app's updater ([Application update](#application-update)) calls it.
 - Access: Linux only (5.8 or later: grants record the `statx` mount ID); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test runs on Linux, except its dialogs session. On Windows and macOS, CI builds the
-  app's crate, runs clippy and the Rust tests, and runs `native/dialogs.ts`
-  (`.github/workflows/next-app-platforms.yml`): the app in local mode against a test core, with
-  the window's and page's command probes, the native confirmations, key entry and key rotation.
-  Starting native tools and launches stay Linux only and refuse at run time. How the app starts,
-  holds and stops processes there is built and tested
+- The native test runs on Linux, except its platform, package, update and dialogs sessions. On
+  Windows and macOS, CI builds the app's crate, runs clippy and the Rust tests, and runs those
+  sessions (`.github/workflows/next-app-platforms.yml`). The dialogs session (`native/dialogs.ts`)
+  runs the app in local mode against a test core, with the window's and page's command probes,
+  the native confirmations, key entry and key rotation; the update session updates the test
+  package and rolls it back ([Application update](#application-update)). Starting native tools
+  and launches stay Linux only and refuse at run time. How the app starts, holds and stops
+  processes there is built and tested
   ([Windows and macOS](app-host/README.md#windows-and-macos)), and the app's own core starts on
   macOS; on Windows its core store does not build yet. On Windows the page document's address is
   `http://pluxy-page.localhost/`.
