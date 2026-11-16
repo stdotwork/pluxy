@@ -1724,9 +1724,15 @@ fn wsl_real_the_first_write_makes_the_data_folder_and_files_are_the_users() {
         .preview("s", &[Selection::File(t.at("settings.json"))])
         .unwrap();
     assert!(!t.at("state").exists(), "a preview made the data folder");
-    let pins = vec![Pin::from_json(&p["targets"][0]).unwrap()];
-    tx.apply("s", &pins, &values(json!({"model": "m"})), &Json, &mut none)
-        .unwrap();
+    let pinned = vec![Pin::from_json(&p["targets"][0]).unwrap()];
+    tx.apply(
+        "s",
+        &pinned,
+        &values(json!({"model": "m"})),
+        &Json,
+        &mut none,
+    )
+    .unwrap();
     // SAFETY: geteuid has no preconditions.
     let me = unsafe { libc::geteuid() };
     assert_ne!(me, 0, "run as a user, not root");
@@ -1740,7 +1746,9 @@ fn wsl_real_the_first_write_makes_the_data_folder_and_files_are_the_users() {
         Path::new("dotfiles/settings.json")
     );
     assert!(read(&target).unwrap().contains("\"model\": \"m\""));
-    tx.restore("s", &pins, &mut none).unwrap();
+    // The apply put a new file in place: restore needs pins from a new preview.
+    let again = pins(&tx, "s", &[Selection::File(t.at("settings.json"))]);
+    tx.restore("s", &again, &mut none).unwrap();
     assert_eq!(read(&target).unwrap(), "{\"theme\": \"light\"}\n");
 }
 
