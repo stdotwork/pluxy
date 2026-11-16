@@ -258,6 +258,18 @@ impl Pages {
     pub fn document_closed(&self, label: &str) -> bool {
         self.open.get(label).is_none_or(|w| w.document.closed)
     }
+    /// Where page label's channel is, for the native test: its document loaded, its hello
+    /// admitted, the window's welcome on its way or delivered, closed, and the calls waiting.
+    #[cfg(feature = "native-test")]
+    pub fn channel_state(&self, label: &str) -> Value {
+        self.open.get(label).map_or(Value::Null, |w| {
+            let d = &w.document;
+            json!({
+                "loaded": d.loaded, "hello": d.hello, "welcome": d.welcome, "closed": d.closed,
+                "waiting": d.waiting.len(),
+            })
+        })
+    }
     /// Every platform reports subframe navigation: WebKitGTK and WKWebView to the webview's
     /// navigation handler, WebView2 as FrameNavigationStarting. Ignore fragment-only changes (a same-document
     /// navigation: the new address has a fragment and differs only in it), but close on a
