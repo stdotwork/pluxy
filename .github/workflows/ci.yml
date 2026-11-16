@@ -21,7 +21,9 @@ permissions:
 
 jobs:
   # Lists the files the change touches: for a pull request, the same three-dot diff its path
-  # filters used (base...head); for a merge group, everything the group adds to the base branch.
+  # filters used (base...head); for a merge group, everything the group adds to the base branch,
+  # including the PRs queued ahead of it. (The group's base_sha is its parent commit, which is the
+  # group ahead of it in the queue when groups build side by side.)
   # Each output says whether a workflow's paths were touched, using the paths that workflow's
   # own pull_request trigger had. A change to this file runs them all.
   changes:
@@ -49,21 +51,22 @@ jobs:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
           GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = merge_group ]; then
-            range=("$GROUP_BASE" "$GROUP_HEAD")
+            range=("refs/remotes/origin/${GROUP_BASE_REF#refs/heads/}...$GROUP_HEAD")
           else
             range=("$PR_BASE...$PR_HEAD")
           fi
-          # --no-renames lists a renamed file under its old and its new path, as path filters see it.
-          git diff --no-renames --name-only "${range[@]}" > "$RUNNER_TEMP/changed"
-          echo "$(wc -l < "$RUNNER_TEMP/changed") changed files"
+          # --no-renames lists a renamed file under its old and its new path, as path filters see it;
+          # -z keeps git from quoting unusual paths.
+          git diff --no-renames --name-only -z "${range[@]}" > "$RUNNER_TEMP/changed"
+          echo "$(tr -cd '\0' < "$RUNNER_TEMP/changed" | wc -c) changed files"
           declare -A run=()
           for w in core app next-ci next-app next-app-platforms next-app-tools-platforms next-corpus; do run[$w]=false; done
-          while IFS= read -r path; do
+          while IFS= read -r -d '' path; do
             case $path in
               .github/workflows/ci.yml) for w in "${!run[@]}"; do run[$w]=true; done ;;
             esac
