@@ -112,9 +112,10 @@ func TestTrackSendOwnConnection(t *testing.T) {
 	})
 }
 
-// A tracked request speaks the HTTP version the base transport would: HTTP/2 when net/http turns
-// it on for base by itself, and HTTP/1.1 when base turned it off or has a TLS config of its own.
-func TestTrackSendKeepsBaseProtocol(t *testing.T) {
+// A request through Upstream, tracked or not, directly or through the account's proxy, speaks the
+// HTTP version the base transport would: HTTP/2 when net/http turns it on for base by itself, and
+// HTTP/1.1 when base turned it off or has a TLS config of its own.
+func TestUpstreamKeepsBaseProtocol(t *testing.T) {
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		_, _ = w.Write([]byte("ok"))
@@ -124,6 +125,14 @@ func TestTrackSendKeepsBaseProtocol(t *testing.T) {
 	defer srv.Close()
 	roots := x509.NewCertPool()
 	roots.AddCert(srv.Certificate())
+	pass := rand.Text()
+	proxies := map[string]string{"directly": ""}
+	for name, start := range map[string]func(*testing.T, string) (string, string, func() int){
+		"through a connect proxy": startHTTPProxy, "through a socks5 proxy": startSOCKS5Proxy,
+	} {
+		scheme, addr, _ := start(t, pass)
+		proxies[name] = scheme + "://alice:" + pass + "@" + addr
+	}
 
 	for _, c := range []struct {
 		name string
@@ -146,25 +155,29 @@ func TestTrackSendKeepsBaseProtocol(t *testing.T) {
 			return &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots}}
 		}, 1},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			client := &http.Client{Transport: Upstream(c.base()), Timeout: 10 * time.Second}
-			for _, track := range []bool{false, true} {
-				req := post(t, srv.URL+"/token")
-				sent := func() bool { return false }
-				if track {
-					req, sent = TrackSend(req)
+		for via, proxy := range proxies {
+			t.Run(c.name+" "+via, func(t *testing.T) {
+				client := &http.Client{Transport: Upstream(c.base()), Timeout: 10 * time.Second}
+				ctx, _ := withUpstreamInfo(context.Background(), protocol.Call{Type: protocol.TypeCall, ID: "r", Op: protocol.OpRefresh,
+					Account: &protocol.Account{ID: "a", ProxyURL: proxy}})
+				for _, track := range []bool{false, true} {
+					req := post(t, srv.URL+"/token").WithContext(ctx)
+					sent := func() bool { return false }
+					if track {
+						req, sent = TrackSend(req)
+					}
+					resp, err := client.Do(req)
+					if err != nil {
+						t.Fatalf("tracked %v: %v (counted as sent: %v)", track, err, sent())
+					}
+					_, _ = io.Copy(io.Discard, resp.Body)
+					resp.Body.Close()
+					if resp.ProtoMajor != c.want {
+						t.Errorf("tracked %v: protocol = %s, want HTTP/%d", track, resp.Proto, c.want)
+					}
 				}
-				resp, err := client.Do(req)
-				if err != nil {
-					t.Fatalf("tracked %v: %v (counted as sent: %v)", track, err, sent())
-				}
-				_, _ = io.Copy(io.Discard, resp.Body)
-				resp.Body.Close()
-				if resp.ProtoMajor != c.want {
-					t.Errorf("tracked %v: protocol = %s, want HTTP/%d", track, resp.Proto, c.want)
-				}
-			}
-		})
+			})
+		}
 	}
 }
 
