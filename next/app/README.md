@@ -1306,8 +1306,9 @@ The base `tauri.conf.json` keeps bundling off. Two commands build packages, from
 after `bun run build`; both use the Tauri CLI pinned in `package.json`:
 
 ```bash
-bun run package:test <out-dir>          # the test package: a disposable AppImage for checks
-bun run package:release [AppImage...]   # the release gate: builds and checks; uploads nothing
+bun run package:test <out-dir>          # the test package, for checks: an AppImage (Linux), a
+                                        # folder bundle (Windows) or an app bundle (macOS)
+bun run package:release [artifact...]   # the release gate: builds and checks; uploads nothing
 ```
 
 `package:test` is for checks only, never for release. It builds a debug app with the
@@ -1331,10 +1332,25 @@ Cargo offline after `cargo fetch --locked`, and every proxy variable pointing at
 the build. Afterwards the tools folder must hold only the pinned tools and the bundler's own two
 plugin scripts. The AppImage's type is still checked on the output.
 
+On Windows and macOS `package:test` makes no installer and no disk image. It builds the same two
+debug apps with the same overlay, with no Tauri bundle on Windows (whose bundles are all
+installers) and the `app` bundle on macOS. On Windows each build's program goes into a plain
+folder bundle of its own, `<out-dir>/pluxy Test/pluxy-app-test.exe` and
+`<out-dir>/update/pluxy Test/pluxy-app-test.exe`, and the update is that second exe, signed. On
+macOS each build's bundle is copied to `<out-dir>/pluxy Test.app` and
+`<out-dir>/update/pluxy Test.app` (with `ditto`, keeping modes and the program's signature, no
+extended attributes or quarantine), and the update is the second bundle as a `.app.tar.gz` made
+by the command (one top folder, no macOS metadata), signed; no signing identity or notarization
+is used. `test-package.json` names the bundle, the program in it, the public key and the update
+(its bundle, payload, feed target `windows-x86_64-exe` or `darwin-aarch64-app`, version and
+signature). Nothing is downloaded there, so the builds run in the caller's environment, Cargo
+offline after `cargo fetch --locked` and every proxy variable pointing at a closed port.
+
 `package:release` turns on no bundle format: release formats are not chosen yet. It builds the
 release app with no features and no overlay (`tauri build --no-bundle`), finds that build's
 snapshots by its receipt, and runs the [release validator](#validate-release-inputs) on them,
-the staged trust folder (`src-tauri/trust`), the built binary and each AppImage given. Its last
+the staged trust folder (`src-tauri/trust`), the built binary (`pluxy-app.exe` on Windows) and
+each artifact given: an AppImage, a Windows folder bundle or a macOS app bundle. Its last
 line says `release-package: valid`, `release-package: refused: <reason>` or, when it could not
 check, `release-package: failed: <reason>`.
 
@@ -1367,12 +1383,13 @@ The app's updater ([Application update](#application-update)) calls it.
 - Access: Linux only (5.8 or later: grants record the `statx` mount ID); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test runs on Linux, except its dialogs session. On Windows and macOS, CI builds the
-  app's crate, runs clippy and the Rust tests, and runs `native/dialogs.ts`
-  (`.github/workflows/next-app-platforms.yml`): the app in local mode against a test core, with
-  the window's and page's command probes, the native confirmations, key entry and key rotation.
-  Process ownership and starting the app's own core stay Linux only and refuse at run time. On
-  Windows the page document's address is `http://pluxy-page.localhost/`.
+- The native test runs on Linux, except its platform, package and dialogs sessions. On Windows
+  and macOS, CI builds the app's crate, runs clippy and the Rust tests, and runs those sessions
+  (`.github/workflows/next-app-platforms.yml`). The dialogs session (`native/dialogs.ts`) runs the
+  app in local mode against a test core, with the window's and page's command probes, the native
+  confirmations, key entry and key rotation. Process ownership and starting the app's own core
+  stay Linux only and refuse at run time. On Windows the page document's address is
+  `http://pluxy-page.localhost/`.
 - The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
   account's known folders, which no environment variable redirects, so it refuses to start when
   they exist and removes only the ones it made. Its input does not come from a keyboard: on
@@ -1381,7 +1398,8 @@ The app's updater ([Application update](#application-update)) calls it.
   AppKit. Both go through the app's real message handling and the dialogs' controls, but miss
   what only a person at the machine would hit, such as another app taking the keyboard. The
   session's summary counts which way each input went.
-- No installer or bundled core yet: the only package is the test AppImage, which is not for release.
+- No installer or bundled core yet: the only packages are the test AppImage, the test folder
+  bundle (Windows) and the test app bundle (macOS), which are not for release.
   The app updates only itself, only as an AppImage, on Linux x86_64, and only with test updater
   trust until release keys exist. Rollback keeps the last three versions that ran on this
   profile; a new version that hangs is stopped after 90 seconds and the earlier one put back, but
@@ -1440,7 +1458,10 @@ private temporary HOME with a runner-created trust marker. A temporary HOME alon
 Private signing keys are generated at runtime and kept only in temporary fixture directories.
 Tauri updater signatures have their own format; descriptor signatures cannot replace them.
 
-The runner creates a private mode-0700 temporary HOME, calls `trust::write_test_marker(home)`,
+The runner creates a private mode-0700 temporary HOME (on Windows: a folder owned by the user
+whose access list lets in only the user, SYSTEM and Administrators, given to the app as HOME;
+the profile's files there must be ones no one else can change), calls
+`trust::write_test_marker(home)`,
 passes its returned per-run random nonce to the child as `PLUXY_TEST_TRUST_NONCE`, and writes
 `.pluxy-test-trust-roots.json` there. Both marker and nonce must match; TMPDIR grants no trust:
 
@@ -1473,9 +1494,18 @@ plus the trust and feature snapshots, in Cargo's `OUT_DIR`. A digest of all thre
 the app. The validator compares its own compiled inputs and requires the matching receipt in an
 artifact. Supply the actual app executable along with every package. The validator streams each
 regular file for test markers, test identifiers and Tauri updater keys or signatures. Each
-artifact must be a well-formed ELF executable (type, machine and program headers inside the
-file) or a type-2 AppImage, and carry the build's receipt itself; anything else is refused,
-since it cannot be looked inside. An AppImage (found by its header,
+artifact must be a well-formed executable, ELF (type, machine and program headers inside the
+file), PE (an executable image for x86, x86-64 or arm64, its optional header inside the file) or
+Mach-O (a 64-bit x86-64 or arm64 executable, library or bundle with its load commands inside the
+file, or a universal file of such parts), or a type-2 AppImage, a Windows folder bundle or a
+macOS app bundle (a folder named `*.app`), and carry the build's receipt itself; anything else
+is refused, since it cannot be looked inside. A bundle folder is read in place, every entry
+checked as an AppImage's are below, and its app executable is `<mainBinaryName>.exe` at its top,
+a PE file, or `Contents/MacOS/<mainBinaryName>`, a Mach-O file. An app bundle's
+`Contents/Info.plist` must be a property list (XML or binary) naming `dev.pluxy.desktop` as
+`CFBundleIdentifier` and the app executable as `CFBundleExecutable`; it is decoded and every
+key, string and data in it checked for test markers. An app bundle's archive
+(`.app.tar.gz`) is refused like any compressed file. An AppImage (found by its header,
 never run) must have its squashfs image where its runtime's header ends, with nothing after it
 but zero padding under 4 KiB. `unsquashfs` (package `squashfs-tools`) first lists the image
 (only folders, regular files and links; at most 100,000 entries, 32 folders deep and 2 GiB
