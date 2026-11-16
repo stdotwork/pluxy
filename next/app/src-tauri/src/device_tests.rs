@@ -2996,7 +2996,8 @@ fn private_folders_are_private_on_windows() {
 }
 
 /// Windows: an installed release is read-only as 0444/0500 make it on Unix: no file in it can be
-/// written or deleted, and nothing added to its folders, yet removing the package removes it.
+/// written or deleted, and nothing added to its folders, by an account without the backup and
+/// restore privileges (`as_unprivileged`), yet removing the package removes it.
 #[cfg(windows)]
 #[test]
 fn installed_releases_are_read_only_on_windows() {
@@ -3007,21 +3008,91 @@ fn installed_releases_are_read_only_on_windows() {
     install(&mut c, &v1, local("n")).unwrap();
     let release = d.store().join(digest(&v1));
     let file = release.join("pages").join("index.html");
-    let denied = |r: std::io::Result<()>| {
+    let denied = |what: &str, r: std::io::Result<()>| {
         assert_eq!(
             r.map_err(|e| e.kind()),
-            Err(std::io::ErrorKind::PermissionDenied)
+            Err(std::io::ErrorKind::PermissionDenied),
+            "{what}"
         )
     };
-    denied(fs::write(&file, b"tampered").map(|_| ()));
-    denied(fs::remove_file(&file));
-    denied(fs::write(release.join("pages").join("new.html"), b"x"));
-    denied(fs::create_dir(release.join("new")));
+    as_unprivileged(|| {
+        denied("writing a file", fs::write(&file, b"tampered").map(|_| ()));
+        denied("deleting a file", fs::remove_file(&file));
+        denied(
+            "adding a file",
+            fs::write(release.join("pages").join("new.html"), b"x"),
+        );
+        denied("adding a folder", fs::create_dir(release.join("new")));
+    });
     assert_eq!(fs::read(&file).unwrap(), b"<p>1.0.0");
     c.remove("example/notes").unwrap();
     assert!(c.take_cleanup().is_none());
     assert!(store_names(&d).is_empty(), "{:?}", store_names(&d));
     done(root);
+}
+
+/// Runs f on this thread with a copy of the process's token without the backup, restore and
+/// take-ownership privileges: as an account that is not an administrator. Windows' own
+/// `DeleteFileW` and `CreateDirectoryW` open with backup intent, which those privileges, where a
+/// process has them enabled (as an administrator's may), let past any access list, as root passes
+/// a Unix mode.
+#[cfg(windows)]
+fn as_unprivileged(f: impl FnOnce()) {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LUID};
+    use windows_sys::Win32::Security::{
+        AdjustTokenPrivileges, ImpersonateSelf, LookupPrivilegeValueW, RevertToSelf,
+        SecurityImpersonation, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_REMOVED, TOKEN_ADJUST_PRIVILEGES,
+        TOKEN_PRIVILEGES, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
+    // SAFETY: each call gets valid pointers to locals; the token is this thread's own copy.
+    unsafe {
+        assert_ne!(ImpersonateSelf(SecurityImpersonation), 0);
+        let mut token: HANDLE = std::ptr::null_mut();
+        assert_ne!(
+            OpenThreadToken(
+                GetCurrentThread(),
+                TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                0,
+                &mut token
+            ),
+            0
+        );
+        for name in [
+            "SeBackupPrivilege",
+            "SeRestorePrivilege",
+            "SeTakeOwnershipPrivilege",
+        ] {
+            let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+            let mut luid = LUID {
+                LowPart: 0,
+                HighPart: 0,
+            };
+            if LookupPrivilegeValueW(std::ptr::null(), wide.as_ptr(), &mut luid) == 0 {
+                continue;
+            }
+            let without = TOKEN_PRIVILEGES {
+                PrivilegeCount: 1,
+                Privileges: [LUID_AND_ATTRIBUTES {
+                    Luid: luid,
+                    Attributes: SE_PRIVILEGE_REMOVED,
+                }],
+            };
+            // A privilege the token does not hold is not there to remove: nothing changes.
+            AdjustTokenPrivileges(
+                token,
+                0,
+                &without,
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+        }
+        CloseHandle(token);
+    }
+    f();
+    // SAFETY: this thread impersonates the copy made above.
+    assert_ne!(unsafe { RevertToSelf() }, 0);
 }
 
 /// Windows: a registry's local artifact is opened beneath the index's folder, never through a
