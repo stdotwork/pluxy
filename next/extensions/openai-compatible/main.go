@@ -408,9 +408,14 @@ func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error)
 	}
 	tr.Losses = losses
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
-		paths := tr.DroppedPaths()
+		var paths []string
+		for _, l := range losses {
+			if l.Kind == llm.LossDropped {
+				paths = append(paths, l.Path)
+			}
+		}
 		// Another account may speak the client's format and carry it whole.
-		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
+		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: formatNames[target] + " cannot carry parts of this request: " + strings.Join(paths, ", ")}
 	}
 	return body, tr, nil
