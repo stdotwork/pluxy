@@ -431,8 +431,11 @@ func TestCallErrorsHoldNoSettingsSecret(t *testing.T) {
 
 // mintCredential is an extension whose refresh and login write the credential they make to stderr
 // before returning it, as a careless provider's debug output would. After the line it writes
-// mintFiller bytes more, which a pipe cannot hold: the write returns only once core has read past
-// the line, so core has the line before the result is sent.
+// mintFiller bytes more, which a pipe of the usual 64 KiB cannot hold: the write returns only once
+// core has read past the line, so core has the line before the result is sent. Where a pipe holds
+// more (1 MiB, on a Linux kernel with 64 KiB pages), the order is not forced and the test below
+// can pass without the hold; TestFreshCredentialInOutputBeforeItsResult forces it in process.
+// This one goes through a real program's stderr.
 func mintCredential() {
 	mint := func(op string) *protocol.Credential {
 		c := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "fresh-" + op + "-access-1234", RefreshToken: "fresh-" + op + "-refresh-1234"}
@@ -460,7 +463,7 @@ func mintCredential() {
 	}
 }
 
-// mintFiller is more than a pipe holds (64 KiB on Linux).
+// mintFiller is more than a pipe of the usual size holds, and less than maxHeldOutput.
 const mintFiller = 512 << 10
 
 // A credential an extension makes in a refresh or a login and writes to its output before it
@@ -510,99 +513,14 @@ func TestFreshCredentialIsNotLoggedBeforeItsResult(t *testing.T) {
 	}
 }
 
-// While refresh or login calls run, every output line waits until the last of them ends and is
-// then logged redacted with what the calls returned; past maxHeldOutput, lines are left out with
-// notes, never logged before then.
-func TestOutputIsHeldWhileACredentialIsMade(t *testing.T) {
-	var log bytes.Buffer
-	var secrets []string
-	o := &output{w: &log, prefix: "[x] ", redact: func(s string) string {
-		for _, secret := range secrets {
-			s = strings.ReplaceAll(s, secret, "[redacted]")
-		}
-		return s
-	}}
-	o.line("[x] ", "before")
-	first, second := o.hold(), o.hold()
-	o.line("[x] ", "first made sk-first-1234")
-	o.line("[x] stdout] ", "no call's line")
-	secrets = append(secrets, "sk-first-1234")
-	first()
-	first() // a second release changes nothing
-	o.line("[x] ", "second made sk-second-1234")
-	if got, want := log.String(), "[x] before\n"; got != want {
-		t.Fatalf("while a call still runs, log = %q, want %q", got, want)
-	}
-	secrets = append(secrets, "sk-second-1234")
-	second()
-	o.line("[x] ", "after")
-	want := "[x] before\n[x] first made [redacted]\n[x] stdout] no call's line\n[x] second made [redacted]\n[x] after\n"
-	if got := log.String(); got != want {
-		t.Fatalf("log = %q, want %q", got, want)
-	}
-
-	log.Reset()
-	release := o.hold()
-	big := strings.Repeat("b", maxHeldOutput/2)
-	for _, l := range []string{big, big, "over sk-third-1234", "over again"} {
-		o.line("[x] ", l)
-	}
-	note := fmt.Sprintf("[x] (more than %d bytes of output while a refresh or login runs; the rest is left out until it ends)\n", maxHeldOutput)
-	if got := log.String(); got != note {
-		t.Fatalf("past the limit, log = %q, want only %q", got, note)
-	}
-	release()
-	if got, want := log.String(), note+"[x] "+big+"\n[x] "+big+"\n[x] (2 lines of output left out)\n"; got != want {
-		t.Errorf("log = %.300q..., want the held lines and a count of those left out", got)
-	}
-}
-
-// syncBuffer is a log both of an extension's output streams write to.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-// waitFor waits until the log holds every line in lines: the output streams are read on their
-// own, so a line can arrive after the call that wrote it has finished.
-func (b *syncBuffer) waitFor(t *testing.T, lines ...string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		out, missing := b.String(), ""
-		for _, l := range lines {
-			if !strings.Contains(out, l) {
-				missing = l
-			}
-		}
-		if missing == "" {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the log never got %q:\n%s", missing, out)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
 // A line too long to log is left out rather than logged in parts: a credential split between
 // two parts would not be recognised by the redaction.
 func TestLongOutputLineIsNotSplit(t *testing.T) {
 	const secret = "sk-split-secret-1234"
 	var out bytes.Buffer
-	l := &lineLogger{out: &output{w: &out, redact: func(s string) string { return strings.ReplaceAll(s, secret, "[redacted]") }}, prefix: "[x] "}
+	h := &held{}
+	h.add("x", &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: secret})
+	l := &lineLogger{out: &output{w: &out, held: h}, prefix: "[x] "}
 	// The first write passes the limit in the middle of the credential.
 	half := len(secret) / 2
 	for _, chunk := range []string{strings.Repeat("a", maxLogLine) + secret[:half], secret[half:] + "b\nshort " + secret + "\n"} {

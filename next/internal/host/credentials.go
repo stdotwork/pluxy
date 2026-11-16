@@ -61,6 +61,28 @@ type LoginCall struct {
 	final    *protocol.Reply
 	onClose  func() // ends the call on its managed generation; safe to call more than once
 	release  func() // logs the extension's output held while the call ran; safe to call more than once
+
+	// Close may run on another goroutine while Next runs. Next may then have read a grant it has
+	// not recorded yet, so the output is released only once no Next runs (release).
+	rmu     sync.Mutex
+	reading bool // Next runs
+	closed  bool // Close ran
+}
+
+// endRelease releases the output held while the call ran, once the call is closed and no Next
+// runs.
+func (l *LoginCall) endRelease(closing bool) {
+	l.rmu.Lock()
+	if closing {
+		l.closed = true
+	} else {
+		l.reading = false
+	}
+	ready := l.closed && !l.reading
+	l.rmu.Unlock()
+	if ready && l.release != nil {
+		l.release()
+	}
 }
 
 // addSecrets adds what the user entered to what is removed from the frames the call returns.
@@ -83,6 +105,10 @@ func (l *LoginCall) redactor() *protocol.Redactor {
 
 // Next returns the next frame: a login.prompt, or the terminal login.done or error.
 func (l *LoginCall) Next() protocol.Reply {
+	l.rmu.Lock()
+	l.reading = true
+	l.rmu.Unlock()
+	defer l.endRelease(false)
 	if l.final != nil {
 		return *l.final
 	}
@@ -150,9 +176,7 @@ func (l *LoginCall) Close() {
 	if l.conn != nil {
 		l.conn.Close()
 	}
-	if l.release != nil {
-		l.release()
-	}
+	l.endRelease(true)
 }
 
 func (l *LoginCall) fail(e *llm.Error) {
