@@ -42,7 +42,9 @@ type Options struct {
 	// StopTimeout bounds the wait for the program to exit after stdin closes. Default 5s.
 	StopTimeout time.Duration
 	// Log receives the program's stderr and later stdout, one prefixed line at a time, with
-	// the credentials the extension holds removed (protocol.Redactor). Default os.Stderr.
+	// the credentials the extension holds removed (protocol.Redactor). While a refresh or login
+	// runs, lines are held and written when it ends, so that the credential it makes is removed
+	// from them too (output). Default os.Stderr.
 	Log io.Writer
 	// ProxyURL returns core's global proxy_url setting, read at each call: the proxy of every
 	// account without one of its own (proxyurl.Resolve). Nil: none.
@@ -71,6 +73,7 @@ type Extension struct {
 	calls    atomic.Uint64
 	stopOnce sync.Once
 	held     held
+	out      output // the program's stderr and stdout lines
 }
 
 // held are the credentials core has given the extension or got back from it, so that its output
@@ -78,10 +81,9 @@ type Extension struct {
 // still write the one it replaced), the secrets of every settings it has had (a call still
 // running after changes has old ones), and what a user entered during a login. Nothing is
 // forgotten while the extension's program runs, so this grows only with the accounts it has
-// served and their settings changes, and goes with the program.
-//
-// shortcut: a credential the extension creates (a refresh or login result) and writes out before
-// core has it is logged as written; the redaction catches it only once the result arrives.
+// served and their settings changes, and goes with the program. A credential the extension makes
+// (a refresh or login result) is added when the result arrives; output is held until then
+// (output).
 type held struct {
 	mu       sync.Mutex
 	by       map[string][]heldCredential
@@ -250,7 +252,8 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 	if err != nil {
 		return err
 	}
-	cmd.Stderr = &lineLogger{w: e.opts.Log, prefix: "[" + e.manifest.ID + "] ", redact: e.held.String}
+	e.out = output{w: e.opts.Log, redact: e.held.String, prefix: "[" + e.manifest.ID + "] "}
+	cmd.Stderr = &lineLogger{out: &e.out, prefix: "[" + e.manifest.ID + "] "}
 	cmd.WaitDelay = waitDelay
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting extension %s: %w", e.manifest.ID, err)
@@ -267,7 +270,7 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 		line, err := r.ReadSlice('\n')
 		lines <- handshake{string(line), err}
 		// Keep draining stdout so the program never blocks on it.
-		_, _ = io.Copy(&lineLogger{w: e.opts.Log, prefix: "[" + e.manifest.ID + " stdout] ", redact: e.held.String}, r)
+		_, _ = io.Copy(&lineLogger{out: &e.out, prefix: "[" + e.manifest.ID + " stdout] "}, r)
 	}()
 	go func() {
 		e.waitErr = cmd.Wait()
@@ -634,14 +637,83 @@ func (s *Stream) Close() {
 // maxLogLine bounds a line of extension output that is logged.
 const maxLogLine = 64 << 10
 
-// lineLogger writes whole lines to w with a prefix, each passed through redact. A line longer
-// than maxLogLine is left out, with a note: cut into parts, a credential split between two of
-// them would not be recognised.
+// maxHeldOutput bounds the extension output held while a refresh or login runs.
+const maxHeldOutput = 1 << 20
+
+// output is where the lines of a program's stderr and stdout go: to w, each passed through
+// redact when it is written.
+//
+// A refresh or login makes a credential core learns only from the call's result, and the
+// extension may write it out before that result arrives, or core may read the line first. So from
+// just before such a call is sent until its result is recorded (held.add), every line is held, and
+// then logged redacted with it. A line can't be told apart by call, as every call shares both
+// streams, so while any refresh or login runs, all lines wait, those of other calls too. A line
+// read after the result is redacted with it anyway. Held lines past maxHeldOutput are left out,
+// with notes, rather than logged before their redaction is known; a call that never ends keeps
+// its lines held until the program exits, which ends it.
+type output struct {
+	mu      sync.Mutex
+	w       io.Writer
+	redact  func(string) string
+	prefix  string // of the notes about left-out lines
+	minting int    // refresh and login calls running
+	queue   []heldLine
+	size    int // bytes of text in queue
+	dropped int // lines left out since the queue was full
+}
+
+type heldLine struct{ prefix, text string }
+
+// line logs text with prefix, or holds it while a refresh or login runs.
+func (o *output) line(prefix, text string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	switch {
+	case o.minting == 0:
+		o.write(prefix, text)
+	case o.size+len(text) > maxHeldOutput:
+		if o.dropped == 0 {
+			fmt.Fprintf(o.w, "%s(more than %d bytes of output while a refresh or login runs; the rest is left out until it ends)\n", o.prefix, maxHeldOutput)
+		}
+		o.dropped++
+	default:
+		o.queue = append(o.queue, heldLine{prefix, text})
+		o.size += len(text)
+	}
+}
+
+func (o *output) write(prefix, text string) {
+	fmt.Fprintf(o.w, "%s%s\n", prefix, o.redact(text))
+}
+
+// hold holds the output from now until the returned release is called, at least once, after
+// the result of the refresh or login about to be sent is recorded.
+func (o *output) hold() (release func()) {
+	o.mu.Lock()
+	o.minting++
+	o.mu.Unlock()
+	return sync.OnceFunc(func() {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if o.minting--; o.minting > 0 {
+			return
+		}
+		for _, l := range o.queue {
+			o.write(l.prefix, l.text)
+		}
+		if o.dropped > 0 {
+			fmt.Fprintf(o.w, "%s(%d lines of output left out)\n", o.prefix, o.dropped)
+		}
+		o.queue, o.size, o.dropped = nil, 0, 0
+	})
+}
+
+// lineLogger passes whole lines to out with a prefix. A line longer than maxLogLine is left out,
+// with a note: cut into parts, a credential split between two of them would not be recognised.
 type lineLogger struct {
 	mu     sync.Mutex
-	w      io.Writer
+	out    *output
 	prefix string
-	redact func(string) string
 	buf    []byte
 	skip   bool // dropping the rest of a line longer than maxLogLine
 }
@@ -660,7 +732,7 @@ func (l *lineLogger) Write(p []byte) (int, error) {
 		case i > maxLogLine:
 			l.longLine()
 		default:
-			fmt.Fprintf(l.w, "%s%s\n", l.prefix, l.redact(string(l.buf[:i])))
+			l.out.line(l.prefix, string(l.buf[:i]))
 		}
 		l.skip = false
 		l.buf = l.buf[i+1:]
@@ -676,5 +748,5 @@ func (l *lineLogger) Write(p []byte) (int, error) {
 }
 
 func (l *lineLogger) longLine() {
-	fmt.Fprintf(l.w, "%s(a line longer than %d bytes, not logged)\n", l.prefix, maxLogLine)
+	l.out.line(l.prefix, fmt.Sprintf("(a line longer than %d bytes, not logged)", maxLogLine))
 }

@@ -73,6 +73,10 @@ func fakeExtension(mode string) {
 		captureSettings()
 		return
 	}
+	if mode == "mint-credential" {
+		mintCredential()
+		return
+	}
 	if mode != "sleep-child" { // the child shares its parent's folder
 		_ = os.WriteFile("pid", []byte(strconv.Itoa(os.Getpid())), 0o644)
 		_ = os.WriteFile("env", []byte(strings.Join(os.Environ(), "\n")), 0o644)
@@ -425,6 +429,134 @@ func TestCallErrorsHoldNoSettingsSecret(t *testing.T) {
 	}
 }
 
+// mintCredential is an extension whose refresh and login write the credential they make to stderr
+// before returning it, as a careless provider's debug output would. After the line it writes
+// mintFiller bytes more, which a pipe cannot hold: the write returns only once core has read past
+// the line, so core has the line before the result is sent.
+func mintCredential() {
+	mint := func(op string) *protocol.Credential {
+		c := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "fresh-" + op + "-access-1234", RefreshToken: "fresh-" + op + "-refresh-1234"}
+		fmt.Fprintf(os.Stderr, "minted %s %s\n", c.AccessToken, c.RefreshToken)
+		line := strings.Repeat("f", 1023) + "\n"
+		_, _ = os.Stderr.WriteString(strings.Repeat(line, mintFiller/len(line)))
+		fmt.Fprintf(os.Stderr, "minted %s done\n", op)
+		return c
+	}
+	err := sdk.Serve(sdk.Extension{
+		ID:           "hosttest/mint-credential",
+		Version:      "0.0.0",
+		Generate:     func(context.Context, sdk.Call, *sdk.Stream) error { return nil },
+		LoginMethods: []protocol.LoginMethod{{Method: "mint", Kind: protocol.LoginAPIKey, Label: "Mint"}},
+		Login: func(context.Context, sdk.LoginCall, *sdk.LoginSession) (*protocol.Grant, error) {
+			return &protocol.Grant{Credential: mint("login")}, nil
+		},
+		Refresh: func(context.Context, sdk.RefreshCall) (*protocol.Credential, error) {
+			return mint("refresh"), nil
+		},
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// mintFiller is more than a pipe holds (64 KiB on Linux).
+const mintFiller = 512 << 10
+
+// A credential an extension makes in a refresh or a login and writes to its output before it
+// returns it is logged without it: core has the line before the result, and still does not log
+// it in clear.
+func TestFreshCredentialIsNotLoggedBeforeItsResult(t *testing.T) {
+	for _, op := range []string{"refresh", "login"} {
+		t.Run(op, func(t *testing.T) {
+			log := &syncBuffer{}
+			ext, err := Start(filepath.Join(fakePackage(t, "mint-credential"), ManifestFile), Options{Log: log})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ext.Stop()
+			ctx := context.Background()
+			var got *protocol.Credential
+			if op == "refresh" {
+				var e *llm.Error
+				got, e = ext.Refresh(ctx, protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, RefreshToken: "old-refresh-1234"}})
+				if e != nil {
+					t.Fatal(e)
+				}
+			} else {
+				l := ext.Login(ctx, protocol.Account{ID: "a"}, protocol.Login{Method: "mint"})
+				r := l.Next()
+				l.Close()
+				if r.Grant == nil {
+					t.Fatalf("login = %+v, want a grant", r)
+				}
+				got = r.Grant.Credential
+			}
+			access, refresh := "fresh-"+op+"-access-1234", "fresh-"+op+"-refresh-1234"
+			if got == nil || got.AccessToken != access || got.RefreshToken != refresh {
+				t.Fatalf("%s returned %+v, want the minted credential", op, got)
+			}
+			log.waitFor(t, "minted "+op+" done")
+			out := log.String()
+			for _, line := range strings.Split(out, "\n") {
+				if strings.Contains(line, access) || strings.Contains(line, refresh) {
+					t.Errorf("the log holds the fresh credential: %q", line)
+				}
+			}
+			if want := "[hosttest/mint-credential] minted [redacted] [redacted]\n"; !strings.Contains(out, want) {
+				t.Errorf("the log lacks %q", want)
+			}
+		})
+	}
+}
+
+// While refresh or login calls run, every output line waits until the last of them ends and is
+// then logged redacted with what the calls returned; past maxHeldOutput, lines are left out with
+// notes, never logged before then.
+func TestOutputIsHeldWhileACredentialIsMade(t *testing.T) {
+	var log bytes.Buffer
+	var secrets []string
+	o := &output{w: &log, prefix: "[x] ", redact: func(s string) string {
+		for _, secret := range secrets {
+			s = strings.ReplaceAll(s, secret, "[redacted]")
+		}
+		return s
+	}}
+	o.line("[x] ", "before")
+	first, second := o.hold(), o.hold()
+	o.line("[x] ", "first made sk-first-1234")
+	o.line("[x] stdout] ", "no call's line")
+	secrets = append(secrets, "sk-first-1234")
+	first()
+	first() // a second release changes nothing
+	o.line("[x] ", "second made sk-second-1234")
+	if got, want := log.String(), "[x] before\n"; got != want {
+		t.Fatalf("while a call still runs, log = %q, want %q", got, want)
+	}
+	secrets = append(secrets, "sk-second-1234")
+	second()
+	o.line("[x] ", "after")
+	want := "[x] before\n[x] first made [redacted]\n[x] stdout] no call's line\n[x] second made [redacted]\n[x] after\n"
+	if got := log.String(); got != want {
+		t.Fatalf("log = %q, want %q", got, want)
+	}
+
+	log.Reset()
+	release := o.hold()
+	big := strings.Repeat("b", maxHeldOutput/2)
+	for _, l := range []string{big, big, "over sk-third-1234", "over again"} {
+		o.line("[x] ", l)
+	}
+	note := fmt.Sprintf("[x] (more than %d bytes of output while a refresh or login runs; the rest is left out until it ends)\n", maxHeldOutput)
+	if got := log.String(); got != note {
+		t.Fatalf("past the limit, log = %q, want only %q", got, note)
+	}
+	release()
+	if got, want := log.String(), note+"[x] "+big+"\n[x] "+big+"\n[x] (2 lines of output left out)\n"; got != want {
+		t.Errorf("log = %.300q..., want the held lines and a count of those left out", got)
+	}
+}
+
 // syncBuffer is a log both of an extension's output streams write to.
 type syncBuffer struct {
 	mu  sync.Mutex
@@ -470,7 +602,7 @@ func (b *syncBuffer) waitFor(t *testing.T, lines ...string) {
 func TestLongOutputLineIsNotSplit(t *testing.T) {
 	const secret = "sk-split-secret-1234"
 	var out bytes.Buffer
-	l := &lineLogger{w: &out, prefix: "[x] ", redact: func(s string) string { return strings.ReplaceAll(s, secret, "[redacted]") }}
+	l := &lineLogger{out: &output{w: &out, redact: func(s string) string { return strings.ReplaceAll(s, secret, "[redacted]") }}, prefix: "[x] "}
 	// The first write passes the limit in the middle of the credential.
 	half := len(secret) / 2
 	for _, chunk := range []string{strings.Repeat("a", maxLogLine) + secret[:half], secret[half:] + "b\nshort " + secret + "\n"} {

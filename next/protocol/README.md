@@ -192,6 +192,9 @@ the reply's `id` matches the manifest.
 
 Anything the extension writes to stderr goes to core's log, prefixed with the extension ID. Never
 write credentials there. Anything written to stdout after the handshake line is also logged.
+Core removes the credentials it knows of from these lines. So that this covers the credential a
+`refresh` or `login` returns, core holds every line while either runs and logs them when it ends;
+past 1 MiB held, further lines are left out, with notes saying so.
 
 ## Shutdown
 
