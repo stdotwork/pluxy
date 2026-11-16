@@ -29,7 +29,8 @@ func TestAttemptCarriesCaller(t *testing.T) {
 		s.Close()
 		return got[len(got)-1]
 	}
-	a1, a2, b, other, none := run("m", "aaaa"), run("m", "aaaa"), run("m", "bbbb"), run("n", "aaaa"), run("m", "")
+	// The tenants hold letters outside hex, so the hex caller cannot contain one by chance.
+	a1, a2, b, other, none := run("m", "tenant-q"), run("m", "tenant-q"), run("m", "tenant-z"), run("n", "tenant-q"), run("m", "")
 	switch {
 	case a1 == "" || a1 != a2:
 		t.Errorf("one tenant on one extension: %q then %q, want one non-empty value", a1, a2)
@@ -39,7 +40,7 @@ func TestAttemptCarriesCaller(t *testing.T) {
 		t.Errorf("another extension got %q for the same tenant (kimi got %q)", other, a1)
 	case none != "":
 		t.Errorf("a request without a tenant got caller %q", none)
-	case strings.Contains(a1, "aaaa"):
+	case strings.Contains(a1, "tenant-q"):
 		t.Errorf("caller %q contains the tenant", a1)
 	}
 }
