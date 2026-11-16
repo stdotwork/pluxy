@@ -13,7 +13,16 @@ static OPERATIONS: AtomicUsize = AtomicUsize::new(0);
 static REAL_SITE: AtomicUsize = AtomicUsize::new(0);
 static ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// Requests for the page scheme's off-site probe address (native_test.rs frame_offsite).
+static OFFSITE: AtomicUsize = AtomicUsize::new(0);
+pub fn offsite_hits() -> usize {
+    OFFSITE.load(SeqCst)
+}
+
 pub fn count(method: &str, path: &str, status: u16, query: Option<&str>) {
+    if path == "/offsite-probe" {
+        OFFSITE.fetch_add(1, SeqCst);
+    }
     if query == Some("pages_site_probe") {
         REAL_SITE.fetch_add(1, SeqCst);
     }

@@ -87,6 +87,9 @@ windows-sys = { version = "=0.61.2", features = [
     "Win32_System_SystemServices",
     "Win32_System_Threading",
 ] }
+# The WebView2 bindings wry uses (the same version, so one copy), to watch a page's frame
+# navigations (src/page_frames.rs).
+webview2-com = "=0.39.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
