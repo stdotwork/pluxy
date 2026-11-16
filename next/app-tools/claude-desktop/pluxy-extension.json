@@ -747,7 +747,7 @@
       },
       {
         "id": "recipe",
-        "description": "How the launcher starts Claude Desktop: claude-desktop, directly, with no arguments, in the home folder",
+        "description": "How the launcher starts Claude Desktop, directly, with no arguments, in the home folder: claude-desktop on Linux, Claude.app in /Applications (or ~/Applications) on macOS; on Windows unsupported, as no program to start is documented",
         "effect": "read",
         "input_schema": {
           "type": "object",
