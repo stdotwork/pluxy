@@ -39,7 +39,8 @@ pub(super) const SUFFIX: &str = ".exe";
 pub(super) const WHAT: &str = "program";
 /// What a pin's digest is, in messages.
 pub(super) const DIGEST: &str = "SHA-256";
-/// How long a rename waits out a file another program (a virus scanner) has open.
+/// How long a rename or a removal waits out a file another program (a virus scanner, or the
+/// earlier version not yet unmapped) has open.
 const BUSY_FOR: Duration = Duration::from_secs(5);
 /// `GetDriveTypeW`'s answer for a fixed local drive.
 const DRIVE_FIXED: u32 = 3;
@@ -221,8 +222,9 @@ fn ours(name: &str) -> bool {
 }
 
 /// Removes what an earlier replace left next to the installed program: the aside copy of a
-/// version that has ended, or a new file a failed replace did not take back. A file still in use
-/// stays for the next start.
+/// version that has ended, or a new file a failed replace did not take back. A file in use is
+/// waited out for `BUSY_FOR` (the earlier version's image can stay mapped for a moment after this
+/// app took the profile); one still in use then stays for the next start.
 pub(super) fn cleanup(installed: &Path) {
     use std::os::windows::fs::MetadataExt;
     let Some(folder) = installed.parent() else {
@@ -239,7 +241,8 @@ pub(super) fn cleanup(installed: &Path) {
                     == 0
         });
         if plain && e.file_name().to_str().is_some_and(ours) {
-            let _ = fs::remove_file(e.path());
+            let path = e.path();
+            let _ = while_busy(|| fs::remove_file(&path));
         }
     }
 }
@@ -252,13 +255,24 @@ fn wide(p: &Path) -> Vec<u16> {
 /// program has open is waited out for `BUSY_FOR`.
 fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
     let (f, t) = (wide(from), wide(to));
-    let until = Instant::now() + BUSY_FOR;
-    loop {
+    while_busy(|| {
         // SAFETY: both are NUL-terminated wide strings.
         if unsafe { MoveFileExW(f.as_ptr(), t.as_ptr(), MOVEFILE_WRITE_THROUGH) } != 0 {
-            return Ok(());
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
         }
-        let e = std::io::Error::last_os_error();
+    })
+}
+
+/// Runs op again while it fails because another program has the file open (a sharing, access
+/// or lock violation), for at most `BUSY_FOR`.
+fn while_busy(mut op: impl FnMut() -> std::io::Result<()>) -> std::io::Result<()> {
+    let until = Instant::now() + BUSY_FOR;
+    loop {
+        let Err(e) = op() else {
+            return Ok(());
+        };
         let busy = matches!(
             e.raw_os_error().map(|c| c as u32),
             Some(ERROR_SHARING_VIOLATION | ERROR_ACCESS_DENIED | ERROR_LOCK_VIOLATION)
@@ -418,6 +432,37 @@ pub(super) mod tests {
         drop(held);
         assert_eq!(fs::read(&exe).unwrap(), program_bytes("old"));
         assert_eq!(fs::read_dir(&tmp).unwrap().count(), 1);
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // An aside copy still held open for a moment after this version took the profile (the earlier
+    // version's image not yet unmapped) is waited out and removed, not left for the next start.
+    #[test]
+    fn cleanup_waits_out_a_leftover_held_open_for_a_moment() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let tmp = super::super::tests::temp("exe-cleanup-busy");
+        let exe = fixture(&tmp, "new");
+        let aside = tmp.join(".pluxy-old-0123456789abcdef.exe");
+        fs::write(&aside, program_bytes("old")).unwrap();
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ)
+            .open(&aside)
+            .unwrap();
+        let let_go = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1000));
+            drop(held);
+        });
+        let started = Instant::now();
+        cleanup(&exe);
+        let_go.join().unwrap();
+        assert!(!aside.exists(), "the aside copy is gone");
+        // The hold did keep the first removal from going through.
+        assert!(
+            started.elapsed() >= Duration::from_millis(900),
+            "it waited for the file"
+        );
+        assert_eq!(fs::read(&exe).unwrap(), program_bytes("new"));
         fs::remove_dir_all(&tmp).unwrap();
     }
 
