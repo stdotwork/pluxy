@@ -44,7 +44,8 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `internal/usage` | The [usage record](#usage-statistics): one event per request, kept in memory within limits. |
 | `internal/extconfig` | Extensions' settings: the schema from the manifest, checking values, and the store core keeps them in. |
 | `ui/` | The UI kit the panel and the desktop app share, the panel's browser build, and the [theme contract](ui/themes/README.md) ([README](ui/README.md)). |
-| `app/` | The desktop app: the kit's second build in a Tauri window, with a tray icon and three ways to reach core ([README](app/README.md)). |
+| `app/` | The desktop app: the kit's second build in a Tauri window, with a tray icon and three ways to reach core ([README](app/README.md)). Linux only for now; its agent clients and the record of the old desktop app's features are in [PARITY.md](app/PARITY.md). |
+| `app-tools/` | The desktop app's optional native tools: agent client setup, the launcher, the usage hub and its parsers, the Codex session reader, and the libraries they share ([README](app-tools/README.md)). |
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
 | `corpus/` | Differential test corpus: cases replayed against this core and today's core, with listed exceptions ([README](corpus/README.md)). |
 

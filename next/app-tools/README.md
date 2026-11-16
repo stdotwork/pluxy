@@ -2,8 +2,10 @@
 
 Native programs that pluxy's desktop app runs on demand, as curated first-party native tools, and
 the libraries they share. This is a cargo workspace of its own (its own `Cargo.lock`), never linked
-into the desktop app. The app runs a tool only while something calls it and stops it when idle; a
-tool keeps no process or thread after its calls end. The contract the tools speak is the app
+into the desktop app. The app starts a tool only for a call and stops it 30 seconds after its last
+call ends; a stopped tool leaves no process or thread. What a launch starts is not the tool's: a
+detached launch runs on, and a managed runtime runs until it is stopped, its package is disabled
+or removed, or the app quits or restarts for an update. The contract the tools speak is the app
 program contract v0 in [`../app/app-host/README.md`](../app/app-host/README.md), which stays the
 reference: this folder implements it, it does not change it.
 
@@ -16,14 +18,14 @@ cargo build --release --locked -p wsl           # pluxy/wsl, for Windows (bin/pl
 ```
 
 Platforms: every tool but `wsl` runs on Linux. The usage hub, the usage parsers,
-`codex-sessions` and `execution` also build and are tested on Windows and macOS
+`codex-sessions`, `execution`, `lib/transactions` with its `fixture-writer`, `claude-code` and
+`codex-setup` also build and are tested on Windows and macOS
 (`.github/workflows/next-app-tools-platforms.yml`), and their manifests name programs for
 `darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does not run native tools on those
 systems yet. `wsl` is a Windows tool (`windows/amd64`, `windows/arm64`; on other systems it builds
 and answers every operation `unsupported`); that workflow's WSL jobs run it, and `lib/program` and
-`lib/transactions` built for Linux, against real WSL distributions. `lib/transactions`,
-`claude-code`, `claude-desktop`, `codex-setup`, `opencode`, `omp-setup`, `grok-setup`,
-`hermes-setup` and `pi-setup` are Linux only for now.
+`lib/transactions` built for Linux, against real WSL distributions. `claude-desktop`, `opencode`,
+`omp-setup`, `grok-setup`, `hermes-setup` and `pi-setup` are Linux only for now.
 
 ## `lib/files`
 
@@ -44,7 +46,19 @@ platform code of its own for them:
   of what they make), Windows refuses that, so making a private file or folder there fails with
   `PermissionDenied`. `make_private` changes a file through
   a handle to the file itself, not a link (on Linux and macOS with `fchmod`), and refuses anything
-  but a file or folder, and a file of another owner (never taking it over).
+  but a file or folder, and a file of another owner (never taking it over); `make_private_open`
+  does the same through a handle the caller holds, for what it has just made.
+- On Windows, `access_list` reads a file's access list through its handle in the system's text
+  form (SDDL: `D:P(…)` when protected, `D:AI(…)` with entries marked `ID` when it takes up its
+  folder's), and `set_access_list` gives one back as it was written, protected or not (a NULL list,
+  which would allow everyone, is refused). `rename_open` renames a file through its own handle into
+  a folder open as another handle, replacing what is there, with POSIX semantics where the file
+  system has them (the name is replaced even while another program has the old file open).
+  `create_private_in` makes a new file relative to a folder's handle, private as it is made and
+  shared with no other handle.
+- `windows_name_problem` says why Windows would read a path's name as another file (a stream such
+  as `a.json:x`, a name ending in a dot or a blank, a device name such as `NUL` or `COM1.json`), a
+  plain string check the same on every platform.
 - `open_regular` opens a file for reading only if it is a regular file, checked on the open handle,
   without following a link: on Linux and macOS with `O_NOFOLLOW` and `O_NONBLOCK` (a FIFO is
   refused, never waited on); on Windows the link itself is opened and refused, as is anything that
@@ -161,13 +175,13 @@ cancel a job between two parts of one file.
 
 Link-preserving, journalled config writes for any writer tool (`pluxy-transactions`), a client of
 the host's vault (backups and journals) through the contract's `vault` frames; it keeps no
-journal store of its own. Linux.
+journal store of its own. Linux, macOS and Windows (below for what differs on Windows).
 
 | Item | What it does |
 | --- | --- |
-| `Selection` | What the person selected: `File(path)`, a config file that may be a link (as stow makes), or `Root { root, path }`, a file inside a root folder that may be a link (as chezmoi can make), `path` being slash-separated parts inside it. |
-| `Transactions::new(vault, data)` | The operations for one call: `vault` is the `Call` (or any `Vault`), `data` the tool's data folder (`data_dir()`, `PLUXY_TOOL_DATA_DIR`), where the state file `transactions.json` (0600) keeps each set's targets and backup IDs, the originals kept for restore, and the journals left open. A data folder that does not exist yet reads as an empty state, and the first write of the state file makes it (0700, with any missing folders above it), so a preview or status leaves nothing behind; in WSL the host cannot make it before the program starts. A link there, or a folder another user owns, is refused. |
-| `preview(set, selections)` | Resolves and pins each selection: `{"set", "targets": [<pin>], "applied", "edited"}`. A pin names the selected path, its link's text, the file it resolves to, the identities (device and inode) of the link, the root, the file's folder and the file, and the file's SHA-256. A link inside a selected root, a part that leaves it (`..`, `.`, empty) and anything but a regular file are refused. A read: it asks nothing, and it reports a file's existence and SHA-256 for any path, so a writer must not export it to other packages. |
+| `Selection` | What the person selected: `File(path)`, a config file that may be a link (as stow makes), or `Root { root, path }`, a file inside a root folder that may be a link (as chezmoi can make), `path` being slash-separated parts inside it (a backslash is refused, as it separates parts on Windows). |
+| `Transactions::new(vault, data)` | The operations for one call: `vault` is the `Call` (or any `Vault`), `data` the tool's data folder (`data_dir()`, `PLUXY_TOOL_DATA_DIR`), where the state file `transactions.json` (private) keeps each set's targets and backup IDs, the originals kept for restore, and the journals left open. A data folder that does not exist yet reads as an empty state, and the first write of the state file makes it (private, with any missing folders above it: 0700 on Linux and macOS; on Windows the folders above it get what their folder passes down), so a preview or status leaves nothing behind; in WSL the host cannot make it before the program starts. A link there, or a folder another user owns, is refused (on Windows also one another user may write). |
+| `preview(set, selections)` | Resolves and pins each selection: `{"set", "targets": [<pin>], "applied", "edited"}`. A pin names the selected path, its link's text, the file it resolves to, the identities (device and inode; on Windows the volume serial number and 64-bit file index) of the link, the root, the file's folder and the file, and the file's SHA-256. A link inside a selected root, a part that leaves it (`..`, `.`, empty) and anything but a regular file are refused. A read: it asks nothing, and it reports a file's existence and SHA-256 for any path, so a writer must not export it to other packages. |
 | `apply(set, pins, image, merge, written)` | Writes each pinned target with what `image` makes of its bytes now, and records `set` as applied: its original images (with the person's edits since the last apply promoted into them by `merge`) and its applied images, as vault backups. A record none of whose selections still resolves to its target (a link pointed elsewhere) is replaced, its originals kept for restore. |
 | `clear(set, pins, merge, written)` | Each target becomes what `merge` makes of its original, its applied image and its bytes now: the writer's untouched values go, the person's edits stay. A pin of the recorded target file itself (named directly) reaches a record made through a link that now points elsewhere. |
 | `restore(set, pins, written)` | Puts the original bytes back (removing a file that did not exist), keeping the mode the file has; a file that is gone comes back with the original's mode. With no record for these targets, it puts back the originals kept for them: after a conflict, or after a new apply replaced a retargeted record. |
@@ -238,6 +252,34 @@ Saving replaces the file; an edit made in the same instant by another program ma
 so where the person confirms: the writers' write operations carry this sentence in their
 descriptions, which their native confirmations show.
 This is cooperative write correctness for a full-access tool, not a confinement.
+
+On Windows:
+
+- A file's permissions are its access list: records keep it as SDDL text where Linux and macOS keep
+  the permission bits. The new file is private from the moment it is made (a protected list
+  allowing only this user and SYSTEM, given as it is made, relative to the folder's handle) and
+  open to no other handle until it is renamed and closed.
+  Clear and restore give it the old file's list (protected or taking up its folder's, as it was);
+  an apply leaves it private, the twin of owner-only; a file that did not exist stays private, or
+  gets the list recorded for it.
+- The rename goes through the new file's own handle into the folder's handle (`rename_open`), with
+  POSIX semantics where the file system has them. A file another program holds open without
+  letting it be deleted, or one marked read-only, is not replaced: the write fails and is rolled
+  back. The folder is not flushed: Windows has no flush of a folder's entries through a handle
+  opened to read it, and NTFS logs them itself.
+- An existing file is written under the name it has on disk, whatever case (or short 8.3 name)
+  selected it, and one file selected under two spellings is refused as named twice (as on macOS,
+  whose file systems also ignore case by default).
+- A name Windows would read as another file (a stream such as `a.json:x`, a name ending in a dot
+  or a blank, a device name such as `NUL` or `COM1.json`) and a path in a device namespace
+  (`\\.\…`, `\\?\GLOBALROOT\…`) are refused, selected or reached through a link.
+- Links are symbolic links and junctions alike: a selected file or root may be either, and either
+  inside a selected root is refused. A file's or folder's identity is the volume serial number and
+  the 64-bit file index (NTFS gives a reused index a new sequence number, so a link made again is
+  another link).
+- A path inside a WSL distribution (`\\wsl.localhost\…` or `\\wsl$\…`, in any case, either
+  slash, also after `\\?\UNC\`), selected or reached through a link, is refused: the package's
+  Linux program serves those files, inside the distribution.
 
 Manual backups and retention:
 
@@ -966,9 +1008,10 @@ version field, so none is checked. The key may not hold spaces; the model is one
 ## `execution`
 
 `pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, a program
-run directly, or a file opened in the person's own app. The app's Launcher page and its tray's
-Start… menu use it, and so will client recipes and tools that open one of their files. It never starts a process itself and never holds a secret's value: the host confirms each
-launch natively, spawns exactly what was confirmed when the program asks, and resolves secrets from
+run directly, or a file opened in the person's own app. The app's Launcher page, its tray's
+Start… menu and the client pages' Start CLI and Start App use it, and so does the Codex session
+reader to open a session's file. It never starts a process itself and never holds a secret's
+value: the host confirms each launch natively, spawns exactly what was confirmed when the program asks, and resolves secrets from
 its vault at the spawn (`../app/app-host/README.md`, "Launches and managed runtimes").
 
 | Operation | Effect | Input | Output |
@@ -1085,8 +1128,10 @@ either before the host is asked.
 
 `pluxy/wsl` (program `bin/pluxy-wsl.exe`, Windows only: on any other system every operation answers
 `unsupported`) tells pluxy's desktop app which WSL distributions and users there are, checks one,
-and prepares launches inside it. The app sets a client up in a distribution by running the client
-package's own Linux program there, through `wsl.exe`; this tool only reads. It writes nothing
+and prepares launches inside it. It is groundwork for the later WSL support: the app does not run
+native tools on Windows yet, so it does not use this tool, and its side (setting a client up in a
+distribution by running the client package's own Linux program there, through `wsl.exe`) is not
+built. This tool only reads. It writes nothing
 anywhere and never starts a launch. It runs only Windows' own `wsl.exe`, from System32 as
 `GetSystemDirectoryW` reports it: with no window, empty standard input, an environment of
 `SystemRoot`, `WINDIR` and `WSL_UTF8=1` only, its output read while it runs and capped, and a

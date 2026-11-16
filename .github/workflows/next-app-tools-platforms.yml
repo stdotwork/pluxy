@@ -1,9 +1,10 @@
 name: Next app tools platforms
 
 # Builds, lints and unit-tests the app tools (next/app-tools, the native programs the desktop app
-# runs on demand) on Windows and macOS. Linux runs them in next-app.yml. The writer tools
-# (pluxy-transactions and the tools built on it) are not ported yet and are left out here.
-# The wsl job runs pluxy/wsl and the Linux side of a WSL instance against real WSL distributions.
+# runs on demand) on Windows and macOS. Linux runs them in next-app.yml. The claude-desktop,
+# opencode, omp-setup, grok-setup, hermes-setup and pi-setup writer tools are not ported yet and
+# are left out here. The wsl job runs pluxy/wsl and the Linux side of a WSL instance against real
+# WSL distributions.
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
@@ -32,8 +33,8 @@ defaults:
     working-directory: next/app-tools
 
 env:
-  # The writer tools and their library, ported in a later change.
-  NOT_PORTED: --exclude pluxy-transactions --exclude claude-code --exclude claude-desktop --exclude codex-setup --exclude opencode --exclude omp-setup --exclude grok-setup --exclude hermes-setup --exclude pi-setup
+  # The writer tools not ported to Windows and macOS yet, Linux only for now.
+  NOT_PORTED: --exclude claude-desktop --exclude opencode --exclude omp-setup --exclude grok-setup --exclude hermes-setup --exclude pi-setup
 
 jobs:
   tools:

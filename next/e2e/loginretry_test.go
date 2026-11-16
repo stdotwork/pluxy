@@ -15,15 +15,16 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// closedPort returns the address of a port nothing listens on.
+// closedPort returns the address of a port nothing listens on: port 1 on loopback, which a test
+// run cannot bind, unlike a just-closed ephemeral port that the next core or test server started
+// may be given.
 func closedPort(t *testing.T) string {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	const addr = "127.0.0.1:1"
+	if c, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+		c.Close()
+		t.Fatalf("something listens on %s; the connection-refused cases need it closed", addr)
 	}
-	addr := l.Addr().String()
-	l.Close()
 	return "http://" + addr
 }
 

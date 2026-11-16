@@ -9,8 +9,11 @@
       0
     ],
     "programs": {
+      "darwin/amd64": "bin/codex-setup",
+      "darwin/arm64": "bin/codex-setup",
       "linux/amd64": "bin/codex-setup",
-      "linux/arm64": "bin/codex-setup"
+      "linux/arm64": "bin/codex-setup",
+      "windows/amd64": "bin/codex-setup.exe"
     },
     "operations": [
       {
