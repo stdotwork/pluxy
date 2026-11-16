@@ -69,7 +69,7 @@
       },
       {
         "id": "folders",
-        "description": "Create Claude Desktop's configuration library folder, configLibrary in its third-party folder (~/.config/Claude-3p on Linux, ~/Library/Application Support/Claude-3p on macOS, Claude-3p in the local application data folder on Windows), private to this user, and the folders above it that are missing, when it does not exist yet; Claude Desktop makes it only once a configuration is saved in its own window",
+        "description": "Create Claude Desktop's configuration library folder (~/.config/Claude-3p/configLibrary on Linux, configLibrary in ~/Library/Application Support/Claude-3p on macOS, configLibrary in Claude-3p in the local application data folder on Windows), private to this user, and the folders above it that are missing, when it does not exist yet; Claude Desktop makes it only once a configuration is saved in its own window",
         "effect": "write",
         "input_schema": {
           "type": "object",

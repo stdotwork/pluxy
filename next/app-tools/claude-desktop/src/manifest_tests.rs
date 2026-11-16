@@ -44,7 +44,8 @@ fn only_apply_receives_the_key_and_writes_ask_each_time() {
     let named = folders["description"].as_str().unwrap();
     for place in [
         "configLibrary",
-        "~/.config/Claude-3p on Linux",
+        // The app's Linux native step looks for this path in the confirmation.
+        "~/.config/Claude-3p/configLibrary on Linux",
         "~/Library/Application Support/Claude-3p on macOS",
         "Claude-3p in the local application data folder on Windows",
     ] {
