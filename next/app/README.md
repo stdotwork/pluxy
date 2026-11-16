@@ -30,7 +30,7 @@ server and to the person's other computers.
 
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
-| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it. |
+| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
 | Core on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address and management key. | Leaves it running. The app never starts or stops it. |
 | Remote core (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
@@ -1550,6 +1550,11 @@ app supported there:
     test core, with the window's and page's command probes, the native confirmations, key entry and
     key rotation. [Limits](#limits) says how its input is made.
 - The vault's private storage is built and unit tested there ([Limits](#limits)).
+- How the app starts, holds and stops processes is built there (`src-tauri/src/owned/`: a job
+  object on Windows, a process group on macOS), and CI checks that each of its lifetime tests ran
+  and passed ([Windows and macOS](app-host/README.md#windows-and-macos)). Nothing reaches it at
+  run time there yet: the native tools and the app's own core that would use it are refused
+  (below).
 - On Windows, the page document's address is `http://pluxy-page.localhost/`, and the app holds a
   page's frame to its site through WebView2's frame navigation event (`src-tauri/src/page_frames.rs`).
 - The app tools' readers, usage parsers and execution program build and pass their tests there,
@@ -1557,9 +1562,11 @@ app supported there:
 
 Still refused at run time there: native tools (so the client pages, the launcher, Access, native
 imports, client keys, core aliases, and the vault's use and its secret entry), the app's own core
-(its versions, install, adoption and start, so process ownership too), installing a package from
-a file, a launch that opens a file, changing the release feed and opening an address in the
-browser. The app updates itself only as a Linux AppImage.
+(on Windows the store of its versions does not open, so nothing installs or starts; on macOS the
+store opens, but installing, adopting and rolling back a version need the native confirmation,
+which core changes have on Linux only, so no version is installed and none starts), installing a
+package from a file, a launch that opens a file, changing the release feed and opening an address
+in the browser. The app updates itself only as a Linux AppImage.
 
 ## Limits
 
