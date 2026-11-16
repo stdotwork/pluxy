@@ -110,7 +110,13 @@ fn no_distribution_is_known_by_wsls_error_code_in_any_language() {
         listing(0, &utf16("Ubuntu\r\n", true), b"").unwrap(),
         Some(vec!["Ubuntu".to_string()])
     );
-    assert_eq!(listing(0, b"", b"").unwrap(), Some(vec![]));
+    // No distribution: windows-latest's wsl.exe exits 0 with no name.
+    assert_eq!(listing(0, b"", b"").unwrap(), None);
+    // Only names pluxy hides or refuses: none it can use either.
+    assert_eq!(
+        listing(0, &utf16("docker-desktop\r\n", true), b"").unwrap(),
+        None
+    );
 }
 
 #[test]

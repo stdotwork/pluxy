@@ -82,15 +82,18 @@ const NOT_INSTALLED: [&str; 2] = [
 ];
 
 /// What `wsl.exe --list --quiet` answered, from its exit code and output: the names, or None when
-/// nothing is installed (exit -1 with one of WSL's error codes for that). The output of a listing
-/// that failed is never read as names: its text may be a translated sentence.
+/// nothing is installed: a listing that worked and names none pluxy can use (the `wsl.exe` on
+/// GitHub's windows-latest exits 0 with no name when there is no distribution), or exit -1 with
+/// one of WSL's error codes for that. The output of a listing that failed is never read as names: its text may be a
+/// translated sentence.
 pub fn listing(
     code: i32,
     stdout: &[u8],
     stderr: &[u8],
 ) -> Result<Option<Vec<String>>, pluxy_program::Error> {
     if code == 0 {
-        return Ok(Some(names(stdout)));
+        let n = names(stdout);
+        return Ok((!n.is_empty()).then_some(n));
     }
     let said = |b: &[u8]| {
         let text = decode(b);

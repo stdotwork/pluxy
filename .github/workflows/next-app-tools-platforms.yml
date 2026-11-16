@@ -139,6 +139,9 @@ jobs:
           printf '{"theme": "light"}\n' > /c/pluxy-wsl/drive/settings.json
       - name: Windows test before any distribution is installed
         run: |
+          # What wsl.exe itself answers, for the record: exit code, then the bytes.
+          code=0; /c/Windows/System32/wsl.exe --list --quiet > "$RUNNER_TEMP/list.out" 2> "$RUNNER_TEMP/list.err" || code=$?
+          echo "wsl.exe --list --quiet: exit $code"; od -c "$RUNNER_TEMP/list.out" | head -20; od -c "$RUNNER_TEMP/list.err" | head -20
           cargo test --locked -p wsl --test real_wsl -- --ignored --exact distros_before_any_distribution_is_installed_says_not_installed 2>&1 | tee "$RUNNER_TEMP/no-distro.log"
           grep -q '^test result: ok. 1 passed' "$RUNNER_TEMP/no-distro.log"
       - name: Set up the distributions
