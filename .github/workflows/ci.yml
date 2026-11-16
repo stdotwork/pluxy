@@ -77,8 +77,10 @@ jobs:
             case $path in next/* | .github/workflows/next-app.yml) run[next-app]=true ;; esac
             case $path in next/* | .github/workflows/next-app-platforms.yml) run[next-app-platforms]=true ;; esac
             case $path in next/app-tools/* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
+            # A tool's manifest, and the workspace's and every member's Cargo.toml (`*` matches `/`
+            # too, so lib/<name>/Cargo.toml is one), where a program's [[bin]] is named.
             case $path in
-              next/app-tools/*/pluxy-extension.json | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock | next/cmd/pluxy-pack/* | .github/workflows/next-app-tools-pack.yml)
+              next/app-tools/*/pluxy-extension.json | next/app-tools/Cargo.toml | next/app-tools/*/Cargo.toml | next/app-tools/Cargo.lock | next/cmd/pluxy-pack/* | .github/workflows/next-app-tools-pack.yml)
                 run[next-app-tools-pack]=true ;;
             esac
             case $path in next/* | core/* | .github/workflows/next-corpus.yml) run[next-corpus]=true ;; esac

@@ -4,8 +4,8 @@ name: Next app tools pack
 # them with `pluxy-pack -app-tools`, as a release would: one archive for each tool and each
 # platform its manifest names, and the app's registry index. It uploads nothing: the app installs
 # a native tool only with a curated signature, which no release makes yet. Pull requests and
-# merge-queue groups run it through ci.yml when a tool's manifest, the tools' workspace, the pack
-# tool or this workflow changes; a next-v* tag runs it by itself.
+# merge-queue groups run it through ci.yml when a tool's manifest, the workspace's or a member's
+# Cargo.toml, Cargo.lock, the pack tool or this workflow changes; a next-v* tag runs it by itself.
 
 on:
   workflow_call:
