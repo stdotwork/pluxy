@@ -76,16 +76,36 @@ fn refuse_link(m: &Metadata) -> io::Result<()> {
     }
 }
 
-/// path as a NUL-terminated wide string.
+/// path as a NUL-terminated wide string for CreateFileW and CreateDirectoryW: absolute, in its
+/// `\\?\` form, which takes any length, as std's own opens do for a long path (a plain path
+/// longer than MAX_PATH fails with ERROR_PATH_NOT_FOUND).
 fn wide(path: &Path) -> io::Result<Vec<u16>> {
-    let w: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let absolute = std::path::absolute(path)?;
+    let w: Vec<u16> = absolute.as_os_str().encode_wide().collect();
     if w.contains(&0) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "a NUL in the path",
         ));
     }
-    Ok(w.into_iter().chain([0]).collect())
+    let backslash = u16::from(b'\\');
+    let prefix: Vec<u16> = if w.starts_with(&[backslash, backslash]) {
+        // `\\?\` and `\\.\` already; a share (`\\server\share`) as `\\?\UNC\server\share`.
+        if w.get(2)
+            .is_some_and(|&c| c == u16::from(b'?') || c == u16::from(b'.'))
+        {
+            Vec::new()
+        } else {
+            return Ok(r"\\?\UNC"
+                .encode_utf16()
+                .chain(w[1..].iter().copied())
+                .chain([0])
+                .collect());
+        }
+    } else {
+        r"\\?\".encode_utf16().collect()
+    };
+    Ok(prefix.into_iter().chain(w).chain([0]).collect())
 }
 
 /// CreateFileW's handle as a File.

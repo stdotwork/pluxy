@@ -728,17 +728,26 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn private_write_is_private_on_windows() {
+        use crate::private_windows::tests::private;
         let dir = std::env::temp_dir().join(format!("pluxy-private-{}", super::random_key()));
         std::fs::create_dir(&dir).unwrap();
         let path = dir.join("connection.json");
         // The control: what the temporary folder passes down is not private.
         std::fs::write(&path, b"{}").unwrap();
-        assert!(!crate::files_windows::is_private(&path).unwrap());
+        assert!(!private(&path));
         let key = super::random_key();
         super::write_private(&path, key.as_bytes()).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), key.as_bytes());
-        assert!(crate::files_windows::is_private(&path).unwrap());
+        assert!(private(&path));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        // A path longer than MAX_PATH (260), as the vault's records can be, and as std takes it.
+        let deep = dir.join("d".repeat(200));
+        std::fs::create_dir(&deep).unwrap();
+        let long = deep.join("index.json");
+        assert!(long.as_os_str().len() > 260, "{}", long.display());
+        super::write_private(&long, key.as_bytes()).unwrap();
+        assert_eq!(std::fs::read(&long).unwrap(), key.as_bytes());
+        assert!(private(&long));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
