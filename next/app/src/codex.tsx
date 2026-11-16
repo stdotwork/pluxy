@@ -34,6 +34,7 @@ import {
   type Secret,
 } from "./codexForm";
 import { connectionGet } from "./host";
+import { keptTerminal, useDeviceChanged } from "./startCli";
 
 const t = strings("codex", {
   title: "Codex",
@@ -315,8 +316,10 @@ function Launch(props: { available: boolean }) {
   const terminals = useLoad(() =>
     reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
   );
+  useDeviceChanged(terminals.reload);
   const action = useAction(state.reload);
   const recent = state.data?.history.Codex ?? [];
+  const shownTerminal = keptTerminal(terminal, terminals.data?.terminals);
   const go = (target: "cli" | "app" | "service", extra: Record<string, unknown>, program?: string) =>
     action.run(async () => {
       const recipe = await tool<Record<string, unknown>>("recipe", {
@@ -342,7 +345,7 @@ function Launch(props: { available: boolean }) {
         {terminals.data && (
           <Choices
             label={t("terminal")}
-            value={terminal}
+            value={shownTerminal}
             choices={terminals.data.terminals.map((x) => ({ value: x.id, label: x.label }))}
             onChange={setTerminal}
           />
@@ -353,7 +356,7 @@ function Launch(props: { available: boolean }) {
           onClick={() =>
             go("cli", {
               cwd: cwd.trim(),
-              terminal,
+              terminal: shownTerminal,
               ...(override.trim() ? { override: override.trim() } : {}),
             })
           }
