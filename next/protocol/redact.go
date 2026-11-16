@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"encoding/base64"
 	"encoding/json"
+	"math"
 	"net/url"
 	"slices"
 	"strconv"
@@ -727,30 +728,45 @@ func (r *Redactor) Body() *BodyRedactor {
 // than the longest form. When a form could be part of a JSON number, it also holds back a colon,
 // bracket or comma at the end, with any spaces after it and the number that follows, if any (a run
 // of the bytes of numbers that starts with a digit or a minus), when they take at most
-// maxNumberHold bytes, and where they start inside a form, that form. So a body of any length
-// passes through in bounded memory, and a stream is delayed only where a piece ends with what
-// could start a form, or such a number. Each text it returns is redacted with String, so a
-// credential spelled with escapes is found within it, and a number in JSON that holds one
-// becomes 0.
+// maxNumberHold bytes, and where they start inside a form, that form. Each text it returns is
+// redacted with String, so a credential spelled with escapes is found within it, and a number in
+// JSON that holds one becomes 0.
+//
+// It follows the credential behind escapes too, through each decoding String tries (escaped), so
+// that a credential spelled with escapes outside the listed forms (\u0073 for s, %73, \\u0073 in
+// JSON quoted twice) is removed wherever a cut falls. In each decoding it holds back from an escape
+// at the end that more text could complete or change (a backslash, \u with fewer than four hex
+// digits, the first half of a surrogate pair, a percent sign with fewer than two), and from the
+// start of a run at the end of the decoded text that is the start of a form. It holds back at most
+// escapeHold bytes for that: enough for a run shorter than the longest form written with escapes
+// of up to 11 bytes a byte (\u0073 is 6, \\u0073 7, %5Cu0073 8, \u005cu0073 11), an escape at the
+// end, and the start of a listed form after them. A spelling that needs more (escapes nested
+// several times over) is replaced with [redacted] from where it starts, together with what follows
+// up to the first byte that cannot be part of any spelling of a form, which is neither a byte of a
+// form nor one an escape is made of (spells); from there it goes on as before. Text with more
+// decodings than String tries (maxDecodings), which String replaces whole, is held back from after
+// the last such byte instead, within the same bound.
+//
+// So a body of any length passes through in bounded memory: after each Write it holds back at most
+// escapeHold bytes, or, when a form could be part of a number, escapeHold, maxNumberHold and the
+// longest form together. A stream is delayed only where a piece ends with what could start a form
+// or complete an escape, or with such a number.
 //
 // It is never worse than redacting each piece on its own: where holding back would change what
-// String finds in the text whole (for example a credential spelled with escapes that ends like the
-// start of a form, or text String gives up on and replaces whole), Write returns all of the text it
-// has, redacted whole, but for the end of what it would have held that this left as it was, which
-// it goes on holding back. It keeps the rest of that end too, marked as sent: a form that starts
-// there and that later pieces complete is replaced in them, so the rest of a credential in one of
-// its forms cut there is not sent; what was sent of it before the cut stays sent.
+// String finds in the text whole (for example text String gives up on and replaces whole), Write
+// returns all of the text it has, redacted whole, but for the end of what it would have held that
+// this left as it was, which it goes on holding back. It keeps the rest of that end too, marked as
+// sent: a form that starts there and that later pieces complete is replaced in them, so the rest of
+// a credential cut there is not sent; what was sent of it before the cut stays sent.
 //
-// shortcut: a credential spelled with escapes outside its listed forms (\u0073 for s, %73)
-// that a piece cuts in two is not found, as when each piece is redacted on its own; holding back
-// for those would need far more than the longest form. A number that, with what stands before it,
-// takes more than maxNumberHold bytes and is cut between pieces may be redacted as text
-// ([redacted]) or as two numbers (0 and the rest of its digits) where String would write 0, either
-// of which leaves JSON invalid. String reads text that is JSON as JSON, and Write calls it on each
-// text it returns, so where a cut makes a text JSON that the whole body is not (a JSON string on
-// its own), or the other way round, a number holding a credential may become 0 where String on the
-// whole body writes [redacted], or the other way round; the credential is removed either way.
-// Upgrade the first two if an upstream is seen to write credentials that way in a streamed body.
+// shortcut: a number that, with what stands before it, takes more than maxNumberHold bytes and is
+// cut between pieces may be redacted as text ([redacted]) or as two numbers (0 and the rest of its
+// digits) where String would write 0, either of which leaves JSON invalid. String reads text that
+// is JSON as JSON, and Write calls it on each text it returns, so where a cut makes a text JSON
+// that the whole body is not (a JSON string on its own), or the other way round, a number holding a
+// credential may become 0 where String on the whole body writes [redacted], or the other way round;
+// the credential is removed either way. Upgrade the first if an upstream is seen to write
+// credentials that way in a streamed body.
 type BodyRedactor struct {
 	r       *Redactor
 	byFirst [256][]string // the forms by their first byte, longest first
@@ -758,16 +774,52 @@ type BodyRedactor struct {
 	// bytes were already returned, redacted whole, by a Write that could not hold them back.
 	held string
 	sent int
+	// drop is set while what arrives continues a spelling that was replaced with [redacted]
+	// because holding it back would take more than escapeHold bytes.
+	drop bool
 }
 
 // maxNumberHold bounds how much of a JSON number, and of what stands before it, Write holds back
 // besides a form's start, so that String reads the number whole.
 const maxNumberHold = 64
 
+// escapeBytes is how many bytes of a body Write holds back at most, for a spelling of a form with
+// escapes that more text could complete, per byte of the longest form.
+const escapeBytes = 12
+
+// escapeHold returns how many bytes Write holds back at most for a spelling of a form with escapes
+// that more text could complete: escapeBytes for each byte of the longest form, L. That covers a
+// run of at most L-1 decoded bytes written in at most 11 bytes each, an escape at the end that more
+// text could complete (at most 11 bytes, as \ud83d\udc0), and the start of a listed form after
+// them (at most L-1 bytes): 11(L-1) + 11 + L-1 < 12L.
+func (b *BodyRedactor) escapeHold() int { return escapeBytes * len(b.r.forms[0]) }
+
+// escapeSyntax are the bytes, besides a form's own, that an escape that decodes to part of a form
+// is made of (escapeAt).
+const escapeSyntax = `\%"/bfnrtu0123456789abcdefABCDEF`
+
+// spells reports whether c can be part of a spelling of a form, as it is or behind escapes nested
+// any number of times: in each decoding any other byte stands for itself and is in no form, so no
+// form a decoding holds spans it. A byte that continues a UTF-8 character counts as one that can,
+// so that what follows one that cannot starts a character.
+func (b *BodyRedactor) spells(c byte) bool {
+	return b.r.chars[c] || strings.IndexByte(escapeSyntax, c) >= 0 || !utf8.RuneStart(c)
+}
+
 // Write returns the redacted text of the body so far that more text cannot change.
 func (b *BodyRedactor) Write(piece string) string {
 	if b.r == nil || b.r.r == nil {
 		return piece
+	}
+	if b.drop {
+		q := 0
+		for q < len(piece) && b.spells(piece[q]) {
+			q++
+		}
+		if q == len(piece) {
+			return ""
+		}
+		b.drop, piece = false, piece[q:]
 	}
 	return b.emit(b.held+piece, false)
 }
@@ -787,17 +839,30 @@ func (b *BodyRedactor) emit(s string, final bool) string {
 	if !final {
 		cut = b.numberStart(s, cut)
 	}
+	hold, end := b.escapes(s, b.sent, final)
+	if skip = max(skip, end); hold > b.sent {
+		// Not inside the rest of a form that began in what was sent: that is replaced whole.
+		hold = max(hold, skip)
+	}
+	var lead string
+	if skip > b.sent {
+		// A form that began in what was sent ends here: its rest is not sent.
+		lead = Redacted
+	}
+	if hold < cut {
+		if len(s)-hold > b.escapeHold() {
+			return b.replaceSpelling(s, skip, hold, lead)
+		}
+		if cut = b.numberStart(s, hold); cut > b.sent {
+			cut = max(cut, skip)
+		}
+	}
 	if cut <= b.sent {
 		// Nothing new is decided: hold it all from cut, also what was sent of it, so that a form
 		// that starts there is still found once more text comes. A cut is never inside a form,
 		// so past sent it is also past skip.
 		b.held, b.sent = strings.Clone(s[cut:]), b.sent-cut
 		return ""
-	}
-	var lead string
-	if skip > b.sent {
-		// A form that began in what was sent ends here: its rest is not sent.
-		lead = Redacted
 	}
 	out := b.r.String(s[skip:cut])
 	b.held, b.sent = strings.Clone(s[cut:]), 0 // not keeping all of a large piece alive
@@ -819,6 +884,234 @@ func (b *BodyRedactor) emit(s string, final bool) string {
 		}
 	}
 	return lead + out
+}
+
+// replaceSpelling returns what to send of s when what Write would hold back from at, the start of
+// a spelling of a form with escapes, takes more than escapeHold bytes: the text before at,
+// redacted, and [redacted] in place of the spelling and what follows it up to the first byte that
+// cannot be part of one (spells). It goes on with the text from that byte, or, when s has none,
+// drops what comes next up to one.
+func (b *BodyRedactor) replaceSpelling(s string, skip, at int, lead string) string {
+	out := lead
+	if at > skip {
+		out += b.r.String(s[skip:at])
+	}
+	out += Redacted
+	b.held, b.sent = "", 0
+	for q := at; q < len(s); q++ {
+		if !b.spells(s[q]) {
+			return out + b.emit(s[q:], false)
+		}
+	}
+	b.drop = true
+	return out
+}
+
+// escapes follows the forms through each decoding String tries of s (decodings), as String finds
+// them behind escapes once the listed forms are replaced, and returns hold and end. hold is len(s),
+// or the earlier start of a spelling of a form that more text could complete or change: an escape
+// at the end of a decoding that more text could complete, or a run at the end of one that is the
+// start of a form. end is the end of the last form a decoding holds that starts before sent and
+// ends after it, or 0. With final nothing more comes, so nothing is held back for more text. Where
+// s has more decodings than maxDecodings, hold is the start of the run of bytes at the end of s
+// that can be part of a spelling (spells).
+//
+// It reads s as String reads it whole, also what parse holds back as the start of a listed form: a
+// form a decoding holds that a cut would split (a listed form that starts inside an escape) is
+// left to emit, which then sends the text whole. When nothing of s was sent, only its end can
+// hold a spelling that more text could complete, so it reads only the run at the end of s that
+// could be part of one (spelling): no spelling spans a byte before it, and a decoding of the
+// run is the end of the decoding of s.
+func (b *BodyRedactor) escapes(s string, sent int, final bool) (hold, end int) {
+	hold, base := len(s), 0
+	if sent == 0 {
+		if final {
+			return hold, 0
+		}
+		base = b.spelling(s)
+	}
+	t := s[base:]
+	if !b.r.liveEscape(t) && (final || openEscape(t, allEscapes) == len(t) && openEscape(t, jsonEscapes) == len(t) &&
+		openEscape(t, percentEscapes) == len(t)) {
+		// No escape could decode to part of a form, nor one at the end become one.
+		return hold, 0
+	}
+	type layer struct {
+		d     string
+		spans []span // where in s each byte of d came from
+		open  int    // where in s the text that could still change d starts: d holds what is before
+	}
+	var forms []span // the forms the decodings hold, where in s they are spelled
+	d, spans := b.replaced(t, base)
+	seen := map[string]bool{}
+	frontier := []layer{{d, spans, len(s)}}
+	for depth := 0; depth < maxDepth && len(frontier) > 0; depth++ {
+		var next []layer
+		for _, l := range frontier {
+			live := b.r.liveEscape(l.d)
+			for _, kinds := range []int{allEscapes, jsonEscapes, percentEscapes} {
+				p := len(l.d)
+				if !final {
+					p = openEscape(l.d, kinds)
+				}
+				if !live && p == len(l.d) {
+					continue
+				}
+				d, spans, changed := unescapeLayer(l.d[:p], l.spans[:p], true, kinds)
+				open := l.open
+				if p < len(l.d) {
+					open = l.spans[p].start
+				}
+				key := d + "\x00" + strconv.Itoa(open)
+				if !changed && p == len(l.d) || seen[key] {
+					continue
+				}
+				if seen[key] = true; len(seen) >= maxDecodings {
+					// String gives up on text with this many decodings: hold back all that could
+					// be part of a spelling.
+					return b.spelling(s), 0
+				}
+				next = append(next, layer{d, spans, open})
+				if !final {
+					hold = min(hold, open, b.startsForm(d, spans))
+				}
+				for _, f := range b.r.forms {
+					if sent == 0 {
+						break // only a form that sent cuts matters
+					}
+					for off := 0; ; {
+						k := strings.Index(d[off:], f)
+						if k < 0 {
+							break
+						}
+						k += off
+						forms = append(forms, span{spans[k].start, spans[k+len(f)-1].end})
+						off = k + 1
+					}
+				}
+			}
+		}
+		frontier = next
+	}
+	for _, f := range forms {
+		if f.start < sent && sent < f.end {
+			end = max(end, f.end)
+		}
+	}
+	return hold, end
+}
+
+// spelling returns where the run of bytes that can be part of a spelling of a form (spells) at the
+// end of s starts, past the bytes that continue the character before it, which cannot be.
+func (b *BodyRedactor) spelling(s string) int {
+	i := len(s)
+	for i > 0 && b.spells(s[i-1]) {
+		i--
+	}
+	for i < len(s) && !utf8.RuneStart(s[i]) {
+		i++
+	}
+	return i
+}
+
+// startsForm returns where in s the first run at the end of d starts that is the start of a form
+// longer than it, which more text could complete; math.MaxInt when there is none. spans maps d to
+// s.
+func (b *BodyRedactor) startsForm(d string, spans []span) int {
+	for k := max(0, len(d)-len(b.r.forms[0])+1); k < len(d); k++ {
+		for _, f := range b.byFirst[d[k]] {
+			if len(f) > len(d)-k && strings.HasPrefix(f, d[k:]) {
+				return spans[k].start
+			}
+		}
+	}
+	return math.MaxInt
+}
+
+// replaced returns t, which starts at base in a text, with each listed form replaced as String's
+// replacer replaces it, and where in the text each of its bytes came from.
+func (b *BodyRedactor) replaced(t string, base int) (string, []span) {
+	out := make([]byte, 0, len(t))
+	spans := make([]span, 0, len(t))
+	for i := 0; i < len(t); {
+		n := 0
+		for _, f := range b.byFirst[t[i]] {
+			if strings.HasPrefix(t[i:], f) {
+				n = len(f)
+				break
+			}
+		}
+		if n == 0 {
+			out, spans = append(out, t[i]), append(spans, span{base + i, base + i + 1})
+			i++
+			continue
+		}
+		out = append(out, Redacted...)
+		for range len(Redacted) {
+			spans = append(spans, span{base + i, base + i + n})
+		}
+		i += n
+	}
+	return string(out), spans
+}
+
+// openEscape returns the first position in s, going through it as unescapeLayer does with the
+// given kinds, of an escape that more text after s could complete or change; len(s) when there is
+// none.
+func openEscape(s string, kinds int) int {
+	for i := 0; i < len(s); {
+		if canGrow(s, i, kinds) {
+			return i
+		}
+		_, n := escapeAt(s, i, kinds)
+		i += max(n, 1)
+	}
+	return len(s)
+}
+
+// canGrow reports whether more text after s could make s[i:] start an escape of the given kinds
+// other than the one it starts now: a percent sign followed by fewer than two hex digits, a
+// backslash at the end, \u followed by fewer than four, or the first half of a surrogate pair
+// followed by what could be the start of the second half.
+func canGrow(s string, i int, kinds int) bool {
+	rest := s[i+1:]
+	switch {
+	case s[i] == '%' && kinds&percentEscapes != 0:
+		return len(rest) < 2 && allHex(rest)
+	case s[i] != '\\' || kinds&jsonEscapes == 0:
+		return false
+	case rest == "":
+		return true
+	case rest[0] != 'u':
+		return false
+	case len(rest) < 5:
+		return allHex(rest[1:])
+	}
+	r1, ok := hex4(s, i+2)
+	if !ok || r1 < 0xD800 || r1 > 0xDBFF {
+		return false
+	}
+	// A second half is \uDC00 to \uDFFF.
+	next := s[i+6:]
+	if len(next) >= 6 {
+		return false
+	}
+	for k := range len(next) {
+		if c := next[k]; !(k == 0 && c == '\\' || k == 1 && c == 'u' || k == 2 && (c == 'd' || c == 'D') ||
+			k == 3 && strings.IndexByte("cdefCDEF", c) >= 0 || k >= 4 && isHex(c)) {
+			return false
+		}
+	}
+	return true
+}
+
+func allHex(s string) bool {
+	for i := range len(s) {
+		if !isHex(s[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // parse follows the forms through s and returns cut, how much of s more text after it cannot

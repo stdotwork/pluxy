@@ -24,17 +24,24 @@ func bodyRedactor() *Redactor {
 
 // redactPieces runs pieces through a BodyRedactor and returns what it sent on, joined. It fails
 // the test when the BodyRedactor holds back as much as the longest form or more, or, when a form
-// could be part of a number, twice that and maxNumberHold.
+// could be part of a number, twice that and maxNumberHold; where the body so far holds a backslash
+// or a percent sign, which can start an escape, more than 12 times the longest form, or, when a
+// form could be part of a number, that, maxNumberHold and the longest form together.
 func redactPieces(t *testing.T, r *Redactor, pieces []string) string {
 	t.Helper()
 	b := r.Body()
-	var out strings.Builder
+	var out, body strings.Builder
 	for _, p := range pieces {
 		out.WriteString(b.Write(p))
+		body.WriteString(p)
 		if len(r.forms) > 0 {
-			limit := len(r.forms[0])
+			longest := len(r.forms[0])
+			limit := longest
+			if strings.ContainsAny(body.String(), `\%`) {
+				limit = 12*longest + 1
+			}
 			if r.numeric {
-				limit = 2*limit + maxNumberHold
+				limit += maxNumberHold + longest
 			}
 			if len(b.held) >= limit {
 				t.Fatalf("holding back %d bytes, %d or more: %q", len(b.held), limit, b.held)
@@ -454,6 +461,202 @@ func TestBodyRedactorWithoutSecrets(t *testing.T) {
 		}
 		if got := b.Flush(); got != "" {
 			t.Errorf("Flush = %q", got)
+		}
+	}
+}
+
+// splitSecrets are made-up credentials for the tests of secrets spelled with escapes: one of
+// letters and dashes, and one with slashes, a plus, a two-byte and a four-byte character.
+var splitSecrets = []string{escapedSecret, "ab/cd+ef/gh-é😀-9"}
+
+// uEscape returns the JSON escape of c (a surrogate pair beyond U+FFFF), with upper- or
+// lower-case hex digits.
+func uEscape(c rune, upper bool) string {
+	f := `\u%04x`
+	if upper {
+		f = `\u%04X`
+	}
+	if c > 0xFFFF {
+		c -= 0x10000
+		return fmt.Sprintf(f, 0xD800+(c>>10)) + fmt.Sprintf(f, 0xDC00+(c&0x3FF))
+	}
+	return fmt.Sprintf(f, c)
+}
+
+// pctEscape returns the percent escape of each byte of s.
+func pctEscape(s string, upper bool) string {
+	f := "%%%02x"
+	if upper {
+		f = "%%%02X"
+	}
+	var b strings.Builder
+	for i := range len(s) {
+		fmt.Fprintf(&b, f, s[i])
+	}
+	return b.String()
+}
+
+// spellings returns ways of writing s that String decodes to s and that no listed form covers:
+// every character, or one character, as a JSON escape; percent escapes in lower case; the second
+// slash only as \/; and the JSON escapes of a JSON escape (a body quoted in JSON twice) or written
+// in a URL.
+func spellings(s string) []string {
+	var out []string
+	all := func(f func(c rune) string) string {
+		var b strings.Builder
+		for _, c := range s {
+			b.WriteString(f(c))
+		}
+		return b.String()
+	}
+	out = append(out,
+		all(func(c rune) string { return uEscape(c, false) }),
+		all(func(c rune) string { return uEscape(c, true) }),
+		pctEscape(s, false),
+		all(func(c rune) string { return strings.ReplaceAll(uEscape(c, false), `\`, `\\`) }),
+		all(func(c rune) string { return strings.ReplaceAll(uEscape(c, false), `\`, "%5C") }),
+	)
+	i := 0
+	for _, c := range s {
+		out = append(out, s[:i]+uEscape(c, false)+s[i+len(string(c)):])
+		i += len(string(c))
+	}
+	if k := strings.LastIndexByte(s, '/'); k > strings.IndexByte(s, '/') {
+		out = append(out, s[:k]+`\/`+s[k+1:])
+	}
+	return out
+}
+
+// A secret spelled with escapes outside the listed forms and cut between two or three pieces at
+// any place is removed as String removes it from the whole body.
+func TestBodyRedactorEscapedSecretAtEveryCut(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: splitSecrets[0]}, &Credential{Kind: CredentialAPIKey, APIKey: splitSecrets[1]})
+	for _, secret := range splitSecrets {
+		for _, sp := range spellings(secret) {
+			for _, whole := range []string{"error: key " + sp + " rejected", sp, `{"message":"` + sp + `"}`} {
+				want := r.String(whole)
+				if strings.Contains(want, sp) {
+					t.Fatalf("String(%q) = %q, which still holds the secret", whole, want)
+				}
+				for i := 0; i <= len(whole); i++ {
+					if got := redactPieces(t, r, []string{whole[:i], whole[i:]}); got != want {
+						t.Fatalf("body %q cut at %d: got %q, want %q", whole, i, got, want)
+					}
+					for j := i; j <= len(whole); j += 3 {
+						if got := redactPieces(t, r, []string{whole[:i], whole[i:j], whole[j:]}); got != want {
+							t.Fatalf("body %q cut at %d and %d: got %q, want %q", whole, i, j, got, want)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// Random bodies of secrets in every spelling of spellings and every listed form, starts of them
+// that never complete, escapes and other text, cut at every offset into two pieces, a byte at a
+// time and at random: what the client gets joined is what String returns for the whole body. A
+// body with more decodings than String tries, which String replaces whole, is left out; the test
+// fails when that leaves out more than a few.
+func TestBodyRedactorEscapedMatchesStringAtEveryCut(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: splitSecrets[0]}, &Credential{Kind: CredentialAPIKey, APIKey: splitSecrets[1]})
+	var frags []string
+	for _, secret := range splitSecrets {
+		for _, sp := range append(spellings(secret), encodings(secret)...) {
+			frags = append(frags, sp, sp[:len(sp)/2])
+		}
+	}
+	frags = append(frags, " ", "x", "error: key ", `{"message":"`, `"}`, "data: ", "\n\n", "é", `\`, `\\`, `\u00`,
+		`\ud83d`, "%", "%5", "%25", `\n`, `\"`, "s", "sk-", "ab/")
+	rng := rand.New(rand.NewPCG(9, 10))
+	ran, left := 0, 0
+	for ran < 300 {
+		var b strings.Builder
+		for range 1 + rng.IntN(5) {
+			b.WriteString(frags[rng.IntN(len(frags))])
+		}
+		whole := b.String()
+		if _, over := r.decodings(r.r.Replace(whole), false, func(string, []span) bool { return false }); over {
+			left++
+			continue
+		}
+		ran++
+		want := r.String(whole)
+		check := func(pieces []string) {
+			t.Helper()
+			if got := redactPieces(t, r, pieces); got != want {
+				t.Fatalf("body %q cut as %q: got %q, want %q", whole, pieces, got, want)
+			}
+		}
+		for i := 0; i <= len(whole); i++ {
+			check([]string{whole[:i], whole[i:]})
+		}
+		bytes := make([]string, len(whole))
+		for i := range len(whole) {
+			bytes[i] = whole[i : i+1]
+		}
+		check(bytes)
+		for range 20 {
+			var pieces []string
+			for rest := whole; rest != ""; {
+				k := min(rng.IntN(24), len(rest))
+				pieces = append(pieces, rest[:k])
+				rest = rest[k:]
+			}
+			check(pieces)
+		}
+	}
+	if left > ran/10 {
+		t.Fatalf("%d bodies left out for every %d run", left, ran)
+	}
+}
+
+// doubleEscape returns s with every character written as a JSON escape, and every character of
+// those as a JSON escape again: 36 bytes for each byte of a secret of letters and dashes, more
+// than Write holds back for.
+func doubleEscape(s string) string {
+	var b strings.Builder
+	for _, c := range s {
+		for _, d := range uEscape(c, false) {
+			b.WriteString(uEscape(d, false))
+		}
+	}
+	return b.String()
+}
+
+// A spelling too long to hold back is replaced with [redacted] from its start up to the first byte
+// that cannot be part of a spelling, wherever it is cut; the text after that byte comes through.
+// So is the start of one that a piece ends with and that never completes: it may have been one.
+// The expected values were worked out by hand.
+func TestBodyRedactorSpellingTooLongToHold(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: escapedSecret})
+	long := doubleEscape(escapedSecret)
+	if r.String("a "+long+" b") != "a [redacted] b" {
+		t.Fatalf("String does not remove the spelling: %q", r.String("a "+long+" b"))
+	}
+	for _, whole := range []string{"a " + long + " b", "a " + long + ", b"} {
+		want := strings.Replace(whole, long, Redacted, 1)
+		for i := 0; i <= len(whole); i++ {
+			for _, pieces := range [][]string{{whole[:i], whole[i:]}, {whole[:i/2], whole[i/2 : i], whole[i:]}} {
+				if got := redactPieces(t, r, pieces); got != want {
+					t.Fatalf("%q cut as %q: got %q, want %q", whole, pieces, got, want)
+				}
+			}
+		}
+	}
+	partial := doubleEscape(escapedSecret[:20])
+	for _, c := range []struct {
+		pieces []string
+		want   string
+	}{
+		{[]string{"a " + partial, " b"}, "a [redacted] b"},
+		{[]string{"a " + partial, "", "x", " b"}, "a [redacted] b"},
+		{[]string{"a " + partial}, "a [redacted]"},
+		// Held whole in one piece, it is not cut, and String leaves it as it is.
+		{[]string{"a " + partial + " b"}, "a " + partial + " b"},
+	} {
+		if got := redactPieces(t, r, c.pieces); got != c.want {
+			t.Errorf("%q: got %q, want %q", c.pieces, got, c.want)
 		}
 	}
 }

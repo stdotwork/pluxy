@@ -476,22 +476,28 @@ number, core also holds back a colon, bracket or comma at the end of a piece, wi
 it and the number that follows, if any (a run of digits, `-`, `+`, `.`, `e` and `E` that starts
 with a digit or `-`), when they take 64 bytes or fewer, so that a number holding the secret
 becomes `0` as a whole; where they start inside one of those forms, it holds back that form too.
-Other text is not held back for this, such as the `e` that ends `there`. Where holding back would
-change what core finds in the text whole (for example a secret spelled with other escapes, or text
-so heavily escaped that core replaces all of it with
-`[redacted]`), core sends at once all it has, redacted whole, but for the end of what it would have
-held that this left as it was, which it goes on holding back. It then replaces with `[redacted]`
-the rest of a secret in one of those forms that began in what it would have held and that later
-pieces complete; what it sent of that start stays sent. It sends what it still holds once the body
-ends with `finish`, and drops it when the body breaks off with an error or is cancelled: the body
-is broken there anyway, and what it held could be part of a secret. Three limits remain. A secret
-spelled with escapes outside those forms (`\u0073` for `s`, `%73`) that a cut splits is not found,
-as when each piece is redacted alone. A number that, with what stands before it, takes more than 64
-bytes and is cut between pieces may become `[redacted]`, or `0` followed by the rest of its digits,
-rather than `0`, which leaves the JSON invalid. And core reads as JSON each text that is JSON on its
-own, so where a cut makes a piece JSON on its own that the whole body is not (such as a JSON
+Other text is not held back for this, such as the `e` that ends `there`. Core also reads the
+pieces as one text for a secret spelled with other escapes that it decodes (`\u0073` for `s`, `%73`,
+`\\u0073` in JSON quoted twice): it holds back an escape at the end of a piece that the next piece
+could complete (a backslash, `\u` with fewer than four hex digits, the first half of a surrogate pair,
+`%` with fewer than two hex digits), and the end of a piece that decodes to the start of a secret.
+For that it holds back at most 12 bytes for each byte of the longest of those forms, which covers
+escapes of up to 11 bytes a character (`\u005cu0073`). A start of a secret written with longer escapes
+(escapes of escapes of escapes) is replaced with `[redacted]` whether it completes or not, together
+with what follows it up to the first character that cannot be part of a secret or an escape, such as
+a space or a comma. Where holding back would change what core finds in the text whole (for example
+text so heavily escaped that core replaces all of it with `[redacted]`), core sends at once all it
+has, redacted whole, but for the end of what it would have held that this left as it was, which it
+goes on holding back. It then replaces with `[redacted]` the rest of a secret in one of those forms
+that began in what it would have held and that later pieces complete; what it sent of that start
+stays sent. It sends what it still holds once the body ends with `finish`, and drops it when the
+body breaks off with an error or is cancelled: the body is broken there anyway, and what it held
+could be part of a secret. Two limits remain. A number that, with what stands before it, takes more
+than 64 bytes and is cut between pieces may become `[redacted]`, or `0` followed by the rest of its
+digits, rather than `0`, which leaves the JSON invalid. And core reads as JSON each text that is JSON
+on its own, so where a cut makes a piece JSON on its own that the whole body is not (such as a JSON
 string), or the other way round, a number holding a secret may become `0` rather than `[redacted]`,
-or the other way round. In the last two the secret is still removed.
+or the other way round. In both the secret is still removed.
 
 Except for the direct `codex.models` call above, an `error` before `response.start` is
 routed as for `generate`: core tries another account when it is retryable, and otherwise answers
