@@ -16,8 +16,10 @@ page links to them rather than repeating them.
 
 Linux is the only platform the app supports now. Windows, macOS and WSL are later work: the app
 does not support them, and none of the Linux checks on this page says anything about them. Some
-groundwork for them is merged and runs in CI; [the README's Platforms section](README.md#platforms)
-lists it and what still refuses there.
+groundwork for them is merged and runs in CI, such as the native key entry and confirmation
+dialogs, login items and one app per profile; [the README's Platforms section](README.md#platforms)
+lists it and what still refuses there, which includes every native tool, so every client, usage
+source and the launcher on this page.
 
 On Linux, every native tool's manifest but `pluxy/wsl`'s names programs for `linux/amd64` and
 `linux/arm64`. The native test runs on GitHub's `ubuntu-24.04` runner, which is x86-64, so it
@@ -200,7 +202,7 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Release feed, release notes, channels, signed app update and rollback | Kept | | [README](README.md#version-management-and-release-notes) |
 | Portable replacement helper, upstream release addresses, the kernel version picker and preset mirrors | Dropped | The app updates only through the signed updater, from a feed address the person sets; the version picker could not be reached in the old app | — |
 | MCP server and skills management | Dropped | The owner's decision; app packages are not agent skills | — |
-| Windows and macOS | Deferred | Later platform work | [README](README.md#platforms) |
+| Windows and macOS | Deferred | Later platform work. Some groundwork is merged (native key entry and confirmations, login items, one app per profile, test packages), but no native tool runs there | [README](README.md#platforms) |
 
 ## Evidence
 

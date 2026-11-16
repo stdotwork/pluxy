@@ -22,7 +22,11 @@ what happened to each feature of the old desktop app.
 ## How the app reaches core
 
 The Connection page picks one of three modes. The app keeps the choice in `connection.json` in
-its config folder (on Linux `~/.config/dev.pluxy.desktop/`), readable only by your user.
+its config folder (on Linux `~/.config/dev.pluxy.desktop/`), readable only by your user. On
+Windows it is in the local application data folder instead (`%LOCALAPPDATA%\dev.pluxy.desktop\`),
+and so is the app's own core's folder (`core/`), since both can hold a management key: the config
+and data folders are in the roaming one (`%APPDATA%`), which a roaming profile copies to its
+server and to the person's other computers.
 
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
@@ -34,8 +38,11 @@ Addresses are origins only (scheme, host and port). A key you give is checked ag
 (`GET /v0/management/status`) before the app switches to it. It is kept in `connection.json` only
 when you tick "Keep the key on this device"; otherwise it lasts until the app quits.
 
-The native side holds the management key. On Linux, "Enter management key" on the Connection
-page opens a GTK dialog with a hidden entry, "Keep the key on this device", and OK/Cancel.
+The native side holds the management key. "Enter management key" on the Connection page opens a
+native dialog with a hidden entry, "Keep the key on this device", and OK/Cancel: a GTK dialog on
+Linux, a Win32 dialog with a password edit control on Windows, and a sheet on the window with an
+`NSSecureTextField` on macOS. On Windows and macOS the dialog is modal to the app's window only:
+the app's other native dialogs and the tray stay usable meanwhile.
 Before opening it, native code validates the mode, origin and certificate authority file. The
 dialog identifies the target origin, any custom certificate authority, and an origin switch.
 The origin switch names the connection you last confirmed and the app saved (not the client
@@ -51,12 +58,14 @@ The window calls core through the
 `<core>/v0/management/...` only, following no redirects and, for a core on this computer, no
 proxy from the environment. Path segments that are, or decode to, `.` or `..` are refused.
 
-Rotate on the Config page's Connectivity tab rotates the management key natively, on Linux: the
-app opens its native confirmation, which names the core and how the new key will be kept, then
+Rotate on the Config page's Connectivity tab rotates the management key natively: the app opens
+its native confirmation, which names the core and how the new key will be kept, then
 calls core's `POST /v0/management/management-key/rotate` itself. It keeps the new key as the old
 one was kept (in `connection.json`, for this session only, or, for the app's own core, in that
 core's config file, which core writes) and shows it once in a native window with Copy and
-Close, for other programs that used the old key and for signing in again. That window stays open
+Close, for other programs that used the old key and for signing in again. On Windows Copy marks
+the copy to stay out of clipboard history, cloud clipboard and clipboard monitors; on macOS it adds
+the `org.nspasteboard.ConcealedType` type clipboard managers take to mean a password. That window stays open
 when the main window closes to the tray, and a later rotation's window replaces it. The window
 gets only how it went: the key never reaches a webview. `core_call` refuses every path under
 `/management-key`, however it is spelled. If the new key cannot be saved, the app keeps using
@@ -743,12 +752,12 @@ checked.
 This is a check that cooperates with the person, not a sandbox: another program of the same user
 can change files between a check and a read.
 
-## Native confirmations (Linux)
+## Native confirmations
 
 Native code prepares each immutable action with its requester chain, executing package, full
 source/digest/signer/contract/generation, selected and resolved file identities, and launch recipe
-where applicable. The main window can ask to review that preparation's opaque ID. A GTK dialog
-shows the action and, for a native tool, “full access to your user account”. Only its native
+where applicable. The main window can ask to review that preparation's opaque ID. A native dialog
+(GTK on Linux, Win32 on Windows, AppKit on macOS) shows the action and, for a native tool, “full access to your user account”. Only its native
 response handler issues approval. No IPC command accepts an approval result, gesture flag or token
 consumption request. Page webviews have no confirmation capability.
 
@@ -767,9 +776,18 @@ safely preserved. Newly created settings folders use mode 0700 and files use 060
 save, an existing folder owned by this user is tightened to 0700 if group/world-writable; a folder
 owned by another user is refused. Disabled persistence hides Remember. If saving fails after
 confirmation, the one-time token is still issued and a native notice/log reports the failure.
+On Windows the same checks read the owner and access list instead of the mode: the file and
+folder must be owned by this user, by the owner this process gives what it makes (for an elevated
+administrator, the Administrators group) or by SYSTEM, and have a protected access list (one that
+takes nothing from its folder's) whose allow entries are only this user's and SYSTEM's; a missing
+access list is refused. A new or unsafe folder, and each file the app saves, gets such a list
+(the folder's inherited by what is made in it). Reparse points (symbolic links and junctions) are
+refused as symlinks are on Unix. The app tools' file library (`next/app-tools/lib/files`) uses the
+same rule.
 
 An executable is opened before checking its canonical path, device/inode, size, mtime, ctime and
-mode. SHA-256 is computed once for that metadata and cached in memory; unchanged metadata reuses
+mode (on Windows: the volume serial number and file index, size, last write and change times, and
+attributes; a program is a file ending in `.exe`, `.com`, `.bat` or `.cmd`). SHA-256 is computed once for that metadata and cached in memory; unchanged metadata reuses
 it. A new app process hashes once before using persisted approvals. Metadata changes or same-path
 replacement require review again. A consumed token exposes the checked open executable and cwd
 handles for a later launcher to use with `fexecve` and `fchdir`. The executable handle is opened
@@ -787,10 +805,12 @@ a remembered approval, and only those dialogs offer Remember. Gesture constructi
 is private to native handlers and fixtures, and a gesture expires after five seconds.
 
 Page Start uses the separate native entry point, always opens a fresh dialog, permits one pending
-confirmation per original package and one attempt per second, and shows a GTK notice with
+confirmation per original package and one attempt per second, and shows a native notice with
 requester, action and outcome, including refusals. Page/Import pending entries have their own
 limit of 16; trusted requests have a separate limit of 64. Page dialogs focus Cancel and keep
-Confirm disabled for one second after mapping. Non-UTF-8 paths are refused before review;
+Confirm disabled for one second after mapping. (On macOS a button takes the keyboard focus only
+with full keyboard access turned on; Cancel is the default button there, which Return presses.)
+A launch that opens a file in the person's own app is refused before review off Linux. Non-UTF-8 paths are refused before review;
 Unicode format characters (including bidi and zero-width characters), control characters and
 Pango line separators (U+2028/U+2029) are displayed as escaped Unicode.
 
@@ -1371,7 +1391,7 @@ around the test-feature dev binary, and on the test package under a neutral name
 own: the first two pass and the rest are refused.
 
 The same native run uses fixture actions (compiled only with `native-test`) and real X input
-from `xdotool` to confirm, cancel, opt into remembering, click a native Start button and revoke
+from `xdotool` (on Windows and macOS, the UI driver's input: see [Limits](#limits)) to confirm, cancel, opt into remembering, click a native Start button and revoke
 in native settings. It checks one-use token consumption and open handles, page command/message
 spoof refusal, exact native-gesture reuse without a dialog, different-chain review, changed
 executable metadata and same-path replacement review, revoked-token refusal, and page Start flood
@@ -1498,27 +1518,36 @@ The app's updater ([Application update](#application-update)) calls it.
 ## Platforms
 
 Linux is the only platform the app supports now: what this README describes is Linux's unless a
-passage names another system (as [Packages](#packages) does), and so is every check in
-[Build and check](#build-and-check). Windows, macOS and WSL are later work,
-and the Linux checks say nothing about them. Some groundwork for them is merged, and CI runs it on
-GitHub-hosted Windows and macOS runners, but it does not make the app supported there:
+passage names another system (as the management key's dialogs, [Native
+confirmations](#native-confirmations) and [Packages](#packages) do), and so is every check in
+[Build and check](#build-and-check). Windows, macOS and WSL are later work, and the Linux checks
+say nothing about them. Some groundwork for them is merged, and CI runs it on GitHub-hosted
+Windows and macOS runners (`.github/workflows/next-app-platforms.yml`), but it does not make the
+app supported there:
 
-- The app's crate builds and passes clippy and its Rust tests there
-  (`.github/workflows/next-app-platforms.yml`).
-- A smaller native test (`native/platform.ts`, with the sessions in `PLATFORM_SHARDS` in
-  `native/shards.ts`) checks one app per profile (a named pipe on Windows, a Unix socket on macOS),
-  the login item (the `Run` key on Windows, a LaunchAgent on macOS), the tray and the close
-  preference, and the test package and the release gate ([Packages](#packages)).
+- The app's crate builds and passes clippy and its Rust tests there.
+- The management key's native entry and rotation, and the native confirmations, have Win32
+  dialogs on Windows and AppKit dialogs on macOS ([How the app reaches core](#how-the-app-reaches-core),
+  [Native confirmations](#native-confirmations)).
+- Three parts of the native test run there:
+  - the platform session (`native/platform.ts`, `PLATFORM_SHARDS` in `native/shards.ts`): one app
+    per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
+    Windows, a LaunchAgent on macOS), the tray and the close preference;
+  - the package session: the test package and the release gate ([Packages](#packages));
+  - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
+    test core, with the window's and page's command probes, the native confirmations, key entry and
+    key rotation. [Limits](#limits) says how its input is made.
 - The vault's private storage is built and unit tested there ([Limits](#limits)).
 - On Windows, the page document's address is `http://pluxy-page.localhost/`, and the app holds a
   page's frame to its site through WebView2's frame navigation event (`src-tauri/src/page_frames.rs`).
 - The app tools' readers, usage parsers and execution program build and pass their tests there,
   and `pluxy/wsl` lists WSL distributions and users ([app tools](../app-tools/README.md)).
 
-What needs a native confirmation, native key entry or the program host refuses at run time there:
-key entry, every native confirmation, native tools (so the client pages, the launcher, the
-vault's use and Access), installing or adopting the app's own core, changing the release feed and
-opening an address in the browser. The app updates itself only as a Linux AppImage.
+Still refused at run time there: native tools (so the client pages, the launcher, Access, native
+imports, client keys, core aliases, and the vault's use and its secret entry), the app's own core
+(its versions, install, adoption and start, so process ownership too), installing a package from
+a file, a launch that opens a file, changing the release feed and opening an address in the
+browser. The app updates itself only as a Linux AppImage.
 
 ## Limits
 
@@ -1539,8 +1568,17 @@ opening an address in the browser. The app updates itself only as a Linux AppIma
 - Access: Linux only (5.8 or later: grants record the `statx` mount ID); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test this README describes (`native/run.ts`) runs on Linux only.
-  [Platforms](#platforms) says what CI runs on Windows and macOS, and what refuses there.
+- The native test runs on Linux, except its platform, package and dialogs sessions, which CI
+  runs on Windows and macOS ([Platforms](#platforms) says what they check and what still refuses
+  there).
+- The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
+  account's known folders, which no environment variable redirects, so it refuses to start when
+  they exist and removes only the ones it made. Its input does not come from a keyboard: on
+  Windows it is `SendInput` when the dialog has the foreground, otherwise the same key messages
+  posted to the focused control; on macOS key and mouse events made in the app and given to
+  AppKit. Both go through the app's real message handling and the dialogs' controls, but miss
+  what only a person at the machine would hit, such as another app taking the keyboard. The
+  session's summary counts which way each input went.
 - No installer or bundled core yet: the only packages are the test AppImage, the test folder
   bundle (Windows) and the test app bundle (macOS), which are not for release.
   The app updates only itself, only as an AppImage, on Linux x86_64, and only with test updater
@@ -1559,11 +1597,16 @@ opening an address in the browser. The app updates itself only as a Linux AppIma
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.
-- Native key entry is implemented on Linux only. Windows and macOS refuse key entry until
-  their native dialogs are implemented; there is no webview entry fallback.
+- Native key entry and confirmations have no webview entry fallback on any system
+  ([Platforms](#platforms) says where they run). Secret entry for the vault and client keys stays
+  Linux only, with the vault.
+- The native dialogs on Windows and macOS are not modal to the whole app: only key entry is modal,
+  to the window. No dialog runs a modal loop of its own, which would hold the app's other work.
 - Hidden native entry keeps keys out of the webview API. It does not isolate them from another
   process with the same user's operating-system access, and transient native buffers are not
-  guaranteed to be erased from memory.
+  guaranteed to be erased from memory. macOS turns on Secure Event Input while the secure field
+  has the focus; Windows has nothing like it, so a keyboard hook of the same user sees what is
+  typed.
 - A kept key is stored in `connection.json`, not in the system keyring.
 - The Linux native suite checks the app's own tray item in the watcher's registration list,
   drives its Start, Stop and Restart through the item's D-Bus menu, and checks startup without a

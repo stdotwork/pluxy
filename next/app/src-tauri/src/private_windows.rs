@@ -326,7 +326,6 @@ pub(crate) fn make_private(f: &File, folder: bool) -> io::Result<()> {
 /// between), then checks path as `make_private_dir` does: the `mkdir -p -m 0700` of `device.rs`'s
 /// `private_dir`. Folders that were there already, above path, are left as they are.
 pub(crate) fn create_private_dir_all(path: &std::path::Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
     let mut missing = Vec::new();
@@ -357,7 +356,7 @@ pub(crate) fn create_private_dir_all(path: &std::path::Path) -> io::Result<()> {
                 h(dir)
             }
         });
-        let name: Vec<u16> = dir.as_os_str().encode_wide().chain([0]).collect();
+        let name = verbatim(dir)?;
         // SAFETY: name is NUL-terminated; sa and its descriptor live through the call.
         if unsafe { CreateDirectoryW(name.as_ptr(), &sa) } == 0 {
             let e = io::Error::last_os_error();
@@ -373,6 +372,78 @@ pub(crate) fn create_private_dir_all(path: &std::path::Path) -> io::Result<()> {
         }
     }
     make_private_dir(path)
+}
+
+/// path as a NUL-terminated wide string for the calls that make files and folders: absolute, in
+/// its `\\?\` form (a share as `\\?\UNC\`), which takes any length, as std's own opens do for
+/// a long path. A plain path longer than MAX_PATH fails there with ERROR_PATH_NOT_FOUND.
+fn verbatim(path: &std::path::Path) -> io::Result<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt;
+    let w: Vec<u16> = std::path::absolute(path)?
+        .as_os_str()
+        .encode_wide()
+        .collect();
+    if w.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a NUL in the path",
+        ));
+    }
+    let backslash = u16::from(b'\\');
+    let prefix: Vec<u16> = if w.starts_with(&[backslash, backslash]) {
+        // `\\?\` and `\\.\` already; a share (`\\server\share`) as `\\?\UNC\server\share`.
+        if w.get(2)
+            .is_some_and(|&c| c == u16::from(b'?') || c == u16::from(b'.'))
+        {
+            Vec::new()
+        } else {
+            return Ok(r"\\?\UNC"
+                .encode_utf16()
+                .chain(w[1..].iter().copied())
+                .chain([0])
+                .collect());
+        }
+    } else {
+        r"\\?\".encode_utf16().collect()
+    };
+    Ok(prefix.into_iter().chain(w).chain([0]).collect())
+}
+
+/// Creates the file path, which must not exist, for writing, private as it is made (the
+/// `O_CREAT|O_EXCL` with 0600 of Linux and macOS): an existing path, a link too, is an
+/// `AlreadyExists` error.
+pub(crate) fn create_new_private(path: &std::path::Path) -> io::Result<File> {
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
+    };
+    let name = verbatim(path)?;
+    let private = Private::new(false)?;
+    let sa = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: private.descriptor(),
+        bInheritHandle: 0,
+    };
+    // SAFETY: name is NUL-terminated; sa and its descriptor live through the call.
+    let h = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            &sa,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            null_mut(),
+        )
+    };
+    if h == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: h is the handle CreateFileW opened, owned by nothing else.
+    Ok(unsafe { File::from_raw_handle(h as _) })
 }
 
 /// For the tests: called with each folder `create_private_dir_all` is about to make, to make it

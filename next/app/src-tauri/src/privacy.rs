@@ -1,4 +1,4 @@
-//! Privacy mode, kept in `privacy-mode.json` beside `connection.json` (a JSON `true` or `false`,
+//! Privacy mode, kept in `privacy-mode.json` in the app's config folder (a JSON `true` or `false`,
 //! readable only by this user). It is kept outside the window's webview so that losing the
 //! webview's storage cannot turn it off while the person shares their screen; for the same
 //! reason a file that cannot be read or parsed counts as on.

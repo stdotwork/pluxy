@@ -211,7 +211,7 @@ feature, it keeps the old label, unless the label named something this core does
   storage, so no other browser saw them.
 - "Edit", and copying a key made earlier: core shows a key in full only once, when it is made.
 - "Set management key": "Rotate" makes a new random key, shows it once and signs the panel in
-  with it. In the desktop app, on Linux, "Rotate" keeps the new key natively and shows it in a
+  with it. In the desktop app, "Rotate" keeps the new key natively and shows it in a
   native window, never in a webview ([the app's README](../app/README.md#how-the-app-reaches-core)).
 
 **System**
