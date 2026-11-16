@@ -131,7 +131,9 @@ so that is not support.
 ## What an optional tool costs
 
 - **Not installed:** none of its code is on disk. The client pages and Beginner Mode are part of the
-  window, but a client page whose tool is missing only says how to install it.
+  window. The navigation lists a client's page by default only when its tool is installed (the Manage
+  Clients page can list any, and Beginner Mode offers them all), and a client page whose tool is
+  missing only says how to install it.
 - **Installed, disabled:** its files sit in the app's package store. Nothing runs, and a call to it
   is refused.
 - **Enabled:** no process until something calls it. The app starts it for a call and stops it 30
@@ -161,7 +163,7 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Kimi Code, OpenClaw, ZCode, DeepSeek Harness, WorkBuddy, Antigravity CLI, Copilot CLI and VSCode Copilot setup and launch | Deferred | The rebuild covers the main clients first; these follow later | Not in the app yet |
 | Client setup inside WSL distributions | Deferred | Part of the later Windows work | `pluxy/wsl` lists distributions and users and prepares launches, but the app's side is not built |
 | Executable and folder overrides, terminal choice and recent working folders | Kept | They let a launch use the person's own install and folders | Each client's Start CLI and the Launcher page |
-| Showing, hiding, searching and resetting the list of clients | Kept: being built (P8-clientlist) | The person chooses which clients the navigation shows | Not in the app yet: all eight client pages always show |
+| Showing, hiding, searching and resetting the list of clients | Kept | The person chooses which clients the navigation shows | The Manage Clients page ([README](README.md#manage-clients)): by default the navigation lists the clients whose tool is installed |
 | Codex's OAuth sign-in method and its OpenAI provider-identity switch | Deferred | Not built now: the core takes no ChatGPT login from a client, so the sign-in could not reach it. A later change could add a separate Codex profile for it | Codex uses a client key |
 | Codex model catalog fetched silently | Dropped | The catalog changes only when the person asks | **Import models from core** on the Codex page |
 | Pi's provider plugin installed with `pi install` from npm | Replaced | npm serves whatever is published at that moment | A reviewed copy carried by `pluxy/pi-setup` |
