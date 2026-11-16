@@ -1616,9 +1616,27 @@ fn paths_on_windows_drives_are_known_by_their_mount() {
                    3 1 0:53 / /home rw - ext4 /dev/sdd rw\n";
     assert!(target::on_windows_drive(at_root, Path::new("/c/x")));
     assert!(!target::on_windows_drive(at_root, Path::new("/home/bob")));
-    // Without WSL's environment nothing is refused: no PLUXY_ENVIRONMENT in a test process.
-    if std::env::var_os("PLUXY_ENVIRONMENT").is_none() {
-        assert!(target::refuse_windows_drive(&[Path::new("/mnt/c/x")]).is_ok());
+    // As in WSL, with these mounts: refused, and a Linux path is not.
+    let (drive, linux) = (Path::new("/mnt/c/x"), Path::new("/home/bob/.claude"));
+    target::WSL_MOUNTS.with(|m| *m.borrow_mut() = Some(MOUNTINFO.to_string()));
+    let (refused, kept) = (
+        target::refuse_windows_drive(&[drive]),
+        target::refuse_windows_drive(&[linux]),
+    );
+    target::WSL_MOUNTS.with(|m| *m.borrow_mut() = None);
+    assert_eq!(refused.unwrap_err().message, ON_DRIVE);
+    assert!(kept.is_ok());
+    // This process as it runs: refused only with WSL's environment set (the WSL job runs this
+    // suite inside a distribution with it) and the path on a drive by the real mounts.
+    let in_wsl = std::env::var_os("PLUXY_ENVIRONMENT").is_some_and(|v| !v.is_empty());
+    let real = std::fs::read_to_string("/proc/self/mountinfo").unwrap();
+    for p in [drive, linux] {
+        assert_eq!(
+            target::refuse_windows_drive(&[p]).is_err(),
+            in_wsl && target::on_windows_drive(&real, p),
+            "{} (PLUXY_ENVIRONMENT set: {in_wsl})",
+            p.display()
+        );
     }
 }
 

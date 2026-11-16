@@ -49,9 +49,12 @@ fn every_operation_is_a_read_and_the_program_is_windows_only() {
     );
     for o in ops.iter().skip(1) {
         let p = &o["input_schema"]["properties"];
-        assert_eq!(p["distro"]["maxLength"], crate::list::MAX_DISTRO);
+        // The design's limits: 64 characters for a distribution, 32 bytes for a user.
+        assert_eq!(p["distro"]["maxLength"], 64);
+        assert_eq!(crate::list::MAX_DISTRO, 64);
         if o["id"] != "users" {
-            assert_eq!(p["user"]["maxLength"], crate::list::MAX_USER);
+            assert_eq!(p["user"]["maxLength"], 32);
+            assert_eq!(crate::list::MAX_USER, 32);
         }
     }
 }
