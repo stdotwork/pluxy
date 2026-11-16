@@ -32,7 +32,7 @@ defaults:
 jobs:
   app:
     name: app (${{ matrix.os }})
-    runs-on: ${{ matrix.os == 'windows-latest' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.PLUXY_WINDOWS_RUNNER && fromJSON(vars.PLUXY_WINDOWS_RUNNER) || matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
