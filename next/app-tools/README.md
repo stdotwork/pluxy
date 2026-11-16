@@ -177,6 +177,7 @@ journal store of its own. Linux.
 | `backup_delete(set, id)` | Deletes version `id` from the state file and the vault. |
 | `backup_call(call, tx, set, leaves)`, `backup_operations(files)` | The backup browser's standard operations, which every writer exports with exactly these manifest entries (`files` targets per version) and serves with `backup_call`: `backup-list`, `backup-diff` (reads), `backup-create`, `backup-restore`, `backup-delete` (writes, each confirmed). The app's shared backup browser (`../app/src/backups.tsx`) calls them. |
 | `Leaves`, `json_leaves` | A writer's reading of its file into settings for a diff (path and value, in file order; None when it cannot read it), and the one for JSON files: objects by key, arrays and other values as one setting each. |
+| `toml` (feature `toml`), `yaml` (feature `yaml`) | The in-place editors of config files, shared by the setup tools, each behind its own cargo feature so a tool compiles only the parser it uses (both are off by default). `toml` (toml_edit, pinned) reads a file as a document that keeps its comments and formatting, sets a key where it stands (`set`, `table_mut`) and makes Clear's three-way merge into the file as it is now (`merge`, `leaves`); a tool gives it its own `parse` and the opening words of its refusals. `yaml` (saphyr and yaml-edit) reads a file as YAML 1.2 into a JSON value (`parse`), edits only the keys whose values differ through a lossless tree and reads the result again (`edit`), and is a `Merge` for Clear (`Yamls`); a tool gives it the program's name for the one refusal that names it. What a tool writes and refuses stays in the tool. |
 
 How a write goes:
 
@@ -848,8 +849,8 @@ What `apply` writes, as `hermes model` does for a provider of the `providers:` m
   `api_key_env` there are removed (`key_env` would win over the entry's key). A `model:` written as
   plain text, the default model, becomes a mapping, as Hermes itself does. Everything else stays.
 
-The file is edited in place through a lossless YAML tree (yaml-edit; the same code as
-`omp-setup`): comments, key order, quoting and indentation stay, and only keys whose values change
+The file is edited in place through a lossless YAML tree (yaml-edit; the library's YAML
+editor, shared with `omp-setup`): comments, key order, quoting and indentation stay, and only keys whose values change
 are touched. It is read as YAML 1.2 (saphyr) and every edited file is read again and must hold
 exactly the intended value, else nothing is written. Hermes reads it with YAML 1.1 rules (ruamel),
 which take some plain words and numbers differently, so the key and the model pluxy writes are

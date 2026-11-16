@@ -28,9 +28,17 @@ mod b64;
 mod backups;
 mod merge;
 mod target;
+#[cfg(feature = "toml")]
+pub mod toml;
+#[cfg(feature = "yaml")]
+pub mod yaml;
 
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, feature = "toml"))]
+mod toml_tests;
+#[cfg(all(test, feature = "yaml"))]
+mod yaml_tests;
 
 pub use backups::{backup_call, backup_operations, json_leaves, Leaves, KEEP_BACKUPS};
 pub use merge::{merge_value, Json, Merge};
