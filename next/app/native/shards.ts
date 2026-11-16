@@ -22,6 +22,8 @@ export const SHARDS: Record<string, readonly string[]> = {
     "open",
     "save",
     "claude-desktop",
+    "opencode",
+    "omp",
   ],
   // About 7 minutes.
   app: [

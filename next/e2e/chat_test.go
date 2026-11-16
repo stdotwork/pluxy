@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -172,6 +173,18 @@ func (l *coreLog) add(line string) {
 	l.lines = append(l.lines, line)
 }
 
+// contains reports whether a line of core's log so far contains s.
+func (l *coreLog) contains(s string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, line := range l.lines {
+		if strings.Contains(line, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // waitFor returns core's log once a line contains s, failing the test if none does in time.
 func (l *coreLog) waitFor(t *testing.T, s string) string {
 	t.Helper()
@@ -249,6 +262,17 @@ func runCoreFile(t *testing.T, path string, args ...string) (string, *coreLog) {
 // runCoreBin is runCoreFile for the program at bin, which may be built with other tags.
 func runCoreBin(t *testing.T, bin, path string, args ...string) (string, *coreLog) {
 	t.Helper()
+	base, logs, err := startCoreBin(t, bin, path, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base, logs
+}
+
+// startCoreBin is runCoreBin that returns why core did not start instead of failing the test. The
+// log is returned in every case.
+func startCoreBin(t *testing.T, bin, path string, args ...string) (string, *coreLog, error) {
+	t.Helper()
 	logs := &coreLog{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, bin, append([]string{"-config", path}, args...)...)
@@ -287,12 +311,34 @@ func runCoreBin(t *testing.T, bin, path string, args ...string) (string, *coreLo
 	select {
 	case a, ok := <-addr:
 		if !ok {
-			t.Fatal("core exited before listening")
+			return "", logs, errors.New("core exited before listening")
 		}
-		return a, logs
+		return a, logs, nil
 	case <-time.After(15 * time.Second):
-		t.Fatal("core did not report its listening address")
-		return "", nil
+		return "", logs, errors.New("core did not report its listening address")
+	}
+}
+
+// startOnFreePort starts core at bin on the config file at path, which content makes with a port
+// that freePort picked. A port can be taken after freePort returns and before core binds it; core
+// then exits with "address already in use". The file is then written again with another port and
+// core started again, up to five times: the retry TestPprofReloadStartsMovesAndStops makes for a
+// reload. It returns the address core reports, the port content was made with and core's log.
+func startOnFreePort(t *testing.T, bin, path string, content func(port int) []byte, args ...string) (string, int, *coreLog) {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		port := freePort(t)
+		if err := os.WriteFile(path, content(port), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		base, logs, err := startCoreBin(t, bin, path, args...)
+		if err == nil {
+			return base, port, logs
+		}
+		if attempt == 5 || !logs.contains("address already in use") {
+			t.Fatal(err)
+		}
+		t.Logf("port %d was taken before core bound it; starting core on another port", port)
 	}
 }
 

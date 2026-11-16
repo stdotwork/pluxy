@@ -172,6 +172,27 @@
 // shape refuse; its recipe starts a stand-in claude-desktop through the launcher with no key in argv
 // or environment; the key and a login canary stay out of every window answer, confirmation and
 // the app's output, and removing the package leaves no process.
+// The OpenCode check (opencode.ts, opencode_native.rs) runs in one more session with that build:
+// pluxy/opencode (next/app-tools/opencode, built here) with the execution program reads the
+// person's global config (opencode.jsonc over an older opencode.json, as OpenCode does), then
+// applies, clears and restores it in the run's HOME to hand-written bytes, after a native
+// confirmation naming the file and the key's label, keeping comments, trailing commas, the person's
+// later edits and their own provider; a Manual Backup restores over an edit; through a stow link
+// and a chezmoi-style root it changes only the target, a replaced target refuses, configs of
+// another schema or syntax refuse; its recipes start a stand-in opencode (from the PATH, then from
+// OpenCode's install-script place) in a terminal and a stand-in desktop app through the launcher
+// with no key in argv or environment; the key and a login canary stay out of every window answer,
+// confirmation and the app's output, and removing the package leaves no process.
+// The Oh My Pi check (omp.ts, omp_native.rs) runs in one more session with that build:
+// pluxy/omp-setup (next/app-tools/omp-setup, built here) with the execution program applies,
+// clears and restores Oh My Pi's models and settings in the run's HOME to hand-written bytes, after
+// a native confirmation naming both files and the key's label, keeping the person's providers,
+// comments, later edits and credential store; through a stow link and a chezmoi-style root it
+// changes only the target, a replaced target refuses, files Oh My Pi would not take refuse; its
+// recipe starts a stand-in omp (from the PATH, then from the install script's place; bun's place
+// comes first) in a terminal through the launcher with no key in argv or environment; the key and
+// a login canary stay out of every window answer, confirmation and the app's output, and removing
+// the package leaves no process.
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
@@ -216,7 +237,9 @@ import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
 import { runInstances } from "./instances";
 import { buildLauncherFixtures } from "./launcher";
+import { buildOmpFixtures } from "./omp";
 import { buildOpenFixtures } from "./open";
+import { buildOpenCodeFixtures } from "./opencode";
 import { descendants, webProcesses } from "./processes";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
@@ -242,6 +265,22 @@ const TEST_PRODUCT = "pluxy Test";
 const commands = [
   ...readFileSync(join(tauri, "src", "command_names.rs"), "utf8").matchAll(/^\s+"(\w+)",$/gm),
 ].map((m) => m[1] as string);
+/** Every command of the plugins the build registers, from the ACL manifests Tauri's build
+ * writes (as lib.rs plugin_commands reads them); read once the app is built. */
+function pluginCommands(): string[] {
+  const manifests = JSON.parse(readFileSync(join(tauri, "gen", "schemas", "acl-manifests.json"), "utf8"));
+  const all = new Set<string>();
+  for (const [plugin, manifest] of Object.entries<{
+    permissions?: Record<string, { commands?: { allow?: string[]; deny?: string[] } }>;
+  }>(manifests)) {
+    if (plugin === "__app-acl__") continue;
+    const name = plugin.replace(/^core:/, "");
+    for (const p of Object.values(manifest.permissions ?? {}))
+      for (const c of [...(p.commands?.allow ?? []), ...(p.commands?.deny ?? [])])
+        all.add(`plugin:${name}|${c}`);
+  }
+  return [...all];
+}
 const PAGE = "ext/test/probe/probe";
 /** Tauri's command check refusing a call (debug builds say where; release builds "by ACL"). */
 const REFUSED = /not allowed( on window|\. Permissions associated| by ACL)/;
@@ -666,7 +705,8 @@ interface Rotation {
  * claudeCode: only the Claude Code setup and launcher check. openCheck: only the check of a tool
  * opening a file in the person's own app. codex: only the Codex setup and launcher check.
  * save: only the save-file check.
- * claudeDesktop: only the Claude Desktop setup and launcher check.
+ * claudeDesktop: only the Claude Desktop setup and launcher check. opencode: only the OpenCode
+ * setup and launcher check. omp: only the Oh My Pi setup and launcher check.
  */
 async function runApp(
   mode: Mode,
@@ -696,6 +736,8 @@ async function runApp(
   codex = false,
   save = false,
   claudeDesktop = false,
+  opencode = false,
+  omp = false,
 ): Promise<string[]> {
   if (currentSession === undefined)
     throw new Error(
@@ -786,6 +828,8 @@ async function runApp(
       !claudeCode &&
       !codex &&
       !claudeDesktop &&
+      !opencode &&
+      !omp &&
       !usage &&
       !save &&
       suite !== "access"
@@ -1034,6 +1078,50 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The OpenCode check's signed packages, OpenCode's files in HOME, its stand-in terminal,
+    // opencode and desktop app, its registry and trust profile, and its key and login canary.
+    const opencodeDir = opencode ? join(root, "opencode") : undefined;
+    if (opencodeDir) {
+      mkdirSync(opencodeDir);
+      const f = buildOpenCodeFixtures(
+        opencodeDir,
+        dirs.home,
+        opencodeProgram,
+        opencodeManifest,
+        executionProgram,
+        executionManifest,
+      );
+      nonce = f.nonce;
+      canaries = f.canaries;
+      launcherBin = f.bin;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
+    // The Oh My Pi check's signed packages, Oh My Pi's files in HOME, its stand-in terminal, omp and
+    // installed copies, its registry and trust profile, and its key and login canary.
+    const ompDir = omp ? join(root, "omp") : undefined;
+    if (ompDir) {
+      mkdirSync(ompDir);
+      const f = buildOmpFixtures(
+        ompDir,
+        dirs.home,
+        ompProgram,
+        ompManifest,
+        executionProgram,
+        executionManifest,
+      );
+      nonce = f.nonce;
+      canaries = f.canaries;
+      launcherBin = f.bin;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     if (curated) {
       mkdirSync(curated);
       if (device) mkdirSync(device);
@@ -1067,7 +1155,9 @@ async function runApp(
       !saveDir &&
       !claudeCodeDir &&
       !codexDir &&
-      !claudeDesktopDir
+      !claudeDesktopDir &&
+      !opencodeDir &&
+      !ompDir
     ) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
@@ -1136,6 +1226,8 @@ async function runApp(
       ...(claudeCodeDir ? { PLUXY_APP_TEST_CLAUDE_CODE: claudeCodeDir } : {}),
       ...(codexDir ? { PLUXY_APP_TEST_CODEX: codexDir } : {}),
       ...(claudeDesktopDir ? { PLUXY_APP_TEST_CLAUDE_DESKTOP: claudeDesktopDir } : {}),
+      ...(opencodeDir ? { PLUXY_APP_TEST_OPENCODE: opencodeDir } : {}),
+      ...(ompDir ? { PLUXY_APP_TEST_OMP: ompDir } : {}),
       ...(usageDir ? { PLUXY_APP_TEST_USAGE: usageDir } : {}),
       ...(saveDir ? { PLUXY_APP_TEST_SAVE: saveDir } : {}),
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
@@ -1502,6 +1594,26 @@ async function runApp(
       return problems;
     }
 
+    if (opencode) {
+      const r = steps.get("opencode") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the OpenCode check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} opencode ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: opencode ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
+    if (omp) {
+      const r = steps.get("omp") as { passed?: boolean } | undefined;
+      const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
+      check(r?.passed === true, `the Oh My Pi check did not complete: ${failure}`);
+      if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
+      console.log(`${mode} omp ${JSON.stringify(r ?? {})}`);
+      console.log(`${mode}: omp ${problems.length === 0 ? "ok" : "FAILED"}`);
+      return problems;
+    }
+
     if (transactions) {
       const r = steps.get("transactions") as { passed?: boolean } | undefined;
       const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
@@ -1715,7 +1827,10 @@ async function runApp(
       `the page webview after the window shrank: ${JSON.stringify(allocation)}`,
     );
     console.log(`${mode} page_allocation ${JSON.stringify(allocation)}`);
-    for (const cmd of commands) check(page?.calls[cmd], `the page webview's probe did not try ${cmd}`);
+    const plugins = pluginCommands();
+    check(plugins.length > 0, "no plugin commands in Tauri's ACL manifests");
+    for (const cmd of [...commands, ...plugins])
+      check(page?.calls[cmd], `the page webview's probe did not try ${cmd}`);
     for (const [cmd, c] of Object.entries(page?.calls ?? {})) {
       check(!c.ok && REFUSED.test(c.detail), `${cmd} from the page webview: ${JSON.stringify(c)}`);
     }
@@ -1732,6 +1847,49 @@ async function runApp(
       const fine = r.status === "blocked" || (r.status === "attempted" && what === "native message handler");
       check(fine, `from the page's frame, "${what}" ${r.status}: ${r.detail}`);
     }
+
+    // The frame's calls through a Tauri bridge of its own: it has none, and none succeeds.
+    const invoked = steps.get("frame_invoke") as Probe | undefined;
+    check(invoked?.internals === false, `the page's frame has a Tauri bridge: ${JSON.stringify(invoked)}`);
+    for (const cmd of [...commands, ...plugins])
+      check(invoked?.calls?.[cmd], `the page's frame did not try ${cmd}`);
+    for (const [cmd, c] of Object.entries(invoked?.calls ?? {}))
+      check(!c.ok, `${cmd} from the page's frame: ${JSON.stringify(c)}`);
+
+    // The frame's navigations off its site, each from a page of its own (native_test.rs
+    // frame_offsite): each stopped where the evidence shows, refused by the app's navigation
+    // handler or first by the app document's frame-src; none allowed, nothing reaching the page
+    // scheme's probe address, the frame still there and the channel open.
+    type OffsiteTry = {
+      url: string;
+      error?: unknown;
+      stopped?: string | null;
+      refused?: boolean;
+      allowed?: unknown[];
+      replaced?: unknown[];
+      stayed?: boolean;
+      open?: boolean;
+    };
+    const offsite = steps.get("frame_offsite") as { tried?: OffsiteTry[]; probe_hits?: number } | undefined;
+    check(
+      offsite?.tried?.length === 4,
+      `the page's frame did not try to leave its site: ${JSON.stringify(offsite)}`,
+    );
+    check(offsite?.probe_hits === 0, `an off-site try reached the page scheme: ${JSON.stringify(offsite)}`);
+    for (const t of offsite?.tried ?? []) {
+      const seen = JSON.stringify(t);
+      check(t.error == null, `the page's frame could not try ${t.url}: ${seen}`);
+      check(
+        (t.stopped === "hook" && t.refused === true) || t.stopped === "frame-src",
+        `nothing shows where ${t.url} stopped: ${seen}`,
+      );
+      check(t.allowed?.length === 0, `the app allowed the frame to ${t.url}: ${seen}`);
+      check(
+        t.stayed === true && t.open === true,
+        `the page's frame or channel did not hold for ${t.url}: ${seen}`,
+      );
+    }
+    console.log(`${label} frame_offsite ${JSON.stringify(offsite)}`);
 
     for (const [step, expected] of [
       ["ingress_site", { attempts: 1, arrivals: 0, blocked: true }],
@@ -2074,6 +2232,12 @@ const codexProgram = join(appToolsTarget, "debug", "codex-setup");
 /** pluxy/claude-desktop (next/app-tools/claude-desktop) and its manifest, for the Claude Desktop check. */
 const claudeDesktopManifest = join(appTools, "claude-desktop", "pluxy-extension.json");
 const claudeDesktopProgram = join(appToolsTarget, "debug", "claude-desktop");
+/** pluxy/opencode (next/app-tools/opencode) and its manifest, for the OpenCode check. */
+const opencodeManifest = join(appTools, "opencode", "pluxy-extension.json");
+const opencodeProgram = join(appToolsTarget, "debug", "opencode");
+/** pluxy/omp-setup (next/app-tools/omp-setup) and its manifest, for the Oh My Pi check. */
+const ompManifest = join(appTools, "omp-setup", "pluxy-extension.json");
+const ompProgram = join(appToolsTarget, "debug", "omp-setup");
 /** The transaction library's fixture writer the transaction library check packs. */
 const fixtureWriter = join(appToolsTarget, "debug", "examples", "fixture-writer");
 let appImage = ""; // the smoke AppImage the sessions run
@@ -2169,6 +2333,12 @@ async function main(): Promise<number> {
   // pluxy/claude-desktop, which the Claude Desktop check installs.
   if (existsSync(claudeDesktopManifest))
     run("cargo", ["build", "--locked", "-p", "claude-desktop", "--target-dir", appToolsTarget], appTools);
+  // pluxy/opencode, which the OpenCode check installs.
+  if (existsSync(opencodeManifest))
+    run("cargo", ["build", "--locked", "-p", "opencode", "--target-dir", appToolsTarget], appTools);
+  // pluxy/omp-setup, which the Oh My Pi check installs.
+  if (existsSync(ompManifest))
+    run("cargo", ["build", "--locked", "-p", "omp-setup", "--target-dir", appToolsTarget], appTools);
   // The build without artifact-test-trust, kept aside before the build with it replaces it. The
   // device check needs the one (a normal build refuses the curated native tool), the admission
   // session and the updater gate's identifier check the other (its features are the test
@@ -2706,6 +2876,75 @@ async function main(): Promise<number> {
             false,
             undefined,
             release,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
+      // The OpenCode setup and launcher check, on the same build.
+      if (runsSession("opencode"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+          )),
+        );
+      // The Oh My Pi setup and launcher check, on the same build.
+      if (runsSession("omp"))
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            managed,
+            undefined,
+            false,
+            false,
+            undefined,
+            undefined,
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            release,
+            false,
+            false,
             false,
             false,
             false,

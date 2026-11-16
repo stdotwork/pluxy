@@ -11,14 +11,15 @@ reference: this folder implements it, it does not change it.
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 cargo build --release --locked -p codex-sessions   # a small, stripped program (likewise agent-usage, usage-codex, usage-claude, usage-omp, usage-pi, usage-opencode)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
-cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup and execution
+cargo build --release --locked -p claude-code   # likewise claude-desktop, codex-setup, execution, omp-setup and opencode
 ```
 
-Platforms: every tool runs on Linux. The usage hub, the usage parsers and `codex-sessions` also
-build and are tested on Windows and macOS (`.github/workflows/next-app-tools-platforms.yml`), and
-their manifests name programs for `darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does
-not run native tools on those systems yet. `lib/transactions`, `claude-code`, `claude-desktop` and `codex-setup` are
-Linux only for now, and `execution` refuses every operation outside Linux.
+Platforms: every tool runs on Linux. The usage hub, the usage parsers, `codex-sessions` and
+`execution` also build and are tested on Windows and macOS
+(`.github/workflows/next-app-tools-platforms.yml`), and their manifests name programs for
+`darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does not run native tools on those
+systems yet. `lib/transactions`, `claude-code`, `claude-desktop` and `codex-setup` are Linux only
+for now.
 
 ## `lib/files`
 
@@ -639,6 +640,122 @@ each. A profile with `selfHostedUrl` set does not read back as configured. Apply
 owner-only (the library's rule: a key is in the profile, and the files sit beside it). None of these files has a
 version, and no minimum Claude Desktop version is assumed.
 
+## `opencode`
+
+`pluxy/opencode` sets up OpenCode to use pluxy's core and says how to start its CLI or desktop
+app, for the desktop app's OpenCode page (`../app/README.md`, "OpenCode"). It writes one config
+file through `lib/transactions` (set `opencode`): link-preserving, journalled, the original and
+applied images in the host's vault, and its manual backups (the backup browser). It exports
+nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: one selection (`file`, or `root` and `path`), by default OpenCode's global config in the app's `HOME` (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`, or `refused` with `reason` for a file OpenCode would not take, which is pinned all the same), `base_url` (the provider's), `key_set`, `model` (the default, when it is one of pluxy's), `default_model` (the file's `model` as `provider/model`), `models` (`id`, `name`, `attachment`), `old_provider` (the old desktop app's `cpa-gui` provider is there), `v2_provider` (OpenCode 2's `providers.pluxy` is there); never the key. The file is read again once if it changed between the pin and the read, then refused |
+| `apply` | `write`; secret `key` (value) | One pin, `base_url`, `key`, `models` (1 to 256: `id`, `name` (empty: the ID), `attachment`), `model` (one of them) | The library's outcome |
+| `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | `target`: `cli` (the default) or `app` | `{"client": "OpenCode", "kind": "terminal", "program": <~/.opencode/bin/opencode when it is an executable file there, else "opencode">, "args": []}`, or `{"client": "OpenCode Desktop", "kind": "direct", "program": "/opt/OpenCode/ai.opencode" (or `/opt/OpenCode/ai.opencode.desktop`, OpenCode 1's, when only that exists), "args": [], "cwd": <HOME>}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed by setting name as `json_leaves` reads JSON | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+OpenCode reads its global config from `~/.config/opencode/` (`$XDG_CONFIG_HOME/opencode`, or
+`$OPENCODE_CONFIG_DIR`): `opencode.json` and then `opencode.jsonc`, so the latter's values win
+(OpenCode 1.x also reads an older `config.json` first). The default file is the one OpenCode itself
+writes: `opencode.jsonc` if it exists, else `opencode.json` if it exists, else a new
+`opencode.jsonc`. The tool's environment holds no `XDG_CONFIG_HOME` or `OPENCODE_CONFIG*`, so a
+person who uses them selects that file or folder; project configs and `OPENCODE_CONFIG_CONTENT`
+still win over the global file, as in OpenCode. Read at source (anomalyco/opencode, tags v1.19.5
+and v2.3.0, 2026-11-14): `packages/opencode/src/config/config.ts` (1.x) and
+`packages/core/src/config.ts`, `config/discovery.ts`, `config/normalize.ts` (2.x).
+
+What `apply` writes, in the form both OpenCode 1.x reads and 2.x migrates when it loads it (2.x's
+own form, `providers`, is unknown to 1.x):
+
+- `provider.pluxy`: `npm` `@ai-sdk/openai-compatible`, `name` `pluxy`, `options.baseURL` (the
+  core's address with `/v1`) and `options.apiKey` (the client key), its other members kept;
+  `models` holds exactly the listed models, each with `name` and, with attachments,
+  `"attachment": true` and `modalities` input text, image and pdf, else input text only (output
+  text), an existing entry's other members kept;
+- `model`: `pluxy/<model>` (replacing a `{providerID, model}` default, which Clear brings back);
+- `$schema`: `https://opencode.ai/config.json`, first, only when the file names none.
+
+The file is edited in place through a JSONC syntax tree (jsonc-parser): comments, formatting,
+trailing commas and every other setting stay where they are, and new members follow the file's
+own style. Clear's three-way merge brings back what Apply replaced unless the person changed it
+since, and edits only what differs. An old desktop app's `cpa-gui` provider is left alone. A file
+with OpenCode 2's own `providers.pluxy` is never reported configured and `apply` refuses it, since
+OpenCode would use that entry instead; the person removes it. `configured` also needs `npm`
+`@ai-sdk/openai-compatible`, the base URL, the key and the default among pluxy's models. Every
+operation but `restore` refuses, before writing, a file OpenCode would not take as its own config
+(the preview reports it `refused`): not JSON or JSONC by OpenCode's parser rules (comments and
+trailing commas are fine; single quotes, bare keys, hexadecimal numbers or missing commas are not),
+a leading byte order mark, a key named twice in any object (arrays included), not an object, a
+`$schema` other than `https://opencode.ai/config.json`, a `provider`, `provider.pluxy`, its
+`options` or `models` (or a model entry) that is not an object, or a `model` that is neither
+`provider/model` text nor `{providerID, model}`.
+A missing or empty file is an empty one. Restore Backup puts the original back whatever the file
+holds now.
+
+## `omp-setup`
+
+`pluxy/omp-setup` sets up Oh My Pi to use pluxy's core and says how to start it, for the desktop
+app's Oh My Pi page (`../app/README.md`, "Oh My Pi"). It writes Oh My Pi's two files through
+`lib/transactions` (set `omp`, targets in this order: the models file, then the settings file):
+link-preserving, journalled, the original and applied images in the host's vault, and its manual
+backups (the backup browser). It exports nothing.
+
+| Operation | Effect | Input | Output |
+| --- | --- | --- | --- |
+| `preview` | `read` | `targets`: two selections (`file`, or `root` and `path`); or `folder`: an agent folder (it may be a link), whose two files are used; by default the two files in `~/.omp/agent` in the app's `HOME` (below); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `config`: `state` (`not-configured`, `configured`, `needs-update`), `base_url` (the provider's), `key_set`, `model` (the default role's, when it is pluxy's), `default_role` (the settings file's `modelRoles.default`), `legacy` (the old desktop app's `easy-cliproxyapi` provider is there); or, for files Oh My Pi would not take, `state` `refused` and `reason`; never the key |
+| `apply` | `write`; secret `key` (value) | Two pins, `base_url`, `key`, `model` (one model ID) | The library's outcome |
+| `clear` | `write` | Two pins | The library's outcome: the values Apply wrote go, edits made since stay |
+| `restore` | `write` | Two pins | The library's outcome: the original bytes back (Restore Backup) |
+| `status` | `read` | — | The library's status |
+| `recipe` | `read` | — | `{"client": "Oh My Pi", "kind": "terminal", "program": <~/.bun/bin/omp, else ~/.local/bin/omp, when an executable file is there, else "omp">, "args": []}`, for the launcher |
+| `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), both files per version, diffed by setting name (each file's YAML read as its value) | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
+
+Oh My Pi keeps its files in its agent folder, `~/.omp/agent` (`PI_CODING_AGENT_DIR` moves it;
+`PI_CONFIG_DIR` renames `.omp`; a profile, `OMP_PROFILE` or `--profile`, uses
+`~/.omp/profiles/<name>/agent`): `models.yml` (or an existing `models.yaml`) holds custom
+providers and models, `config.yml` (or an existing `config.yaml`) the settings, both YAML. The
+tool's environment holds none of those variables, so a person who uses them selects that folder or
+those files. Read at source (can1357/oh-my-pi at af8e4c142b2b, release v18.20.0, 2026-11-14):
+`packages/utils/src/dirs.ts`, `packages/coding-agent/src/config/config-file.ts`,
+`models-config-schema-bundle.ts`, `settings.ts` and `docs/models.md`, `docs/settings.md`.
+
+What `apply` writes:
+
+- in the models file, `providers.pluxy`: `baseUrl` (the core's address with `/v1`), `apiKey` (the
+  client key), `api` `openai-responses` and `discovery.type` `openai-models-list` (Oh My Pi lists
+  the core's models from its `/v1/models`); its other members, such as the person's own `models`,
+  `modelOverrides` or `headers`, and every other provider stay;
+- in the settings file, `modelRoles.default`: `pluxy/<model>`; the other roles and settings stay.
+
+Both files are edited in place through a lossless YAML tree (yaml-edit): comments, key order,
+quoting and indentation stay, and only keys whose values change are touched. Each file is read as
+YAML 1.2 (saphyr), as Oh My Pi's parser reads it, and every edited file is read again and must hold
+exactly the intended value, else nothing is written. Clear's three-way merge brings back what Apply
+replaced unless the person changed it since, and edits only what differs; a file Apply created that
+holds nothing else is removed. An old desktop app's `easy-cliproxyapi` provider is left alone. `apply`
+and `clear` refuse, before writing, files Oh My Pi would not take; `preview` pins them all the same
+and reports them `refused` with the reason, so Restore Backup and the backups still reach them: not
+UTF-8, not YAML (a repeated key too), more than one document, a top level that is not a mapping, a
+tag, a key that is not text or a number that is not finite, `providers`, `providers.pluxy` or its
+`discovery` not a mapping, `modelRoles` not a mapping, or `modelRoles.default` neither text nor a
+list of text. A missing or empty file, or one whose document is only `null`, is an empty one (apply
+gives it a mapping); a `null` mapping is an absent one, as Oh My Pi reads it. A list of default
+selectors (fallbacks in order) is the person's default, never pluxy's: apply replaces it with
+pluxy's model and Clear puts the list back. A preview reads the files once more if one changed
+between its pin and its read, and refuses if it changed again. Neither file has a version field, so
+none is checked. With neither YAML name in the folder, a legacy `models.json` or `settings.json`
+there refuses them too: Oh My Pi moves it into a
+new YAML file when it next starts, which a file made here would stop (settings Oh My Pi still holds
+in `agent.db` from an old version are not seen). The key may not start with `!` (Oh My Pi runs such
+a value as a command) or hold spaces; Oh My Pi first reads `apiKey` as an environment variable's
+name, so a key equal to a set variable's name would be replaced. The model is one ID: no spaces or
+commas (a role's fallbacks), not starting with `@` (a role) or `*`. Restore Backup puts the
+originals back whatever the files hold now.
+
 ## `execution`
 
 `pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, a program
@@ -694,3 +811,65 @@ A call from another package (a tool's import, or a page's) may prepare only an o
 terminal or direct preparation answers whether programs and folders exist, so only the app's own
 window asks for those.
 
+### On Windows and macOS
+
+There the execution program is also the terminal and the opener of the launches it prepares: the
+app runs it, as the confirmed launch, with arguments that name a launch mode, and it runs that
+mode instead of serving operations (as a tool it gets no arguments). A launch's `lifetime` and the
+host's checks are as on Linux.
+
+**Windows.** The terminals are `powershell` (PowerShell, Automatic's first), `cmd` (Command
+Prompt) and `console` (Console window). A terminal launch runs `<execution> terminal --with <kind>
+-- <program> <args>`, which the app starts in a new console: Windows shows it in the person's
+default terminal app (Windows Terminal, or the console host). The execution program runs the
+program there in the launch's folder and environment, leaving Ctrl+C to it, says how it ended,
+and then waits for Enter (`console`) or stays at a `cmd.exe /D` or `powershell.exe -NoLogo
+-NoProfile` prompt, both from the System32 folder Windows reports (never the launch's
+`SystemRoot`). There is no Windows Terminal kind:
+`wt.exe` splits its command line its own way, so the arguments confirmed would not be the ones
+it runs.
+
+A program is a PE image (`.exe` or `.com` starting with `MZ`), looked up as `<name>.com`,
+`.exe`, `.bat`, `.cmd` in each search path folder in turn. A batch file runs only as an npm, pnpm
+or Yarn command shim the execution program can read: it becomes what the shim runs, Node
+(`node.exe` beside the shim, else on the search path) with the shim's script and arguments, or
+the shim's own program; any other batch file is refused, since `cmd.exe` would read the
+arguments its own way. For the same reason `cmd.exe`, `wt.exe`, `conhost.exe` and the other
+programs that read their command line their own way start only with no arguments. The program (for a
+shim, what it runs) and the working folder are judged and confirmed by their final paths, links
+and short names resolved, so a link to `cmd.exe` is `cmd.exe`. Paths are shown
+and confirmed in their plain form (`C:\…`, not `\\?\C:\…`), and a path whose plain form would
+name another file (a name ending in a dot or a blank, a device name such as `NUL`) is refused.
+
+A direct launch may name a packaged app as `shell:AppsFolder\<AppUserModelID>` (such as the Codex
+app), with no arguments: `<execution> app -- <AppUserModelID>` starts it through the shell. An
+open launch runs `<execution> open -- <file>`, which opens the file with the app Windows has for
+its extension (`ShellExecuteExW`, verb `open`, the extension as its class, no dialog). The file
+must be `.txt`, `.json`, `.jsonl`, `.ndjson`, `.md` or `.log`, on a local drive, with no
+alternate data stream and a path shorter than 260 UTF-16 units, and some app must open its type:
+`prepare` checks that (the shell would report success and open nothing). Its folders must be real
+folders (no link, junction or other reparse point) writable by no one but the user, SYSTEM and
+Administrators.
+
+**macOS.** The terminal is Terminal (iTerm2 and Ghostty are not offered yet). A terminal launch
+runs `<execution> terminal --with terminal --app <Terminal.app> -- <program> <args>`. It makes a
+private folder in the per-user temporary folder with a Unix socket and a `.command` file, has
+Terminal open the file (`/usr/bin/open -a`), and hands the program, arguments, folder and
+environment over the socket to the first connection from this user; the file only runs
+`<execution> attach <socket>`, so nothing of the launch is written to a file or read by a shell.
+In the window, the program runs with the launch's environment and the window's own `TERM…`,
+`LC_TERMINAL…` and `PATH`. When macOS holds `open` back for 20 seconds (a quarantine or a
+permission prompt), the launch fails as blocked; when no window takes it within 60 seconds, as
+expired. A launch whose hand-over would be over 1 MiB (the program, arguments, folder and
+environment) is refused before Terminal opens.
+
+A direct launch may name an application bundle (`….app`) in `/Applications`, `~/Applications` or
+`/System/Applications`, with no arguments: it runs `/usr/bin/open -a <bundle>`. An open launch
+runs `/usr/bin/open <file>`, which opens the file in the app LaunchServices has for its type. The
+types are Windows' and Linux's, the file must carry no attribute that can choose another app
+(`com.apple.FinderInfo`, `com.apple.ResourceFork`, `com.apple.LaunchServices.OpenWith`), and
+LaunchServices must have an app for it.
+
+On both, an app launch carries nothing but the app (no environment, standard input, secret or
+managed lifetime), and a terminal launch takes no standard input: the execution program refuses
+either before the host is asked.

@@ -31,12 +31,12 @@ defaults:
 
 env:
   # The writer tools and their library, ported in a later change.
-  NOT_PORTED: --exclude pluxy-transactions --exclude claude-code --exclude claude-desktop --exclude codex-setup
+  NOT_PORTED: --exclude pluxy-transactions --exclude claude-code --exclude claude-desktop --exclude codex-setup --exclude opencode --exclude omp-setup
 
 jobs:
   tools:
     name: app tools (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'windows-latest' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_WINDOWS_RUNNER && fromJSON(vars.PLUXY_WINDOWS_RUNNER) || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -46,6 +46,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.97.0
         with:
