@@ -1153,7 +1153,15 @@ fn an_unknown_outcome_is_reported_at_the_next_start_and_never_sent_again() {
 fn a_swap_drains_the_old_release_and_serializes_calls_across_releases() {
     let v1 = package(Value::Null);
     let v2 = release(Value::Null, "1.1.0", 2);
-    let h = Arc::new(host_for(v1, fast()));
+    // Not stopped for idleness while the old release drains and is reaped, which a loaded machine
+    // can take longer than fast()'s idle delay to do: the swap starts the new one's idle time.
+    let h = Arc::new(host_for(
+        v1,
+        Limits {
+            idle: Duration::from_secs(60),
+            ..fast()
+        },
+    ));
     let first = summary(&h, &[]).unwrap();
     let (old, old_child) = pids(&first);
     // Held through the swap (hashing this test program can take longer than the idle delay).
@@ -1198,7 +1206,7 @@ fn a_swap_drains_the_old_release_and_serializes_calls_across_releases() {
     until("the old release to go", 5, || {
         !alive(old) && !alive(old_child) && h.status(ID).draining.is_empty()
     });
-    assert!(alive(new));
+    assert!(alive(new), "{:?}", h.status(ID));
     assert_eq!(h.status(ID).state, "ready");
     h.stop_all();
     assert!(!alive(new));
@@ -1262,6 +1270,9 @@ fn a_failed_or_abandoned_candidate_leaves_the_old_release_serving() {
 fn a_draining_release_is_stopped_at_the_drain_limit() {
     let mut limits = fast();
     limits.drain = Duration::from_millis(500);
+    // The new release is not stopped for idleness while the old one drains: the swap starts its
+    // idle time, and the drain limit and the reap take most of fast()'s idle delay.
+    limits.idle = Duration::from_secs(60);
     let h = Arc::new(host_for(package(Value::Null), limits));
     let (old, _) = pids(&summary(&h, &[]).unwrap());
     let waiting = call_in_thread(&h, "wait", json!({}));
