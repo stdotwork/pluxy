@@ -167,7 +167,8 @@ counts the system text, each message's role and text, reasoning, tool calls and 
 tools' names, descriptions and parameters, and the tool choice; images and files add nothing.
 `token_count_estimate` (top level, default `true`) turns the estimate off: core then answers an
 error saying the account cannot count. When every account tried can count, an error from an
-upstream that counts (a 400, 401 or 429) stays an error.
+upstream that counts (a 400, 401 or 429) stays an error, and so does a refusal under
+`drop_policy` `"reject"`.
 
 A model name may end in a thinking setting in brackets, as today's core reads it: a level
 (`gpt-5(high)`; `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), `none`, `auto`, or a token
