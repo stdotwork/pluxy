@@ -2089,6 +2089,13 @@ this core does not support yet, and one line naming the settings it ignores for 
 nothing and is not named, nor is any setting of a feature whose `enabled` switch is off.
 Neither line stops core from starting. Settings that did nothing in today's core either (marked
 "dead") are accepted without a word. A key today's core does not know is named as unknown.
+[`-import-auth`](#importing-todays-auth-folder) prints the same lines on standard error before it
+imports, so a migration sees them before core ever starts.
+
+A migrated config needs its management key set again once. Today's core writes a bcrypt hash over
+`management.secret-key` in the file after it reads the key, and this core cannot use a hash: it
+leaves the management API and the panel off and says why in its log. Replace the hash with the key
+itself, in plain text.
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
 `extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir` and `cors`
@@ -2223,7 +2230,9 @@ Environment variables today's core reads (`MANAGEMENT_PASSWORD`, `PGSTORE_*`, `G
 
 `-import-auth` copies the credential files in today's auth folder (the JSON files at its top
 level, as today's core reads them) into core's credential store (`credentials_dir`), prints what
-it imported and skipped, and exits. Run it while core is stopped, then start core. Each file
+it imported and skipped, and exits. Before that it prints the config's notices (the settings it
+ignores and a hashed management key, as in core's log) on standard error. Run it while core is
+stopped, then start core. Each file
 becomes an account added by login, with the file's name (less `.json`) as its ID, so running it
 again skips the files already imported. A file whose account ID the config or the store already
 uses is skipped, as is a file larger than 1 MiB. The import never changes the auth folder, and
