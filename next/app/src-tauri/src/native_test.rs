@@ -310,13 +310,13 @@ const ACTING: &[&str] = &[
     "app_update_cancel",
 ];
 
-// GTK dialogs, driven by xdotool: Linux only.
-#[cfg(target_os = "linux")]
 #[path = "key_entry_test.rs"]
 mod key_entry_test;
-#[cfg(target_os = "linux")]
 #[path = "rotation_test.rs"]
 mod rotation_test;
+/// How the native tests find, read and work the native dialogs on each platform.
+#[path = "ui_driver.rs"]
+pub(crate) mod ui;
 
 /// Reports the updater gate (`trust::updater_gate`) with what it read: the compiled test marker,
 /// identifier and product name. The app calls this first among the test's steps, right after the
@@ -338,7 +338,71 @@ pub fn updater_gate(app: &AppHandle) {
 }
 
 pub(crate) fn log(step: &str, v: Value) {
+    beat(&format!("after {step}"));
     eprintln!("native-test: {step} {v}");
+}
+
+/// The test thread's last sign of life, and what it was doing then, for the stall report.
+static BEAT: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+
+fn beat(what: &str) {
+    if let Ok(mut b) = BEAT.lock() {
+        *b = Some((Instant::now(), what.to_string()));
+    }
+}
+
+/// How long the test thread may go without a sign of life before the stall report: longer than
+/// any single call it makes (each wait beats every 200 ms between its tries).
+#[cfg(not(target_os = "linux"))]
+const STALL: Duration = Duration::from_secs(90);
+
+/// Off Linux, where the session has no other way to tell where a run stopped: once the test
+/// thread has given no sign of life for STALL, reports what it was waiting for, whether the main
+/// thread still answers, and which of the app's locks are held (step `stalled`), then again
+/// after each new sign of life that stalls.
+#[cfg(not(target_os = "linux"))]
+fn watch_stalls(app: AppHandle) {
+    use std::sync::TryLockError;
+    fn lock<T>(m: &Mutex<T>) -> &'static str {
+        match m.try_lock() {
+            Ok(_) => "free",
+            Err(TryLockError::WouldBlock) => "held",
+            Err(TryLockError::Poisoned(_)) => "poisoned",
+        }
+    }
+    std::thread::spawn(move || {
+        let mut reported: Option<Instant> = None;
+        loop {
+            std::thread::sleep(Duration::from_secs(5));
+            let Some((at, what)) = BEAT.lock().ok().and_then(|b| b.clone()) else {
+                continue;
+            };
+            if at.elapsed() < STALL || reported == Some(at) {
+                continue;
+            }
+            reported = Some(at);
+            let (tx, rx) = mpsc::channel();
+            let main_answers = app
+                .run_on_main_thread(move || {
+                    let _ = tx.send(());
+                })
+                .is_ok()
+                && rx.recv_timeout(Duration::from_secs(5)).is_ok();
+            let st = app.state::<App>();
+            // Printed, not logged: a log is a sign of life.
+            eprintln!(
+                "native-test: stalled {}",
+                json!({
+                    "idle_s": at.elapsed().as_secs(), "last": what, "main_thread_answers": main_answers,
+                    "locks": {
+                        "conn": lock(&st.conn), "pages": lock(&st.pages),
+                        "confirmations": lock(&st.confirmations), "closing": lock(&st.closing),
+                        "device": lock(&st.device), "core_change": lock(&st.core_change),
+                    },
+                })
+            );
+        }
+    });
 }
 
 fn probe_js(calls: &[&str]) -> String {
@@ -366,6 +430,7 @@ fn probe_js(calls: &[&str]) -> String {
 pub(crate) fn wait_for<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> Result<T, String> {
     let deadline = Instant::now() + WAIT;
     loop {
+        beat(what);
         if let Some(v) = f() {
             return Ok(v);
         }
@@ -401,7 +466,7 @@ const AREA: &str = "(() => { const r = document.querySelector('[data-part=extens
      return {x: r.left, y: r.top, width: r.width, height: r.height}; })()";
 
 /// f's result, run on the main thread (GTK widgets live there).
-fn on_main<T: Send + 'static>(
+pub(crate) fn on_main<T: Send + 'static>(
     app: &AppHandle,
     f: impl FnOnce() -> T + Send + 'static,
 ) -> Option<T> {
@@ -411,6 +476,22 @@ fn on_main<T: Send + 'static>(
     })
     .ok()?;
     rx.recv_timeout(Duration::from_secs(5)).ok()
+}
+
+/// Where webview w is in its window, in logical pixels: off Linux, where the page webview is a
+/// child webview the window places itself (`place::place`).
+#[cfg(not(target_os = "linux"))]
+fn webview_bounds(w: &Webview) -> Option<crate::place::Bounds> {
+    let r = w.bounds().ok()?;
+    let scale = w.window().scale_factor().ok()?;
+    let p = r.position.to_logical::<f64>(scale);
+    let s = r.size.to_logical::<f64>(scale);
+    Some(crate::place::Bounds {
+        x: p.x,
+        y: p.y,
+        width: s.width,
+        height: s.height,
+    })
 }
 
 /// Whether two places agree, to the rounding of logical pixels to whole ones.
@@ -576,7 +657,6 @@ fn run(app: &AppHandle) -> Result<(), String> {
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_STARTUP") {
         return startup(app, &stage);
     }
-    #[cfg(target_os = "linux")]
     if std::env::var("PLUXY_APP_TEST_ROTATION_RESTART").is_ok() {
         return rotation_test::after_restart(app);
     }
@@ -786,12 +866,17 @@ fn run(app: &AppHandle) -> Result<(), String> {
         r["url"] = eval(&wv, "location.href").unwrap_or(Value::Null);
         // Where the page webview is, against the page area the window drew for it.
         r["area"] = eval(&main, AREA).unwrap_or(Value::Null);
-        let l = label.clone();
-        r["placed"] = json!(on_main(app, move || crate::place::allocation(&l)).flatten());
+        #[cfg(target_os = "linux")]
+        let placed = {
+            let l = label.clone();
+            on_main(app, move || crate::place::allocation(&l)).flatten()
+        };
+        #[cfg(not(target_os = "linux"))]
+        let placed = webview_bounds(&wv);
+        r["placed"] = json!(placed);
         log("page", r);
         #[cfg(target_os = "linux")]
         log("page_allocation", shrunk_page(app, &main, &label));
-        #[cfg(target_os = "linux")]
         crate::confirmation::native::run(app, &main, &wv)?;
 
         // The page's own report, written through the channel into its settings.
@@ -869,11 +954,14 @@ fn run(app: &AppHandle) -> Result<(), String> {
         log("frame_offsite", frame_offsite(app, &main, &page)?);
     }
 
-    #[cfg(target_os = "linux")]
     key_entry_test::check(app, &main)?;
     // In local and remote mode the window closes to the tray and opens again meanwhile.
-    #[cfg(target_os = "linux")]
     let main = rotation_test::check(app, &main)?;
+    // Key entry whose window goes while it is open (closed to the tray).
+    #[cfg(not(target_os = "linux"))]
+    let main = key_entry_test::owner_gone(app, &main)?;
+    // Which way each native input went (`ui_driver.rs`).
+    log("input", ui::input_counts());
     ingress::run(app, &main)?;
     #[cfg(target_os = "linux")]
     {
@@ -1130,6 +1218,9 @@ fn early_exit(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn start(app: AppHandle) {
+    beat("start");
+    #[cfg(not(target_os = "linux"))]
+    watch_stalls(app.clone());
     std::thread::spawn(move || {
         let result = if std::env::var_os("PLUXY_APP_TEST_EARLY_EXIT").is_some() {
             early_exit(&app)
