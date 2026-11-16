@@ -129,12 +129,16 @@ jobs:
           # post-step runs git there with the job token in its environment, so the image must not be
           # able to change git's config. The one folder in it that the browser tests write is the panel
           # build (next/internal/panel/dist), made here so Docker doesn't create it owned by root.
-          # Playwright's output goes to the container's /tmp: it removes and recreates its output
-          # folder, which fails on a mount point.
+          # Playwright's output goes to a folder under the runner's temp folder, mounted writable, for
+          # the upload step below: it removes and recreates its output folder, which fails on a mount
+          # point, so the mount is the folder above it. The folder holds nothing the job token or
+          # git could reach.
           # Submodules aren't supported: fail rather than mount their .git files unreviewed.
           if [ -e "$GITHUB_WORKSPACE/.gitmodules" ] || [ -L "$GITHUB_WORKSPACE/.gitmodules" ]; then echo "::error::a submodule's .git file would need its own read-only mount" >&2; exit 1; fi
           dist="$GITHUB_WORKSPACE/next/internal/panel/dist"
           mkdir -p "$dist"
+          output="$RUNNER_TEMP/playwright"
+          mkdir -p "$output"
           docker run --rm --init --ipc=host --entrypoint "" \
             --user "$(id -u):$(id -g)" \
             -e CI -e HOME=/tmp -e CGO_ENABLED=0 \
@@ -143,7 +147,18 @@ jobs:
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
             -v "$GITHUB_WORKSPACE/.git:$GITHUB_WORKSPACE/.git:ro" \
             -v "$dist:$dist" \
+            -v "$output:$output" \
             -v "$goroot:$goroot:ro" -v "$bun_dir:$bun_dir:ro" \
             -v "$gomodcache:$gomodcache:ro" \
             -w "$PWD" \
-            "$PLAYWRIGHT_IMAGE" bun run test:browser --output /tmp/test-results
+            "$PLAYWRIGHT_IMAGE" bun run test:browser --output "$output/test-results"
+      # The panel's screenshots (every chromium test) and the traces of failed tests, for a PR to
+      # link as proof of what the UI showed. Kept 7 days.
+      - name: Upload the browser test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-test-output
+          path: ${{ runner.temp }}/playwright/test-results
+          retention-days: 7
+          if-no-files-found: ignore
