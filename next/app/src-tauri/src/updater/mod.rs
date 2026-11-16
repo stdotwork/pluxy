@@ -470,8 +470,14 @@ fn install(
         .clone()
         .ok_or("No release feed is set.")?;
     gate(app)?;
+    // The plugin is given the program provenance checked (its real path, links resolved), so it
+    // does not look for this process's path itself. Its own look, Tauri's `current_exe`, refuses
+    // on macOS a path with a link in it (an app started through a linked folder, or from under
+    // /var, a link to /private/var), and the plugin uses the path only for its own install,
+    // which this module never calls.
     let updater = app
         .updater_builder()
+        .executable_path(format::program(installed))
         .endpoints(vec![tauri::Url::parse(&feed).map_err(|e| e.to_string())?])
         .and_then(|b| b.build())
         .map_err(|e| format!("The updater could not start: {e}"))?;
