@@ -367,6 +367,9 @@ fn changed_files_are_not_served_or_rolled_back_to() {
         fs::set_permissions(file.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
     }
+    // Windows: the release's access lists make it read-only (`freeze`).
+    #[cfg(windows)]
+    thaw(file.parent().unwrap());
     fs::write(&file, b"tampered").unwrap();
     let e = c.rollback("example/notes").unwrap_err();
     assert!(e.contains("changed since it was installed"), "{e}");
@@ -384,6 +387,9 @@ fn changed_files_are_not_served_or_rolled_back_to() {
         fs::set_permissions(file.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
     }
+    // Windows: the release's access lists make it read-only (`freeze`).
+    #[cfg(windows)]
+    thaw(file.parent().unwrap());
     fs::write(&file, b"tampered").unwrap();
     assert!(c
         .asset("example/notes", &digest(&v1), "index.html")
