@@ -370,8 +370,53 @@ checks the sources for any other call that could end a process.
 Names of environment variables are compared ignoring case on Windows. Besides the names a launch
 never gets anywhere ([What a launch gets](#what-a-launch-gets)), it never gets `DYLD_*` on macOS,
 nor `COR_*` or `__COMPAT_LAYER` on Windows: each makes a program load code it was not asked to
-run. Nor does it get `WSLENV` on Windows, which would pass the Windows variables it names on into
-a WSL distribution.
+run. Nor may it set `WSLENV` on Windows, which would pass the Windows variables it names on into
+a WSL distribution: for a launch of Windows' own `wsl.exe` (a launch in WSL, prepared by
+`pluxy/wsl`), the host itself sets `WSLENV` to the variables the launch sets or gives a secret
+in, each passed on unchanged (`/u`), and to nothing else.
+
+### Tools in WSL (Windows)
+
+On Windows a package whose manifest names `"environments": ["wsl"]` may also run in a WSL
+distribution, as one of its users: an instance of its own beside the one on this computer
+(`src-tauri/src/environments.rs`). Only the app's window chooses where a call runs; the host
+carries that choice itself (never in an operation's input, so a page or another package cannot
+choose it) and refuses, before anything starts, an environment it has no record of or a package
+that does not run in WSL. The host's record of an environment is what `pluxy/wsl`'s `check` gave
+when the person added it ([app tools](../../app-tools/README.md#wsl)): the distribution, the user,
+their home, the processor and the Windows drives mounted there, kept in `environments.json` beside
+`launcher.json`, readable only by your user.
+
+- **What runs.** The release's Linux build for the distribution's processor (`linux/amd64` or
+  `linux/arm64`), installed for WSL after its own native confirmation and verified like any
+  release. Its program runs from the Windows disk, through the drive the distribution mounts
+  (`/mnt/c/...`; a distribution that mounts no drive, or mounts it `noexec`, is refused): Windows'
+  own `wsl.exe -d <distribution> -u <user> --cd <its folder> --exec <its program>`, started and
+  held like any tool (its own job, three pipes). `wsl.exe` does not open the program itself, so
+  the host keeps it pinned (no writer, rename or delete) for the whole run, not only until it
+  starts.
+- **What it gets.** `wsl.exe` gets only `SystemRoot` (WSL 2 refuses to start without it), the
+  contract's values, `PLUXY_TOOL_DATA_DIR` and `PLUXY_ENVIRONMENT=wsl:<distribution>:<user>`, each
+  passed into the distribution unchanged by `WSLENV` (`/u`). No `PATH`, so WSL adds no Windows
+  folder to the tool's. A tool in WSL also sees the variables WSL itself sets there (`HOME`,
+  `USER`, `PATH`, `WSL_DISTRO_NAME`, `WSL_INTEROP`, the WSLg display variables and others); the
+  host does not remove them. Before it says hello the tool checks that it runs in that
+  distribution as that user, so a stale record runs nothing.
+- **Its data folder** is `<home>/.local/state/pluxy/tools/<publisher>/<name>` in the
+  distribution, which the tool makes at its first write (the host never writes in a
+  distribution).
+- **Its own state.** Each instance has its own process, turn, calls of unknown outcome and vault
+  records (backups and journals, in a folder named by the package's digest and a digest of the
+  distribution and user). Changing, disabling or removing the package stops its instances in
+  every environment; removing an environment stops what runs there.
+- **Start.** A tool in WSL has 60 seconds to say hello and describe itself (a stopped WSL 2
+  distribution starts first). When WSL itself refuses to start the program (WSL 1's
+  `0xd0000225`: nothing ran), the start is tried twice more, two seconds apart. What `wsl.exe`
+  prints instead of a frame is shown in the start's error.
+- **Native confirmations** of its writes show `Runs in WSL: distribution <d>, user <u>
+  (<home>).` above the review, and that line is part of what a remembered approval names.
+- **Not yet.** A tool in WSL may use its vault, but its own calls, jobs, launches, runtimes and
+  saves are refused.
 
 ## Calls between packages
 
