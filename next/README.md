@@ -570,7 +570,8 @@ requests are sent with (`2023-06-01`):
 - Claude 4.7 and later, and any `claude-` model name the extension does not know as an older
   model: neither is sent.
 - An older Claude model with thinking on: `temperature` is sent only at 1, `top_p` only from 0.95.
-- An older Claude model without thinking: `top_p` is left out when `temperature` is set too.
+- An older Claude model, with thinking on or off: `top_p` is left out when `temperature` is sent
+  too, since Claude refuses the two together.
 - A model name that does not start with `claude-`: both go as the client sent them.
 
 Each one left out is reported as dropped, so `drop_policy` `"reject"` refuses the request. A

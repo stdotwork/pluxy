@@ -43,7 +43,10 @@ func TestBuildBodyDropsRefusedSampling(t *testing.T) {
 		// Rule 2: an older model with thinking on.
 		{"4.5 budget thinking", "claude-sonnet-4-5", fp(0.5), fp(0.9), "high", nil, []string{"temperature", "top_p"}},
 		{"4.6 adaptive thinking", "claude-opus-4-6", fp(0.7), nil, "medium", nil, []string{"temperature"}},
-		{"3.7 thinking, allowed values", "claude-3-7-sonnet-20250219", fp(1), fp(0.95), "low", []string{"temperature", "top_p"}, nil},
+		{"3.7 thinking, temperature 1", "claude-3-7-sonnet-20250219", fp(1), nil, "low", []string{"temperature"}, nil},
+		{"4.5 thinking, top_p 0.95", "claude-sonnet-4-5", nil, fp(0.95), "high", []string{"top_p"}, nil},
+		// Rules 2 and 3: with thinking on, both at values Claude takes alone are still not sent together.
+		{"4.6 thinking, both allowed", "claude-opus-4-6", fp(1), fp(0.97), "medium", []string{"temperature"}, []string{"top_p"}},
 		// Rule 3: an older model without thinking, both set.
 		{"4.5 both", "claude-sonnet-4-5", fp(0.5), fp(0.9), "", []string{"temperature"}, []string{"top_p"}},
 		{"4.6 thinking off, both", "claude-sonnet-4-6", fp(0.5), fp(0.9), "none", []string{"temperature"}, []string{"top_p"}},

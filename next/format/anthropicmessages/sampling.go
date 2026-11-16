@@ -22,7 +22,7 @@ import (
 //     and top_p;
 //   - an older Claude model with thinking on (thinking.type enabled or adaptive): temperature
 //     other than 1, and top_p below 0.95;
-//   - an older Claude model without thinking: top_p when temperature is set too.
+//   - an older Claude model, with thinking on or off: top_p when temperature is still set too.
 //
 // A model name that does not start with claude- keeps its settings. The body is returned as it
 // was when nothing is removed.
@@ -56,15 +56,20 @@ func DropRefusedSampling(body []byte, model string) ([]byte, []llm.Loss, error) 
 		if hasTopP {
 			drop("top_p", why)
 		}
-	case thinkingOn(m["thinking"]):
-		if hasTemperature && temperature != 1 {
-			drop("temperature", "Claude takes no temperature other than 1 while thinking is on")
+	default:
+		if thinkingOn(m["thinking"]) {
+			if hasTemperature && temperature != 1 {
+				drop("temperature", "Claude takes no temperature other than 1 while thinking is on")
+				hasTemperature = false
+			}
+			if hasTopP && topP < 0.95 {
+				drop("top_p", "Claude takes top_p only from 0.95 to 1 while thinking is on")
+				hasTopP = false
+			}
 		}
-		if hasTopP && topP < 0.95 {
-			drop("top_p", "Claude takes top_p only from 0.95 to 1 while thinking is on")
+		if hasTemperature && hasTopP {
+			drop("top_p", "Claude refuses temperature and top_p together; temperature is kept")
 		}
-	case hasTemperature && hasTopP:
-		drop("top_p", "Claude refuses temperature and top_p together; temperature is kept")
 	}
 	if len(losses) == 0 {
 		return body, nil, nil
