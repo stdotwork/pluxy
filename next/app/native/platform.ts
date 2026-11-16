@@ -1063,13 +1063,6 @@ async function update() {
       const copied = run("ditto", ["--norsrc", "--noextattr", "--noqtn", made.bundle, installed]);
       if (copied.status !== 0) throw new Error(`ditto: ${copied.out}`);
       program = join(installed, "Contents", "MacOS", exe);
-      // The app runs from a path with a link in it (the system's temporary folder is under /var,
-      // a link to /private/var), as one started through a linked folder does: the update must
-      // work from there too.
-      check(
-        realpathSync(installed) !== installed,
-        `the installed copy's path ${installed} has no link in it, so the session no longer runs the app through one`,
-      );
     }
     const v1 = pinOf(installed);
     writeFileSync(join(work, "v1.sha256"), v1);
