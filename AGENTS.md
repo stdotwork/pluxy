@@ -146,7 +146,8 @@ app; they are not part of the routine checks above.
 
 Workflows live in `.github/workflows/`, one set per folder, each limited to its folder's paths.
 Pull requests and merge-queue groups run them through `ci.yml`, whose `gate` job is the one
-required check; pushes to `main` and manual runs start them directly.
+required check; otherwise each workflow's own triggers start it (pushes to `main`,
+manual runs or tags, as its file says).
 
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
