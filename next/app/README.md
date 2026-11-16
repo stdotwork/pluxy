@@ -24,7 +24,7 @@ server and to the person's other computers.
 
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
-| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it. |
+| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
 | Core on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address and management key. | Leaves it running. The app never starts or stops it. |
 | Remote core (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
@@ -1387,8 +1387,11 @@ The app's updater ([Application update](#application-update)) calls it.
   app's crate, runs clippy and the Rust tests, and runs `native/dialogs.ts`
   (`.github/workflows/next-app-platforms.yml`): the app in local mode against a test core, with
   the window's and page's command probes, the native confirmations, key entry and key rotation.
-  Process ownership and starting the app's own core stay Linux only and refuse at run time. On
-  Windows the page document's address is `http://pluxy-page.localhost/`.
+  Starting native tools and launches stays Linux only and refuses at run time. How the app
+  starts, holds and stops processes there is built and tested
+  ([Windows and macOS](app-host/README.md#windows-and-macos)), and the app's own core starts on
+  macOS; on Windows its core store does not build yet. On Windows the page document's address is
+  `http://pluxy-page.localhost/`.
 - The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
   account's known folders, which no environment variable redirects, so it refuses to start when
   they exist and removes only the ones it made. Its input does not come from a keyboard: on

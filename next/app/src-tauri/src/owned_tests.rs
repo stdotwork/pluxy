@@ -1,0 +1,1086 @@
+//! The owner module's own tests: that nothing outside `owned/` signals or ends a process (every
+//! platform), and the primitives each platform's spawns and stops rest on, on real files, folders
+//! and processes.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+/// Words by which code signals or ends a process: system calls, programs and their arguments.
+/// Matched as whole words, outside lines that are only a comment.
+const SIGNALS: &[&str] = &[
+    "killpg",
+    "libc::kill",
+    "SYS_kill",
+    "SYS_tkill",
+    "SYS_tgkill",
+    "pidfd_send_signal",
+    "sigqueue",
+    "signal::kill",
+    "\"kill\"",
+    "kill -",
+    "pkill",
+    "killall",
+    "taskkill",
+    "Stop-Process",
+    "TerminateProcess",
+    "NtTerminateProcess",
+    "TerminateJobObject",
+    "TerminateThread",
+    "OpenProcess",
+    "GenerateConsoleCtrlEvent",
+    "DebugActiveProcess",
+    "CreateRemoteThread",
+    "EndTask",
+    "WM_CLOSE",
+    "WM_QUIT",
+];
+
+/// Where in a file a site is: in its inline `#[cfg(test)] mod tests { ... }`, or anywhere else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Part {
+    Code,
+    Tests,
+}
+
+/// The only places outside `src/owned/` that may use a word of `SIGNALS`: (file under `src/`,
+/// part, word, exactly how many times, why). A new site, or one gone, fails the test until this
+/// list says so.
+const ALLOWED: &[(&str, Part, &str, usize, &str)] = &[
+    (
+        "instance/win.rs",
+        Part::Code,
+        "OpenProcess",
+        2,
+        "single instance (Windows): opens the pipe's server process with QUERY_LIMITED_INFORMATION only, to compare its user with this one; that right cannot end it",
+    ),
+    (
+        "launcher_native.rs",
+        Part::Code,
+        "libc::kill",
+        1,
+        "native test (Linux, feature native-test): kills the execution program by the process ID its status gives, to make it crash",
+    ),
+    (
+        "managed.rs",
+        Part::Tests,
+        "libc::kill",
+        1,
+        "test: kills the core the test started and holds, to see its exit before it is reaped",
+    ),
+    (
+        "program_tests.rs",
+        Part::Code,
+        "OpenProcess",
+        2,
+        "test (Windows): opens a process only to wait for it (SYNCHRONIZE) or to ask whether it is in a job (QUERY_LIMITED_INFORMATION); neither right can end it",
+    ),
+    (
+        "spawn_keys_native.rs",
+        Part::Code,
+        "libc::kill",
+        1,
+        "native test (Linux): ends an agent the test started, only while /proc shows it runs as that test's",
+    ),
+    (
+        "spawn_native.rs",
+        Part::Code,
+        "libc::kill",
+        1,
+        "native test (Linux): signal 0, which only asks whether a process exists",
+    ),
+    (
+        "spawn_tests.rs",
+        Part::Code,
+        "libc::kill",
+        2,
+        "test: signal 0 to see whether a process runs, and the cleanup of processes /proc shows run as this test's",
+    ),
+    (
+        "updater.rs",
+        Part::Code,
+        "kill -",
+        1,
+        "`kill -0` in the shell that waits for the old version to end: signal 0 only asks whether it exists",
+    ),
+    (
+        "updater.rs",
+        Part::Code,
+        "libc::kill",
+        1,
+        "ends the process group of the new version it started and holds unreaped, when that does not accept the update in time",
+    ),
+];
+
+/// How often word appears in line as a whole word.
+fn count(line: &str, word: &str) -> usize {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let starts = word.starts_with(ident);
+    let ends = word.ends_with(ident);
+    line.match_indices(word)
+        .filter(|(i, _)| {
+            let before = line[..*i].chars().next_back();
+            let after = line[i + word.len()..].chars().next();
+            !(starts && before.is_some_and(ident)) && !(ends && after.is_some_and(ident))
+        })
+        .count()
+}
+
+/// Each use of a word of `SIGNALS` in text, a Rust source: (part, word, line number).
+fn sites_in(text: &str) -> Vec<(Part, &'static str, usize)> {
+    let mut out = Vec::new();
+    let mut tests = false;
+    let mut previous = "";
+    for (n, line) in text.lines().enumerate() {
+        if !tests
+            && line == "mod tests {"
+            && previous.starts_with("#[cfg(")
+            && previous.contains("test")
+        {
+            tests = true;
+        } else if tests && line == "}" {
+            tests = false;
+            continue;
+        }
+        if !line.trim().is_empty() {
+            previous = line.trim();
+        }
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        let part = if tests { Part::Tests } else { Part::Code };
+        for word in SIGNALS {
+            for _ in 0..count(line, word) {
+                out.push((part, *word, n + 1));
+            }
+        }
+    }
+    out
+}
+
+type Sites = BTreeMap<(String, Part, &'static str), Vec<usize>>;
+
+/// Every Rust source under dir but the owner module's own (`owned/` and this file), named by
+/// its path under src with `/`; and each site in them.
+fn scan(src: &Path, dir: &Path, files: &mut Vec<String>, sites: &mut Sites) {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+        .map(|e| e.unwrap().path())
+        .collect();
+    entries.sort();
+    for path in entries {
+        let rel: Vec<String> = path
+            .strip_prefix(src)
+            .unwrap()
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        let rel = rel.join("/");
+        if path.is_dir() {
+            if rel != "owned" {
+                scan(src, &path, files, sites);
+            }
+            continue;
+        }
+        if !rel.ends_with(".rs") || rel == "owned_tests.rs" {
+            continue;
+        }
+        let text =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        for (part, word, line) in sites_in(&text) {
+            sites
+                .entry((rel.clone(), part, word))
+                .or_default()
+                .push(line);
+        }
+        files.push(rel);
+    }
+}
+
+/// The owner module is the only code that signals or ends a process (`owned/mod.rs`): anything
+/// else that does is in `ALLOWED`, with its reason.
+#[test]
+fn only_the_owner_module_signals_or_ends_a_process() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let (mut files, mut sites) = (Vec::new(), Sites::new());
+    scan(&src, &src, &mut files, &mut sites);
+    assert!(
+        files.len() > 20
+            && ["spawn.rs", "program.rs", "managed.rs"]
+                .iter()
+                .all(|f| files.iter().any(|g| g == f)),
+        "the scan read {} files under {}: {files:?}",
+        files.len(),
+        src.display()
+    );
+    let mut problems = Vec::new();
+    for ((file, part, word), lines) in &sites {
+        let allowed = ALLOWED
+            .iter()
+            .find(|a| a.0 == file && a.1 == *part && a.2 == *word)
+            .map_or(0, |a| a.3);
+        if lines.len() != allowed {
+            problems.push(format!(
+                "src/{file} ({part:?}): `{word}` {} times (lines {lines:?}), allowed {allowed}",
+                lines.len()
+            ));
+        }
+    }
+    for (file, part, word, n, _) in ALLOWED {
+        if !sites.contains_key(&(file.to_string(), *part, *word)) {
+            problems.push(format!(
+                "src/{file} ({part:?}): `{word}` allowed {n} times, found none: take it out of ALLOWED"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "only src/owned/ signals or ends a process; elsewhere only the sites in ALLOWED may:\n{}",
+        problems.join("\n")
+    );
+}
+
+/// The scan sees each form as a whole word, in code and in a file's inline test module, and
+/// passes over comments.
+#[test]
+fn the_scan_finds_each_use_and_where_it_is() {
+    assert_eq!(count("libc::kill(p, 0); libc::kill(q, 9)", "libc::kill"), 2);
+    assert_eq!(count("libc::killpg(p, 9)", "libc::kill"), 0);
+    assert_eq!(count("unsafe { libc::killpg(p, 9) }", "killpg"), 1);
+    assert_eq!(count("pkill -f x", "kill -"), 0);
+    assert_eq!(count("sh -c 'kill -0 $p'", "kill -"), 1);
+    assert_eq!(count("NtTerminateProcess(h, 1)", "TerminateProcess"), 0);
+    assert_eq!(count("TerminateProcess(h, 1)", "TerminateProcess"), 1);
+    assert_eq!(count("Command::new(\"kill\")", "\"kill\""), 1);
+    assert_eq!(count("child.kill()", "libc::kill"), 0);
+    let text = "\
+fn a() { unsafe { libc::killpg(1, 9) } }
+/// libc::kill in a comment
+    // TerminateProcess in a comment
+#[cfg(test)]
+mod tests {
+    fn b() { unsafe { libc::kill(2, 0) } }
+}
+fn c() { TerminateJobObject(j, 1); }
+";
+    assert_eq!(
+        sites_in(text),
+        vec![
+            (Part::Code, "killpg", 1),
+            (Part::Tests, "libc::kill", 6),
+            (Part::Code, "TerminateJobObject", 8),
+        ]
+    );
+}
+
+/// A fresh folder under the system's temporary folder (private to this user on unix), removed
+/// when dropped.
+#[cfg(any(windows, target_os = "macos"))]
+struct Temp(std::path::PathBuf);
+
+#[cfg(any(windows, target_os = "macos"))]
+impl Temp {
+    fn new(name: &str) -> Temp {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let p = std::env::temp_dir().join(format!(
+            "pluxy-owned-{name}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&p);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+            .create(&p)
+            .unwrap();
+        #[cfg(not(unix))]
+        std::fs::create_dir(&p).unwrap();
+        Temp(p)
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(unix)]
+mod unix {
+    use crate::owned::{kill_group, leader, term_group, Leader};
+    use std::io::{BufRead, BufReader, Read};
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    use std::process::{Child, ChildStdin, Command, Stdio};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    /// A leader and one more process in its group, each running until its input ends.
+    const RUNNING: &str = "exec 3<&0; { echo member; exec cat <&3; } & echo leader; exec cat";
+    /// A leader that exits at once, and one more process in its group, running until its input
+    /// ends.
+    const LEADER_EXITS: &str = "exec 3<&0; { echo member; exec cat <&3; } & echo leader";
+
+    /// A child leading a process group of its own, and its input; ended reports when no process
+    /// holds its output any more (each of its group has ended).
+    struct Group {
+        child: Child,
+        stdin: Option<ChildStdin>,
+        ended: mpsc::Receiver<()>,
+    }
+
+    impl Group {
+        /// Starts script with `sh` in a process group of its own, and waits until both its
+        /// processes said they run.
+        fn start(script: &str) -> Group {
+            let mut child = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(script)
+                .process_group(0)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let stdin = child.stdin.take();
+            let mut out = BufReader::new(child.stdout.take().unwrap());
+            for _ in 0..2 {
+                let mut line = String::new();
+                out.read_line(&mut line).unwrap();
+                assert!(!line.is_empty(), "the group ended before it ran");
+            }
+            let (tx, ended) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = out.read_to_end(&mut Vec::new());
+                let _ = tx.send(());
+            });
+            Group {
+                child,
+                stdin,
+                ended,
+            }
+        }
+
+        /// Whether every process of the group has ended within.
+        fn ended(&self, within: Duration) -> bool {
+            self.ended.recv_timeout(within).is_ok()
+        }
+    }
+
+    fn until(mut f: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !f() {
+            if Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        true
+    }
+
+    const LONG: Duration = Duration::from_secs(10);
+
+    /// The leader's state is read without reaping it: running, then exited for as long as it is
+    /// not reaped, then gone.
+    #[test]
+    fn leader_is_running_then_exited_until_reaped_then_gone() {
+        let mut g = Group::start(RUNNING);
+        assert_eq!(leader(&g.child), Leader::Running);
+        drop(g.stdin.take());
+        assert!(
+            until(|| leader(&g.child) == Leader::Exited),
+            "the leader's exit was not seen"
+        );
+        assert_eq!(
+            leader(&g.child),
+            Leader::Exited,
+            "looking at the exit reaped the leader"
+        );
+        assert!(g.child.wait().unwrap().success());
+        assert_eq!(leader(&g.child), Leader::Gone);
+        assert!(g.ended(LONG));
+    }
+
+    /// SIGTERM reaches every process of the child's group, and no other group.
+    #[test]
+    fn term_group_ends_the_childs_group_and_no_other() {
+        let mut g = Group::start(RUNNING);
+        let mut other = Group::start(RUNNING);
+        assert!(term_group(&g.child));
+        assert!(
+            g.ended(LONG),
+            "a process of the child's group outlived its SIGTERM"
+        );
+        assert_eq!(g.child.wait().unwrap().signal(), Some(libc::SIGTERM));
+        assert_eq!(leader(&other.child), Leader::Running);
+        drop(other.stdin.take());
+        let status = other.child.wait().unwrap();
+        assert!(status.success(), "another group was signalled: {status}");
+        assert!(other.ended(LONG));
+    }
+
+    /// SIGKILL reaches every process of the child's group, and no other group.
+    #[test]
+    fn kill_group_ends_the_childs_group_and_no_other() {
+        let mut g = Group::start(RUNNING);
+        let mut other = Group::start(RUNNING);
+        kill_group(&mut g.child);
+        assert!(
+            g.ended(LONG),
+            "a process of the child's group outlived kill_group"
+        );
+        assert_eq!(g.child.wait().unwrap().signal(), Some(libc::SIGKILL));
+        assert_eq!(leader(&other.child), Leader::Running);
+        drop(other.stdin.take());
+        let status = other.child.wait().unwrap();
+        assert!(status.success(), "another group was signalled: {status}");
+        assert!(other.ended(LONG));
+    }
+
+    /// Once the leader has exited, the rest of its group is still ended while the leader is
+    /// unreaped (the group's number is still its own); once reaped, nothing is signalled.
+    #[test]
+    fn kill_group_ends_the_rest_of_the_group_until_the_leader_is_reaped() {
+        let mut g = Group::start(LEADER_EXITS);
+        assert!(until(|| leader(&g.child) == Leader::Exited));
+        kill_group(&mut g.child);
+        assert!(
+            g.ended(LONG),
+            "the rest of the group outlived kill_group after its leader exited"
+        );
+        assert!(g.child.wait().unwrap().success());
+
+        let mut r = Group::start(LEADER_EXITS);
+        assert!(until(|| leader(&r.child) == Leader::Exited));
+        assert!(r.child.wait().unwrap().success());
+        assert_eq!(leader(&r.child), Leader::Gone);
+        kill_group(&mut r.child);
+        assert!(
+            !r.ended(Duration::from_secs(1)),
+            "kill_group signalled the group of a reaped child"
+        );
+        drop(r.stdin.take());
+        assert!(r.ended(LONG));
+    }
+
+    /// Whether a child the test starts, which makes a descriptor of the test's inheritable just
+    /// before it executes, still holds it after, with close was `close_on_exec_from_3`.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn keeps_descriptor(close: bool) -> bool {
+        use std::os::fd::AsRawFd;
+        // std's pipe is close-on-exec in the test, so no other test's child gets it.
+        let (mut r, w) = std::io::pipe().unwrap();
+        let fd = w.as_raw_fd();
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-c")
+            .arg("read _; exit 0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // SAFETY: fcntl is async-signal-safe and allocates nothing; so does
+        // close_on_exec_from_3, which is for this place only.
+        unsafe {
+            cmd.pre_exec(move || {
+                if libc::fcntl(fd, libc::F_SETFD, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if close {
+                    crate::owned::close_on_exec_from_3()?;
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().unwrap();
+        drop(w);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = r.read_to_end(&mut Vec::new());
+            let _ = tx.send(());
+        });
+        // The pipe's end comes once no process holds its write end: at once unless the child
+        // does, and then once the child ends.
+        let kept = rx
+            .recv_timeout(if close { LONG } else { Duration::from_secs(1) })
+            .is_err();
+        drop(child.stdin.take());
+        assert!(child.wait().unwrap().success());
+        if kept {
+            assert!(rx.recv_timeout(LONG).is_ok());
+        }
+        kept
+    }
+
+    /// Every descriptor of the app's but 0-2 closes as a child executes.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn close_on_exec_from_3_lets_no_descriptor_through() {
+        assert!(
+            keeps_descriptor(false),
+            "the probe did not see a descriptor the child was given"
+        );
+        assert!(
+            !keeps_descriptor(true),
+            "a descriptor above 2 reached the executed program"
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::Temp;
+    use crate::owned::{exec_target, secure};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    /// t's folder by its real path (the system's temporary folder is under the link `/var`).
+    fn real(t: &Temp) -> PathBuf {
+        fs::canonicalize(&t.0).unwrap()
+    }
+
+    fn file(p: &Path, mode: u32) {
+        fs::write(p, b"#!/bin/sh\n").unwrap();
+        fs::set_permissions(p, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// A refusal that names part.
+    fn refused(path: &Path, part: &Path) {
+        let e = secure(path).expect_err(&path.display().to_string());
+        assert!(
+            e.starts_with(&format!("{} ", part.display())),
+            "{} refused for {e}, not for {}",
+            path.display(),
+            part.display()
+        );
+    }
+
+    #[test]
+    fn secure_takes_a_file_no_other_user_can_change() {
+        let t = Temp::new("secure");
+        let dir = real(&t);
+        let p = dir.join("prog");
+        file(&p, 0o700);
+        assert_eq!(secure(&p), Ok(()));
+
+        // In a folder anyone can write to with the sticky bit set (as /tmp), only the owner of
+        // an entry can rename or remove it.
+        let sticky = dir.join("sticky");
+        fs::create_dir(&sticky).unwrap();
+        fs::set_permissions(&sticky, fs::Permissions::from_mode(0o1777)).unwrap();
+        let q = sticky.join("prog");
+        file(&q, 0o700);
+        assert_eq!(secure(&q), Ok(()));
+    }
+
+    #[test]
+    fn secure_refuses_what_another_user_could_change() {
+        let t = Temp::new("insecure");
+        let dir = real(&t);
+
+        let others = dir.join("others");
+        file(&others, 0o702);
+        refused(&others, &others);
+
+        // A group writable file, in a group other than wheel (0) and admin (80).
+        let group = dir.join("group");
+        file(&group, 0o720);
+        let gid = unsafe { libc::getegid() };
+        assert!(gid != 0 && gid != 80, "the test runs with group {gid}");
+        let c = std::ffi::CString::new(group.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::chown(c.as_ptr(), u32::MAX, gid) }, 0);
+        refused(&group, &group);
+
+        let open = dir.join("open");
+        fs::create_dir(&open).unwrap();
+        fs::set_permissions(&open, fs::Permissions::from_mode(0o777)).unwrap();
+        let inside = open.join("prog");
+        file(&inside, 0o700);
+        refused(&inside, &open);
+
+        let real_dir = dir.join("real");
+        fs::create_dir(&real_dir).unwrap();
+        file(&real_dir.join("prog"), 0o700);
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&real_dir, &link).unwrap();
+        refused(&link.join("prog"), &link);
+        let file_link = dir.join("file-link");
+        std::os::unix::fs::symlink(real_dir.join("prog"), &file_link).unwrap();
+        refused(&file_link, &file_link);
+
+        refused(Path::new("prog"), Path::new("prog"));
+    }
+
+    #[test]
+    fn exec_target_is_the_opened_file_until_it_changes() {
+        let t = Temp::new("exec");
+        let dir = real(&t);
+
+        let p = dir.join("prog");
+        file(&p, 0o700);
+        let f = fs::File::open(&p).unwrap();
+        assert_eq!(exec_target(&f).unwrap(), p);
+        // Written in place it is still the file that was opened, as on Linux, where the kernel
+        // runs what it holds then: what it holds is checked by the callers (`recheck`).
+        fs::write(&p, b"#!/bin/sh\necho changed\n").unwrap();
+        assert_eq!(exec_target(&f).unwrap(), p);
+
+        let q = dir.join("swapped");
+        file(&q, 0o700);
+        let g = fs::File::open(&q).unwrap();
+        assert_eq!(exec_target(&g).unwrap(), q);
+        let other = dir.join("other");
+        file(&other, 0o700);
+        fs::rename(&other, &q).unwrap();
+        assert!(
+            exec_target(&g).is_err(),
+            "a file replaced after it was opened"
+        );
+    }
+}
+
+#[cfg(windows)]
+mod windows {
+    use super::Temp;
+    use crate::owned::windows::{
+        breakaway, command_line, environment_block, final_path, image, pin_dir, pin_file,
+        std_spawn, NO_BREAKAWAY,
+    };
+    use std::ffi::OsString;
+    use std::fs::{self, File, OpenOptions};
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::path::{Path, PathBuf};
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, CREATE_BREAKAWAY_FROM_JOB};
+
+    /// std's full path of p (`GetFinalPathNameByHandleW` too), in plain drive or UNC form.
+    fn plain(p: &Path) -> PathBuf {
+        let s = fs::canonicalize(p)
+            .unwrap()
+            .into_os_string()
+            .into_string()
+            .unwrap();
+        PathBuf::from(if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{rest}")
+        } else {
+            s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+        })
+    }
+
+    /// p, as a path Windows' path rules leave as it is (a name may end in a dot or a space).
+    fn verbatim(p: &Path) -> PathBuf {
+        PathBuf::from(format!(r"\\?\{}", plain(p).display()))
+    }
+
+    fn open_dir(p: &Path) -> File {
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(p)
+            .unwrap()
+    }
+
+    #[test]
+    fn final_path_is_where_the_opened_file_is() {
+        let t = Temp::new("final");
+        let dir = t.0.join("a folder");
+        fs::create_dir(&dir).unwrap();
+        let p = dir.join("f.txt");
+        fs::write(&p, b"x").unwrap();
+        assert_eq!(final_path(&File::open(&p).unwrap()).unwrap(), plain(&p));
+        assert_eq!(final_path(&open_dir(&dir)).unwrap(), plain(&dir));
+
+        // Opened through a junction: the path of the file itself.
+        let junction = t.0.join("junction");
+        let made = std_spawn(
+            std::process::Command::new("cmd")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(&junction)
+                .arg(&dir)
+                .stdout(std::process::Stdio::null()),
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        assert!(made.success(), "mklink /J: {made}");
+        let through = junction.join("f.txt");
+        assert_eq!(
+            final_path(&File::open(&through).unwrap()).unwrap(),
+            plain(&p)
+        );
+    }
+
+    /// Windows' path rules read a name ending in a dot or a space, and a long path, otherwise
+    /// than the file system has it: refused.
+    #[test]
+    fn final_path_refuses_a_path_windows_would_read_otherwise() {
+        let t = Temp::new("final-refused");
+        for name in ["dot.", "space "] {
+            let p = verbatim(&t.0).join(name);
+            fs::write(&p, b"x").unwrap();
+            assert!(final_path(&File::open(&p).unwrap()).is_err(), "{name:?}");
+        }
+        let mut long = verbatim(&t.0);
+        for _ in 0..5 {
+            long.push("a".repeat(60));
+        }
+        fs::create_dir_all(&long).unwrap();
+        let p = long.join("f.txt");
+        fs::write(&p, b"x").unwrap();
+        assert!(final_path(&File::open(&p).unwrap()).is_err());
+    }
+
+    #[test]
+    fn image_takes_exe_and_com_programs_only() {
+        let t = Temp::new("image");
+        let pe: &[u8] = b"MZ\x90\0fixture";
+        for (name, bytes, ok) in [
+            ("p.exe", pe, true),
+            ("P.EXE", pe, true),
+            ("p.com", pe, true),
+            ("p.exe", b"#!/bin/sh\n".as_slice(), false),
+            ("p.exe", b"M", false),
+            ("p.exe", b"", false),
+            ("p.bat", pe, false),
+            ("p.cmd", pe, false),
+            ("p.ps1", pe, false),
+            ("p.exe.txt", pe, false),
+            ("p", pe, false),
+        ] {
+            let p = t.0.join(name);
+            fs::write(&p, bytes).unwrap();
+            let r = image(&File::open(&p).unwrap(), &p);
+            assert_eq!(r.is_ok(), ok, "{name} {bytes:?}: {r:?}");
+            fs::remove_file(&p).unwrap();
+        }
+    }
+
+    /// While pinned, no process can write, move, replace or remove the program; once let go, it
+    /// can.
+    #[test]
+    fn a_pinned_program_stays_until_let_go() {
+        let t = Temp::new("pin");
+        let exe = t.0.join("prog.exe");
+        fs::write(&exe, b"MZ one").unwrap();
+        let other = t.0.join("other.exe");
+        fs::write(&other, b"MZ two").unwrap();
+        let held = File::open(&exe).unwrap();
+        let pinned = pin_file(&held).unwrap();
+        drop(held);
+        assert_eq!(pinned.path, plain(&exe));
+
+        assert!(
+            OpenOptions::new().write(true).open(&exe).is_err(),
+            "written"
+        );
+        assert!(fs::rename(&other, &exe).is_err(), "replaced");
+        assert!(fs::rename(&exe, t.0.join("moved.exe")).is_err(), "moved");
+        assert!(fs::remove_file(&exe).is_err(), "removed");
+        assert_eq!(fs::read(&exe).unwrap(), b"MZ one");
+
+        drop(pinned);
+        fs::write(&exe, b"MZ three").unwrap();
+        fs::rename(&other, &exe).unwrap();
+        fs::rename(&exe, t.0.join("moved.exe")).unwrap();
+        fs::remove_file(t.0.join("moved.exe")).unwrap();
+    }
+
+    /// The folders above a pinned program cannot be renamed while it is pinned either (NTFS), so
+    /// the path it starts by stays its path.
+    #[test]
+    fn the_folders_above_a_pinned_program_stay_until_let_go() {
+        let t = Temp::new("pin-folders");
+        let (a, b) = (t.0.join("a"), t.0.join("a").join("b"));
+        fs::create_dir_all(&b).unwrap();
+        let exe = b.join("prog.exe");
+        fs::write(&exe, b"MZ").unwrap();
+        let held = File::open(&exe).unwrap();
+        let pinned = pin_file(&held).unwrap();
+        drop(held);
+
+        assert!(fs::rename(&b, a.join("b2")).is_err(), "its folder renamed");
+        assert!(
+            fs::rename(&a, t.0.join("a2")).is_err(),
+            "the folder above renamed"
+        );
+
+        drop(pinned);
+        fs::rename(&b, a.join("b2")).unwrap();
+        fs::rename(&a, t.0.join("a2")).unwrap();
+    }
+
+    #[test]
+    fn pin_file_refuses_what_is_not_a_program() {
+        let t = Temp::new("pin-refused");
+        for (name, bytes) in [
+            ("script.cmd", b"MZ".as_slice()),
+            ("script.exe", b"@echo off"),
+        ] {
+            let p = t.0.join(name);
+            fs::write(&p, bytes).unwrap();
+            assert!(pin_file(&File::open(&p).unwrap()).is_err(), "{name}");
+        }
+    }
+
+    /// While pinned, the folder cannot be moved or removed; what is in it can change.
+    #[test]
+    fn a_pinned_folder_stays_until_let_go() {
+        let t = Temp::new("pin-dir");
+        let d = t.0.join("work");
+        fs::create_dir(&d).unwrap();
+        let held = open_dir(&d);
+        let pinned = pin_dir(&held).unwrap();
+        drop(held);
+        assert_eq!(pinned.path, plain(&d));
+
+        assert!(fs::rename(&d, t.0.join("moved")).is_err(), "moved");
+        assert!(fs::remove_dir(&d).is_err(), "removed");
+        fs::write(d.join("inside"), b"x").unwrap();
+        fs::remove_file(d.join("inside")).unwrap();
+
+        drop(pinned);
+        fs::rename(&d, t.0.join("moved")).unwrap();
+    }
+
+    /// A copy of `cmd.exe` in t, and the run of it that waits for a line on its input.
+    fn waiting_cmd(t: &Temp) -> (PathBuf, crate::owned::windows::Command) {
+        use crate::owned::windows::{Command, Io, Kind};
+        let root = std::env::var_os("SystemRoot").expect("SystemRoot");
+        let exe = t.0.join("prog.exe");
+        fs::copy(Path::new(&root).join("System32").join("cmd.exe"), &exe).unwrap();
+        let mut c = Command::new(pin_file(&File::open(&exe).unwrap()).unwrap(), Kind::Tool);
+        c.args(["/d", "/c", "set /p x="]).stdin(Io::Piped);
+        (exe, c)
+    }
+
+    /// A pin kept with a run (`keep`, `keep_program`) holds for as long as the child is held,
+    /// not only until it starts: a running program can be renamed on Windows otherwise, and a
+    /// file it only reads (a Linux program `wsl.exe` runs) written.
+    #[test]
+    fn kept_pins_last_as_long_as_the_child() {
+        use crate::owned::windows::pin_other;
+        let t = Temp::new("keep");
+
+        // Without keep_program, the running copy can be renamed: what keep_program changes.
+        let (exe, mut c) = waiting_cmd(&t);
+        let mut child = c.spawn().unwrap();
+        drop(c);
+        let moved = t.0.join("moved.exe");
+        fs::rename(&exe, &moved).unwrap();
+        drop(child.stdin.take());
+        child.wait().unwrap();
+        drop(child);
+        fs::remove_file(&moved).unwrap();
+
+        let data = t.0.join("data.bin");
+        fs::write(&data, b"a Linux program").unwrap();
+        let (exe, mut c) = waiting_cmd(&t);
+        c.keep_program()
+            .keep(pin_other(&File::open(&data).unwrap()).unwrap());
+        let mut child = c.spawn().unwrap();
+        drop(c);
+        assert!(fs::rename(&exe, &moved).is_err(), "the program renamed");
+        assert!(fs::remove_file(&data).is_err(), "the kept file removed");
+        assert!(
+            OpenOptions::new().write(true).open(&data).is_err(),
+            "the kept file written"
+        );
+        drop(child.stdin.take());
+        assert!(child.wait().is_ok());
+        drop(child);
+        fs::rename(&exe, &moved).unwrap();
+        fs::remove_file(&data).unwrap();
+    }
+
+    /// A detached launch is not held, so it cannot keep pins: refused before anything starts.
+    #[test]
+    fn a_detached_launch_keeps_no_pins() {
+        use crate::owned::windows::{Command, Kind};
+        let t = Temp::new("keep-detached");
+        let root = std::env::var_os("SystemRoot").expect("SystemRoot");
+        let exe = t.0.join("prog.exe");
+        fs::copy(Path::new(&root).join("System32").join("cmd.exe"), &exe).unwrap();
+        let mut c = Command::new(
+            pin_file(&File::open(&exe).unwrap()).unwrap(),
+            Kind::Detached,
+        );
+        c.args(["/d", "/c", "exit 0"]).keep_program();
+        let e = c.spawn_detached().unwrap_err();
+        assert!(e.to_string().contains("not held"), "{e}");
+    }
+
+    #[link(name = "shell32.dll", kind = "raw-dylib", modifiers = "+verbatim")]
+    extern "system" {
+        fn CommandLineToArgvW(line: *const u16, n: *mut i32) -> *mut *mut u16;
+    }
+
+    /// What Windows' own parser (`CommandLineToArgvW`) reads line, ending in a NUL, as.
+    fn parsed(line: &[u16]) -> Vec<OsString> {
+        let mut n = 0;
+        let v = unsafe { CommandLineToArgvW(line.as_ptr(), &mut n) };
+        assert!(!v.is_null());
+        let out = (0..n as usize)
+            .map(|i| {
+                let p = unsafe { *v.add(i) };
+                let len = (0..).take_while(|j| unsafe { *p.add(*j) } != 0).count();
+                OsString::from_wide(unsafe { std::slice::from_raw_parts(p, len) })
+            })
+            .collect();
+        unsafe { LocalFree(v as _) };
+        out
+    }
+
+    fn line(name: &str, args: &[&str]) -> std::io::Result<Vec<u16>> {
+        let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+        command_line(name.as_ref(), &args)
+    }
+
+    /// Quoted by the rules the C runtimes and `CommandLineToArgvW` read arguments by: each
+    /// comes back as it was.
+    #[test]
+    fn command_line_quotes_each_argument_back_to_itself() {
+        let cases: &[(&str, &[&str], &str)] = &[
+            ("p", &[], r#""p""#),
+            (
+                r"C:\Program Files\x\p.exe",
+                &["a", "b c"],
+                r#""C:\Program Files\x\p.exe" a "b c""#,
+            ),
+            ("p", &[""], r#""p" """#),
+            ("p", &[r#"a"b"#], r#""p" a\"b"#),
+            ("p", &[r"a\b"], r#""p" a\b"#),
+            ("p", &[r#"a\\"b"#], r#""p" a\\\\\"b"#),
+            ("p", &[r"dir\"], r#""p" dir\"#),
+            ("p", &[r"my dir\"], r#""p" "my dir\\""#),
+            ("p", &[r"a\\ b\\"], r#""p" "a\\ b\\\\""#),
+            ("p", &[r#"say "hi""#], r#""p" "say \"hi\"""#),
+            ("p", &["a\tb"], "\"p\" \"a\tb\""),
+        ];
+        for (name, args, want) in cases {
+            let got = line(name, args).unwrap();
+            assert_eq!(got.last(), Some(&0));
+            assert_eq!(
+                String::from_utf16(&got[..got.len() - 1]).unwrap(),
+                *want,
+                "{name} {args:?}"
+            );
+        }
+        let more: &[(&str, &[&str])] = &[
+            (r"C:\dir\", &["x"]),
+            (
+                "p",
+                &[
+                    "\\",
+                    "\\\\",
+                    "\"",
+                    "\"\"",
+                    " ",
+                    "\\\"",
+                    "\\\\\"",
+                    "a b\\\\\\",
+                ],
+            ),
+            ("p", &["", "", "x y", "-flag=\"v w\"", "ünï cødé"]),
+        ];
+        for (name, args) in cases.iter().map(|c| (c.0, c.1)).chain(more.iter().copied()) {
+            let want: Vec<OsString> = std::iter::once(name)
+                .chain(args.iter().copied())
+                .map(OsString::from)
+                .collect();
+            assert_eq!(parsed(&line(name, args).unwrap()), want, "{name} {args:?}");
+        }
+    }
+
+    #[test]
+    fn command_line_refuses_what_it_cannot_pass() {
+        assert!(
+            line(r#"a"b.exe"#, &[]).is_err(),
+            "a quote in the program's name"
+        );
+        assert!(
+            line("a\0b.exe", &[]).is_err(),
+            "a NUL in the program's name"
+        );
+        assert!(line("p", &["a\0b"]).is_err(), "a NUL in an argument");
+    }
+
+    fn env(vars: &[(&str, &str)]) -> std::io::Result<Vec<u16>> {
+        let vars: Vec<(OsString, OsString)> =
+            vars.iter().map(|(k, v)| (k.into(), v.into())).collect();
+        environment_block(&vars)
+    }
+
+    /// The block CreateProcessW takes: each `NAME=value` and a NUL, then a NUL.
+    fn block(entries: &[&str]) -> Vec<u16> {
+        let mut out = Vec::new();
+        for e in entries {
+            out.extend(std::ffi::OsStr::new(e).encode_wide());
+            out.push(0);
+        }
+        if out.is_empty() {
+            out.push(0);
+        }
+        out.push(0);
+        out
+    }
+
+    /// Sorted by name ignoring case, as Windows compares them (in upper case: `A` before `_`),
+    /// each name once, the last value given winning.
+    #[test]
+    fn environment_block_is_sorted_with_each_name_once() {
+        assert_eq!(env(&[]).unwrap(), block(&[]));
+        assert_eq!(
+            env(&[("b", "1"), ("A", "2"), ("c", "3")]).unwrap(),
+            block(&["A=2", "b=1", "c=3"])
+        );
+        assert_eq!(
+            env(&[("_X", "1"), ("a", "2")]).unwrap(),
+            block(&["a=2", "_X=1"])
+        );
+        let one = env(&[("Path", "1"), ("PATH", "2")]).unwrap();
+        let text = String::from_utf16(&one).unwrap();
+        let entries: Vec<&str> = text.split('\0').filter(|e| !e.is_empty()).collect();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert!(entries[0].eq_ignore_ascii_case("PATH=2"), "{entries:?}");
+        // A drive's current folder (`=C:=C:\x`), as Windows keeps them.
+        assert_eq!(env(&[("=C:", r"C:\x")]).unwrap(), block(&[r"=C:=C:\x"]));
+    }
+
+    #[test]
+    fn environment_block_refuses_what_it_cannot_hold() {
+        for (k, v) in [("A=B", "1"), ("", "1"), ("A\0", "1"), ("A", "x\0y")] {
+            assert!(env(&[(k, v)]).is_err(), "{k:?}={v:?}");
+        }
+    }
+
+    /// Whether a detached launch can leave the job the tests run in, as the app would see it.
+    #[test]
+    fn breakaway_says_whether_a_detached_launch_can_leave_the_apps_job() {
+        let mut in_job = 0;
+        assert_ne!(
+            unsafe { IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut in_job) },
+            0
+        );
+        let r = breakaway();
+        eprintln!("in a job: {}; breakaway: {r:?}", in_job != 0);
+        match &r {
+            Ok(f) => assert!(*f == 0 || *f == CREATE_BREAKAWAY_FROM_JOB, "{f:#x}"),
+            Err(e) => assert_eq!(e, NO_BREAKAWAY),
+        }
+        if in_job == 0 {
+            assert_eq!(r, Ok(0));
+        }
+    }
+
+    /// Run from a process outside every job that refuses breakaway (a hosted runner's steps run
+    /// in one that does).
+    #[test]
+    #[ignore = "needs a process outside every job that refuses breakaway; CI starts it so"]
+    fn outside_job_breakaway() {
+        let r = breakaway();
+        assert!(
+            matches!(r, Ok(0) | Ok(CREATE_BREAKAWAY_FROM_JOB)),
+            "a detached launch could not leave the app's job: {r:?}"
+        );
+    }
+}
