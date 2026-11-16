@@ -142,3 +142,27 @@ fn wsl_not_enabled_is_not_installed() {
         "unavailable"
     );
 }
+
+/// The values WSL keeps for a distribution under `HKCU\...\Lxss\{guid}`, as WSL itself writes
+/// them: `Version` is the registration's format (2 for every new one, whatever its WSL version),
+/// `Flags` holds WSL 2 as 0x8 (interop 0x1, Windows PATH 0x2 and drive mounting 0x4 by default).
+fn lxss(version: u32, flags: Option<u32>) -> impl Fn(&str) -> Option<u32> {
+    move |name| match name {
+        "Version" => Some(version),
+        "Flags" => flags,
+        "DefaultUid" => Some(1000),
+        _ => None,
+    }
+}
+
+#[test]
+fn the_wsl_version_is_the_vm_mode_flag_not_the_registrations_format() {
+    // Seen on windows-latest: both distributions WSL 1 (wsl.exe --list --verbose), format 2.
+    assert_eq!(wsl_version(lxss(2, Some(0x7))), Some(1));
+    assert_eq!(wsl_version(lxss(2, Some(0xF))), Some(2));
+    // An old registration's format does not change the answer either.
+    assert_eq!(wsl_version(lxss(1, Some(0xF))), Some(2));
+    assert_eq!(wsl_version(lxss(0, Some(0x7))), Some(1));
+    // No flags: not known.
+    assert_eq!(wsl_version(lxss(2, None)), None);
+}

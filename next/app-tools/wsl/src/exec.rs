@@ -220,8 +220,9 @@ pub fn wsl(
 }
 
 /// The distributions the registry knows (`HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`):
-/// each one's name and WSL version, and the default's name. Community-documented values, read for
-/// display only; anything missing or unreadable is left out.
+/// each one's name and WSL version (from `Flags`, see `list::wsl_version`), and the default's name.
+/// Values as WSL's own source names them (`DistributionName`, `Flags`, `DefaultDistribution`), read
+/// for display only; anything missing or unreadable is left out.
 pub fn registry() -> (Vec<(String, Option<u32>)>, Option<String>) {
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
@@ -304,7 +305,10 @@ pub fn registry() -> (Vec<(String, Option<u32>)>, Option<String>) {
         if default_guid.as_deref() == Some(guid.as_str()) {
             default = Some(distro.clone());
         }
-        found.push((distro, dword(key, &sub, "Version")));
+        found.push((
+            distro,
+            crate::list::wsl_version(|name| dword(key, &sub, name)),
+        ));
     }
     // SAFETY: key was opened above.
     unsafe { RegCloseKey(key) };

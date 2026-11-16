@@ -1,5 +1,6 @@
-//! Reading `wsl.exe` output, and the names this program accepts: distributions from
-//! `wsl.exe --list --quiet` (decoded, checked, Docker's own hidden) and user names.
+//! Reading `wsl.exe` output and WSL's registry values, and the names this program accepts:
+//! distributions from `wsl.exe --list --quiet` (decoded, checked, Docker's own hidden) and user
+//! names.
 
 /// Docker Desktop's own distributions: no user homes, nothing to set up in them.
 pub const HIDDEN: [&str; 2] = ["docker-desktop", "docker-desktop-data"];
@@ -107,6 +108,16 @@ pub fn listing(
         decode(stdout).trim(),
         decode(stderr).trim()
     )))
+}
+
+/// WSL's flag for a distribution that runs in the WSL 2 virtual machine (`LXSS_DISTRO_FLAGS_VM_MODE`).
+const VM_MODE: u32 = 0x8;
+
+/// A distribution's WSL version (1 or 2) from its registry values (`value` gives a DWORD by name),
+/// or None when they do not say. It is the `Flags` value's WSL 2 bit, as `wsl.exe --list
+/// --verbose` reports it; `Version` is the registration's format (2 for every new one), not this.
+pub fn wsl_version(value: impl Fn(&str) -> Option<u32>) -> Option<u32> {
+    value("Flags").map(|f| if f & VM_MODE != 0 { 2 } else { 1 })
 }
 
 #[cfg(test)]
