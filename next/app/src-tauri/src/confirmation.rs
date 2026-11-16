@@ -1648,7 +1648,7 @@ pub(crate) fn revoke_approval(app: &tauri::AppHandle, id: &str) -> Result<(), St
         .unwrap()
         .revoke(id)?;
     // The tray's Start… menu lists only launches still remembered.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     crate::launcher::refresh_tray(app);
     Ok(())
 }
