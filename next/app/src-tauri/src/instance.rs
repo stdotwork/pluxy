@@ -63,9 +63,9 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const LOCK: &str = "lock";
-/// Names the file descriptor of the profile lock an updating app hands the version it starts
-/// (`updater.rs`), which adopts it instead of taking the lock: the lock is never free between
-/// the two, so no other launch becomes the app meanwhile.
+/// Names the file descriptor of the profile lock an updating app hands the version it starts on
+/// Linux and macOS (`updater`), which adopts it instead of taking the lock: the lock is never free
+/// between the two, so no other launch becomes the app meanwhile.
 pub const LOCK_FD_ENV: &str = "PLUXY_APP_INSTANCE_LOCK_FD";
 /// Names the nonce of the successor record a version started by an update finds (Windows; see
 /// the module).

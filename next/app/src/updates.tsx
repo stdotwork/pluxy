@@ -4,7 +4,7 @@
 // the native side opens a webview of their own over the notes area, with no app command granted
 // (src-tauri/src/notes.rs). This page gets only versions, dates and status from the native side.
 // "Update Now" installs the app's newer release through the native updater
-// (src-tauri/src/updater.rs), which says what it is doing and why it cannot update, if it cannot.
+// (src-tauri/src/updater/), which says what it is doing and why it cannot update, if it cannot.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";

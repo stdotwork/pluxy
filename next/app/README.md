@@ -327,7 +327,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches (Linux) |
 | `release_get`, `release_check` | The release feed's view (versions, dates, status); `release_check` reads the feed first ("Check for Updates") |
 | `release_channel_set` | Picks the Stable or the Preview (latest) channel |
-| `release_source_set` | Asks to change or remove the feed's address; opens a native confirmation (Linux) and applies nothing itself |
+| `release_source_set` | Asks to change or remove the feed's address; opens a native confirmation and applies nothing itself |
 | `release_notes_open`, `release_notes_place`, `release_notes_close` | Opens a release's notes in a webview of their own over part of the window, moves it, closes it |
 | `release_notes_full` | Opens the release's notes address from the feed in the browser ("View full release notes") |
 | `device_list` | This device's extension catalog |
@@ -1600,7 +1600,7 @@ app supported there:
 - The management key's native entry and rotation, and the native confirmations, have Win32
   dialogs on Windows and AppKit dialogs on macOS ([How the app reaches core](#how-the-app-reaches-core),
   [Native confirmations](#native-confirmations)).
-- Three parts of the native test run there:
+- Four parts of the native test run there:
   - the platform session (`native/platform.ts`, `PLATFORM_SHARDS` in `native/shards.ts`): one app
     per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
     Windows, a LaunchAgent on macOS), the tray and the close preference;
