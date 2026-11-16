@@ -15,14 +15,14 @@ cargo build --release --locked -p claude-code   # likewise claude-desktop, codex
 cargo build --release --locked -p wsl           # pluxy/wsl, for Windows (bin/pluxy-wsl.exe)
 ```
 
-Platforms: every tool runs on Linux. The usage hub, the usage parsers, `codex-sessions` and
-`execution` also build and are tested on Windows and macOS
+Platforms: every tool but `wsl` runs on Linux. The usage hub, the usage parsers,
+`codex-sessions` and `execution` also build and are tested on Windows and macOS
 (`.github/workflows/next-app-tools-platforms.yml`), and their manifests name programs for
 `darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does not run native tools on those
-systems yet. `wsl` is a Windows tool (`windows/amd64`, `windows/arm64`); its job in that workflow
-also runs it, and `lib/program` and `lib/transactions` built for Linux, against real WSL
-distributions. `lib/transactions`, `claude-code`, `claude-desktop` and `codex-setup` are Linux only
-for now.
+systems yet. `wsl` is a Windows tool (`windows/amd64`, `windows/arm64`; on other systems it builds
+and answers every operation `unsupported`); that workflow's WSL jobs run it, and `lib/program` and
+`lib/transactions` built for Linux, against real WSL distributions. `lib/transactions`,
+`claude-code`, `claude-desktop`, `codex-setup`, `opencode` and `omp-setup` are Linux only for now.
 
 ## `lib/files`
 
