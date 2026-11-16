@@ -31,7 +31,7 @@ defaults:
 
 env:
   # The writer tools and their library, ported in a later change.
-  NOT_PORTED: --exclude pluxy-transactions --exclude claude-code --exclude claude-desktop --exclude codex-setup --exclude opencode
+  NOT_PORTED: --exclude pluxy-transactions --exclude claude-code --exclude claude-desktop --exclude codex-setup --exclude opencode --exclude omp-setup
 
 jobs:
   tools:
