@@ -20,6 +20,47 @@ fn var(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("{name} is not set: run from the WSL job"))
 }
 
+/// A Linux path the job gives (`/` first): never a Windows path a shell made of it.
+fn linux_path(name: &str) -> String {
+    let v = var(name);
+    assert!(
+        v.starts_with('/'),
+        "{name} is {v:?}, not a Linux path: was it converted by Git Bash (MSYS2_ENV_CONV_EXCL)?"
+    );
+    v
+}
+
+/// wsl.exe's own text, which is UTF-16LE unless `WSL_UTF8` is set (then UTF-8).
+fn text(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.contains(&0) {
+        let words: Vec<u16> = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| u16::from_le_bytes(*p))
+            .collect();
+        String::from_utf16_lossy(&words)
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
+/// A reader that keeps what it has read, so bytes taken for a frame that is not one can be shown.
+struct Kept<'a, R: Read> {
+    inner: &'a mut R,
+    seen: Vec<u8>,
+}
+
+impl<R: Read> Read for Kept<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if self.seen.len() < 4096 {
+            self.seen.extend_from_slice(&buf[..n]);
+        }
+        Ok(n)
+    }
+}
+
 fn distro() -> String {
     var("PLUXY_WSL_TEST_DISTRO")
 }
@@ -361,15 +402,17 @@ fn prepare_answers_the_exact_launch_and_that_launch_runs_as_the_user() {
 /// The fixture writer's Linux program started in distro as user, as the host starts a WSL
 /// instance: `wsl.exe -d -u --cd <package> --exec <program>`, the contract's variables crossing by
 /// `WSLENV`, with `PLUXY_ENVIRONMENT` naming environment. Its first frame (None: it ended without
-/// one) and, when it ended, its standard error.
+/// one) and, when it ended, what it wrote (wsl.exe's own errors go to standard output) and the
+/// command line.
 fn writer(distro: &str, user: &str, environment: &str) -> (Option<Program>, String) {
     let (prog, dir) = (
-        var("PLUXY_WSL_TEST_WRITER"),
-        var("PLUXY_WSL_TEST_WRITER_DIR"),
+        linux_path("PLUXY_WSL_TEST_WRITER"),
+        linux_path("PLUXY_WSL_TEST_WRITER_DIR"),
     );
+    let args = ["-d", distro, "-u", user, "--cd", &dir, "--exec", &prog];
     for attempt in 1..=5 {
         let mut c = Command::new(r"C:\Windows\System32\wsl.exe");
-        c.args(["-d", distro, "-u", user, "--cd", &dir, "--exec", &prog])
+        c.args(args)
             .env_clear()
             .env("SystemRoot", std::env::var("SystemRoot").unwrap())
             .env("PLUXY_APP_CONTRACT_VERSIONS", "0")
@@ -396,7 +439,13 @@ fn writer(distro: &str, user: &str, environment: &str) -> (Option<Program>, Stri
             let _ = stderr.read_to_end(&mut s);
             s
         });
-        match read_frame(&mut stdout) {
+        let mut kept = Kept {
+            inner: &mut stdout,
+            seen: Vec::new(),
+        };
+        let first = read_frame(&mut kept);
+        let seen = kept.seen;
+        match first {
             Ok(Some(f)) => {
                 assert_eq!(f["type"], "hello", "{f}");
                 assert_eq!(f["id"], "pluxy/fixture-writer");
@@ -412,17 +461,20 @@ fn writer(distro: &str, user: &str, environment: &str) -> (Option<Program>, Stri
             }
             _ => {
                 drop(stdin);
-                let mut rest = Vec::new();
-                let _ = stdout.read_to_end(&mut rest);
+                let mut out = seen;
+                let _ = stdout.read_to_end(&mut out);
                 child.wait().unwrap();
-                let mut text = String::from_utf8_lossy(&err.join().unwrap()).into_owned();
-                text.push_str(&String::from_utf8_lossy(&rest));
-                if text.contains("0xd0000225") && attempt < 5 {
+                let said = format!(
+                    "{} {} (wsl.exe {args:?})",
+                    text(&err.join().unwrap()).trim(),
+                    text(&out).trim()
+                );
+                if said.contains("0xd0000225") && attempt < 5 {
                     eprintln!("retry: WSL refused a launch with 0xd0000225 ({attempt})");
                     std::thread::sleep(Duration::from_secs(2));
                     continue;
                 }
-                return (None, text);
+                return (None, said);
             }
         }
     }
@@ -443,7 +495,7 @@ fn a_linux_program_says_hello_only_in_its_distribution_as_its_user() {
     );
     assert_eq!(v["targets"][0]["target"], "/home/bob/.claude/settings.json");
     // A file on a Windows drive is refused in WSL.
-    let drive = format!("{}/settings.json", var("PLUXY_WSL_TEST_DRIVE_DIR"));
+    let drive = format!("{}/settings.json", linux_path("PLUXY_WSL_TEST_DRIVE_DIR"));
     let e = p.err("preview", json!({"set": "s", "targets": [{"file": drive}]}));
     assert_eq!(
         e["message"], "This file is on a Windows drive; set it up from Windows local.",
