@@ -154,11 +154,34 @@ Workflows live in `.github/workflows/`, one set per folder, each limited to its 
 | `next-ci.yml` | PRs and pushes to `main` touching `next/` | UI type check, lint and unit tests; builds the panel; `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test -race ./...`; the panel's browser test in headless Chromium, and the extension pages test in Chromium, Firefox and WebKit |
 | `next-app.yml` | PRs and pushes to `main` touching `next/` | The desktop app in `next/app`: type check, lint, unit tests and build of the window; `cargo fmt --check`, `cargo clippy`, `cargo test --locked` (unit tests and each connection mode against a real core); format, clippy and tests of `next/app-tools`. In parallel, the native test on Xvfb, which also builds and runs the test AppImage and checks the release gate, split into shard jobs that each build everything and run their own sessions (`next/app/native/shards.ts`). The `app` job passes only when every other job did |
 | `next-app-platforms.yml` | PRs and pushes to `main` touching `next/`, `workflow_dispatch` | The desktop app's Rust crate on `windows-latest` and `macos-latest`: builds the window, then `cargo clippy --locked --all-targets -- -D warnings` and `cargo test --locked` (and `cargo fmt --check` on macOS) with an empty temporary home; records the passed, failed and ignored test counts in the job summary. The native test stays on Linux in `next-app.yml` |
-| `next-app-tools-platforms.yml` | PRs and pushes to `main` touching `next/app-tools/` or the workflow | The app tools on `windows-latest` and `macos-latest`: `cargo clippy` and `cargo test --locked` with an empty temporary home, the passed, failed and ignored counts and the tests that skipped a part the account may not do in the job summary; `claude-desktop` and `opencode` are left out until they are ported |
+| `next-app-tools-platforms.yml` | PRs and pushes to `main` touching `next/app-tools/` or the workflow | The app tools on `windows-latest` and `macos-latest`: `cargo clippy` and `cargo test --locked` with an empty temporary home, the passed, failed and ignored counts and the tests that skipped a part the account may not do in the job summary; `claude-desktop`, `opencode` and `omp-setup` are left out until they are ported |
 | `next-corpus.yml` | PRs and pushes to `main` touching `next/` or `core/` | Builds `core/` and runs the corpus against both cores live; the report is in the job summary |
 | `next-release.yml` | `next-v*` tags; PRs touching `next/Dockerfile`, `next/.dockerignore`, `next/compose.example.yaml`, `next/cmd/pluxy-pack/` or the workflow | PRs: builds the container image (amd64, and arm64 without running it), starts it with a temporary config, polls `/healthz`, checks the panel and the bundled packages, and packs every extension for the release platforms. Tags: also uploads the archives and `registry.json` to the GitHub release and pushes the image to `ghcr.io` once the checks pass |
 
 When you add a workflow, add a row here.
+
+### Where jobs run
+
+By default every job runs on GitHub's own runners. Two repository variables send some jobs to
+the maintainers' own machines instead:
+
+- `PLUXY_LINUX_RUNNER` takes the Linux jobs of `core-pr-test-build.yml`, `app-ci.yml`,
+  `next-app.yml` and `next-corpus.yml`. `next-ci.yml` stays on GitHub's runners.
+- `PLUXY_WINDOWS_RUNNER` takes the Windows leg of the `tools` job in
+  `next-app-tools-platforms.yml`. The `app` job in `next-app-platforms.yml` (its registry tests
+  only run on GitHub's runners), macOS jobs, the `native` job in `next-app-platforms.yml` and the
+  release workflows always stay on GitHub's runners.
+
+Each variable holds a runner label as JSON, for example `"self-hosted"` or
+`["self-hosted", "linux"]`. When a variable is not set, its jobs run on the GitHub runner they
+named before.
+
+Only these events can use the maintainers' runners: pushes, manual runs, and pull requests from
+branches of this repository, except Dependabot's. Every other event, including pull requests from
+a fork, runs on GitHub's runners. That check lives in the workflow files, which a fork can edit,
+so it is not the only guard: runs from forks need a maintainer's approval, and the maintainers'
+runner host cancels any run from a fork that asks for its runners. Before approving a fork's run,
+check whether it changes `.github/workflows/`.
 
 ## How changes flow
 

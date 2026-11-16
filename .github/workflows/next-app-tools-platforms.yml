@@ -1,8 +1,8 @@
 name: Next app tools platforms
 
 # Builds, lints and unit-tests the app tools (next/app-tools, the native programs the desktop app
-# runs on demand) on Windows and macOS. Linux runs them in next-app.yml. The claude-desktop and
-# opencode writer tools are not ported yet and are left out here.
+# runs on demand) on Windows and macOS. Linux runs them in next-app.yml. The claude-desktop,
+# opencode and omp-setup writer tools are not ported yet and are left out here.
 
 on:
   workflow_dispatch:
@@ -30,13 +30,14 @@ defaults:
     working-directory: next/app-tools
 
 env:
-  # Claude Desktop's and OpenCode's setup, Linux only for now (not ported to Windows and macOS).
-  NOT_PORTED: --exclude claude-desktop --exclude opencode
+  # The writer tools not ported to Windows and macOS yet (Claude Desktop's, OpenCode's and Oh My
+  # Pi's setup), Linux only for now.
+  NOT_PORTED: --exclude claude-desktop --exclude opencode --exclude omp-setup
 
 jobs:
   tools:
     name: app tools (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'windows-latest' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_WINDOWS_RUNNER && fromJSON(vars.PLUXY_WINDOWS_RUNNER) || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -46,6 +47,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.97.0
         with:
