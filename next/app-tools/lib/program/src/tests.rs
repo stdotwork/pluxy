@@ -626,6 +626,13 @@ fn the_user_is_the_effective_user_ids_name() {
 /// This test binary run again as a child, with env, running only `identity_child`: what it said.
 #[cfg(target_os = "linux")]
 fn identity_in_child(env: &[(&str, &str)]) -> String {
+    let env: Vec<(&str, &std::ffi::OsStr)> = env.iter().map(|(k, v)| (*k, v.as_ref())).collect();
+    identity_in_child_os(&env)
+}
+
+/// As `identity_in_child`, with values that need not be UTF-8.
+#[cfg(target_os = "linux")]
+fn identity_in_child_os(env: &[(&str, &std::ffi::OsStr)]) -> String {
     let mut c = std::process::Command::new(std::env::current_exe().unwrap());
     c.args([
         "--exact",
@@ -695,6 +702,21 @@ fn a_program_in_another_distribution_or_as_another_user_refuses_to_start() {
         format!("err pluxy expected WSL Fake/{me}, this is (not WSL)/{me}")
     );
     assert!(identity_in_child(&[("PLUXY_ENVIRONMENT", "docker:x")]).starts_with("err "));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn an_environment_that_is_not_utf8_refuses_to_start() {
+    use std::os::unix::ffi::OsStrExt;
+    let bad = std::ffi::OsStr::from_bytes(b"wsl:Fake:b\xffob");
+    let said = identity_in_child_os(&[
+        ("PLUXY_ENVIRONMENT", bad),
+        ("WSL_DISTRO_NAME", "Fake".as_ref()),
+    ]);
+    assert_eq!(
+        said,
+        "err PLUXY_ENVIRONMENT is not UTF-8: start this program from pluxy's app"
+    );
 }
 
 /// In a real WSL distribution (the platforms workflow's WSL job runs this inside it, as the user

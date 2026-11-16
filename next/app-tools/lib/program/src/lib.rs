@@ -196,11 +196,12 @@ impl Identity {
                 "the app speaks contract versions {versions}, this program {CONTRACT}"
             ));
         }
-        if let Some(env) = std::env::var("PLUXY_ENVIRONMENT")
-            .ok()
-            .filter(|v| !v.is_empty())
-        {
-            environment::check(&env)?;
+        // Fail closed: a value that is set but not UTF-8 is refused, never taken for none.
+        if let Some(env) = std::env::var_os("PLUXY_ENVIRONMENT").filter(|v| !v.is_empty()) {
+            let env = env
+                .to_str()
+                .ok_or("PLUXY_ENVIRONMENT is not UTF-8: start this program from pluxy's app")?;
+            environment::check(env)?;
         }
         Ok(Identity {
             id: var("PLUXY_EXTENSION_ID")?,
