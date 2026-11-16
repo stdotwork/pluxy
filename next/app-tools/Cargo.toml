@@ -3,7 +3,7 @@
 # into the desktop app.
 [workspace]
 resolver = "2"
-members = ["lib/files", "lib/program", "lib/transactions", "lib/usage", "lib/sqlite-ro", "lib/pi-sessions", "agent-usage", "claude-code", "claude-desktop", "codex", "codex-sessions", "execution", "omp-setup", "opencode", "usage-claude", "usage-codex", "usage-fixture", "usage-omp", "usage-opencode", "usage-pi"]
+members = ["lib/files", "lib/program", "lib/transactions", "lib/usage", "lib/sqlite-ro", "lib/pi-sessions", "agent-usage", "claude-code", "claude-desktop", "codex", "codex-sessions", "execution", "grok-setup", "hermes-setup", "omp-setup", "opencode", "pi-setup", "usage-claude", "usage-codex", "usage-fixture", "usage-omp", "usage-opencode", "usage-pi", "wsl"]
 
 [workspace.package]
 edition = "2021"

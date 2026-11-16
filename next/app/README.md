@@ -16,7 +16,11 @@ from packages installed on this device, open in webviews of their own.
 ## How the app reaches core
 
 The Connection page picks one of three modes. The app keeps the choice in `connection.json` in
-its config folder (on Linux `~/.config/dev.pluxy.desktop/`), readable only by your user.
+its config folder (on Linux `~/.config/dev.pluxy.desktop/`), readable only by your user. On
+Windows it is in the local application data folder instead (`%LOCALAPPDATA%\dev.pluxy.desktop\`),
+and so is the app's own core's folder (`core/`), since both can hold a management key: the config
+and data folders are in the roaming one (`%APPDATA%`), which a roaming profile copies to its
+server and to the person's other computers.
 
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
@@ -28,8 +32,11 @@ Addresses are origins only (scheme, host and port). A key you give is checked ag
 (`GET /v0/management/status`) before the app switches to it. It is kept in `connection.json` only
 when you tick "Keep the key on this device"; otherwise it lasts until the app quits.
 
-The native side holds the management key. On Linux, "Enter management key" on the Connection
-page opens a GTK dialog with a hidden entry, "Keep the key on this device", and OK/Cancel.
+The native side holds the management key. "Enter management key" on the Connection page opens a
+native dialog with a hidden entry, "Keep the key on this device", and OK/Cancel: a GTK dialog on
+Linux, a Win32 dialog with a password edit control on Windows, and a sheet on the window with an
+`NSSecureTextField` on macOS. On Windows and macOS the dialog is modal to the app's window only:
+the app's other native dialogs and the tray stay usable meanwhile.
 Before opening it, native code validates the mode, origin and certificate authority file. The
 dialog identifies the target origin, any custom certificate authority, and an origin switch.
 The origin switch names the connection you last confirmed and the app saved (not the client
@@ -45,12 +52,14 @@ The window calls core through the
 `<core>/v0/management/...` only, following no redirects and, for a core on this computer, no
 proxy from the environment. Path segments that are, or decode to, `.` or `..` are refused.
 
-Rotate on the Config page's Connectivity tab rotates the management key natively, on Linux: the
-app opens its native confirmation, which names the core and how the new key will be kept, then
+Rotate on the Config page's Connectivity tab rotates the management key natively: the app opens
+its native confirmation, which names the core and how the new key will be kept, then
 calls core's `POST /v0/management/management-key/rotate` itself. It keeps the new key as the old
 one was kept (in `connection.json`, for this session only, or, for the app's own core, in that
 core's config file, which core writes) and shows it once in a native window with Copy and
-Close, for other programs that used the old key and for signing in again. That window stays open
+Close, for other programs that used the old key and for signing in again. On Windows Copy marks
+the copy to stay out of clipboard history, cloud clipboard and clipboard monitors; on macOS it adds
+the `org.nspasteboard.ConcealedType` type clipboard managers take to mean a password. That window stays open
 when the main window closes to the tray, and a later rotation's window replaces it. The window
 gets only how it went: the key never reaches a webview. `core_call` refuses every path under
 `/management-key`, however it is spelled. If the new key cannot be saved, the app keeps using
@@ -492,10 +501,11 @@ AppImage itself, in this order (`src-tauri/src/updater.rs`):
    changed since, nothing is kept or installed and the page asks for a restart first. Then the app
    writes the new AppImage over the old one in one step: a temporary file in the same folder,
    flushed to disk, renamed over it, and the folder flushed.
-7. The app stops as Quit does (its native tools and its own core stop) and hides its window, but
-   keeps its profile lock and hands it to the new AppImage it starts, so no other launch takes the
-   profile meanwhile; the tray stays responsive while it waits. It waits up to 90 seconds for
-   the new version to accept itself: once it has started, with the installed file's digest the one
+7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
+   that order; detached launches run on) and hides its window, but keeps its profile lock and
+   hands it to the new AppImage it starts, so no other launch takes the profile meanwhile; the
+   tray stays responsive while it waits. It waits up to 90 seconds for the new version to accept
+   itself: once it has started, with the installed file's digest the one
    pinned, it writes `updates/accepted.json`. If it ends first or does not accept in time, the kept
    copy (checked against its digest) is put back the same way, the page later says the update
    failed, and the earlier version starts again with the lock. If the kept copy cannot be put back,
@@ -726,12 +736,12 @@ checked.
 This is a check that cooperates with the person, not a sandbox: another program of the same user
 can change files between a check and a read.
 
-## Native confirmations (Linux)
+## Native confirmations
 
 Native code prepares each immutable action with its requester chain, executing package, full
 source/digest/signer/contract/generation, selected and resolved file identities, and launch recipe
-where applicable. The main window can ask to review that preparation's opaque ID. A GTK dialog
-shows the action and, for a native tool, “full access to your user account”. Only its native
+where applicable. The main window can ask to review that preparation's opaque ID. A native dialog
+(GTK on Linux, Win32 on Windows, AppKit on macOS) shows the action and, for a native tool, “full access to your user account”. Only its native
 response handler issues approval. No IPC command accepts an approval result, gesture flag or token
 consumption request. Page webviews have no confirmation capability.
 
@@ -750,9 +760,18 @@ safely preserved. Newly created settings folders use mode 0700 and files use 060
 save, an existing folder owned by this user is tightened to 0700 if group/world-writable; a folder
 owned by another user is refused. Disabled persistence hides Remember. If saving fails after
 confirmation, the one-time token is still issued and a native notice/log reports the failure.
+On Windows the same checks read the owner and access list instead of the mode: the file and
+folder must be owned by this user, by the owner this process gives what it makes (for an elevated
+administrator, the Administrators group) or by SYSTEM, and have a protected access list (one that
+takes nothing from its folder's) whose allow entries are only this user's and SYSTEM's; a missing
+access list is refused. A new or unsafe folder, and each file the app saves, gets such a list
+(the folder's inherited by what is made in it). Reparse points (symbolic links and junctions) are
+refused as symlinks are on Unix. The app tools' file library (`next/app-tools/lib/files`) uses the
+same rule.
 
 An executable is opened before checking its canonical path, device/inode, size, mtime, ctime and
-mode. SHA-256 is computed once for that metadata and cached in memory; unchanged metadata reuses
+mode (on Windows: the volume serial number and file index, size, last write and change times, and
+attributes; a program is a file ending in `.exe`, `.com`, `.bat` or `.cmd`). SHA-256 is computed once for that metadata and cached in memory; unchanged metadata reuses
 it. A new app process hashes once before using persisted approvals. Metadata changes or same-path
 replacement require review again. A consumed token exposes the checked open executable and cwd
 handles for a later launcher to use with `fexecve` and `fchdir`. The executable handle is opened
@@ -770,10 +789,12 @@ a remembered approval, and only those dialogs offer Remember. Gesture constructi
 is private to native handlers and fixtures, and a gesture expires after five seconds.
 
 Page Start uses the separate native entry point, always opens a fresh dialog, permits one pending
-confirmation per original package and one attempt per second, and shows a GTK notice with
+confirmation per original package and one attempt per second, and shows a native notice with
 requester, action and outcome, including refusals. Page/Import pending entries have their own
 limit of 16; trusted requests have a separate limit of 64. Page dialogs focus Cancel and keep
-Confirm disabled for one second after mapping. Non-UTF-8 paths are refused before review;
+Confirm disabled for one second after mapping. (On macOS a button takes the keyboard focus only
+with full keyboard access turned on; Cancel is the default button there, which Return presses.)
+A launch that opens a file in the person's own app is refused before review off Linux. Non-UTF-8 paths are refused before review;
 Unicode format characters (including bidi and zero-width characters), control characters and
 Pango line separators (U+2028/U+2029) are displayed as escaped Unicode.
 
@@ -1015,6 +1036,126 @@ when one exists) and starts it through the launcher in the chosen working direct
 ones offered), terminal and optional program path. Each launch's confirmation shows it in full; the
 key is not part of a launch: Oh My Pi reads it from its models file. Oh My Pi has no desktop app.
 
+## Grok Build
+
+The Grok Build page sets up and starts Grok Build with this core (`src/grok.tsx`). It needs the
+curated native tool `pluxy/grok-setup` ([app tools](../app-tools/README.md#grok-setup)) and, for
+**Start CLI**, the execution program, both installed and enabled on the Device extensions page. Like
+the Claude Code page it is the window's own page, because **Apply** gives the tool the client key.
+
+**Read configuration** previews Grok Build's `config.toml`: its user config (`~/.grok/config.toml`),
+a selected file (such as `$GROK_HOME/config.toml`; a link is followed and kept) or a file in a
+selected folder; it shows the status, the file it writes to, Grok Build's default model now and
+whether a key is in pluxy's entry, never the key, and notes model entries an older app left
+(`cpa-gui/…`), which pluxy leaves alone. A file Grok Build would not take shows as refused, with the
+reason: Apply and Close configuration stay off, Restore Backup and the backups stay available. The **Model catalog** holds the models pluxy's entries
+list: those the file has, and the core's served models, added (all selected, as the old app wrote
+them all) when **Refresh models** is pressed, never in the background. Each can be left out or
+given its **Context window**; the **Default model** is one of the selected models. Apply stays off,
+with a notice, while more than 256 models are selected. The **Authentication Key** is one of the
+vault's plain secrets or this tool's client keys, or a new one through native key entry.
+
+**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
+**Close configuration** (Clear) and **Restore Backup** call the tool on the file the last preview
+pinned (changing the file selection drops that preview; the tool refuses a file changed since),
+whose native confirmation names the file, the key's label for Apply, and that an edit made in
+the same instant by another program may be lost; **Backup and restore** keeps the file in manual
+backups, as on the Claude Code page. **Start CLI** asks the tool for its recipe (`~/.grok/bin/grok`
+when Grok Build's installer put it there, else `grok` from PATH, in a terminal with no arguments)
+and starts it through the launcher in the chosen working directory, terminal and optional program
+path. The key is not part of the launch: Grok Build reads it from config.toml. Grok Build has no
+Linux desktop app.
+
+## Hermes Agent
+
+The Hermes Agent page sets up and starts Hermes Agent with this core (`src/hermes.tsx`). It needs
+the curated native tool `pluxy/hermes-setup` ([app tools](../app-tools/README.md#hermes-setup))
+and, for **Start CLI**, the execution program, both installed and enabled on the Device extensions
+page. Like the Claude Code page it is the window's own page, because **Apply** gives the tool the
+client key.
+
+**Read settings** previews Hermes Agent's `config.yaml`: in its default home (`~/.hermes`, or the
+profile `~/.hermes/active_profile` names), in a selected Hermes home folder (the folder
+`HERMES_HOME` names, or a profile's `~/.hermes/profiles/<name>`; the folder may be a link, as
+chezmoi can make) or as a selected file (a link, as stow makes, is followed and kept). It shows
+whether pluxy's integration is applied, the file it writes to, the provider's address, whether a
+key is in the file, the selected provider and the default model, never the key, and warns when the
+old desktop app's `cpa-gui` provider is still there. **Default model** is the model Hermes Agent
+starts with through this core (the core's served models are suggested; **Refresh models** reloads
+them). The **Authentication Key** is one of the vault's secrets (a captured client key only when it
+is this tool's), or a new one through native key entry (**Add key…**).
+
+A file Hermes would not take shows as refused, with the reason: **Apply** and **Clear integration**
+stay off, and **Restore Backup** and the backups stay available. Choosing another file or folder
+drops the last preview. **Connect in One Click** (or **Update Configuration** / **Repair
+Connection** once applied), **Clear integration** and **Restore Backup** call the tool with the file
+the last preview pinned (the tool refuses it if the file changed since), and its native
+confirmation names the file it resolves to, the key's label for Apply, and that an edit made
+in the same instant by another program may be lost; comments and everything else in the file stay,
+including the person's own settings under the pluxy provider. **Backup and restore** is the shared
+backup browser. **Start CLI** asks the tool for its recipe (`hermes` in a terminal, no arguments,
+which starts a chat; `~/.local/bin/hermes`, where Hermes's installer puts it, when it exists) and
+starts it through the launcher in the chosen working directory (recently used ones offered),
+terminal and optional program path. Each launch's confirmation shows it in full; the key is not
+part of a launch: Hermes Agent reads it from its config file. Hermes Agent's desktop app is not
+offered: its Linux packages are not released.
+
+## Pi
+
+The Pi page sets up and starts Pi with this core (`src/pi.tsx`). It needs the curated native tool
+`pluxy/pi-setup` ([app tools](../app-tools/README.md#pi-setup)) and, for **Start CLI**, the
+execution program, both installed and enabled on the Device extensions page. Like the Claude Code
+page it is the window's own page, because **Apply** gives the tool the client key.
+
+Pi reaches the core through the CLIProxyAPI provider plugin. The tool carries a reviewed copy of
+it and installs it as a local Pi package in Pi's agent folder; it never runs `pi install` or npm.
+**Read settings** previews Pi's files, `cliproxyapi.json`, `settings.json` and the plugin's model
+cache `cliproxyapi-models.json`, in its agent folder (`~/.pi/agent`) or in a selected agent folder
+(the one `PI_CODING_AGENT_DIR` names; the folder may be a link, as chezmoi can make), or as the
+linked files in a folder (links, as stow makes, are followed and kept). Files Pi would not take
+are still read: the page says why, leaves Apply, Clear and Uninstall off, and keeps Restore Backup
+and the backups. It shows whether the plugin is
+installed and its version (with **Update available** when the tool carries another), whether
+pluxy's integration is applied, the files it writes to, whether a key is in `cliproxyapi.json` and
+Pi's default provider and model, never the key; it warns when `settings.json` still lists the npm
+copy an older app installed, or when a folder of the plugin's name is not pluxy's. **Model** is the
+model Pi starts with through this core (the core's served models are suggested; **Refresh models**
+reloads them; the plugin itself lists the core's Codex catalog in Pi). The **Authentication Key**
+is one of the vault's secrets, or a new one through native key entry (**Add key…**).
+
+**Install Pi Plugin** (or **Connect in One Click**, **Update Configuration** / **Repair
+Connection** once installed) installs the plugin when it is not there and writes the core's
+address, the key and Pi's defaults. **Plugin management** has **Update Pi Plugin** (the tool's copy
+replaces the installed one) and **Uninstall Pi Plugin** (its entry and folder go; the connection
+settings stay). **Clear integration** and **Restore Backup** also remove the plugin's folder once
+`settings.json` no longer lists it. Each of these previews the files again and calls the tool,
+whose native confirmation names the files it resolves to (or the agent folder, for Update), the
+key's label for Apply, and that an edit made in the same instant by another program may be lost;
+everything else in the files stays. **Backup and restore** is the shared backup browser. **Start
+CLI** asks the tool for its recipe (`pi` in a terminal, no arguments; `~/.pi/agent/bin/pi` or
+`~/.local/bin/pi`, where Pi's installer puts it, when one exists) and starts it through the
+launcher in the chosen working directory (recently used ones offered), terminal and optional
+program path. The key is not part of a launch: the plugin reads it from `cliproxyapi.json`. Pi has
+no desktop app.
+
+## Beginner Mode
+
+Beginner Mode (`src/easyMode.tsx`, in the Operate group) is the guided setup of the old app's Easy
+mode, in its two steps. **Connect a model** is the Add Account page's own sign-in (every browser,
+device code and API-key method core's extensions offer); it counts core's accounts, and **Next:
+Configure Agent** stays off until there is one. **Connect an agent** lists the agent clients this
+window can set up whose optional tool is installed on this device or offered by a registry, and the
+launcher (`pluxy/execution`) that **Start CLI** runs through: **Install** installs a tool from its
+registry, **Enable** opens the tool's native confirmation ("full access to your user account"),
+answered in that dialog only, and **Set up** shows the client's own page below, where its
+configuration is applied and the client started as on that page. The guide writes nothing itself and
+keeps no draft: a cancelled confirmation, or leaving the guide, leaves files and packages as they
+were; Close configuration and Restore Backup on the client's page undo an apply.
+
+A client joins the list by being an agent page: a window page that names the package it drives
+(`AgentPage` in `src/easyMode.tsx`), listed in `agentPages` in `src/agentPages.ts`. The list itself
+(`src/easyModeItems.ts`) has no per-client code.
+
 ## Build and check
 
 Bun `1.4.3`, a stable Rust toolchain (CI uses 1.97.0), and on Linux the WebKitGTK 4.1 and
@@ -1221,7 +1362,7 @@ around the test-feature dev binary, and on the test package under a neutral name
 own: the first two pass and the rest are refused.
 
 The same native run uses fixture actions (compiled only with `native-test`) and real X input
-from `xdotool` to confirm, cancel, opt into remembering, click a native Start button and revoke
+from `xdotool` (on Windows and macOS, the UI driver's input: see [Limits](#limits)) to confirm, cancel, opt into remembering, click a native Start button and revoke
 in native settings. It checks one-use token consumption and open handles, page command/message
 spoof refusal, exact native-gesture reuse without a dialog, different-chain review, changed
 executable metadata and same-path replacement review, revoked-token refusal, and page Start flood
@@ -1363,13 +1504,23 @@ The app's updater ([Application update](#application-update)) calls it.
 - Access: Linux only (5.8 or later: grants record the `statx` mount ID); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test runs on Linux only. On Windows and macOS, CI builds the app's crate, runs
-  clippy and the Rust tests (`.github/workflows/next-app-platforms.yml`); the native features
-  (confirmations, key entry, starting native tools and launches) stay Linux only and refuse at
-  run time. How the app starts, holds and stops processes there is built and tested
+- The native test runs on Linux, except its platform, package and dialogs sessions. On Windows
+  and macOS, CI builds the app's crate, runs clippy and the Rust tests, and runs those sessions
+  (`.github/workflows/next-app-platforms.yml`). The dialogs session (`native/dialogs.ts`) runs the
+  app in local mode against a test core, with the window's and page's command probes, the native
+  confirmations, key entry and key rotation. Starting native tools and launches stays Linux only
+  and refuses at run time. How the app starts, holds and stops processes there is built and tested
   ([Windows and macOS](app-host/README.md#windows-and-macos)), and the app's own core starts on
   macOS; on Windows its core store does not build yet. On Windows the page document's address is
   `http://pluxy-page.localhost/`.
+- The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
+  account's known folders, which no environment variable redirects, so it refuses to start when
+  they exist and removes only the ones it made. Its input does not come from a keyboard: on
+  Windows it is `SendInput` when the dialog has the foreground, otherwise the same key messages
+  posted to the focused control; on macOS key and mouse events made in the app and given to
+  AppKit. Both go through the app's real message handling and the dialogs' controls, but miss
+  what only a person at the machine would hit, such as another app taking the keyboard. The
+  session's summary counts which way each input went.
 - No installer or bundled core yet: the only packages are the test AppImage, the test folder
   bundle (Windows) and the test app bundle (macOS), which are not for release.
   The app updates only itself, only as an AppImage, on Linux x86_64, and only with test updater
@@ -1388,11 +1539,15 @@ The app's updater ([Application update](#application-update)) calls it.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.
-- Native key entry is implemented on Linux only. Windows and macOS refuse key entry until
-  their native dialogs are implemented; there is no webview entry fallback.
+- Native key entry and confirmations run on Linux, Windows and macOS; there is no webview entry
+  fallback. Secret entry for the vault and client keys stays Linux only, with the vault.
+- The native dialogs on Windows and macOS are not modal to the whole app: only key entry is modal,
+  to the window. No dialog runs a modal loop of its own, which would hold the app's other work.
 - Hidden native entry keeps keys out of the webview API. It does not isolate them from another
   process with the same user's operating-system access, and transient native buffers are not
-  guaranteed to be erased from memory.
+  guaranteed to be erased from memory. macOS turns on Secure Event Input while the secure field
+  has the focus; Windows has nothing like it, so a keyboard hook of the same user sees what is
+  typed.
 - A kept key is stored in `connection.json`, not in the system keyring.
 - The Linux native suite checks the app's own tray item in the watcher's registration list,
   drives its Start, Stop and Restart through the item's D-Bus menu, and checks startup without a

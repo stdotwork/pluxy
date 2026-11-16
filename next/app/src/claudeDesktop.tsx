@@ -7,7 +7,6 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useId, useState } from "preact/hooks";
-import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
 import {
   Button,
@@ -37,6 +36,7 @@ import {
   rowsFrom,
   type Secret,
 } from "./claudeDesktopForm";
+import type { AgentPage } from "./easyMode";
 import { connectionGet } from "./host";
 
 const t = strings("claudeDesktop", {
@@ -462,8 +462,9 @@ export function ClaudeDesktopPage() {
   );
 }
 
-export const claudeDesktopPage = (): PageDef => ({
+export const claudeDesktopPage = (): AgentPage => ({
   id: "claude-desktop",
+  package: PACKAGE,
   group: "control",
   title: t("title"),
   short: t("short"),

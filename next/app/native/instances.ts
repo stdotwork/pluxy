@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { makeProfile } from "./profile";
+import { shotEnv } from "./shots";
 
 export interface InstancesRun {
   bin: string;
@@ -43,6 +44,7 @@ export async function runInstances(o: InstancesRun): Promise<{ problems: string[
       JSON.stringify({ close_behavior: "minimize-to-tray" }),
       { mode: 0o600 },
     );
+    Object.assign(env, shotEnv("instances"));
     const session = [
       process.execPath,
       join(import.meta.dir, "session.ts"),
