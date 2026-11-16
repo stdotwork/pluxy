@@ -54,8 +54,8 @@ pub(super) fn provenance(app: &AppHandle) -> Result<PathBuf, String> {
     if translocated(&bundle) {
         return Err(format!(
             "{} runs from a read-only copy macOS made of it (App Translocation), not from where \
-             it was put. Move the app into a folder such as Applications with Finder, open it from \
-             there, and update then.",
+             it was put. Move the app into a folder of your own, such as Applications in your \
+             home folder (~/Applications), with Finder, open it from there, and update then.",
             bundle.display()
         ));
     }
