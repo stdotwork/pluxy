@@ -884,7 +884,7 @@ pub fn accept(app: &AppHandle) {
 
 /// Returns once the version this one took over from has ended (or after two minutes): on Windows
 /// once this app holds the profile lock, which that version held to its end; on macOS once this
-/// process is no longer that version's child.
+/// process is no longer that version's child (`still_its_child`).
 #[cfg(not(target_os = "linux"))]
 fn earlier_ended(app: &AppHandle) {
     let deadline = Instant::now() + Duration::from_secs(120);
@@ -902,10 +902,22 @@ fn earlier_ended(app: &AppHandle) {
         let started_by = std::env::var_os(crate::instance::LOCK_FD_ENV).is_some();
         // SAFETY: getppid has no preconditions.
         let parent = unsafe { libc::getppid() };
-        while started_by && unsafe { libc::getppid() } == parent && Instant::now() < deadline {
+        while still_its_child(started_by, parent, unsafe { libc::getppid() })
+            && Instant::now() < deadline
+        {
             std::thread::sleep(Duration::from_millis(200));
         }
     }
+}
+
+/// macOS: whether this process, started by an update or a rollback (`started_by`), is still the
+/// child of the version that started it: its parent now (`now`) is the one it read first
+/// (`first`), and is not launchd (process 1). macOS has no subreapers, so a process whose parent
+/// has ended is launchd's: so is one a restore's wait loop starts once the earlier version has
+/// ended, or one whose parent ended before it first looked.
+#[cfg(any(target_os = "macos", test))]
+fn still_its_child(started_by: bool, first: i32, now: i32) -> bool {
+    started_by && now != 1 && now == first
 }
 
 /// Rolls back to a version that ran here and was kept, by its digest, after a native
@@ -1271,6 +1283,24 @@ pub(super) mod tests {
         let r = await_acceptance(next, past, accepted);
         assert_eq!(r, Ok(()));
         assert_eq!(calls.get(), 2, "it was let go at the deadline's last look");
+    }
+
+    // macOS: the version started by an update or a rollback waits only while the earlier version
+    // is its parent. A successor started after the earlier version ended (a restore's wait loop
+    // runs it once that version has ended) or one whose parent ended before it first looked has
+    // launchd, process 1, as its parent from the start, and does not wait.
+    #[test]
+    fn a_successor_whose_parent_is_already_launchd_does_not_wait() {
+        assert!(still_its_child(true, 4242, 4242), "its parent still runs");
+        assert!(!still_its_child(true, 4242, 1), "its parent ended");
+        assert!(
+            !still_its_child(false, 4242, 4242),
+            "not started by an update"
+        );
+        assert!(
+            !still_its_child(true, 1, 1),
+            "orphaned before it first looked"
+        );
     }
 
     #[test]
