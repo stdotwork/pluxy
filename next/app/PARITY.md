@@ -135,7 +135,8 @@ so that is not support.
 - **Enabled:** no process until something calls it. The app starts it for a call and stops it 30
   seconds after its last call ends, with every process in its group. Opening the Launcher page, or
   a client page with a Start CLI card (all but Claude Desktop's), asks the launcher for its terminal
-  list, so it starts `pluxy/execution` for that one call when the launcher is enabled.
+  list, so it starts `pluxy/execution` for that one call when the launcher is enabled. A client
+  page's Start CLI card asks again each time this device's packages change while it is open.
 - **The usage hub** syncs only while its page is open. **The Codex session reader** reads only when
   its page asks.
 - **Launches are not the tool's.** A detached launch runs on after its tool stops and after the app
@@ -203,9 +204,10 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 
 ## Evidence
 
-Checked against `main` at `fe42982d5`, in the merge-group run
-[43831091359](https://github.com/stdotwork/pluxy/actions/runs/43831091359) of the CI workflow. Its
-four native jobs each ended with their shard's pass line:
+Checked against `main` at `168f83888`, in the merge-group run
+[43838704720](https://github.com/stdotwork/pluxy/actions/runs/43838704720) of the CI workflow
+(and before it at `fe42982d5`, in [43831091359](https://github.com/stdotwork/pluxy/actions/runs/43831091359),
+with the same results). Its four native jobs each ended with their shard's pass line:
 
 - `native test shard usage passed: program, transactions, usage`;
 - `native test shard tools passed: core steps, admission, routing, vault, spawn, sessions, launcher, claude-code, open, codex, save, claude-desktop, opencode, omp, grok, hermes, pi`;

@@ -869,7 +869,10 @@ an edit made in the same instant by another program may be lost. **Start CLI** a
 recipe (`claude` in a terminal, no arguments) and starts it through the launcher in the chosen
 working directory (recently used ones offered), terminal and optional program path; the launcher's
 confirmation shows it in full. The key is not part of the launch: Claude Code reads it from its
-settings.
+settings. The card's terminal list loads again whenever this device's packages change
+(`pluxy-device`), such as when the launcher is enabled from Beginner Mode; a chosen terminal the
+list no longer offers falls back to Automatic (`src/startCli.ts`). Every client page's Start CLI
+does the same.
 
 **Backup and restore** (`src/backups.tsx`, the backup browser every writer's page shows) keeps
 manual backups of the previewed file in the app's vault through the tool's standard backup
