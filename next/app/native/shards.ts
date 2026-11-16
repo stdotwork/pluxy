@@ -23,6 +23,7 @@ export const SHARDS: Record<string, readonly string[]> = {
     "save",
     "claude-desktop",
     "opencode",
+    "omp",
   ],
   // About 7 minutes.
   app: [
