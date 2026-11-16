@@ -1706,6 +1706,63 @@ async fn device_install(
     .map_err(|e| e.to_string())?
 }
 
+/// Installs native tool package's Linux build for platform (`linux/amd64` or `linux/arm64`) to
+/// run it in WSL (`install_wsl`).
+#[tauri::command]
+async fn device_install_wsl(
+    webview: Webview,
+    package: String,
+    platform: String,
+) -> Result<device::View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || install_wsl(&app, &package, &platform))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Installs native tool id's Linux build for platform: the active release's version, from the
+/// registry it was installed from, recorded once the person confirmed it in a native
+/// confirmation naming its version, platform and archive digest. A cancel records nothing. The
+/// active release does not change, so its pages, jobs and running tool stay as they are.
+#[cfg(native_stack)]
+fn install_wsl(app: &AppHandle, id: &str, platform: &str) -> Result<device::View, String> {
+    let st = app.state::<App>();
+    let roots = trust::TrustStore::current();
+    let target = st
+        .device
+        .lock()
+        .unwrap()
+        .linux_target(id, platform, &roots)?;
+    // Fetched and checked without holding the catalog.
+    let c = device::stage_linux(&st.device_dirs, &roots, &target)?;
+    let nothing = format!("nothing of {id}'s Linux build for {platform} was installed");
+    match ask_native(app, c.confirmation(), id) {
+        Ok(true) => {}
+        Ok(false) => return Err(format!("the install was cancelled; {nothing}")),
+        Err(e) => return Err(format!("{e}; {nothing}")),
+    }
+    let (view, left) = {
+        let mut catalog = st.device.lock().unwrap();
+        catalog.commit_linux(c, &roots)?;
+        (device_view(&st, &catalog), catalog.take_cleanup())
+    };
+    let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
+    match left {
+        None => Ok(view),
+        Some(left) => Err(format!(
+            "{id}'s Linux build for {platform} was installed, but {left}"
+        )),
+    }
+}
+
+#[cfg(not(native_stack))]
+fn install_wsl(_app: &AppHandle, id: &str, _platform: &str) -> Result<device::View, String> {
+    Err(format!(
+        "{id} is a native tool; native tools run on Linux, Windows and macOS only"
+    ))
+}
+
 /// The native file chooser's title.
 pub const CHOOSER: &str = "Install an extension package on this device";
 
@@ -2975,6 +3032,7 @@ pub fn run() {
             device_registries,
             device_install,
             device_install_file,
+            device_install_wsl,
             device_enable,
             device_remove,
             device_rollback,

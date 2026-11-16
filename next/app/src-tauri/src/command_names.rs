@@ -37,6 +37,7 @@ pub const COMMANDS: &[&str] = &[
     "device_registries",
     "device_install",
     "device_install_file",
+    "device_install_wsl",
     "device_enable",
     "device_remove",
     "device_rollback",
