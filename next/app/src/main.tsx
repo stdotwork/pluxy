@@ -21,11 +21,14 @@ import { codexPage } from "./codex";
 import { ConnectionPage } from "./connection";
 import { type DeviceCatalog, device, newest } from "./device";
 import { DevicePage, devicePage } from "./devicePage";
+import { grokPage } from "./grok";
+import { hermesPage } from "./hermes";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
 import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
 import { ompPage } from "./omp";
 import { opencodePage } from "./opencode";
+import { piPage } from "./pi";
 import { UpdatesPage } from "./updates";
 import { ClosePrompt } from "./window";
 
@@ -131,6 +134,9 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       claudeDesktopPage(),
       opencodePage(),
       ompPage(),
+      grokPage(),
+      hermesPage(),
+      piPage(),
       ...devicePages(catalog),
     ],
     [shown, catalog, loadDevice],

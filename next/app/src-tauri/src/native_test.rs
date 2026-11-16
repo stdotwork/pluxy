@@ -36,7 +36,10 @@
 //!    `PLUXY_APP_TEST_CLAUDE_DESKTOP`, only the Claude Desktop setup and launcher
 //!    (`claude_desktop_native.rs`); with `PLUXY_APP_TEST_OPENCODE`, only the OpenCode setup and
 //!    launcher (`opencode_native.rs`); with `PLUXY_APP_TEST_OMP`, only the Oh My Pi setup and
-//!    launcher (`omp_native.rs`);
+//!    launcher (`omp_native.rs`); with `PLUXY_APP_TEST_GROK`, only the Grok Build setup and
+//!    launcher (`grok_native.rs`); with `PLUXY_APP_TEST_HERMES`, only the Hermes Agent setup and
+//!    launcher (`hermes_native.rs`); with `PLUXY_APP_TEST_PI`, only the Pi setup and launcher
+//!    (`pi_native.rs`);
 //! 5. closes the window, reports which webviews are left, and quits (stopping the app's own core)
 //!    once the file `PLUXY_APP_TEST_QUIT` exists.
 //!
@@ -85,6 +88,12 @@ mod codex;
 mod core_updates;
 #[path = "device_native.rs"]
 mod device;
+#[cfg(target_os = "linux")]
+#[path = "grok_native.rs"]
+mod grok;
+#[cfg(target_os = "linux")]
+#[path = "hermes_native.rs"]
+mod hermes;
 #[path = "native_ingress.rs"]
 mod ingress;
 #[cfg(target_os = "linux")]
@@ -102,6 +111,9 @@ mod open;
 #[cfg(target_os = "linux")]
 #[path = "opencode_native.rs"]
 mod opencode;
+#[cfg(target_os = "linux")]
+#[path = "pi_native.rs"]
+mod pi;
 #[cfg(target_os = "linux")]
 #[path = "program_native.rs"]
 mod program;
@@ -698,6 +710,30 @@ fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_OMP") {
         omp::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The Grok Build setup and launcher (grok_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_GROK") {
+        grok::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The Hermes Agent setup and launcher (hermes_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_HERMES") {
+        hermes::run(app, &main, dir.into())?;
+        log("quit", json!({}));
+        crate::quit(app);
+        return Ok(());
+    }
+    // The Pi setup and launcher (pi_native.rs), in a session of its own.
+    #[cfg(target_os = "linux")]
+    if let Ok(dir) = std::env::var("PLUXY_APP_TEST_PI") {
+        pi::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
