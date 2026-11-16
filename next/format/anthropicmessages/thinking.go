@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -39,11 +40,34 @@ var adaptiveEfforts = map[string]string{
 }
 
 // claudeModel reads a model name such as claude-opus-4-6 or claude-sonnet-5-5-20261001: its
-// major and minor version. oldClaudeModel reads the older form, such as claude-3-7-sonnet-latest.
+// major and minor version. The minor is left out only before an 8-digit date, the end of the name
+// or a part that does not start with a digit, so claude-sonnet-4-20250514 is 4.0 and
+// claude-opus-4-7x is no version. oldClaudeModel reads the older form, such as
+// claude-3-7-sonnet-latest.
 var (
-	claudeModel    = regexp.MustCompile(`^claude-(?:opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:$|-)`)
-	oldClaudeModel = regexp.MustCompile(`^claude-(\d+)(?:-(\d))?-(?:opus|sonnet|haiku)(?:$|-)`)
+	claudeModel    = regexp.MustCompile(`^claude-(?:opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2})(?:$|-)|-\d{8}(?:$|-)|-\D|$)`)
+	oldClaudeModel = regexp.MustCompile(`^claude-(\d+)(?:-(\d))?-(?:opus|sonnet|haiku|fable|mythos)(?:$|-)`)
 )
+
+// bedrockPrefixes are the prefixes Amazon Bedrock puts before a Claude model name: the provider,
+// and before it a cross-region inference profile's geography.
+var bedrockPrefixes = []string{"global.anthropic.", "apac.anthropic.", "us.anthropic.", "eu.anthropic.", "anthropic."}
+
+// claudeName returns model as the parsers read it: lowercase, without a Bedrock prefix, and cut at
+// a context window in brackets (claude-opus-4-7[1m]) or a Vertex AI version after @
+// (claude-opus-4@20250514).
+func claudeName(model string) string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	for _, p := range bedrockPrefixes {
+		if rest, ok := strings.CutPrefix(m, p); ok {
+			m = rest
+			break
+		}
+	}
+	m, _, _ = strings.Cut(m, "@")
+	m, _, _ = strings.Cut(m, "[")
+	return m
+}
 
 // claudeVersion reads the version of a Claude model that can think (Claude 3.7 and later); ok is
 // false for any other name, which then gets no thinking settings, as today's core gives none to
@@ -52,6 +76,14 @@ var (
 // shortcut: decided from the model name, since protocol v0 has no model capabilities. Move this
 // to per-model capabilities when describe carries them.
 func claudeVersion(model string) (major, minor int, ok bool) {
+	major, minor, ok = parseClaudeVersion(model)
+	return major, minor, ok && (major > 3 || (major == 3 && minor >= 7))
+}
+
+// parseClaudeVersion reads the version in a Claude model name of either form (claudeName); ok is
+// false for a name it cannot place.
+func parseClaudeVersion(model string) (major, minor int, ok bool) {
+	model = claudeName(model)
 	m := claudeModel.FindStringSubmatch(model)
 	if m == nil {
 		m = oldClaudeModel.FindStringSubmatch(model)
@@ -63,7 +95,7 @@ func claudeVersion(model string) (major, minor int, ok bool) {
 	if m[2] != "" {
 		minor, _ = strconv.Atoi(m[2])
 	}
-	return major, minor, major > 3 || (major == 3 && minor >= 7)
+	return major, minor, true
 }
 
 // adaptive reports whether a Claude model of this version thinks adaptively: Claude 4.6 and later.
