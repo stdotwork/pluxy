@@ -2,9 +2,9 @@ name: Next app platforms
 
 # Builds and unit-tests the desktop app's Rust crate on Windows and macOS, and runs the real app
 # there (next/app/native/platform.ts: a second launch raising the first, the login item, the
-# window and the tray; the test package and the release gate; next/app/native/dialogs.ts: native
-# key entry, confirmations and key rotation). The Linux native test (Xvfb, portals) stays in
-# next-app.yml.
+# window and the tray; the test package and the release gate; the signed tool sessions, admission,
+# program, routing and launcher; next/app/native/dialogs.ts: native key entry, confirmations and
+# key rotation). The rest of the Linux native test (Xvfb, portals) stays in next-app.yml.
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
@@ -253,7 +253,9 @@ jobs:
   # in next/app/native/shards.ts (PLATFORM_SHARDS), one job per shard; the summary has the counts.
   # The package shard builds the test package first (package.ts test: a folder bundle on Windows,
   # an app bundle on macOS, never an installer), then the dev app, since the package's builds
-  # rename the program they make in target/debug.
+  # rename the program they make in target/debug. The tools shard (native/platform-tools.ts) runs
+  # run.ts's admission, program, routing and launcher sessions here, on the app built with the
+  # test trust (artifact-test-trust) against a test core it starts with `go run`.
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
@@ -266,9 +268,18 @@ jobs:
         shard:
           - platform
           - package
+          - tools
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      # The tools shard's sessions start a test core with `go run ./e2e/panelcore`.
+      - name: Set up Go
+        if: matrix.shard == 'tools'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -292,8 +303,20 @@ jobs:
         run: bun run package:test "$RUNNER_TEMP/test-package"
       # The app with the test hooks (never in a release build): the one the checks start.
       - name: Build the app for the native test
+        if: matrix.shard != 'tools'
         working-directory: next/app/src-tauri
         run: cargo build --locked --features native-test
+      # The tools shard: the app with the test hooks and the test trust, the fixture tool its signed
+      # packages hold, and the execution program the launcher session installs, built into
+      # target/app-tools as run.ts builds it (without execution's native-test feature, which only
+      # run.ts's open session uses).
+      - name: Build the app and tools for the tools sessions
+        if: matrix.shard == 'tools'
+        working-directory: next/app/src-tauri
+        run: |
+          cargo build --locked --features native-test,artifact-test-trust --bin pluxy-app --example program_fixture
+          cd ../../app-tools
+          cargo build --locked -p execution --target-dir ../app/src-tauri/target/app-tools
       - name: Native test
         timeout-minutes: 40
         env:

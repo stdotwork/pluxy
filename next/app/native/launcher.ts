@@ -15,7 +15,7 @@
 import { generateKeyPairSync, type KeyObject, randomBytes } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { artifact, type Fixture, platform, writeTrustProfile } from "./admission";
+import { artifact, EXE, type Fixture, platform, TOOL, writeTrustProfile } from "./admission";
 import { index, native, type Package, pack } from "./routing";
 
 const object = { type: "object" };
@@ -63,7 +63,7 @@ export function buildLauncherFixtures(
         id: m.id,
         version: m.version,
         tier: "native",
-        app: { ...m.app, programs: { [platform()]: "bin/tool" } },
+        app: { ...m.app, programs: { [platform()]: TOOL } },
       },
       execution,
     ]);
@@ -96,10 +96,16 @@ export function buildLauncherFixtures(
   const override = join(root, "override");
   mkdirSync(bin);
   mkdirSync(override);
-  for (const to of [join(bin, "x-terminal-emulator"), join(bin, "pluxy-agent"), join(override, "agent")]) {
+  for (const to of [
+    join(bin, "x-terminal-emulator"),
+    join(bin, `pluxy-agent${EXE}`),
+    join(override, "agent"),
+  ]) {
     copyFileSync(program, to);
     chmodSync(to, 0o755);
   }
+  // Off Linux, the agent's working folder: it exits once a file named stop is in it.
+  if (process.platform !== "linux") mkdirSync(join(root, "work"));
   const keys = { key: `pluxy-launcher-key-${randomBytes(16).toString("hex")}` };
   writeFileSync(join(root, "keys.json"), JSON.stringify(keys));
   const nonce = writeTrustProfile(home, [curatedFile], publicKey);

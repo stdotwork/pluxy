@@ -1,6 +1,8 @@
 // The native test on Windows and macOS, on the GitHub-hosted runners of those systems
 // (.github/workflows/next-app-platforms.yml). Run from next/app, after the app is built with the
-// native-test feature (`cargo build --locked --features native-test` in src-tauri):
+// native-test feature (`cargo build --locked --features native-test` in src-tauri; for the tools
+// shard with `--features native-test,artifact-test-trust --bin pluxy-app --example
+// program_fixture`, and the execution program built into target/app-tools, see platform-tools.ts):
 //
 //   bun native/platform.ts
 //
@@ -26,7 +28,9 @@
 //   app (normal identifier, no test trust) with it, are refused at the gate;
 // - bundle release gate: the release command (package.ts release) passes a clean release build and
 //   a clean bundle of this system's kind around it, and refuses a bundle holding the test-feature
-//   dev app, the test package renamed and the test package itself.
+//   dev app, the test package renamed and the test package itself;
+// - admission, program, routing, launcher: run.ts's sessions of the same names, for signed tools,
+//   in the app built with artifact-test-trust against a test core (native/platform-tools.ts).
 //
 // These write what a real run writes: the user's registry or LaunchAgents folder, and on Windows
 // the app's own folder in the user's profile. So it runs only on a GitHub-hosted runner, whose user
@@ -55,6 +59,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { MARKER_FILE, PROFILE_FILE } from "./admission";
 import { Launch, type Step } from "./launch";
+import { TOOL_SESSIONS, toolSession } from "./platform-tools";
 import { SESSIONS, selectShard } from "./shards";
 
 const windows = process.platform === "win32";
@@ -85,7 +90,7 @@ if (!existsSync(bin)) {
 const shard = process.env.PLUXY_APP_NATIVE_SHARD || "platform";
 let selected: ReadonlySet<string>;
 try {
-  selected = selectShard(shard);
+  selected = selectShard(shard, undefined, undefined, true);
 } catch (e) {
   console.error(`native test setup failed: ${(e as Error).message}`);
   process.exit(1);
@@ -706,15 +711,20 @@ function testPackage(): BundlePackage | undefined {
 }
 
 /** A private folder of this user's for the test trust profile, the app's HOME (its updater gate
- * reads the profile from HOME). macOS: the profile's own home, made owner-only. Windows: a folder
- * under the runner's temporary folder whose access list lets in only this user, SYSTEM and
- * Administrators, and is inherited by the files made in it. */
+ * reads the profile from HOME). macOS: the profile's own home, made owner-only. Windows: a new
+ * private folder (privateFolder). */
 function privateHome(p: Profile): string {
   if (mac) {
     const home = p.env.HOME as string;
     chmodSync(home, 0o700);
     return home;
   }
+  return privateFolder();
+}
+
+/** Windows: a new folder under the runner's temporary folder whose access list lets in only this
+ * user, SYSTEM and Administrators, and is inherited by the files made in it. */
+function privateFolder(): string {
   const home = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-trust-"));
   const user = run("whoami", []).out;
   const set = run("icacls", [
@@ -974,6 +984,23 @@ async function main() {
     ["window and tray", windowAndTray],
     ["bundle", bundle],
     ["bundle release gate", bundleReleaseGate],
+    ...TOOL_SESSIONS.map(
+      (name) =>
+        [
+          name,
+          () =>
+            toolSession(name, {
+              bin,
+              targetDir,
+              identifier,
+              check,
+              say,
+              privateFolder,
+              removeWhenFree,
+              powershell,
+            }),
+        ] as [string, () => Promise<void>],
+    ),
   ];
   for (const [name, body] of sessions) {
     if (!runsSession(name)) continue;

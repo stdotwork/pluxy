@@ -7,13 +7,14 @@
 // incompatible. expect.json holds what the checks compare with, worked out here and not by the
 // app: each archive's SHA-256, the summary's input and the count and longest item it must answer.
 
-import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, type KeyObject } from "node:crypto";
 import { chmodSync, copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { artifact, type Fixture, platform, writeTrustProfile } from "./admission";
+import { artifact, EXE, type Fixture, platform, tarGz, writeTrustProfile } from "./admission";
 
 export const PROGRAM_ID = "pluxy/summary";
+/** The packages' program: a program image on Windows. */
+const SUMMARY = `bin/summary${EXE}`;
 const ITEMS = ["one", "three", "seventeen", "four"];
 /** Each release, and the fixture.json that makes it misbehave (none: it behaves). */
 const RELEASES: { version: string; mode?: object }[] = [
@@ -100,7 +101,7 @@ function release(
         version: 0,
         tier: "native",
         host_versions: [0],
-        programs: { [platform()]: "bin/summary" },
+        programs: { [platform()]: SUMMARY },
         operations: OPERATIONS,
         state: { version: 0, readable_versions: [0] },
         ui: {
@@ -112,11 +113,10 @@ function release(
     }),
   );
   if (mode) writeFileSync(join(dir, "fixture.json"), JSON.stringify(mode));
-  copyFileSync(program, join(dir, "bin", "summary"));
-  chmodSync(join(dir, "bin", "summary"), 0o755);
+  copyFileSync(program, join(dir, SUMMARY));
+  chmodSync(join(dir, SUMMARY), 0o755);
   writeFileSync(join(dir, "pages", "index.html"), "<!doctype html><title>Summary</title><p>Summary</p>");
-  const r = spawnSync("tar", ["-czf", join(root, f.file), "-C", dir, "."], { stdio: "inherit" });
-  if (r.status !== 0) throw new Error(`tar exited with ${r.status}`);
+  tarGz(join(root, f.file), dir);
   rmSync(dir, { recursive: true, force: true });
   return artifact(root, f.file, f, publicKey, privateKey);
 }

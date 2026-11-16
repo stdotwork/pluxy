@@ -1542,11 +1542,16 @@ app supported there:
 - The management key's native entry and rotation, and the native confirmations, have Win32
   dialogs on Windows and AppKit dialogs on macOS ([How the app reaches core](#how-the-app-reaches-core),
   [Native confirmations](#native-confirmations)).
-- Three parts of the native test run there:
+- Four parts of the native test run there:
   - the platform session (`native/platform.ts`, `PLATFORM_SHARDS` in `native/shards.ts`): one app
     per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
     Windows, a LaunchAgent on macOS), the tray and the close preference;
   - the package session: the test package and the release gate ([Packages](#packages));
+  - the tools sessions (`native/platform-tools.ts`, the `tools` shard): the signed tool sessions
+    run.ts runs on Linux (admission, the program host with its swaps, routing with jobs), and a
+    launcher check that uses managed launches only (`src-tauri/src/launcher_platform_native.rs`:
+    no detached agent, terminal or key entry, which wait for their own slices), in the app built
+    with the test trust, in local mode against a test core;
   - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
     test core, with the window's and page's command probes, the native confirmations, key entry and
     key rotation. [Limits](#limits) says how its input is made.
@@ -1560,9 +1565,9 @@ app supported there:
   program host, the launch service and the launcher, and the vault for tools' backups and
   journals, with the differences [Windows and macOS](app-host/README.md#windows-and-macos) lists.
   A client page reaches its writer tool only where that tool has a program for the system
-  ([app tools](../app-tools/README.md) says which do). Clippy and the Rust tests check this there;
-  no native session starts a tool on those systems yet, and outside tests nothing can be
-  installed to run, as there are no production trust roots ([Limits](#limits)).
+  ([app tools](../app-tools/README.md) says which do). Clippy, the Rust tests and the tools
+  sessions check this there; outside tests nothing can be installed to run, as there are no
+  production trust roots ([Limits](#limits)).
 - On Windows, the page document's address is `http://pluxy-page.localhost/`, and the app holds a
   page's frame to its site through WebView2's frame navigation event (`src-tauri/src/page_frames.rs`).
 - The app tools' readers, usage parsers and execution program, the writer library and the
