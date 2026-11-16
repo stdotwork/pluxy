@@ -518,7 +518,9 @@ fn an_unanswered_cancel_stops_the_tool() {
         "{e}"
     );
     until("the tool to go", 5, || !alive(pid) && !alive(child));
-    assert_eq!(h.status(ID).state, "crashed");
+    // The host records the end once its supervisor has reaped the tool, which can come after
+    // the processes are gone: wait for the state, not a single read.
+    until("the crashed state", 5, || h.status(ID).state == "crashed");
 }
 
 #[test]
