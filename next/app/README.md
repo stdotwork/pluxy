@@ -1159,7 +1159,7 @@ confirmation, or leaving the guide, leaves files and packages as they were; Clos
 and Restore Backup on the client's page undo an apply.
 
 A client joins the list by being an agent page: a window page that names the package it drives
-(`AgentPage` in `src/easyMode.tsx`), listed in `agentPages` in `src/main.tsx`. The list itself
+(`AgentPage` in `src/easyMode.tsx`), listed in `agentPages` in `src/agentPages.ts`. The list itself
 (`src/easyModeItems.ts`) has no per-client code.
 
 ## Build and check

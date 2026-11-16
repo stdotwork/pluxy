@@ -15,27 +15,16 @@ import { KitContext } from "../../ui/kit/ui";
 import defaultTheme from "../../ui/themes/default.json";
 import paper from "../../ui/themes/paper.json";
 import terminal from "../../ui/themes/terminal.json";
-import { claudeCodePage } from "./claudeCode";
-import { claudeDesktopPage } from "./claudeDesktop";
-import { codexPage } from "./codex";
+import { agentPages } from "./agentPages";
 import { ConnectionPage } from "./connection";
 import { type DeviceCatalog, device, newest } from "./device";
 import { DevicePage, devicePage } from "./devicePage";
-import { type AgentPage, easyModePage } from "./easyMode";
-import { grokPage } from "./grok";
-import { hermesPage } from "./hermes";
+import { easyModePage } from "./easyMode";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
 import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
-import { ompPage } from "./omp";
-import { opencodePage } from "./opencode";
-import { piPage } from "./pi";
 import { UpdatesPage } from "./updates";
 import { ClosePrompt } from "./window";
-
-/** The agent clients' setup pages: each names the optional tool it drives, and Beginner Mode
- * offers the ones whose tool is installed or offered by a registry. */
-const agentPages = (): AgentPage[] => [claudeCodePage()];
 
 function brand(c: Connection): string {
   return c.mode === "remote" && c.target ? `pluxy · ${new URL(c.target).host}` : "pluxy";
@@ -137,13 +126,6 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       devicePage(loadDevice),
       launcherPage(),
       ...agents,
-      codexPage(),
-      claudeDesktopPage(),
-      opencodePage(),
-      ompPage(),
-      grokPage(),
-      hermesPage(),
-      piPage(),
       ...devicePages(catalog),
     ];
   }, [shown, catalog, loadDevice]);

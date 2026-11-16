@@ -7,7 +7,6 @@
 // whether one is set. Labels follow the old app's Agents page.
 
 import { useEffect, useId, useState } from "preact/hooks";
-import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
 import {
   Button,
@@ -23,6 +22,7 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
+import type { AgentPage } from "./easyMode";
 import { connectionGet } from "./host";
 import {
   attachmentDefault,
@@ -35,6 +35,7 @@ import {
   type Secret,
   withModels,
 } from "./opencodeForm";
+import { keptTerminal, useDeviceChanged } from "./startCli";
 
 const t = strings("opencode", {
   title: "OpenCode",
@@ -155,8 +156,10 @@ function Launch(props: { available: boolean }) {
   const terminals = useLoad(() =>
     reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
   );
+  useDeviceChanged(terminals.reload);
   const action = useAction(state.reload);
   const recent = state.data?.history[CLIENT] ?? [];
+  const shownTerminal = keptTerminal(terminal, terminals.data?.terminals);
   const go = (target: "cli" | "app", extra: Record<string, unknown>) =>
     action.run(async () => {
       const recipe = await tool<Record<string, unknown>>("recipe", { target });
@@ -179,7 +182,7 @@ function Launch(props: { available: boolean }) {
         {terminals.data && (
           <Choices
             label={t("terminal")}
-            value={terminal}
+            value={shownTerminal}
             choices={terminals.data.terminals.map((x) => ({ value: x.id, label: x.label }))}
             onChange={setTerminal}
           />
@@ -190,7 +193,7 @@ function Launch(props: { available: boolean }) {
           onClick={() =>
             go("cli", {
               cwd: cwd.trim(),
-              terminal,
+              terminal: shownTerminal,
               ...(override.trim() ? { override: override.trim() } : {}),
             })
           }
@@ -466,8 +469,9 @@ export function OpenCodePage() {
   );
 }
 
-export const opencodePage = (): PageDef => ({
+export const opencodePage = (): AgentPage => ({
   id: "opencode",
+  package: PACKAGE,
   group: "control",
   title: t("title"),
   short: t("short"),
