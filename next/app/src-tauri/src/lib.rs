@@ -45,6 +45,8 @@ mod page_frames;
 pub mod pages;
 mod place;
 mod privacy;
+#[cfg(windows)]
+mod private_windows;
 // Built and tested on every platform; the app starts tools on Linux only for now.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub mod program;
@@ -67,7 +69,6 @@ mod update_native;
 #[cfg(unix)]
 mod updater;
 mod updates;
-#[cfg(target_os = "linux")]
 pub mod vault;
 pub mod window;
 
@@ -3037,7 +3038,7 @@ pub fn run() {
                 vec![
                     config.clone(),
                     app.path().app_data_dir()?,
-                    app.path().app_data_dir()?.join("vault"),
+                    vault::folder(app)?,
                     app.path().app_local_data_dir()?,
                     app.path().app_cache_dir()?,
                 ],
@@ -3081,8 +3082,7 @@ pub fn run() {
             #[cfg(feature = "native-test")]
             native_test::hold_for_early_exit();
             #[cfg(target_os = "linux")]
-            let vault =
-                std::sync::Arc::new(vault::Vault::open(app.path().app_data_dir()?.join("vault")));
+            let vault = std::sync::Arc::new(vault::Vault::open(vault::folder(app)?));
             #[cfg(target_os = "linux")]
             if let Some(w) = vault.broken() {
                 eprintln!("pluxy-app: the vault is not used: {w}");

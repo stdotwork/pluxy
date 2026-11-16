@@ -29,10 +29,12 @@ defaults:
 
 jobs:
   core:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-latest' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@v5
         with:

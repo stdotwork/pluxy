@@ -134,23 +134,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: core/go.sum
+          # Release archives must not be built from Go caches that main saved, which self-hosted runs may now write.
+          cache: false
       - name: Refresh models catalog
         shell: bash
         run: bash .github/scripts/refresh-model-catalogs.sh
       - name: Fetch tags
         shell: bash
         run: git fetch --force --tags
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ hashFiles('core/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-
-            go-${{ runner.os }}-${{ runner.arch }}-
       - name: Generate Build Metadata
         shell: bash
         run: |
@@ -262,8 +253,8 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: core/go.sum
+          # Release archives must not be built from Go caches that main saved, which self-hosted runs may now write.
+          cache: false
       - name: Refresh models catalog
         shell: bash
         run: bash .github/scripts/refresh-model-catalogs.sh
@@ -395,23 +386,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: core/go.sum
+          # Release archives must not be built from Go caches that main saved, which self-hosted runs may now write.
+          cache: false
       - name: Refresh models catalog
         shell: bash
         run: bash .github/scripts/refresh-model-catalogs.sh
       - name: Fetch tags
         shell: bash
         run: git fetch --force --tags
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-linux-no-plugin-${{ matrix.goarch }}-${{ hashFiles('core/go.sum') }}
-          restore-keys: |
-            go-linux-no-plugin-${{ matrix.goarch }}-
-            go-linux-no-plugin-
       - name: Generate Build Metadata
         shell: bash
         run: |
@@ -524,21 +506,12 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: core/go.sum
+          # Release archives must not be built from Go caches that main saved, which self-hosted runs may now write.
+          cache: false
       - name: Refresh models catalog
         run: bash .github/scripts/refresh-model-catalogs.sh
       - name: Fetch tags
         run: git fetch --force --tags
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-freebsd-${{ matrix.goarch }}-${{ hashFiles('core/go.sum') }}
-          restore-keys: |
-            go-freebsd-${{ matrix.goarch }}-
-            go-freebsd-
       - name: Generate Build Metadata
         id: metadata
         run: |
