@@ -1538,7 +1538,7 @@ An account names its models with these fields, applied in this order:
 
 | Field | Meaning |
 | --- | --- |
-| account `models` | The only models the account serves. Each is the upstream's name, or `{"name": ..., "alias": ...}` to serve the model `name` under the name `alias` only. |
+| account `models` | The only models the account serves. Each is the upstream's name, or `{"name": ..., "alias": ...}` to serve the model `name` under the name `alias` only. One name clients use maps to one upstream model: the config check refuses an entry whose name or alias another entry already uses for a different upstream model, naming the alias and the account (in the config file, and as a 400 from `PATCH /accounts/{id}`, which the panel uses). Listing the same model twice passes. Today's core pools such entries in `openai-compatibility`; this core does not pool models yet. |
 | account `excluded_models` | Models the account does not serve: names, or patterns with `*` for any text (`gpt-5-*`, `*-mini`, `*preview*`), whatever their case. They match the name clients use for an entry of `models` (its `alias`, when it has one, as in today's core), and for any other model its name before `model_alias` renames it. |
 | account `model_alias` | Renames: a request for `alias` (exactly as written) goes to the model `name` (any case). Without `fork` the model is served only as `alias`; with `"fork": true` under both names. `display_name` replaces the model's display name in lists. |
 | account `prefix` | The account also serves each model as `{prefix}/{model}`, so a client can ask for a model on that account alone. No `/` in it. |
@@ -2102,8 +2102,12 @@ needs none) is not supported yet: it adds no account and is named in the log.
 
 In every section, `priority` is the account's `priority` and a key's `weight` is its `weight`.
 A group's `models` list becomes the account's `models`: each entry's `name` is the model the
-upstream knows, and its `alias` the name clients use (the first entry for a name wins, as in
-today's core); the account serves only those models. A group's or key's `prefix` is the account's
+upstream knows, and its `alias` the name clients use; the account serves only those models. When
+entries share a name clients use, the first wins in every section, as in today's core, except
+`openai-compatibility`: there today's core treats them as a pool and rotates requests over them,
+and falls back to the next on a failure. This core does not pool models yet, so it keeps the
+first entry and names the alias and each dropped entry in the log (a model listed twice drops
+nothing and is not named). A group's or key's `prefix` is the account's
 `prefix`, and its `excluded-models` its `excluded_models` (today's core has no
 `excluded-models` for `openai-compatibility`, so it is accepted there and does nothing). See
 [Model lists and model names](#model-lists-and-model-names). An account's ID is the group's `name`
