@@ -29,7 +29,8 @@ interface MethodTile {
   method: LoginMethod;
 }
 
-export function AddAccountPage() {
+/** onSuccess: called with the new account's ID once a sign-in adds it (Beginner Mode counts it). */
+export function AddAccountPage(props: { onSuccess?: (accountId: string) => void } = {}) {
   const { api } = useKit();
   const p = usePrivacy();
   const methods = useLoad(api.loginMethods);
@@ -129,7 +130,7 @@ export function AddAccountPage() {
                           extension={tile.extension}
                           method={tile.method}
                           newAccountId={accountId}
-                          onSuccess={() => {}}
+                          onSuccess={(id) => props.onSuccess?.(id)}
                           onReset={reset}
                         />
                       )}

@@ -30,7 +30,8 @@
 //!    program and the launcher (`launcher_native.rs`); with `PLUXY_APP_TEST_OPEN`, only a tool's
 //!    opening of a file in the person's own app (`open_native.rs`); with
 //!    `PLUXY_APP_TEST_CLAUDE_CODE`, only the Claude Code setup and launcher
-//!    (`claude_code_native.rs`), with its backup browser (`backups_native.rs`); with
+//!    (`claude_code_native.rs`), with its backup browser (`backups_native.rs`) and Beginner Mode's
+//!    guided setup (`easy_mode_native.rs`); with
 //!    `PLUXY_APP_TEST_CODEX`, only the Codex setup and launcher (`codex_native.rs`); with
 //!    `PLUXY_APP_TEST_SAVE`, only the host's save-file service (`save_native.rs`);
 //!    `PLUXY_APP_TEST_CLAUDE_DESKTOP`, only the Claude Desktop setup and launcher
@@ -88,6 +89,9 @@ mod codex;
 mod core_updates;
 #[path = "device_native.rs"]
 mod device;
+#[cfg(target_os = "linux")]
+#[path = "easy_mode_native.rs"]
+mod easy_mode;
 #[cfg(target_os = "linux")]
 #[path = "grok_native.rs"]
 mod grok;

@@ -7,7 +7,6 @@
 // whether one is set. Labels follow the old app's Agents page.
 
 import { useEffect, useId, useState } from "preact/hooks";
-import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
 import {
   Button,
@@ -38,6 +37,7 @@ import {
   WINDOW_1M,
   WINDOW_DEFAULT,
 } from "./claudeCodeForm";
+import type { AgentPage } from "./easyMode";
 import { connectionGet } from "./host";
 
 const t = strings("claudeCode", {
@@ -493,8 +493,9 @@ export function ClaudeCodePage() {
   );
 }
 
-export const claudeCodePage = (): PageDef => ({
+export const claudeCodePage = (): AgentPage => ({
   id: "claude-code",
+  package: PACKAGE,
   group: "control",
   title: t("title"),
   short: t("short"),

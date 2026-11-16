@@ -1118,6 +1118,24 @@ launcher in the chosen working directory (recently used ones offered), terminal 
 program path. The key is not part of a launch: the plugin reads it from `cliproxyapi.json`. Pi has
 no desktop app.
 
+## Beginner Mode
+
+Beginner Mode (`src/easyMode.tsx`, in the Operate group) is the guided setup of the old app's Easy
+mode, in its two steps. **Connect a model** is the Add Account page's own sign-in (every browser,
+device code and API-key method core's extensions offer); it counts core's accounts, and **Next:
+Configure Agent** stays off until there is one. **Connect an agent** lists the agent clients this
+window can set up whose optional tool is installed on this device or offered by a registry, and the
+launcher (`pluxy/execution`) that **Start CLI** runs through: **Install** installs a tool from its
+registry, **Enable** opens the tool's native confirmation ("full access to your user account"),
+answered in that dialog only, and **Set up** shows the client's own page below, where its
+configuration is applied and the client started as on that page. The guide writes nothing itself and
+keeps no draft: a cancelled confirmation, or leaving the guide, leaves files and packages as they
+were; Close configuration and Restore Backup on the client's page undo an apply.
+
+A client joins the list by being an agent page: a window page that names the package it drives
+(`AgentPage` in `src/easyMode.tsx`), listed in `agentPages` in `src/main.tsx`. The list itself
+(`src/easyModeItems.ts`) has no per-client code.
+
 ## Build and check
 
 Bun `1.4.3`, a stable Rust toolchain (CI uses 1.97.0), and on Linux the WebKitGTK 4.1 and
