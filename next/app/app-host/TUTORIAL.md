@@ -3,7 +3,8 @@
 This walkthrough prepares two package folders for the [app package contract](README.md).
 The desktop app installs the page-only package on this device. It installs the native package
 only from a curated registry, signed by a curated first-party key, and runs its program on
-demand once it is enabled (Linux).
+demand once it is enabled (on Linux, Windows and macOS, where the package has a program for the
+system).
 
 ## Make a page-only web package
 

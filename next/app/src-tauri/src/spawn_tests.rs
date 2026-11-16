@@ -1409,3 +1409,60 @@ fn on_windows_a_launch_is_checked_again_once_its_files_are_pinned() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// Resolves no secret: the runtimes file test starts nothing.
+struct NoValues;
+
+impl Values for NoValues {
+    fn value(&self, _: &str, id: &str) -> Result<(String, Option<u64>), String> {
+        Err(format!("{id}: no secrets here"))
+    }
+    fn still(&self, _: &[Given]) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// The runtimes file is written private, replacing the old one in one step: on Linux and macOS
+/// 0600, also when a temporary file of an earlier run is left beside it with wider bits or a link
+/// is left there; on Windows with a protected access list allowing only this user and SYSTEM.
+#[test]
+fn the_runtimes_file_is_private() {
+    let dir = folder("runtimes-file");
+    let file = dir.join("runtimes.json");
+    // Opening the registry writes the file once.
+    let rt = Runtimes::open(Some(file.clone()), Box::new(NoValues));
+    // What an earlier run could leave beside it: its temporary file, readable by others.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(dir.join("runtimes.tmp"), "[]").unwrap();
+        std::fs::set_permissions(
+            dir.join("runtimes.tmp"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+    }
+    rt.0.save(&[]);
+    let m = std::fs::symlink_metadata(&file).unwrap();
+    assert!(m.is_file(), "{m:?}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "[]");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(m.permissions().mode() & 0o777, 0o600);
+    }
+    #[cfg(windows)]
+    assert!(crate::private_windows::is_private(&std::fs::File::open(&file).unwrap()).unwrap());
+    // A link left where a temporary file could go is not written through.
+    #[cfg(unix)]
+    {
+        let elsewhere = dir.join("elsewhere");
+        std::fs::write(&elsewhere, "kept").unwrap();
+        let _ = std::fs::remove_file(dir.join("runtimes.tmp"));
+        std::os::unix::fs::symlink(&elsewhere, dir.join("runtimes.tmp")).unwrap();
+        rt.0.save(&[]);
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "kept");
+        assert!(std::fs::symlink_metadata(&file).unwrap().is_file());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

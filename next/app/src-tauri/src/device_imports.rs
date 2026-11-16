@@ -302,7 +302,7 @@ pub(super) fn import_decls(id: &str, app: &App) -> Result<Vec<ImportDecl>, Strin
 }
 
 /// The imports, for a native confirmation: empty when there are none.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(native_stack), allow(dead_code))]
 pub(super) fn listing(imports: &[ImportDecl]) -> String {
     if imports.is_empty() {
         return String::new();
@@ -462,7 +462,7 @@ impl Catalog {
 
     /// The native confirmation for consent c to web package id's imports: the package (source,
     /// digest, signer) and each target operation with its description and effect class.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     pub fn consent_confirmation(
         &self,
         id: &str,
@@ -654,7 +654,7 @@ impl Catalog {
 
     /// Package id as native confirmations name a page's requester: a native tool by its admitted
     /// record, a web package by its source, digest and signer (or as Unverified).
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     pub fn requester(&self, id: &str, roots: &dyn Roots) -> Option<crate::confirmation::Package> {
         let p = self.packages.get(id)?;
         if p.active.tier == "native" {
