@@ -773,7 +773,7 @@ fn create_private(tmp: &Path) -> std::io::Result<File> {
     }
     #[cfg(windows)]
     {
-        crate::files_windows::create_new_private(tmp)
+        crate::private_windows::create_new_private(tmp)
     }
 }
 fn refuse_settings_symlink(path: &Path) -> Result<(), String> {
@@ -813,38 +813,22 @@ fn secure_parent(path: &Path, create: bool) -> Result<(), String> {
     }
     Ok(())
 }
-/// Windows: the folder made private when missing (its access list given as it is made), refused
-/// when it is a link, not a folder or its permissions cannot be read, and made private through a
-/// handle that is the folder itself when it is not (refused when another account owns it).
+/// Windows: the folder and any folders missing above it made private as they are made, and the
+/// folder refused when it is a link, not a folder, owned by another account or its permissions
+/// cannot be read, and made private through a handle that is the folder itself when it is not
+/// (`private_windows.rs`).
 #[cfg(windows)]
 fn secure_parent(path: &Path, create: bool) -> Result<(), String> {
     let dir = path.parent().ok_or("settings has no parent")?;
-    if create {
-        if let Some(up) = dir.parent() {
-            fs::create_dir_all(up).map_err(|e| e.to_string())?;
+    let made = if create {
+        crate::private_windows::create_private_dir_all(dir)
+    } else {
+        match crate::private_windows::make_private_dir(dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            r => r,
         }
-        match crate::files_windows::create_private_dir(dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(format!("settings folder refused: {e}")),
-        }
-    }
-    let f = match windows_files::open_no_follow(dir) {
-        Ok(f) => f,
-        Err(e) if !create && e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(format!("settings folder refused: {e}")),
     };
-    if !windows_files::is_dir(windows_files::info(&f)?.attributes) {
-        return Err("settings folder refused: not a folder".into());
-    }
-    match windows_files::privacy(&f, "settings folder")? {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            drop(f);
-            crate::files_windows::make_private(dir)
-                .map_err(|e| format!("settings folder refused: {e}"))
-        }
-    }
+    made.map_err(|e| format!("settings folder refused: {e}"))
 }
 fn load_settings(path: &Path) -> Result<Vec<Approval>, String> {
     secure_parent(path, false)?;

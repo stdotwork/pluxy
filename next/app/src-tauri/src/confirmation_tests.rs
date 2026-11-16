@@ -27,7 +27,8 @@ fn owner_only(path: &Path) {
     #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     #[cfg(windows)]
-    crate::files_windows::make_private(path).unwrap();
+    crate::private_windows::make_private(&crate::private_windows::tests::open(path), false)
+        .unwrap();
 }
 /// Changes path's metadata, not its bytes: its mode, or on Windows its read-only attribute.
 fn change_metadata(path: &Path) {
@@ -398,7 +399,8 @@ fn settings_version_access_lists_and_reparse_points_fail_closed() {
     fs::write(&c.settings, b"{}").unwrap();
     // What the folder passes down is not protected, so a file made there is not private yet.
     assert!(!private_path(&c.settings));
-    crate::files_windows::make_private(&c.settings).unwrap();
+    crate::private_windows::make_private(&crate::private_windows::tests::open(&c.settings), false)
+        .unwrap();
     assert!(
         private_path(&c.settings),
         "the control: a protected file is private"

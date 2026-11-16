@@ -98,9 +98,9 @@ fn write_private_with_nonce(
                 .open(&tmp)
         };
         // Windows: with a protected access list allowing only this user and SYSTEM, given as it
-        // is made (`files_windows.rs`).
+        // is made (`private_windows.rs`).
         #[cfg(windows)]
-        let made = crate::files_windows::create_new_private(&tmp);
+        let made = crate::private_windows::create_new_private(&tmp);
         match made {
             Ok(f) => break (tmp, f),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
