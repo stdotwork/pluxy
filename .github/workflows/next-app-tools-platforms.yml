@@ -5,11 +5,10 @@ name: Next app tools platforms
 # (pluxy-transactions and the tools built on it) are not ported yet and are left out here.
 
 on:
+  # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
+  # its paths below are touched.
+  workflow_call:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'next/app-tools/**'
-      - '.github/workflows/next-app-tools-platforms.yml'
   push:
     branches:
       - main
@@ -18,7 +17,9 @@ on:
       - '.github/workflows/next-app-tools-platforms.yml'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A literal name: called from ci.yml, github.workflow is the caller's name, the same for every
+  # workflow it calls.
+  group: next-app-tools-platforms-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -36,7 +37,7 @@ env:
 jobs:
   tools:
     name: app tools (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'windows-latest' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_WINDOWS_RUNNER && fromJSON(vars.PLUXY_WINDOWS_RUNNER) || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -46,6 +47,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.97.0
         with:
@@ -55,6 +58,7 @@ jobs:
         with:
           workspaces: next/app-tools -> target
           key: ${{ matrix.os }}
+          save-if: ${{ runner.environment == 'github-hosted' }}
       - name: Clippy
         run: cargo clippy --locked --workspace $NOT_PORTED --all-targets -- -D warnings
       # Unit tests with an empty temporary home, so no test can reach the runner's own.

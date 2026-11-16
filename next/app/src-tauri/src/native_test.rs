@@ -56,9 +56,9 @@
 use crate::{App, COMMANDS, MAIN, WINDOW};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, Webview};
+use tauri::{AppHandle, Manager, Url, Webview};
 
 #[cfg(target_os = "linux")]
 #[path = "access_native.rs"]
@@ -161,18 +161,144 @@ pub fn window_call(method: &str, path: &str) {
 
 const WAIT: Duration = Duration::from_secs(120);
 
-/// Tauri's own commands a page webview might try.
-const PLUGINS: &[&str] = &[
-    "plugin:event|listen",
-    "plugin:event|emit",
-    "plugin:window|close",
-    "plugin:webview|create_webview",
-    "plugin:app|version",
-    "plugin:path|resolve_directory",
-    "plugin:menu|new",
-    "plugin:tray|new",
-    "plugin:image|new",
+/// Where the page's frame tries to go off its site (the frame-offsite step).
+const OFFSITE: &[&str] = &[
+    "https://example.com/",
+    "about:blank",
+    "data:text/html,pluxy-offsite",
 ];
+
+/// Each navigation a page webview's handler decided, in order (lib.rs page_navigation).
+static NAVIGATIONS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+
+/// Records a page webview's navigation and whether it was allowed.
+pub fn navigated(label: &str, url: &Url, allowed: bool) {
+    NAVIGATIONS
+        .lock()
+        .unwrap()
+        .push(json!({"label": label, "url": url.as_str(), "allowed": allowed}));
+}
+
+/// The navigations of page label decided since the first `from`.
+fn navigations_of(label: &str, from: usize) -> Vec<Value> {
+    NAVIGATIONS.lock().unwrap()[from..]
+        .iter()
+        .filter(|d| d["label"] == label)
+        .cloned()
+        .collect()
+}
+
+/// Records that WebView2 replaced page label's frame document with its error page (lib.rs).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn frame_replaced(label: &str, status: i32) {
+    NAVIGATIONS
+        .lock()
+        .unwrap()
+        .push(json!({"label": label, "replaced": status}));
+}
+
+/// Where page webview wv's frame is, asking for up to secs: only a document still there answers.
+fn frame_here(wv: &Webview, secs: u64) -> Option<Value> {
+    let mut asked = Instant::now() - Duration::from_secs(1);
+    within(secs, || {
+        if asked.elapsed() >= Duration::from_millis(500) {
+            asked = Instant::now();
+            let _ = wv.eval("document.querySelector('iframe')?.contentWindow?.postMessage({nativeHere: true}, '*')");
+        }
+        eval(wv, "window.__offsite?.here ?? null").filter(|v| v.is_string())
+    })
+}
+
+/// The page's frame tries each off-site address, each from a page opened for it (window hash
+/// page), plus an address on the page scheme itself, which counts its requests. Each try must be
+/// stopped where it is shown to stop: refused by the app's navigation handler ("hook"), or first
+/// by the page's app document, whose policy allows frames from the page's site only ("frame-src":
+/// its `securitypolicyviolation` event names the address). None may be allowed, nothing may
+/// reach the probe address, and the frame must stay with the channel open, or, where WebView2
+/// replaces the frame's document with its error page, the channel must close.
+fn frame_offsite(app: &AppHandle, main: &Webview, page: &str) -> Result<Value, String> {
+    let mut addresses: Vec<String> = OFFSITE.iter().map(|a| a.to_string()).collect();
+    addresses.push(
+        crate::pages::app_url()
+            .join("offsite-probe")
+            .map_err(|e| e.to_string())?
+            .to_string(),
+    );
+    let hits = ingress::offsite_hits();
+    let mut tries = Vec::new();
+    for url in &addresses {
+        main.eval("location.hash = '#/extensions'")
+            .map_err(|e| e.to_string())?;
+        wait_for("the last page to close", || {
+            let pages = app.state::<App>().pages.lock().unwrap().labels();
+            pages.is_empty().then_some(())
+        })?;
+        main.eval(format!("location.hash = {}", json!(format!("#/{page}"))))
+            .map_err(|e| e.to_string())?;
+        let label = wait_for("a page for the off-site try", || {
+            app.state::<App>()
+                .pages
+                .lock()
+                .unwrap()
+                .labels()
+                .first()
+                .cloned()
+        })?;
+        let wv = wait_for("its webview", || app.get_webview(&label))?;
+        wait_for("its frame", || {
+            eval(&wv, "document.querySelector('iframe')?.src ?? null").filter(|v| v.is_string())
+        })?;
+        wv.eval("window.__cspBlocked = []; document.addEventListener('securitypolicyviolation', e => window.__cspBlocked.push({uri: e.blockedURI, directive: e.effectiveDirective})); window.__offsite = {}; window.addEventListener('message', e => { if (e.data?.nativeOffsiteTried) window.__offsite.tried = e.data.nativeOffsiteTried; if (typeof e.data?.nativeHere === 'string') window.__offsite.here = e.data.nativeHere; });")
+            .map_err(|e| e.to_string())?;
+        // Ready once the frame answers: its listeners come before its report.
+        let before = frame_here(&wv, WAIT.as_secs()).ok_or("the page's frame never answered")?;
+        let from = NAVIGATIONS.lock().unwrap().len();
+        wv.eval(format!(
+            "window.__offsite = {{}}; document.querySelector('iframe').contentWindow.postMessage({{nativeOffsite: {}}}, '*')",
+            json!(url)
+        ))
+        .map_err(|e| e.to_string())?;
+        let tried = within(10, || {
+            eval(&wv, "window.__offsite.tried ?? null").filter(|v| v.is_object())
+        });
+        // The decision, waited for up to a bound.
+        let stopped = within(10, || {
+            if navigations_of(&label, from)
+                .iter()
+                .any(|d| d["url"] == url.as_str() && d["allowed"] == false)
+            {
+                return Some("hook");
+            }
+            let csp = eval(
+                &wv,
+                &format!("window.__cspBlocked.some(v => v.directive === 'frame-src' && v.uri !== '' && {}.startsWith(v.uri))", json!(url)),
+            );
+            (csp == Some(json!(true))).then_some("frame-src")
+        });
+        let after = frame_here(&wv, 10);
+        let decided = navigations_of(&label, from);
+        tries.push(json!({
+            "url": url,
+            "error": match &tried { Some(t) => t.get("error").cloned().unwrap_or(Value::Null), None => json!("the frame did not try") },
+            "stopped": stopped,
+            "refused": decided.iter().any(|d| d["url"] == url.as_str() && d["allowed"] == false),
+            "allowed": decided.iter().filter(|d| d["allowed"] == true).cloned().collect::<Vec<_>>(),
+            "replaced": decided.iter().filter_map(|d| d.get("replaced").cloned()).collect::<Vec<_>>(),
+            "stayed": after.as_ref() == Some(&before),
+            "open": !app.state::<App>().pages.lock().unwrap().document_closed(&label),
+            "csp": eval(&wv, "window.__cspBlocked"),
+        }));
+    }
+    // The last try's page stays open: the steps after this one inspect a page webview.
+    Ok(json!({"tried": tries, "probe_hits": ingress::offsite_hits() - hits}))
+}
+
+/// Every app command and every command of the plugins this build registers.
+fn every_command() -> Vec<String> {
+    let mut all: Vec<String> = COMMANDS.iter().map(|c| c.to_string()).collect();
+    all.extend(crate::plugin_commands());
+    all
+}
 
 /// Commands the window's probe leaves out: they take no arguments and would act.
 const ACTING: &[&str] = &[
@@ -300,7 +426,6 @@ fn same_place(a: &Value, b: &Value) -> bool {
 }
 
 /// Waits up to secs for f, without failing anything: None when it never came.
-#[cfg(target_os = "linux")]
 fn within<T>(secs: u64, mut f: impl FnMut() -> Option<T>) -> Option<T> {
     let deadline = Instant::now() + Duration::from_secs(secs);
     loop {
@@ -666,8 +791,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
         wait_for("the page's frame", || {
             eval(&wv, "document.querySelector('iframe')?.src ?? null").filter(|v| v.is_string())
         })?;
-        let mut all: Vec<&str> = COMMANDS.to_vec();
-        all.extend(PLUGINS);
+        let every = every_command();
+        let all: Vec<&str> = every.iter().map(String::as_str).collect();
         let mut r = probe(&wv, &all)?;
         r["label"] = json!(label);
         r["url"] = eval(&wv, "location.href").unwrap_or(Value::Null);
@@ -714,6 +839,20 @@ fn run(app: &AppHandle) -> Result<(), String> {
         {
             return Err("fragment navigation closed admission".into());
         }
+        // The frame calls every command through a Tauri bridge of its own, where it has one: on
+        // Windows it has the page webview's, until wry keeps Tauri's scripts out of frames on
+        // WebView2 (https://github.com/tauri-apps/wry/pull/1874).
+        wv.eval(format!(
+            "window.__frameInvoked = null; window.addEventListener('message', e => {{ if (e.data?.nativeInvoked) window.__frameInvoked = e.data.nativeInvoked; }}); document.querySelector('iframe').contentWindow.postMessage({{nativeInvoke: {}}}, '*')",
+            json!(all)
+        ))
+        .map_err(|e| e.to_string())?;
+        log(
+            "frame_invoke",
+            wait_for("the frame's calls", || {
+                eval(&wv, "window.__frameInvoked ?? null").filter(|v| !v.is_null())
+            })?,
+        );
         // The real HTTP pages-site frame navigates while wrapper closed is deliberately lost.
         // The native navigation callback must invalidate admission before its new document loads.
         wv.eval("{ const original=window.fetch; window.fetch=(u,o)=>o?.body && JSON.parse(o.body).type==='closed' ? Promise.resolve(new Response('',{status:204})) : original(u,o); const frame=document.querySelector('iframe');const next=new URL(frame.src);next.hash='';next.search='?native-second';frame.src=next.href; }").map_err(|e|e.to_string())?;
@@ -739,6 +878,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
             "http_navigation",
             json!({"native_closed":true,"status":status,"wrapper_closed_suppressed":true,"window_closed":true,"fragment_open":true}),
         );
+        log("frame_offsite", frame_offsite(app, &main, &page)?);
     }
 
     #[cfg(target_os = "linux")]
@@ -749,8 +889,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
     ingress::run(app, &main)?;
     #[cfg(target_os = "linux")]
     {
-        let mut all: Vec<&str> = COMMANDS.to_vec();
-        all.extend(PLUGINS);
+        let every = every_command();
+        let all: Vec<&str> = every.iter().map(String::as_str).collect();
         crate::release_native::run(app, &main, |w| probe(w, &all))?;
     }
 
