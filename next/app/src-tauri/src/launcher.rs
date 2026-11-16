@@ -239,14 +239,17 @@ fn search_path() -> Vec<String> {
     spawn::environment(spawn::snapshot(), &spawn::Request::default(), &[])
         .into_iter()
         .find(|(k, _)| k == "PATH")
-        .map(|(_, v)| {
-            v.to_string_lossy()
-                .split(':')
-                .filter(|e| e.starts_with('/'))
-                .map(String::from)
-                .collect()
-        })
+        .map(|(_, v)| path_entries(&v))
         .unwrap_or_default()
+}
+
+/// The absolute folders of a PATH value, split as this system splits it (`:` on Linux and macOS;
+/// `;` on Windows, where an entry may be quoted); empty and relative entries are left out.
+fn path_entries(path: &std::ffi::OsStr) -> Vec<String> {
+    std::env::split_paths(path)
+        .filter(|p| p.is_absolute())
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect()
 }
 
 /// Calls op of the execution program from the window, on a thread of its own that ends with the
