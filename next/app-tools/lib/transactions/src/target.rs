@@ -338,6 +338,96 @@ fn canonical(p: &Path) -> Result<PathBuf, Error> {
     Ok(c)
 }
 
+/// The mount points and types in `/proc/self/mountinfo` text, mount points unescaped (`\040`).
+fn mounts(text: &str) -> Vec<(PathBuf, String)> {
+    let unescape = |s: &str| {
+        let b = s.as_bytes();
+        let mut out = Vec::with_capacity(b.len());
+        let mut i = 0;
+        while i < b.len() {
+            let octal = b[i] == b'\\'
+                && i + 3 < b.len()
+                && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c));
+            let v = octal
+                .then(|| {
+                    b[i + 1..i + 4]
+                        .iter()
+                        .fold(0u32, |v, c| v * 8 + u32::from(c - b'0'))
+                })
+                .and_then(|v| u8::try_from(v).ok());
+            if let Some(v) = v {
+                out.push(v);
+                i += 4;
+            } else {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+        use std::os::unix::ffi::OsStringExt;
+        PathBuf::from(std::ffi::OsString::from_vec(out))
+    };
+    text.lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split(' ').collect();
+            let dash = f.iter().position(|x| *x == "-")?;
+            (dash >= 6 && f.len() > dash + 1).then(|| (unescape(f[4]), f[dash + 1].to_string()))
+        })
+        .collect()
+}
+
+/// The types WSL mounts Windows drives with.
+fn windows_type(fstype: &str) -> bool {
+    matches!(fstype, "drvfs" | "9p" | "virtiofs")
+}
+
+/// Whether path (absolute and resolved) is on a Windows drive, by `/proc/self/mountinfo` text: the
+/// mount holding it (the last of the longest mount points it is inside) is of a type WSL mounts
+/// drives with, or is mounted in the folder WSL mounts the drives in (the automount root: the
+/// folder holding a drive mount, one whose last part is one letter), as `/mnt/wsl` is.
+pub(crate) fn on_windows_drive(mountinfo: &str, path: &Path) -> bool {
+    let all = mounts(mountinfo);
+    let holding = all
+        .iter()
+        .filter(|(point, _)| path.starts_with(point))
+        .max_by_key(|(point, _)| point.components().count());
+    let Some((point, fstype)) = holding else {
+        return false;
+    };
+    if windows_type(fstype) {
+        return true;
+    }
+    let drive = |p: &Path| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_alphabetic())
+    };
+    let roots = all
+        .iter()
+        .filter(|(p, t)| windows_type(t) && drive(p))
+        .filter_map(|(p, _)| p.parent());
+    let parent = point.parent();
+    roots
+        .into_iter()
+        .any(|r| parent == Some(r) && r != Path::new("/"))
+}
+
+/// In WSL (the host set `PLUXY_ENVIRONMENT`), refuses paths (resolved folders) on a Windows drive:
+/// without its metadata mode, a drive keeps no owner-only permission bits, and Windows' own
+/// writer already sets up its files.
+pub(crate) fn refuse_windows_drive(paths: &[&Path]) -> Result<(), Error> {
+    if std::env::var_os("PLUXY_ENVIRONMENT").is_none_or(|v| v.is_empty()) {
+        return Ok(());
+    }
+    let info = std::fs::read_to_string("/proc/self/mountinfo")
+        .map_err(|e| io("/proc/self/mountinfo", e))?;
+    if paths.iter().any(|p| on_windows_drive(&info, p)) {
+        return Err(Error::invalid_request(
+            "This file is on a Windows drive; set it up from Windows local.",
+        ));
+    }
+    Ok(())
+}
+
 /// A selection resolved now: the pin, and a handle on the target's folder with the file's name.
 pub struct Target {
     pub pin: Pin,
@@ -361,12 +451,14 @@ impl Target {
                 );
                 let pdir = open_dir(parent)?;
                 let link = link_at(&pdir, Path::new(name), f)?;
+                let cparent = canonical(parent)?;
                 let target = if link.is_some() {
                     canonical(f)?
                 } else {
-                    canonical(parent)?.join(name)
+                    cparent.join(name)
                 };
                 let tparent = target.parent().unwrap_or(Path::new("/"));
+                refuse_windows_drive(&[&cparent, tparent])?;
                 let dir = open_dir(tparent)?;
                 let parent_id = dir_id(&dir, tparent)?;
                 let name = PathBuf::from(target.file_name().unwrap_or_default());
@@ -391,6 +483,7 @@ impl Target {
                 );
                 let link = link_at(&open_dir(rparent)?, Path::new(rname), root)?;
                 let croot = canonical(root)?;
+                refuse_windows_drive(&[&canonical(rparent)?, &croot])?;
                 let mut dir = open_dir(&croot)?;
                 let root_id = dir_id(&dir, &croot)?;
                 let mut at = croot.clone();
@@ -419,6 +512,8 @@ impl Target {
                     }
                     dir = next;
                 }
+                // A folder inside the root may be a mount of its own.
+                refuse_windows_drive(&[&at])?;
                 let parent_id = dir_id(&dir, &at)?;
                 let last = parts[parts.len() - 1];
                 let target = croot.join(path);
@@ -499,6 +594,7 @@ impl Target {
     /// pinned one.
     pub fn pinned(pin: &Pin) -> Result<Target, Error> {
         let folder = pin.target.parent().unwrap_or(Path::new("/"));
+        refuse_windows_drive(&[&canonical(folder)?])?;
         let dir = open_dir(folder)?;
         if dir_id(&dir, folder)? != pin.parent_id {
             return Err(changed(&pin.target, "its folder was replaced"));

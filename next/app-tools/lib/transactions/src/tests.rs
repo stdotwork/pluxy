@@ -1521,3 +1521,207 @@ fn a_failed_operations_sweep_keeps_the_manual_backups() {
         1
     );
 }
+
+#[test]
+fn the_data_folder_is_made_at_the_first_state_write_and_not_before() {
+    let t = Tmp::new();
+    let file = t.put("home/settings.json", "{}\n");
+    // Missing, with a missing folder above it, as in a WSL distribution before the first write.
+    let (mem, data) = (
+        Mem::default(),
+        t.at("home/.local/state/pluxy/tools/pluxy/w"),
+    );
+    let tx = Transactions::new(&mem, &data);
+    assert_eq!(tx.status().unwrap()["sets"], json!({}));
+    let p = tx.preview("s", &[Selection::File(file.clone())]).unwrap();
+    assert!(!t.at("home/.local").exists(), "a read made the data folder");
+    let pins = vec![Pin::from_json(&p["targets"][0]).unwrap()];
+    tx.apply("s", &pins, &values(json!({"a": 1})), &Json, &mut none)
+        .unwrap();
+    for d in [
+        t.at("home/.local"),
+        t.at("home/.local/state/pluxy"),
+        data.clone(),
+    ] {
+        let m = std::fs::symlink_metadata(&d).unwrap();
+        assert!(m.is_dir());
+        assert_eq!(m.mode() & 0o7777, 0o700, "{}", d.display());
+    }
+    assert_eq!(
+        std::fs::metadata(data.join(STATE)).unwrap().mode() & 0o7777,
+        0o600
+    );
+    assert_eq!(
+        tx.status().unwrap()["sets"]["s"]["targets"][0]["target"],
+        json!(file)
+    );
+}
+
+#[test]
+fn a_link_where_the_data_folder_goes_is_refused() {
+    let t = Tmp::new();
+    let file = t.put("settings.json", "{}\n");
+    std::fs::create_dir(t.at("elsewhere")).unwrap();
+    let data = t.at("data");
+    std::os::unix::fs::symlink(t.at("elsewhere"), &data).unwrap();
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, &data);
+    let e = tx.status().unwrap_err();
+    assert!(e.message.contains("not a folder of this user's"), "{e}");
+    let e = tx.preview("s", &[Selection::File(file)]).unwrap_err();
+    assert!(e.message.contains("not a folder of this user's"), "{e}");
+    assert_eq!(std::fs::read_dir(t.at("elsewhere")).unwrap().count(), 0);
+}
+
+const MOUNTINFO: &str = "\
+1 0 8:32 / / rw,relatime - ext4 /dev/sdc rw
+2 1 0:20 / /usr/lib/wsl/drivers ro - 9p drivers ro,aname=drivers
+3 1 0:21 / /mnt/wsl rw,relatime shared:1 - tmpfs none rw
+4 1 0:52 / /mnt/c rw,noatime - 9p C:\\134 rw,aname=drvfs,uid=1000
+5 1 0:54 / /home/bob/win\\040docs rw - drvfs D:\\134docs rw
+6 1 0:55 / /home/bob/data rw - ext4 /dev/sdd rw
+7 6 0:56 / /home/bob/data/over rw - 9p E:\\134 rw,aname=drvfs
+8 1 0:57 / /mnt/cd rw - ext4 /dev/sde rw
+";
+
+#[test]
+fn paths_on_windows_drives_are_known_by_their_mount() {
+    let on = |p: &str| target::on_windows_drive(MOUNTINFO, Path::new(p));
+    // Linux files, a folder that is a mount of its own, a folder beside the drives.
+    for p in [
+        "/home/bob/.claude",
+        "/home/bob/data/x",
+        "/",
+        "/mnt",
+        "/mnt/cfoo",
+    ] {
+        assert!(!on(p), "{p}");
+    }
+    // A drive, a drive mounted elsewhere (with a space), one mounted over a Linux folder, mounts
+    // in the automount root (WSL's shared tmpfs, and any disk mounted there), and WSL's own 9p
+    // mounts.
+    for p in [
+        "/mnt/c",
+        "/mnt/c/Users/me/.claude",
+        "/home/bob/win docs/x",
+        "/home/bob/data/over/y",
+        "/mnt/wsl/shared",
+        "/mnt/cd/x",
+        "/usr/lib/wsl/drivers/x",
+    ] {
+        assert!(on(p), "{p}");
+    }
+    // Drives mounted at the root (automount root `/`): only the drives themselves.
+    let at_root = "1 0 8:32 / / rw - ext4 /dev/sdc rw\n2 1 0:52 / /c rw - drvfs C:\\134 rw\n\
+                   3 1 0:53 / /home rw - ext4 /dev/sdd rw\n";
+    assert!(target::on_windows_drive(at_root, Path::new("/c/x")));
+    assert!(!target::on_windows_drive(at_root, Path::new("/home/bob")));
+    // Without WSL's environment nothing is refused: no PLUXY_ENVIRONMENT in a test process.
+    if std::env::var_os("PLUXY_ENVIRONMENT").is_none() {
+        assert!(target::refuse_windows_drive(&[Path::new("/mnt/c/x")]).is_ok());
+    }
+}
+
+/// The Linux folder of the real-WSL tests, in the running user's home, removed when dropped.
+#[cfg(target_os = "linux")]
+fn wsl_home_folder() -> Tmp {
+    let home = std::env::var("HOME").expect("HOME");
+    assert!(
+        std::env::var("PLUXY_ENVIRONMENT").is_ok_and(|e| e.starts_with("wsl:")),
+        "the WSL job runs these with PLUXY_ENVIRONMENT"
+    );
+    let p = Path::new(&home).join(format!("pluxy-tx-{}", target::random_hex().unwrap()));
+    std::fs::create_dir(&p).unwrap();
+    Tmp(p)
+}
+
+/// In a real WSL distribution, as a user that is not its default one (next-app-tools-platforms.yml,
+/// WSL job): a file on a Windows drive (`PLUXY_WSL_TEST_DRIVE_DIR`, a Linux path to a folder on
+/// one, holding `settings.json`), selected directly, through a root or through a link in the
+/// home, is refused; the same selections in the home are pinned.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "runs inside a real WSL distribution (next-app-tools-platforms.yml, WSL job)"]
+fn wsl_real_targets_on_a_windows_drive_are_refused() {
+    let drive = PathBuf::from(std::env::var("PLUXY_WSL_TEST_DRIVE_DIR").unwrap());
+    assert!(drive.join("settings.json").is_file());
+    let t = wsl_home_folder();
+    let home_file = t.put("cfg/settings.json", "{}\n");
+    std::os::unix::fs::symlink(drive.join("settings.json"), t.at("to-drive.json")).unwrap();
+    std::os::unix::fs::symlink(&drive, t.at("drive-root")).unwrap();
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, t.at("data"));
+    let refused = [
+        Selection::File(drive.join("settings.json")),
+        Selection::Root {
+            root: drive.clone(),
+            path: "settings.json".into(),
+        },
+        Selection::File(t.at("to-drive.json")),
+        Selection::Root {
+            root: t.at("drive-root"),
+            path: "settings.json".into(),
+        },
+    ];
+    for s in &refused {
+        let e = tx.preview("s", std::slice::from_ref(s)).unwrap_err();
+        assert_eq!(
+            e.message, "This file is on a Windows drive; set it up from Windows local.",
+            "{s:?}"
+        );
+    }
+    // Positive controls on the same route.
+    let p = tx
+        .preview("s", &[Selection::File(home_file.clone())])
+        .unwrap();
+    assert_eq!(p["targets"][0]["target"], json!(home_file));
+    let p = tx
+        .preview(
+            "s",
+            &[Selection::Root {
+                root: t.at("cfg"),
+                path: "settings.json".into(),
+            }],
+        )
+        .unwrap();
+    assert_eq!(p["targets"][0]["target"], json!(home_file));
+    assert!(!t.at("data").exists());
+}
+
+/// In a real WSL distribution, as a user that is not its default one: the data folder is made in
+/// the home at the first write, owner-only and owned by that user, and an apply's file is 0600,
+/// owned by that user, with a link kept as it was.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "runs inside a real WSL distribution (next-app-tools-platforms.yml, WSL job)"]
+fn wsl_real_the_first_write_makes_the_data_folder_and_files_are_the_users() {
+    let t = wsl_home_folder();
+    let target = t.put("dotfiles/settings.json", "{\"theme\": \"light\"}\n");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::os::unix::fs::symlink("dotfiles/settings.json", t.at("settings.json")).unwrap();
+    let data = t.at("state/pluxy/tools/pluxy/fixture-writer");
+    let mem = Mem::default();
+    let tx = Transactions::new(&mem, &data);
+    let p = tx
+        .preview("s", &[Selection::File(t.at("settings.json"))])
+        .unwrap();
+    assert!(!t.at("state").exists(), "a preview made the data folder");
+    let pins = vec![Pin::from_json(&p["targets"][0]).unwrap()];
+    tx.apply("s", &pins, &values(json!({"model": "m"})), &Json, &mut none)
+        .unwrap();
+    // SAFETY: geteuid has no preconditions.
+    let me = unsafe { libc::geteuid() };
+    assert_ne!(me, 0, "run as a user, not root");
+    let m = std::fs::symlink_metadata(&data).unwrap();
+    assert!(m.is_dir());
+    assert_eq!((m.uid(), m.mode() & 0o7777), (me, 0o700));
+    let m = std::fs::metadata(&target).unwrap();
+    assert_eq!((m.uid(), m.mode() & 0o7777), (me, 0o600));
+    assert_eq!(
+        std::fs::read_link(t.at("settings.json")).unwrap(),
+        Path::new("dotfiles/settings.json")
+    );
+    assert!(read(&target).unwrap().contains("\"model\": \"m\""));
+    tx.restore("s", &pins, &mut none).unwrap();
+    assert_eq!(read(&target).unwrap(), "{\"theme\": \"light\"}\n");
+}
