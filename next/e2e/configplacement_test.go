@@ -115,18 +115,20 @@ func startPlacement(t *testing.T, isYAML bool) *placeCore {
 	manifest := filepath.Join(binDir, "pluxy-extension.json")
 	dir := t.TempDir()
 	p.mcore = &mcore{yaml: isYAML}
-	var content []byte
+	var content func(port int) []byte
 	if isYAML {
 		p.path = filepath.Join(dir, "config.yaml")
-		var b strings.Builder
-		b.WriteString("server:\n  host: 127.0.0.1\n  port: " + strconv.Itoa(freePort(t)) + "\n")
-		fmt.Fprintf(&b, "access:\n  api-keys:\n    - %q\n", clientKey)
-		fmt.Fprintf(&b, "management:\n  secret-key: %q\n", managementKey)
-		fmt.Fprintf(&b, "extension:\n  manifest: %q\n  accounts:\n", manifest)
-		for _, a := range []struct{ id, url, key string }{{"a", p.a.URL, placeKeyA}, {"b", p.b.URL, placeKeyB}} {
-			fmt.Fprintf(&b, "    - id: %s\n      settings:\n        base_url: %q\n      credential:\n        kind: api_key\n        api_key: %q\n", a.id, a.url+"/v1", a.key)
+		content = func(port int) []byte {
+			var b strings.Builder
+			b.WriteString("server:\n  host: 127.0.0.1\n  port: " + strconv.Itoa(port) + "\n")
+			fmt.Fprintf(&b, "access:\n  api-keys:\n    - %q\n", clientKey)
+			fmt.Fprintf(&b, "management:\n  secret-key: %q\n", managementKey)
+			fmt.Fprintf(&b, "extension:\n  manifest: %q\n  accounts:\n", manifest)
+			for _, a := range []struct{ id, url, key string }{{"a", p.a.URL, placeKeyA}, {"b", p.b.URL, placeKeyB}} {
+				fmt.Fprintf(&b, "    - id: %s\n      settings:\n        base_url: %q\n      credential:\n        kind: api_key\n        api_key: %q\n", a.id, a.url+"/v1", a.key)
+			}
+			return []byte(b.String())
 		}
-		content = []byte(b.String())
 	} else {
 		p.path = filepath.Join(dir, "config.json")
 		p.creds = filepath.Join(dir, "credentials")
@@ -144,13 +146,11 @@ func startPlacement(t *testing.T, isYAML bool) *placeCore {
 				"accounts": []any{account("a", p.a.URL, placeKeyA), account("b", p.b.URL, placeKeyB)},
 			},
 		}
-		content, _ = json.MarshalIndent(cfg, "", "  ")
-		content = append(content, '\n')
+		b, _ := json.MarshalIndent(cfg, "", "  ")
+		b = append(b, '\n')
+		content = func(int) []byte { return b }
 	}
-	if err := os.WriteFile(p.path, content, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	p.base, _ = runCoreFile(t, p.path, noWatch...)
+	p.base, _, _ = startOnFreePort(t, filepath.Join(binDir, "pluxy"), p.path, content, noWatch...)
 	return p
 }
 

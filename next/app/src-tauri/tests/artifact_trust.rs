@@ -44,6 +44,21 @@ impl Fixture {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
         }
+        // The same on Windows: an access list of this user, SYSTEM and Administrators only,
+        // inherited by the files made in it.
+        #[cfg(windows)]
+        {
+            let user = std::process::Command::new("whoami").output().unwrap();
+            let user = String::from_utf8_lossy(&user.stdout).trim().to_string();
+            assert!(std::process::Command::new("icacls")
+                .arg(&dir)
+                .args(["/inheritance:r", "/grant:r"])
+                .arg(format!("{user}:(OI)(CI)F"))
+                .args(["*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"])
+                .status()
+                .unwrap()
+                .success());
+        }
         fs::write(dir.join("signing-key"), seed).unwrap();
         let key = SigningKey::from_bytes(&seed);
         let package = dir.join("package");
