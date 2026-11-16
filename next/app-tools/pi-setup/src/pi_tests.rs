@@ -618,5 +618,8 @@ fn the_recipe_starts_the_installers_pi_where_this_system_runs_it_else_the_one_on
     assert_eq!(program("linux"), unix(&own));
     assert_eq!(program("macos"), unix(&own));
     assert_eq!(program("windows"), "pi");
+    // On Windows no installed copy is looked for at all (also where this test runs on Windows,
+    // which runs none of the Unix copies anyway).
+    assert!(crate::installed("windows", &home).is_empty());
     std::fs::remove_dir_all(home).unwrap();
 }
