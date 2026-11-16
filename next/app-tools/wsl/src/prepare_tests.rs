@@ -46,14 +46,40 @@ fn the_launch_runs_the_program_found_in_the_folder_found_as_the_user() {
     assert_eq!(
         v,
         json!({
-            "executable": "C:\\Windows\\System32\\wsl.exe",
-            "argv": ["-d", "Ubuntu", "-u", "bob", "--cd", "/home/bob", "--exec",
-                "/usr/local/bin/claude", "a b", "\"q\""],
-            "cwd": "C:\\Users\\me",
-            "program": "/usr/local/bin/claude",
+            "launch": {
+                "executable": "C:\\Windows\\System32\\wsl.exe",
+                "argv": ["-d", "Ubuntu", "-u", "bob", "--cd", "/home/bob", "--exec",
+                    "/usr/local/bin/claude", "a b", "\"q\""],
+                "cwd": "C:\\Users\\me",
+                "program": "/usr/local/bin/claude"
+            },
             "kind": "terminal"
         })
     );
+    // The launch is exactly pluxy/execution's launch input, which takes no other field: the host
+    // passes it on as it is, and applies kind itself.
+    let execution: Value =
+        serde_json::from_str(include_str!("../../execution/pluxy-extension.json")).unwrap();
+    let schema = execution["app"]["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["id"] == "launch")
+        .unwrap()["input_schema"]
+        .clone();
+    assert_eq!(schema["additionalProperties"], false);
+    for k in v["launch"].as_object().unwrap().keys() {
+        assert!(
+            schema["properties"].get(k).is_some(),
+            "execution's launch takes no {k}"
+        );
+    }
+    for k in schema["required"].as_array().unwrap() {
+        assert!(
+            v["launch"].get(k.as_str().unwrap()).is_some(),
+            "{k} is missing"
+        );
+    }
     let a = r.resolve_args("Ubuntu", "bob");
     assert_eq!(
         a[..9],
@@ -118,12 +144,12 @@ fn the_script_finds_programs_on_the_path_and_checks_overrides_and_folders() {
     // Found on the PATH; the folder is the home when none is named.
     let r = input(json!({"kind": "terminal", "program": "claude"}));
     let v = launch(&r).unwrap();
-    assert_eq!(v["program"], s(&exe));
-    assert_eq!(v["argv"][5], s(&home));
+    assert_eq!(v["launch"]["program"], s(&exe));
+    assert_eq!(v["launch"]["argv"][5], s(&home));
     // A named folder with a space.
     let cwd = s(&home.join("work space"));
     let r = input(json!({"kind": "terminal", "program": "claude", "cwd": cwd}));
-    assert_eq!(launch(&r).unwrap()["argv"][5], cwd);
+    assert_eq!(launch(&r).unwrap()["launch"]["argv"][5], cwd);
     // Not on the PATH, not executable, a shell builtin.
     for p in ["missing", "notexec", "echo"] {
         let r = input(json!({"kind": "terminal", "program": p}));
@@ -134,7 +160,7 @@ fn the_script_finds_programs_on_the_path_and_checks_overrides_and_folders() {
     }
     // An override must be an executable file.
     let r = input(json!({"kind": "direct", "override": s(&exe)}));
-    assert_eq!(launch(&r).unwrap()["program"], s(&exe));
+    assert_eq!(launch(&r).unwrap()["launch"]["program"], s(&exe));
     for o in [s(&plain), s(&bin), s(&d.join("nope"))] {
         let r = input(json!({"kind": "direct", "override": o}));
         assert!(

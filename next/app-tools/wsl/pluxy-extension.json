@@ -65,7 +65,7 @@
           "required": ["distro", "user", "kind"],
           "additionalProperties": false
         },
-        "output_schema": { "type": "object", "required": ["executable", "argv", "cwd", "program"] }
+        "output_schema": { "type": "object", "required": ["launch", "kind"] }
       }
     ],
     "state": { "version": 0, "readable_versions": [0] }

@@ -1,6 +1,9 @@
 //! `prepare`: the exact `wsl.exe` launch of a program inside a distribution as a user, for the
-//! person to confirm and the host to spawn (through `pluxy/execution`'s `launch`, whose shape it
-//! has: the executable, then its arguments without a program name, and a Windows working folder).
+//! person to confirm and the host to spawn. It answers `{"launch", "kind"}`: `launch` is exactly
+//! `pluxy/execution`'s `launch` input (`executable`, then `argv` without a program name, a Windows
+//! `cwd`, and the `program` shown), which the host passes on as it is; `kind` (`terminal` or
+//! `direct`) stays beside it, and the host applies it before it calls execution: a terminal launch
+//! gets a console window of its own, no standard input and no managed lifetime.
 //! The program and folder are found inside the distribution, as that user, by one fixed script;
 //! no login shell is started, so a program only an rc file puts on the PATH is reached by its
 //! full path (`override`).
@@ -173,10 +176,10 @@ impl Request {
         .map(|s| s.to_string())
         .collect();
         argv.extend(self.args.iter().cloned());
-        Ok(
-            json!({"executable": executable, "argv": argv, "cwd": cwd, "program": program,
-            "kind": self.kind}),
-        )
+        Ok(json!({
+            "launch": {"executable": executable, "argv": argv, "cwd": cwd, "program": program},
+            "kind": self.kind
+        }))
     }
 }
 

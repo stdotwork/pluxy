@@ -265,11 +265,12 @@ fn prepare_answers_the_exact_launch_and_that_launch_runs_as_the_user() {
         json!({"distro": d, "user": "bob", "kind": "direct", "program": "pluxy-standin",
             "cwd": "/home/bob/work dir", "args": ["a b", "\"q\"", "", "ü"]}),
     );
-    let exe = v["executable"].as_str().unwrap().to_string();
+    let exe = v["launch"]["executable"].as_str().unwrap().to_string();
     assert!(exe.to_lowercase().ends_with(r"\system32\wsl.exe"), "{v}");
-    assert_eq!(v["program"], "/usr/local/bin/pluxy-standin");
+    assert_eq!(v["launch"]["program"], "/usr/local/bin/pluxy-standin");
+    assert_eq!(v["kind"], "direct");
     assert_eq!(
-        v["argv"],
+        v["launch"]["argv"],
         json!([
             "-d",
             d,
@@ -285,9 +286,9 @@ fn prepare_answers_the_exact_launch_and_that_launch_runs_as_the_user() {
             "ü"
         ])
     );
-    assert_eq!(v["cwd"], std::env::var("USERPROFILE").unwrap());
+    assert_eq!(v["launch"]["cwd"], std::env::var("USERPROFILE").unwrap());
     // The prepared launch, run as it stands: the stand-in records who, where and what.
-    let argv: Vec<String> = v["argv"]
+    let argv: Vec<String> = v["launch"]["argv"]
         .as_array()
         .unwrap()
         .iter()
@@ -306,7 +307,8 @@ fn prepare_answers_the_exact_launch_and_that_launch_runs_as_the_user() {
         json!({"distro": d, "user": "bob", "kind": "terminal",
         "program": "pluxy-standin"}),
     );
-    assert_eq!(v["argv"][5], "/home/bob");
+    assert_eq!(v["launch"]["argv"][5], "/home/bob");
+    assert_eq!(v["kind"], "terminal");
     // An absolute override; a program only a login shell's rc file puts on the PATH is not
     // found by name (no login shell), but is by its full path.
     let e = p.err(
@@ -320,7 +322,10 @@ fn prepare_answers_the_exact_launch_and_that_launch_runs_as_the_user() {
         json!({"distro": d, "user": "bob", "kind": "terminal",
         "override": "/home/bob/.local/bin/pluxy-nonlogin"}),
     );
-    assert_eq!(v["program"], "/home/bob/.local/bin/pluxy-nonlogin");
+    assert_eq!(
+        v["launch"]["program"],
+        "/home/bob/.local/bin/pluxy-nonlogin"
+    );
     // Missing program, folder or override, a missing user: refused, nothing started.
     for (input, word) in [
         (json!({"program": "pluxy-no-such-program"}), "PATH"),
