@@ -15,17 +15,16 @@ import { KitContext } from "../../ui/kit/ui";
 import defaultTheme from "../../ui/themes/default.json";
 import paper from "../../ui/themes/paper.json";
 import terminal from "../../ui/themes/terminal.json";
-import { claudeCodePage } from "./claudeCode";
-import { claudeDesktopPage } from "./claudeDesktop";
-import { codexPage } from "./codex";
+import { agentPages } from "./agentPages";
+import { clientListPage } from "./clientList";
+import { detected, encode, listed, openClient, PREF, parse } from "./clientListItems";
 import { ConnectionPage } from "./connection";
 import { type DeviceCatalog, device, newest } from "./device";
 import { DevicePage, devicePage } from "./devicePage";
+import { easyModePage } from "./easyMode";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
 import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
-import { ompPage } from "./omp";
-import { opencodePage } from "./opencode";
 import { UpdatesPage } from "./updates";
 import { ClosePrompt } from "./window";
 
@@ -106,9 +105,33 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
     };
   }, []);
   const themes = useMemo(() => new ThemeState(host, document, [defaultTheme, terminal, paper]), [host]);
-  const pages: PageDef[] = useMemo(
-    () => [
+  // The agent client pages the navigation lists (clientListItems.ts): the saved choice, or the clients
+  // whose tool is installed on this device, and the client page the person is on.
+  const agents = useMemo(() => agentPages(), []);
+  const clients = useMemo(
+    () => agents.map((a) => ({ id: a.id, package: a.package, title: a.title })),
+    [agents],
+  );
+  const [saved, setSaved] = useState(() => parse(host.prefs.get(PREF), clients));
+  const saveClients = useCallback(
+    (ids: string[] | undefined) => {
+      host.prefs.set(PREF, encode(ids));
+      setSaved(ids);
+    },
+    [host],
+  );
+  const [open, setOpen] = useState(() => openClient(location.hash, clients));
+  useEffect(() => {
+    const onHash = () => setOpen(openClient(location.hash, clients));
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, [clients]);
+  const pages: PageDef[] = useMemo(() => {
+    const installed = detected(clients, catalog);
+    const visible = listed(clients, installed, saved, open);
+    return [
       ...corePages(),
+      easyModePage(agents, catalog, loadDevice),
       {
         id: "connection",
         title: "Connection",
@@ -126,15 +149,11 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       },
       devicePage(loadDevice),
       launcherPage(),
-      claudeCodePage(),
-      codexPage(),
-      claudeDesktopPage(),
-      opencodePage(),
-      ompPage(),
+      clientListPage(clients, installed, saved, visible.length, saveClients),
+      ...visible.flatMap((c) => agents.find((a) => a.id === c.id) ?? []),
       ...devicePages(catalog),
-    ],
-    [shown, catalog, loadDevice],
-  );
+    ];
+  }, [shown, catalog, loadDevice, agents, clients, saved, open, saveClients]);
 
   // Not connected or not signed in (or the app's own core did not start): the Connection page,
   // where the person can fix the address or give the key, and this device's extensions, which

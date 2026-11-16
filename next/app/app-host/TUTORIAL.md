@@ -39,8 +39,9 @@ appears in the navigation, labelled Unverified on the Device extensions page.
 For settings, add versioned `config` inside `app`, using the existing
 [settings schema](../../ui/extension-pages/README.md#config). To request a file later, declare
 `"resources":[{"id":"notes","kind":"file","operations":["read"]}]` inside `app`. This grants
-no access: signer approval and native confirmation are required. Keep this first package page-only
-until the broker is available.
+no access. A grant needs a release signed by its publisher and listed in a registry (a package
+installed from a file cannot get one), the signer's approval and a native confirmation on Linux
+([Access for web packages](README.md#access-for-web-packages)).
 
 ## Describe a native package
 

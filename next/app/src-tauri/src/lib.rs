@@ -555,14 +555,20 @@ fn quit(app: &AppHandle) {
     // the connection for seconds while a core starts or stops. Tray actions refuse to start now.
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        #[cfg(native_stack)]
-        app.state::<App>().programs.stop_all();
-        // The app's managed runtimes stop with it; detached launches are not its own.
-        #[cfg(native_stack)]
-        app.state::<App>().runtimes.stop_all();
-        app.state::<App>().conn.lock().unwrap().stop_core();
+        stop_owned(&app.state::<App>());
         app.exit(0);
     });
+}
+
+/// Stops what the app owns, in this order: its native tools, its managed runtimes, then its own
+/// core, if it runs one. Quit, the restart after an update install (`updater::restart_into`) and
+/// the app's exit all stop it this way. Detached launches are not the app's own and run on.
+fn stop_owned(st: &App) {
+    #[cfg(native_stack)]
+    st.programs.stop_all();
+    #[cfg(native_stack)]
+    st.runtimes.stop_all();
+    st.conn.lock().unwrap().stop_core();
 }
 
 /// Saves the window's size and place, as it is now if it is open.
@@ -1386,6 +1392,7 @@ fn deliver_page(app: &AppHandle, label: &str, generation: &str, msg: Value) -> R
             #[cfg(feature = "native-test")]
             if result == "true" {
                 native_test::privacy::delivered(&sent);
+                native_test::page_delivered(&callback_label, &sent);
             }
             finish_page_delivery(
                 &callback_app,
@@ -3355,11 +3362,7 @@ pub fn run() {
         }
         RunEvent::Exit => {
             if let Some(st) = app.try_state::<App>() {
-                #[cfg(native_stack)]
-                st.programs.stop_all();
-                #[cfg(native_stack)]
-                st.runtimes.stop_all();
-                st.conn.lock().unwrap().stop_core();
+                stop_owned(&st);
             }
             if let Some(i) = app.try_state::<instance::Instance>() {
                 i.release();

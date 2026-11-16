@@ -9,10 +9,34 @@ publish.workspace = true
 [dependencies]
 cap-std = "=4.0.3"
 getrandom = "0.3"
+pluxy-files = { path = "../files" }
 pluxy-program = { path = "../program" }
 # Keys keep their order and numbers their digits in the files the library rewrites.
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 sha2 = "=0.10.9"
+# The in-place config editors, each behind its own feature so a tool compiles only the parser it uses.
+# feature `toml`: config.toml files, edited in place with comments, formatting and tables it does not know kept.
+toml_edit = { version = "=0.25.19", optional = true }
+# feature `yaml`: YAML files are read as YAML 1.2 and edited in place, keeping comments and formatting.
+saphyr = { version = "0.3.4", optional = true }
+yaml-edit = { version = "0.3.6", default-features = false, optional = true }
+
+[features]
+toml = ["dep:toml_edit"]
+yaml = ["dep:saphyr", "dep:yaml-edit"]
+
+# Unix: the data folder's owner check (`geteuid`).
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
+
+# Windows: a file's identity from its handle (volume serial number and file index), which cap-std
+# keeps in cap-primitives' metadata there.
+[target.'cfg(windows)'.dependencies]
+cap-primitives = "=4.0.3"
+
+# Windows: the access rights the tests open files with to change their access lists.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [[example]]
 name = "fixture-writer"

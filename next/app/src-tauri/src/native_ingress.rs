@@ -94,13 +94,8 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
             .cloned()
     })?;
     let w = wait_for("ingress webview", || app.get_webview(&label))?;
-    wait_for("ingress welcome", || {
-        eval(
-            main,
-            "document.querySelector('[data-part=extension-frame]')?.dataset.phase",
-        )
-        .filter(|v| v == "connected")
-    })?;
+    // The fixture's calls need the channel open, not only the window's connected phase.
+    super::channel_open(app, main, &label)?;
     w.eval("window.addEventListener('message', e => { if(e.data?.ingress) window.__ingressReport = e.data.ingress; });").map_err(|e| e.to_string())?;
     let d = command(&w, "denials", "denials")?;
     for (name, status, code) in [
@@ -239,13 +234,8 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
             .cloned()
     })?;
     let w = wait_for("closed control webview", || app.get_webview(&next))?;
-    wait_for("closed control welcome", || {
-        eval(
-            main,
-            "document.querySelector('[data-part=extension-frame]')?.dataset.phase",
-        )
-        .filter(|v| v == "connected")
-    })?;
+    // The fixture's calls need the channel open, not only the window's connected phase.
+    super::channel_open(app, main, &next)?;
     w.eval("window.addEventListener('message',e=>{if(e.data?.ingress)window.__ingressReport=e.data.ingress;});").map_err(|e|e.to_string())?;
     let closed = command(&w, "closed", "closed")?;
     require(
