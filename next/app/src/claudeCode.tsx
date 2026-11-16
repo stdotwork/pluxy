@@ -4,7 +4,9 @@
 // page, because Apply takes the client key: the window names a vault secret's ID and the native
 // confirmation of the apply names its label; an extension page can pass no secret. The key's value
 // never reaches this webview: native key entry keeps it, and the tool's preview reads back only
-// whether one is set. Labels follow the old app's Agents page.
+// whether one is set. Labels follow the old app's Agents page. On Windows with WSL, the environment
+// block at the top picks where Claude Code is set up and started: every call to the tool and the
+// launch then go to that environment (environmentBlock.tsx).
 
 import { useEffect, useId, useState } from "preact/hooks";
 import { strings } from "../../ui/kit/strings";
@@ -34,10 +36,21 @@ import {
   type Role,
   ready,
   type Secret,
+  settingsNote,
+  toolUnavailable,
   WINDOW_1M,
   WINDOW_DEFAULT,
 } from "./claudeCodeForm";
 import type { AgentPage } from "./easyMode";
+import { historyKey, inHome } from "./environment";
+import {
+  type Environment,
+  EnvironmentBlock,
+  LinuxBuildOffer,
+  PathText,
+  plainPath,
+  useEnvironment,
+} from "./environmentBlock";
 import { connectionGet } from "./host";
 import { keptTerminal, useDeviceChanged } from "./startCli";
 
@@ -107,13 +120,18 @@ const t = strings("claudeCode", {
   override: "Agent program path",
   overrideHint: "A full path used instead of claude found on the PATH (optional)",
   terminal: "Terminal",
+  terminalWsl: "Terminal: Windows console",
+  cwdWsl: "A folder in the distribution, such as {example}",
   launch: "Start Claude Code",
 });
 
 const LABELS: Record<Role, string> = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable" };
 
-const tool = <T,>(op: string, input: Record<string, unknown>) =>
-  reply<T>("program_call", { package: PACKAGE, op, input });
+/** A call to the tool in the page's environment. */
+const toolIn =
+  (env: Environment) =>
+  <T,>(op: string, input: Record<string, unknown>) =>
+    reply<T>("program_call", { package: PACKAGE, op, input, environment: env.selection });
 
 interface Preview {
   /** The pinned file: passed as is to apply, clear and restore. */
@@ -176,7 +194,11 @@ function Num(props: {
   );
 }
 
-function StartCli(props: { available: boolean }) {
+function StartCli(props: { available: boolean; env: Environment }) {
+  const { env } = props;
+  const tool = toolIn(env);
+  const sel = env.selection;
+  const distro = sel?.wsl.distro;
   const [cwd, setCwd] = useState("");
   const [override, setOverride] = useState("");
   const [terminal, setTerminal] = useState("automatic");
@@ -186,24 +208,32 @@ function StartCli(props: { available: boolean }) {
   );
   useDeviceChanged(terminals.reload);
   const action = useAction(state.reload);
-  const recent = state.data?.history[CLIENT] ?? [];
+  const recent = state.data?.history[historyKey(CLIENT, sel)] ?? [];
   const shownTerminal = keptTerminal(terminal, terminals.data?.terminals);
   const start = () =>
     action.run(async () => {
       const recipe = await tool<Record<string, unknown>>("recipe", {});
       if (!recipe.body) return recipe;
+      // In WSL the launch opens in a Windows console: no terminal is chosen.
       return reply("launcher_launch", {
         launch: {
           ...recipe.body,
           cwd: cwd.trim(),
-          terminal: shownTerminal,
+          ...(sel ? {} : { terminal: shownTerminal }),
           ...(override.trim() ? { override: override.trim() } : {}),
         },
+        environment: sel,
       });
     });
   return (
     <Card title={t("start")}>
-      <Text label={t("cwd")} value={cwd} onInput={setCwd} />
+      <PathText
+        label={t("cwd")}
+        hint={sel ? t("cwdWsl", { example: inHome(env.record?.home ?? "~", "project") }) : undefined}
+        value={cwd}
+        onInput={setCwd}
+        distro={distro}
+      />
       {recent.length > 0 && (
         <Choices
           label={t("recent")}
@@ -212,8 +242,15 @@ function StartCli(props: { available: boolean }) {
           onChange={setCwd}
         />
       )}
-      <Text label={t("override")} hint={t("overrideHint")} value={override} onInput={setOverride} />
-      {terminals.data && (
+      <PathText
+        label={t("override")}
+        hint={t("overrideHint")}
+        value={override}
+        onInput={setOverride}
+        distro={distro}
+      />
+      {sel && <p>{t("terminalWsl")}</p>}
+      {!sel && terminals.data && (
         <Choices
           label={t("terminal")}
           value={shownTerminal}
@@ -221,9 +258,21 @@ function StartCli(props: { available: boolean }) {
           onChange={setTerminal}
         />
       )}
-      {terminals.error && <Notice tone="warn">{terminals.error}</Notice>}
+      {!sel && terminals.error && <Notice tone="warn">{terminals.error}</Notice>}
       {action.error && <Notice tone="danger">{action.error}</Notice>}
-      <Button variant="primary" onClick={start} disabled={action.busy || !props.available || !cwd.trim()}>
+      <LinuxBuildOffer error={action.error} pkg={PACKAGE} record={env.record} />
+      <Button
+        variant="primary"
+        onClick={start}
+        disabled={
+          action.busy ||
+          !props.available ||
+          env.pending ||
+          !cwd.trim() ||
+          !plainPath(cwd, distro) ||
+          !plainPath(override, distro)
+        }
+      >
         {t("launch")}
       </Button>
     </Card>
@@ -239,6 +288,13 @@ export function ClaudeCodePage() {
   const [form, setForm] = useState<Form>(fresh);
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
+  // Another environment is another file: its preview and form start over.
+  const env = useEnvironment(PACKAGE, () => {
+    setPreview(undefined);
+    setForm(fresh());
+  });
+  const tool = toolIn(env);
+  const distro = env.selection?.wsl.distro;
   const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
   const keys = keysOf(secrets.data);
   const listId = useId();
@@ -316,13 +372,15 @@ export function ClaudeCodePage() {
     : st?.state === "configured"
       ? t("update")
       : t("repair");
-  const unavailable = read.error?.includes(PACKAGE) || read.error?.includes("not installed");
+  const unavailable = toolUnavailable(read.error);
   const busy = read.busy || write.busy;
+  const typed = where === "file" ? file : where === "root" ? root : "";
 
   return (
     <div class="stack">
       <PageHead title={t("title")} />
       <p class="muted">{t("intro")}</p>
+      <EnvironmentBlock env={env} />
       {unavailable && <Notice tone="warn">{t("unavailable")}</Notice>}
       {!core && <Notice tone="warn">{t("noCore")}</Notice>}
       <datalist id={listId}>
@@ -335,23 +393,36 @@ export function ClaudeCodePage() {
           label={t("file")}
           value={where}
           choices={[
-            { value: "default", label: t("fileDefault"), note: "~/.claude/settings.json" },
+            { value: "default", label: t("fileDefault"), note: settingsNote(env.record?.home) },
             { value: "file", label: t("fileSelected") },
             { value: "root", label: t("fileInRoot") },
           ]}
           onChange={reselect(setWhere)}
         />
         {where === "file" && (
-          <Text label={t("filePath")} hint={t("filePathHint")} value={file} onInput={reselect(setFile)} />
+          <PathText
+            label={t("filePath")}
+            hint={t("filePathHint")}
+            value={file}
+            onInput={reselect(setFile)}
+            distro={distro}
+          />
         )}
         {where === "root" && (
           <>
-            <Text label={t("root")} hint={t("rootHint")} value={root} onInput={reselect(setRoot)} />
+            <PathText
+              label={t("root")}
+              hint={t("rootHint")}
+              value={root}
+              onInput={reselect(setRoot)}
+              distro={distro}
+            />
             <Text label={t("inRoot")} value={inRoot} onInput={reselect(setInRoot)} />
           </>
         )}
         {read.error && <Notice tone="danger">{read.error}</Notice>}
-        <Button onClick={load} disabled={busy}>
+        <LinuxBuildOffer error={read.error} pkg={PACKAGE} record={env.record} onInstalled={load} />
+        <Button onClick={load} disabled={busy || env.pending || !plainPath(typed, distro)}>
           {t("read")}
         </Button>
         {preview && st && (
@@ -489,9 +560,15 @@ export function ClaudeCodePage() {
         </Card>
       )}
       {preview && (
-        <Backups pkg={PACKAGE} pins={async () => preview.targets} disabled={busy} onChange={load} />
+        <Backups
+          pkg={PACKAGE}
+          pins={async () => preview.targets}
+          disabled={busy}
+          onChange={load}
+          environment={env.selection}
+        />
       )}
-      <StartCli available={!unavailable} />
+      <StartCli key={JSON.stringify(env.selection)} available={!unavailable} env={env} />
     </div>
   );
 }
