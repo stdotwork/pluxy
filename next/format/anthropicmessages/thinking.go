@@ -52,6 +52,13 @@ var (
 // shortcut: decided from the model name, since protocol v0 has no model capabilities. Move this
 // to per-model capabilities when describe carries them.
 func claudeVersion(model string) (major, minor int, ok bool) {
+	major, minor, ok = parseClaudeVersion(model)
+	return major, minor, ok && (major > 3 || (major == 3 && minor >= 7))
+}
+
+// parseClaudeVersion reads the version in a Claude model name of either form; ok is false for a
+// name it cannot place.
+func parseClaudeVersion(model string) (major, minor int, ok bool) {
 	m := claudeModel.FindStringSubmatch(model)
 	if m == nil {
 		m = oldClaudeModel.FindStringSubmatch(model)
@@ -63,7 +70,7 @@ func claudeVersion(model string) (major, minor int, ok bool) {
 	if m[2] != "" {
 		minor, _ = strconv.Atoi(m[2])
 	}
-	return major, minor, major > 3 || (major == 3 && minor >= 7)
+	return major, minor, true
 }
 
 // adaptive reports whether a Claude model of this version thinks adaptively: Claude 4.6 and later.
