@@ -7,6 +7,14 @@
 //
 // The archives and the index go into <out>/bundled. The index is a registry index: uploaded
 // beside the archives to an https:// location, it serves installs from there too.
+//
+// With -app-tools it packs the desktop app's native tools (next/app-tools) instead, from programs
+// built beforehand on each platform's own runner:
+//
+//	go run ./cmd/pluxy-pack -out dist -app-tools bin -platforms linux/amd64,windows/amd64
+//
+// takes each tool's program from bin/<goos>-<goarch>/<program file name> and writes the archives
+// and the app's registry index into <out>/app-tools.
 package main
 
 import (
@@ -40,11 +48,19 @@ const usage = `pluxy-pack builds the release archives of the extensions in ./ext
 index that installs them. Run it from the next module (the folder with go.mod).
 
 usage: pluxy-pack -out <folder> [-platforms <goos>/<goarch>,...] [-extensions <name>,...]
+       pluxy-pack -out <folder> -app-tools <programs> [-platforms ...] [-extensions ...]
 
 For every extension and platform it builds the program, writes
 <folder>/bundled/<publisher>-<name>-<version>-<goos>-<goarch>.tar.gz and lists every archive
 in <folder>/bundled/index.json. Start core with -bundled <folder>/bundled/index.json (or put
 the bundled folder beside the pluxy program) to install and enable them on its first start.
+
+With -app-tools it packs the desktop app's native tools under ./app-tools instead, for each
+platform a tool's manifest names among -platforms, from the program built beforehand at
+<programs>/<goos>-<goarch>/<program file name>; it builds nothing. It writes the archives the
+same way into <folder>/app-tools, and <folder>/app-tools/index.json, an index for the app's
+device registries. The app installs a native tool only with a curated signature, which this
+does not make.
 
 flags:
 `
@@ -69,6 +85,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	out := flags.String("out", "", "output folder (required)")
 	platformsFlag := flags.String("platforms", runtime.GOOS+"/"+runtime.GOARCH, "comma-separated GOOS/GOARCH platforms (default: the host platform)")
 	extensionsFlag := flags.String("extensions", "", "comma-separated extension folder names to pack (default: all)")
+	appToolsFlag := flags.String("app-tools", "", "pack the app's native tools from the programs built in this folder, as <folder>/<goos>-<goarch>/<program>")
 	flags.Usage = func() {
 		fmt.Fprint(stderr, usage)
 		flags.PrintDefaults()
@@ -90,6 +107,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	root, err := moduleRoot()
 	if err != nil {
 		return err
+	}
+	if *appToolsFlag != "" {
+		return packAppTools(root, *out, *appToolsFlag, platforms, *extensionsFlag, stdout)
 	}
 	extensions, err := loadExtensions(root)
 	if err != nil {
@@ -455,8 +475,9 @@ type indexPackage struct {
 }
 
 type indexRelease struct {
-	Version   string                   `json:"version"`
-	Protocol  []int                    `json:"protocol"`
+	Version string `json:"version"`
+	// The extension's protocol versions; an app tool's release names none.
+	Protocol  []int                    `json:"protocol,omitempty"`
 	Artifacts map[string]indexArtifact `json:"artifacts"`
 }
 
