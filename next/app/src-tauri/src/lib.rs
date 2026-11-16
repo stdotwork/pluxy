@@ -36,6 +36,10 @@ pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
 pub mod notes;
+// The processes the app starts and holds; used on Windows and macOS by `program` and `spawn`,
+// which the app wires up on Linux only for now.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod owned;
 #[cfg(windows)]
 mod page_frames;
 pub mod pages;
@@ -43,7 +47,8 @@ mod place;
 mod privacy;
 #[cfg(windows)]
 mod private_windows;
-#[cfg(target_os = "linux")]
+// Built and tested on every platform; the app starts tools on Linux only for now.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub mod program;
 pub mod recovery;
 pub mod release;
@@ -55,7 +60,7 @@ mod release_native;
 pub mod route;
 #[cfg(target_os = "linux")]
 pub mod savefile;
-#[cfg(target_os = "linux")]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub mod spawn;
 mod startup;
 pub mod trust;

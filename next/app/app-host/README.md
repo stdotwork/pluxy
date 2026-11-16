@@ -331,7 +331,32 @@ anything a caller passes. On top of the rules above:
   release go in no set order. The package's pages close at the switch. A cancelled confirmation
   or a candidate that fails installs nothing; the old release stays active and serving.
 
-Still to come: deleting a tool's data folder from the Device page; and Windows and macOS.
+Still to come: deleting a tool's data folder from the Device page.
+
+### Windows and macOS
+
+The host and the launch service (`program.rs`, `spawn.rs`) build and pass their tests on Windows
+and macOS, but the app does not start native tools there yet: enabling a package, its router and
+its confirmations are still Linux only. A tool that needs a data folder is refused there until
+the vault is. Every process the app starts goes through `src/owned/`, which is the only code in
+the app that signals or ends a process, and only one the app started and still holds: an unreaped
+child on Linux and macOS, the process handle and its job object on Windows. `owned_tests.rs`
+checks the sources for any other call that could end a process.
+
+| | Windows | macOS |
+| --- | --- | --- |
+| What runs | The file the host opened and checked: its path now (with `\\?\` removed), opened again with only reading shared, so it cannot be renamed, replaced or written until the process runs; only `.exe` and `.com` files that start with `MZ` | The file the host opened and checked, by the path it has now (`F_GETPATH`), once no other user can change that file or any folder above it and the path still names the same file (device, inode, size, mode and times) |
+| Handles and descriptors it gets | Only its three standard handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), made inheritable only while it starts | Every descriptor above 2 closes as it executes |
+| Tool, managed runtime, the app's core | A job object of its own, which ends the process and everything it started when stopped and when the app exits or crashes (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) | A process group of its own (a tool's, a runtime's); the app's core stays in the app's group |
+| Asked to stop | `CTRL_BREAK` to its process group on its own hidden console, then the job ends after the grace. An app that has a console of its own (a debug build run from a terminal) cannot send it, and ends the job at once | SIGTERM, then SIGKILL to the group after the grace, as on Linux |
+| Detached launch | Started outside every job of the app's, held by nothing once it runs. Refused, and nothing starts, when the job the app runs in does not let a process leave it (a terminal, an editor or a service that started the app may hold it in one) | A session and process group of its own, as on Linux, without the systemd scope |
+| If the app crashes | Tools, runtimes and the core end with their jobs; detached launches run on | A tool sees its input close and exits; managed runtimes and the core run on (macOS has no parent-death signal) and are reported `unknown` at the next start, as on Linux |
+
+Names of environment variables are compared ignoring case on Windows. Besides the names a launch
+never gets anywhere ([What a launch gets](#what-a-launch-gets)), it never gets `DYLD_*` on macOS,
+nor `COR_*` or `__COMPAT_LAYER` on Windows: each makes a program load code it was not asked to
+run. Nor does it get `WSLENV` on Windows, which would pass the Windows variables it names on into
+a WSL distribution.
 
 ## Calls between packages
 

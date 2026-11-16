@@ -105,6 +105,135 @@ jobs:
             printf "passed %d, failed %d, ignored %d\n", p, f, i
             if (p == 0) exit 1
           }' "$RUNNER_TEMP/cargo-test.log" | tee -a "$GITHUB_STEP_SUMMARY"
+      # The process ownership tests (`lifetime_...` in src/program_tests.rs and src/spawn_tests.rs):
+      # each must have run and passed here, not been compiled out or skipped.
+      - name: Lifetime tests ran
+        working-directory: next/app/src-tauri
+        run: |
+          case "$RUNNER_OS" in
+            Windows) expected=8 ;;
+            macOS) expected=8 ;;
+          esac
+          ran=$(grep -cE '^test [^ ]*lifetime_[a-z0-9_]* \.\.\. ok$' "$RUNNER_TEMP/cargo-test.log" || true)
+          echo "lifetime tests passed: $ran of $expected" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$ran" -eq "$expected" ]
+      # A detached launch must leave the app's job. The runner's own job refuses that (the unit
+      # tests check the refusal), so the check that it works runs the breakaway test, the
+      # lifetime tests and the stdin secret test (a detached launch with a piped stdin), whose
+      # detached launches then run and must be in no job, from a process outside that job:
+      # started by WMI, or failing that by the Task Scheduler.
+      - name: Detached launch outside the runner's job
+        if: runner.os == 'Windows'
+        working-directory: next/app/src-tauri
+        shell: pwsh
+        run: |
+          $exe = cargo test --locked --lib --no-run --message-format=json 2>$null |
+            ConvertFrom-Json | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.executable -and $_.target.name -eq 'pluxy_app' } |
+            Select-Object -ExpandProperty executable -Last 1
+          if (-not $exe) { throw 'no unit test program' }
+          $dir = Join-Path $env:RUNNER_TEMP 'outside'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          function Attempt($how) {
+            Remove-Item "$dir\*" -Force -ErrorAction SilentlyContinue
+            # The exit code goes first to a file of its own (a redirection before echo: `echo 0>`
+            # would redirect stream 0), then into place, so done.txt never appears empty.
+            Set-Content "$dir\run.cmd" "@`"$exe`" outside_job lifetime_ a_launchs_stdin_secret_reaches_it_on_its_stdin_only --include-ignored --test-threads=1 > `"$dir\out.txt`" 2>&1`r`n@> `"$dir\done.tmp`" echo %ERRORLEVEL%`r`n@move /y `"$dir\done.tmp`" `"$dir\done.txt`" > nul"
+            if ($how -eq 'WMI') {
+              $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "cmd.exe /c `"$dir\run.cmd`""; CurrentDirectory = $dir }
+              if ($r.ReturnValue -ne 0) { return "WMI could not start it ($($r.ReturnValue))" }
+            } else {
+              schtasks /create /f /tn pluxy-outside-job /sc once /st 23:59 /tr "cmd.exe /c `"$dir\run.cmd`"" | Out-Null
+              schtasks /run /tn pluxy-outside-job | Out-Null
+            }
+            for ($i = 0; $i -lt 240 -and -not (Test-Path "$dir\done.txt"); $i++) { Start-Sleep -Milliseconds 500 }
+            if ($how -ne 'WMI') { schtasks /delete /f /tn pluxy-outside-job | Out-Null }
+            if (-not (Test-Path "$dir\done.txt")) { return "$($how): no result within 120 s" }
+            Get-Content "$dir\out.txt" | Write-Host
+            $code = (Get-Content "$dir\done.txt").Trim()
+            if ($code -eq '0' -and (Select-String -Quiet -Path "$dir\out.txt" -Pattern '^test result: ok\. 10 passed')) { return 'ok' }
+            return "$($how): the test failed (exit $code)"
+          }
+          $why = @()
+          foreach ($how in 'WMI', 'Task Scheduler') {
+            $r = Attempt $how
+            if ($r -eq 'ok') { "Detached launch outside the runner's job: passed, started by $how" >> $env:GITHUB_STEP_SUMMARY; exit 0 }
+            $why += $r
+          }
+          "Detached launch outside the runner's job: not proven: $($why -join '; ')" >> $env:GITHUB_STEP_SUMMARY
+          throw ($why -join '; ')
+      # The app's check that its core owns its port (src/managed.rs) rests on macOS refusing
+      # another user's bind over a port a socket of this user's holds. A second, throwaway user
+      # tries every overlapping bind.
+      - name: Bind rules with a second user
+        if: runner.os == 'macOS'
+        run: |
+          other=pluxyprobe
+          sudo sysadminctl -addUser "$other" -password "$(openssl rand -hex 24)" >/dev/null 2>&1
+          trap 'sudo sysadminctl -deleteUser "$other" >/dev/null 2>&1 || true' EXIT
+          python3 - "$other" <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          # Run on macOS by the CI step: proves the bind rules the app's core check rests on.
+          import os, socket, subprocess, sys
+
+          OTHER = sys.argv[1]
+          PROBE = r'''
+          import socket, sys
+          fam = socket.AF_INET6 if ":" in sys.argv[1] else socket.AF_INET
+          s = socket.socket(fam, socket.SOCK_STREAM)
+          s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+          if fam == socket.AF_INET6:
+              s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+          try:
+              s.bind((sys.argv[1], int(sys.argv[2])))
+              s.listen()
+              print("bound")
+          except OSError as e:
+              print("refused", e.errno)
+          '''
+
+          def held(addr):
+              # As the app binds its core's socket: Rust's TcpListener sets SO_REUSEADDR, not SO_REUSEPORT.
+              s = socket.socket(socket.AF_INET6 if ":" in addr else socket.AF_INET, socket.SOCK_STREAM)
+              s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              s.bind((addr, 0))
+              s.listen()
+              return s
+
+          def probe(user, addr, port):
+              cmd = ["python3", "-c", PROBE, addr, str(port)]
+              if user:
+                  cmd = ["sudo", "-n", "-u", user] + cmd
+              return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
+
+          failed = False
+          def expect(what, got, want):
+              global failed
+              ok = got.split()[0] == want
+              failed |= not ok
+              print(f"{'ok  ' if ok else 'FAIL'} {what}: {got} (expected {want})")
+
+          # The app sends its key only to a loopback address, the one its socket holds (`local_origin`,
+          # `owns_listener`): every bind that would take that address's connections is tried.
+          overlapping = {
+              "127.0.0.1": ["127.0.0.1", "0.0.0.0", "::", "::ffff:127.0.0.1"],
+              "::1": ["::1", "::"],
+          }
+          for app_addr, addrs in overlapping.items():
+              s = held(app_addr)
+              port = s.getsockname()[1]
+              for addr in addrs:
+                  expect(f"another user binds {addr}:{port} over the app's {app_addr}", probe(OTHER, addr, port), "refused")
+              s.close()
+
+          # Controls: the probe can bind as the other user, and the kernel does let this same user bind
+          # over its own wildcard socket (what the check leaves to the user's own processes).
+          free = held("127.0.0.1"); fport = free.getsockname()[1]; free.close()
+          expect("another user binds a free port", probe(OTHER, "127.0.0.1", fport), "bound")
+          s = held("0.0.0.0"); port = s.getsockname()[1]
+          expect(f"this user binds 127.0.0.1:{port} over its own 0.0.0.0", probe(None, "127.0.0.1", port), "bound")
+          s.close()
+          sys.exit(1 if failed else 0)
+          PY
       # The test trust built in: the trust profile and the updater gate, the release gate (which
       # must refuse a test build), and on Windows the access-list check of the profile
       # (src/win_acl.rs).
