@@ -7,7 +7,6 @@
 // follow the old app's Agents page.
 
 import { useEffect, useId, useState } from "preact/hooks";
-import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
 import {
   Button,
@@ -22,6 +21,7 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
+import type { AgentPage } from "./easyMode";
 import { connectionGet } from "./host";
 import { CLIENT, keysOf, modelOf, PACKAGE, type ReadBack, type Secret, validModel } from "./ompForm";
 import { keptTerminal, useDeviceChanged } from "./startCli";
@@ -392,8 +392,9 @@ export function OmpPage() {
   );
 }
 
-export const ompPage = (): PageDef => ({
+export const ompPage = (): AgentPage => ({
   id: "omp",
+  package: PACKAGE,
   group: "control",
   title: t("title"),
   short: t("short"),
