@@ -156,13 +156,18 @@ fn owner_accepted(owner: PSID, user: &TokenSid, default_owner: &TokenSid, system
 
 /// An access list allowing this user and SYSTEM everything, inherited by what is made in a folder.
 fn private_acl(user: &TokenSid, system: &System, folder: bool) -> io::Result<Local<ACL>> {
+    acl_of(user, system, folder, FILE_ALL_ACCESS)
+}
+
+/// An access list allowing this user and SYSTEM access, inherited by what is made in a folder.
+fn acl_of(user: &TokenSid, system: &System, folder: bool, access: u32) -> io::Result<Local<ACL>> {
     let inheritance = if folder {
         SUB_CONTAINERS_AND_OBJECTS_INHERIT
     } else {
         NO_INHERITANCE
     };
     let entry = |sid: PSID, kind| EXPLICIT_ACCESS_W {
-        grfAccessPermissions: FILE_ALL_ACCESS,
+        grfAccessPermissions: access,
         grfAccessMode: SET_ACCESS,
         grfInheritance: inheritance,
         Trustee: TRUSTEE_W {
@@ -321,6 +326,62 @@ pub(crate) fn make_private(f: &File, folder: bool) -> io::Result<()> {
     })
 }
 
+/// Makes the object open as f (with `READ_CONTROL | WRITE_DAC`) read-only, the 0444/0500 of an
+/// installed package's files and folders on Linux and macOS: a protected list allowing only this
+/// user and SYSTEM to read and run it (a folder: list and traverse it), with no right to write,
+/// delete or add to it. The owner may still change the list (Windows lets an owner always), as a
+/// Unix owner may chmod: `make_private` undoes it. One owned by another account is refused.
+pub(crate) fn make_read_only(f: &File, folder: bool) -> io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
+    if !owned(f)? {
+        return Err(another_owner());
+    }
+    let acl = acl_of(
+        &TokenSid::user()?,
+        &System::sid()?,
+        folder,
+        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+    )?;
+    // SAFETY: f is open with WRITE_DAC; acl is a valid list.
+    win32(unsafe {
+        SetSecurityInfo(
+            handle(f),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            acl.0,
+            null(),
+        )
+    })
+}
+
+/// Opens path itself (never a link it names: a link is refused) for reading and changing its
+/// access list; a folder when folder is set, else a file.
+pub(crate) fn open_for_access_list(path: &std::path::Path, folder: bool) -> io::Result<File> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_READ_ATTRIBUTES, READ_CONTROL, WRITE_DAC,
+    };
+    let f = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    let m = f.metadata()?;
+    if m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || m.is_dir() != folder {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            if folder {
+                "a link or not a folder"
+            } else {
+                "a link or not a file"
+            },
+        ));
+    }
+    Ok(f)
+}
+
 /// Makes the folder path and every missing folder above it, each private as it is made (the
 /// protected list comes with the descriptor it is made with, so it is never open to others in
 /// between), then checks path as `make_private_dir` does: the `mkdir -p -m 0700` of `device.rs`'s
@@ -461,22 +522,7 @@ thread_local! {
 /// changing its access list, and makes it private as `make_private` does when it is not: the
 /// `chmod 0700` of `device.rs`'s `private_dir`.
 pub(crate) fn make_private_dir(path: &std::path::Path) -> io::Result<()> {
-    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_READ_ATTRIBUTES, READ_CONTROL, WRITE_DAC,
-    };
-    let f = std::fs::OpenOptions::new()
-        .access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)?;
-    let m = f.metadata()?;
-    if m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !m.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "a link or not a folder",
-        ));
-    }
+    let f = open_for_access_list(path, true)?;
     if is_private(&f)? {
         return Ok(());
     }

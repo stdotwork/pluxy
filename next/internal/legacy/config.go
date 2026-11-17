@@ -201,7 +201,7 @@ const (
 
 type rule struct {
 	status int
-	note   string // the slice that brings it (later) or why it is dropped
+	note   string // what brings it (later) or why it is dropped
 }
 
 // rules classify each setting by its v8 path. A rule covers its path and everything below it.
@@ -229,7 +229,7 @@ var rules = map[string]rule{
 	"routing.strategy":                                  {supported, ""},
 	"routing.session-affinity":                          {supported, ""},
 	"routing.session-affinity-ttl":                      {supported, ""},
-	"routing.session-affinity-subagents":                {later, ""},
+	"routing.session-affinity-subagents":                {dropped, "a subagent stays on its session's account, and no need was found to spread subagents over the pool"},
 	"routing.session-affinity-rebind-on":                {dropped, "no need found"},
 	"routing.force-model-prefix":                        {supported, ""},
 	"routing.retry.max-retry-credentials":               {supported, ""},
@@ -249,8 +249,8 @@ var rules = map[string]rule{
 	"requests.nonstream-keepalive-interval":  {dropped, "off by default and no need found"},
 	"requests.streaming":                     {dropped, "off by default and no need found"},
 
-	"client.codex.enable-apply-patch":      {later, ""},
-	"client.codex.optimize-multi-agent-v2": {later, ""},
+	"client.codex.enable-apply-patch":      {later, "built when someone uses a non-Codex model through the Codex client and needs apply_patch on it"},
+	"client.codex.optimize-multi-agent-v2": {later, "built when Codex multi-agent v2 sub-agents need to reach non-Codex providers"},
 	"client.codex.web-search-result-cache": {dropped, "off by default and no need found"},
 	"client.claude.show-codex-commentary":  {dropped, "off by default and no need found"},
 
@@ -258,10 +258,10 @@ var rules = map[string]rule{
 	"upstream.codex.websocket-compression":                  {supported, ""}, // reported in translate
 	"upstream.codex.model-level-cooling":                    {supported, ""},
 	"upstream.claude.model-level-cooling":                   {supported, ""},
-	"upstream.codex.upstream-request-compression":           {later, ""},
-	"upstream.codex.upstream-request-compression-min-bytes": {later, ""},
-	"upstream.codex.stream-bootstrap-buffering":             {later, ""},
-	"upstream.codex.stream-bootstrap-timeout":               {later, ""},
+	"upstream.codex.upstream-request-compression":           {dropped, "it needs a compression library this core does not carry, for an off-by-default saving no one has measured"},
+	"upstream.codex.upstream-request-compression-min-bytes": {dropped, "it needs a compression library this core does not carry, for an off-by-default saving no one has measured"},
+	"upstream.codex.stream-bootstrap-buffering":             {later, "built when pooled Codex accounts are seen failing on overload errors that moving the turn to another account would hide"},
+	"upstream.codex.stream-bootstrap-timeout":               {later, "built when pooled Codex accounts are seen failing on overload errors that moving the turn to another account would hide"},
 	"upstream.codex.response-steering":                      {dropped, "experimental, no need found"},
 	"upstream.codex.orphan-delegation-compatibility":        {dropped, "off by default and no need found"},
 	"oauth.providers.codex.header-defaults":                 {dropped, "no need found"},
@@ -283,9 +283,8 @@ var rules = map[string]rule{
 	"oauth.providers.devin":                                {dropped, "rewriting words to get past a content filter is out of scope"},
 
 	"multimedia.disable-image-generation":                     {supported, ""},
-	"multimedia.gpt-image-2-base-model":                       {later, ""},
-	"multimedia.video-result-auth-cache-ttl":                  {later, ""},
-	"observability.logs":                                      {later, ""},
+	"multimedia.gpt-image-2-base-model":                       {dropped, "it names the model of the Responses-based image path, which is not built; images use the Images API"},
+	"multimedia.video-result-auth-cache-ttl":                  {dropped, "it applies to video routes, which are not built"},
 	"observability.logs.logging-to-file":                      {supported, ""},
 	"observability.logs.logs-max-total-size-mb":               {supported, ""},
 	"observability.logs.debug":                                {dropped, "this core writes no debug-level log lines"},
@@ -295,7 +294,9 @@ var rules = map[string]rule{
 	"observability.usage.redis-usage-queue-retention-seconds": {dropped, "reading usage no longer removes it; the record keeps requests by usage.max_events and usage.max_age_ms"},
 	"observability.pprof.enable":                              {supported, ""},
 	"observability.pprof.addr":                                {supported, ""},
-	"models":                                                  {later, ""},
+	"models.catalog":                                          {dropped, "this core has no remote model catalog; each extension carries its model list"},
+	"models.codex-catalog":                                    {dropped, "this core has no remote model catalog; each extension carries its model list"},
+	"models.devin-catalog":                                    {dropped, "this core has no remote model catalog; each extension carries its model list"},
 	"plugins":                                                 {dropped, "replaced by packages"},
 	"credentials":                                             {dropped, "only the Home control plane used them"},
 
@@ -309,15 +310,15 @@ var rules = map[string]rule{
 	"api-keys.*[].models[].alias":                              {supported, ""},
 	"api-keys.*[].models[].display-name":                       {dropped, "list metadata only, no need found"},
 	"api-keys.*[].models[].max-context-length":                 {dropped, "list metadata only, no need found"},
-	"api-keys.*[].models[].force-mapping":                      {later, ""},
+	"api-keys.*[].models[].force-mapping":                      {later, "built when a client needs a reply's model to be the alias it asked for"},
 	"api-keys.*[].models[].is-compat":                          {dropped, "a single-provider quirk, no need found"},
 	"api-keys.*[].models[].thinking":                           {dropped, "the thinking suffix and extensions cover it"},
-	"api-keys.*[].models[].image":                              {later, ""},
+	"api-keys.*[].models[].image":                              {dropped, "images are served for Codex accounts only, and no use of OpenAI-compatible image models was found"},
 	"api-keys.*[].models[].input-modalities":                   {dropped, "list metadata only, no need found"},
 	"api-keys.*[].models[].output-modalities":                  {dropped, "list metadata only, no need found"},
 	"api-keys.*[].models[].use-max-completion-tokens":          {dropped, "a single-provider quirk, no need found"},
-	"api-keys.*[].models[].support-configuration-update":       {later, ""},
-	"api-keys.*[].models[].openapi":                            {later, ""},
+	"api-keys.*[].models[].support-configuration-update":       {dropped, "an off-by-default prompt-cache saving for one kind of relay, no need found"},
+	"api-keys.*[].models[].openapi":                            {later, "built when someone calls Vertex partner models (Claude, Llama, Mistral) through a key"},
 	"api-keys.*[].prefix":                                      {supported, ""},
 	"api-keys.*[].excluded-models":                             {supported, ""},
 	"api-keys.*[].headers":                                     {supported, ""},
@@ -329,10 +330,10 @@ var rules = map[string]rule{
 	"api-keys.codex[].websockets":                              {supported, ""},
 	"api-keys.codex[].disable-codex-cloaking":                  {supported, ""},
 	"api-keys.codex[].alpha-search":                            {supported, ""},
-	"api-keys.xai[].websockets":                                {later, ""},
+	"api-keys.xai[].websockets":                                {dropped, "xAI is served over HTTP, which gives the same replies"},
 	"api-keys.vertex[].interactions":                           {supported, ""},
-	"api-keys.vertex[].openapi":                                {later, ""},
-	"api-keys.vertex[].openapi-location":                       {later, ""},
+	"api-keys.vertex[].openapi":                                {later, "built when someone calls Vertex partner models (Claude, Llama, Mistral) through a key"},
+	"api-keys.vertex[].openapi-location":                       {later, "built when someone calls Vertex partner models (Claude, Llama, Mistral) through a key"},
 	"api-keys.openai-compatibility[].disabled":                 {supported, ""},
 	"api-keys.openai-compatibility[].support-prompt-cache-key": {dropped, "no need found: a payload rule can set a fixed key"},
 	"api-keys.openai-compatibility[].excluded-models":          {dead, ""}, // today's core has no such key there
@@ -342,6 +343,12 @@ var rules = map[string]rule{
 	"api-keys.claude[].rebuild-mid-system-message":             {supported, ""},
 	"api-keys.claude[].experimental-cch-signing":               {dead, ""},
 	"api-keys.meta":                                            {dropped, "the login is built; no need for a bare key"},
+}
+
+// aliasLater is the reason an oauth.model-alias entry's setting is not imported yet.
+var aliasLater = map[string]string{
+	"force-mapping": "built when a client needs a reply's model to be the alias it asked for",
+	"openapi":       "built when someone calls Vertex partner models (Claude, Llama, Mistral) through a key",
 }
 
 // tree is a decoded YAML mapping.
@@ -977,7 +984,9 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 			return nil, fmt.Errorf("%s.models must be a list", path)
 		}
 		var models []any
-		public := map[string]bool{}
+		public := map[string]string{} // the name clients use, to the upstream name kept for it
+		var pooled []string           // the names clients use that later entries repeat, in order
+		dropped := map[string][]string{}
 		for _, m := range list {
 			e, ok := m.(tree)
 			if !ok {
@@ -991,18 +1000,34 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 			if err != nil {
 				return nil, err
 			}
-			// The name clients use is the alias, else the name; the first entry for a name
-			// wins, as in today's core.
+			// The name clients use is the alias, else the name; the first entry for a name wins.
+			// Today's core does the same in every section but openai-compatibility, where
+			// entries that share an alias are a pool its requests rotate over and fall back
+			// through; this core serves the first and names the others in a note.
 			name, alias = strings.TrimSpace(name), strings.TrimSpace(alias)
-			if name == "" || public[cmp.Or(alias, name)] {
+			if name == "" {
 				continue
 			}
-			public[cmp.Or(alias, name)] = true
+			pub := cmp.Or(alias, name)
+			if kept, seen := public[pub]; seen {
+				if f.v8 == "openai-compatibility" && kept != name && !slices.Contains(dropped[pub], name) {
+					if dropped[pub] == nil {
+						pooled = append(pooled, pub)
+					}
+					dropped[pub] = append(dropped[pub], name)
+				}
+				continue
+			}
+			public[pub] = name
 			if alias == "" || alias == name {
 				models = append(models, name)
 			} else {
 				models = append(models, map[string]any{"name": name, "alias": alias})
 			}
+		}
+		for _, pub := range pooled {
+			x.notes = append(x.notes, fmt.Sprintf("config.yaml: %s key %s: models: the alias %q lists %d upstream models, which today's core rotates over as a pool; this core does not pool models yet and serves only the first, %q; dropped: %s",
+				display(path), id, pub, len(dropped[pub])+1, public[pub], quoteAll(dropped[pub])))
 		}
 		if len(models) > 0 {
 			a["models"] = models
@@ -1219,7 +1244,7 @@ func (x *translator) oauthModels() error {
 				case "name", "alias", "display-name", "fork":
 				case "force-mapping", "openapi":
 					if !isZero(v) {
-						x.laterKeys = append(x.laterKeys, "oauth.model-alias."+k)
+						x.laterKeys = append(x.laterKeys, "oauth.model-alias."+k+" ("+aliasLater[k]+")")
 					}
 				default:
 					x.unknownKeys = append(x.unknownKeys, "oauth.model-alias."+k)
@@ -1343,6 +1368,11 @@ var defaults = map[string]any{
 	"observability.usage.redis-usage-queue-retention-seconds": 60,
 }
 
+// falseAsks are settings whose default is true, so false is the value that asks for something.
+var falseAsks = map[string]bool{
+	"routing.session-affinity-subagents": true,
+}
+
 // classify names, among the settings at path and below, those that are not supported, are
 // dropped or are not known. inherited is the rule of the nearest mapping above that has one.
 func (x *translator) classify(path string, v any, inherited *rule) {
@@ -1441,6 +1471,9 @@ func asksNothing(path string, v any) bool {
 	case []any:
 		return len(v) == 0
 	}
+	if v == false && falseAsks[path] {
+		return false
+	}
 	if d, ok := defaults[path]; ok && d == v {
 		return true
 	}
@@ -1466,6 +1499,15 @@ func lookup(path string) (rule, bool) {
 
 // display is how a setting is named in a notice.
 func display(path string) string { return strings.ReplaceAll(path, "[]", "") }
+
+// quoteAll writes names as quoted strings separated by commas.
+func quoteAll(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = strconv.Quote(n)
+	}
+	return strings.Join(q, ", ")
+}
 
 func isZero(v any) bool {
 	switch v := v.(type) {
