@@ -215,6 +215,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
                 program: None,
                 opens: None,
                 terminal_adapter: pkg,
+                adapter_program: None,
                 environment_revision: "1".into(),
                 environment_review: vec![],
                 secret_uses: vec![],

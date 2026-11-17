@@ -83,14 +83,21 @@ pub(super) fn open_no_follow(path: &Path) -> io::Result<File> {
     Ok(f)
 }
 
-/// Whether a regular file is executable here: Windows has no execute bit, so its type is its
-/// extension, one CreateProcess runs directly (`exe`, `com`) or through cmd (`bat`, `cmd`).
+/// Whether a regular file is a program here: Windows has no execute bit, so a file named `.exe` or
+/// `.com` that starts `MZ` (a program image), the only kind the app starts. A batch file runs
+/// through cmd, which reads its command line its own way, so it is never one.
 pub(super) fn executable(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        ["exe", "com", "bat", "cmd"]
-            .iter()
-            .any(|x| e.eq_ignore_ascii_case(x))
-    })
+    use std::io::Read;
+    let named = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| ["exe", "com"].iter().any(|x| e.eq_ignore_ascii_case(x)));
+    let mut head = [0u8; 2];
+    named
+        && std::fs::File::open(path)
+            .and_then(|mut f| f.read_exact(&mut head))
+            .is_ok()
+        && &head == b"MZ"
 }
 
 /// Refused unless f is private: owned by this user, by the owner this process gives what it makes

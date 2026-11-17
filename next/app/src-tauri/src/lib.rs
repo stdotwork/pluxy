@@ -77,7 +77,8 @@ mod update_native;
 mod updater;
 mod updates;
 pub mod vault;
-#[cfg(all(windows, feature = "artifact-test-trust"))]
+// Whether a file is this user's own: the test trust's files and the files launches open.
+#[cfg(windows)]
 mod win_acl;
 pub mod window;
 

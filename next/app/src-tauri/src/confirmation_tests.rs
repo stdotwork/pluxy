@@ -2,17 +2,17 @@ use super::*;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-/// The fixture's program: a shell script, or on Windows a command script, which its extension
-/// makes a program.
-const TOOL: &str = if cfg!(windows) { "tool.cmd" } else { "tool" };
+/// The fixture's program: a shell script, or on Windows a file named `.exe` that starts `MZ`, which
+/// makes it a program for review (it never runs).
+const TOOL: &str = if cfg!(windows) { "tool.exe" } else { "tool" };
 #[cfg(unix)]
 const EXIT_0: &[u8] = b"#!/bin/sh\nexit 0\n";
 #[cfg(unix)]
 const EXIT_1: &[u8] = b"#!/bin/sh\nexit 1\n";
 #[cfg(windows)]
-const EXIT_0: &[u8] = b"@exit /b 0\r\n";
+const EXIT_0: &[u8] = b"MZ fixture 0";
 #[cfg(windows)]
-const EXIT_1: &[u8] = b"@exit /b 1\r\n";
+const EXIT_1: &[u8] = b"MZ fixture 1";
 
 /// Writes a program at path: executable by its owner (on Windows its extension makes it one).
 fn program(path: &Path, bytes: &[u8]) {
@@ -89,6 +89,7 @@ fn fixture_in(root: &Path) -> (PathBuf, Confirmations, Action) {
             program: None,
             opens: None,
             terminal_adapter: package,
+            adapter_program: None,
             environment_revision: "1".into(),
             environment_review: vec![],
             secret_uses: vec![],
@@ -1126,4 +1127,110 @@ fn a_confirmed_open_is_refused_once_its_file_or_folder_changed() {
     std::os::unix::fs::symlink(dir.join("moved"), &within).unwrap();
     assert!(c.consume(&id, &t).is_err());
     let _ = fs::remove_dir_all(dir);
+}
+
+/// Windows starts only program images: a file named `.exe` or `.com` that starts `MZ`. A batch
+/// file, or a file named `.exe` that is not an image, is no program for review.
+#[cfg(windows)]
+#[test]
+fn only_program_images_are_programs() {
+    let (dir, mut c, action) = fixture();
+    for (name, bytes, ok) in [
+        ("p.exe", b"MZ image".as_slice(), true),
+        ("p.com", b"MZ".as_slice(), true),
+        ("p.cmd", b"MZ".as_slice(), false),
+        ("p.bat", b"@exit /b 0\r\n".as_slice(), false),
+        ("q.exe", b"not an image".as_slice(), false),
+    ] {
+        let p = dir.join(name);
+        program(&p, bytes);
+        let mut a = action.clone();
+        a.launch.as_mut().unwrap().executable = p;
+        let r = c.prepare(a, Origin::NativeUi);
+        assert_eq!(r.is_ok(), ok, "{name}: {:?}", r.err());
+    }
+    remove(&dir);
+}
+
+/// Makes action's launch open file inside within, as the execution program prepares it here: on
+/// Windows its own program (the fixture's) in its `open` mode, on macOS `/usr/bin/open`.
+#[cfg(not(target_os = "linux"))]
+fn opening(action: &mut Action, file: &Path, within: &Path) {
+    let shown = |p: &Path| PathBuf::from(open_os::plain(&fs::canonicalize(p).unwrap()).unwrap());
+    let (f, w) = (shown(file), shown(within));
+    let l = action.launch.as_mut().unwrap();
+    #[cfg(windows)]
+    {
+        l.argv = vec!["open".into(), "--".into(), f.to_string_lossy().into_owned()];
+        l.adapter_program = Some(l.executable.clone());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        l.executable = "/usr/bin/open".into();
+        l.argv = vec![f.to_string_lossy().into_owned()];
+    }
+    l.cwd = f.parent().unwrap().into();
+    l.opens = Some((f, w));
+}
+
+/// Windows and macOS: a launch opens a file by its extension's type, with the system's opener,
+/// and says so; another extension, another opener, other arguments and a root as the within
+/// folder are refused.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn opens_a_file_by_its_extension() {
+    let (dir, mut c, action) = fixture();
+    let within = dir.join("sessions");
+    fs::create_dir(&within).unwrap();
+    // Its content does not decide its type: the extension does.
+    let file = within.join("rollout.jsonl");
+    fs::write(&file, "<html><script></script></html>").unwrap();
+    let mut a = action.clone();
+    opening(&mut a, &file, &within);
+    let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
+    let review = p.review().unwrap();
+    let system = if cfg!(windows) { "Windows" } else { "macOS" };
+    assert!(
+        review.contains("(application/jsonl, inside")
+            && review.contains(&format!("with the app {system} opens .jsonl files with")),
+        "{review}"
+    );
+    #[cfg(windows)]
+    assert!(p.windowless, "the open mode starts with no console");
+
+    let html = within.join("page.html");
+    fs::write(&html, "x").unwrap();
+    let mut b = action.clone();
+    opening(&mut b, &html, &within);
+    let e = c.prepare(b, Origin::NativeUi).err().expect("refused");
+    assert!(
+        e.contains("must be .txt, .json, .jsonl, .ndjson, .md or .log"),
+        "{e}"
+    );
+
+    let mut b = a.clone();
+    b.launch.as_mut().unwrap().argv.push("--extra".into());
+    let e = c.prepare(b, Origin::NativeUi).err().expect("refused");
+    assert!(e.contains("an open launch runs exactly"), "{e}");
+
+    let mut b = a.clone();
+    #[cfg(windows)]
+    {
+        b.launch.as_mut().unwrap().adapter_program = None;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        b.launch.as_mut().unwrap().executable = dir.join(TOOL);
+    }
+    let e = c.prepare(b, Origin::NativeUi).err().expect("refused");
+    assert!(e.contains("a launch that opens a file runs"), "{e}");
+
+    let mut b = a.clone();
+    let root = fs::canonicalize(&within).unwrap();
+    let root = PathBuf::from(open_os::plain(root.ancestors().last().unwrap()).unwrap());
+    b.launch.as_mut().unwrap().opens.as_mut().unwrap().1 = root;
+    let e = c.prepare(b, Origin::NativeUi).err().expect("refused");
+    assert!(e.contains("cannot be a root"), "{e}");
+    remove(&within);
+    remove(&dir);
 }

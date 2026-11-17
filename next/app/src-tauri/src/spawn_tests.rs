@@ -1466,3 +1466,34 @@ fn the_runtimes_file_is_private() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// macOS: a launch's PATH is the app's, then the client folders that exist, each once.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_path_adds_existing_client_folders() {
+    let home = std::env::temp_dir().join(format!("pluxy-path-{}", crate::managed::random_key()));
+    std::fs::create_dir_all(home.join(".local/bin")).unwrap();
+    std::fs::create_dir_all(home.join(".bun/bin")).unwrap();
+    let local = home.join(".local/bin");
+    let snap = Snapshot::of(
+        &[
+            ("PATH", &format!("/usr/bin:/bin:{}", local.display())),
+            ("HOME", home.to_str().unwrap()),
+        ],
+        core_limit(),
+    );
+    let env = environment(&snap, &Request::default(), &[]);
+    let path = env.iter().find(|(k, _)| k == "PATH").unwrap().1.clone();
+    let entries: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    assert_eq!(
+        entries[..3],
+        [PathBuf::from("/usr/bin"), "/bin".into(), local.clone()]
+    );
+    assert!(entries.contains(&home.join(".bun/bin")));
+    assert_eq!(entries.iter().filter(|e| **e == local).count(), 1);
+    assert!(
+        !entries.contains(&home.join(".cargo/bin")),
+        "a missing folder is left out"
+    );
+    std::fs::remove_dir_all(&home).unwrap();
+}
