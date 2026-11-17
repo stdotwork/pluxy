@@ -254,20 +254,20 @@ impl Launcher {
 
 /// Forgets environment's remembered launches and recent folders, and revokes their approvals:
 /// its record was removed, so none of them starts again (not even in a distribution or user made
-/// again under the same names, which the person adds again).
+/// again under the same names, which the person adds again). The approvals are revoked even when
+/// saving the launcher's record fails, whose error is returned after.
 pub fn forget_environment(app: &AppHandle, environment: &Environment) -> Result<(), String> {
-    let gone = {
+    let (gone, saved) = {
         let st = app.state::<App>();
         let mut l = st.launcher.lock().unwrap();
         let gone = l.forget_environment(environment);
-        l.save()?;
-        gone
+        (gone, l.save())
     };
     for approval in gone {
         revoke_superseded(app, Some(approval));
     }
     refresh_tray(app);
-    Ok(())
+    saved
 }
 
 /// Revokes approval, which a fresh confirmation of the same launch replaced.
