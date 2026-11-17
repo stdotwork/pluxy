@@ -164,6 +164,8 @@ pub(super) fn folder_id(path: &Path) -> Result<String, String> {
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
         .map_err(shown)?;
+    #[cfg(test)]
+    tests::swap_point(path);
     let m = f.metadata().map_err(shown)?;
     // SAFETY: geteuid has no preconditions.
     if !m.is_dir() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o7777 != 0o700 {
@@ -201,7 +203,7 @@ pub(super) fn remove_folder(m: &Made) -> Outcome {
         _ => return Outcome::NotThere,
     }
     #[cfg(test)]
-    tests::after_check(&m.path);
+    tests::swap_point(&m.path);
     if empty(f.as_raw_fd(), 0).is_err() {
         return Outcome::Kept;
     }
@@ -324,14 +326,14 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// Run by `remove_folder` between its identity check and emptying the folder, for the path
-    /// set here only (tests run in parallel).
+    /// Run by `remove_folder` between its identity check and emptying the folder, and by
+    /// `folder_id` right after its open, for the path set here only (tests run in parallel).
     static SWAP: Mutex<Option<Swap>> = Mutex::new(None);
 
     /// The path a swap is for, and the swap.
     type Swap = (PathBuf, fn(&Path));
 
-    pub(super) fn after_check(path: &Path) {
+    pub(super) fn swap_point(path: &Path) {
         let hook = match &*SWAP.lock().unwrap() {
             Some((p, f)) if p == path => Some(*f),
             _ => None,
@@ -657,6 +659,27 @@ mod tests {
             "the folder put there was emptied"
         );
         assert!(names(&path.with_extension("moved")).is_empty());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A new folder's identity is that of the folder its one open reached: a folder put at its
+    // name after that open is not what is recorded.
+    #[test]
+    fn a_new_folders_identity_is_read_through_its_one_open() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = super::super::tests::temp("leftovers-one-open");
+        let path = tmp.join(".pluxy-update-cccccccccccccccc");
+        fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        fn swap(p: &Path) {
+            fs::rename(p, p.with_extension("moved")).unwrap();
+            fs::create_dir(p).unwrap();
+            fs::set_permissions(p, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        *SWAP.lock().unwrap() = Some((path.clone(), swap));
+        let id = folder_id(&path);
+        *SWAP.lock().unwrap() = None;
+        assert_eq!(id.unwrap(), id_of(&path.with_extension("moved")));
         fs::remove_dir_all(&tmp).unwrap();
     }
 
