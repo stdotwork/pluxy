@@ -141,7 +141,10 @@ function withPath(
 }
 
 /** The program path of process pid, if it runs: Windows from PowerShell's Get-Process (no output
- * when there is no such process), macOS from `ps -p <pid> -o comm=`. */
+ * when there is no such process), macOS from `ps -p <pid> -o comm=`. On macOS this relies on ps
+ * giving a process's full program path as `comm`, as it does for one started by that path (the
+ * host starts a tool by its path, and the tool its child by `current_exe`); a process started by
+ * a bare name would show only that name and not match. */
 function programOf(ctx: Context, pid: number): string | undefined {
   if (!Number.isInteger(pid) || pid <= 0) return undefined;
   if (windows) {
