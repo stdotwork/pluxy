@@ -60,7 +60,8 @@
 //! its arguments, folder and environment to the file `FIXTURE_TERMINAL_RECORD` names and runs the
 //! command after its `-e`, as a terminal would. Started as `xdg-open` (the open check's stand-in
 //! opener, `opener`) it appends its arguments and folder to `opened.jsonl` beside itself and
-//! exits.
+//! exits; started with `OPENED` first (the Windows open check's stand-in app for `.jsonl` files,
+//! `opened`) it does the same.
 //!
 //! In describe, it reconciles each open vault journal the host names, never redoing it: it ends it
 //! as `committed` when the file holds the bytes the journal names, `rolled_back` otherwise, and
@@ -111,6 +112,9 @@ pub const HEARTBEAT: &str = "pluxy-fixture-heartbeat";
 pub const HANDLE: &str = "pluxy-fixture-handle";
 /// The first argument that makes it the Windows launcher session's starter (`run`).
 pub const RUN: &str = "pluxy-fixture-run";
+/// The first argument that makes it the Windows and macOS open check's stand-in app for a file
+/// type (`opened`): the type's `open` command runs it with this, then the file.
+pub const OPENED: &str = "pluxy-fixture-opened";
 
 /// How the unit tests make it misbehave, from `fixture.json`. Absent: it behaves.
 #[derive(Default)]
@@ -1229,6 +1233,32 @@ fn opener(args: &[String]) -> ! {
     std::process::exit(0);
 }
 
+/// The open check's stand-in app for a file type off Linux, started as `<it> OPENED <file>` by
+/// the type's `open` command (`open_platform_native.rs`): it appends one line of what it was
+/// started with (process ID, arguments, folder) to `opened.jsonl` beside its own program and
+/// exits, as an app that has the file open would.
+fn opened(args: &[String]) -> ! {
+    use std::io::Write as _;
+    let seen = json!({
+        "pid": std::process::id(),
+        "argv": args,
+        "cwd": std::env::current_dir().ok(),
+    });
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+    {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("opened.jsonl"))
+        {
+            let _ = writeln!(f, "{seen}");
+        }
+    }
+    std::process::exit(0);
+}
+
 /// Runs the fixture: as its child when started with `CHILD`, as the Windows launcher session's
 /// starter when started with `RUN`, as the spawn check's agent when started with `AGENT`, as the
 /// launcher check's terminal when started as `x-terminal-emulator`,
@@ -1241,6 +1271,9 @@ pub fn main() -> ! {
         let args: Vec<String> = std::env::args().collect();
         if args.get(1).is_some_and(|a| a == HEARTBEAT) {
             heartbeat(&args);
+        }
+        if args.get(1).is_some_and(|a| a == OPENED) {
+            opened(&args);
         }
         if args.get(1).is_some_and(|a| a == HANDLE) {
             #[cfg(windows)]

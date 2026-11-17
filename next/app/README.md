@@ -1545,7 +1545,7 @@ app supported there:
 - The management key's native entry and rotation, and the native confirmations, have Win32
   dialogs on Windows and AppKit dialogs on macOS ([How the app reaches core](#how-the-app-reaches-core),
   [Native confirmations](#native-confirmations)).
-- Four parts of the native test run there:
+- Five parts of the native test run there:
   - the platform session (`native/platform.ts`, `PLATFORM_SHARDS` in `native/shards.ts`): one app
     per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
     Windows, a LaunchAgent on macOS), the tray and the close preference;
@@ -1566,6 +1566,14 @@ app supported there:
     wait for their own slices; on macOS its tray step calls the menu's event handler with the
     item's ID, as no menu shows without a person holding it open (on Windows it sends the menu's
     own command message);
+  - the open session (`native/platform-tools.ts`, the `open` shard, on the tools shard's build):
+    a tool's opening of a file through the system's own route
+    (`src-tauri/src/open_platform_native.rs`: on Windows the execution program's `open` mode, on
+    macOS `/usr/bin/open`) and the open rules' refusals, and the app's opening of an address in
+    the default browser, with the session's own https server on 127.0.0.1. It opens a `.txt` file
+    in Notepad or TextEdit, and on Windows a `.jsonl` file in the fixture program, through a
+    per-user file type of the check's own that it removes again; on macOS no app opens `.jsonl`
+    files on GitHub's image, so it checks that refusal there ([Limits](#limits));
   - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
     test core, with the window's and page's command probes, the native confirmations, key entry and
     key rotation. [Limits](#limits) says how its input is made.
@@ -1621,8 +1629,8 @@ AppImage.
   mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test runs on Linux, except its platform, package, tools and dialogs sessions, which
-  CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
+- The native test runs on Linux, except its platform, package, tools, open and dialogs sessions,
+  which CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
   refuses there).
 - On Windows the tools shard's launcher session starts the app outside the job the runner's steps
   run in, which lets no detached launch leave it: WMI's `Win32_Process.Create` starts the fixture
@@ -1630,6 +1638,17 @@ AppImage.
   Its terminal launches run the execution program's test build, whose Console window does not wait
   for Enter and whose Command Prompt or PowerShell after the agent runs one fixed command and exits,
   so the session does not see the prompt a person gets there.
+- The open session runs only on GitHub-hosted runners, and its steps that change the machine (the
+  `.jsonl` file type, the browser, and on macOS the test certificate authority) fail anywhere
+  else. On macOS the browser asks for the session's address only from a server it
+  trusts, so the session adds a test authority made for the run to the System keychain's trust,
+  then deletes the authority's certificate; its trust setting stays, as removing that asks for a
+  password, but nothing can use it: the authority's key is never written down. The step closes
+  only the browser it started: on Windows the windows of the processes started with the session's
+  address, on macOS the default browser, which must not be running before. On Windows the opens
+  of `.txt` and `.jsonl` files are detached launches, which the app refuses while it runs in a
+  job that keeps what it starts; every step of a GitHub-hosted runner runs in such a job, so those
+  two steps fail there until the session starts the app outside it.
 - On Windows the program session does not check which processes hold the tool's pipes, as it
   does on Linux and macOS: Windows lists no process's handles to an unprivileged one. It checks
   instead that the tool's three standard handles are pipes and that a file the app holds through

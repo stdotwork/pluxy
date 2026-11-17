@@ -266,7 +266,8 @@ jobs:
   # an app bundle on macOS, never an installer), then the dev app, since the package's builds
   # rename the program they make in target/debug. The tools shard (native/platform-tools.ts) runs
   # run.ts's admission, program, routing, launcher and vault sessions here, on the app built with
-  # the test trust (artifact-test-trust) against a test core it starts with `go run`.
+  # the test trust (artifact-test-trust) against a test core it starts with `go run`. The open shard
+  # runs platform-tools.ts's open session the same way, on the same build.
   # A schedule or manual run has no inputs: null is not true, so it runs these.
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
@@ -287,12 +288,13 @@ jobs:
           - platform
           - package
           - tools
+          - open
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      # The tools shard's sessions start a test core with `go run ./e2e/panelcore`.
+      # The tools and open shards' sessions start a test core with `go run ./e2e/panelcore`.
       - name: Set up Go
-        if: matrix.shard == 'tools'
+        if: matrix.shard == 'tools' || matrix.shard == 'open'
         uses: actions/setup-go@v5
         with:
           go-version-file: next/go.mod
@@ -321,16 +323,17 @@ jobs:
         run: bun run package:test "$RUNNER_TEMP/test-package"
       # The app with the test hooks (never in a release build): the one the checks start.
       - name: Build the app for the native test
-        if: matrix.shard != 'tools'
+        if: matrix.shard != 'tools' && matrix.shard != 'open'
         working-directory: next/app/src-tauri
         run: cargo build --locked --features native-test
-      # The tools shard: the app with the test hooks and the test trust, the fixture tool its signed
-      # packages hold, and the execution program the launcher session installs, built into
-      # target/app-tools with its native-test feature: on Windows a terminal launch's console window
-      # then does not wait for Enter, and its Command Prompt or PowerShell after the program runs one
-      # fixed command, which the launcher session reads back (never in a release build).
+      # The tools and open shards: the app with the test hooks and the test trust, the fixture tool
+      # their signed packages hold, and the execution program the launcher and open sessions
+      # install, built into target/app-tools with its native-test feature: on Windows a terminal
+      # launch's console window then does not wait for Enter, and its Command Prompt or PowerShell
+      # after the program runs one fixed command, which the launcher session reads back (never in a
+      # release build). The feature changes nothing about opening files.
       - name: Build the app and tools for the tools sessions
-        if: matrix.shard == 'tools'
+        if: matrix.shard == 'tools' || matrix.shard == 'open'
         working-directory: next/app/src-tauri
         run: |
           cargo build --locked --features native-test,artifact-test-trust --bin pluxy-app --example program_fixture
@@ -342,6 +345,9 @@ jobs:
       # folders, five in Windows' launcher session; the launcher session also waits up to 105 s on
       # Windows for its app to start and for it and its agents to end, up to 55 s on macOS for its
       # agents and Terminal): 80 minutes lets every session report even when each hangs.
+      # The open shard runs one
+      # such session and, on macOS, at most four certificate trust commands of at most a minute
+      # each: about 20 minutes at worst.
       - name: Native test
         timeout-minutes: ${{ matrix.shard == 'tools' && 80 || 40 }}
         env:
