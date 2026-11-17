@@ -142,7 +142,8 @@ struct State {
     buttons: Vec<(Id, Retained<NSButton>)>,
     check: Option<Retained<NSButton>>,
     secret: Option<Retained<NSSecureTextField>>,
-    /// Every text shown, for the native test (only there: one is the rotated key).
+    /// Every text shown, check box and button titles included, for the native test (only there:
+    /// one is the rotated key).
     #[cfg(feature = "native-test")]
     texts: Vec<String>,
     timers: Vec<Retained<NSTimer>>,
@@ -314,6 +315,8 @@ pub(crate) fn show(
         };
         b.setFrame(NSRect::new(NSPoint::new(MARGIN, y), NSSize::new(inner, h)));
         parts.push((Retained::into_super(Retained::into_super(b.clone())), false));
+        #[cfg(feature = "native-test")]
+        texts.push(crate::confirmation::text::plain(c));
         state_check = Some(b);
         y += h + GAP;
     }
@@ -349,6 +352,8 @@ pub(crate) fn show(
                 NSRect::new(NSPoint::new(0.0, ry), NSSize::new(240.0, 32.0)),
             );
             doc.addSubview(&b);
+            #[cfg(feature = "native-test")]
+            texts.push(crate::confirmation::text::plain(title));
             buttons.push((*id, b));
             ry += 32.0 + GAP;
         }
@@ -375,6 +380,8 @@ pub(crate) fn show(
             b.setEnabled(false);
         }
         parts.push((Retained::into_super(Retained::into_super(b.clone())), false));
+        #[cfg(feature = "native-test")]
+        texts.push(crate::confirmation::text::plain(title));
         buttons.push((*id, b));
         x += bw + 8.0;
     }
