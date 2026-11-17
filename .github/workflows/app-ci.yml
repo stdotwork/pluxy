@@ -1,4 +1,15 @@
 name: App CI
+# Checks the Tauri desktop app in extensions/app/, in two jobs. Frontend (Bun 1.3.14): `bun install
+# --frozen-lockfile`, `bun run check`, `bun test` and `bun run build`. Rust (1.97.0, with the Tauri
+# Linux packages installed): `cargo check --locked` and `cargo test --locked` in src-tauri, the
+# tests run with an empty temporary HOME and XDG folders.
+#
+# Pull requests and merge-queue groups run it through ci.yml, when a changed path is under
+# extensions/app/ or is this file. It also runs on pushes to `main` that touch those paths, and by
+# hand.
+#
+# Both jobs run on ubuntu-latest, or on the maintainers' runner when the repository variable
+# PLUXY_LINUX_RUNNER is set (AGENTS.md, "Where jobs run"). It uploads nothing.
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when

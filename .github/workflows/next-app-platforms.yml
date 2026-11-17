@@ -4,7 +4,38 @@ name: Next app platforms
 # there (next/app/native/platform.ts: a second launch raising the first, the login item, the
 # window and the tray; the test package and the release gate; next/app/native/dialogs.ts: native
 # key entry, confirmations and key rotation). The Linux native test (Xvfb, portals) stays in
-# next-app.yml.
+# next-app.yml; next/app/README.md ("Limits") says which sessions run off Linux.
+#
+# Three jobs, each on windows-latest and macos-latest:
+#   app: builds the window (`bun run build`); `cargo fmt --check` (macOS only); clippy, with and
+#     without the test features; `cargo test --locked --no-fail-fast` in src-tauri (unit tests,
+#     and each connection mode against a real core with fake extensions, with an empty temporary
+#     home), whose counts go to the job summary and which fails if it ran nothing; the
+#     process-ownership tests (`lifetime_...`), each of which must have run and passed; and the
+#     artifact signature and test trust tests (on Windows also the profile access-list test).
+#     On Windows it also checks that a detached launch leaves the runner's job, and on macOS it
+#     checks the bind rules with a second user.
+#   native: the real app, one job for each shard in PLATFORM_SHARDS (next/app/native/shards.ts),
+#     `platform` and `package`, run with `bun run test:native:platform`. The package shard builds
+#     the test package first (a folder bundle on Windows, an app bundle on macOS, never an
+#     installer), then the app with the test hooks.
+#   dialogs: the native dialogs session (`bun native/dialogs.ts`); its counts go to the job
+#     summary. It uploads its log as the artifact `dialogs-<os>`.
+#
+# Pull requests and merge-queue groups run it through ci.yml, when a changed path is one of
+# next/app/, next/ui/, next/protocol/testdata/app-manifests/, next/go.mod, next/go.sum, this file
+# or ci.yml. A changed file elsewhere in next/ also runs it if it is not a test file and is under
+# a folder of a Go package that `go list -deps` finds for ./e2e/panelcore, ./e2e/testext or
+# ./cmd/pluxy, the packages the Rust tests build and run with `go run`, checked for every
+# combination of linux, windows and darwin, amd64 and arm64, and cgo on and off. Of its jobs,
+# `native` is skipped (the `skip-native` input) unless a changed path is under next/app/ or
+# next/ui/, or is this file or ci.yml; `app` and `dialogs` always run with it. It also runs once a
+# day on `main` (03:17 UTC) and by hand, both with every job; it does not run on pushes.
+#
+# Runners: `app` uses GitHub's windows-latest, and on macOS the runner named by the repository
+# variable PLUXY_MACOS_CLOUD_RUNNER when it is set, else macos-latest. `native` and `dialogs`
+# always use GitHub's runners, since they run only on a runner that reports itself GitHub-hosted
+# (AGENTS.md, "Where jobs run").
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when what it

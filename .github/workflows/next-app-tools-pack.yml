@@ -2,10 +2,21 @@ name: Next app tools pack
 
 # Builds the desktop app's native tools (next/app-tools) on each platform's own runner and packs
 # them with `pluxy-pack -app-tools`, as a release would: one archive for each tool and each
-# platform its manifest names, and the app's registry index. It uploads nothing: the app installs
-# a native tool only with a curated signature, which no release makes yet. Pull requests and
-# merge-queue groups run it through ci.yml when a tool's manifest, the workspace's or a member's
-# Cargo.toml, Cargo.lock, the pack tool or this workflow changes; a next-v* tag runs it by itself.
+# platform its manifest names, and the app's registry index. It uploads no release asset: the app
+# installs a native tool only with a curated signature, which no release makes yet. The only
+# uploads are the built programs, which the `build` jobs pass to the `pack` job as the artifacts
+# `programs-<target>`, with no retention set here.
+#
+# Pull requests and merge-queue groups run it through ci.yml when a tool's manifest
+# (next/app-tools/*/pluxy-extension.json), the workspace's or a member's Cargo.toml, Cargo.lock,
+# next/cmd/pluxy-pack/ or this workflow changes; a `next-v*` tag runs it by itself. It has no
+# trigger for pushes to `main` or for manual runs.
+#
+# Runners: `build` runs each platform on GitHub's ubuntu-24.04 (linux/amd64), ubuntu-24.04-arm
+# (linux/arm64), macos-latest (darwin/arm64 and darwin/amd64, the second built for
+# x86_64-apple-darwin on the same runner) and windows-latest (windows/amd64); on macOS it uses
+# the runner named by PLUXY_MACOS_CLOUD_RUNNER when that is set (AGENTS.md, "Where jobs run").
+# `pack` runs on ubuntu-latest.
 
 on:
   workflow_call:

@@ -4,6 +4,28 @@ name: Next release
 # registry.json to that tag's GitHub release, and pushes the container image to the GitHub
 # container registry. A pull request that touches the image, this workflow or the pack tool
 # builds the image and starts it, so a broken image fails before any tag.
+#
+# It starts from its own triggers, not through ci.yml (and it is not among the jobs `gate` waits
+# for): pushes of a `next-v*` tag, and pull requests that change next/Dockerfile,
+# next/.dockerignore, next/compose.example.yaml, next/cmd/pluxy-pack/ or this file.
+#
+# Jobs:
+#   image-check (pull requests and tags): checks the compose example, builds the image for amd64
+#     and starts it with a temporary config and the compose example's settings, polls /healthz
+#     until it answers 200, and checks that the image's own HEALTHCHECK passes, that the panel
+#     is served, that every bundled extension is installed and enabled, that the CA certificates
+#     are present and that the user is 65532, not root. It reports the image size in the job
+#     summary, and builds the image for arm64 too, without running it.
+#   pack (pull requests and tags): packs every extension for every platform with `pluxy-pack` and
+#     checks the archive count and the index. On a tag it keeps the archives as the artifact
+#     `bundled`.
+#   release (tags only): checks the tag is next-vX.Y.Z or next-vX.Y.Z-suffix, creates the
+#     release if there is none (a pre-release when the tag has a suffix, never the latest), and
+#     uploads the archives and registry.json to it.
+#   image (tags only, after `pack` and `image-check` passed): pushes the amd64 and arm64 image to
+#     ghcr.io, tagged with the version, and with `latest` unless the tag has a suffix.
+#
+# Every job runs on GitHub's ubuntu-latest runner; the maintainers' runners do not apply to it.
 
 on:
   push:

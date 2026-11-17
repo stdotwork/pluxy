@@ -1,4 +1,13 @@
 name: Core CI
+# Builds, vets and tests the Go proxy in core/ with CGO_ENABLED=1, in one job: it refreshes the
+# model catalog (.github/scripts/refresh-model-catalogs.sh), then runs `go build ./cmd/server`,
+# `go vet ./...` and `go test -p 4 -count=1 ./...`.
+#
+# Pull requests and merge-queue groups run it through ci.yml, when a changed path is under core/
+# or is this file. It also runs on pushes to `main` that touch those paths, and by hand.
+#
+# It runs on ubuntu-latest, or on the maintainers' runner when the repository variable
+# PLUXY_LINUX_RUNNER is set (AGENTS.md, "Where jobs run"). It uploads nothing.
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when

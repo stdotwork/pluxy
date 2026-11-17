@@ -4,8 +4,25 @@ name: CI
 # check `main` requires. A required check from a path-filtered workflow would stay pending forever
 # on a change outside its paths, and `merge_group` events take no path filter. So this workflow
 # always runs: it works out which folders the change touches, runs those folders' workflows as
-# reusable workflows, and `gate` passes only when every one it ran passed. Each of those
-# workflows also runs by itself on pushes to `main` and by hand.
+# reusable workflows, and `gate` passes only when every one it ran passed.
+#
+# Triggers: every pull request, and every merge-queue group (`merge_group`, `checks_requested`).
+# The `changes` job picks the workflows: its comments say what diff it reads, and its `case` rules
+# hold the paths that select each workflow. A change to this file runs them all. For a merge group
+# the diff is what the group adds to the group ahead of it in the queue (or to `main` for the
+# first group), which is sound only while the queue's ruleset keeps "Only merge non-failing pull
+# requests" (ALLGREEN).
+#
+# Workflows it runs: core-pr-test-build.yml, app-ci.yml, next-ci.yml, next-app.yml,
+# next-app-platforms.yml, next-app-tools-platforms.yml, next-app-tools-pack.yml and
+# next-corpus.yml. It does not run next-release.yml, which starts from its own `pull_request`
+# trigger and from `next-v*` tags, or core-release.yaml, which starts from `core-v*` tags.
+#
+# Outside pull requests and merge-queue groups, each workflow it runs starts from its own
+# triggers, as its own header says. core-pr-test-build.yml, app-ci.yml, next-ci.yml, next-app.yml
+# and next-corpus.yml run on pushes to `main` and by hand. next-app-platforms.yml and
+# next-app-tools-platforms.yml run once a day and by hand, not on pushes. next-app-tools-pack.yml
+# runs on `next-v*` tags only.
 
 on:
   pull_request:

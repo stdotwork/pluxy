@@ -3,8 +3,33 @@ name: Next app tools platforms
 # Builds, lints and unit-tests the app tools (next/app-tools, the native programs the desktop app
 # runs on demand) on Windows and macOS. Linux runs them in next-app.yml. The claude-desktop,
 # opencode, omp-setup, grok-setup, hermes-setup and pi-setup writer tools are not ported yet and
-# are left out here. The wsl job runs pluxy/wsl and the Linux side of a WSL instance against real
-# WSL distributions.
+# are left out here (NOT_PORTED below; next/app-tools/README.md names them).
+#
+# Two jobs:
+#   tools: on windows-latest and macos-latest, `cargo clippy --locked --workspace --all-targets
+#     -- -D warnings` and `cargo test --locked --no-fail-fast --workspace`, both without the tools
+#     not ported. The tests run with an empty temporary home. The counts (passed, failed, ignored
+#     and skipped parts) go to the job summary, and a run that ran nothing fails.
+#   wsl: "WSL 2" and "WSL 1", on windows-latest. It runs pluxy/wsl and the Linux side of a WSL
+#     instance against real WSL distributions: it installs Ubuntu and a second distribution,
+#     runs the Linux-built tests of pluxy-program and pluxy-transactions inside Ubuntu as a user
+#     that is not its default, and runs the real-WSL tests of pluxy/wsl. Every test it names
+#     must run and pass; a skipped or missing one fails the job. It always runs on a
+#     GitHub-hosted runner, which is discarded after the job, since it installs distributions and
+#     users.
+#
+# Pull requests and merge-queue groups run it through ci.yml, when a changed path is under
+# next/app-tools/, is this file, or is one of the desktop app's files that exist for WSL
+# (next/app/src-tauri/src/environments*.rs and its wsl-named files). The `wsl` input then says
+# whether the WSL jobs run: ci.yml passes true only when a changed path is something they build or
+# run, that is next/app-tools/wsl/, lib/program/, lib/transactions/, lib/files/, claude-code/,
+# the workspace's Cargo.toml or Cargo.lock, one of those app files, or this file. It also runs
+# once a day on `main` (03:47 UTC) and by hand, both with every job; it does not run on pushes.
+#
+# Runners: on macOS, `tools` uses the runner named by the repository variable
+# PLUXY_MACOS_CLOUD_RUNNER when it is set, else macos-latest. On Windows it uses the maintainers'
+# runner named by PLUXY_WINDOWS_RUNNER when that is set and the event may use it, else
+# windows-latest (AGENTS.md, "Where jobs run").
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when

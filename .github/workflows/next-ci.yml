@@ -1,4 +1,19 @@
 name: Next CI
+# Checks next/ in one job, with CGO_ENABLED=1. In next/ui (Bun 1.4.3): `bun install
+# --frozen-lockfile`, then `bun run check` (type check), `bun run lint` and `bun run test`. Then
+# `go generate ./internal/panel` builds the panel that core embeds, and `gofmt -l .` (it fails if
+# it lists a file), `go build ./...`, `go vet ./...` and `go test -race -count=1 ./...` run with
+# PLUXY_REQUIRE_PANEL=1, so the panel's tests fail instead of skipping. Last, `bun run
+# test:browser` runs the headless browser tests inside Microsoft's Playwright container image,
+# pinned by digest. Chromium runs all of them, the panel's included; Firefox and WebKit run only
+# the extension pages test (next/ui/playwright.config.ts).
+#
+# Pull requests and merge-queue groups run it through ci.yml, when a changed path is under next/
+# or is this file. It also runs on pushes to `main` that touch those paths, and by hand.
+#
+# It always runs on GitHub's ubuntu-latest runner: PLUXY_LINUX_RUNNER does not apply to it. It
+# uploads the artifact `browser-test-output` (the panel's screenshots from every Chromium test
+# and the traces of failed tests), even when a step failed, and keeps it 7 days.
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when

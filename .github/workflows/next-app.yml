@@ -1,4 +1,25 @@
 name: Next app
+# Checks the desktop app in next/app and the app tools in next/app-tools on Linux, in three kinds
+# of job.
+#   checks: the window's `bun run check`, `bun run lint`, `bun run test` and `bun run build`;
+#     `cargo fmt --check`, `cargo clippy` and `cargo test --locked` in src-tauri (unit tests, and
+#     each connection mode against a real core with fake extensions, with an empty HOME and XDG
+#     folders); the artifact signature and test trust tests; and `cargo fmt --check`, `cargo
+#     clippy` and `cargo test --locked` for next/app-tools.
+#   native: the real app on Xvfb, in each mode (`bun run test:native`, next/app/native/run.ts). It
+#     also builds and runs the test AppImage and checks the release gate. One job for each shard
+#     of native/shards.ts (usage, tools, app, release); each builds everything the test builds,
+#     then runs its own sessions; the test step stops after 45 minutes.
+#   app: the workflow's one result. It fails unless `checks` and every native shard passed.
+#
+# Pull requests and merge-queue groups run it through ci.yml, when a changed path is under next/
+# or is this file. It also runs on pushes to `main` that touch those paths, and by hand.
+#
+# `checks` and `app` run on ubuntu-24.04, or on the maintainers' runner when PLUXY_LINUX_RUNNER is
+# set (AGENTS.md, "Where jobs run"). `native` always runs on GitHub's ubuntu-24.04: the document
+# portal it starts needs /dev/fuse, which the maintainers' runner containers don't get. Each
+# native shard uploads the artifact `native-screenshots-<shard>`, the last screen of each of its
+# sessions, and keeps it 7 days.
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when

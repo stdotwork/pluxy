@@ -150,21 +150,22 @@ required check; otherwise each workflow's own triggers start it (pushes to `main
 manual runs or tags, as its file says; the two Windows and macOS platform workflows run on
 `main` once a day instead of on every push).
 
-| Workflow | Runs on | What it does |
-| --- | --- | --- |
-| `ci.yml` | Every PR and every merge-queue group | Works out which folders the change touches (for a PR, the diff against its base; for a group, what it adds to the group ahead of it in the queue, or to `main` for the first group; sound only while the queue's ruleset keeps "Only merge non-failing pull requests" (ALLGREEN)), runs the workflows below whose paths it touches as reusable workflows, and runs `gate`, which passes only when every workflow it chose passed. A change to `ci.yml` runs them all. `next-release.yml` is not among them |
-| `core-pr-test-build.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `core/` | Refreshes the model catalog, then `go build ./cmd/server`, `go vet ./...` and `go test ./...` |
-| `core-release.yaml` | `core-v*` tags | Builds release archives and creates the GitHub release |
-| `app-ci.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `extensions/app/` | Front end: `bun run check`, `bun test`, `bun run build`; Rust: `cargo check --locked`, `cargo test --locked` |
-| `next-ci.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/` | UI type check, lint and unit tests; builds the panel; `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test -race ./...`; the panel's browser test in headless Chromium, and the extension pages test in Chromium, Firefox and WebKit; uploads the browser tests' screenshots and traces as an artifact for 7 days |
-| `next-app.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/` | The desktop app in `next/app`: type check, lint, unit tests and build of the window; `cargo fmt --check`, `cargo clippy`, `cargo test --locked` (unit tests and each connection mode against a real core); format, clippy and tests of `next/app-tools`. In parallel, the native test on Xvfb, which also builds and runs the test AppImage and checks the release gate, split into shard jobs that each build everything and run their own sessions (`next/app/native/shards.ts`) and upload each session's last screenshot as an artifact for 7 days. The `app` job passes only when every other job did |
-| `next-app-platforms.yml` | PRs and merge-queue groups (through `ci.yml`) changing what it builds: `next/app/`, `next/ui/`, `next/protocol/testdata/app-manifests/`, `next/go.mod` or `next/go.sum`, the workflow, or a file other than a test in a Go package the app's tests build (`e2e/panelcore`, `e2e/testext` and `cmd/pluxy` and what they import, as `go list` finds them), and its `native` jobs, which build only the app and the kit, only for `next/app/`, `next/ui/` or the workflow; once a day on `main` (03:17 UTC); `workflow_dispatch` | The desktop app on `windows-latest` and `macos-latest`: the Rust crate's format, clippy and tests, and the native test's sessions that run there; the rest of the native test stays on Linux in `next-app.yml`. The workflow file says which jobs run and what each checks; `next/app/README.md` ("Limits") says which sessions run off Linux |
-| `next-app-tools-platforms.yml` | PRs and merge-queue groups (through `ci.yml`) touching `next/app-tools/` or the workflow, or the desktop app's files that exist for WSL (`next/app/src-tauri/src/environments*.rs` and its wsl-named files); once a day on `main` (03:47 UTC); `workflow_dispatch` | The app tools on `windows-latest` and `macos-latest` (clippy and tests, with the counts in the job summary), leaving out the tools not yet ported (the workflow's `NOT_PORTED`; `next/app-tools/README.md` names them), and the `WSL 2` and `WSL 1` jobs, which run the real-WSL tests on GitHub-hosted `windows-latest` (for PRs and merge-queue groups only when what they build or run changes, as `ci.yml` decides; always on the daily and manual runs). The workflow file says what each job checks |
-| `next-corpus.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/` or `core/` | Builds `core/` and runs the corpus against both cores live; the report is in the job summary |
-| `next-release.yml` | `next-v*` tags; PRs touching `next/Dockerfile`, `next/.dockerignore`, `next/compose.example.yaml`, `next/cmd/pluxy-pack/` or the workflow | PRs: builds the container image (amd64, and arm64 without running it), starts it with a temporary config, polls `/healthz`, checks the panel and the bundled packages, and packs every extension for the release platforms. Tags: also uploads the archives and `registry.json` to the GitHub release and pushes the image to `ghcr.io` once the checks pass |
-| `next-app-tools-pack.yml` | PRs and merge-queue groups (through `ci.yml`) touching the app tools' manifests or workspace, `next/cmd/pluxy-pack/` or the workflow; `next-v*` tags | Builds the app tools on each platform's own runner and packs them with `pluxy-pack -app-tools`, uploading nothing; the workflow file has the detail |
+| Workflow | Covers |
+| --- | --- |
+| `ci.yml` | Picks the workflows a PR or merge-queue group runs, and the `gate` check; see the file's header |
+| `core-pr-test-build.yml` | Build, vet and tests of `core/`; see the file's header |
+| `core-release.yaml` | Release builds for `core-v*` tags; see the file's header |
+| `app-ci.yml` | Checks of `extensions/app/`; see the file's header |
+| `next-ci.yml` | UI checks, Go build and tests, and browser tests of `next/`; see the file's header |
+| `next-app.yml` | The desktop app and the app tools on Linux, and the native test; see the file's header |
+| `next-app-platforms.yml` | The desktop app on Windows and macOS; see the file's header |
+| `next-app-tools-platforms.yml` | The app tools on Windows and macOS, and the WSL tests; see the file's header |
+| `next-corpus.yml` | The corpus against the old and new core, live; see the file's header |
+| `next-release.yml` | Release for `next-v*` tags, and the container image check; see the file's header |
+| `next-app-tools-pack.yml` | Packing the app tools for each platform; see the file's header |
 
-When you add a workflow, add a row here. A workflow that must pass before a merge to `main`
+When you add a workflow, describe it in a header comment at the top of its file and add a short
+row here. A workflow that must pass before a merge to `main`
 runs through `ci.yml`: give it a `workflow_call` trigger instead of a `pull_request` one, add a
 path case and a job for it in `ci.yml`, and add the job to `gate`'s `needs`.
 

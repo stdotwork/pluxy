@@ -2,7 +2,15 @@ name: Next corpus
 
 # Runs the differential test corpus against both cores live: today's core is built from core/
 # and the new one from next/. Next CI already runs the corpus against the recorded old-core
-# replies; this job also catches a change in core/ that the recordings no longer match.
+# replies; this job also catches a change in core/ that the recordings no longer match. It runs
+# `go test -count=1 -v -run TestCorpus ./corpus` with PLUXY_CORPUS_OLD_CORE=1 and CGO_ENABLED=1,
+# and writes the report to the job summary.
+#
+# Pull requests and merge-queue groups run it through ci.yml, when a changed path is under next/
+# or core/, or is this file. It also runs on pushes to `main` that touch those paths, and by hand.
+#
+# It runs on ubuntu-latest, or on the maintainers' runner when the repository variable
+# PLUXY_LINUX_RUNNER is set (AGENTS.md, "Where jobs run"). It uploads no artifact.
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when

@@ -1,4 +1,26 @@
 name: Core release
+# Runs when a tag `core-v*` is pushed. It does not run through ci.yml and takes no path filter.
+#
+# `prepare-release` creates the tag's GitHub release, or, if one exists, replaces its title and
+# notes. The notes are the Linux and FreeBSD asset list, a changelog of the commits under core/
+# since the previous `core-v*` tag (leaving out `docs:` and `test:` commits), and GitHub's
+# generated notes. The build jobs then run, each building `cli-proxy-api` from core/ with the
+# version, commit and date set, after refreshing the model catalog. Each packs a tar.gz archive
+# (a zip on Windows), keeps it as a workflow artifact named after its target, uploads it to the
+# release with `gh release upload --clobber`, and refreshes `checksums.txt` on the release (a
+# failure there does not fail the job). `publish-checksums` runs even if a build failed: it
+# downloads the artifacts and uploads the final `checksums.txt`.
+#
+# Builds: `build-hosted` makes darwin amd64 (macos-15-intel), darwin arm64 (macos-15), windows
+# amd64 (windows-latest) and windows arm64 (windows-11-arm), with CGO. `build-linux-glibc` makes
+# linux amd64 (ubuntu-latest) and arm64 (ubuntu-24.04-arm) with CGO inside a manylinux2014
+# container, and fails if the binary needs a newer GLIBC than 2.17. `build-linux-no-plugin` makes
+# linux amd64 and arm64 without CGO, so without dynamic library plugins, on ubuntu-latest.
+# `build-freebsd` cross-builds on ubuntu-latest: amd64 with CGO against a FreeBSD 14 sysroot, and
+# arm64 without CGO and without plugins.
+#
+# Every job runs on GitHub's runners, never PLUXY_LINUX_RUNNER. The workflow's token can write
+# repository contents, to create the release and upload its assets.
 
 on:
   push:
