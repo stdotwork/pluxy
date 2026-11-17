@@ -28,7 +28,8 @@ protocol only together with its README (`next/protocol/README.md`). The old desk
 `AGENTS.md` either; follow nearby code there too.
 
 If `.private/AGENTS.md` exists, read it too: it holds the owner's private instructions and notes.
-Confirmed plans, decisions and major tradeoffs are written up in `docs/`.
+Confirmed plans, decisions and major tradeoffs are written up in `docs/`: the new core's design
+in `docs/design.md`, and how the corpus holds it to the old core in `docs/corpus.md`.
 
 ## Build and test
 
