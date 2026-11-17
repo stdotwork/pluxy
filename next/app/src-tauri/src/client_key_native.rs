@@ -476,7 +476,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         })(),
     )?;
 
-    // ---- changed core: another core, then the app's own again
+    // ---- changed core: another core, then the first again (the app's own on Linux, the session's
+    // test core elsewhere)
     step(
         "changed core",
         (|| {
