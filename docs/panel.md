@@ -26,9 +26,10 @@ The panel shows what core itself does, in compact pages, and nothing core cannot
 gets a field only when core runs it; the rest of the config file stays editable as text in the
 Config Panel's Source tab, and a setting gets its field when core starts running it.
 
-Richer views of the same data, such as usage analysis, prices and tools for coding agents, belong
-to the desktop app. The app shows the same core pages in the same places, and adds its own pages
-after them. Both show the pages of the extensions that run.
+Richer views and tools the panel does not have, such as the local usage of coding agents and the
+tools that set those agents up, belong to the desktop app. The app shows the same core pages in
+the same places, and adds its own pages after them. Both show the pages of the extensions that
+run.
 
 Nothing in the panel spends from an account behind a click, except an account's "Test", whose
 label says that it spends one request.
@@ -65,10 +66,12 @@ config layouts it reads, and a key is never shown after it is added.
 Core keeps a record of recent requests, in memory and within the limits `usage.max_events` and
 `usage.max_age_ms`. The panel's Usage page lists these requests, newest first, with filters,
 paging and a CSV export, and links each request's trace ID to its request log in the Logs Viewer.
-The totals and breakdowns by model, provider, account and key are on the Dashboard.
+The Dashboard shows the totals, the traffic chart and the providers; it has no breakdown by
+model, account or key.
 
 The page is in the panel, not only in the desktop app, because core keeps the record and no other
-page lists requests. It shows only what core records; prices and cost views belong to the app.
+page lists requests. It shows only what core records: tokens, with no prices or cost views, and the
+app has none either.
 
 ## Themes reach every page
 
