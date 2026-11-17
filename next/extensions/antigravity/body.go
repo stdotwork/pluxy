@@ -94,13 +94,8 @@ func buildBody(req llm.Request) (map[string]json.RawMessage, *llm.Translation, p
 	}
 	tr.Losses = losses
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
-		var paths []string
-		for _, l := range losses {
-			if l.Kind == llm.LossDropped {
-				paths = append(paths, l.Path)
-			}
-		}
-		return nil, nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+		paths := tr.DroppedPaths()
+		return nil, nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
 			Message: "Antigravity cannot carry parts of this request: " + strings.Join(paths, ", ")}
 	}
 	return inner, tr, added, nil

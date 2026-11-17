@@ -167,7 +167,8 @@ counts the system text, each message's role and text, reasoning, tool calls and 
 tools' names, descriptions and parameters, and the tool choice; images and files add nothing.
 `token_count_estimate` (top level, default `true`) turns the estimate off: core then answers an
 error saying the account cannot count. When every account tried can count, an error from an
-upstream that counts (a 400, 401 or 429) stays an error.
+upstream that counts (a 400, 401 or 429) stays an error, and so does a refusal under
+`drop_policy` `"reject"`.
 
 A model name may end in a thinking setting in brackets, as today's core reads it: a level
 (`gpt-5(high)`; `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), `none`, `auto`, or a token
@@ -593,9 +594,9 @@ The model name is read in lower case, without a Bedrock prefix (`anthropic.`, or
 `apac.` or `global.` before it), a context window in brackets (`[1m]`) or a Vertex AI version
 after `@`; the same reading decides the thinking settings above, so Claude Mythos models get
 thinking from a reasoning effort too. Each one left out is reported as dropped, so
-`drop_policy` `"reject"` refuses a generation request that would lose one. A Messages client's own
-sampling settings go upstream as it wrote them. Today's core leaves both out
-of every translated request, on every model.
+`drop_policy` `"reject"` refuses a generation request, or a token count sent to Anthropic's own
+API, that would lose one. A Messages client's own sampling settings go upstream as it wrote them.
+Today's core leaves both out of every translated request, on every model.
 
 Every request, a Messages client's or a translated one, also gets the betas its body needs, after
 the client's own and without repeats, as today's core adds them: `advisor-tool-2026-03-01` for a

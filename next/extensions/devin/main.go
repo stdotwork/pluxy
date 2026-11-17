@@ -168,13 +168,8 @@ func chat(ctx context.Context, call sdk.Call, out sender) error {
 		tr.From = req.Origin.Format
 	}
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
-		var paths []string
-		for _, l := range chat.losses {
-			if l.Kind == llm.LossDropped {
-				paths = append(paths, l.Path)
-			}
-		}
-		return &llm.Error{Code: llm.CodeUnsupported, Message: "Devin has no place for " + strings.Join(paths, ", "), Scope: llm.ScopeRequest}
+		paths := tr.DroppedPaths()
+		return &llm.Error{Code: llm.CodeUnsupported, Message: "Devin has no place for " + strings.Join(paths, ", "), Scope: llm.ScopeRequest, Dropped: paths}
 	}
 	body := frame(chat.encode(token, deviceFingerprint(s.DeviceSeed)))
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.BaseURL+chatPath, bytes.NewReader(body))
