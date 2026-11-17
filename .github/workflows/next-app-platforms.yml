@@ -7,13 +7,20 @@ name: Next app platforms
 # next-app.yml.
 
 on:
-  # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
-  # its paths below are touched.
+  # Pull requests and merge-queue groups run this through ci.yml, which runs it only when what it
+  # builds changed (see the changes job there).
   workflow_call:
+    inputs:
+      # ci.yml sets this when the change reaches none of what the native jobs build: the app, the
+      # kit, the workflows, and the Go packages `go run ./e2e/panelcore` builds (see ci.yml).
+      skip-native:
+        type: boolean
+        default: false
   workflow_dispatch:
-  # Not on every push to main: the merge queue already ran this on the exact tree it merges, and
-  # the hosted macOS pool is short enough that re-runs on main starved the queue's own jobs. One
-  # run a day on main keeps main's caches fresh for the PR and merge-queue runs that restore them.
+  # Not on every push to main: the merge queue already ran this for the last change it merges that
+  # touched what this builds, and the hosted macOS pool is short enough that re-runs on main starved
+  # the queue's own jobs. One run a day on main keeps main's caches fresh for the PR and
+  # merge-queue runs that restore them.
   schedule:
     - cron: '17 3 * * *'
 
@@ -34,7 +41,10 @@ defaults:
 jobs:
   app:
     name: app (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
+    # to use instead of GitHub's (AGENTS.md, "Where jobs run"). Windows stays on GitHub's runner:
+    # the registry tests run only on a runner that reports itself GitHub-hosted.
+    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -253,8 +263,12 @@ jobs:
   # The package shard builds the test package first (package.ts test: a folder bundle on Windows,
   # an app bundle on macOS, never an installer), then the dev app, since the package's builds
   # rename the program they make in target/debug.
+  # A schedule or manual run has no inputs: null is not true, so it runs these.
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
+    if: inputs.skip-native != true
+    # Always GitHub's runners: the test runs only on a runner that reports itself GitHub-hosted
+    # (RUNNER_ENVIRONMENT=github-hosted), since it writes the account's own folders and settings.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -306,6 +320,8 @@ jobs:
   # the account's own.
   dialogs:
     name: dialogs (${{ matrix.os }})
+    # Always GitHub's runners: the test runs only on a runner that reports itself GitHub-hosted
+    # (RUNNER_ENVIRONMENT=github-hosted), since it writes the account's own folders and settings.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:

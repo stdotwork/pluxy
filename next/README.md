@@ -1,10 +1,10 @@
 # next: the new pluxy core
 
-A new core for pluxy, built from scratch beside today's core, the Go proxy in `core/`. (In this
-README and in the corpus, "today's core" and "the old core" mean that core, and `core/...` paths
-are files in it. Once `core/` is removed from the repository, they mean `core/` at the last commit
-that still has it; the commit will be named here when that happens.) Core receives client requests and
-hands them to **provider extensions**: separate programs, one per kind of upstream, that core
+A new core for pluxy, built from scratch to replace the old core, the Go proxy that was in `core/`.
+(In this README and in the corpus, "today's core" and "the old core" mean that core, and `core/...`
+paths are files in it as they are at commit `0b84f013f18e1bbf528533b1c6f2c2dbdb19fc67`, the last commit
+that changed `core/`. The folder has since been removed from the repository.) Core receives client
+requests and hands them to **provider extensions**: separate programs, one per kind of upstream, that core
 starts and talks to over a local socket. Today it serves OpenAI Chat Completions, OpenAI
 Responses, Anthropic Messages and Gemini GenerateContent (streamed and not, over HTTP) through the
 OpenAI-compatible API-key provider, which talks to an upstream that speaks any of them. A request
@@ -167,7 +167,8 @@ counts the system text, each message's role and text, reasoning, tool calls and 
 tools' names, descriptions and parameters, and the tool choice; images and files add nothing.
 `token_count_estimate` (top level, default `true`) turns the estimate off: core then answers an
 error saying the account cannot count. When every account tried can count, an error from an
-upstream that counts (a 400, 401 or 429) stays an error.
+upstream that counts (a 400, 401 or 429) stays an error, and so does a refusal under
+`drop_policy` `"reject"`.
 
 A model name may end in a thinking setting in brackets, as today's core reads it: a level
 (`gpt-5(high)`; `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), `none`, `auto`, or a token
@@ -575,6 +576,27 @@ Claude 4.6 and later, and a thinking budget from Claude 3.7 to 4.5 (low 1024, me
 24576 tokens); a model name the extension does not know as a Claude model gets no thinking
 settings, and the effort is reported as dropped. The extension never changes how a client presents itself: a client that is
 not Claude Code is not made to look like Claude Code.
+
+**Sampling options.** A translated request's `temperature` and `top_p` reach Claude only where
+the model takes them, by Anthropic's documented limits for the `anthropic-version` translated
+requests are sent with (`2023-06-01`):
+
+- Claude 4.7 and later: one of them alone is sent only at its default (`temperature` 1, `top_p`
+  0.99); when both are set, neither is sent.
+- A `claude-` model name the extension does not know as a Claude version (such as
+  `claude-mythos-preview`): neither is sent.
+- An older Claude model with thinking on: `temperature` is sent only at 1, `top_p` only from 0.95.
+- An older Claude model, with thinking on or off: `top_p` is left out when `temperature` is sent
+  too, since Claude refuses the two together.
+- Any other model name: both go as the client sent them.
+
+The model name is read in lower case, without a Bedrock prefix (`anthropic.`, or `us.`, `eu.`,
+`apac.` or `global.` before it), a context window in brackets (`[1m]`) or a Vertex AI version
+after `@`; the same reading decides the thinking settings above, so Claude Mythos models get
+thinking from a reasoning effort too. Each one left out is reported as dropped, so
+`drop_policy` `"reject"` refuses a generation request, or a token count sent to Anthropic's own
+API, that would lose one. A Messages client's own sampling settings go upstream as it wrote them.
+Today's core leaves both out of every translated request, on every model.
 
 Every request, a Messages client's or a translated one, also gets the betas its body needs, after
 the client's own and without repeats, as today's core adds them: `advisor-tool-2026-03-01` for a
@@ -1109,7 +1131,22 @@ translated system instructions go as a user turn. Each function declaration's sc
 core cleans them: local `$ref`s inlined, `const` as an enum, constraints and short enums moved into
 the description as hints (`minLength: 1`, `Allowed: a, b`), a type list such as
 `["string","null"]` as one nullable type, and other JSON Schema keywords removed; for a Claude
-model, a union becomes its strongest branch. Claude models, Gemini 3 Pro and the image model are always
+model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
+object in a function's parameters that requires nothing gets a required placeholder property:
+`reason` (a string) where it has no properties, `_` (a boolean) where it has some and none is
+required. An object is a schema of type `object`, or one with no type whose properties come only
+from its `allOf` branches (it then gets that type); a union object (with `anyOf` or `oneOf`) gets
+none; an `allOf` branch counts with the object it merges into, so that object's properties and
+required names are the branches' too. Every schema with `properties` and no type gets type
+`object`, whatever the model, as in today's core; an `allOf` branch keeps its own type or none. A
+function's response schema gets no placeholder: today's core adds one there, but the schema
+describes what the client returns, and nothing would remove the placeholder. The extension removes
+the placeholders from the model's calls before any client format sees them; today's core does that
+only for Messages clients. It leaves a placeholder in a call where a client schema at the same path
+declares the name, as a property or in `required`: the other branches of a union (also those
+Claude's cleaning cuts), another item of a tuple, or a function declared again under that name. So
+it never removes a key the client declared; it does remove a key named `reason` that the model
+writes into an object with no declared properties, such as a free-form map. Claude models, Gemini 3 Pro and the image model are always
 asked on the stream method and gathered into one reply when the client wants one. Replies are
 taken out of the envelope's `response` field. A 429 is a used-up quota when Google says
 `QUOTA_EXHAUSTED` or asks for a wait of five minutes or more, and a rate limit otherwise, with the
@@ -1122,8 +1159,7 @@ reasoning (thought signatures travel in band, as for Gemini), the per-account mo
 (`fetchAvailableModels`), Responses compaction through Antigravity, structured output for Claude
 5.5 as prompt text, sensitive-word obfuscation (`antigravity.sensitive-words`), the connection
 pool settings (`antigravity.connection-pool.*`), the app version lookup at every start, token
-counting (core has no count-tokens route), and the placeholder property today's core adds to a
-Claude function's objects that require nothing.
+counting (core has no count-tokens route).
 
 **Quota.** Quota reads `POST {base_url}/v1internal:retrieveUserQuotaSummary` with the credential's project, and the plan from `POST {base_url}/v1internal:loadCodeAssist`, with the access token and the account's Antigravity user agent. Each bucket of each model group becomes a limit, such as "Gemini models 5-hour limit", with the share used, the reset time, the window length where known and the group's models. A login's grant carries `identity` `{"email"}`.
 
@@ -1199,8 +1235,7 @@ signature) is not retry-safe, and a reply that ends without its end frame is an 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
 through as given); a session's turn count (each request is a new session, as today's core sends
-for a client that names none); the account's plan and quota status (`GetUserStatus`) and a used-up
-quota's reset time; the remote model catalog refresh; Devin's names for older models
+for a client that names none); a used-up quota's reset time; the remote model catalog refresh; Devin's names for older models
 (`claude-haiku-4-5`, `gpt-4-1`, Sonnet 4.5, Claude 4.5 Opus) and the `-fast` variants built from a
 `<effort>-fast` request; the usage fallback from response dimensions; images in tool results;
 signature types other than `sealed`; namespace tools and custom (freeform) tools such as
@@ -1234,6 +1269,14 @@ its model and its endpoint), and a failure that ends after a later-started reque
 the same scope leaves no block and no last error. Among eligible accounts, core prefers the
 session's account (with session affinity on), then the highest `priority`, then picks by
 strategy.
+
+When every account is blocked, the reply tells the client how long is left in whole seconds,
+rounded up and at least 1 while anything is left: the message's "try again in 1s" (or `1m1s`),
+`Retry-After`, and the usage-limit reply's `reset_time`, `reset_seconds` and "reset after" all
+come from the same rounding, so they agree. `retry_after_ms` keeps the exact wait. Today's core
+rounds `Retry-After` and `reset_seconds` up, but shows `reset_time` and "reset after" to the
+nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next to
+`reset_seconds` 2; core says "2s" in all of them. That is an intended difference.
 
 ```json
 {
@@ -1551,7 +1594,7 @@ An account names its models with these fields, applied in this order:
 
 | Field | Meaning |
 | --- | --- |
-| account `models` | The only models the account serves. Each is the upstream's name, or `{"name": ..., "alias": ...}` to serve the model `name` under the name `alias` only. |
+| account `models` | The only models the account serves. Each is the upstream's name, or `{"name": ..., "alias": ...}` to serve the model `name` under the name `alias` only. One name clients use maps to one upstream model: the config check refuses an entry whose name or alias another entry already uses for a different upstream model, naming the alias and the account (in the config file, and as a 400 from `PATCH /accounts/{id}`, which the panel uses). Listing the same model twice passes. Today's core pools such entries in `openai-compatibility`; this core does not pool models yet. |
 | account `excluded_models` | Models the account does not serve: names, or patterns with `*` for any text (`gpt-5-*`, `*-mini`, `*preview*`), whatever their case. They match the name clients use for an entry of `models` (its `alias`, when it has one, as in today's core), and for any other model its name before `model_alias` renames it. |
 | account `model_alias` | Renames: a request for `alias` (exactly as written) goes to the model `name` (any case). Without `fork` the model is served only as `alias`; with `"fork": true` under both names. `display_name` replaces the model's display name in lists. |
 | account `prefix` | The account also serves each model as `{prefix}/{model}`, so a client can ask for a model on that account alone. No `/` in it. |
@@ -1813,8 +1856,8 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `proxy-url` (top level) | `proxy_url` | The [outbound proxy](#outbound-proxy) of every account without its own, shown with `redacted` in place of a user name and password; `""` removes it. Sending back the value as shown keeps the password. |
 | `payload` (top level) | `payload` (`requests.payload` in a `config.yaml`, or `payload` where the file has only that) | The [payload rules](#payload-rules), all five lists at once; absent when there are none. A change replaces them, `null` or `{}` removes them, and a field the rules do not have or a path outside the supported syntax is refused. |
 
-The settings shown are those of the running config. Today's other basic setting `ws-auth` does
-not exist in this core yet, and `debug` is dropped (this
+The settings shown are those of the running config. Today's other basic setting `ws-auth` is
+dropped (the AI Studio relay is not built), and `debug` is dropped (this
 core writes no debug-level lines); `max_attempts`, which today's core has no
 name for, is changed in the document.
 
@@ -1822,8 +1865,9 @@ name for, is changed in the document.
 
 Core keeps a usage record: one event for each generation request that reached routing (a request
 refused for its client key, or whose body does not parse, is not recorded), including Responses
-WebSocket turns. Token counts (`count_tokens`, `:countTokens`) generate nothing and are not
-recorded. An event holds the request's trace ID (`id`, the `X-CPA-TRACE-ID` of its reply),
+WebSocket turns. A WebSocket warmup (`generate: false`) that core answers itself reaches no
+upstream and is not recorded. Token counts (`count_tokens`, `:countTokens`) generate nothing
+and are not recorded. An event holds the request's trace ID (`id`, the `X-CPA-TRACE-ID` of its reply),
 when it arrived, the `endpoint`, whether it streamed, the `model` the client asked for (without a
 thinking suffix) and the account's own name for it when that differs (`upstream_model`: an alias
 or prefix resolved), the `provider` (extension) and `account` its last attempt went to, the
@@ -1834,7 +1878,11 @@ the upstream reported: `input_tokens` (cached ones included), `output_tokens` (r
 included), `reasoning_tokens`, `cached_tokens`, `cache_creation_tokens` and `total_tokens` (input
 plus output). A token count the upstream did not report is absent, not 0. A streamed reply
 that fails after it began keeps its `status` 200 with `failed` true; a client that goes away is
-recorded as `cancelled`, with no `status` when nothing had reached it.
+recorded as `cancelled`, with no `status` when nothing had reached it. A WebSocket turn is
+recorded before its last message (`response.completed` or `response.incomplete`) is written, so
+a client that has that message finds the turn in the record; a client that goes away while it
+is written leaves the turn recorded as finished, with the tokens the upstream reported. For a
+reply core translates, that holds for the `.done` messages written just before it too.
 
 The record lives in memory and is gone after a restart. It keeps the last `max_events` requests
 (default 10000, at most 200000) and none recorded (when the request ended) longer ago than
@@ -1923,17 +1971,41 @@ message refused before it starts a turn (an unknown type, no model, an `input` t
 list) is answered on the socket and not written. A reply over 1 MiB keeps its first 256 KiB and its last 768
 KiB, with a line saying how many bytes were left out between them. While only error logs are
 written, every request keeps its reply's start and end until it ends, in case it fails, so an
-error log keeps less of a reply: the first 32 KiB and the last 96 KiB.
+error log keeps less of a reply: the first 32 KiB and the last 96 KiB. A secret cut in two at
+that line would not be recognised, so the bytes beside it that could be part of one are left out
+too, and counted with the rest. On each side that is, first, a window of 12 bytes for each byte
+of the longest form of a secret the log removes that holds a character other than a key's (the
+secret as it is, or escaped, whichever is longest). That holds every part of such a secret the
+line cut in a spelling of up to 11 bytes for each of its bytes; the log also removes spellings
+with deeper escapes, and a part of one of those cut at the line can stay. Secrets made only of
+letters, digits and `-_.~+/=%\`, as API keys and tokens are, need no window: the run of those
+characters that goes on from the edge is left out in any case, and it holds any part of such a
+secret, whatever its length. Where the edge then cuts through a secret in one of its forms, 4
+bytes or more of it go. Where it cuts through a secret the log would find whole within a window
+of it, the edge moves to where that secret starts (or ends), and the run of key characters there
+goes too, so the edge never stands inside a run of key characters or inside a secret the log
+finds whole around it. Where the log's redaction gives up on the text around the edge (escapes
+that decode too many ways), or the edge still cuts through a secret after 4 moves, all of that
+side goes. With client keys, API keys and OAuth tokens the window is 0 and only the run goes. A
+secret with other characters makes it grow with the secret: a secret header's forms hold its
+name, so a 22-byte value of a header named `X-Gateway-Key` makes it 612 bytes, a 207-byte
+`Bearer` value 2,856 bytes and a 1,507-byte value about 18 KiB; an OAuth scope (`openid profile
+email offline_access`), 420 bytes. A service account's private key (PEM text, about 1.7 KB for a
+2048-bit key, with spaces and line breaks) makes it about 21 KiB a side, most of what an error
+log keeps of a reply's start. Where the text there is one long run of key characters, such as
+base64 data, all of that run goes. Text that repeats the start of a secret there, such as a
+secret header's name, loses one repeat, not all of them.
 
 A request log also holds what the provider extension sent upstream and what came back: between
 the client's request and its reply, an `=== UPSTREAM REQUEST ===` section (the account, time, the
 whole URL, method, headers and body) and an `=== UPSTREAM RESPONSE ===` section (time, status,
 headers and body, or the error that kept a response from coming) for each upstream request, so a
 refused attempt and the retry on another account show as two pairs. Each body keeps its first 32
-KiB and its last 96 KiB, a streamed reply recorded as the extension reads it, without holding it
-back; when a request made more than two upstream requests, the first and the last are kept, with
-a line saying how many were left out between them. A Responses WebSocket turn that opens the
-upstream socket holds its handshake; the messages on that socket are not written. This needs an
+KiB and its last 96 KiB, less what beside the cut could be part of a secret, as for the reply, a
+streamed reply recorded as the extension reads it, without holding it back; when a request made
+more than two upstream requests, the first and the last are kept, with a line saying how many
+were left out between them. A Responses WebSocket turn that opens the upstream socket holds its
+handshake; the messages on that socket are not written. This needs an
 extension that implements [protocol](protocol/README.md#upstream-capture) 0.13; it is captured
 only while `logs.request_log` is on, so error logs written with it off have no upstream sections,
 and with it off nothing is recorded or sent.
@@ -2132,8 +2204,12 @@ needs none) is not supported yet: it adds no account and is named in the log.
 
 In every section, `priority` is the account's `priority` and a key's `weight` is its `weight`.
 A group's `models` list becomes the account's `models`: each entry's `name` is the model the
-upstream knows, and its `alias` the name clients use (the first entry for a name wins, as in
-today's core); the account serves only those models. A group's or key's `prefix` is the account's
+upstream knows, and its `alias` the name clients use; the account serves only those models. When
+entries share a name clients use, the first wins in every section, as in today's core, except
+`openai-compatibility`: there today's core treats them as a pool and rotates requests over them,
+and falls back to the next on a failure. This core does not pool models yet, so it keeps the
+first entry and names the alias and each dropped entry in the log (a model listed twice drops
+nothing and is not named). A group's or key's `prefix` is the account's
 `prefix`, and its `excluded-models` its `excluded_models` (today's core has no
 `excluded-models` for `openai-compatibility`, so it is accepted there and does nothing). See
 [Model lists and model names](#model-lists-and-model-names). An account's ID is the group's `name`
@@ -2168,7 +2244,7 @@ are accepted silently.
 | `server.discovery.advertise-management` | | Dead |
 | `routing.strategy` | `routing.strategy`: `round-robin`, `fill-first` (also `fillfirst`, `ff`), `weighted-round-robin` (also `weightedroundrobin`, `wrr`; this core's `weighted`); this core's `weighted` and `least-active` work too. A name today's core does not know is `round-robin`, as there, and the log says so. | Supported |
 | `routing.session-affinity`, `routing.session-affinity-ttl` | `routing.session_affinity` with `ttl_ms` from the duration (default `1h`). | Supported |
-| `routing.session-affinity-subagents` | A Claude Code subagent sends its session's `X-Claude-Code-Session-Id`, so with `routing.session-affinity` it stays on the session's account, as today's default `true` keeps it. `false` (spread subagents over the pool) is not built. | Later (`false`) |
+| `routing.session-affinity-subagents` | A Claude Code subagent sends its session's `X-Claude-Code-Session-Id`, so with `routing.session-affinity` it stays on the session's account, as today's default `true` keeps it. `false` (spread subagents over the pool) is not built, and the log names it. | Dropped: a subagent stays on its session's account, and no need was found to spread subagents over the pool |
 | `routing.session-affinity-rebind-on` | | Dropped: no need found |
 | `routing.force-model-prefix` (`force-model-prefix`) | `routing.force_model_prefix`. | Supported |
 | `routing.retry.max-retry-credentials` (`max-retry-credentials`) | `routing.max_accounts`. | Supported |
@@ -2183,13 +2259,15 @@ are accepted silently.
 | Every `proxy-url` on a group or key | The account's `proxy_url`: a key's own, else its group's. | Supported |
 | `requests.payload.*` (`payload`) | `payload`: the [payload rules](#payload-rules), with today's lists and fields. A path outside the parts today's example config uses, or a raw value that is not JSON, fails the load. Today's `protocol` named the upstream's API format; here it names the extension. | Supported |
 | `requests.tls-handshake-timeout-seconds`, `requests.passthrough-headers`, `requests.nonstream-keepalive-interval`, `requests.streaming.*` (each also at the top level) | A request is retried on another account until its reply starts. | Dropped: off by default and no need found |
-| `client.codex.enable-apply-patch`, `client.codex.optimize-multi-agent-v2` (`codex.optimize-multi-agent-v2`) | | Later |
+| `client.codex.enable-apply-patch` | Models without a Codex template are left out of the [Codex client catalog](#codex-client-catalog), so there is no entry to add `apply_patch` to. | Later: built when someone uses a non-Codex model through the Codex client and needs `apply_patch` on it |
+| `client.codex.optimize-multi-agent-v2` (`codex.optimize-multi-agent-v2`) | | Later: built when Codex multi-agent v2 sub-agents need to reach non-Codex providers |
 | `client.codex.web-search-result-cache.*`, `client.claude.show-codex-commentary` | | Dropped: off by default and no need found |
 | `upstream.codex.disable-codex-cloaking` (`codex.disable-codex-cloaking`) | `codex_identity: false` on the Codex subscription accounts `-import-auth` adds. It does not change accounts already imported. | Supported when importing |
 | `upstream.codex.websocket-compression` | Always on; `false` is named in the log. | Supported (fixed on) |
 | `upstream.codex.model-level-cooling` | Blocks are kept per model where the upstream says the limit is per model; usage limits remain account-wide. | Supported (fixed on) |
 | `upstream.claude.model-level-cooling` (`claude.model-level-cooling`) | `model_level_cooling: true` on the Claude keys' accounts and on the Claude subscription accounts `-import-auth` adds (see [Claude](#claude)). It does not change accounts already imported. | Supported |
-| `upstream.codex.upstream-request-compression`, `-min-bytes`, `upstream.codex.stream-bootstrap-buffering`, `stream-bootstrap-timeout` | | Later |
+| `upstream.codex.upstream-request-compression`, `-min-bytes` | | Dropped: it needs a compression library this core does not carry, for an off-by-default saving no one has measured |
+| `upstream.codex.stream-bootstrap-buffering`, `stream-bootstrap-timeout` | The Codex extension does not move a turn that ends in an overload error to another account. | Later: built when pooled Codex accounts are seen failing on overload errors that moving the turn to another account would hide |
 | `upstream.codex.response-steering`, `upstream.codex.orphan-delegation-compatibility`, `oauth.providers.codex.header-defaults.*` (`codex-header-defaults`) | | Dropped: experimental or off by default, no need found |
 | `upstream.claude.header-defaults.*`, `disable-claude-cloak-mode`, `disable-cloaking-model-list`, `session-date-pin-days` (also `claude`, `claude-code`, `claude-header-defaults`), and the Claude keys' `cloak` and `fingerprint-profile` | This core never changes how a client presents itself. | Dropped: making other clients look like Claude Code is out of scope |
 | `upstream.claude.tool-search`, the Claude keys' `native-tool-search` | | Dropped: Codex's tool search on Claude accounts, off by default with no panel or app control |
@@ -2198,7 +2276,7 @@ are accepted silently.
 | `experimental-cch-signing` (Claude keys) | | Dead |
 | `oauth.auth-dir` (`auth-dir`) | The folder `-import-auth` reads (see below). Core never reads or writes it while it runs; at each load it logs how many credential files there are not imported yet. | Supported |
 | `oauth.auth-auto-refresh-workers` (`auth-auto-refresh-workers`) | Each account is renewed shortly before it expires. | Dropped: no need for a pool size |
-| `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`) | Each channel's rules become the `model_alias` and `excluded_models` of the package that serves its accounts, for the accounts added to it by a sign-in (not with an API key): `codex` is `pluxy/codex`, `claude` is `pluxy/claude`, `vertex` is `pluxy/gemini`, `kimi` (and `kimi-ai`, `kimi.ai`, `kimi.com`) is `pluxy/kimi`, `xai` is `pluxy/xai`, `meta` is `pluxy/meta`, `antigravity` is `pluxy/antigravity`, `devin` is `pluxy/devin`. Rules for another channel are named in the log and ignored. An alias's `force-mapping` and `openapi` are later. | Supported |
+| `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`) | Each channel's rules become the `model_alias` and `excluded_models` of the package that serves its accounts, for the accounts added to it by a sign-in (not with an API key): `codex` is `pluxy/codex`, `claude` is `pluxy/claude`, `vertex` is `pluxy/gemini`, `kimi` (and `kimi-ai`, `kimi.ai`, `kimi.com`) is `pluxy/kimi`, `xai` is `pluxy/xai`, `meta` is `pluxy/meta`, `antigravity` is `pluxy/antigravity`, `devin` is `pluxy/devin`. Rules for another channel are named in the log and ignored. An alias's `force-mapping` and `openapi` are later, as the same settings are on the keys' models below. | Supported |
 | `oauth.settings` (`oauth-settings`) | | Dropped: needs a model catalog, and no page uses it |
 | `oauth.request-scoped-errors` (`oauth-request-scoped-errors`) and every `request-scoped-errors` | | Dropped: a request-scoped error is already not the account's fault |
 | `oauth.providers.aistudio.ws-auth` (`ws-auth`) | | Dropped: the AI Studio relay needs a long-lived listener the extension protocol does not have |
@@ -2214,18 +2292,21 @@ are accepted silently.
 | The keys' `models[]` `display-name`, `max-context-length`, `input-modalities`, `output-modalities` | A model's display name in lists is its upstream name; use `model_alias` for a different one. | Dropped: list metadata only, no need found |
 | The keys' `models[]` `thinking` | The thinking suffix and the extensions cover it. | Dropped: no need found |
 | The keys' `models[]` `is-compat`, `use-max-completion-tokens` | | Dropped: single-provider quirks, no need found |
-| The keys' `models[]` `force-mapping`, `image`, `support-configuration-update`, `openapi` | | Later |
-| Vertex keys' `openapi`, `openapi-location`; xAI keys' `websockets` | | Later |
+| The keys' `models[]` `force-mapping` | A reply carries the upstream's model name, not the alias the client asked for. | Later: built when a client needs a reply's model to be the alias it asked for |
+| The keys' `models[]` `openapi`; Vertex keys' `openapi`, `openapi-location` | | Later: built when someone calls Vertex partner models (Claude, Llama, Mistral) through a key |
+| The keys' `models[]` `image` (openai-compatibility) | Images are served for Codex accounts only. | Dropped: no use of OpenAI-compatible image models was found |
+| The keys' `models[]` `support-configuration-update` | | Dropped: an off-by-default prompt-cache saving for one kind of relay, no need found |
+| xAI keys' `websockets` | xAI is served over HTTP. | Dropped: HTTP gives the same replies |
 | openai-compatibility's `support-prompt-cache-key` | A [payload rule](#payload-rules) can set a fixed `prompt_cache_key`. | Dropped: no need found |
 | `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `-import-auth` adds; `true` is also `images: false` there, which turns the Images API off on them (today's core answers its image routes 404). | Supported |
-| `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | Images are served through the Codex upstream's Images API, the path today's core takes for its built-in image models; the Responses-based path this model sets is not built, and there are no video routes yet. | Later |
+| `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | Images are served through the Codex upstream's Images API, the path today's core takes for its built-in image models; the Responses-based path this model sets is not built, and there are no video routes. | Dropped: the first names the model of a path that is not built, the second belongs to video routes that are not built |
 | `observability.logs.logging-to-file` (`logging-to-file`), `observability.logs.logs-max-total-size-mb` (`logs-max-total-size-mb`) | `logs.to_file` and `logs.max_total_size_mb`: [log files](#log-files). A negative cap is none, as in today's core. | Supported |
 | `observability.logs.debug` (`debug`) | | Dropped: this core writes no debug-level lines |
 | `observability.logs.request-log` (`request-log`), `observability.logs.error-logs-max-files` (`error-logs-max-files`) | `logs.request_log` and `logs.error_logs_max_files`: [request logs](#request-logs). A negative count is the default, 10, as in today's core. | Supported |
 | `observability.usage.usage-statistics-enabled` (`usage-statistics-enabled`) | `usage.enabled`: the [usage record](#usage-statistics). Today's example config sets it to `false`, which turns the record off here too. | Supported |
 | `observability.usage.redis-usage-queue-retention-seconds` (`redis-usage-queue-retention-seconds`) | The record keeps requests by `usage.max_events` and `usage.max_age_ms`. | Dropped: it was how long a queued usage record waited for a reader that removed it; reading the record here removes nothing, and its default of 60 seconds would leave little to read |
 | `observability.pprof.enable` (`pprof.enable`), `observability.pprof.addr` (`pprof.addr`) | `pprof.enable` and `pprof.addr`: the [profiling pages](#profiling-pages). Only a build with `-tags pprof` serves them; the default build logs that the setting does nothing. An address that is not loopback is refused. | Supported (in the `pprof` build) |
-| `models.catalog`, `models.codex-catalog`, `models.devin-catalog` | | Later |
+| `models.catalog`, `models.codex-catalog`, `models.devin-catalog` | Each extension carries its model list, and a developer refreshes it by hand (see [Codex client catalog](#codex-client-catalog)). | Dropped: this core has no remote model catalog |
 | `plugins.*` | Extensions are separate programs (packages), not libraries loaded into core. | Dropped: replaced by packages |
 | `credentials.*` (`credential-concurrency`, `credential-in-flight`) | | Dropped: only the Home control plane used them |
 

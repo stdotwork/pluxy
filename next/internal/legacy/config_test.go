@@ -3,8 +3,10 @@ package legacy
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -355,7 +357,7 @@ observability:
 `)
 	n := notices(r)
 	for _, want := range []string{
-		"not supported yet, ignored: client.codex.enable-apply-patch\n",
+		"not supported yet, ignored: client.codex.enable-apply-patch (built when someone uses a non-Codex model through the Codex client and needs apply_patch on it)\n",
 		"dropped, ignored: plugins (replaced by packages), routing.session-affinity-rebind-on (no need found), server.commercial-mode (it turns off features this core does not have), upstream.claude.session-date-pin-days (making other clients look like Claude Code is out of scope), upstream.claude.tool-search (Codex's tool search on Claude accounts: off by default, with no panel or app control)\n",
 		"unknown keys, ignored: server.discovery-typo\n",
 		"websocket-compression: false is not supported",
@@ -372,13 +374,14 @@ observability:
 }
 
 // TestDecidedDroppedSettings: settings decided not to be built are named as dropped, with their
-// reason, and never as "not supported yet"; the neighbours that are still to come stay Later.
+// reason, and never as "not supported yet"; the settings that are still to come stay Later, each
+// with what would bring it.
 func TestDecidedDroppedSettings(t *testing.T) {
 	r := translate(t, `
 server:
   response-compression: {enabled: true, min-bytes: 10}
   discovery: {enabled: true, service-name: x}
-routing: {session-affinity-rebind-on: quota}
+routing: {session-affinity-rebind-on: quota, session-affinity-subagents: false}
 oauth:
   request-scoped-errors: [{status: 400}]
   providers:
@@ -398,8 +401,17 @@ api-keys:
         - {name: m, alias: m, display-name: D, max-context-length: 9, input-modalities: [text], output-modalities: [text], is-compat: true, use-max-completion-tokens: true, thinking: {levels: [low]}, force-mapping: true, image: true}
   vertex:
     - name: v
-      keys: [{api-key: k, openapi: true}]
-      models: [{name: m, support-configuration-update: true}]
+      keys: [{api-key: k, openapi: true, openapi-location: us-central1}]
+      models: [{name: m, support-configuration-update: true, openapi: true}]
+  xai:
+    - name: x
+      websockets: true
+      keys: [{api-key: k}]
+client: {codex: {enable-apply-patch: true, optimize-multi-agent-v2: true}}
+upstream:
+  codex: {upstream-request-compression: true, upstream-request-compression-min-bytes: 2048, stream-bootstrap-buffering: true, stream-bootstrap-timeout: 5s}
+multimedia: {gpt-image-2-base-model: gpt-6-image, video-result-auth-cache-ttl: 1h}
+models: {catalog: "https://example.com/models.json", codex-catalog: /etc/codex.json, devin-catalog: "https://example.com/devin.json"}
 `)
 	var later, dropped string
 	for _, n := range r.Notices {
@@ -419,6 +431,11 @@ api-keys:
 		"api-keys.openai-compatibility.models.input-modalities", "api-keys.openai-compatibility.models.output-modalities",
 		"api-keys.openai-compatibility.models.is-compat", "api-keys.openai-compatibility.models.use-max-completion-tokens",
 		"api-keys.openai-compatibility.models.thinking",
+		"api-keys.openai-compatibility.models.image", "api-keys.vertex.models.support-configuration-update",
+		"api-keys.xai.websockets", "routing.session-affinity-subagents (",
+		"upstream.codex.upstream-request-compression (", "upstream.codex.upstream-request-compression-min-bytes (",
+		"multimedia.gpt-image-2-base-model (", "multimedia.video-result-auth-cache-ttl (",
+		"models.catalog (", "models.codex-catalog (", "models.devin-catalog (",
 	} {
 		if !strings.Contains(dropped, want) {
 			t.Errorf("not named as dropped: %q\n%s", want, notices(r))
@@ -428,8 +445,10 @@ api-keys:
 		}
 	}
 	for _, want := range []string{
-		"api-keys.openai-compatibility.models.force-mapping", "api-keys.openai-compatibility.models.image",
-		"api-keys.vertex.models.support-configuration-update", "api-keys.vertex.openapi",
+		"api-keys.openai-compatibility.models.force-mapping (built when", "api-keys.vertex.openapi (built when",
+		"api-keys.vertex.openapi-location (built when", "api-keys.vertex.models.openapi (built when",
+		"client.codex.enable-apply-patch (built when", "client.codex.optimize-multi-agent-v2 (built when",
+		"upstream.codex.stream-bootstrap-buffering (built when", "upstream.codex.stream-bootstrap-timeout (built when",
 	} {
 		if !strings.Contains(later, want) {
 			t.Errorf("not named as not supported yet: %q\n%s", want, notices(r))
@@ -437,6 +456,31 @@ api-keys:
 		if strings.Contains(dropped, want) {
 			t.Errorf("named as dropped: %q\n%s", want, notices(r))
 		}
+	}
+}
+
+// TestSessionAffinitySubagents: true is today's default and asks for nothing; false asks to spread
+// subagents over the pool, which is not done here, so it is named.
+func TestSessionAffinitySubagents(t *testing.T) {
+	for _, v := range []string{"true", "false"} {
+		r := translate(t, "routing: {session-affinity: true, session-affinity-subagents: "+v+"}")
+		got := strings.Contains(notices(r), "routing.session-affinity-subagents")
+		if got != (v == "false") {
+			t.Errorf("subagents %s: named = %v\n%s", v, got, notices(r))
+		}
+	}
+}
+
+// TestContainerSettings: a setting of a container that has no rule of its own is an unknown key,
+// not one "not supported yet".
+func TestContainerSettings(t *testing.T) {
+	r := translate(t, "observability: {logs: {mystery: 1}}\nmodels: {mystery: 1}\n")
+	n := notices(r)
+	if !strings.Contains(n, "unknown keys, ignored: ") || !strings.Contains(n, "observability.logs.mystery") || !strings.Contains(n, "models.mystery") {
+		t.Errorf("notices:\n%s", n)
+	}
+	if strings.Contains(n, "not supported yet") {
+		t.Errorf("an unknown key is called not supported yet:\n%s", n)
 	}
 }
 
@@ -554,6 +598,216 @@ claude-api-key:
 	}`)
 }
 
+// A text setting written as a scalar YAML reads as something else (a number in any base, an
+// exponent, infinity, true, a date, a number too big for 64 bits) is its text as written, as
+// today's core's typed decoder keeps it: its loader (config.LoadConfigOptional) reads each of
+// these into its string fields unchanged.
+func TestTextKeptAsWritten(t *testing.T) {
+	for _, s := range []string{
+		"0123", "1e5", "0x1F", "0o17", "0b101", ".inf", "-.Inf", ".NaN", "true", "False", "1_000", "+12", "1.0", "-0",
+		"2001-12-14", "9223372036854775808", "123456789012345678901234567890",
+	} {
+		t.Run(s, func(t *testing.T) {
+			r := translate(t, `
+server:
+  host: `+s+`
+  tls:
+    enable: true
+    cert: `+s+`
+    key: `+s+`
+  trusted-proxies:
+    - `+s+`
+routing:
+  strategy: `+s+`
+  session-affinity: true
+  session-affinity-ttl: `+s+`
+observability:
+  pprof:
+    enable: true
+    addr: `+s+`
+requests:
+  payload:
+    override:
+      - models:
+          - name: `+s+`
+            protocol: `+s+`
+            from-protocol: `+s+`
+            headers:
+              X-H: `+s+`
+            exist:
+              - `+s+`
+            not-exist:
+              - `+s+`
+        params:
+          p: x
+    default:
+      - models:
+          - name: `+s+`
+        params:
+          p: x
+    default-raw:
+      - models:
+          - name: `+s+`
+        params:
+          p: '"x"'
+    override-raw:
+      - models:
+          - name: `+s+`
+        params:
+          p: '"x"'
+    filter:
+      - models:
+          - name: `+s+`
+            protocol: `+s+`
+        params:
+          - `+s+`
+access:
+  api-keys:
+    - `+s+`
+management:
+  secret-key: `+s+`
+oauth:
+  auth-dir: `+s+`
+  providers:
+    codex:
+      signin-with-chatgpt-identifier: `+s+`
+  model-alias:
+    claude:
+      - name: `+s+`
+        alias: alias-1
+        display-name: `+s+`
+      - name: name-2
+        alias: `+s+`
+  excluded-models:
+    claude:
+      - `+s+`
+claude-api-key:
+  - api-key: `+s+`
+    prefix: `+s+`
+    base-url: `+s+`
+    headers:
+      X-A: `+s+`
+    models:
+      - name: `+s+`
+        alias: alias-4
+      - name: name-3
+        alias: `+s+`
+    excluded-models:
+      - `+s+`
+api-keys:
+  codex:
+    - name: `+s+`
+      base-url: https://codex.example.com
+      keys:
+        - api-key: `+s+`
+`)
+			lower := strings.ToLower(s)
+			want := map[string]any{
+				"listen":          net.JoinHostPort(s, "8317"),
+				"tls":             map[string]any{"enable": true, "cert": s, "key": s},
+				"trusted_proxies": []any{s},
+				// Not a duration, so the default hour, as in today's core.
+				"routing": map[string]any{"request_retry": 0, "session_affinity": map[string]any{"ttl_ms": 3600000}},
+				"pprof":   map[string]any{"enable": true, "addr": s},
+				"payload": map[string]any{
+					"override": []any{map[string]any{
+						"models": []any{map[string]any{"name": s, "protocol": s, "from-protocol": s, "headers": map[string]any{"X-H": s},
+							"exist": []any{s}, "not-exist": []any{s}}},
+						"params": map[string]any{"p": "x"},
+					}},
+					"default":      []any{map[string]any{"models": []any{map[string]any{"name": s}}, "params": map[string]any{"p": "x"}}},
+					"default-raw":  []any{map[string]any{"models": []any{map[string]any{"name": s}}, "params": map[string]any{"p": `"x"`}}},
+					"override-raw": []any{map[string]any{"models": []any{map[string]any{"name": s}}, "params": map[string]any{"p": `"x"`}}},
+					"filter":       []any{map[string]any{"models": []any{map[string]any{"name": s, "protocol": s}}, "params": []any{s}}},
+				},
+				"client_keys":    []any{s},
+				"management_key": s,
+				"extensions": map[string]any{
+					Claude: map[string]any{
+						"model_alias":     []any{map[string]any{"name": s, "alias": "alias-1", "display_name": s}, map[string]any{"name": "name-2", "alias": s}},
+						"excluded_models": []any{lower},
+						"accounts": []any{map[string]any{
+							"id": "claude-api-key-1", "credential": map[string]any{"kind": "api_key", "api_key": s},
+							"prefix": s, "settings": map[string]any{"base_url": s}, "headers": map[string]any{"X-A": s},
+							"models":          []any{map[string]any{"name": s, "alias": "alias-4"}, map[string]any{"name": "name-3", "alias": s}},
+							"excluded_models": []any{lower},
+						}},
+					},
+					Codex: map[string]any{"accounts": []any{map[string]any{
+						"id": AccountID(s), "credential": map[string]any{"kind": "api_key", "api_key": s},
+						"settings": map[string]any{"base_url": "https://codex.example.com"},
+					}}},
+				},
+			}
+			wb, err := json.Marshal(want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			equalJSON(t, r.Config, string(wb))
+			if r.AuthDir != s || r.Import.SIWCIdentifier != s {
+				t.Errorf("AuthDir = %q, SIWCIdentifier = %q, want %q", r.AuthDir, r.Import.SIWCIdentifier, s)
+			}
+			if n := notices(r); !strings.Contains(n, fmt.Sprintf("routing.strategy %q is not known", s)) {
+				t.Errorf("notices do not name the strategy %q:\n%s", s, n)
+			}
+			// A quota response mode no such text is valid for is refused, naming the text as
+			// written.
+			y := "routing: {cooldown: {quota-response-mode: " + s + "}}"
+			if _, err := Translate([]byte(y)); err == nil || !strings.Contains(err.Error(), strconv.Quote(s)) {
+				t.Errorf("%s: err = %v, want it to name %q", y, err, s)
+			}
+			// No such text is a proxy URL either, so the proxy URL check refuses a proxy-url (its
+			// error does not show a value that is not a URL, so it cannot show which text was
+			// read, but it is the URL check's, not a refusal to read the value as text).
+			for _, y := range []string{"requests: {proxy-url: " + s + "}", "claude-api-key: [{api-key: k, proxy-url: " + s + "}]"} {
+				if _, err := Translate([]byte(y)); err == nil || !strings.Contains(err.Error(), "proxy-url \"(not a valid proxy URL)\"") {
+					t.Errorf("%s: err = %v, want the proxy URL check's error", y, err)
+				}
+			}
+		})
+	}
+	// Payload values (a rule's params, a model's match) are values, as in today's core.
+	r0 := translate(t, "payload:\n  override:\n    - models: [{name: m, match: [{a: 0123}]}]\n      params: {p: 0123, q: true, r: 1e5}\n")
+	equalJSON(t, r0.Config["payload"], `{"override": [{"models": [{"name": "m", "match": [{"a": 83}]}], "params": {"p": 83, "q": true, "r": 100000}}]}`)
+	// Null is no text, as in today's core: no key, so no account.
+	r := translate(t, "access: {api-keys: [k]}\nclaude-api-key:\n  - api-key: ~\n")
+	if _, ok := r.Config["extensions"]; ok {
+		t.Errorf("api-key: ~ made an account: %v", r.Config["extensions"])
+	}
+}
+
+// Aliases and merge keys read as yaml.v3 reads them, text kept as written through them: a key's
+// own field wins over a merged one, and an earlier mapping of a merged list over a later one. A
+// file yaml.v3 refuses (repeated keys, excessive aliasing) is refused.
+func TestAliasesAndMergeKeys(t *testing.T) {
+	r := translate(t, `
+x-first: &first {base-url: 0x1F, prefix: first}
+x-second: &second {base-url: second, prefix: second, proxy-url: "http://proxy.example:8080"}
+claude-api-key:
+  - <<: [*first, *second]
+    api-key: &k 0123
+    prefix: own
+access: {api-keys: [*k]}
+`)
+	equalJSON(t, r.Config, `{
+		"listen": ":8317", "routing": {"request_retry": 0},
+		"client_keys": ["0123"],
+		"extensions": {"pluxy/claude": {"accounts": [{"id": "claude-api-key-1", "credential": {"kind": "api_key", "api_key": "0123"},
+			"prefix": "own", "proxy_url": "http://proxy.example:8080", "settings": {"base_url": "0x1F"}}]}}
+	}`)
+	bomb := "a: &a [x, x, x, x, x, x, x, x, x, x]\n"
+	for i, prev := 1, "a"; i < 9; i++ {
+		name := string(rune('a' + i))
+		bomb += name + ": &" + name + " [" + strings.Repeat("*"+prev+", ", 9) + "*" + prev + "]\n"
+		prev = name
+	}
+	for _, y := range []string{"claude-api-key: [{api-key: 0123, api-key: 0124}]", bomb} {
+		if _, err := Translate([]byte(y)); err == nil {
+			t.Errorf("%.60q: no error", y)
+		}
+	}
+}
+
 // A key with no api-key (today's core serves an upstream that needs none) is not supported
 // yet: it adds no account and is named, and the rest of the file still loads.
 func TestKeysWithoutAPIKey(t *testing.T) {
@@ -644,6 +898,47 @@ openai-compatibility:
 	}
 	if strings.Contains(n, "unknown") || strings.Contains(n, "force-model-prefix") || strings.Contains(n, "excluded-models,") {
 		t.Errorf("notices name a key that is read:\n%s", n)
+	}
+}
+
+// Entries of an openai-compatibility group that share an alias are a pool in today's core. The
+// import keeps the first and names the alias and every member it drops; a model listed twice
+// loses nothing and is not named, and in the other sections, where today's core also takes the
+// first entry, nothing is named.
+func TestAliasPoolIsNamedOnImport(t *testing.T) {
+	r := translate(t, `
+codex-api-key:
+  - api-key: k1
+    base-url: https://codex.example.com
+    models:
+      - {name: up-a, alias: pub-a}
+      - {name: up-c, alias: pub-a}
+openai-compatibility:
+  - name: compat
+    base-url: https://compat.example.com/v1
+    api-key-entries: [{api-key: k2}]
+    models:
+      - {name: deepseek-v3.1, alias: claude-opus-4.66}
+      - {name: glm-5, alias: claude-opus-4.66}
+      - {name: kimi-k2.5, alias: claude-opus-4.66}
+      - {name: glm-5, alias: claude-opus-4.66}
+      - {name: plain}
+      - {name: plain}
+`)
+	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
+	equalJSON(t, exts[OpenAICompatible].(map[string]any)["accounts"], `[{
+		"id": "compat", "models": [{"name": "deepseek-v3.1", "alias": "claude-opus-4.66"}, "plain"],
+		"settings": {"base_url": "https://compat.example.com/v1"},
+		"credential": {"kind": "api_key", "api_key": "k2"}
+	}]`)
+	n := notices(r)
+	for _, want := range []string{`openai-compatibility key compat`, `alias "claude-opus-4.66"`, `lists 3 upstream models`, `does not pool models yet`, `serves only the first, "deepseek-v3.1"`, `dropped: "glm-5", "kimi-k2.5"`} {
+		if !strings.Contains(n, want) {
+			t.Errorf("notices lack %q:\n%s", want, n)
+		}
+	}
+	if strings.Count(n, "claude-opus-4.66") != 1 || strings.Contains(n, "plain") || strings.Contains(n, "pub-a") {
+		t.Errorf("notices name more than the one pool:\n%s", n)
 	}
 }
 

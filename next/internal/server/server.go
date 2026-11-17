@@ -281,7 +281,7 @@ func (f clientFormat) writeError(w http.ResponseWriter, e *llm.Error) int {
 	case status == http.StatusTooManyRequests && e.RetryAfterMS > 0:
 		// Tell a rate-limited client when to try again, in whole seconds rounded up (RFC 9110
 		// section 10.2.3, RFC 6585 section 4).
-		w.Header().Set("Retry-After", strconv.FormatInt((e.RetryAfterMS+999)/1000, 10))
+		w.Header().Set("Retry-After", strconv.FormatInt(int64(llm.WholeSeconds(time.Duration(e.RetryAfterMS)*time.Millisecond)/time.Second), 10))
 	}
 	w.WriteHeader(status)
 	_, _ = w.Write(body)

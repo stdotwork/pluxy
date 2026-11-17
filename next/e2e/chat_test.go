@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -161,6 +162,33 @@ func startCore(t *testing.T, u *upstream, options ...func(cfg map[string]any)) s
 	return base
 }
 
+// lineWriter is an io.Writer that passes each complete line written to it to fn, without its line
+// ending. exec calls Write from one goroutine, and flush is called after Wait returns.
+type lineWriter struct {
+	buf []byte
+	fn  func(line string)
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		w.fn(strings.TrimSuffix(string(w.buf[:i]), "\r"))
+		w.buf = w.buf[i+1:]
+	}
+}
+
+// flush passes on a last line that has no line ending.
+func (w *lineWriter) flush() {
+	if len(w.buf) > 0 {
+		w.fn(string(w.buf))
+		w.buf = nil
+	}
+}
+
 // coreLog collects the lines core writes to stderr.
 type coreLog struct {
 	mu    sync.Mutex
@@ -278,36 +306,35 @@ func startCoreBin(t *testing.T, bin, path string, args ...string) (string, *core
 	cmd := exec.CommandContext(ctx, bin, append([]string{"-config", path}, args...)...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 10 * time.Second
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
+	addr := make(chan string, 1)
+	// Core's stderr goes through a writer, so os/exec copies it on a goroutine of its own and
+	// Wait does not return before it has copied every line. Each line is logged before the
+	// test's cleanup is done, never after the test has ended.
+	w := &lineWriter{fn: func(line string) {
+		t.Logf("core: %.4096s", line)
+		logs.add(line)
+		if rest, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
+			select {
+			case addr <- rest:
+			default:
+			}
+		}
+	}}
+	cmd.Stderr = w
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	exited := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		w.flush()
+		close(addr) // core exited
+		close(exited)
+	}()
 	t.Cleanup(func() {
 		cancel()
-		_ = cmd.Wait()
+		<-exited
 	})
-	addr := make(chan string, 1)
-	go func() {
-		defer close(addr) // core exited
-		sc := bufio.NewScanner(stderr)
-		// A line can hold a whole reply's translation report; a scanner that stopped at a long
-		// line would leave core blocked writing its log.
-		sc.Buffer(nil, 256<<20)
-		for sc.Scan() {
-			line := sc.Text()
-			t.Logf("core: %.4096s", line)
-			logs.add(line)
-			if rest, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
-				select {
-				case addr <- rest:
-				default:
-				}
-			}
-		}
-	}()
 	select {
 	case a, ok := <-addr:
 		if !ok {

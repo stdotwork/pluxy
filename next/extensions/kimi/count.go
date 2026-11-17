@@ -23,7 +23,8 @@ const tokenCountingBeta = "token-counting-2024-11-01"
 // countTokens counts a request's input tokens with Kimi's Messages count endpoint,
 // {base_url}/v1/messages/count_tokens, as today's core does for every client format: a Messages
 // request is counted as Kimi's Messages API would get it, any other is rebuilt as Messages with
-// the fields count_tokens takes.
+// the fields count_tokens takes. Under the reject drop policy it refuses what generating the same
+// request would refuse (countRefusal).
 func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -31,6 +32,9 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	token, _, err := bearer(call.Account.Credential)
 	if err != nil {
+		return err
+	}
+	if err := countRefusal(call.Request); err != nil {
 		return err
 	}
 	body, native, err := countBody(call.Request)
@@ -82,6 +86,18 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, &llm.Usage{InputTokens: &n, Raw: llm.RawJSON(raw)})
+}
+
+// countRefusal returns the refusal generating req would give under the reject drop policy, or
+// nil. A count is rebuilt as Messages, but generating sends a request in a format Kimi has an API
+// for as it came and rebuilds any other as Chat Completions (upstreamFor, passesThrough), so the
+// count refuses on what the Chat rebuild drops, not on what the Messages rebuild drops.
+func countRefusal(req llm.Request) error {
+	if req.DropPolicy != llm.DropReject || passesThrough(req, upstreamFor(req)) {
+		return nil
+	}
+	_, _, err := encodeChat(req)
+	return err
 }
 
 // countBody returns the count_tokens body for req, and whether it is the client's own Messages

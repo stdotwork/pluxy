@@ -20,6 +20,27 @@ func TestConfigRefusesHugeTimings(t *testing.T) {
 	}
 }
 
+// An account that lists two upstream models under one name is refused, naming the alias and the
+// account, where it was used to serve the first and ignore the rest. The same model listed
+// twice, and one name per model, still load.
+func TestConfigRefusesRepeatedModelAlias(t *testing.T) {
+	cfg := func(models string) string {
+		return `{"listen":"127.0.0.1:0","client_keys":["k"],"extension":{"manifest":"m.json","accounts":[{"id":"pool","models":` + models + `}]}}`
+	}
+	_, err := ParseConfig([]byte(cfg(`[{"name":"up-a","alias":"pub"},{"name":"up-b","alias":"pub"}]`)), "/tmp/config.json")
+	if err == nil || !strings.Contains(err.Error(), `"pub"`) || !strings.Contains(err.Error(), `"pool"`) {
+		t.Errorf("ParseConfig = %v, want a refusal naming the alias \"pub\" and the account \"pool\"", err)
+	}
+	for _, models := range []string{
+		`[{"name":"up-a","alias":"pub"},{"name":"up-a","alias":"pub"}]`,
+		`[{"name":"up-a","alias":"pub-a"},{"name":"up-b","alias":"pub-b"},"up-c"]`,
+	} {
+		if _, err := ParseConfig([]byte(cfg(models)), "/tmp/config.json"); err != nil {
+			t.Errorf("models %s: ParseConfig = %v, want none", models, err)
+		}
+	}
+}
+
 // token_count_estimate is on unless the config turns it off, in a JSON config and, under the same
 // name, in a config.yaml. A value that is not a boolean is refused.
 func TestConfigTokenCountEstimate(t *testing.T) {
@@ -134,6 +155,51 @@ claude-api-key:
 	// A JSON config is not read as YAML.
 	if _, err := ParseConfig([]byte("port: 9100\n"), "/srv/pluxy/config.json"); err == nil {
 		t.Error("a config.json in YAML was accepted")
+	}
+}
+
+// A config.yaml's payload rules load as today's core reads them: the fields it reads as text
+// (a model's name, protocol, from-protocol, headers, exist and not-exist, a filter's params)
+// keep the text as written, however YAML would read it; a rule's params and a model's match
+// keep their values.
+func TestConfigYAMLPayloadText(t *testing.T) {
+	cfg := `
+api-keys: [k]
+auth-dir: auths
+payload:
+  override:
+    - models:
+        - name: 0123
+          protocol: codex
+          from-protocol: 0x1F
+          headers: {X-Pin: 0123, X-Flag: true}
+          exist: [0, 1e5]
+          not-exist: [2001-12-14]
+          match: [{a: 0123}]
+        - name: 2001-12-14
+      params: {p: 0123, q: true}
+  filter:
+    - models: [{name: "*"}]
+      params: [0, true]
+`
+	c, err := ParseConfig([]byte(cfg), "/srv/pluxy/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Payload.Override[0]
+	m := o.Models[0]
+	if m.Name != "0123" || m.FromProtocol != "0x1F" || !reflect.DeepEqual(m.Headers, map[string]string{"X-Pin": "0123", "X-Flag": "true"}) ||
+		!reflect.DeepEqual(m.Exist, []string{"0", "1e5"}) || !reflect.DeepEqual(m.NotExist, []string{"2001-12-14"}) {
+		t.Errorf("model %+v", m)
+	}
+	if n := o.Models[1].Name; n != "2001-12-14" {
+		t.Errorf("model name %q, want 2001-12-14", n)
+	}
+	if !reflect.DeepEqual(m.Match, []map[string]any{{"a": float64(83)}}) || !reflect.DeepEqual(o.Params, map[string]any{"p": float64(83), "q": true}) {
+		t.Errorf("match %v, params %v: want the values 83 and true", m.Match, o.Params)
+	}
+	if p := c.Payload.Filter[0].Params; !reflect.DeepEqual(p, []string{"0", "true"}) {
+		t.Errorf("filter params %q", p)
 	}
 }
 
