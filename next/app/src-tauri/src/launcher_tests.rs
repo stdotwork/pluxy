@@ -340,3 +340,54 @@ fn a_remembered_launch_in_wsl_keeps_its_line_and_its_folder_there() {
         .iter()
         .any(|e| e.id == bob_id && e.shown.as_deref() == Some(line)));
 }
+
+/// Removing a WSL environment forgets its remembered launches (handing back their approvals for
+/// revoking) and its recent folders: none of them starts again in one click, even in a
+/// distribution or user made again under the same names. Other environments' and this computer's
+/// stay.
+#[test]
+fn removing_an_environment_forgets_its_launches_and_folders() {
+    let mut l = launcher();
+    let bob = Environment::wsl("Ubuntu", "bob").unwrap();
+    let alice = Environment::wsl("Ubuntu", "alice").unwrap();
+    let (cb, ca) = (client_in("c", &bob), client_in("c", &alice));
+    let input = |u: &str| json!({"executable": "wsl.exe", "argv": ["-d", "Ubuntu", "-u", u], "cwd": "C:\\"});
+    let (b, _) = l.keep(
+        &cb,
+        &input("bob"),
+        Some(("line bob", "/home/bob/p")),
+        "a-bob",
+    );
+    let (b2, _) = l.keep(
+        &client_in("d", &bob),
+        &input("bob2"),
+        Some(("line bob", "/home/bob")),
+        "a-bob2",
+    );
+    let (a, _) = l.keep(
+        &ca,
+        &input("alice"),
+        Some(("line alice", "/home/alice")),
+        "a-alice",
+    );
+    let local = json!({"executable": "/bin/true", "argv": [], "cwd": "/"});
+    let (here, _) = l.keep("c", &local, None, "a-here");
+    for (c, f) in [
+        (cb.as_str(), "/home/bob/p"),
+        (ca.as_str(), "/home/alice"),
+        ("c", "/"),
+    ] {
+        l.remember_folder(c, f);
+    }
+    let mut gone = l.forget_environment(&bob);
+    gone.sort();
+    assert_eq!(gone, ["a-bob", "a-bob2"]);
+    let ids: Vec<&str> = l.store.entries.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, [a.as_str(), here.as_str()]);
+    assert!(!ids.contains(&b.as_str()) && !ids.contains(&b2.as_str()));
+    let kept: Vec<&str> = l.store.history.keys().map(String::as_str).collect();
+    assert_eq!(kept, ["c", ca.as_str()]);
+    // This computer is no environment to remove.
+    assert!(l.forget_environment(&Environment::Local).is_empty());
+    assert_eq!(l.store.entries.len(), 2);
+}

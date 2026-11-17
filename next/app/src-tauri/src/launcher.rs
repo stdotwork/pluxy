@@ -220,6 +220,26 @@ impl Launcher {
         (id, None)
     }
 
+    /// Forgets environment's remembered launches and recent folders (its record was removed):
+    /// the approvals of the launches forgotten, which the caller revokes.
+    /// Its launches go by `client_in`'s name, which only a launch there has.
+    fn forget_environment(&mut self, environment: &Environment) -> Vec<String> {
+        if environment.is_local() {
+            return Vec::new();
+        }
+        let there = client_in("", environment);
+        let mut gone = Vec::new();
+        self.store.entries.retain(|e| {
+            let keep = e.shown.is_none() || !e.client.ends_with(&there);
+            if !keep {
+                gone.push(e.approval.clone());
+            }
+            keep
+        });
+        self.store.history.retain(|c, _| !c.ends_with(&there));
+        gone
+    }
+
     /// Binds entry id to approval, a fresh confirmation of it: the approval it replaced, if any
     /// other, which the caller revokes so that nothing still replays the old one.
     fn replace(&mut self, id: &str, approval: &str) -> Option<String> {
@@ -230,6 +250,24 @@ impl Launcher {
         }
         Some(std::mem::replace(&mut e.approval, approval.to_string()))
     }
+}
+
+/// Forgets environment's remembered launches and recent folders, and revokes their approvals:
+/// its record was removed, so none of them starts again (not even in a distribution or user made
+/// again under the same names, which the person adds again).
+pub fn forget_environment(app: &AppHandle, environment: &Environment) -> Result<(), String> {
+    let gone = {
+        let st = app.state::<App>();
+        let mut l = st.launcher.lock().unwrap();
+        let gone = l.forget_environment(environment);
+        l.save()?;
+        gone
+    };
+    for approval in gone {
+        revoke_superseded(app, Some(approval));
+    }
+    refresh_tray(app);
+    Ok(())
 }
 
 /// Revokes approval, which a fresh confirmation of the same launch replaced.

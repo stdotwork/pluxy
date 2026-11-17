@@ -2629,6 +2629,8 @@ fn environment_remove(webview: Webview, distro: String, user: String) -> Result<
         let st = webview.state::<App>();
         let removed = st.environments.lock().unwrap().remove(&env)?;
         st.programs.stop_in(&env);
+        // Its remembered launches go too: one click would start them in whatever is there now.
+        launcher::forget_environment(webview.app_handle(), &env)?;
         Ok(serde_json::json!({"removed": removed}))
     }
     #[cfg(not(native_stack))]
