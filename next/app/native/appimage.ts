@@ -5,8 +5,8 @@
 // cases with a known content for the gate to pass or refuse.
 //
 // The runtime is the x86_64 asset of AppImage/type2-runtime's release 20251108. It is downloaded
-// when needed, kept in the user's cache folder, and checked against the SHA-256 below every time
-// it is used. GitHub does not mark the release immutable, so the digest is what pins it. It was
+// when needed (a refusal GitHub's releases give now and then is retried, see downloadPinned),
+// kept in the user's cache folder, and checked against the SHA-256 below every time it is used. GitHub does not mark the release immutable, so the digest is what pins it. It was
 // checked when pinned: GitHub's own digest for the asset (releases API, `digest`) equals the
 // sha256sum of the downloaded file, and the release's detached signature (runtime-x86_64.sig)
 // verifies with gpg against the public key the release ships (signing-pubkey.asc, fingerprint
@@ -53,9 +53,64 @@ echo "pluxy-appimage-smoke arg=$1 appimage=\${APPIMAGE:+set} appdir=$APPDIR"
 
 const sha256 = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
 
+/** How a download is retried. GitHub's release downloads now and then refuse a request that a
+ * second try passes (403 and 429 from rate limiting, 5xx from the CDN), and a network error is
+ * as passing. The waits and the budget keep a download that will not pass from stalling a job. */
+export interface Retry {
+  /** The wait before each retry; the download is tried once more than there are waits. */
+  backoffMs: readonly number[];
+  /** The longest the whole download may take, tries and waits together. */
+  budgetMs: number;
+  /** The longest one try may take, its body included. */
+  attemptMs: number;
+}
+
+const RETRY: Retry = { backoffMs: [1_000, 2_000, 4_000, 8_000], budgetMs: 60_000, attemptMs: 20_000 };
+
+/** The statuses a retry can change: refused or rate limited (403, 429) and a server's own failure. */
+const retryable = (status: number) => status === 403 || status === 429 || status >= 500;
+
+/** A pinned file downloaded and checked against its digest. A refusal that can pass and a
+ * network error are retried with a growing wait, within the budget; any other status stops at
+ * once, and bytes with another digest are never retried: they are an answer, not a failure.
+ * When every try fails, the error names each one. */
+export async function downloadPinned(pin: Pin, retry: Retry = RETRY): Promise<Uint8Array> {
+  const started = Date.now();
+  const tries: string[] = [];
+  for (let attempt = 0; ; attempt++) {
+    const signal = AbortSignal.timeout(
+      Math.max(1, Math.min(retry.attemptMs, retry.budgetMs - (Date.now() - started))),
+    );
+    let bytes: Uint8Array | undefined;
+    let failure = "";
+    let again = true;
+    try {
+      const response = await fetch(pin.url, { signal });
+      if (response.ok) bytes = new Uint8Array(await response.arrayBuffer());
+      else {
+        failure = `HTTP ${response.status}`;
+        again = retryable(response.status);
+      }
+    } catch (e) {
+      failure = e instanceof Error ? e.message : String(e);
+    }
+    if (bytes) {
+      const got = sha256(bytes);
+      if (got !== pin.sha256) throw new Error(`${pin.url} has SHA-256 ${got}, not the pinned ${pin.sha256}`);
+      return bytes;
+    }
+    tries.push(`attempt ${attempt + 1}: ${failure}`);
+    const wait = retry.backoffMs[attempt];
+    if (!again || wait === undefined || Date.now() - started + wait >= retry.budgetMs) {
+      throw new Error(`downloading ${pin.url} failed (${tries.join("; ")})`);
+    }
+    await Bun.sleep(wait);
+  }
+}
+
 /** A pinned file's bytes, from the cache folder or downloaded, checked against its digest every
  * time. The caller uses these bytes, never the cache file again, so nothing unchecked runs. */
-export async function pinnedBytes(pin: Pin): Promise<Uint8Array> {
+export async function pinnedBytes(pin: Pin, retry?: Retry): Promise<Uint8Array> {
   const dir = join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "pluxy-app-native");
   mkdirSync(dir, { recursive: true });
   const file = join(dir, pin.cache);
@@ -65,11 +120,7 @@ export async function pinnedBytes(pin: Pin): Promise<Uint8Array> {
   }
   rmSync(file, { force: true });
 
-  const response = await fetch(pin.url);
-  if (!response.ok) throw new Error(`downloading ${pin.url}: HTTP ${response.status}`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  const got = sha256(bytes);
-  if (got !== pin.sha256) throw new Error(`${pin.url} has SHA-256 ${got}, not the pinned ${pin.sha256}`);
+  const bytes = await downloadPinned(pin, retry);
   const part = `${file}.${randomUUID()}`;
   writeFileSync(part, bytes, { flag: "wx", mode: 0o600 });
   renameSync(part, file);

@@ -1482,7 +1482,8 @@ fails the run at setup, naming its package, and never skips:
 - the tray watcher service, which owns `org.kde.StatusNotifierWatcher`: the probe registers a
   status notifier item with it and finds the item in `RegisteredStatusNotifierItems`;
 - a disposable AppImage, built from a pinned release of the AppImage type 2 runtime (downloaded
-  into `~/.cache/pluxy-app-native`, its SHA-256 checked; `mksquashfs` builds the image), which runs
+  into `~/.cache/pluxy-app-native`, its SHA-256 checked; a refused or failed request (403, 429, 5xx,
+  a network error) is tried again within a minute, bytes with another digest never; `mksquashfs` builds the image), which runs
   with `APPIMAGE_EXTRACT_AND_RUN=1`, the FUSE-free way to run an AppImage, in the run's cleared
   environment. It is a fixture, not the app's own package.
 
