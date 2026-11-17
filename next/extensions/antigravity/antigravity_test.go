@@ -252,7 +252,7 @@ func TestAllOfMerged(t *testing.T) {
 			`{"description":"No extra properties allowed","properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`,
 			`{"description":"No extra properties allowed","properties":{"a":{"type":"string"}},"required":["a"],"title":"T","type":"object"}`,
 			`{"description":"No extra properties allowed","properties":{"a":{"type":"string"}},"required":["a"],"title":"T","type":"object"}`,
-			""}, // the response schema is not compared: the extension drops a response schema's title, allOf or not, where today's core keeps it
+			`{"additionalProperties":false,"properties":{"a":{"type":"string"}},"required":["a"],"title":"T","type":"object"}`},
 		{"descs", `{"type":"object","description":"P","allOf":[{"description":"B","properties":{"a":{"type":"string"}},"required":["a"]}]}`,
 			`{"description":"P","properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`,
 			`{"description":"P","properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`,
@@ -298,15 +298,61 @@ func TestAllOfMerged(t *testing.T) {
 					t.Errorf("%s: parameters\n %s\nwant\n %s", m.name, got, m.want)
 				}
 			}
-			if c.response == "" {
-				return
-			}
 			gen := map[string]json.RawMessage{"responseSchema": json.RawMessage(c.schema)}
 			cleanResponseSchema(gen)
 			if got := string(gen["responseSchema"]); !sameJSON(t, got, c.response) {
 				t.Errorf("response schema\n %s\nwant\n %s", got, c.response)
 			}
 		})
+	}
+}
+
+// Google's Schema type, the one Cloud Code's response_schema and function declarations take, has a
+// title field, so a response schema keeps every title the client wrote, as today's core does
+// (CleanJSONSchemaForAntigravityResponse removes none). A function's parameters keep titles only
+// for Claude and Gemini 3 Pro, and a function declaration's response schema follows the same rule
+// (today's core cleans it as it cleans parameters). Each expected value is today's core's output.
+func TestTitleKept(t *testing.T) {
+	for _, c := range []struct{ name, schema, response string }{
+		{"root, properties and a property named title", `{"properties":{"a":{"title":"A","type":"string"},"title":{"title":"Kind","type":"string"}},"required":["a"],"title":"Resp","type":"object"}`,
+			`{"properties":{"a":{"title":"A","type":"string"},"title":{"title":"Kind","type":"string"}},"required":["a"],"title":"Resp","type":"object"}`},
+		{"array, items and a union of two", `{"properties":{"rows":{"items":{"properties":{"id":{"title":"Id","type":"integer"}},"title":"Row","type":"object"},"title":"Rows","type":"array"},"u":{"anyOf":[{"title":"S","type":"string"},{"title":"I","type":"integer"}],"title":"U"}},"title":"R","type":"object"}`,
+			`{"properties":{"rows":{"items":{"properties":{"id":{"title":"Id","type":"integer"}},"title":"Row","type":"object"},"title":"Rows","type":"array"},"u":{"anyOf":[{"title":"S","type":"string"},{"title":"I","type":"integer"}],"title":"U"}},"title":"R","type":"object"}`},
+		{"$ref target", `{"$defs":{"M":{"properties":{"x":{"type":"string"}},"title":"M","type":"object"}},"properties":{"m":{"$ref":"#/$defs/M"}},"type":"object"}`,
+			`{"properties":{"m":{"properties":{"x":{"type":"string"}},"title":"M","type":"object"}},"type":"object"}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			gen := map[string]json.RawMessage{"responseSchema": json.RawMessage(c.schema)}
+			cleanResponseSchema(gen)
+			if got := string(gen["responseSchema"]); !sameJSON(t, got, c.response) {
+				t.Errorf("response schema\n %s\nwant\n %s", got, c.response)
+			}
+		})
+	}
+	// A function declaration's response schema: other models lose titles, Gemini 3 Pro and Claude keep them.
+	in := `[{"functionDeclarations":[{"name":"f","parameters":{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]},` +
+		`"response":{"type":"object","title":"Resp","properties":{"a":{"type":"string","title":"A"}},"required":["a"]}}]}]`
+	for _, m := range []struct {
+		name          string
+		claude, group bool
+		want          string
+	}{
+		{"other models", false, false, `{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}`},
+		{"Gemini 3 Pro", false, true, `{"type":"object","title":"Resp","properties":{"a":{"type":"string","title":"A"}},"required":["a"]}`},
+		{"Claude", true, true, `{"type":"object","title":"Resp","properties":{"a":{"type":"string","title":"A"}},"required":["a"]}`},
+	} {
+		out, _ := cleanTools(json.RawMessage(in), m.claude, m.group)
+		var tools []struct {
+			Decls []struct {
+				Response json.RawMessage `json:"response"`
+			} `json:"functionDeclarations"`
+		}
+		if err := json.Unmarshal(out, &tools); err != nil || len(tools) != 1 || len(tools[0].Decls) != 1 {
+			t.Fatalf("%s: cleaned tools %s (%v)", m.name, out, err)
+		}
+		if got := string(tools[0].Decls[0].Response); !sameJSON(t, got, m.want) {
+			t.Errorf("%s: function response schema\n %s\nwant\n %s", m.name, got, m.want)
+		}
 	}
 }
 
