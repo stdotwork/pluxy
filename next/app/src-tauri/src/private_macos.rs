@@ -6,13 +6,19 @@
 //!
 //! - a private folder has no entries: one with any is given an empty list (`clear_entries`), as a
 //!   too-open folder is tightened to 0700, so what is made in it inherits none;
-//! - a private file the app reads has none: one with any is refused (`has_entries`);
+//! - where the app checks a private file's mode before using it (the vault's files, the
+//!   remembered launches, the instance folder's lock and address, an installed core's files), a
+//!   file with any entry is refused too (`has_entries`);
 //! - a file the app writes privately is made with an empty list that takes nothing from its
 //!   folder (`create_new`), so no entry is on it at any moment.
 //!
-//! Every check and change goes through the open descriptor, never a path a link could redirect.
-//! libc has no bindings for these calls: they are libSystem's (acl(3), `acl_get_fd_np`,
-//! `acl_set_fd_np`), declared here.
+//! Files and folders already inside a folder when it is emptied keep what they had. Each check
+//! and change acts on an open descriptor, opened as the caller's mode check opens it: the vault,
+//! the instance folder, the settings folder and what is inside the app's core folder are opened
+//! without following a link; Access's store, the cores store and the device store open their
+//! folder by its path, following a link as their mode change does, and make their files in it by
+//! path. libc has no bindings for these calls: they are libSystem's (acl(3), `acl_get_fd_np`,
+//! `acl_set_fd_np`, filesec(3), `openx_np`), declared here.
 
 use std::ffi::c_void;
 use std::fs::File;
