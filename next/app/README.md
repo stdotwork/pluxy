@@ -313,7 +313,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `page_open`, `page_place`, `page_close` | Opens an extension page's webview over part of the window, moves it, closes it |
 | `page_send` | Passes the window's channel messages to a page's webview |
 | `confirmation_request` | Opens native review for an opaque action ID already prepared by native code; returns no approval or token |
-| `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches (Linux) |
+| `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches |
 | `release_get`, `release_check` | The release feed's view (versions, dates, status); `release_check` reads the feed first ("Check for Updates") |
 | `release_channel_set` | Picks the Stable or the Preview (latest) channel |
 | `release_source_set` | Asks to change or remove the feed's address; opens a native confirmation (Linux) and applies nothing itself |
@@ -324,25 +324,25 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_install` | Installs or updates a package from one of those registries |
 | `device_install_file` | Opens the native file chooser and installs or updates the package chosen there (Linux) |
 | `device_enable`, `device_remove`, `device_rollback` | Enables or disables (a native tool only through its native confirmation), removes, or rolls back a package on this device |
-| `device_imports` | Allows a curated web package's native imports, through a native confirmation, or revokes them (Linux) |
+| `device_imports` | Allows a curated web package's native imports, through a native confirmation, or revokes them |
 | `device_page_open` | Opens a webview for a page of a package on this device, at the address its catalog keeps |
 | `access_list` | The approved signers and every grant of Access |
 | `access_signer` | Opens a native confirmation to approve a device package's signer for its source |
 | `access_grant` | Opens the native file chooser for a package's declared resource, then a native confirmation, and keeps the grant |
 | `access_revoke` | Revokes a grant, answering once the reads under it have finished |
-| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given (Linux) |
-| `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, its vault journals, open and recently ended, or why they cannot be read, and its managed runtimes, running, ended or `unknown` (left running by a run of the app that did not stop them) (Linux) |
+| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given |
+| `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, its vault journals, open and recently ended, or why they cannot be read, and its managed runtimes, running, ended or `unknown` (left running by a run of the app that did not stop them) |
 | `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID (Linux) |
 | `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one (Linux) |
 | `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key (Linux) |
 | `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it (Linux) |
 | `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it (Linux) |
-| `launcher_state` | The launcher's state: whether the execution program can be used, the remembered launches with their source, the recent folders and the notice setting (Linux) |
-| `launcher_terminals` | The terminals the execution program finds, Automatic first (Linux) |
-| `launcher_launch` | A new launch, prepared by the execution program; it always opens the native confirmation (Linux) |
-| `launcher_start` | Starts a remembered launch again in one click, from the window only, with its remembered approval (Linux) |
-| `launcher_forget` | Forgets a remembered launch, revoking its approval (Linux) |
-| `launcher_settings` | Whether a one-click start shows a launch notice (Linux) |
+| `launcher_state` | The launcher's state: whether the execution program can be used, the remembered launches with their source, the recent folders and the notice setting |
+| `launcher_terminals` | The terminals the execution program finds, Automatic first |
+| `launcher_launch` | A new launch, prepared by the execution program; it always opens the native confirmation |
+| `launcher_start` | Starts a remembered launch again in one click, from the window only, with its remembered approval |
+| `launcher_forget` | Forgets a remembered launch, revoking its approval |
+| `launcher_settings` | Whether a one-click start shows a launch notice |
 | `app_update_get` | The Application Update card's state |
 | `app_update_start` | **Update Now**: downloads, checks and installs the newer release, then restarts the app; the window hears `pluxy-app-update` as it goes |
 | `app_update_cancel` | **Cancel Download** |
@@ -601,23 +601,24 @@ records that admission against the release, source, signer and key. Disabling, u
 back or removing it ends the admission, so a new release asks again. A native release replaces
 another only if it reads the state version the other writes.
 
-The program host (`src-tauri/src/program.rs`, Linux) runs an admitted tool only on demand: at its
+The program host (`src-tauri/src/program.rs`; on Linux, Windows and macOS) runs an admitted tool only on demand: at its
 first call from the window, from what `Catalog::admitted` returns then, after checking the
 admission, the root, the signature and every installed file again. It opens the program, checks
 its SHA-256 against the record and runs that opened file, in its package folder, with a cleared
-environment, only its three private pipes, a process group of its own and a parent-death signal,
-from a supervisor thread that stays until the tool has been reaped. Calls follow [app program
+environment, only its three private pipes, a process group of its own (on Windows a job object)
+and on Linux a parent-death signal, from a supervisor thread that stays until the tool has been reaped. Calls follow [app program
 contract v0](app-host/README.md#app-program-contract-v0), one at a time. When the last call
 ends, the tool stops after 30 seconds idle; closing the window cancels its calls, so their tools
 stop when idle. Any change to its package (disable, update, roll back, remove) and quitting the
 app stop it at once, and once the app is quitting no call starts a tool. Stopping closes its
 stdin, kills its whole process group after five seconds and reaps it: no process or thread of it
-is left. If the app itself dies, the tool gets SIGTERM and nothing kills its group, so a tool must
-end the processes it started when its input ends and on SIGTERM. Pages, including the tool's own,
+is left. If the app itself dies, the tool gets SIGTERM on Linux, sees its input close on macOS,
+and ends with its job on Windows ([Windows and macOS](app-host/README.md#windows-and-macos)), so
+a tool must end the processes it started when its input ends and on SIGTERM. Pages, including the tool's own,
 have no program command and no route to its pipes; they reach operations only through the router,
 below.
 
-Every call of a native tool's operation goes through the router (`src-tauri/src/route.rs`, Linux):
+Every call of a native tool's operation goes through the router (`src-tauri/src/route.rs`):
 from the window, from a page (its `native.call` method, answered in the page's own webview) and
 from another native tool (a call on its pipe). The router checks each call against the catalog at
 that moment: a tool calls only what it imports and its target exports, under an accepted export
@@ -1453,7 +1454,8 @@ fails the run at setup, naming its package, and never skips:
 - the tray watcher service, which owns `org.kde.StatusNotifierWatcher`: the probe registers a
   status notifier item with it and finds the item in `RegisteredStatusNotifierItems`;
 - a disposable AppImage, built from a pinned release of the AppImage type 2 runtime (downloaded
-  into `~/.cache/pluxy-app-native`, its SHA-256 checked; `mksquashfs` builds the image), which runs
+  into `~/.cache/pluxy-app-native`, its SHA-256 checked; a refused or failed request (403, 429, 5xx,
+  a network error) is tried again within a minute, bytes with another digest never; `mksquashfs` builds the image), which runs
   with `APPIMAGE_EXTRACT_AND_RUN=1`, the FUSE-free way to run an AppImage, in the run's cleared
   environment. It is a fixture, not the app's own package.
 
@@ -1552,16 +1554,28 @@ app supported there:
 - The vault's private storage is built and unit tested there ([Limits](#limits)).
 - How the app starts, holds and stops processes is built there (`src-tauri/src/owned/`: a job
   object on Windows, a process group on macOS), and CI checks that each of its lifetime tests ran
-  and passed ([Windows and macOS](app-host/README.md#windows-and-macos)). Nothing reaches it at
-  run time there yet: the native tools and the app's own core that would use it are refused
-  (below).
+  and passed ([Windows and macOS](app-host/README.md#windows-and-macos)). Native tools, their
+  managed runtimes and confirmed launches reach it at run time there; the app's own core, which
+  would too, is refused (below).
+- Native tools run there as on Linux: enabling a package and its native imports, the router, the
+  program host, the launch service and the launcher, and the vault for tools' backups and
+  journals, with the differences [Windows and macOS](app-host/README.md#windows-and-macos) lists.
+  A client page reaches its writer tool only where that tool has a program for the system
+  ([app tools](../app-tools/README.md) says which do). Clippy and the Rust tests check this there;
+  no native session starts a tool on those systems yet, and outside tests nothing can be
+  installed to run, as there are no production trust roots ([Limits](#limits)).
 - On Windows, the page document's address is `http://pluxy-page.localhost/`, and the app holds a
   page's frame to its site through WebView2's frame navigation event (`src-tauri/src/page_frames.rs`).
-- The app tools' readers, usage parsers and execution program build and pass their tests there,
-  and `pluxy/wsl` lists WSL distributions and users ([app tools](../app-tools/README.md)).
+- The app tools' readers, usage parsers and execution program, the writer library and the
+  Claude Code and Codex setup tools build and pass their tests there, and `pluxy/wsl` lists WSL
+  distributions and users ([app tools](../app-tools/README.md)).
 
-Still refused at run time there: native tools (so the client pages, the launcher, Access, native
-imports, client keys, core aliases, and the vault's use and its secret entry), the app's own core
+Access gives no page anything there: approving a signer and making a grant are Linux only, so no
+signer or grant can be made. On Windows its commands and a page's Access calls are refused; on
+macOS its list, revocation and a page's calls answer, with nothing granted.
+
+Still refused at run time there: a native tool's `files` frames (saving a file), the vault's
+secret entry and list, client keys and core aliases, the app's own core
 (on Windows the store of its versions does not open, so nothing installs or starts; on macOS the
 store opens, but installing, adopting and rolling back a version need the native confirmation,
 which core changes have on Linux only, so no version is installed and none starts), installing a
@@ -1571,20 +1585,23 @@ in the browser. The app updates itself only as a Linux AppImage.
 ## Limits
 
 - Device extensions: no production trust roots (so no curated source outside tests) or settings
-  yet, and native tools run on Linux only (5.11 or later: the program host needs
-  `close_range` with `CLOSE_RANGE_CLOEXEC`); the host starts only a launch the person confirmed,
+  yet, and native tools run on Linux (5.11 or later: the program host needs `close_range` with
+  `CLOSE_RANGE_CLOEXEC`), Windows and macOS, where a tool's `files` frames (saving a file) are
+  refused; the host starts only a launch the person confirmed,
   when the tool serving that call asks ([Launches and managed runtimes](app-host/README.md#launches-and-managed-runtimes));
   installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
-- Vault: Linux only. Its storage is built and unit tested on Windows (in the local data folder,
-  private by its access list) and macOS too, but not used there yet. Secrets are kept in a file
+- Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
+  entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the
+  local data folder, private by its access list. Secrets are kept in a file
   only the user may read (0600 on Linux and macOS) in the app's data folder, not in the system
   keyring, and only exact values are redacted. On macOS the modes are checked, not extended access
   lists. The window has no vault page yet. Secrets reach
   native tools' pipes and the environment of a process a confirmed launch starts (the launching
   tool holds only a reference); a client key is checked at each use, also at a launch's spawn and
   each restart. Backups have no retention: a package keeps at most 256.
-- Access: Linux only (5.8 or later: grants record the `statx` mount ID); web packages only; reads only (no writes or watchers); a signature only
+- Access: signers and grants can be made on Linux only (5.8 or later: grants record the `statx`
+  mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
 - The native test runs on Linux, except its platform, package and dialogs sessions, which CI

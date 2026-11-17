@@ -11,6 +11,15 @@ fn main() {
             || std::env::var("PROFILE").as_deref() == Ok("debug"),
         "native-test fixture actions must never be built in a release profile"
     );
+    // `native_stack`: the platforms the app runs native tools on (the router, the program host,
+    // the spawn service, the vault, the launcher and the native confirmations they ask).
+    println!("cargo:rustc-check-cfg=cfg(native_stack)");
+    if matches!(
+        std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("linux" | "windows" | "macos")
+    ) {
+        println!("cargo:rustc-cfg=native_stack");
+    }
     use sha2::{Digest, Sha256};
     // Package tooling validates these snapshots from the same OUT_DIR as the app build.
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo OUT_DIR"));

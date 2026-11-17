@@ -18,7 +18,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | Path | What it is |
 | --- | --- |
 | `cmd/pluxy` | The core program. |
-| `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index. |
+| `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index; packs the desktop app's native tools with `-app-tools`. |
 | `protocol/` | The extension protocol: [README](protocol/README.md), [tutorial](protocol/TUTORIAL.md), wire types and framing. |
 | `llm/` | The internal model of a request and its streamed reply, shared by core and extensions. |
 | `sdk/` | Go SDK for writing extensions. |
@@ -303,6 +303,19 @@ the same sources twice gives byte-identical archives and index. `-platforms` def
 platform; `-extensions codex,claude` packs only those extension folders, by folder name or
 package ID. `go run ./cmd/pluxy-pack -h` lists the flags.
 
+With `-app-tools <folder>` it packs the desktop app's native tools under `app-tools/` instead
+(not the test fixture `usage-fixture`), each for the platforms among `-platforms` that its
+manifest names. It builds nothing: Rust tools are built on each platform's own runner, and it
+takes each program from `<folder>/<goos>-<goarch>/<program file name>`, failing when one is
+missing. It writes `dist/app-tools/<publisher>-<name>-<version>-<goos>-<goarch>.tar.gz` and
+`dist/app-tools/index.json`, an index for the app's device registries (no `protocol`). The app
+installs a native tool only with a curated signature, which this does not add, so nothing
+publishes these yet; `.github/workflows/next-app-tools-pack.yml` builds and packs them to check:
+
+```bash
+go run ./cmd/pluxy-pack -out dist -app-tools programs -platforms linux/amd64,windows/amd64
+```
+
 Core installs and enables every package the bundled index lists on its first start with an
 empty packages folder:
 
@@ -563,6 +576,27 @@ Claude 4.6 and later, and a thinking budget from Claude 3.7 to 4.5 (low 1024, me
 24576 tokens); a model name the extension does not know as a Claude model gets no thinking
 settings, and the effort is reported as dropped. The extension never changes how a client presents itself: a client that is
 not Claude Code is not made to look like Claude Code.
+
+**Sampling options.** A translated request's `temperature` and `top_p` reach Claude only where
+the model takes them, by Anthropic's documented limits for the `anthropic-version` translated
+requests are sent with (`2023-06-01`):
+
+- Claude 4.7 and later: one of them alone is sent only at its default (`temperature` 1, `top_p`
+  0.99); when both are set, neither is sent.
+- A `claude-` model name the extension does not know as a Claude version (such as
+  `claude-mythos-preview`): neither is sent.
+- An older Claude model with thinking on: `temperature` is sent only at 1, `top_p` only from 0.95.
+- An older Claude model, with thinking on or off: `top_p` is left out when `temperature` is sent
+  too, since Claude refuses the two together.
+- Any other model name: both go as the client sent them.
+
+The model name is read in lower case, without a Bedrock prefix (`anthropic.`, or `us.`, `eu.`,
+`apac.` or `global.` before it), a context window in brackets (`[1m]`) or a Vertex AI version
+after `@`; the same reading decides the thinking settings above, so Claude Mythos models get
+thinking from a reasoning effort too. Each one left out is reported as dropped, so
+`drop_policy` `"reject"` refuses a generation request that would lose one. A Messages client's own
+sampling settings go upstream as it wrote them. Today's core leaves both out
+of every translated request, on every model.
 
 Every request, a Messages client's or a translated one, also gets the betas its body needs, after
 the client's own and without repeats, as today's core adds them: `advisor-tool-2026-03-01` for a
@@ -998,7 +1032,7 @@ Not built, and why:
   (a test in `format/openairesponses` pins this). pluxy sends no comment in its place: a long
   upstream silence reaches the client as silence.
 
-**Quota.** A Grok login's quota is what the Grok CLI shows: `GET {cli}/billing?format=credits` and `GET {cli}/billing` on the CLI's chat endpoint (the host the account's requests go to), and `GET {cli}/user?include=subscription` and `GET {cli}/settings` for the plan's name, with the login's token and the Grok CLI identity headers the requests carry. It reports the weekly credit window (`weekly`), the monthly credits (`monthly_credits`), the pay-as-you-go cap and use (`pay_as_you_go`) and the prepaid balance (`prepaid`), in `usd`. Nothing that spends from the account is sent (today's panel sent a one-token chat for paid accounts; that is not rebuilt). An API key answers unsupported. A Grok login's grant carries `identity` `{"sub", "email"}` from its ID token.
+**Quota.** A Grok login's quota is what the Grok CLI shows: `GET {cli}/billing?format=credits` and `GET {cli}/billing` on the CLI's chat endpoint (the host the account's requests go to), and `GET {cli}/user?include=subscription` and `GET {cli}/settings` for the plan's name, with the login's token and the Grok CLI identity headers the requests carry. It reports the weekly credit window (`weekly`), the monthly credits (`monthly_credits`), the pay-as-you-go cap and use (`pay_as_you_go`) and the prepaid balance (`prepaid`), in `usd`. Nothing that spends from the account is sent (the old panel sent a one-token chat for paid accounts; that is not rebuilt). An API key answers unsupported. A Grok login's grant carries `identity` `{"sub", "email"}` from its ID token.
 
 ## Meta
 
@@ -1539,7 +1573,7 @@ An account names its models with these fields, applied in this order:
 
 | Field | Meaning |
 | --- | --- |
-| account `models` | The only models the account serves. Each is the upstream's name, or `{"name": ..., "alias": ...}` to serve the model `name` under the name `alias` only. |
+| account `models` | The only models the account serves. Each is the upstream's name, or `{"name": ..., "alias": ...}` to serve the model `name` under the name `alias` only. One name clients use maps to one upstream model: the config check refuses an entry whose name or alias another entry already uses for a different upstream model, naming the alias and the account (in the config file, and as a 400 from `PATCH /accounts/{id}`, which the panel uses). Listing the same model twice passes. Today's core pools such entries in `openai-compatibility`; this core does not pool models yet. |
 | account `excluded_models` | Models the account does not serve: names, or patterns with `*` for any text (`gpt-5-*`, `*-mini`, `*preview*`), whatever their case. They match the name clients use for an entry of `models` (its `alias`, when it has one, as in today's core), and for any other model its name before `model_alias` renames it. |
 | account `model_alias` | Renames: a request for `alias` (exactly as written) goes to the model `name` (any case). Without `fork` the model is served only as `alias`; with `"fork": true` under both names. `display_name` replaces the model's display name in lists. |
 | account `prefix` | The account also serves each model as `{prefix}/{model}`, so a client can ask for a model on that account alone. No `/` in it. |
@@ -1717,7 +1751,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets (names are compared in lower case whatever joins their words, or none, so `accessToken` and `accesstoken` are `access_token`, with letters folded as core matches a JSON key to a setting, so `client_keyſ` is `client_keys`; `aws_secret_access_key`, `client_secrets` and `passwords` are ones too, and so is a name that ends in a number or a word saying how the value is written, such as `apiKey2`, `api_key_value` or `privateKeyPem`), header values about authentication (`Authorization`, `X-Api-Key`, cookies) or named like a secret in any mapping whose name holds `header` (`extra_headers`, `headers_override`), and any URL with a user name, password or query. Everything below a key named like a secret is a secret, however deep, also when given through a YAML alias (as a value, or as a key's name), as `GET /accounts` shows a login account's settings, except in today's core's provider sections at the top of a `config.yaml` (the sections of the v8 `api-keys` mapping, such as `codex`, and the older lists such as `codex-api-key`), whose entries are read by these rules; any other key of the v8 `api-keys` mapping is read as a secret key. A string secret of 8 bytes or more written again as a whole value anywhere else in the file (a note holding a key) is hidden there too; a shorter copy, or a number, is shown, and so is a copy of a value that is a secret only for being in a mapping below a secret key. `true`, `false`, `null` and the empty string never are secrets, as they carry none. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
 | `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything, placeholders put back as `PUT /config` puts them (below). 200 with `valid: true` and the `notices` a `config.yaml` load logs, or `valid: false` and `error`, such as for a placeholder where its secret is not. |
 | `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. Each placeholder goes back only where its own secret is in the file now: the same account or list item (by its `id` or `name` when it holds that item's secrets, else by its secrets), and the same keys, also where a YAML alias or merge key reads it (below). 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document, such as for a placeholder anywhere else, naming its line; a refused document writes nothing. |
-| `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as today's panel shows them; a key shorter than 8 characters is hidden whole). |
+| `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as the old panel showed them; a key shorter than 8 characters is hidden whole). |
 | `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
@@ -1791,8 +1825,8 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `proxy-url` (top level) | `proxy_url` | The [outbound proxy](#outbound-proxy) of every account without its own, shown with `redacted` in place of a user name and password; `""` removes it. Sending back the value as shown keeps the password. |
 | `payload` (top level) | `payload` (`requests.payload` in a `config.yaml`, or `payload` where the file has only that) | The [payload rules](#payload-rules), all five lists at once; absent when there are none. A change replaces them, `null` or `{}` removes them, and a field the rules do not have or a path outside the supported syntax is refused. |
 
-The settings shown are those of the running config. Today's other basic setting `ws-auth` does
-not exist in this core yet, and `debug` is dropped (this
+The settings shown are those of the running config. Today's other basic setting `ws-auth` is
+dropped (the AI Studio relay is not built), and `debug` is dropped (this
 core writes no debug-level lines); `max_attempts`, which today's core has no
 name for, is changed in the document.
 
@@ -2077,6 +2111,13 @@ this core does not support yet, and one line naming the settings it ignores for 
 nothing and is not named, nor is any setting of a feature whose `enabled` switch is off.
 Neither line stops core from starting. Settings that did nothing in today's core either (marked
 "dead") are accepted without a word. A key today's core does not know is named as unknown.
+[`-import-auth`](#importing-todays-auth-folder) prints the same lines on standard error before it
+imports, so a migration sees them before core ever starts.
+
+A migrated config needs its management key set again once. Today's core writes a bcrypt hash over
+`management.secret-key` in the file after it reads the key, and this core cannot use a hash: it
+leaves the management API and the panel off and says why in its log. Replace the hash with the key
+itself, in plain text.
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
 `extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir` and `cors`
@@ -2103,8 +2144,12 @@ needs none) is not supported yet: it adds no account and is named in the log.
 
 In every section, `priority` is the account's `priority` and a key's `weight` is its `weight`.
 A group's `models` list becomes the account's `models`: each entry's `name` is the model the
-upstream knows, and its `alias` the name clients use (the first entry for a name wins, as in
-today's core); the account serves only those models. A group's or key's `prefix` is the account's
+upstream knows, and its `alias` the name clients use; the account serves only those models. When
+entries share a name clients use, the first wins in every section, as in today's core, except
+`openai-compatibility`: there today's core treats them as a pool and rotates requests over them,
+and falls back to the next on a failure. This core does not pool models yet, so it keeps the
+first entry and names the alias and each dropped entry in the log (a model listed twice drops
+nothing and is not named). A group's or key's `prefix` is the account's
 `prefix`, and its `excluded-models` its `excluded_models` (today's core has no
 `excluded-models` for `openai-compatibility`, so it is accepted there and does nothing). See
 [Model lists and model names](#model-lists-and-model-names). An account's ID is the group's `name`
@@ -2139,7 +2184,7 @@ are accepted silently.
 | `server.discovery.advertise-management` | | Dead |
 | `routing.strategy` | `routing.strategy`: `round-robin`, `fill-first` (also `fillfirst`, `ff`), `weighted-round-robin` (also `weightedroundrobin`, `wrr`; this core's `weighted`); this core's `weighted` and `least-active` work too. A name today's core does not know is `round-robin`, as there, and the log says so. | Supported |
 | `routing.session-affinity`, `routing.session-affinity-ttl` | `routing.session_affinity` with `ttl_ms` from the duration (default `1h`). | Supported |
-| `routing.session-affinity-subagents` | A Claude Code subagent sends its session's `X-Claude-Code-Session-Id`, so with `routing.session-affinity` it stays on the session's account, as today's default `true` keeps it. `false` (spread subagents over the pool) is not built. | Later (`false`) |
+| `routing.session-affinity-subagents` | A Claude Code subagent sends its session's `X-Claude-Code-Session-Id`, so with `routing.session-affinity` it stays on the session's account, as today's default `true` keeps it. `false` (spread subagents over the pool) is not built, and the log names it. | Dropped: a subagent stays on its session's account, and no need was found to spread subagents over the pool |
 | `routing.session-affinity-rebind-on` | | Dropped: no need found |
 | `routing.force-model-prefix` (`force-model-prefix`) | `routing.force_model_prefix`. | Supported |
 | `routing.retry.max-retry-credentials` (`max-retry-credentials`) | `routing.max_accounts`. | Supported |
@@ -2154,13 +2199,15 @@ are accepted silently.
 | Every `proxy-url` on a group or key | The account's `proxy_url`: a key's own, else its group's. | Supported |
 | `requests.payload.*` (`payload`) | `payload`: the [payload rules](#payload-rules), with today's lists and fields. A path outside the parts today's example config uses, or a raw value that is not JSON, fails the load. Today's `protocol` named the upstream's API format; here it names the extension. | Supported |
 | `requests.tls-handshake-timeout-seconds`, `requests.passthrough-headers`, `requests.nonstream-keepalive-interval`, `requests.streaming.*` (each also at the top level) | A request is retried on another account until its reply starts. | Dropped: off by default and no need found |
-| `client.codex.enable-apply-patch`, `client.codex.optimize-multi-agent-v2` (`codex.optimize-multi-agent-v2`) | | Later |
+| `client.codex.enable-apply-patch` | Models without a Codex template are left out of the [Codex client catalog](#codex-client-catalog), so there is no entry to add `apply_patch` to. | Later: built when someone uses a non-Codex model through the Codex client and needs `apply_patch` on it |
+| `client.codex.optimize-multi-agent-v2` (`codex.optimize-multi-agent-v2`) | | Later: built when Codex multi-agent v2 sub-agents need to reach non-Codex providers |
 | `client.codex.web-search-result-cache.*`, `client.claude.show-codex-commentary` | | Dropped: off by default and no need found |
 | `upstream.codex.disable-codex-cloaking` (`codex.disable-codex-cloaking`) | `codex_identity: false` on the Codex subscription accounts `-import-auth` adds. It does not change accounts already imported. | Supported when importing |
 | `upstream.codex.websocket-compression` | Always on; `false` is named in the log. | Supported (fixed on) |
 | `upstream.codex.model-level-cooling` | Blocks are kept per model where the upstream says the limit is per model; usage limits remain account-wide. | Supported (fixed on) |
 | `upstream.claude.model-level-cooling` (`claude.model-level-cooling`) | `model_level_cooling: true` on the Claude keys' accounts and on the Claude subscription accounts `-import-auth` adds (see [Claude](#claude)). It does not change accounts already imported. | Supported |
-| `upstream.codex.upstream-request-compression`, `-min-bytes`, `upstream.codex.stream-bootstrap-buffering`, `stream-bootstrap-timeout` | | Later |
+| `upstream.codex.upstream-request-compression`, `-min-bytes` | | Dropped: it needs a compression library this core does not carry, for an off-by-default saving no one has measured |
+| `upstream.codex.stream-bootstrap-buffering`, `stream-bootstrap-timeout` | The Codex extension does not move a turn that ends in an overload error to another account. | Later: built when pooled Codex accounts are seen failing on overload errors that moving the turn to another account would hide |
 | `upstream.codex.response-steering`, `upstream.codex.orphan-delegation-compatibility`, `oauth.providers.codex.header-defaults.*` (`codex-header-defaults`) | | Dropped: experimental or off by default, no need found |
 | `upstream.claude.header-defaults.*`, `disable-claude-cloak-mode`, `disable-cloaking-model-list`, `session-date-pin-days` (also `claude`, `claude-code`, `claude-header-defaults`), and the Claude keys' `cloak` and `fingerprint-profile` | This core never changes how a client presents itself. | Dropped: making other clients look like Claude Code is out of scope |
 | `upstream.claude.tool-search`, the Claude keys' `native-tool-search` | | Dropped: Codex's tool search on Claude accounts, off by default with no panel or app control |
@@ -2169,7 +2216,7 @@ are accepted silently.
 | `experimental-cch-signing` (Claude keys) | | Dead |
 | `oauth.auth-dir` (`auth-dir`) | The folder `-import-auth` reads (see below). Core never reads or writes it while it runs; at each load it logs how many credential files there are not imported yet. | Supported |
 | `oauth.auth-auto-refresh-workers` (`auth-auto-refresh-workers`) | Each account is renewed shortly before it expires. | Dropped: no need for a pool size |
-| `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`) | Each channel's rules become the `model_alias` and `excluded_models` of the package that serves its accounts, for the accounts added to it by a sign-in (not with an API key): `codex` is `pluxy/codex`, `claude` is `pluxy/claude`, `vertex` is `pluxy/gemini`, `kimi` (and `kimi-ai`, `kimi.ai`, `kimi.com`) is `pluxy/kimi`, `xai` is `pluxy/xai`, `meta` is `pluxy/meta`, `antigravity` is `pluxy/antigravity`, `devin` is `pluxy/devin`. Rules for another channel are named in the log and ignored. An alias's `force-mapping` and `openapi` are later. | Supported |
+| `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`) | Each channel's rules become the `model_alias` and `excluded_models` of the package that serves its accounts, for the accounts added to it by a sign-in (not with an API key): `codex` is `pluxy/codex`, `claude` is `pluxy/claude`, `vertex` is `pluxy/gemini`, `kimi` (and `kimi-ai`, `kimi.ai`, `kimi.com`) is `pluxy/kimi`, `xai` is `pluxy/xai`, `meta` is `pluxy/meta`, `antigravity` is `pluxy/antigravity`, `devin` is `pluxy/devin`. Rules for another channel are named in the log and ignored. An alias's `force-mapping` and `openapi` are later, as the same settings are on the keys' models below. | Supported |
 | `oauth.settings` (`oauth-settings`) | | Dropped: needs a model catalog, and no page uses it |
 | `oauth.request-scoped-errors` (`oauth-request-scoped-errors`) and every `request-scoped-errors` | | Dropped: a request-scoped error is already not the account's fault |
 | `oauth.providers.aistudio.ws-auth` (`ws-auth`) | | Dropped: the AI Studio relay needs a long-lived listener the extension protocol does not have |
@@ -2185,18 +2232,21 @@ are accepted silently.
 | The keys' `models[]` `display-name`, `max-context-length`, `input-modalities`, `output-modalities` | A model's display name in lists is its upstream name; use `model_alias` for a different one. | Dropped: list metadata only, no need found |
 | The keys' `models[]` `thinking` | The thinking suffix and the extensions cover it. | Dropped: no need found |
 | The keys' `models[]` `is-compat`, `use-max-completion-tokens` | | Dropped: single-provider quirks, no need found |
-| The keys' `models[]` `force-mapping`, `image`, `support-configuration-update`, `openapi` | | Later |
-| Vertex keys' `openapi`, `openapi-location`; xAI keys' `websockets` | | Later |
+| The keys' `models[]` `force-mapping` | A reply carries the upstream's model name, not the alias the client asked for. | Later: built when a client needs a reply's model to be the alias it asked for |
+| The keys' `models[]` `openapi`; Vertex keys' `openapi`, `openapi-location` | | Later: built when someone calls Vertex partner models (Claude, Llama, Mistral) through a key |
+| The keys' `models[]` `image` (openai-compatibility) | Images are served for Codex accounts only. | Dropped: no use of OpenAI-compatible image models was found |
+| The keys' `models[]` `support-configuration-update` | | Dropped: an off-by-default prompt-cache saving for one kind of relay, no need found |
+| xAI keys' `websockets` | xAI is served over HTTP. | Dropped: HTTP gives the same replies |
 | openai-compatibility's `support-prompt-cache-key` | A [payload rule](#payload-rules) can set a fixed `prompt_cache_key`. | Dropped: no need found |
 | `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `-import-auth` adds; `true` is also `images: false` there, which turns the Images API off on them (today's core answers its image routes 404). | Supported |
-| `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | Images are served through the Codex upstream's Images API, the path today's core takes for its built-in image models; the Responses-based path this model sets is not built, and there are no video routes yet. | Later |
+| `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | Images are served through the Codex upstream's Images API, the path today's core takes for its built-in image models; the Responses-based path this model sets is not built, and there are no video routes. | Dropped: the first names the model of a path that is not built, the second belongs to video routes that are not built |
 | `observability.logs.logging-to-file` (`logging-to-file`), `observability.logs.logs-max-total-size-mb` (`logs-max-total-size-mb`) | `logs.to_file` and `logs.max_total_size_mb`: [log files](#log-files). A negative cap is none, as in today's core. | Supported |
 | `observability.logs.debug` (`debug`) | | Dropped: this core writes no debug-level lines |
 | `observability.logs.request-log` (`request-log`), `observability.logs.error-logs-max-files` (`error-logs-max-files`) | `logs.request_log` and `logs.error_logs_max_files`: [request logs](#request-logs). A negative count is the default, 10, as in today's core. | Supported |
 | `observability.usage.usage-statistics-enabled` (`usage-statistics-enabled`) | `usage.enabled`: the [usage record](#usage-statistics). Today's example config sets it to `false`, which turns the record off here too. | Supported |
 | `observability.usage.redis-usage-queue-retention-seconds` (`redis-usage-queue-retention-seconds`) | The record keeps requests by `usage.max_events` and `usage.max_age_ms`. | Dropped: it was how long a queued usage record waited for a reader that removed it; reading the record here removes nothing, and its default of 60 seconds would leave little to read |
 | `observability.pprof.enable` (`pprof.enable`), `observability.pprof.addr` (`pprof.addr`) | `pprof.enable` and `pprof.addr`: the [profiling pages](#profiling-pages). Only a build with `-tags pprof` serves them; the default build logs that the setting does nothing. An address that is not loopback is refused. | Supported (in the `pprof` build) |
-| `models.catalog`, `models.codex-catalog`, `models.devin-catalog` | | Later |
+| `models.catalog`, `models.codex-catalog`, `models.devin-catalog` | Each extension carries its model list, and a developer refreshes it by hand (see [Codex client catalog](#codex-client-catalog)). | Dropped: this core has no remote model catalog |
 | `plugins.*` | Extensions are separate programs (packages), not libraries loaded into core. | Dropped: replaced by packages |
 | `credentials.*` (`credential-concurrency`, `credential-in-flight`) | | Dropped: only the Home control plane used them |
 
@@ -2211,7 +2261,9 @@ Environment variables today's core reads (`MANAGEMENT_PASSWORD`, `PGSTORE_*`, `G
 
 `-import-auth` copies the credential files in today's auth folder (the JSON files at its top
 level, as today's core reads them) into core's credential store (`credentials_dir`), prints what
-it imported and skipped, and exits. Run it while core is stopped, then start core. Each file
+it imported and skipped, and exits. Before that it prints the config's notices (the settings it
+ignores and a hashed management key, as in core's log) on standard error. Run it while core is
+stopped, then start core. Each file
 becomes an account added by login, with the file's name (less `.json`) as its ID, so running it
 again skips the files already imported. A file whose account ID the config or the store already
 uses is skipped, as is a file larger than 1 MiB. The import never changes the auth folder, and

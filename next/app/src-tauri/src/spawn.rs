@@ -51,8 +51,6 @@ use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::FileExt;
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 #[cfg(unix)]
@@ -700,7 +698,7 @@ pub trait Opened: Send + Sync {
     fn recheck(&self) -> Result<(), String>;
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 impl Opened for crate::confirmation::Authorized {
     fn executable(&self) -> &File {
         crate::confirmation::Authorized::executable(self).expect("a launch's executable")
@@ -1718,7 +1716,9 @@ impl Shared {
         Ok(())
     }
 
-    /// Writes the runtimes running (or stopping) to the registry's file, owner-only.
+    /// Writes the runtimes running (or stopping) to the registry's file, readable only by this
+    /// user and replaced in one step (`managed::write_private`: 0600 on Linux and macOS, a
+    /// protected access list of this user and SYSTEM on Windows).
     fn save(&self, list: &[Entry]) {
         let Some(f) = &self.file else {
             return;
@@ -1728,19 +1728,7 @@ impl Shared {
             .filter(|e| matches!(e.state, State::Running | State::Stopping))
             .map(Entry::view)
             .collect();
-        let tmp = f.with_extension("tmp");
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let written = options
-            .open(&tmp)
-            .and_then(|mut file| {
-                use std::io::Write;
-                file.write_all(json!(running).to_string().as_bytes())?;
-                file.sync_all()
-            })
-            .and_then(|_| std::fs::rename(&tmp, f));
+        let written = crate::managed::write_private(f, json!(running).to_string().as_bytes());
         if let Err(e) = written {
             eprintln!("pluxy-app: could not record the managed runtimes: {e}");
         }
