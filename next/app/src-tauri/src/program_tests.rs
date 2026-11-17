@@ -3374,6 +3374,84 @@ fn wsl_here(mode: Value) -> (Host, Instance) {
     (h, instance)
 }
 
+/// A host running tool ID on this computer (from spec) and as bob's instance in WSL (the fixture
+/// here, with that instance's environment); and that instance.
+fn here_and_in_wsl(spec: Spec) -> (Host, Instance) {
+    let bob = wsl_record("bob");
+    let instance = Instance {
+        package: ID.into(),
+        environment: bob.environment(),
+    };
+    let in_wsl = Spec {
+        environment: bob.environment(),
+        ..spec.clone()
+    };
+    let (folder, want) = (Folder(spec.dir.clone()), instance.clone());
+    let h = Host::for_tests(
+        Box::new(move |i: &Instance| {
+            let _ = &folder;
+            if *i == want {
+                Ok(in_wsl.clone())
+            } else if *i == Instance::local(ID) {
+                Ok(spec.clone())
+            } else {
+                Err(format!("{} is not installed on this device", i.name()))
+            }
+        }),
+        Limits {
+            idle: Duration::from_secs(60),
+            ..fast()
+        },
+    );
+    (h, instance)
+}
+
+/// Both of tool ID's instances run: their process IDs (here, then in WSL).
+fn both_run(h: &Host, bob: &Instance) -> (u32, u32) {
+    summary(h, &[]).unwrap();
+    call_in(h, bob).unwrap();
+    let (here, wsl) = (h.status(ID).pid.unwrap(), h.status_in(bob).pid.unwrap());
+    assert_ne!(here, wsl);
+    (here, wsl)
+}
+
+/// A change of the package stops its instances in every environment; a removed environment's
+/// record stops only the instances there.
+#[test]
+fn a_package_change_stops_its_instances_in_wsl_and_an_environment_removed_only_those() {
+    let (h, bob) = here_and_in_wsl(package(Value::Null));
+    let (here, wsl) = both_run(&h, &bob);
+    h.stop(ID);
+    until("both stopped", 10, || {
+        !alive(u64::from(here)) && !alive(u64::from(wsl))
+    });
+    let (here, wsl) = both_run(&h, &bob);
+    h.stop_in(&bob.environment);
+    until("the instance in WSL stopped", 10, || !alive(u64::from(wsl)));
+    assert_eq!(h.status(ID).pid, Some(here));
+    assert!(alive(u64::from(here)));
+    // This computer is no environment to remove: nothing stops.
+    h.stop_in(&Environment::Local);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(h.status(ID).pid, Some(here));
+    h.stop_all();
+}
+
+/// A swap to a new release stops the instances in WSL, which ran the old release's Linux build:
+/// their next call starts the one installed for the release now active.
+#[test]
+fn a_swap_stops_the_instances_in_wsl_of_the_release_it_replaces() {
+    let (h, bob) = here_and_in_wsl(package(Value::Null));
+    let (_, wsl) = both_run(&h, &bob);
+    let p = h
+        .prepare_spec(release(Value::Null, "1.1.0", 2), h.stops(ID))
+        .unwrap();
+    h.switch(p).unwrap();
+    assert_eq!(h.status(ID).generation, Some(2));
+    until("the instance in WSL stopped", 10, || !alive(u64::from(wsl)));
+    h.stop_all();
+}
+
 // WSL 1 can refuse a start (`0xd0000225`, wsl.exe's text on stderr or in place of a frame): such a
 // start is tried again, twice, 2 seconds apart, and none of those tries counts as a crash; only
 // when the last one is refused too does one crash count, with its backoff.

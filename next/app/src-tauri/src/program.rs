@@ -1453,7 +1453,14 @@ impl Host {
     /// ones draining, are stopped too. Calls of unknown outcome are still reported at its next
     /// start.
     pub fn stop(&self, id: &str) {
+        self.stop_key(id);
         // Every instance of the package: in WSL too, which runs the same release's Linux build.
+        self.stop_wsl(id);
+    }
+
+    /// `stop`, of tool id's instances in WSL only: they run a Linux build of the release that
+    /// was active then, which a swap or a newly installed Linux build replaces.
+    pub fn stop_wsl(&self, id: &str) {
         let keys: Vec<String> = {
             let slots = self.0.slots();
             let wsl = format!("{id}@");
@@ -1463,7 +1470,6 @@ impl Host {
                 .cloned()
                 .collect()
         };
-        self.stop_key(id);
         for k in &keys {
             self.stop_key(k);
         }
@@ -1692,8 +1698,18 @@ impl Host {
 
     /// Makes the prepared tool the one that serves its package: new calls and leases go to it.
     /// The one it replaces drains: the calls holding its leases finish on it, then it stops; after
-    /// the drain limit it is stopped. Refused when the candidate stopped meanwhile.
+    /// the drain limit it is stopped. The package's instances in WSL, which run the replaced
+    /// release's Linux build, are stopped (`stop_wsl`). Refused when the candidate stopped
+    /// meanwhile.
     pub fn switch(&self, p: Prepared) -> Result<(), CallError> {
+        let id = p.run.spec.id.clone();
+        self.switch_local(p)?;
+        self.stop_wsl(&id);
+        Ok(())
+    }
+
+    /// `switch`, of the slot on this computer.
+    fn switch_local(&self, p: Prepared) -> Result<(), CallError> {
         let id = p.run.spec.id.clone();
         let mut slots = self.0.slots();
         let slot = slots.entry(id.clone()).or_default();

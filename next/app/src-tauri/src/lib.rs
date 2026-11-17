@@ -1728,7 +1728,8 @@ async fn device_install_wsl(
 /// Installs native tool id's Linux build for platform: the active release's version, from the
 /// registry it was installed from, recorded once the person confirmed it in a native
 /// confirmation naming its version, platform and archive digest. A cancel records nothing. The
-/// active release does not change, so its pages, jobs and running tool stay as they are.
+/// active release does not change, so its pages, jobs and tool on this computer stay as they are;
+/// its instances in WSL are stopped.
 #[cfg(native_stack)]
 fn install_wsl(app: &AppHandle, id: &str, platform: &str) -> Result<device::View, String> {
     let st = app.state::<App>();
@@ -1751,6 +1752,8 @@ fn install_wsl(app: &AppHandle, id: &str, platform: &str) -> Result<device::View
         catalog.commit_linux(c, &roots)?;
         (device_view(&st, &catalog), catalog.take_cleanup())
     };
+    // Its instances in WSL ran the Linux build this one replaces: their next call starts this one.
+    st.programs.stop_wsl(id);
     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
     match left {
         None => Ok(view),
