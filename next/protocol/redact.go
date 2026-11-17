@@ -765,9 +765,12 @@ func (r *Redactor) Body() *BodyRedactor {
 // replaced with [redacted] from where it starts, and so is what goes on with it in a decoding, up
 // to the end of the form it began (follow); what follows that cannot go on with it comes through.
 // Where following it would take more than escapeHold bytes (an escape nested so deep that what
-// more text could complete of it takes more), Write drops instead what follows that could still be
-// part of a spelling (dropRun): bytes that can be part of one (spells), no more than maxStretch of
-// them in a row without a backslash or a percent sign. Text with more decodings than String tries
+// more text could complete of it takes more), or where what goes on with it has more decodings
+// than String tries, so that the forms in it are not known, Write drops instead what follows that
+// could still be part of a spelling (dropRun): bytes that can be part of one (spells), no more
+// than maxStretch of them in a row without a backslash or a percent sign. Where it stops at that
+// bound, it keeps the last bytes it dropped, fewer than the longest form, counted as sent, so a
+// form that began in them is replaced whole (dropping). Text with more decodings than String tries
 // (maxDecodings), which String replaces whole, is held back from the start of the run of such
 // bytes at its end, within the same bound.
 //
@@ -787,10 +790,13 @@ func (r *Redactor) Body() *BodyRedactor {
 // returns all of the text it has, redacted whole, but for the end of what it would have held that
 // this left as it was, which it goes on holding back. It keeps the rest of that end too, marked as
 // sent: a form that starts there and that later pieces complete is replaced in them, so the rest of
-// a credential cut there is not sent; what was sent of it before the cut stays sent. Where the text
-// then has more decodings than String tries, so that the forms in it are not known, the run of
-// bytes that can be part of a spelling that goes on from what was sent is replaced instead, or,
-// while it goes on to the end of what came, held back.
+// a credential cut there is not sent; what was sent of it before the cut stays sent. So is an
+// escape of any decoding that starts there and that later pieces complete, up to where no escape
+// or form of a decoding spans (past): what the client got for that end may be [redacted], after
+// which it reads what follows on its own, so the rest of such an escape could start a spelling for
+// it. Where the text then has more decodings than String tries, so that the forms in it are not
+// known, the run of bytes that can be part of a spelling that goes on from what was sent is
+// replaced instead, or, while it goes on to the end of what came, held back.
 //
 // shortcut: a number that, with what stands before it, takes more than maxNumberHold bytes and is
 // cut between pieces may be redacted as text ([redacted]) or as two numbers (0 and the rest of its
@@ -819,8 +825,9 @@ type BodyRedactor struct {
 	// one of which held may go on with.
 	next []string
 	// drop is set instead where that end would take more than escapeHold bytes: Write drops what
-	// comes while it could still be part of a spelling (dropRun). stretch counts the bytes since
-	// the last backslash or percent sign.
+	// comes while it could still be part of a spelling (dropRun), and held is the end of what it
+	// dropped, fewer bytes than the longest form (dropping). stretch counts the bytes since the
+	// last backslash or percent sign.
 	drop    bool
 	stretch int
 }
@@ -900,11 +907,7 @@ func (b *BodyRedactor) Write(piece string) string {
 // write is Write for one part of a piece.
 func (b *BodyRedactor) write(piece string) string {
 	if b.drop {
-		q := b.dropRun(piece)
-		if q == len(piece) {
-			return ""
-		}
-		b.drop, piece = false, piece[q:]
+		return b.dropping(b.held+piece, len(b.held), false)
 	}
 	if b.cont {
 		return b.follow(b.held+piece, false)
@@ -923,8 +926,7 @@ func (b *BodyRedactor) Flush() string {
 		rest = b.fixUTF8("", true)
 	}
 	if b.drop {
-		q := b.dropRun(rest)
-		b.drop, rest = false, rest[q:]
+		return b.dropping(b.held+rest, len(b.held), true)
 	}
 	if b.cont {
 		return b.follow(b.held+rest, true)
@@ -984,7 +986,8 @@ func (b *BodyRedactor) dropRun(t string) int {
 }
 
 // emit returns what can be sent of s, the held text and what came after it, and keeps the rest;
-// with final nothing more comes, and it keeps nothing. s[:b.sent] was already sent.
+// with final nothing more comes, and it keeps nothing. s[:b.sent] was already sent (or dropped:
+// dropping).
 func (b *BodyRedactor) emit(s string, final bool) string {
 	skip, cut := b.parse(s, b.sent, final)
 	if !final {
@@ -1032,13 +1035,16 @@ func (b *BodyRedactor) emit(s string, final bool) string {
 			// The cut would hide what String finds in the text whole: send it whole, and keep the
 			// end, so that a form starting there is still removed from what follows. Of that end,
 			// what the text whole changed counts as sent; the rest, the longest end of it that the
-			// text whole ends with as it was, is held back as before rather than sent. That the
-			// text whole merely ends like it (a 0 standing for a number that ends in 0) is not
-			// enough: redacting the text up to there must give the rest of the text whole.
+			// text whole ends with as it was, is held back as before rather than sent, when
+			// redacting the text up to there gives the rest of the text whole (that the text whole
+			// merely ends like it, as a 0 standing for a number that ends in 0 does, is not
+			// enough). Otherwise all of it counts as sent.
 			j := 0
-			for j < len(b.held) && !(utf8.RuneStart(b.held[j]) && strings.HasSuffix(whole, b.held[j:]) &&
-				whole[:len(whole)-(len(b.held)-j)] == b.r.String(s[skip:cut+j])) {
+			for j < len(b.held) && !(utf8.RuneStart(b.held[j]) && strings.HasSuffix(whole, b.held[j:])) {
 				j++
+			}
+			if j < len(b.held) && whole[:len(whole)-(len(b.held)-j)] != b.r.String(s[skip:cut+j]) {
+				j = len(b.held)
 			}
 			b.sent = j
 			return lead + whole[:len(whole)-(len(b.held)-j)]
@@ -1165,24 +1171,43 @@ func (b *BodyRedactor) follow(s string, final bool) string {
 // drops what may still be part of the spelling replaced (dropRun), and goes on after it as Write
 // does.
 func (b *BodyRedactor) blind(s string, from int, final bool) string {
-	b.cont, b.next, b.held, b.sent = false, nil, "", 0
+	b.cont, b.next = false, nil
 	b.stretch = from - (strings.LastIndexAny(s[:from], `\%`) + 1)
+	return b.dropping(s, from, final)
+}
+
+// dropping returns what to send of s, of which s[:from] was dropped: it drops what may still be
+// part of the spelling replaced (dropRun), and goes on after it as Write does. Where it stops at
+// maxStretch bytes in a row without a backslash or a percent sign, a form may have begun in what
+// it dropped: no escape of any decoding reaches into the last L bytes of such a run (an escape and
+// what each layer under it makes of what follows take at most 6 bytes a layer, 6·maxDepth in all),
+// so in every decoding they are themselves, and a form that goes on past the stop began in its
+// last L-1 bytes, as they are. So it keeps those, counted as sent, and emit replaces such a form
+// as one that began in what was sent. While it drops to the end of s, it keeps them in held.
+func (b *BodyRedactor) dropping(s string, from int, final bool) string {
+	keep := len(b.r.forms[0]) - 1
 	q := from + b.dropRun(s[from:])
-	if q < len(s) || final {
-		b.drop = false
-		return b.emit(s[q:], final)
+	if q == len(s) && !final {
+		b.drop, b.held, b.sent = true, strings.Clone(s[max(0, q-keep):]), 0
+		return ""
 	}
-	b.drop = true
-	return ""
+	b.drop, b.held, b.sent = false, "", 0
+	k := q
+	if q < len(s) && b.stretch >= b.maxStretch() {
+		k, b.sent = max(0, q-keep), q-max(0, q-keep)
+	}
+	return b.emit(s[k:], final)
 }
 
 // escapes follows the forms through each decoding String tries of s (decodings), as String finds
 // them behind escapes once the listed forms are replaced, and returns hold, end and inside. hold
 // is len(s), or the earlier start of a spelling of a form that more text could complete or change:
 // an escape at the end of a decoding that more text could complete, or a run at the end of one
-// that is the start of a form. end is the end of the last form a decoding holds that starts before
-// sent and ends after it, or 0. inside is cut, or the start of an escape a decoding reads that
-// holds cut: the text from cut, read on its own, would read it differently. With final nothing
+// that is the start of a form. end is 0, or, when an escape or a form of a decoding starts before
+// sent and ends after it, the first position past sent that none spans (past); while what more
+// text could change of a decoding starts before that position, hold is at most where the first
+// escape or form that spans sent starts. inside is cut, or the start of an escape a decoding reads
+// that holds cut: the text from cut, read on its own, would read it differently. With final nothing
 // more comes, so hold is len(s). Where s has more decodings than maxDecodings, hold is the start
 // of the run of bytes that can be part of a spelling (spells) at the end of s, and end, when
 // something was sent, the end of the run of them that goes on from sent: the forms in s are not
@@ -1213,7 +1238,7 @@ func (b *BodyRedactor) escapes(s string, sent, cut int, final bool) (hold, end, 
 		// No escape could decode to part of a form, nor one at the end become one.
 		return hold, 0, inside
 	}
-	_, ls, over := b.walk(t, true, final)
+	root, ls, over := b.walk(t, true, final)
 	if over {
 		// String gives up on text with this many decodings.
 		if final {
@@ -1232,21 +1257,19 @@ func (b *BodyRedactor) escapes(s string, sent, cut int, final bool) (hold, end, 
 				hold = min(hold, base+c.at(k).lo())
 			}
 		}
-		for _, f := range b.r.forms {
-			if sent == 0 {
-				break // only a form that sent cuts matters
-			}
-			for off := 0; ; {
-				k := strings.Index(c.d[off:], f)
-				if k < 0 {
-					break
-				}
-				k += off
-				if a, e := base+c.at(k).lo(), base+c.at(k+len(f)-1).hi(); a < sent && sent < e {
-					end = max(end, e)
-				}
-				off = k + 1
-			}
+	}
+	if sent > 0 {
+		// base is 0. What the client got of s[:sent] is not s[:sent] where it was redacted whole,
+		// so the client reads the text after an escape or form that sent cuts on its own: such
+		// an escape or form is replaced too, from sent to past where they end.
+		from, past := b.past(append([]layer{root}, ls...), sent)
+		if past > hold {
+			// What more text could change of a decoding starts before that: decide nothing yet,
+			// and hold back from where what spans sent starts, so it is still known next time.
+			hold = min(hold, from)
+		}
+		if end = past; end == sent {
+			end = 0
 		}
 	}
 	return hold, end, inside
@@ -1313,8 +1336,7 @@ func (b *BodyRedactor) walk(t string, replace, final bool) (root layer, ls []lay
 		var next []layer
 		for _, l := range frontier {
 			kinds := []int{allEscapes}
-			if (strings.IndexByte(l.d, '\\') >= 0 || strings.IndexByte(l.tail, '\\') >= 0) &&
-				(strings.IndexByte(l.d, '%') >= 0 || strings.IndexByte(l.tail, '%') >= 0) {
+			if strings.IndexByte(l.d, '\\') >= 0 && strings.IndexByte(l.d, '%') >= 0 {
 				// Otherwise decoding only one kind gives what decoding both gives, or nothing.
 				kinds = append(kinds, jsonEscapes, percentEscapes)
 			}
@@ -1391,7 +1413,7 @@ func (b *BodyRedactor) outside(t string, base int, ls []layer, pos int) int {
 					break
 				}
 			}
-			if i := escapeHolding(d, m); i < m {
+			if i, _ := escapeHolding(d, m); i < m {
 				pos, moved = base+from(i), true
 				break
 			}
@@ -1400,9 +1422,9 @@ func (b *BodyRedactor) outside(t string, base int, ls []layer, pos int) int {
 	return pos
 }
 
-// escapeHolding returns where an escape of any kind in d that holds d[m] starts, or m when none
-// does.
-func escapeHolding(d string, m int) int {
+// escapeHolding returns where an escape of any kind in d that holds d[m] starts and ends, or m and
+// m when none does.
+func escapeHolding(d string, m int) (int, int) {
 	for _, kind := range []int{allEscapes, jsonEscapes, percentEscapes} {
 		// An escape that holds m starts at most 12 bytes before it. Without a backslash there,
 		// only a percent sign in the 2 bytes before can start one, and no escape holds a percent
@@ -1417,12 +1439,50 @@ func escapeHolding(d string, m int) int {
 		for i < m {
 			_, n := escapeAt(d, i, kind)
 			if i+n > m {
-				return i
+				return i, i + n
 			}
 			i += max(n, 1)
 		}
 	}
-	return m
+	return m, m
+}
+
+// past returns pos, or the first position after it that no escape of a layer of ls spans, also one
+// a layer holds that is not decoded further, nor a form a layer holds: the text from there, read
+// on its own, decodes as it does after it in each layer. from is pos, or where the first escape or
+// form that spans pos starts.
+func (b *BodyRedactor) past(ls []layer, pos int) (from, end int) {
+	from = pos
+	for moved := true; moved; {
+		moved = false
+		for _, l := range ls {
+			m := min(pos, len(l.d)) // a layer that stops at an open escape before pos
+			if l.spans != nil {
+				if m = endsAfter(l.spans, pos); m < len(l.spans) && l.spans[m].lo() < pos {
+					from, pos, moved = min(from, l.spans[m].lo()), l.spans[m].hi(), true
+					continue
+				}
+			}
+			if i, e := escapeHolding(l.d, m); i < m {
+				from, pos, moved = min(from, l.at(i).lo()), l.at(e-1).hi(), true
+				continue
+			}
+			for _, f := range b.r.forms {
+				for off := 0; ; {
+					k := strings.Index(l.d[off:], f)
+					if k < 0 {
+						break
+					}
+					k += off
+					if a, e := l.at(k).lo(), l.at(k+len(f)-1).hi(); a < pos && pos < e {
+						from, pos, moved = min(from, a), e, true
+					}
+					off = k + 1
+				}
+			}
+		}
+	}
+	return from, pos
 }
 
 // spellsFrom returns where the run of bytes that can be part of a spelling (spells) that goes on

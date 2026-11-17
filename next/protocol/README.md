@@ -490,16 +490,21 @@ another (below). A start of a secret written with longer escapes (escapes of esc
 character of `\u0073` escaped again, 36 bytes for each byte) is replaced with `[redacted]` whether it
 completes or not, together with what goes on with it in the decoded text up to the end of the
 secret it began; what follows that cannot go on with it comes through. Where an escape is nested so
-deep that core cannot follow what goes on with it within that limit, core replaces instead what
-follows that could still be part of a secret or an escape: bytes of those kinds, up to the first
-other byte (such as a space or a comma), and no more than 48 bytes past the length of the longest of
-those forms in a row without a backslash or `%`. When a secret holds U+FFFD, core first reads each
+deep that core cannot follow what goes on with it within that limit, or where what follows it is so
+heavily escaped that core cannot tell what secrets it holds, core replaces instead what follows that
+could still be part of a secret or an escape: bytes of those kinds, up to the first other byte (such
+as a space or a comma), and no more than 48 bytes past the length of the longest of those forms in a
+row without a backslash or `%`. Where it stops at that limit, a secret that began in what it
+replaced is replaced whole. When a secret holds U+FFFD, core first reads each
 byte of invalid UTF-8 in the body as U+FFFD, as a JSON decoder does. Where holding back would change
 what core finds in the text whole (for example text so heavily escaped that core replaces all of it
 with `[redacted]`), core sends at once all it has, redacted whole, but for the end of what it would
 have held that this left as it was, which it goes on holding back. It then replaces with
 `[redacted]` the rest of a secret that began in what it would have held and that later pieces
-complete; what it sent of that start stays sent. Where the text after that is so heavily escaped
+complete; what it sent of that start stays sent. It replaces too the rest of an escape that began
+there and that later pieces complete, up to where no escape or secret in the decoded text goes on:
+what the client got for that end may be `[redacted]`, after which the client reads the rest of
+such an escape on its own. Where the text after that is so heavily escaped
 that core cannot tell what secrets it holds, core replaces the rest of the run of bytes that can be
 part of a secret or an escape instead. It sends what it still holds once the body ends with
 `finish`, and drops it when the body breaks off with an error or is cancelled: the body is broken
