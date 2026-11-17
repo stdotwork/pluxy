@@ -1819,8 +1819,8 @@ mod tests {
     }
 
     /// Two names that differ only in case, of files or of folders on the way to them, are one
-    /// name on Windows: there the second spelling is refused, never merged with the first;
-    /// elsewhere both unpack, as before. Names that differ otherwise unpack.
+    /// name on Windows: there the second spelling is refused, never merged with the first.
+    /// Elsewhere the store does not check them, as before. Names that differ otherwise unpack.
     #[test]
     fn names_differing_only_in_case_are_refused() {
         let twins: [&[(&str, tar::EntryType, Vec<u8>)]; 3] = [
@@ -1844,9 +1844,13 @@ mod tests {
             if cfg!(windows) {
                 let e = r.unwrap_err();
                 assert!(e.contains("differs only in case"), "{e}");
-            } else {
-                // Elsewhere they are two names, as before.
+            } else if cfg!(target_os = "linux") {
+                // Two names there, as before.
                 assert_eq!(r.unwrap().len(), 2);
+            } else if let Err(e) = r {
+                // macOS: its file system decides, as before (by default one name, so the second
+                // file's exclusive create fails); the case check itself does not run.
+                assert!(!e.contains("differs only in case"), "{e}");
             }
             remove_tree(&dir);
         }
