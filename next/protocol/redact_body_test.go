@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // bodyRedactor is a Redactor for several made-up secrets: one with characters that JSON and URLs
@@ -24,9 +25,11 @@ func bodyRedactor() *Redactor {
 
 // redactPieces runs pieces through a BodyRedactor and returns what it sent on, joined. It fails
 // the test when the BodyRedactor holds back as much as the longest form or more, or, when a form
-// could be part of a number, twice that and maxNumberHold; where the body so far holds a backslash
-// or a percent sign, which can start an escape, more than 12 times the longest form, or, when a
-// form could be part of a number, that, maxNumberHold and the longest form together.
+// could be part of a number, twice that and maxNumberHold; where what it holds has a backslash or a
+// percent sign, which can start an escape, or the body so far has more decodings than String
+// tries, more than 12 times the longest form, or, when a form could be part of a number, that,
+// maxNumberHold and the longest form together. It fails the test too when Flush leaves anything
+// held.
 func redactPieces(t *testing.T, r *Redactor, pieces []string) string {
 	t.Helper()
 	b := r.Body()
@@ -36,12 +39,17 @@ func redactPieces(t *testing.T, r *Redactor, pieces []string) string {
 		body.WriteString(p)
 		if len(r.forms) > 0 {
 			longest := len(r.forms[0])
-			limit := longest
-			if strings.ContainsAny(body.String(), `\%`) {
-				limit = 12*longest + 1
-			}
+			limit, more := longest, 0
 			if r.numeric {
-				limit += maxNumberHold + longest
+				limit, more = 2*longest+maxNumberHold, longest+maxNumberHold
+			}
+			if len(b.held) >= limit && strings.ContainsAny(b.held, `\%`) {
+				limit = 12*longest + 1 + more
+			}
+			if len(b.held) >= limit {
+				if _, over := r.decodings(r.r.Replace(body.String()), false, func(string, []span) bool { return false }); over {
+					limit = 12*longest + 1 + more
+				}
 			}
 			if len(b.held) >= limit {
 				t.Fatalf("holding back %d bytes, %d or more: %q", len(b.held), limit, b.held)
@@ -49,6 +57,9 @@ func redactPieces(t *testing.T, r *Redactor, pieces []string) string {
 		}
 	}
 	out.WriteString(b.Flush())
+	if b.held != "" {
+		t.Fatalf("still holding %q after Flush", b.held)
+	}
 	return out.String()
 }
 
@@ -498,8 +509,8 @@ func pctEscape(s string, upper bool) string {
 
 // spellings returns ways of writing s that String decodes to s and that no listed form covers:
 // every character, or one character, as a JSON escape; percent escapes in lower case; the second
-// slash only as \/; and the JSON escapes of a JSON escape (a body quoted in JSON twice) or written
-// in a URL.
+// slash only as \/; the JSON escapes of a JSON escape (a body quoted in JSON twice) or written
+// in a URL; and the first character with escapes of both kinds in two layers.
 func spellings(s string) []string {
 	var out []string
 	all := func(f func(c rune) string) string {
@@ -521,6 +532,10 @@ func spellings(s string) []string {
 		out = append(out, s[:i]+uEscape(c, false)+s[i+len(string(c)):])
 		i += len(string(c))
 	}
+	// The first character as a JSON escape whose backslash is a JSON escape and whose u is a
+	// percent escape: decoding takes both kinds, in two layers.
+	first, n := utf8.DecodeRuneInString(s)
+	out = append(out, strings.Replace(uEscape(first, false), bs+"u", bs+"u005c%75", 1)+s[n:])
 	if k := strings.LastIndexByte(s, '/'); k > strings.IndexByte(s, '/') {
 		out = append(out, s[:k]+`\/`+s[k+1:])
 	}
@@ -555,38 +570,116 @@ func TestBodyRedactorEscapedSecretAtEveryCut(t *testing.T) {
 
 // Random bodies of secrets in every spelling of spellings and every listed form, starts of them
 // that never complete, escapes and other text, cut at every offset into two pieces, a byte at a
-// time and at random: what the client gets joined is what String returns for the whole body. A
-// body with more decodings than String tries, which String replaces whole, is left out; the test
-// fails when that leaves out more than a few.
+// time and at random. Where String reads the body whole, what the client gets joined is what
+// String returns. A body with more decodings than String tries, which String replaces whole, is
+// checked for what must not get through instead: a listed form, or the rest of a spelling of a
+// secret that a cut splits. Most of the bodies are made to reach that after a Write that sent
+// text whole and marked what it held as sent: text with many decodings, escapes, a whole spelling
+// of a secret, and more escapes, after a byte that cannot be part of a spelling or right after it,
+// so that the body may end inside the run. The escapes can give the run more decodings than String
+// tries only together with the part of it that was sent, most often before a spelling with
+// escapes of both kinds, as 1000 or more of the bodies have; those are cut in two after the text
+// with many decodings, the others also a byte at a time and at random.
 func TestBodyRedactorEscapedMatchesStringAtEveryCut(t *testing.T) {
 	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: splitSecrets[0]}, &Credential{Kind: CredentialAPIKey, APIKey: splitSecrets[1]})
-	var frags []string
+	rng := rand.New(rand.NewPCG(9, 10))
+	var secrets, mixed, frags []string
 	for _, secret := range splitSecrets {
 		for _, sp := range append(spellings(secret), encodings(secret)...) {
-			frags = append(frags, sp, sp[:len(sp)/2])
+			secrets = append(secrets, sp)
+			frags = append(frags, sp[:len(sp)/2])
+			if strings.Contains(sp, "%75") {
+				mixed = append(mixed, sp)
+			}
 		}
 	}
-	frags = append(frags, " ", "x", "error: key ", `{"message":"`, `"}`, "data: ", "\n\n", "é", `\`, `\\`, `\u00`,
-		`\ud83d`, "%", "%5", "%25", `\n`, `\"`, "s", "sk-", "ab/")
-	rng := rand.New(rand.NewPCG(9, 10))
-	ran, left := 0, 0
-	for ran < 300 {
-		var b strings.Builder
-		for range 1 + rng.IntN(5) {
-			b.WriteString(frags[rng.IntN(len(frags))])
+	// Text with more decodings than String tries, and pieces of escapes, which can make a body
+	// have more together.
+	many := strings.Repeat(bs, 16) + "%25252525"
+	atoms := []string{bs, bs + bs, "%25", "%", "%5C", "u", "00", "73", "x"}
+	escapes := func(least int) string {
+		var e strings.Builder
+		for range least + rng.IntN(6) {
+			e.WriteString(atoms[rng.IntN(len(atoms))])
 		}
-		whole := b.String()
-		if _, over := r.decodings(r.r.Replace(whole), false, func(string, []span) bool { return false }); over {
-			left++
+		return e.String()
+	}
+	frags = append(frags, " ", "x", "error: key ", `{"message":"`, `"}`, "data: ", "\n\n", "é", bs, bs+bs, bs+"u00",
+		bs+"ud83d", "%", "%5", "%25", bs+"n", bs+`"`, "s", "sk-", "ab/", collapsing, many)
+	// Bodies of each kind made so far: random, and the two kinds made to reach many decodings.
+	var made [3]int
+	matched, safe := 0, 0
+	for n := 0; matched < 300 || safe < 100 || made[1] < 200 || made[2] < 1000; n++ {
+		if made[n%3] >= []int{300, 200, 1000}[n%3] && (n%3 != 0 || matched >= 300) {
 			continue
 		}
-		ran++
+		made[n%3]++
+		var b strings.Builder
+		var spelled [][2]int // where whole spellings of secrets are in the body
+		secret := func(secrets []string) {
+			sp := secrets[rng.IntN(len(secrets))]
+			spelled = append(spelled, [2]int{b.Len(), b.Len() + len(sp)})
+			b.WriteString(sp)
+		}
+		switch n % 3 {
+		case 1:
+			b.WriteString(collapsing + escapes(0))
+			secret(secrets)
+			b.WriteString([]string{"!", " ", ""}[rng.IntN(3)] + []string{many, escapes(0)}[rng.IntN(2)])
+		case 2:
+			b.WriteString(collapsing + escapes(3))
+			secret(mixed)
+			b.WriteString([]string{"!", " ", ""}[rng.IntN(3)] + escapes(0))
+		default:
+			for range 1 + rng.IntN(5) {
+				if rng.IntN(3) == 0 {
+					secret(secrets)
+				} else {
+					b.WriteString(frags[rng.IntN(len(frags))])
+				}
+			}
+		}
+		whole := b.String()
+		_, over := r.decodings(r.r.Replace(whole), false, func(string, []span) bool { return false })
+		if over {
+			safe++
+		} else {
+			matched++
+		}
 		want := r.String(whole)
 		check := func(pieces []string) {
 			t.Helper()
-			if got := redactPieces(t, r, pieces); got != want {
-				t.Fatalf("body %q cut as %q: got %q, want %q", whole, pieces, got, want)
+			got := redactPieces(t, r, pieces)
+			if !over {
+				if got != want {
+					t.Fatalf("body %q cut as %q: got %q, want %q", whole, pieces, got, want)
+				}
+				return
 			}
+			if f := formsIn(r, got); len(f) > 0 {
+				t.Fatalf("body %q cut as %q: got %q, which holds %q", whole, pieces, got, f)
+			}
+			at := 0
+			for _, p := range pieces[:len(pieces)-1] {
+				at += len(p)
+				for _, sp := range spelled {
+					// The rest of a spelling cut at at, long enough not to be there by chance and
+					// found nowhere else in the body, which String removes from the run of bytes
+					// that can be part of a spelling up to the end of it (text before can make it
+					// read otherwise: \u00 before ab is one escape).
+					if rest := whole[min(at, sp[1]):sp[1]]; sp[0] < at && len(rest) >= 12 && strings.Count(whole, rest) == 1 &&
+						strings.Contains(got, rest) && !strings.Contains(r.String(spellingRun(r, whole[:sp[1]], sp[0], sp[1])), rest) {
+						t.Fatalf("body %q cut as %q: got %q, which holds %q, the rest of a secret cut there", whole, pieces, got, rest)
+					}
+				}
+			}
+		}
+		if n%3 == 2 {
+			// Cut in two after the text with many decodings, where a secret is cut.
+			for i := len(collapsing); i <= len(whole); i++ {
+				check([]string{whole[:i], whole[i:]})
+			}
+			continue
 		}
 		for i := 0; i <= len(whole); i++ {
 			check([]string{whole[:i], whole[i:]})
@@ -606,9 +699,19 @@ func TestBodyRedactorEscapedMatchesStringAtEveryCut(t *testing.T) {
 			check(pieces)
 		}
 	}
-	if left > ran/10 {
-		t.Fatalf("%d bodies left out for every %d run", left, ran)
+}
+
+// spellingRun returns the run of bytes that can be part of a spelling of a form (spells) in x that
+// holds x[i:j].
+func spellingRun(r *Redactor, x string, i, j int) string {
+	b := r.Body()
+	for i > 0 && b.spells(x[i-1]) {
+		i--
 	}
+	for j < len(x) && b.spells(x[j]) {
+		j++
+	}
+	return x[i:j]
 }
 
 // doubleEscape returns s with every character written as a JSON escape, and every character of
@@ -657,6 +760,104 @@ func TestBodyRedactorSpellingTooLongToHold(t *testing.T) {
 	} {
 		if got := redactPieces(t, r, c.pieces); got != c.want {
 			t.Errorf("%q: got %q, want %q", c.pieces, got, c.want)
+		}
+	}
+}
+
+// bs is a backslash, written so that no escape in these tests is itself read as one.
+const bs = "\x5c"
+
+// After a Write that sent text whole and marked the end it holds as sent, a later piece that
+// makes the text have more decodings than String tries still does not send the rest of a secret
+// that began in that end: here "s" spelled as \%750073 (two layers) begins
+// "sx-other-secret", and the second piece brings the rest and text with many decodings.
+func TestBodyRedactorCollapseAfterSentKeepsRest(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "my-api-keys"}, &Credential{Kind: CredentialAPIKey, APIKey: "sx-other-secret"})
+	pieces := []string{"err my-api-key" + bs + "u005c%750073x-oth", "er-secret!%2525" + bs + bs + bs + bs}
+	got := redactPieces(t, r, pieces)
+	if strings.Contains(got, "x-oth") || strings.Contains(got, "er-secret") {
+		t.Errorf("%q: got %q, which holds the rest of a secret", pieces, got)
+	}
+}
+
+// Flush returns all the BodyRedactor holds, also when what it holds was partly sent and has
+// more decodings than String tries.
+func TestBodyRedactorFlushAfterCollapse(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "my-api-keys"}, &Credential{Kind: CredentialAPIKey, APIKey: "3x-other-secret"})
+	pieces := []string{"err my-api-key" + bs + "u0073x-oth", "er" + strings.Repeat(bs, 16) + "%25252525"}
+	got := redactPieces(t, r, pieces)
+	if strings.Contains(got, "x-oth") || strings.Contains(got, "er-secret") {
+		t.Errorf("%q: got %q, which holds the rest of a secret", pieces, got)
+	}
+}
+
+// A spelling too long to hold back that holds no secret takes with it, when it is replaced, no
+// more of the data after it than could still be part of a spelling: here an unfinished
+// surrogate pair escaped twice, then 1 MiB of hex digits, which no spelling of a form runs
+// through.
+func TestBodyRedactorReplacedSpellingIsBounded(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "sk-test"})
+	head := "prefix " + doubleEscape(bs+"ud83d"+bs+"udc")
+	hex := strings.Repeat("0123456789abcdef", 65536)
+	got := redactPieces(t, r, []string{head, hex + " suffix"})
+	if !strings.HasPrefix(got, "prefix ") || !strings.HasSuffix(got, " suffix") {
+		t.Fatalf("got %d bytes, starting %.40q and ending %.40q", len(got), got, got[max(0, len(got)-40):])
+	}
+	if lost := len(head) + len(hex) + len(" suffix") - len(got); lost > len(head)+r.Body().maxStretch() {
+		t.Errorf("lost %d bytes of the body, more than the spelling (%d) and %d after it", lost, len(head)-len("prefix "), r.Body().maxStretch())
+	}
+}
+
+// A credential that holds U+FFFD is removed from JSON that writes it with invalid UTF-8, as
+// String removes it (a JSON decoder reads the invalid byte as U+FFFD), wherever the body is cut.
+func TestBodyRedactorInvalidUTF8(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "pa" + string(utf8.RuneError) + "ss"})
+	whole := `{"m":"key pa` + "\xff" + `ss"}`
+	want := `{"m":"key [redacted]"}`
+	if got := r.String(whole); got != want {
+		t.Fatalf("String = %q, want %q", got, want)
+	}
+	for i := 0; i <= len(whole); i++ {
+		if got := redactPieces(t, r, []string{whole[:i], whole[i:]}); got != want {
+			t.Errorf("cut at %d: got %q, want %q", i, got, want)
+		}
+	}
+}
+
+// BenchmarkBodyRedactor streams 4 MiB bodies through a BodyRedactor in pieces of 256 and 4096
+// bytes, and in one piece: JSON with and without escapes, and the worst cases for it, text made
+// only of escapes or of bytes that escapes are made of, and one large piece whose end makes Write
+// send it whole.
+func BenchmarkBodyRedactor(b *testing.B) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "sk-test/key+42"},
+		&Credential{Kind: CredentialAPIKey, APIKey: "my-api-keys"}, &Credential{Kind: CredentialAPIKey, APIKey: "3x-other-secret"})
+	const size = 4 << 20
+	fill := func(unit string) string { return strings.Repeat(unit, size/len(unit)) }
+	for _, c := range []struct {
+		name   string
+		body   string
+		pieces []int
+	}{
+		{"plain_json", string(largeBody(`{"type":"text","text":"Hello there, a long reply.","n":12345}`)), []int{256, 4096}},
+		{"json_backslashes", string(largeBody(`{"type":"text","text":"printf(\"%d\\n\", x); // C:\\temp"}`)), []int{256, 4096}},
+		{"backslashes", fill(bs + bs), []int{256, 4096}},
+		{"percent25", fill("%25"), []int{256, 4096}},
+		{"percents", fill("%"), []int{256, 4096}},
+		{"hex", fill("0123456789abcdef"), []int{256, 4096}},
+		{"fallback_end", fill("x ") + "err my-api-key" + bs + "u0073x-oth", []int{size + 64}},
+	} {
+		for _, n := range c.pieces {
+			b.Run(fmt.Sprintf("%s/%d", c.name, n), func(b *testing.B) {
+				b.SetBytes(int64(len(c.body)))
+				b.ReportAllocs()
+				for range b.N {
+					br := r.Body()
+					for i := 0; i < len(c.body); i += n {
+						_ = br.Write(c.body[i:min(i+n, len(c.body))])
+					}
+					_ = br.Flush()
+				}
+			})
 		}
 	}
 }
