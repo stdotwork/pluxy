@@ -326,7 +326,10 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     "environment": {"set": {ASKED.0: ASKED.1}},
                 }}),
             )?;
-            dialog_with(app, &[EXECUTION, "launch", &s(&named), "managed"])?;
+            // The review text is JSON, so the executable shows JSON-encoded (doubled
+            // backslashes on Windows) as `launch.executable.selected`.
+            let shown = json!(s(&named)).to_string();
+            dialog_with(app, &[EXECUTION, "launch", &shown, "managed"])?;
             press("alt+r")?;
             press("alt+o")?;
             let r = settle(main, &slot)?;

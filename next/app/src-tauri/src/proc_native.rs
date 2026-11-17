@@ -409,6 +409,8 @@ mod imp {
 
     /// pid, opened to query it, while it runs (not once it has exited, though held): its handle is
     /// not yet signalled. Its exit code would not do: a process may exit with 259, `STILL_ACTIVE`.
+    // shortcut: no run has a process exit with 259, so nothing shows a process that did counted
+    // as ended; upgrade when a fixture can exit with 259.
     fn running(pid: u32) -> Option<Owned> {
         // SAFETY: no pointers; the handle it returns is checked.
         let h = unsafe {
@@ -481,9 +483,15 @@ mod imp {
                     // SAFETY: t is a live thread handle; name receives a string the system
                     // allocated, NUL-terminated, which LocalFree releases once read.
                     if unsafe { GetThreadDescription(t.0, &mut name) } >= 0 && !name.is_null() {
+                        // SAFETY: name is NUL-terminated, so every index up to and including the
+                        // NUL is inside its allocation, and the count stops at the NUL.
                         let len = (0..).take_while(|i| unsafe { *name.add(*i) } != 0).count();
+                        // SAFETY: the len characters before the NUL are initialised, aligned
+                        // u16s that nothing writes while wide is read; name is freed only after.
                         let wide = unsafe { std::slice::from_raw_parts(name, len) };
                         out.push(String::from_utf16_lossy(wide));
+                        // SAFETY: name came from GetThreadDescription and is freed once; wide,
+                        // which borrows it, is no longer used.
                         unsafe { LocalFree(name.cast()) };
                     }
                 }

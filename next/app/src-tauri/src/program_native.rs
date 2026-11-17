@@ -9,13 +9,13 @@
 //!   is disabled is refused and starts none;
 //! - three calls from the window at once start it once: each answers the expected summary from
 //!   the same process, which leads its own process group (on Windows: its immediate job holds
-//!   only it and its child and ends them when closed) with the child it started, has only the
-//!   contract's environment (not the app's canary; the app's HOME and its own data folder, 0700
-//!   on Linux and macOS; on Windows also the app's `SystemRoot`, `APPDATA` and `LOCALAPPDATA`,
-//!   `ToolEnv::system`) and only stdin, stdout and stderr open (on Windows: its three standard
-//!   handles are pipes, and a file the app holds through an inheritable handle meanwhile is not
-//!   open in it at that handle's value, though a process std starts has it there), and runs in its
-//!   package folder;
+//!   only it, its child and the `conhost.exe` of its hidden console, and ends them when closed)
+//!   with the child it started, has only the contract's environment (not the app's canary; the
+//!   app's HOME and its own data folder, 0700 on Linux and macOS; on Windows also the app's
+//!   `SystemRoot`, `APPDATA` and `LOCALAPPDATA`, `ToolEnv::system`) and only stdin, stdout and
+//!   stderr open (on Windows: its three standard handles are pipes, and a file the app holds
+//!   through an inheritable handle meanwhile is not open in it at that handle's value, though a
+//!   process std starts has it there), and runs in its package folder;
 //! - the command thread that started it has ended while it runs on, with its supervisor thread;
 //! - its stdin and stdout pipes are held by the app and the tool only, no web process (Linux and
 //!   macOS: Windows lists no process's handles to an unprivileged one);
@@ -248,6 +248,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     require(env == want, format!("the tool's environment: {env:?}"))?;
     // On Windows each system folder the tool has is the app's own, and it has each the app has as
     // a full path (none the app has as a relative one).
+    // shortcut: a runner's system folders are all full paths, so no run checks the relative case
+    // (left out of the tool's environment, `ToolEnv::system`), nor does a unit test; upgrade when
+    // a session can start the app with a relative APPDATA, LOCALAPPDATA or SystemRoot.
     #[cfg(windows)]
     for k in SYSTEM_ENV {
         let app_value = std::env::var_os(k)
@@ -367,18 +370,37 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     }
     let real = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
     // On Linux and macOS it leads its own process group. On Windows its immediate job is the
-    // host's: it holds the tool and its child and nothing else, and ends them when it closes.
+    // host's, and ends what it holds when it closes: the tool, its child, and one process more,
+    // `%SystemRoot%\System32\conhost.exe`, which Windows starts for the hidden console the host
+    // gives the tool (`CREATE_NO_WINDOW`) and puts in the tool's job. Every member the job counts
+    // is listed with the program it runs; nothing else may be in it.
     #[cfg(unix)]
     let grouped = first["pgid"] == pid;
     #[cfg(windows)]
     let grouped = {
-        let pids: BTreeSet<u64> = first["job"]["pids"]
+        let job = &first["job"];
+        let members: Vec<(u64, &str)> = job["members"]
             .as_array()
-            .map(|a| a.iter().filter_map(Value::as_u64).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| Some((m["pid"].as_u64()?, m["image"].as_str()?)))
+                    .collect()
+            })
             .unwrap_or_default();
-        first["job"]["assigned"] == 2
-            && pids == BTreeSet::from([pid, child])
-            && first["job"]["kill_on_close"] == true
+        let listed = job["members"].as_array().map_or(0, Vec::len);
+        let conhost = std::env::var("SystemRoot")
+            .map(|root| format!(r"{root}\System32\conhost.exe"))
+            .map_err(|e| format!("SystemRoot: {e}"))?;
+        let (ours, others): (Vec<_>, Vec<_>) =
+            members.iter().partition(|(p, _)| *p == pid || *p == child);
+        job["kill_on_close"] == true
+            && job["assigned"].as_u64() == Some(listed as u64)
+            && members.len() == listed
+            && ours.iter().map(|(p, _)| *p).collect::<BTreeSet<_>>() == BTreeSet::from([pid, child])
+            && others.len() == 1
+            && others
+                .iter()
+                .all(|(_, image)| image.eq_ignore_ascii_case(&conhost))
     };
     // Its folder as it reports it, resolved as the package folder is.
     let cwd = first["cwd"]

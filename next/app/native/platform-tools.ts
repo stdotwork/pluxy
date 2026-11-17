@@ -83,6 +83,35 @@ const UPDATER_KEY = "no-test-package";
 const TIMEOUT = 600_000;
 /** The test core's start: `go run` builds it first, once a minute or two on a runner. */
 const CORE_START = 180_000;
+/** How long a process this session stopped, or asked to stop, may take to end. */
+const STOP_MS = 30_000;
+
+/** Waits at most ms for proc's event (`exit`, or `close` once its output is read too); whether it
+ * came. */
+function within(proc: ChildProcess, event: "exit" | "close", ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(t);
+      resolve(true);
+    };
+    const t = setTimeout(() => {
+      proc.off(event, done);
+      resolve(false);
+    }, ms);
+    proc.once(event, done);
+  });
+}
+
+/** Ends the test core: closes its input, which ends it once it runs, and waits up to STOP_MS for
+ * `go` to exit; then stops it (only the process this session started) and waits up to STOP_MS
+ * more. Whether it exited. */
+async function stopCore(proc: ChildProcess): Promise<boolean> {
+  const ended = () => proc.exitCode !== null || proc.signalCode !== null;
+  proc.stdin?.end();
+  if (ended() || (await within(proc, "exit", STOP_MS))) return true;
+  proc.kill();
+  return ended() || within(proc, "exit", STOP_MS);
+}
 
 /** The account's known folders on Windows, as the app finds them (SHGetKnownFolderPath). */
 function knownFolders(ctx: Context): { roaming: string; local: string } {
@@ -98,9 +127,8 @@ function knownFolders(ctx: Context): { roaming: string; local: string } {
   return { roaming: out[0] as string, local: out[1] as string };
 }
 
-/** Starts the test core and waits at most CORE_START for its first line. Past that, it closes
- * the core's input, which ends it once it runs, waits up to 30 s for `go` to exit (then stops
- * it), and fails. */
+/** Starts the test core and waits at most CORE_START for its first line. Past that, it ends the
+ * core (`stopCore`) and fails. */
 async function startCore(): Promise<{ proc: ChildProcess; base: string; key: string; config: string }> {
   const proc = spawn("go", ["run", "./e2e/panelcore", "-probe"], {
     cwd: next,
@@ -119,20 +147,7 @@ async function startCore(): Promise<{ proc: ChildProcess; base: string; key: str
     });
     return { proc, ...JSON.parse(line) };
   } catch (e) {
-    proc.stdin?.end();
-    if (proc.exitCode === null && proc.signalCode === null) {
-      await new Promise((r) => {
-        const t = setTimeout(() => {
-          // Only the process this session started.
-          proc.kill();
-          r(undefined);
-        }, 30_000);
-        proc.once("exit", () => {
-          clearTimeout(t);
-          r(undefined);
-        });
-      });
-    }
+    if (!(await stopCore(proc))) throw new Error(`${(e as Error).message}; and it did not exit once stopped`);
     throw e;
   } finally {
     clearTimeout(timer);
@@ -369,15 +384,22 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       // Only the process this session started.
       child.kill();
     }, TIMEOUT);
-    // "close", not "exit": it comes after the output is read.
-    const code = await new Promise<number | null>((resolve) => child.once("close", (c) => resolve(c)));
+    // "close", not "exit": it comes after the output is read. Once stopped, it has STOP_MS for
+    // that.
+    let late: ReturnType<typeof setTimeout> | undefined;
+    const code = await new Promise<number | null | "open">((resolve) => {
+      child.once("close", (c) => resolve(c));
+      late = setTimeout(() => resolve("open"), TIMEOUT + STOP_MS);
+    });
     clearTimeout(timer);
-    proc = undefined;
+    clearTimeout(late);
+    check(code !== "open", `the app's output did not close within ${STOP_MS / 1000} s after it was stopped`);
+    if (code !== "open") proc = undefined;
 
     const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
     check(!timedOut, `the app did not finish within ${TIMEOUT / 1000} s; stopped it`);
     check(!steps.has("failed"), `the app's test steps failed: ${JSON.stringify(steps.get("failed"))}`);
-    check(code === 0, `the app exited with ${code}`);
+    if (code !== "open") check(code === 0, `the app exited with ${code}`);
     check(steps.has("quit"), "the app did not reach its quit step");
 
     if (name === "admission") {
@@ -476,18 +498,16 @@ export async function toolSession(name: ToolSession, ctx: Context) {
     if (proc && proc.exitCode === null && proc.signalCode === null) {
       const p = proc;
       p.kill();
-      await new Promise((r) => p.once("close", r));
+      if (!(await within(p, "close", STOP_MS)))
+        check(false, `the app's output did not close within ${STOP_MS / 1000} s after it was stopped`);
     }
     // The launcher's agent ends once this file is in its working folder.
     if (name === "launcher" && existsSync(join(fixtures, "work"))) {
       writeFileSync(join(fixtures, "work", "stop"), "");
       await Bun.sleep(2000);
     }
-    if (core) {
-      const c = core.proc;
-      c.stdin?.end();
-      if (c.exitCode === null) await new Promise((r) => c.once("exit", r));
-    }
+    if (core && !(await stopCore(core.proc)))
+      check(false, `the test core did not exit within ${(2 * STOP_MS) / 1000} s of being stopped`);
     if (data) {
       try {
         makeRemovable(data);

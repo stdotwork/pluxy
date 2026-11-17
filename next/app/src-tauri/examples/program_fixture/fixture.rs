@@ -8,8 +8,9 @@
 //! - `describe` with the manifest's operations and state;
 //! - `summary` with what it was given (`count`, `longest`) and what it sees of itself: its process
 //!   and group, the child it started, the calls it has had, its environment's names, its open
-//!   file descriptors and its working folder (on Windows also its job, whether its standard
-//!   handles are pipes and the file its handle with the input's `handle` value names, if any);
+//!   file descriptors and its working folder (on Windows also its job and the programs in it,
+//!   whether its standard handles are pipes and the file its handle with the input's `handle`
+//!   value names, if any);
 //! - `wait` only once it is cancelled;
 //! - `store` and `launch` with what they were given, doing nothing else: the routing check's
 //!   write- and launch-class operations;
@@ -266,8 +267,9 @@ fn handle_path(value: u64) -> Option<String> {
 }
 
 /// The job this process is in itself, the innermost when jobs nest (a process on a CI runner may
-/// be in the runner's job too): the IDs of its processes (`pids`) and whether closing the job
-/// ends them (`kill_on_close`); `error` when it is in no job or the job cannot be read.
+/// be in the runner's job too): how many processes it holds (`assigned`), each one's ID and the
+/// path of its program (`members`, `image` null when it cannot be read), and whether closing the
+/// job ends them (`kill_on_close`); `error` when it is in no job or the job cannot be read.
 #[cfg(windows)]
 fn immediate_job() -> Value {
     use windows_sys::Win32::System::JobObjects::{
@@ -316,11 +318,38 @@ fn immediate_job() -> Value {
         return json!({"error": format!("its job's limits: {}", io::Error::last_os_error())});
     }
     let listed = (list.listed as usize).min(list.ids.len());
+    let members: Vec<Value> = list.ids[..listed]
+        .iter()
+        .map(|&pid| json!({"pid": pid, "image": image(pid as u32)}))
+        .collect();
     json!({
         "assigned": list.assigned,
-        "pids": list.ids[..listed],
+        "members": members,
         "kill_on_close": limits.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0,
     })
+}
+
+/// The path of the program process pid runs, as Windows names it (`C:\Windows\System32\…`).
+#[cfg(windows)]
+fn image(pid: u32) -> Option<String> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: no pointers; the handle it returns is checked.
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if h.is_null() {
+        return None;
+    }
+    let mut buf = vec![0u16; 32768];
+    let mut len = buf.len() as u32;
+    // SAFETY: h is a live process handle with the query right; buf holds len characters.
+    let ok =
+        unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) };
+    // SAFETY: h is open, and closed only here.
+    unsafe { CloseHandle(h) };
+    (ok != 0).then(|| String::from_utf16_lossy(&buf[..len as usize]))
 }
 
 /// The file descriptors open in this process, but for the one listing them.
