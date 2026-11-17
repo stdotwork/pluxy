@@ -381,7 +381,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 		defer func() {
 			s.capture.Store(nil)
 			g.RequestLog.write(&requestEntry{at: arrived, method: s.r.Method, url: s.r.URL, client: ClientIP(s.r), headers: s.r.Header, body: nativeBody,
-				trace: turnTrace, reply: turnLog.bytes(), replyTitle: "WEBSOCKET MESSAGES"})
+				trace: turnTrace, reply: turnLog, replyTitle: "WEBSOCKET MESSAGES"})
 		}()
 	}
 	sessReq, err := openairesponses.ParseRequest(nativeBody)
@@ -411,7 +411,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	if g.RequestLog != nil && g.RequestLog.All {
-		ctx = turnTrace.captureUpstream(ctx)
+		ctx = turnTrace.captureUpstream(ctx, g.RequestLog.Redact)
 	}
 	turn := &wsTurn{cancel: cancel}
 	var opened []Session // sessions this turn opened
@@ -579,6 +579,11 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	// an empty output left empty, as today's core does (its preserveNativeOutput).
 	sw.KeepOutput = attemptExt == legacy.Codex && liteTurn(sessReq)
 	defer func() { logTranslation(s.r, nil, sw) }()
+	if ev.Type != llm.EventError && chosen == wsModeHTTP && httpTurn.Warmup {
+		// A warmup reaches no upstream: nothing to record, even when the client goes away
+		// during its reply.
+		m.drop()
+	}
 	for {
 		if ev.Type == llm.EventError {
 			s.mu.Lock()
@@ -607,6 +612,20 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			completed = marshalItems(output)
 			break
 		}
+		// The turn is recorded before its last message is written: a client that has read that
+		// message may ask for the usage record next. The finish carries that message, or, in a
+		// stream that opened with it, response.start does, and the finish with the turn's usage
+		// is read before response.start is written.
+		end, ahead := ev, opensWithEnd(ev)
+		if ahead {
+			if end = stream.Next(); end.Type == llm.EventError {
+				ev = end // nothing of the reply was written
+				continue
+			}
+		}
+		if end.Type == llm.EventFinish {
+			m.finish(end)
+		}
 		if err := sw.Write(ev); err != nil {
 			return false
 		}
@@ -614,15 +633,13 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			m.sent = http.StatusOK // the turn's reply has begun
 		}
 		if ev.Terminal() {
-			if chosen == wsModeHTTP && httpTurn.Warmup {
-				// A warmup reaches no upstream: nothing to record.
-				m.drop()
-			} else if ev.Type == llm.EventFinish {
-				m.finish(ev)
-			}
 			break
 		}
-		ev = stream.Next()
+		if ahead {
+			ev = end
+		} else {
+			ev = stream.Next()
+		}
 	}
 	s.lastModel = model
 	switch {
@@ -641,6 +658,20 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 		s.transcript.Commit(httpTurn.Body, completed)
 	}
 	return true
+}
+
+// opensWithEnd reports whether ev is the response.start of a Responses stream that opened with
+// its last message (response.completed or response.incomplete, with no response.created): the
+// stream decoder puts that message on response.start, and the finish follows it.
+func opensWithEnd(ev llm.Event) bool {
+	if ev.Type != llm.EventResponseStart || ev.Response == nil || ev.Response.Format != llm.FormatOpenAIResponses {
+		return false
+	}
+	var d struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal(ev.Raw, &d)
+	return d.Type == "response.completed" || d.Type == "response.incomplete"
 }
 
 // liteTurn reports whether the client's turn is a Responses-lite one.
