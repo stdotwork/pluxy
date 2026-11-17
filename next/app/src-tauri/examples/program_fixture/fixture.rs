@@ -238,7 +238,9 @@ fn windows_seen(out: &mut Value) {
         .map(|which| unsafe { GetFileType(GetStdHandle(which)) } == FILE_TYPE_PIPE));
 }
 
-/// Its own argv and environment, one per line (Windows: the client-key check reads them here).
+/// Its own argv and environment, one per line. On Windows the client-key check reads the
+/// environment here, since Windows gives no supported way to read another process's; the argv it
+/// reads as Windows has it (`Win32_Process.CommandLine`).
 #[cfg(windows)]
 fn own_process() -> String {
     let args = std::env::args_os().map(|a| a.to_string_lossy().into_owned());

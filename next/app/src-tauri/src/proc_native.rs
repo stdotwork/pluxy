@@ -291,12 +291,10 @@ mod imp {
         Ok((format!("pipe:{handle:#x}"), holders))
     }
 
-    /// The argv and environment of pid, a process of this user, as `sysctl(KERN_PROCARGS2)`
-    /// gives them: after the argument count, the program's path, each argument and each
-    /// environment string, separated by NULs. Empty when they cannot be read.
-    /// The argv (after the executable's path) and environment of pid, from `KERN_PROCARGS2`:
-    /// argc, the executable's path, padding, argc arguments, then the environment; none unless
-    /// it can be read.
+    /// The argv and environment of pid, a process of this user, from `sysctl(KERN_PROCARGS2)`,
+    /// which gives argc, the executable's path, NUL padding, argc arguments, then the environment
+    /// strings, each ending in a NUL: the path and the arguments, NUL-separated, and the
+    /// environment. None when they cannot be read.
     pub(super) fn argv_env(pid: u64) -> Option<(String, String)> {
         let pid = libc::c_int::try_from(pid).ok()?;
         let mut max: libc::c_int = 0;
