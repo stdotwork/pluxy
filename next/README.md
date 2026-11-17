@@ -1234,8 +1234,7 @@ signature) is not retry-safe, and a reply that ends without its end frame is an 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
 through as given); a session's turn count (each request is a new session, as today's core sends
-for a client that names none); the account's plan and quota status (`GetUserStatus`) and a used-up
-quota's reset time; the remote model catalog refresh; Devin's names for older models
+for a client that names none); a used-up quota's reset time; the remote model catalog refresh; Devin's names for older models
 (`claude-haiku-4-5`, `gpt-4-1`, Sonnet 4.5, Claude 4.5 Opus) and the `-fast` variants built from a
 `<effort>-fast` request; the usage fallback from response dimensions; images in tool results;
 signature types other than `sealed`; namespace tools and custom (freeform) tools such as
