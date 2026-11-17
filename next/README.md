@@ -594,9 +594,9 @@ The model name is read in lower case, without a Bedrock prefix (`anthropic.`, or
 `apac.` or `global.` before it), a context window in brackets (`[1m]`) or a Vertex AI version
 after `@`; the same reading decides the thinking settings above, so Claude Mythos models get
 thinking from a reasoning effort too. Each one left out is reported as dropped, so
-`drop_policy` `"reject"` refuses a generation request that would lose one. A Messages client's own
-sampling settings go upstream as it wrote them. Today's core leaves both out
-of every translated request, on every model.
+`drop_policy` `"reject"` refuses a generation request, or a token count sent to Anthropic's own
+API, that would lose one. A Messages client's own sampling settings go upstream as it wrote them.
+Today's core leaves both out of every translated request, on every model.
 
 Every request, a Messages client's or a translated one, also gets the betas its body needs, after
 the client's own and without repeats, as today's core adds them: `advisor-tool-2026-03-01` for a
