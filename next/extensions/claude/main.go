@@ -493,13 +493,8 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	}
 	tr.Losses = losses
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
-		var paths []string
-		for _, l := range losses {
-			if l.Kind == llm.LossDropped {
-				paths = append(paths, l.Path)
-			}
-		}
-		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+		paths := tr.DroppedPaths()
+		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
 			Message: "Anthropic Messages cannot carry parts of this request: " + strings.Join(paths, ", ")}
 	}
 	return body, tr, nil

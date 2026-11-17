@@ -714,6 +714,12 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 		e.Code, e.Scope = r.field(e.Code, codes), r.field(e.Scope, scopes)
 		e.Message = r.String(e.Message)
 		e.ProviderCode = r.String(e.ProviderCode)
+		if e.Dropped != nil {
+			e.Dropped = slices.Clone(e.Dropped)
+			for i, p := range e.Dropped {
+				e.Dropped[i] = r.String(p)
+			}
+		}
 		e.Raw = r.raw(e.Raw)
 		e.Usage = r.usage(e.Usage)
 		ev.Error = &e

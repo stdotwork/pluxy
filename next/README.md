@@ -167,7 +167,8 @@ counts the system text, each message's role and text, reasoning, tool calls and 
 tools' names, descriptions and parameters, and the tool choice; images and files add nothing.
 `token_count_estimate` (top level, default `true`) turns the estimate off: core then answers an
 error saying the account cannot count. When every account tried can count, an error from an
-upstream that counts (a 400, 401 or 429) stays an error.
+upstream that counts (a 400, 401 or 429) stays an error, and so does a refusal under
+`drop_policy` `"reject"`.
 
 A model name may end in a thinking setting in brackets, as today's core reads it: a level
 (`gpt-5(high)`; `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), `none`, `auto`, or a token
@@ -593,9 +594,9 @@ The model name is read in lower case, without a Bedrock prefix (`anthropic.`, or
 `apac.` or `global.` before it), a context window in brackets (`[1m]`) or a Vertex AI version
 after `@`; the same reading decides the thinking settings above, so Claude Mythos models get
 thinking from a reasoning effort too. Each one left out is reported as dropped, so
-`drop_policy` `"reject"` refuses a generation request that would lose one. A Messages client's own
-sampling settings go upstream as it wrote them. Today's core leaves both out
-of every translated request, on every model.
+`drop_policy` `"reject"` refuses a generation request, or a token count sent to Anthropic's own
+API, that would lose one. A Messages client's own sampling settings go upstream as it wrote them.
+Today's core leaves both out of every translated request, on every model.
 
 Every request, a Messages client's or a translated one, also gets the betas its body needs, after
 the client's own and without repeats, as today's core adds them: `advisor-tool-2026-03-01` for a
@@ -1999,8 +2000,12 @@ MiB of an error, stopped at a stream's last event, or the connection broke) ends
 off there is left out: 4 bytes or more that start a form of the account's credential or of a
 secret the log removes, then the run of letters, digits and `-_.~+/=%\` there. No window is left
 out there, so the start of a secret with other characters, spelled with escapes the log decodes
-beyond those forms, can stay. That needs protocol 0.16; with an older extension such a body
-ends as the read stopped. A Responses WebSocket turn that opens the upstream socket holds its
+beyond those forms, can stay. A streamed reply ends with the line too when the extension stops at
+the last event of the upstream's format, as the OpenAI-compatible provider does (Chat's `data:
+[DONE]`, Responses' `response.completed`, Messages' `message_stop`): then the reply was not cut,
+and what was left unread is only what the upstream sent after that event, usually nothing but the
+end of the transfer. That needs protocol 0.17; with an older extension such a body ends as the
+read stopped. A Responses WebSocket turn that opens the upstream socket holds its
 handshake; the messages on that socket are not written. This needs an
 extension that implements [protocol](protocol/README.md#upstream-capture) 0.13; it is captured
 only while `logs.request_log` is on, so error logs written with it off have no upstream sections,

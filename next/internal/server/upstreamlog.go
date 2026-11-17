@@ -234,10 +234,13 @@ func writeBody(b *bytes.Buffer, c protocol.CapturedBody, redact *protocol.Redact
 // (Redactor.TrimCut), then the run of key characters (secretChar), which holds the start of a
 // secret made of them in any spelling.
 //
-// shortcut: it leaves out no window as trimGap does, so a secret with other characters, spelled
-// with escapes beyond its forms, can keep a start here. Most streamed bodies end unread (their
-// extension stops at the reply's last event), and a window would leave out all of a short one.
-// Upgrade if such a start is seen in a log.
+// shortcut: it leaves out no window as trimGap does, so the start of a secret with characters
+// other than a key's, written in escapes that are not among its forms (such as \u escapes of
+// every character, which the redaction recognises only in a whole secret), can stay here. Most
+// streamed bodies end unread, at the reply's last event, and a window would leave out all of a
+// short one. Upgrade when a capture tells a stop after the reply's last event from one in the
+// middle of a body, so that the window can go where the read stopped mid-body, or when such a
+// start is seen in a log.
 func trimStop(r *protocol.Redactor, s string) string {
 	s, _ = r.TrimCut(s, "")
 	return strings.TrimRightFunc(s, secretChar)
