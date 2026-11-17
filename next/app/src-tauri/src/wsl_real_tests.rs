@@ -614,7 +614,9 @@ fn wsl_real_a_record_naming_another_user_than_the_program_runs_as_is_refused_bef
         &format!("-o -u {uid} -g bob -M -N -d /nonexistent-{alias} -s /bin/sh"),
     );
     refused_with_no_outside_effects(&w, &stale, &bob, &|e, status| {
-        assert_eq!(e.code, "extension_crashed", "{e:?}");
+        // A tool that ends before hello fails its start, which a call sees as unavailable.
+        assert_eq!(e.code, "extension_unavailable", "{e:?}");
+        assert!(e.message.ends_with("exited as it started"), "{e:?}");
         let log = status.log.join("\n");
         assert!(
             log.contains(&format!("pluxy expected WSL {d}/{alias}, this is {d}/bob")),
