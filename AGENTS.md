@@ -193,6 +193,7 @@ Some macOS jobs and every Windows job stay on GitHub's runners:
   workflows, for example `fix(next): ...` or `ci: ...`. Repo-wide docs use `docs: ...`. The scope
   `app` is for the old desktop app in `extensions/app/` only; work on `next/app/` uses `next`.
 - Open PRs ready for review, not as drafts. The owner reviews and merges.
-- Licensing: the upstream MIT notices of the removed old core and old web panel are in
-  `THIRD_PARTY_NOTICES.md`; the old desktop app keeps its own in `extensions/app/LICENSE`. The
-  root license is not decided yet; do not add one.
+- Licensing: the upstream MIT notices of the removed old core and old web panel, of the old
+  desktop app and of the Pi adapter in `next/app-tools/pi-setup/adapter/`, with the files `next/`
+  keeps or adapts from them, are in `THIRD_PARTY_NOTICES.md`; the old desktop app also keeps its own
+  in `extensions/app/LICENSE`. The root license is not decided yet; do not add one.
