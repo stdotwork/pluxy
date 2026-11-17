@@ -220,12 +220,18 @@ const DEEPEST: usize = 64;
 
 /// Removes everything in the open folder fd, through it: each entry looked at without following
 /// a link, folders opened the same way and emptied first. The folder is made this user's to
-/// change first (a bundle's folders may be read-only).
+/// change first (a bundle's folders may be read-only). A folder in it on another device (a file
+/// system mounted there) is not entered: refused.
 #[cfg(unix)]
 fn empty(fd: std::os::unix::io::RawFd, depth: usize) -> std::io::Result<()> {
     use std::io::Error;
     if depth > DEEPEST {
         return Err(Error::other("too deep"));
+    }
+    let mut own: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: fd is open; own is written on success.
+    if unsafe { libc::fstat(fd, &mut own) } != 0 {
+        return Err(Error::last_os_error());
     }
     // SAFETY: fd is an open folder; a failure leaves it as it was.
     unsafe { libc::fchmod(fd, 0o700) };
@@ -236,6 +242,9 @@ fn empty(fd: std::os::unix::io::RawFd, depth: usize) -> std::io::Result<()> {
             return Err(Error::last_os_error());
         }
         if st.st_mode & libc::S_IFMT == libc::S_IFDIR {
+            if st.st_dev != own.st_dev {
+                return Err(Error::other("a file system is mounted in it"));
+            }
             // SAFETY: as above; the descriptor is closed below.
             let child = unsafe {
                 libc::openat(
@@ -473,6 +482,68 @@ mod tests {
         let link = tmp.join("link");
         std::os::unix::fs::symlink(&ok, &link).unwrap();
         assert!(folder_id(&link).is_err(), "a link");
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A file system mounted on a folder inside a recorded folder is not crossed: the folder is
+    // kept, and what is on the mount stays. The mount needs a mount namespace of its own: the
+    // test runs itself again under `unshare -rm` where this system allows that (CI's Ubuntu
+    // runners do not), else says it did not run.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_file_system_mounted_inside_is_not_crossed() {
+        const IN_NS: &str = "PLUXY_TEST_MOUNT_NAMESPACE";
+        if std::env::var_os(IN_NS).is_none() {
+            let unshare = |args: &[&std::ffi::OsStr]| {
+                std::process::Command::new("unshare")
+                    .arg("-rm")
+                    .args(args)
+                    .env(IN_NS, "1")
+                    .status()
+            };
+            if !unshare(&["true".as_ref()]).is_ok_and(|s| s.success()) {
+                eprintln!("not run: this system makes no mount namespace for this user");
+                return;
+            }
+            let exe = std::env::current_exe().unwrap();
+            let name = "updater::leftovers::tests::a_file_system_mounted_inside_is_not_crossed";
+            let s = unshare(&[
+                exe.as_os_str(),
+                "--exact".as_ref(),
+                name.as_ref(),
+                "--test-threads=1".as_ref(),
+            ])
+            .unwrap();
+            assert!(s.success(), "in its own mount namespace: {s}");
+            return;
+        }
+        let tmp = super::super::tests::temp("leftovers-mount");
+        let path = tmp.join(".pluxy-update-8888888888888888");
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("file"), b"x").unwrap();
+        let mounted = path.join("mounted");
+        fs::create_dir(&mounted).unwrap();
+        let c = |p: &Path| std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: NUL-terminated strings that outlive the call; no data for tmpfs.
+        let r = unsafe {
+            libc::mount(
+                c"tmpfs".as_ptr(),
+                c(&mounted).as_ptr(),
+                c"tmpfs".as_ptr(),
+                0,
+                std::ptr::null(),
+            )
+        };
+        assert_eq!(r, 0, "{}", std::io::Error::last_os_error());
+        fs::write(mounted.join("keep"), b"z").unwrap();
+        let m = Made {
+            path: path.clone(),
+            id: id_of(&path),
+        };
+        assert_eq!(remove_folder(&m), Outcome::Kept);
+        assert!(mounted.join("keep").exists(), "the mount was crossed");
+        // SAFETY: as above.
+        assert_eq!(unsafe { libc::umount(c(&mounted).as_ptr()) }, 0);
         fs::remove_dir_all(&tmp).unwrap();
     }
 
