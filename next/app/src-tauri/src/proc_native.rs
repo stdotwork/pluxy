@@ -410,9 +410,15 @@ mod imp {
                     // SAFETY: t is a live thread handle; name receives a string the system
                     // allocated, NUL-terminated, which LocalFree releases once read.
                     if unsafe { GetThreadDescription(t.0, &mut name) } >= 0 && !name.is_null() {
+                        // SAFETY: name is NUL-terminated, so every index up to and including the
+                        // NUL is inside its allocation, and the count stops at the NUL.
                         let len = (0..).take_while(|i| unsafe { *name.add(*i) } != 0).count();
+                        // SAFETY: the len characters before the NUL are initialised, aligned
+                        // u16s that nothing writes while wide is read; name is freed only after.
                         let wide = unsafe { std::slice::from_raw_parts(name, len) };
                         out.push(String::from_utf16_lossy(wide));
+                        // SAFETY: name came from GetThreadDescription and is freed once; wide,
+                        // which borrows it, is no longer used.
                         unsafe { LocalFree(name.cast()) };
                     }
                 }
