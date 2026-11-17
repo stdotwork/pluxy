@@ -15,8 +15,9 @@
 // - vault: the vault, secret delivery and references and journal recovery, then client-key capture
 //   and entry (vault_native.rs, client_key_native.rs; vault.ts). Client keys are made on the test
 //   core, whose config file core.json in the fixtures names: the app's own core, which run.ts's
-//   session uses on Linux, does not run on these systems yet. Neither the vault's key and canary
-//   nor a client key the check learned may appear in the app's output.
+//   session uses on Linux, does not run on these systems yet. Neither the vault's key and canary,
+//   the test core's management key nor a client key the check learned may appear in the app's
+//   output.
 //
 // Each session gets a fresh app state and a private temporary HOME holding the test trust profile
 // (the app's updater gate and trust store read it from HOME). On macOS the app's folders come from
@@ -216,8 +217,12 @@ export async function toolSession(name: ToolSession, ctx: Context) {
 
     say("starting the test core");
     core = await startCore();
-    // The core whose config file the client-key check reads the keys core makes from.
-    if (name === "vault") writeFileSync(join(fixtures, "core.json"), JSON.stringify({ config: core.config }));
+    if (name === "vault") {
+      // The core whose config file the client-key check reads the keys core makes from.
+      writeFileSync(join(fixtures, "core.json"), JSON.stringify({ config: core.config }));
+      // Its management key, which the check types when it signs in again off Linux.
+      canaries = [...canaries, core.key];
+    }
     // The connection the app starts with: local mode, signed in with a kept key.
     writeFileSync(
       join(localDir, "connection.json"),
