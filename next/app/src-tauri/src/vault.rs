@@ -215,7 +215,7 @@ fn printable(s: &str) -> bool {
 
 /// The vault's folder: on Windows in the app's local data folder, so it stays on this machine
 /// when the profile roams; elsewhere in its data folder.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(native_stack), allow(dead_code))]
 pub fn folder<R: tauri::Runtime>(app: &impl tauri::Manager<R>) -> tauri::Result<PathBuf> {
     #[cfg(windows)]
     let dir = app.path().app_local_data_dir()?;
@@ -256,6 +256,8 @@ fn windows_refuses(name: &str) -> bool {
 #[cfg(windows)]
 #[path = "vault_windows.rs"]
 mod folder_windows;
+#[cfg(windows)]
+pub(crate) use folder_windows::at;
 #[cfg(windows)]
 use folder_windows::Folder;
 
@@ -312,7 +314,7 @@ fn clear_errno() {
 /// each opened without following a link (from its parent's descriptor below root), made (0700)
 /// when missing, and checked to be this user's folder that no one else may use. Its path, which
 /// the tool gets as `PLUXY_TOOL_DATA_DIR`; it stays across releases and when the tool is removed.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(native_stack), allow(dead_code))]
 pub(crate) fn tool_data_dir(root: &Path, id: &str) -> Result<PathBuf, String> {
     let part = |s: &str| {
         !s.is_empty()
@@ -1155,7 +1157,7 @@ impl Vault {
 }
 
 /// The vault as the program host reaches it.
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 impl crate::program::Private for Vault {
     fn journals(&self, id: &str) -> Result<Vec<Value>, String> {
         self.open_journals(id)
