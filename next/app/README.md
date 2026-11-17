@@ -1612,6 +1612,10 @@ in the browser. The app updates itself only as a Linux AppImage.
 - The native test runs on Linux, except its platform, package and dialogs sessions, which CI
   runs on Windows and macOS ([Platforms](#platforms) says what they check and what still refuses
   there).
+- On Windows the program session does not check which processes hold the tool's pipes, as it
+  does on Linux and macOS: Windows lists no process's handles to an unprivileged one. It checks
+  instead that the tool's three standard handles are pipes and that a file the app holds through
+  an inheritable handle is not open in the tool.
 - The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
   account's known folders, which no environment variable redirects, so it refuses to start when
   they exist and removes only the ones it made. Its input does not come from a keyboard: on

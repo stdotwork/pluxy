@@ -40,6 +40,8 @@ const OPERATIONS = [
       type: "object",
       properties: {
         items: { type: "array", items: { type: "string", maxLength: 64 }, maxItems: 16 },
+        // Windows: a handle value of the app's the summary names the file of, if it has it.
+        handle: { type: "integer", minimum: 0 },
       },
       required: ["items"],
       additionalProperties: false,

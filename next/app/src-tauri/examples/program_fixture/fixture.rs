@@ -8,7 +8,8 @@
 //! - `describe` with the manifest's operations and state;
 //! - `summary` with what it was given (`count`, `longest`) and what it sees of itself: its process
 //!   and group, the child it started, the calls it has had, its environment's names, its open
-//!   file descriptors and its working folder;
+//!   file descriptors and its working folder (on Windows also its job, whether its standard
+//!   handles are pipes and the file its handle with the input's `handle` value names, if any);
 //! - `wait` only once it is cancelled;
 //! - `store` and `launch` with what they were given, doing nothing else: the routing check's
 //!   write- and launch-class operations;
@@ -100,6 +101,10 @@ pub const AGENT: &str = "pluxy-fixture-agent";
 /// The first argument that makes it the lifetime checks' stand-in agent or runtime (`heartbeat`),
 /// on every platform.
 pub const HEARTBEAT: &str = "pluxy-fixture-heartbeat";
+/// The first argument that makes it print the file its handle with the value of the second
+/// argument names, if any (Windows, `handle_path`), and exit: the program check's control for
+/// handle inheritance.
+pub const HANDLE: &str = "pluxy-fixture-handle";
 
 /// How the unit tests make it misbehave, from `fixture.json`. Absent: it behaves.
 #[derive(Default)]
@@ -228,6 +233,25 @@ fn windows_seen(out: &mut Value) {
     // SAFETY: GetStdHandle returns this process's handle or none; GetFileType takes either.
     out["std_pipes"] = json!([STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
         .map(|which| unsafe { GetFileType(GetStdHandle(which)) } == FILE_TYPE_PIPE));
+}
+
+/// The file this process's handle with value names (`GetFinalPathNameByHandleW`), if it has such
+/// a handle and it is a file on disk.
+#[cfg(windows)]
+fn handle_path(value: u64) -> Option<String> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileType, GetFinalPathNameByHandleW, FILE_TYPE_DISK,
+    };
+    let h = value as usize as windows_sys::Win32::Foundation::HANDLE;
+    // Only a file on disk: asking a pipe's name can wait for a read on it.
+    // SAFETY: GetFileType takes any value, and answers FILE_TYPE_UNKNOWN for no handle.
+    if unsafe { GetFileType(h) } != FILE_TYPE_DISK {
+        return None;
+    }
+    let mut buf = vec![0u16; 1024];
+    // SAFETY: buf is as long as the length given; flags 0 is the normalized DOS path.
+    let n = unsafe { GetFinalPathNameByHandleW(h, buf.as_mut_ptr(), buf.len() as u32, 0) } as usize;
+    (n > 0 && n < buf.len()).then(|| String::from_utf16_lossy(&buf[..n]))
 }
 
 /// The job this process is in itself, the innermost when jobs nest (a process on a CI runner may
@@ -1073,6 +1097,17 @@ pub fn main() -> ! {
         if args.get(1).is_some_and(|a| a == HEARTBEAT) {
             heartbeat(&args);
         }
+        if args.get(1).is_some_and(|a| a == HANDLE) {
+            #[cfg(windows)]
+            if let Some(p) = args
+                .get(2)
+                .and_then(|v| v.parse().ok())
+                .and_then(handle_path)
+            {
+                println!("{p}");
+            }
+            std::process::exit(0);
+        }
         if args.get(1).is_some_and(|a| a.starts_with(AGENT)) {
             agent(&args);
         }
@@ -1274,6 +1309,9 @@ pub fn main() -> ! {
                         #[cfg(windows)]
                         if mode.output.is_none() {
                             windows_seen(&mut out);
+                            if let Some(v) = f["input"]["handle"].as_u64() {
+                                out["handle_path"] = json!(handle_path(v));
+                            }
                         }
                         if let Some(n) = mode.pad {
                             out["pad"] = json!("x".repeat(n));
