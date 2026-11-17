@@ -551,7 +551,13 @@ mod tests {
                     .status()
             };
             if !unshare(&["true".as_ref()]).is_ok_and(|s| s.success()) {
-                eprintln!("not run: this system makes no mount namespace for this user");
+                // Written past the test harness's capture, so that a run's log shows it.
+                use std::io::Write;
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "a_file_system_mounted_inside_is_not_crossed not run: this system makes no \
+                     mount namespace for this user (unshare -rm)"
+                );
                 return;
             }
             let exe = std::env::current_exe().unwrap();
