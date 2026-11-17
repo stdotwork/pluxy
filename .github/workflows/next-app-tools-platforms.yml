@@ -98,10 +98,11 @@ jobs:
   # run and pass; a skipped or missing one fails it.
   wsl:
     name: WSL ${{ matrix.wsl }}
-    # Pushes to main and manual runs always run it; ci.yml decides for pull requests and merge
-    # groups. (On those events there is no wsl input, and an expression's null equals false, so
-    # the event is checked, not inputs.wsl != false.)
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || inputs.wsl
+    # The daily run and manual runs always run it; ci.yml decides for pull requests and merge
+    # groups. (On the daily and manual runs there is no wsl input, and an expression's null equals
+    # false, so the event is checked, not inputs.wsl != false. Called from ci.yml, the event is
+    # ci.yml's: pull_request or merge_group.)
+    if: (github.event_name != 'pull_request' && github.event_name != 'merge_group') || inputs.wsl
     runs-on: windows-latest
     timeout-minutes: 90
     strategy:
