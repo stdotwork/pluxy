@@ -34,6 +34,8 @@ pub(crate) enum Leader {
     /// Exited, and not reaped yet: its process ID (and on unix its group's number) is still its
     /// own, so the rest of its group can still be ended safely.
     Exited,
-    /// Not this host's child to wait for any more: reaped by someone else.
+    /// Not this host's child to wait for any more: reaped by someone else. Unix only: on Windows
+    /// the host's handle keeps its child's record.
+    #[cfg_attr(windows, allow(dead_code))]
     Gone,
 }

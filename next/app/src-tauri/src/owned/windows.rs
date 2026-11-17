@@ -4,7 +4,7 @@
 //! - **What runs.** Windows cannot execute an open file. The host opens the confirmed file again
 //!   by the path it has now, with every link resolved (`pin_file`), so that no process can write,
 //!   rename or delete it while that handle is open, checks that it is the same file (volume and
-//!   file ID, size and times) and a program image (`MZ`, `.exe` or `.com`: never a script, which
+//!   file ID, size and last write time) and a program image (`MZ`, `.exe` or `.com`: never a script, which
 //!   `CreateProcessW` would hand to `cmd.exe`), and starts that path while it holds the handle.
 //!   The folder it starts in is held the same way (`pin_dir`). These pins close once the
 //!   process runs, when its image is mapped and Windows itself keeps the file from changing;
@@ -191,8 +191,11 @@ fn file_id(f: &File) -> io::Result<[u8; 24]> {
     Ok(out)
 }
 
-/// Size, last write time, change time and attributes.
-fn state(f: &File) -> io::Result<(u64, i64, i64, u32)> {
+/// Size and last write time: what writing the file changes, which no one can do while the pin is
+/// open (it shares reading only). Change time and attributes are left out: they move with changes
+/// to the file's names and metadata, such as another hard link to it made or removed, which leave
+/// its bytes as they were, so two reads of the same file a moment apart could differ.
+fn state(f: &File) -> io::Result<(u64, i64)> {
     let mut info: FILE_BASIC_INFO = unsafe { std::mem::zeroed() };
     if unsafe {
         GetFileInformationByHandleEx(
@@ -206,12 +209,7 @@ fn state(f: &File) -> io::Result<(u64, i64, i64, u32)> {
         return Err(io::Error::last_os_error());
     }
     let size = f.metadata()?.file_size();
-    Ok((
-        size,
-        info.LastWriteTime,
-        info.ChangeTime,
-        info.FileAttributes,
-    ))
+    Ok((size, info.LastWriteTime))
 }
 
 /// Opens path so that no process can write, rename or delete it while the file is open (only
@@ -388,6 +386,8 @@ impl Command {
 
     /// Keeps the program's pin (and its folder's) for as long as the returned child is held, not
     /// only until it runs. Tools and managed processes only.
+    // No caller outside the tests yet.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn keep_program(&mut self) -> &mut Self {
         self.keep_program = true;
         self
@@ -396,6 +396,8 @@ impl Command {
     /// Keeps pin, another file the process uses by its path (`pin_other`), from being written,
     /// renamed or removed for as long as the returned child is held. Tools and managed processes
     /// only.
+    // No caller outside the tests yet.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn keep(&mut self, pin: Pinned) -> &mut Self {
         self.kept.push(pin);
         self

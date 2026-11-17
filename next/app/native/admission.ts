@@ -17,10 +17,13 @@ export const KEY_ID = "fixture";
 /** The native fixtures' program (bin/tool). */
 const PROGRAM = "#!/bin/sh\nexit 0\n";
 
-/** Go's platform name for this machine, as registry artifacts are keyed. */
+/** Go's platform name for this machine, as the app keys a package's programs and a registry's
+ * artifacts (`device::platform`): `windows`, `darwin` or `linux`, then `amd64`, `arm64` or `386`.
+ * Node names Windows `win32`, x86-64 `x64` and 32-bit x86 `ia32`. */
 export function platform(): string {
-  const arch = { x64: "amd64", arm64: "arm64" }[process.arch as string] ?? process.arch;
-  return `${process.platform}/${arch}`;
+  const os = { win32: "windows" }[process.platform as string] ?? process.platform;
+  const arch = { x64: "amd64", arm64: "arm64", ia32: "386" }[process.arch as string] ?? process.arch;
+  return `${os}/${arch}`;
 }
 
 export interface Fixture {

@@ -669,7 +669,7 @@ impl Authorized {
     }
     /// Refused once a reviewed target changed since it was confirmed: the executable replaced or
     /// written in place (its metadata), or the cwd replaced.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(native_stack), allow(dead_code))]
     pub(crate) fn recheck(&self) -> Result<(), String> {
         self.prepared.check()
     }
@@ -695,12 +695,12 @@ struct Approval {
 // create this only in their native event callbacks. DOM and IPC paths cannot create one.
 pub struct Gesture {
     created: Instant,
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(native_stack), allow(dead_code))]
     origin: Origin,
 }
 impl Gesture {
     /// A click on one of the tray's Start… items, made in its menu event handler.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(native_stack), allow(dead_code))]
     pub(crate) fn tray() -> Gesture {
         Gesture {
             created: Instant::now(),
@@ -710,7 +710,7 @@ impl Gesture {
     /// The launcher's Start in the app's own window (`launcher_start`, after its caller check),
     /// naming a remembered launch of the host's own list: it can only start exactly that launch
     /// again, and anything changed asks.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(native_stack), allow(dead_code))]
     pub(crate) fn main_window() -> Gesture {
         Gesture {
             created: Instant::now(),
@@ -1647,7 +1647,7 @@ pub(crate) fn revoke_approval(app: &tauri::AppHandle, id: &str) -> Result<(), St
         .unwrap()
         .revoke(id)?;
     // The tray's Start… menu lists only launches still remembered.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     crate::launcher::refresh_tray(app);
     Ok(())
 }
