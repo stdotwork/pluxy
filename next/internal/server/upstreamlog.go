@@ -219,28 +219,87 @@ func writeBody(b *bytes.Buffer, c protocol.CapturedBody, redact *protocol.Redact
 }
 
 // gapBytesPerFormByte is how many bytes beside a cut trimGap leaves out for each byte of the
-// longest form of a secret: the bound on how long a spelling of a secret with escapes is taken to
-// be, the same bound a streamed body's redaction uses for what it holds back of one.
+// longest form of a secret that holds a character other than a key's: more than a spelling of
+// the secret with escapes takes, at most 11 bytes for each of its bytes, the bound a streamed
+// body's redaction uses for what it holds back of one.
 const gapBytesPerFormByte = 12
+
+// gapWindow returns how many bytes beside a cut trimGap leaves out for r's secrets: 12 for each
+// byte of the longest form of r's that holds a character other than a key's (secretChar), or 0
+// when no form does. A secret made only of key characters, such as an API key or a token, is
+// spelled only with them in every escape the redaction decodes, so the run of key characters
+// removes any part of it beside a cut, whatever its length.
+func gapWindow(r *protocol.Redactor) int {
+	return gapBytesPerFormByte * r.LongestForm(func(f string) bool {
+		return strings.IndexFunc(f, func(c rune) bool { return !secretChar(c) }) >= 0
+	})
+}
 
 // trimGap returns head and end, the start and the end of a body with bytes left out between them,
 // without what beside the gap could be part of a secret cut in two, which the redaction cannot
-// recognise as neither part is the whole secret. On each side, in one pass, it leaves out:
-//   - a window of 12 bytes for each byte of the longest form of r's secrets, which holds every part
-//     of a secret cut by the gap in any spelling the redaction decodes that takes at most that many
-//     bytes;
-//   - then the run of characters a key or a token is spelled with, escapes included (secretChar),
-//     so that a longer spelling made of them goes too;
-//   - then a part of at least 4 bytes of a form of one of r's secrets, whatever its characters
-//     (Redactor.TrimCut), where the edge the first two leave cuts through one.
+// recognise as neither part is the whole secret. What it returns is the text as it was, ready to
+// be redacted, so the bytes it leaves out count as they are. On each side it leaves out:
+//   - a window of gapWindow(r) bytes, which holds every part of a secret with a character other
+//     than a key's that the gap cut, in any spelling the redaction decodes;
+//   - a part of at least 4 bytes of a form of one of r's secrets that the window's edge cuts
+//     (Redactor.TrimCut), then the run of key characters (secretChar) there, which holds every
+//     part of a secret made of them that the gap cut, whatever its length;
+//   - where the edge still cuts through a secret that the redaction finds whole in the text the
+//     side had, that secret's part (keepWhole).
 //
-// It does not go on: text that repeats the start of a form loses one repeat, not all of them.
-// A secret in a spelling the redaction decodes but does not list, with characters other than a
-// key's, that the edge the window leaves cuts in two keeps its part, as one the gap cut did.
+// So the edge cuts only text the redaction finds no secret in: what is left of the side is
+// redacted as the whole side would have been.
 func trimGap(r *protocol.Redactor, head, end string) (string, string) {
-	n := gapBytesPerFormByte * r.LongestForm()
-	head, end = head[:len(head)-min(n, len(head))], end[min(n, len(end)):]
-	return r.TrimCut(strings.TrimRightFunc(head, secretChar), strings.TrimLeftFunc(end, secretChar))
+	n := gapWindow(r)
+	q, p := len(head)-min(n, len(head)), min(n, len(end))
+	h, e := r.TrimCut(head[:q], end[p:])
+	q, p = len(strings.TrimRightFunc(h, secretChar)), len(end)-len(strings.TrimLeftFunc(e, secretChar))
+	if n > 0 {
+		q, p = keepWhole(r, head, q, n, true), keepWhole(r, end, p, n, false)
+	}
+	return head[:q], end[p:]
+}
+
+// keepWhole returns at, a place in s to cut s at, moved so that it cuts through no secret of r's
+// that the redaction finds whole in s: to the start of one, keeping s[:at] (head), or to its
+// end, keeping s[at:] (the end). A secret that the place cuts through spells out in less than n
+// bytes on either side of it, so only those are redacted, with the cut and without it: where no
+// secret is cut, the redacted text without the cut starts (head) or ends with the redacted kept
+// part, and where one is, they differ from where the secret's part begins. A secret made only of
+// key characters cannot be cut there: the run of key characters left out before leaves the cut
+// beside another character. If the place still cuts through a secret after a few moves, which
+// takes secrets whose spellings overlap, it leaves out all of the side.
+func keepWhole(r *protocol.Redactor, s string, at, n int, head bool) int {
+	for range 4 {
+		a, b := max(0, at-n), min(len(s), at+n)
+		whole := r.String(s[a:b])
+		if head {
+			kept := r.String(s[a:at])
+			if strings.HasPrefix(whole, kept) {
+				return at
+			}
+			d := 0
+			for d < len(kept) && d < len(whole) && kept[d] == whole[d] {
+				d++
+			}
+			at -= max(1, len(kept)-d)
+		} else {
+			kept := r.String(s[at:b])
+			if strings.HasSuffix(whole, kept) {
+				return at
+			}
+			d := 0
+			for d < len(kept) && d < len(whole) && kept[len(kept)-1-d] == whole[len(whole)-1-d] {
+				d++
+			}
+			at += max(1, len(kept)-d)
+		}
+		at = max(0, min(at, len(s)))
+	}
+	if head {
+		return 0
+	}
+	return len(s)
 }
 
 // secretChar reports whether r can be part of a secret as text carries one: a key, a token, and

@@ -127,7 +127,7 @@ func checkGaps(t *testing.T, log, s string, r *protocol.Redactor, gaps int) {
 	if strings.Contains(log, s) || !strings.Contains(log, protocol.Redacted) {
 		t.Fatalf("the whole copy of the secret is not redacted")
 	}
-	reach := gapBytesPerFormByte*r.LongestForm() + 2*len(s) + 64
+	reach := gapWindow(r) + 2*len(s) + 64
 	at := 0
 	for range gaps {
 		i := strings.Index(log[at:], " bytes not logged ...]")
@@ -190,17 +190,19 @@ func TestCaptureDropsSecretPartsAtTheGap(t *testing.T) {
 			for _, all := range []bool{true, false} {
 				l := &RequestLog{All: all, Redact: gapRedactor(tc.secret)}
 				c := l.newCapture()
-				body := bodyOf(c, len(s)/2, 1<<20)
+				body := bodyOf(c, len(s)/2, 4<<10)
 				writeAll(c, body)
 				checkCount(t, c.bytes(), len(body))
 				checkGaps(t, logOf(l, c), s, l.Redact, 1)
 			}
-			// Every place in the secret the cut can fall, with smaller bounds. trimGap's one pass
-			// leaves out at least what repeating its last two steps until they find no more does.
+			// Every place in the secret the cut can fall, with bounds that just hold the copies and
+			// the window. trimGap leaves out at least what repeating its TrimCut and its run of key
+			// characters until they find no more does.
 			l := &RequestLog{All: true, Redact: gapRedactor(tc.secret)}
+			bound := gapWindow(l.Redact) + 4*len(s) + 256
 			for k := 1; k < len(s); k++ {
-				c := &capture{headLimit: 8 << 10, tailLimit: 8 << 10, redact: l.Redact}
-				body := bodyOf(c, k, 4<<10)
+				c := &capture{headLimit: bound, tailLimit: bound, redact: l.Redact}
+				body := bodyOf(c, k, 64)
 				writeAll(c, body)
 				checkCount(t, c.bytes(), len(body))
 				checkGaps(t, logOf(l, c), s, l.Redact, 1)
@@ -242,8 +244,10 @@ func TestUpstreamLogDropsSecretPartsAtTheGap(t *testing.T) {
 			l := &RequestLog{All: true, Redact: gapRedactor(tc.secret)}
 			s := tc.spelled
 			for k := 1; k < len(s); k++ {
-				head := s + gapFill(4<<10) + s[:k]
-				end := s[k:] + gapFill(4<<10)
+				// Text first, so that what checkGaps looks at near the cut stays in the body, away from
+				// the log's random trace ID.
+				head := gapFill(gapWindow(l.Redact)+2*len(s)+128) + s + gapFill(gapWindow(l.Redact)+256) + s[:k]
+				end := s[k:] + gapFill(gapWindow(l.Redact)+256)
 				sent := protocol.CapturedBody{Body: head, BodyEnd: end, BodySize: int64(len(head)+len(end)) + 1<<20}
 				checkGaps(t, logOf(l, protocol.UpstreamExchange{
 					Request: protocol.UpstreamRequest{Method: "POST", URL: "https://upstream.example.test/v1", CapturedBody: sent},
@@ -256,6 +260,68 @@ func TestUpstreamLogDropsSecretPartsAtTheGap(t *testing.T) {
 				Response: &protocol.UpstreamResponse{Status: 200, CapturedBody: protocol.CapturedBody{Body: whole, BodySize: int64(len(whole))}},
 			}), s, l.Redact, 1)
 		})
+	}
+}
+
+// A whole copy of a secret that the edge of the window left out beside the cut falls across is
+// not cut there: the edge moves to where the copy starts (or, on the end's side, ends), so that
+// the redaction still finds the copy whole, however it is spelled. Only secrets with a character
+// other than a key's have a window.
+func TestCaptureKeepsCopiesAcrossTheWindowWhole(t *testing.T) {
+	for _, tc := range gapSecrets() {
+		l := &RequestLog{All: true, Redact: gapRedactor(tc.secret)}
+		n, s := gapWindow(l.Redact), tc.spelled
+		if n < len(s) { // no window, or one too short for a copy to fall across its edge alone
+			continue
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			// Each side holds a whole copy before the window and one across the window's edge, j
+			// bytes into it.
+			for j := 1; j < len(s); j++ {
+				head := s + gapFill(256) + s + gapFill(n-(len(s)-j))
+				end := gapFill(n-j) + s + gapFill(256) + s
+				c := &capture{headLimit: len(head), tailLimit: len(end), redact: l.Redact}
+				body := head + gapFill(64) + end
+				writeAll(c, body)
+				reply := c.bytes()
+				checkCount(t, reply, len(body))
+				log := string(l.format(&requestEntry{method: "POST", url: &url.URL{Path: "/v1/chat/completions"},
+					reply: c, replyTitle: "RESPONSE"}))
+				if n, part := longestPart(log, s); n >= 4 {
+					t.Fatalf("across the window's edge %d bytes in: %d bytes of the secret stay: %q", j, n, part)
+				}
+				if got := strings.Count(log, protocol.Redacted); got < 2 {
+					t.Fatalf("across the window's edge %d bytes in: %d copies redacted, want the 2 outside the windows", j, got)
+				}
+			}
+		})
+	}
+}
+
+// A config whose secrets are made only of key characters, such as a client key and an OAuth
+// account's 2,000-byte token, has no window: a token cut by the gap goes with the run of key
+// characters, and the rest of the kept start stays.
+func TestCaptureKeyOnlySecretsHaveNoWindow(t *testing.T) {
+	jwt := strings.Repeat("eyJhbGciOiJSUzI1NiJ9", 100)[:2000] // made up, of a token's characters
+	jwt = jwt[:400] + "." + jwt[401:1600] + "." + jwt[1601:]
+	l := &RequestLog{Redact: protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-client-0123456789"},
+		&protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: jwt, RefreshToken: "rt-0123456789abcdef"})}
+	if n := gapWindow(l.Redact); n != 0 {
+		t.Fatalf("window %d bytes, want 0", n)
+	}
+	c := l.newCapture()
+	k := 1000
+	body := gapFill(c.headLimit-k) + jwt + gapFill(c.tailLimit-(len(jwt)-k)+4096)
+	writeAll(c, body)
+	reply := string(c.bytes())
+	checkCount(t, []byte(reply), len(body))
+	head, _, _ := strings.Cut(reply, "\n[... ")
+	// The token's 1,000 bytes, and the key characters of the text before it ("QZ").
+	if want := c.headLimit - k - 2; len(head) < want {
+		t.Errorf("kept %d bytes of the start, want at least %d of %d", len(head), want, c.headLimit)
+	}
+	if n, part := longestPart(head[max(0, len(head)-4096):], jwt); n >= 4 {
+		t.Errorf("%d bytes of the token stay beside the cut: %q", n, part)
 	}
 }
 
@@ -275,7 +341,7 @@ func TestCaptureKeepsRepeatedSecretStarts(t *testing.T) {
 	head, end, _ := strings.Cut(reply, "\n[... ")
 	_, end, _ = strings.Cut(end, " ...]\n")
 	// The window, the rest of a repeat's run of key characters, and one start of a form.
-	most := gapBytesPerFormByte*l.Redact.LongestForm() + 2*len(unit)
+	most := gapWindow(l.Redact) + 2*len(unit)
 	if len(head) < c.headLimit-most || len(end) < c.tailLimit-most {
 		t.Errorf("kept %d bytes of the start and %d of the end, want at least %d and %d", len(head), len(end), c.headLimit-most, c.tailLimit-most)
 	}
@@ -285,11 +351,9 @@ func TestCaptureKeepsRepeatedSecretStarts(t *testing.T) {
 func longestPart(text, s string) (int, string) {
 	best := ""
 	for i := range s {
-		for j := len(s); j > i+len(best); j-- {
-			if strings.Contains(text, s[i:j]) {
-				best = s[i:j]
-				break
-			}
+		// Only a run longer than the best so far matters; grow it while text holds it.
+		for j := i + len(best) + 1; j <= len(s) && strings.Contains(text, s[i:j]); j++ {
+			best = s[i:j]
 		}
 	}
 	return len(best), best
