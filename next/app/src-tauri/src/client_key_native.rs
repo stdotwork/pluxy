@@ -235,19 +235,35 @@ impl Drop for Listener {
     }
 }
 
-/// The agent's argv and environment, as the system has them for process pid.
+/// The agent's program in its package, as its argv names it.
+const PROGRAM: &str = if cfg!(windows) {
+    r"bin\tool.exe"
+} else {
+    "bin/tool"
+};
+
+/// The agent's argv and environment, as the system has them for process pid; empty when they
+/// cannot be read.
 #[cfg(unix)]
-fn argv_env(pid: u64, _out: &Path) -> String {
-    super::procs::argv_env(pid)
+fn argv_env(pid: u64, _out: &Path) -> (String, String) {
+    super::procs::argv_env(pid).unwrap_or_default()
 }
 
 /// The agent's argv and environment as it reports them itself, beside out (the fixture tool
-/// writes them there on Windows).
+/// writes them there on Windows); empty when they cannot be read.
 #[cfg(windows)]
-fn argv_env(_pid: u64, out: &Path) -> String {
+fn argv_env(_pid: u64, out: &Path) -> (String, String) {
     let mut seen = out.as_os_str().to_owned();
     seen.push(".process");
-    std::fs::read_to_string(seen).unwrap_or_default()
+    let seen = std::fs::read_to_string(seen).unwrap_or_default();
+    (seen.clone(), seen)
+}
+
+/// Whether argv and env, the agent's as read, are whole: its argv names its program, and its
+/// environment holds the extension ID the host gives every tool (it clears a tool's environment,
+/// then sets that: program.rs). A read that failed, or a reply without the environment, is not.
+fn whole(argv: &str, env: &str) -> bool {
+    argv.contains(PROGRAM) && env.contains("PLUXY_EXTENSION_ID=pluxy/agent")
 }
 
 pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<(), String> {
@@ -366,13 +382,19 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "core did not serve the agent with the key",
             )?;
             let pid = r["value"]["pid"].as_u64().ok_or("no agent pid")?;
-            let seen = argv_env(pid, &file);
+            let (argv, env) = argv_env(pid, &file);
             require(
-                !seen.is_empty(),
-                "the agent's argv and environment could not be read",
+                whole(&argv, &env),
+                format!(
+                    "the agent's argv and environment could not be read: {} and {} bytes",
+                    argv.len(),
+                    env.len()
+                ),
             )?;
             require(
-                !keys.iter().any(|k| seen.contains(k.as_str())),
+                !keys
+                    .iter()
+                    .any(|k| argv.contains(k.as_str()) || env.contains(k.as_str())),
                 "the key is in the agent's argv or environment",
             )?;
             let status = ok(main, "program_status", json!({"package": AGENT}))?;
@@ -545,4 +567,30 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     out["passed"] = json!(true);
     log("client_keys", out);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{whole, PROGRAM};
+
+    #[test]
+    fn a_read_without_the_agents_environment_is_refused() {
+        let argv = format!("/s/{PROGRAM}\0serve\0");
+        // Argv only, as macOS gives a reply without the environment.
+        assert!(!whole(&argv, ""));
+        assert!(!whole("", "PLUXY_EXTENSION_ID=pluxy/agent\0"));
+        assert!(whole(&argv, "HOME=/h\0PLUXY_EXTENSION_ID=pluxy/agent\0"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_process_linux_cannot_read_is_refused() {
+        // No such process.
+        let (argv, env) = super::super::procs::argv_env(u64::from(u32::MAX)).unwrap_or_default();
+        assert!(!whole(&argv, &env));
+        // This process: both read.
+        let (argv, env) = super::super::procs::argv_env(u64::from(std::process::id()))
+            .expect("this process's argv and environment");
+        assert!(!argv.is_empty() && !env.is_empty());
+    }
 }

@@ -85,14 +85,15 @@ mod imp {
         Ok((pipe, holders))
     }
 
-    /// The argv and environment of pid, as /proc has them.
-    pub(super) fn argv_env(pid: u64) -> String {
-        let read = |f: &str| std::fs::read(format!("/proc/{pid}/{f}")).unwrap_or_default();
-        format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&read("cmdline")),
-            String::from_utf8_lossy(&read("environ"))
-        )
+    /// The argv and environment of pid, as /proc has them; none unless both can be read.
+    pub(super) fn argv_env(pid: u64) -> Option<(String, String)> {
+        let read = |f: &str| {
+            std::fs::read(format!("/proc/{pid}/{f}"))
+                .ok()
+                .filter(|b| !b.is_empty())
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+        };
+        Some((read("cmdline")?, read("environ")?))
     }
 }
 
@@ -277,10 +278,11 @@ mod imp {
     /// The argv and environment of pid, a process of this user, as `sysctl(KERN_PROCARGS2)`
     /// gives them: after the argument count, the program's path, each argument and each
     /// environment string, separated by NULs. Empty when they cannot be read.
-    pub(super) fn argv_env(pid: u64) -> String {
-        let Ok(pid) = libc::c_int::try_from(pid) else {
-            return String::new();
-        };
+    /// The argv (after the executable's path) and environment of pid, from `KERN_PROCARGS2`:
+    /// argc, the executable's path, padding, argc arguments, then the environment; none unless
+    /// it can be read.
+    pub(super) fn argv_env(pid: u64) -> Option<(String, String)> {
+        let pid = libc::c_int::try_from(pid).ok()?;
         let mut max: libc::c_int = 0;
         let mut size = size_of::<libc::c_int>();
         let mut mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
@@ -295,7 +297,7 @@ mod imp {
             )
         };
         if got != 0 || max <= 0 {
-            return String::new();
+            return None;
         }
         let mut buf = vec![0u8; max as usize];
         let mut size = buf.len();
@@ -311,11 +313,26 @@ mod imp {
             )
         };
         if got != 0 {
-            return String::new();
+            return None;
         }
         buf.truncate(size);
-        let args = buf.get(size_of::<libc::c_int>()..).unwrap_or_default();
-        String::from_utf8_lossy(args).into_owned()
+        let argc = i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?);
+        let rest = buf.get(size_of::<libc::c_int>()..)?;
+        // The executable's path, then the NULs padding it.
+        let path_end = rest.iter().position(|b| *b == 0)?;
+        let mut at = path_end;
+        while rest.get(at) == Some(&0) {
+            at += 1;
+        }
+        let mut end = at;
+        for _ in 0..argc.max(0) {
+            end += rest.get(end..)?.iter().position(|b| *b == 0)? + 1;
+        }
+        let lossy = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+        Some((
+            format!("{}\0{}", lossy(&rest[..path_end]), lossy(&rest[at..end])),
+            lossy(&rest[end..]),
+        ))
     }
 }
 
@@ -465,9 +482,10 @@ pub(super) fn pipe_holders(pid: u64, fd: u32) -> Result<(String, BTreeSet<u64>),
     imp::pipe_holders(pid, fd)
 }
 
-/// The argv and environment of pid, a process of this user. Windows gives no supported way to
-/// read another process's environment; there the tool reports its own.
+/// The argv and environment of pid, a process of this user; none unless both can be read.
+/// Windows gives no supported way to read another process's environment; there the tool reports
+/// its own.
 #[cfg(unix)]
-pub(super) fn argv_env(pid: u64) -> String {
+pub(super) fn argv_env(pid: u64) -> Option<(String, String)> {
     imp::argv_env(pid)
 }
