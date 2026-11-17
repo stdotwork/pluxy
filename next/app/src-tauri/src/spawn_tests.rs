@@ -1496,3 +1496,43 @@ fn a_launch_through_wsl_exe_passes_on_the_variables_it_sets_and_nothing_else() {
     // Set and secret names cross; inherited Windows values do not.
     assert_eq!(wslenv(&r).as_deref(), Some("MODE/u:API_KEY/u"));
 }
+
+/// Every launch, managed or detached, gets its environment from `launch_env`: one of Windows'
+/// own `wsl.exe` gets `WSLENV` naming what it sets (replacing any it inherited), and no other
+/// launch does.
+#[test]
+fn a_launch_of_wsl_exe_gets_wslenv_in_its_environment_and_no_other_launch_does() {
+    let dir = folder("wslenv");
+    let (lifetime, request) = parse(
+        &serde_json::json!({"environment": {"set": {"MODE": "x"}, "secrets": {"API_KEY": "key"}},
+            "key": "s"}),
+        &|f| f == "key",
+    )
+    .unwrap();
+    let launch = |named: &str| Launch {
+        opened: opened(&dir),
+        named: PathBuf::from(named),
+        argv: vec![],
+        lifetime,
+        request: request.clone(),
+        secrets: vec![("API_KEY".into(), "s-1".into())],
+        stdin: None,
+    };
+    let secrets = [("API_KEY".to_string(), "v".to_string())];
+    let root = Some(Path::new(r"C:\Windows"));
+    let wslenv_of = |env: Vec<(String, OsString)>| -> Vec<OsString> {
+        env.into_iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("WSLENV"))
+            .map(|(_, v)| v)
+            .collect()
+    };
+    let wsl = launch(r"C:\Windows\System32\wsl.exe");
+    assert_eq!(
+        wslenv_of(launch_env(&wsl, &secrets, root)),
+        [OsString::from("MODE/u:API_KEY/u")]
+    );
+    // Not wsl.exe, or no Windows folder to find it in: nothing added.
+    assert!(wslenv_of(launch_env(&launch(r"C:\tools\wsl.exe"), &secrets, root)).is_empty());
+    assert!(wslenv_of(launch_env(&wsl, &secrets, None)).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
