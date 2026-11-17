@@ -417,25 +417,34 @@ their home, the processor and the Windows drives mounted there, kept in `environ
   the host keeps it pinned (no writer, rename or delete) for the whole run, not only until it
   starts.
 - **What it gets.** `wsl.exe` gets only `SystemRoot` (WSL 2 refuses to start without it), the
-  contract's values, `PLUXY_TOOL_DATA_DIR` and `PLUXY_ENVIRONMENT=wsl:<distribution>:<user>`, each
-  passed into the distribution unchanged by `WSLENV` (`/u`). No `PATH`, so WSL adds no Windows
+  contract's values, `PLUXY_TOOL_DATA_DIR`, `PLUXY_ENVIRONMENT=wsl:<distribution>:<user>` and
+  `PLUXY_ENVIRONMENT_ACCOUNT=<user ID>:<home>` (the record's), each passed into the distribution
+  unchanged by `WSLENV` (`/u`). No `PATH`, so WSL adds no Windows
   folder to the tool's. A tool in WSL also sees the variables WSL itself sets there (`HOME`,
   `USER`, `PATH`, `WSL_DISTRO_NAME`, `WSL_INTEROP`, the WSLg display variables and others); the
   host does not remove them. Before it says hello the tool checks that it runs in that
-  distribution as that user, so a stale record runs nothing.
+  distribution as that user, with the record's user ID and home, so a stale record (a
+  distribution or user made again under the name, or a home since moved) runs nothing.
 - **Its data folder** is `<home>/.local/state/pluxy/tools/<publisher>/<name>` in the
   distribution, which the tool makes at its first write (the host never writes in a
   distribution).
 - **Its own state.** Each instance has its own process, turn, calls of unknown outcome and vault
   records (backups and journals, in a folder named by the package's digest and a digest of the
   distribution and user). Changing, disabling or removing the package stops its instances in
-  every environment; removing an environment stops what runs there.
+  every environment; removing an environment stops what runs there and forgets the launcher's
+  remembered launches and recent folders there, revoking their approvals.
 - **Start.** A tool in WSL has 60 seconds to say hello and describe itself (a stopped WSL 2
   distribution starts first). When WSL itself refuses to start the program (WSL 1's
-  `0xd0000225`: nothing ran), the start is tried twice more, two seconds apart. What `wsl.exe`
-  prints instead of a frame is shown in the start's error.
-- **Native confirmations** of its writes show `Runs in WSL: distribution <d>, user <u>
-  (<home>).` above the review, and that line is part of what a remembered approval names.
+  `0xd0000225` on either stream: nothing ran), the start is tried twice more, two seconds apart,
+  and none of those tries counts as a crash; only when the last one is refused too does one
+  crash count, with its backoff. What `wsl.exe` prints instead of a frame (its first 4 KiB) is
+  shown in the start's error, and so is that refusal when it comes on standard error; other
+  standard error goes to the status log.
+- **Native confirmations** of its writes show `Runs in WSL: distribution "<d>", user "<u>"
+  (<home>).` above the review (the names quoted: neither holds a `"`), and that line is part of
+  what a remembered approval names. A launch the launcher starts there shows its own line,
+  `Starts in WSL: …`, and runs only if `pluxy/wsl`'s prepared launch is exactly the one asked for
+  (Windows' own `wsl.exe`, that distribution, user, folder, program, arguments and kind).
 - **Not yet.** A tool in WSL may use its vault, but its own calls, jobs, launches, runtimes and
   saves are refused.
 

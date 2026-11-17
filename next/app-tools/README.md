@@ -1128,10 +1128,10 @@ either before the host is asked.
 
 `pluxy/wsl` (program `bin/pluxy-wsl.exe`, Windows only: on any other system every operation answers
 `unsupported`) tells pluxy's desktop app which WSL distributions and users there are, checks one,
-and prepares launches inside it. It is groundwork for the later WSL support: the app does not run
-native tools on Windows yet, so it does not use this tool, and its side (setting a client up in a
-distribution by running the client package's own Linux program there, through `wsl.exe`) is not
-built. This tool only reads. It writes nothing
+and prepares launches inside it. The app uses it to list and check the distributions and users a
+client page offers and to prepare a launch there; it then runs the client package's own Linux
+program in the distribution through `wsl.exe` itself ([Tools in
+WSL](../app/app-host/README.md#tools-in-wsl-windows)). This tool only reads. It writes nothing
 anywhere and never starts a launch. It runs only Windows' own `wsl.exe`, from System32 as
 `GetSystemDirectoryW` reports it: with no window, empty standard input, an environment of
 `SystemRoot`, `WINDIR` and `WSL_UTF8=1` only, its output read while it runs and capped, and a

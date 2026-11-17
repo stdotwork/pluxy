@@ -922,6 +922,9 @@ chosen distribution becomes its Linux path; any other network path is refused th
 use asks to **Install the Linux build for WSL**, in its own native confirmation. **Start CLI**
 starts Claude Code in that distribution through the launcher, in the Windows console. The page
 keeps its last choice for the window; the app checks it against its records on every call.
+**Apply** does not work in WSL yet: it needs a client key or one of the vault's secrets, and the
+vault's secrets, client key capture and native key entry are Linux only for now, so on Windows
+there is no key to give. Reading, previewing, backups and **Start CLI** work there.
 
 **Backup and restore** (`src/backups.tsx`, the backup browser every writer's page shows) keeps
 manual backups of the previewed file in the app's vault through the tool's standard backup
