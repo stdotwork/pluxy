@@ -2,7 +2,7 @@
 
 A new core for pluxy, built from scratch to replace the old core, the Go proxy that was in `core/`.
 (In this README and in the corpus, "today's core" and "the old core" mean that core, and `core/...`
-paths are files in it as they are at commit `d62c5bbf15c5369c5723600655f7682890fddd0b`, the last commit
+paths are files in it as they are at commit `0b84f013f18e1bbf528533b1c6f2c2dbdb19fc67`, the last commit
 that changed `core/`. The folder has since been removed from the repository.) Core receives client
 requests and hands them to **provider extensions**: separate programs, one per kind of upstream, that core
 starts and talks to over a local socket. Today it serves OpenAI Chat Completions, OpenAI

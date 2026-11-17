@@ -10,7 +10,7 @@ gives a reason, so every difference is on the record.
 
 Which old core: in this repository, "today's core", "the old core" and `core/...` paths in this
 document, in code comments and in the cases' `source` fields mean the Go proxy that was in `core/`
-until it was removed, as it is at commit `d62c5bbf15c5369c5723600655f7682890fddd0b`, the last commit
+until it was removed, as it is at commit `0b84f013f18e1bbf528533b1c6f2c2dbdb19fc67`, the last commit
 that changed `core/`. The recorded replies need no old core to run, and
 [re-recording](#re-recording-against-the-old-core) works from a worktree of that commit.
 
@@ -50,7 +50,7 @@ point the corpus at the binary. The build needs cgo and the Go version on the `g
 core's `go.mod` at that commit (`go 1.26.10`). From the repository root:
 
 ```bash
-git worktree add /tmp/old-core-tree d62c5bbf15c5369c5723600655f7682890fddd0b
+git worktree add /tmp/old-core-tree 0b84f013f18e1bbf528533b1c6f2c2dbdb19fc67
 (cd /tmp/old-core-tree/core && CGO_ENABLED=1 go build -o /tmp/old-core ./cmd/server)
 cd next
 PLUXY_CORPUS_OLD_CORE_BIN=/tmp/old-core PLUXY_CORPUS_RECORD=1 go test -count=1 -run TestCorpus ./corpus
