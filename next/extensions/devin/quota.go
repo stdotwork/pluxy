@@ -46,7 +46,7 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "Devin is unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: true}
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()

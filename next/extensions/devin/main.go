@@ -48,6 +48,9 @@ const (
 	defaultAPIBaseURL = "https://api.devin.ai"
 	chatPath          = "/exa.api_server_pb.ApiServerService/GetChatMessage"
 
+	// maxBody is how much of a refusal's body, or of a quota reply, is read. A longer body is cut.
+	maxBody = 1 << 20
+
 	// opaqueFormat names Devin's reasoning signatures in a reply's reasoning items.
 	opaqueFormat = llm.OpaqueDevin
 )
@@ -197,7 +200,7 @@ func chat(ctx context.Context, call sdk.Call, out sender) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 		return statusError(resp.StatusCode, connectMessage(raw), raw, resp.Header.Get("Retry-After"))
 	}
 	return newRelay(out, req.Model, tr).run(ctx, resp.Body)
@@ -645,13 +648,19 @@ func connectStatus(code, msg string) int {
 	return http.StatusBadGateway
 }
 
-// connectMessage returns the message of a Connect error body ({"code", "message"}), or the body.
+// connectMessage returns the message of a Connect error body ({"code", "message"}), or the body
+// if it was read whole. A body that fills maxBody may have been cut, and the cut may fall inside a
+// credential the upstream echoed; core removes only whole copies of a credential, so the start of
+// one would reach the client and the log. Such a body gives no message.
 func connectMessage(raw []byte) string {
 	var e struct {
 		Message string `json:"message"`
 	}
 	if json.Unmarshal(raw, &e) == nil && e.Message != "" {
 		return e.Message
+	}
+	if len(raw) >= maxBody {
+		return ""
 	}
 	return strings.TrimSpace(string(raw))
 }
