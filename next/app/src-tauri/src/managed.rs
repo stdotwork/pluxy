@@ -116,6 +116,10 @@ fn write_private_with_nonce(
             use std::os::unix::fs::PermissionsExt;
             f.set_permissions(fs::Permissions::from_mode(0o600))?;
         }
+        // macOS: nothing inherited from the folder's extended access list either
+        // (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        crate::private_macos::clear_entries(&f)?;
         f.write_all(data)?;
         f.sync_all()?;
         drop(f);
@@ -856,6 +860,25 @@ mod tests {
     }
 
     use super::*;
+
+    /// macOS: what a folder's inheritable access list entries would give a new file is taken
+    /// away, so the file is as private as its 0600 mode says.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn private_write_has_no_access_list_on_macos() {
+        let dir = temp("acl");
+        crate::private_macos::add_entry(&dir, "everyone allow list,file_inherit");
+        let has =
+            |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+        // The control: a file made the plain way inherits the entry.
+        let plain = dir.join("plain.json");
+        fs::write(&plain, b"{}").unwrap();
+        assert!(has(&plain));
+        let path = dir.join("connection.json");
+        write_private(&path, b"{}").unwrap();
+        assert!(!has(&path));
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     fn temp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("pluxy-app-{name}-{}", random_key()));

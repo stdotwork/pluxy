@@ -342,6 +342,10 @@ mod fsx {
         if st.st_mode & 0o077 != 0 && unsafe { libc::fchmod(fd.as_raw_fd(), 0o700) } != 0 {
             return Err(io::Error::last_os_error());
         }
+        // macOS: no extended access list entry either, the 0700 mode's twin
+        // (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        crate::private_macos::clear_entries(&fd)?;
         Ok(fd)
     }
 
@@ -958,6 +962,19 @@ mod tests {
         return PathBuf::from("/private/tmp");
         #[cfg(not(target_os = "macos"))]
         std::env::temp_dir()
+    }
+
+    /// macOS: the instance folder keeps no extended access list entry, as it keeps no group or
+    /// other mode bits.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_instance_folder_keeps_no_access_list() {
+        let t = temp();
+        let d = t.0.join("run");
+        fs::create_dir(&d).unwrap();
+        crate::private_macos::add_entry(&d, "everyone allow list,add_file,file_inherit");
+        let open = super::fsx::open_dir(&d).unwrap();
+        assert!(!crate::private_macos::has_entries(&open).unwrap());
     }
 
     fn temp() -> Temp {

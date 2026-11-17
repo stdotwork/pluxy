@@ -219,7 +219,18 @@ pub struct Store {
 #[cfg(unix)]
 fn private_dir(path: &Path) -> io::Result<()> {
     fs::create_dir_all(path)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    no_entries(path)
+}
+
+/// macOS: the folder at path has no extended access list entry, the 0700 mode's twin, so what
+/// is made in it inherits none (`private_macos.rs`). Nothing elsewhere.
+#[cfg(unix)]
+fn no_entries(path: &Path) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    crate::private_macos::clear_entries(&fs::File::open(path)?)?;
+    let _ = path;
+    Ok(())
 }
 
 /// Makes a new private folder at path, failing if anything is already there.
@@ -357,6 +368,7 @@ impl Store {
         private_dir(&s.records()).map_err(|e| format!("{}: {e}", dir.display()))?;
         private_dir(&s.staging()).map_err(|e| format!("{}: {e}", dir.display()))?;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+            .and_then(|_| no_entries(dir))
             .map_err(|e| format!("{}: {e}", dir.display()))?;
         Ok(s)
     }
@@ -1191,6 +1203,34 @@ impl ConfigSnapshot {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// macOS: the store's folders keep no extended access list entry, as they keep no group or
+    /// other mode bits, so nothing made in them inherits one.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_store_passes_no_access_list_on() {
+        let dir = std::env::temp_dir().join(format!("pluxy-cores-acl-{}", random_key()));
+        let cores = dir.join("cores");
+        fs::create_dir_all(cores.join("versions")).unwrap();
+        for d in [&cores, &cores.join("versions")] {
+            crate::private_macos::add_entry(
+                d,
+                "everyone allow list,file_inherit,directory_inherit",
+            );
+        }
+        let store = Store::open(&cores).unwrap();
+        let has =
+            |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+        for d in [
+            &cores,
+            &store.versions(),
+            &store.records(),
+            &store.staging(),
+        ] {
+            assert!(!has(d), "{}", d.display());
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     /// N5: a config that did not exist is recorded by the absent mark, and that is what a
     /// failed restore names.
