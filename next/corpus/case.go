@@ -1,4 +1,4 @@
-// Package corpus is the differential test corpus: cases taken from today's core (`core/`), each
+// Package corpus is the differential test corpus: cases taken from the old core, each
 // replayed against the new core and compared with what the old core does, at the HTTP seam.
 //
 // A case is one JSON file under cases/<client format>/<provider>/. It holds the client request,
