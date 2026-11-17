@@ -1497,6 +1497,44 @@ fn a_launch_through_wsl_exe_passes_on_the_variables_it_sets_and_nothing_else() {
     assert_eq!(wslenv(&r).as_deref(), Some("MODE/u:API_KEY/u"));
 }
 
+/// A managed and a detached launch named as Windows' own `wsl.exe`, with Windows' folder given
+/// (`TEST_SYSTEM_ROOT`; the program run is still this test's agent), each start with `WSLENV`
+/// naming what they set: both launch paths take their environment from `launch_env`. Windows'
+/// own detached launch is not run here (CI's runners refuse it).
+#[cfg(unix)]
+#[test]
+fn managed_and_detached_launches_of_wsl_exe_start_with_wslenv() {
+    *TEST_SYSTEM_ROOT.lock().unwrap() = Some(PathBuf::from(r"C:\Windows"));
+    let dir = folder("wslenv-launch");
+    let as_wsl = |rec: &Path, lifetime| {
+        let mut l = agent(&dir, rec, &[], lifetime);
+        l.named = PathBuf::from(r"C:\Windows\System32\wsl.exe");
+        l.request.set.insert("FIXTURE_SET".into(), "set".into());
+        l
+    };
+    let (rd, rm) = (dir.join("detached"), dir.join("managed"));
+    detached(&as_wsl(&rd, Lifetime::Detached), "p", &By(none)).unwrap();
+    let rt = Runtimes::open(None, Box::new(By(none)));
+    let m = rt.start("p", as_wsl(&rm, Lifetime::Managed)).unwrap();
+    let (d, mr) = (record(&rd, 0), record(&rm, 0));
+    *TEST_SYSTEM_ROOT.lock().unwrap() = None;
+    let _ = rt.stop("p", m["runtime"].as_str().unwrap());
+    clean(
+        &[
+            pid(&d, "pid"),
+            pid(&d, "child"),
+            pid(&mr, "pid"),
+            pid(&mr, "child"),
+        ],
+        &dir,
+    );
+    for r in [&d, &mr] {
+        assert_eq!(r["env"]["WSLENV"], "FIXTURE_SET/u", "{r}");
+        assert_eq!(r["env"]["FIXTURE_SET"], "set", "{r}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Every launch, managed or detached, gets its environment from `launch_env`: one of Windows'
 /// own `wsl.exe` gets `WSLENV` naming what it sets (replacing any it inherited), and no other
 /// launch does.

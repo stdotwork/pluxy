@@ -745,12 +745,21 @@ fn launch_env(
 /// Windows' folder (`SystemRoot`), whose System32 holds its own `wsl.exe`; None off Windows,
 /// where nothing runs in WSL.
 fn system_root() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(root) = TEST_SYSTEM_ROOT.lock().unwrap().clone() {
+        return Some(root);
+    }
     if cfg!(windows) {
         std::env::var_os("SystemRoot").map(PathBuf::from)
     } else {
         None
     }
 }
+
+/// Windows' folder for `system_root` in tests on any system: a launch named as its own `wsl.exe`
+/// (the program run is still the test's) then gets `WSLENV` on every launch path.
+#[cfg(test)]
+pub(crate) static TEST_SYSTEM_ROOT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
 /// What a launch runs from: the executable and cwd its confirmation opened, and the check that
 /// they are still what was confirmed.
@@ -1052,6 +1061,9 @@ pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), St
 pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), String> {
     l.opened.recheck()?;
     let r = resolve(l, package, values)?;
+    // shortcut: no test runs this line: GitHub's hosted runners refuse a detached launch before it
+    // runs (`NO_BREAKAWAY`), and the Unix one is tested instead; test it once CI runs on a Windows
+    // runner whose job lets a launch leave.
     let env = launch_env(l, &r.env, system_root().as_deref());
     let mut cmd = command(l, env, r.holds())?;
     // Checked again now its executable and cwd are pinned (`command`): nothing can change them
