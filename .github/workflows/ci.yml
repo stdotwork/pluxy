@@ -21,9 +21,12 @@ permissions:
 
 jobs:
   # Lists the files the change touches: for a pull request, the same three-dot diff its path
-  # filters used (base...head); for a merge group, everything the group adds to the base branch,
-  # including the PRs queued ahead of it. (The group's base_sha is its parent commit, which is the
-  # group ahead of it in the queue when groups build side by side.)
+  # filters used (base...head); for a merge group, what it adds to its parent commit (base_sha):
+  # the group ahead of it in the queue, or the base branch for the first group. The PRs ahead were
+  # checked by their own groups, and the queue merges a group only when every group ahead of it
+  # passed too. That holds only while the ruleset's merge queue requires all groups to pass
+  # (grouping strategy ALLGREEN, "Only merge non-failing pull requests"); with HEADGREEN a PR
+  # ahead could merge on this group's run, which skipped what that PR changed.
   # Each output says whether a workflow's paths were touched, using the paths that workflow's
   # own pull_request trigger had. A change to this file runs them all.
   # next-app-platforms (the Windows and macOS jobs) is the exception: it runs only for a change to
@@ -63,12 +66,12 @@ jobs:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
           GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = merge_group ]; then
-            range=("refs/remotes/origin/${GROUP_BASE_REF#refs/heads/}...$GROUP_HEAD")
+            range=("$GROUP_BASE...$GROUP_HEAD")
           else
             range=("$PR_BASE...$PR_HEAD")
           fi

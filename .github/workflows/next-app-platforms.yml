@@ -17,9 +17,10 @@ on:
         type: boolean
         default: false
   workflow_dispatch:
-  # Not on every push to main: the merge queue already ran this on the exact tree it merges, and
-  # the hosted macOS pool is short enough that re-runs on main starved the queue's own jobs. One
-  # run a day on main keeps main's caches fresh for the PR and merge-queue runs that restore them.
+  # Not on every push to main: the merge queue already ran this for the last change it merges that
+  # touched what this builds, and the hosted macOS pool is short enough that re-runs on main starved
+  # the queue's own jobs. One run a day on main keeps main's caches fresh for the PR and
+  # merge-queue runs that restore them.
   schedule:
     - cron: '17 3 * * *'
 
