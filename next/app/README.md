@@ -1593,8 +1593,10 @@ in the browser. The app updates itself only as a Linux AppImage.
   native run.
 - On macOS a launch you confirm may run a program from a folder that every administrator of the
   Mac can change, such as `/Applications` or Homebrew's folders. Another administrator account can
-  swap that program in the moment between the app's check and its start, and can change at any
-  time what it loads from those folders (Homebrew's libraries, a script's interpreter). The app's
+  swap that program in the moment between the app's check and its start, or, for a program
+  inside an app, what it later starts from that app. For any program that uses those folders,
+  wherever it is, that account can also change at any time what it loads from them (Homebrew's
+  libraries, a script's interpreter). The app's
   own core and native tools never run from such a folder: the app refuses them there.
 - Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
   entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the

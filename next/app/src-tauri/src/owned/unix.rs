@@ -137,12 +137,13 @@ pub(crate) enum Writers {
     /// with Homebrew or inside an app in `/Applications`.
     ///
     /// What it costs: another admin account on this Mac, or a process running as one, can
-    /// replace the program between this check and the exec (a replacement before the check is
-    /// refused: the path then no longer names the opened file), and for a program inside an app
-    /// until it has loaded the app's frameworks. Larger, and true with or without this rule: such
-    /// a program loads other files from folders `admin` may write (Homebrew's libraries in
-    /// `Cellar` and `opt`, a script's interpreter and its modules under `lib`), which that account
-    /// can replace at any time, and nothing here checks them. Being in `admin` does not make that
+    /// replace the program between this check and the exec (a replacement made before the check
+    /// never runs: the check follows the opened file or refuses), and, for a program inside an
+    /// app, whatever it later loads or starts from its app (frameworks, plug-ins, helper apps).
+    /// Larger, and true with or without this rule: any program that uses folders `admin` may write
+    /// (Homebrew's libraries in `Cellar` and `opt`, a script's interpreter and its modules under
+    /// `lib`) loads files from them that that account can replace at any time, and nothing here
+    /// checks them. Being in `admin` does not make that
     /// account root (sudo asks for its password): it needs only the folder's group write.
     Admins,
 }
