@@ -157,6 +157,41 @@ fn phase(main: &Webview, what: &str, want: &[&str]) -> Result<String, String> {
     })
 }
 
+/// The update's phase and error as the page shows them, read together: two reads could straddle
+/// a new task (its phase from the last one, its error from the new one).
+fn outcome_now(main: &Webview) -> Value {
+    eval(
+        main,
+        &format!(
+            "(d => d ? {{phase: d.phase, error: d.error}} : null)(document.querySelector({})?.dataset)",
+            json!(UPDATE)
+        ),
+    )
+    .unwrap_or(Value::Null)
+}
+
+/// Clicks Update Now and waits for that update's own outcome, one of want: a phase in want, read
+/// with its error, that is not the outcome shown before the click (a step after a failed one
+/// would otherwise take the leftover failure for its own); a failure must say why.
+fn update_outcome(main: &Webview, what: &str, want: &[&str]) -> Result<Value, String> {
+    let before = outcome_now(main);
+    click(main, "[data-part=app-update-now]")?;
+    wait_for(what, || {
+        let now = outcome_now(main);
+        let phase = now["phase"].as_str()?;
+        let done = want.contains(&phase)
+            && now != before
+            && (phase != "failed" || now["error"].as_str().is_some_and(|e| !e.is_empty()));
+        done.then_some(now)
+    })
+    .map_err(|e| {
+        format!(
+            "{e}: the update shows {}, before the click {before}",
+            outcome_now(main)
+        )
+    })
+}
+
 /// A refused launch: Update Now is not offered, the page says why, and the command refuses too.
 fn refused(app: &AppHandle, main: &Webview, dir: &Path, case: &str) -> Result<(), String> {
     check(main, dir, "good", "0.2.0")?;
@@ -250,16 +285,14 @@ fn first(app: &AppHandle, main: &Webview, dir: &Path) -> Result<(), String> {
 
     // Signed by a key the app does not trust (with the trusted key's ID): refused after download.
     check(main, dir, "badsig", "0.2.0")?;
-    click(main, "[data-part=app-update-now]")?;
-    phase(main, "the bad signature refused", &["failed"])?;
-    let badsig = json!({"error": update_attr(main, "error"), "installed_sha": installed_sha(app)});
+    let o = update_outcome(main, "the bad signature refused", &["failed"])?;
+    let badsig = json!({"error": o["error"], "installed_sha": installed_sha(app)});
 
     // Announced as 0.3.0 with 0.2.0's artifact and signature: the signed version differs.
+    // The page still shows the bad signature's failure: this step waits for its own.
     check(main, dir, "mismatch", "0.3.0")?;
-    click(main, "[data-part=app-update-now]")?;
-    phase(main, "the signed version refused", &["failed"])?;
-    let mismatch =
-        json!({"error": update_attr(main, "error"), "installed_sha": installed_sha(app)});
+    let o = update_outcome(main, "the signed version refused", &["failed"])?;
+    let mismatch = json!({"error": o["error"], "installed_sha": installed_sha(app)});
 
     // A slow download, cancelled part way.
     check(main, dir, "slow", "0.2.0")?;

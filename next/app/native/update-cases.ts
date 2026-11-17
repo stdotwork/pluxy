@@ -16,7 +16,7 @@
 // - every step the system's cases print is there (expectedSteps), and stand-ins for what installs
 //   with privileges never ran.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -29,7 +29,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { certificates } from "./feed";
 import { keyIdOf, signUpdate, updaterKey } from "./minisign";
@@ -304,6 +304,36 @@ export function startUpdateFeed(o: {
 
 // ---- launches -----------------------------------------------------------------------------
 
+/**
+ * What each thread of process pid (a launch this session started) is doing, said line by line,
+ * without stopping it for good: on Windows the console debugger attached noninvasively (`-pv`),
+ * symbols from folder when a PDB is there; on macOS `sample`. Only names and addresses come out,
+ * never memory. Nothing on Linux, whose sessions have their own report.
+ */
+export function stacks(pid: number, folder: string, say: Say) {
+  let r: ReturnType<typeof spawnSync> | undefined;
+  if (process.platform === "win32") {
+    const cdb = [
+      "C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe",
+      "C:\\Program Files\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe",
+    ].find((p) => existsSync(p));
+    if (!cdb) {
+      say("no console debugger (cdb.exe) on this runner, so no thread stacks");
+      return;
+    }
+    r = spawnSync(cdb, ["-pv", "-p", String(pid), "-y", folder, "-c", "~*kc 40; qd"], {
+      encoding: "utf8",
+      timeout: 120_000,
+    });
+  } else if (process.platform === "darwin") {
+    r = spawnSync("/usr/bin/sample", [String(pid), "3"], { encoding: "utf8", timeout: 60_000 });
+  } else {
+    return;
+  }
+  say(`the threads of process ${pid} (status ${r.status}):`);
+  for (const line of `${r.stdout ?? ""}${r.stderr ?? ""}`.split("\n")) say(`  stack | ${line}`);
+}
+
 export interface Chain {
   ended: string;
   /** Every step of that name, in order. */
@@ -341,7 +371,9 @@ export async function launchChain(o: {
           value = { raw: m[2] };
         }
         steps.push([name, value]);
-        if (name.startsWith("update") || name === "failed") o.say(`${o.label} | ${line.slice(0, 1500)}`);
+        // The app's own stall report (native_test.rs) says what its test thread last did.
+        if (name.startsWith("update") || name === "failed" || name === "stalled")
+          o.say(`${o.label} | ${line.slice(0, 1500)}`);
         if (o.onStep) {
           pending.push(
             Promise.resolve()
@@ -360,6 +392,10 @@ export async function launchChain(o: {
   const ended = await new Promise<string>((resolve) => {
     const timer = setTimeout(() => {
       o.check(false, `${o.label}: did not end within ${o.ms / 1000}s`);
+      // What the app was doing: its last lines (a stall report among them, if its test thread
+      // went quiet), then its threads' stacks, before it is stopped.
+      o.say(`${o.label}: the app's last lines:\n  ${tail.join("\n  ")}`);
+      if (child.pid !== undefined) stacks(child.pid, dirname(o.program), o.say);
       child.kill("SIGKILL");
     }, o.ms);
     child.on("close", (code, signal) => {
