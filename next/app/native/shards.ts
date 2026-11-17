@@ -48,7 +48,7 @@ export const SHARDS: Record<string, readonly string[]> = {
 };
 
 /** The sessions of the Windows and macOS native test (platform.ts), which next-app-platforms.yml
- * runs on the GitHub-hosted runners of those systems. They are not among the shards above: the
+ * runs on disposable runners of those systems (runner.ts). They are not among the shards above: the
  * Linux matrix of next-app.yml does not list them and never runs them. */
 export const PLATFORM_SHARDS: Record<string, readonly string[]> = {
   platform: ["single instance", "login item", "window and tray"],

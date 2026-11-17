@@ -164,12 +164,17 @@ runners, such as Blacksmith's. It holds a plain runner label, for example
 
 It applies to these jobs:
 - the `app` job in `next-app-platforms.yml`;
+- the macOS legs of the `native` and `dialogs` jobs in `next-app-platforms.yml`. Their tests write
+  the account's own folders, so they also check the runner (`next/app/native/runner.ts`): the job
+  passes the label in `PLUXY_EPHEMERAL_CI_RUNNER`, and the runner's name must start with it;
 - the `tools` job in `next-app-tools-platforms.yml`;
 - the `build` jobs in `next-app-tools-pack.yml`.
 
 Some macOS jobs and every Windows job stay on GitHub's runners:
-- The `native` and `dialogs` jobs, and the app's Windows registry tests, run only on a runner that
-  reports itself GitHub-hosted. Another provider's runner reports itself self-hosted.
+- The app's Windows registry tests run only on a runner that reports itself GitHub-hosted.
+  Another provider's runner reports itself self-hosted.
+- The Windows `native` and `dialogs` jobs need a signed-in desktop session. Blacksmith's Windows
+  runner runs in the services session, where the app's window never shows.
 - The Windows app-tool tests fail on Blacksmith's Windows runner.
 - The WSL jobs need GitHub's Windows runners.
 - The workflows a tag starts always use GitHub's runners.
