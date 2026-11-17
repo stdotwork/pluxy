@@ -276,7 +276,10 @@ impl ManagedCore {
         #[cfg(not(unix))]
         let hold: Option<Hold> = None;
         #[cfg(unix)]
-        let mut cmd = Command::new(crate::owned::exec_target(&program)?);
+        let mut cmd = Command::new(crate::owned::exec_target(
+            &program,
+            crate::owned::Writers::Nobody,
+        )?);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
