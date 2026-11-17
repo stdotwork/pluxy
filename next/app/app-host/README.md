@@ -437,8 +437,8 @@ their home, the processor and the Windows drives mounted there, kept in `environ
   distribution starts first). When WSL itself refuses to start the program (WSL 1's
   `0xd0000225` on either stream: nothing ran), the start is tried twice more, two seconds apart,
   and none of those tries counts as a crash; only when the last one is refused too does one
-  crash count, with its backoff. What `wsl.exe` prints instead of a frame (its first 4 KiB) is
-  shown in the start's error, and so is that refusal when it comes on standard error; other
+  crash count, with its backoff. What `wsl.exe` prints instead of a frame (at most 512 characters
+  of its first 4 KiB) is shown in the start's error, and so is that refusal when it comes on standard error; other
   standard error goes to the status log.
 - **Native confirmations** of its writes show `Runs in WSL: distribution "<d>", user "<u>"
   (<home>).` above the review (the names quoted: neither holds a `"`), and that line is part of

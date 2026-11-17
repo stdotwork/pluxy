@@ -1247,7 +1247,6 @@ type Spawning = (
     Option<String>,
 );
 
-/// A launch's spawn, from what its confirmation opened (a) and what its input asked.
 /// The native confirmation of a call from origin to a native tool (executor): what it does, the
 /// chain that asked, its launch if any, and the line of where it runs (`shown_line`), which a
 /// remembered approval names too.
@@ -1268,6 +1267,7 @@ fn native_action(
     }
 }
 
+/// A launch's spawn, from what its confirmation opened (a) and what its input asked.
 fn spawnable(spawning: Option<Spawning>, a: Authorized) -> Option<spawn::Launch> {
     let (lifetime, request, secrets, named, argv, stdin) = spawning?;
     a.executable()?;

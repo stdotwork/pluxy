@@ -541,8 +541,9 @@ pub fn wsl_refused_start(error: &str) -> bool {
     error.contains("0xd0000225")
 }
 
-/// What `wsl.exe` printed on the tool's stdout instead of a frame, as text: UTF-16 (its usual
-/// form) when the bytes hold a NUL, else UTF-8; white space trimmed, at most 512 characters.
+/// What `wsl.exe` printed, on the tool's stdout instead of a frame or on its stderr before hello,
+/// as text: UTF-16 (its usual form) when the bytes hold a NUL, else UTF-8; white space trimmed,
+/// at most 512 characters.
 pub fn wsl_said(bytes: &[u8]) -> String {
     let text = if bytes.contains(&0) {
         let units: Vec<u16> = bytes
