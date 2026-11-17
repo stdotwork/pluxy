@@ -254,3 +254,36 @@ fn what_wsl_exe_printed_instead_of_a_frame_reads_as_text() {
     assert!(!wsl_refused_start("User not found."));
     assert_eq!(wsl_said(&[b'x'; 2000]).chars().count(), 512);
 }
+
+/// What `pluxy/wsl`'s `check` answers for bob in Ubuntu: its own test checks that `check` gives
+/// exactly this file, and the record made of it keeps every field.
+#[test]
+fn a_record_reads_every_field_pluxy_wsl_check_answers() {
+    let answer: Value =
+        serde_json::from_str(include_str!("../../../app-tools/wsl/testdata/check.json")).unwrap();
+    assert_eq!(
+        Record::from_check("Ubuntu", "bob", &answer, 7).unwrap(),
+        Record {
+            distro: "Ubuntu".into(),
+            user: "bob".into(),
+            uid: 1001,
+            home: "/home/bob".into(),
+            arch: "amd64".into(),
+            wsl: Some(2),
+            automount: Some("/mnt/".into()),
+            drives: vec![
+                Drive {
+                    letter: "c".into(),
+                    path: "/mnt/c".into(),
+                    exec: true
+                },
+                Drive {
+                    letter: "d".into(),
+                    path: "/mnt/d".into(),
+                    exec: false
+                },
+            ],
+            checked_at: 7,
+        }
+    );
+}
