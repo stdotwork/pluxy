@@ -81,7 +81,7 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 		}
 		body, tr.Losses = b, losses
 		if req.DropPolicy == llm.DropReject && tr.Dropped() {
-			return nil, nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			return nil, nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: tr.DroppedPaths(),
 				Message: "Responses cannot carry parts of this request"}
 		}
 	}
