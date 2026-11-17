@@ -570,6 +570,9 @@ pub(super) mod tests {
         drop(held);
         assert_eq!(fs::read(&exe).unwrap(), program_bytes("old"));
         assert_eq!(names(&tmp), ["pluxy.exe"]);
+        // Its aside name was recorded before the rename was tried.
+        let record = fs::read_to_string(tmp.join("updates").join("leftovers.json")).unwrap();
+        assert!(record.contains(".pluxy-old-"), "{record}");
         fs::remove_dir_all(&tmp).unwrap();
     }
 
@@ -592,6 +595,58 @@ pub(super) mod tests {
         assert_eq!(remove_recorded(&m), Outcome::NotThere);
         assert!(start.elapsed() < BUSY_FOR, "waited {:?}", start.elapsed());
         assert!(path.join("keep").exists());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A link at a recorded name, even to the recorded file, is not that file: the link is not
+    // followed and the file stays. Not run where this user cannot make a link.
+    #[test]
+    fn a_link_at_a_recorded_name_is_not_followed() {
+        let tmp = super::super::tests::temp("exe-link");
+        let target = tmp.join("target.exe");
+        fs::write(&target, b"x").unwrap();
+        let path = tmp.join(".pluxy-old-0123456789abcdef.exe");
+        if let Err(e) = std::os::windows::fs::symlink_file(&target, &path) {
+            eprintln!("not run: this user cannot make a link: {e}");
+            fs::remove_dir_all(&tmp).unwrap();
+            return;
+        }
+        let m = Made {
+            path: path.clone(),
+            id: file_id(&fs::File::open(&target).unwrap()).unwrap(),
+        };
+        assert_eq!(remove_recorded(&m), Outcome::NotThere);
+        assert!(target.exists());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A file put in place of a recorded one and held open is waited out like the recorded file,
+    // then checked: it is not the file recorded, and stays.
+    #[test]
+    fn a_file_put_in_place_and_held_is_checked_once_let_go() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let tmp = super::super::tests::temp("exe-held-other");
+        let aside = tmp.join(".pluxy-old-0123456789abcdef.exe");
+        fs::write(&aside, b"recorded").unwrap();
+        let m = Made {
+            path: aside.clone(),
+            id: file_id(&fs::File::open(&aside).unwrap()).unwrap(),
+        };
+        fs::rename(&aside, tmp.join("moved.exe")).unwrap();
+        fs::write(&aside, b"theirs").unwrap();
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ)
+            .open(&aside)
+            .unwrap();
+        let let_go = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            drop(held);
+        });
+        let r = remove_recorded(&m);
+        let_go.join().unwrap();
+        assert_eq!(r, Outcome::NotThere);
+        assert_eq!(fs::read(&aside).unwrap(), b"theirs");
         fs::remove_dir_all(&tmp).unwrap();
     }
 

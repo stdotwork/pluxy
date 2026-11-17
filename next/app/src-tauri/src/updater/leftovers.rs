@@ -199,6 +199,8 @@ pub(super) fn remove_folder(m: &Made) -> Outcome {
         Ok(md) if md.is_dir() && md.uid() == me && id(&md) == m.id => {}
         _ => return Outcome::NotThere,
     }
+    #[cfg(test)]
+    tests::after_check(&m.path);
     if empty(f.as_raw_fd(), 0).is_err() {
         return Outcome::Kept;
     }
@@ -309,6 +311,20 @@ fn entries(fd: std::os::unix::io::RawFd) -> std::io::Result<Vec<std::ffi::CStrin
 mod tests {
     use super::*;
     use std::fs;
+
+    /// Run by `remove_folder` between its identity check and emptying the folder, for the path
+    /// set here only (tests run in parallel).
+    static SWAP: Mutex<Option<(PathBuf, fn(&Path))>> = Mutex::new(None);
+
+    pub(super) fn after_check(path: &Path) {
+        let hook = match &*SWAP.lock().unwrap() {
+            Some((p, f)) if p == path => Some(*f),
+            _ => None,
+        };
+        if let Some(f) = hook {
+            f(path);
+        }
+    }
 
     /// Device and inode of what path names, without following a link.
     fn id_of(path: &Path) -> String {
@@ -544,6 +560,67 @@ mod tests {
         assert!(mounted.join("keep").exists(), "the mount was crossed");
         // SAFETY: as above.
         assert_eq!(unsafe { libc::umount(c(&mounted).as_ptr()) }, 0);
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A recorded folder swapped for another between the identity check and the emptying: what is
+    // emptied is the folder checked, through the open it was checked on, and the folder now at its
+    // name stays whole.
+    #[test]
+    fn the_folder_emptied_is_the_one_checked() {
+        let tmp = super::super::tests::temp("leftovers-swap");
+        let outside = tmp.join("outside");
+        fs::create_dir(&outside).unwrap();
+        let path = tmp.join(".pluxy-update-9999999999999999");
+        made(&path, &outside, false);
+        let m = Made {
+            path: path.clone(),
+            id: id_of(&path),
+        };
+        fn swap(p: &Path) {
+            fs::rename(p, p.with_extension("moved")).unwrap();
+            fs::create_dir(p).unwrap();
+            fs::write(p.join("theirs"), b"z").unwrap();
+        }
+        *SWAP.lock().unwrap() = Some((path.clone(), swap));
+        let r = remove_folder(&m);
+        *SWAP.lock().unwrap() = None;
+        assert_eq!(r, Outcome::NotThere);
+        assert!(
+            path.join("theirs").exists(),
+            "the folder put there was emptied"
+        );
+        assert!(names(&path.with_extension("moved")).is_empty());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // Another user's folder at a recorded name is not entered, even with the recorded identity.
+    // /usr/bin is root's; not run as root, or where this user can change it.
+    #[test]
+    fn another_users_folder_is_not_there() {
+        let path = Path::new("/usr/bin");
+        let c = std::ffi::CString::new("/usr/bin").unwrap();
+        // SAFETY: geteuid has no preconditions; c is NUL-terminated.
+        if unsafe { libc::geteuid() } == 0 || unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0 {
+            eprintln!("not run: as root, or /usr/bin is this user's to change");
+            return;
+        }
+        let m = Made {
+            path: path.to_path_buf(),
+            id: id_of(path),
+        };
+        assert_eq!(remove_folder(&m), Outcome::NotThere);
+    }
+
+    // A folder made whose record cannot be written is removed again, and the install told.
+    #[test]
+    fn a_folder_that_cannot_be_recorded_is_not_left() {
+        let tmp = super::super::tests::temp("leftovers-norecord");
+        let dir = tmp.join("updates");
+        fs::write(&dir, b"not a folder").unwrap();
+        let path = tmp.join(".pluxy-update-aaaaaaaaaaaaaaaa");
+        assert!(Folder::new(&dir, &path).is_err());
+        assert!(!path.exists());
         fs::remove_dir_all(&tmp).unwrap();
     }
 
