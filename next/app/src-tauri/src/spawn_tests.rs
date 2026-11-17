@@ -1321,7 +1321,8 @@ fn on_macos_a_launch_from_a_folder_the_admin_group_may_write_starts() {
             cwd: open_dir(&dir),
         }),
         named: program.clone(),
-        argv: vec!["agent".into(), started.to_string_lossy().into_owned()],
+        // Its arguments after its name (`named`, given as argv[0]).
+        argv: vec![started.to_string_lossy().into_owned()],
         lifetime: Lifetime::Detached,
         request: Request::default(),
         secrets: vec![],
