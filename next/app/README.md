@@ -109,9 +109,9 @@ The archive is a gzip tar file of the core's folder, as provider releases are pa
 Windows `pluxy.exe`) at the top, and anything beside it, such as `bundled/`. It may hold only
 regular files and folders, no links, devices or names that leave the folder, at most 10,000
 entries, and at most 512 MiB decompressed in all (headers and the data of folder entries count
-too), and no two names that differ only in case (one name on Windows and, by default, macOS). On
-Windows it may also hold no name Windows cannot hold plainly (a `:` stream, a device name such as
-`CON`, a trailing dot or space). The folder it is unpacked into is opened by its path, refusing a
+too). On Windows it may also hold no two names that differ only in case, compared as Windows
+compares them (`σ` and `ς` too), and no name Windows cannot hold plainly (a `:` stream, a device
+name such as `CON`, a trailing dot or space). The folder it is unpacked into is opened by its path, refusing a
 link there; below it each folder and file is made from the folder held open before it, following
 no links (on Windows relative to the folder's handle, which is held so no one can rename that
 folder meanwhile). Release versions may not start with `custom-`, which adopted programs use.

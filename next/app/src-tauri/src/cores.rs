@@ -39,8 +39,8 @@ use std::rc::Rc;
 
 /// The publisher and ID of core releases.
 pub const CORE_ID: &str = "pluxy/core";
-/// The core's program in a version's folder: on Windows, which runs only programs named `.exe`,
-/// `pluxy.exe`, as Go names it there.
+/// The core's program in a version's folder: on Windows, which runs programs named `.exe` or
+/// `.com`, `pluxy.exe`, as Go names it there.
 pub const PROGRAM: &str = if cfg!(windows) { "pluxy.exe" } else { "pluxy" };
 const FORMAT: u32 = 1;
 const MAX_INDEX: u64 = 1024 * 1024;
@@ -290,7 +290,8 @@ fn local_fixed(path: &Path) -> Result<(), String> {
     };
     let real = crate::owned::windows::final_path(&f)?;
     let wide: Vec<u16> = real.as_os_str().encode_wide().chain([0]).collect();
-    // The volume's root is never longer than the path it holds.
+    // The volume's root can be one character longer than the path it holds (a trailing
+    // backslash, as for `C:` itself); wide's NUL and the `+ 1` leave room for it.
     let mut root = vec![0u16; wide.len() + 1];
     // SAFETY: wide is NUL-terminated; root holds the length given.
     if unsafe { GetVolumePathNameW(wide.as_ptr(), root.as_mut_ptr(), root.len() as u32) } == 0 {
@@ -1153,8 +1154,8 @@ fn open_program(path: &Path) -> Result<File, String> {
     Ok(f)
 }
 
-/// Windows: a regular file of at most 512 MiB that is a program image, named `.exe` and starting
-/// `MZ` (`owned::windows::image`), the only kind the app starts there.
+/// Windows: a regular file of at most 512 MiB that is a program image, named `.exe` or `.com` and
+/// starting `MZ` (`owned::windows::image`), the only kind the app starts there.
 #[cfg(windows)]
 fn open_program(path: &Path) -> Result<File, String> {
     let f = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -1169,6 +1170,21 @@ fn open_program(path: &Path) -> Result<File, String> {
     // Reading its first bytes moved the file's position (Windows' positional reads do).
     (&f).seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     Ok(f)
+}
+
+/// The spelling Windows compares a name by: each character uppercased where that gives one
+/// character, as the file system's table maps them one to one (so `ς` and `σ` match, while `ß`
+/// stays apart from `ss`).
+fn windows_name_key(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            let mut upper = c.to_uppercase();
+            match (upper.next(), upper.next()) {
+                (Some(u), None) => u,
+                _ => c,
+            }
+        })
+        .collect()
 }
 
 struct HashingWriter<'a, W> {
@@ -1306,7 +1322,7 @@ fn unpack(archive: impl Read, dir: &Path, limit: u64) -> Result<Vec<FileRecord>,
     let root = Dir::open(dir).map_err(|e| e.to_string())?;
     let mut tar = tar::Archive::new(bounded);
     let mut files = Vec::new();
-    // Each path unpacked so far and each folder on its way, by its lower-case spelling.
+    // Windows: each path unpacked so far and each folder on its way, by `windows_name_key`.
     let mut spelled: std::collections::HashMap<String, String> = Default::default();
     let entries = tar.entries().map_err(read_err)?;
     for (n, entry) in entries.enumerate() {
@@ -1318,18 +1334,18 @@ fn unpack(archive: impl Read, dir: &Path, limit: u64) -> Result<Vec<FileRecord>,
         let Some(path) = entry_path(&raw)? else {
             continue;
         };
-        // Where a file system ignores case (Windows; macOS by default), names that differ only
-        // in case are one name: a second spelling would merge with the first, so it is refused.
+        // On Windows names that differ only in case are one name: a second spelling would
+        // merge with the first, so it is refused.
         let mut end = 0;
-        for part in path.split('/') {
+        for part in path.split('/').filter(|_| cfg!(windows)) {
             end += part.len();
             let prefix = &path[..end];
             let first = spelled
-                .entry(prefix.to_lowercase())
+                .entry(windows_name_key(prefix))
                 .or_insert_with(|| prefix.to_string());
             if first != prefix {
                 return Err(format!(
-                    "archive entry {path} differs only in case from {first}, the same name on Windows and macOS"
+                    "archive entry {path} differs only in case from {first}, the same name on Windows"
                 ));
             }
             end += 1;
@@ -1803,11 +1819,11 @@ mod tests {
     }
 
     /// Two names that differ only in case, of files or of folders on the way to them, are one
-    /// name on Windows (and macOS by default): the second spelling is refused, never merged with
-    /// the first. Names that differ otherwise unpack.
+    /// name on Windows: there the second spelling is refused, never merged with the first;
+    /// elsewhere both unpack, as before. Names that differ otherwise unpack.
     #[test]
     fn names_differing_only_in_case_are_refused() {
-        let twins: [&[(&str, tar::EntryType, Vec<u8>)]; 2] = [
+        let twins: [&[(&str, tar::EntryType, Vec<u8>)]; 3] = [
             &[
                 ("a.txt", tar::EntryType::Regular, b"one".to_vec()),
                 ("A.txt", tar::EntryType::Regular, b"two".to_vec()),
@@ -1816,14 +1832,35 @@ mod tests {
                 ("bundled/a", tar::EntryType::Regular, b"one".to_vec()),
                 ("Bundled/b", tar::EntryType::Regular, b"two".to_vec()),
             ],
+            &[
+                ("\u{3c3}.txt", tar::EntryType::Regular, b"one".to_vec()),
+                ("\u{3c2}.txt", tar::EntryType::Regular, b"two".to_vec()),
+            ],
         ];
         for entries in twins {
             let dir = temp("case");
             fs::create_dir_all(&dir).unwrap();
-            let e = unpack(&gz_tar(entries)[..], &dir, MAX_UNPACKED).unwrap_err();
-            assert!(e.contains("differs only in case"), "{e}");
+            let r = unpack(&gz_tar(entries)[..], &dir, MAX_UNPACKED);
+            if cfg!(windows) {
+                let e = r.unwrap_err();
+                assert!(e.contains("differs only in case"), "{e}");
+            } else {
+                // Elsewhere they are two names, as before.
+                assert_eq!(r.unwrap().len(), 2);
+            }
             remove_tree(&dir);
         }
+        // The key Windows compares by, on every system: final and medial sigma, long s, dotless i
+        // and the micro sign match their twins; `ß` is not `ss`.
+        for (a, b) in [
+            ("\u{3c3}", "\u{3c2}"),
+            ("s", "\u{17f}"),
+            ("i", "\u{131}"),
+            ("\u{3bc}", "\u{b5}"),
+        ] {
+            assert_eq!(windows_name_key(a), windows_name_key(b), "{a} {b}");
+        }
+        assert_ne!(windows_name_key("\u{df}"), windows_name_key("ss"));
         // The control: other names, also in the same folder, unpack.
         let dir = temp("case");
         fs::create_dir_all(&dir).unwrap();
