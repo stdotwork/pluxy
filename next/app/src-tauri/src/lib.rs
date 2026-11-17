@@ -2775,6 +2775,13 @@ fn asset_queue() -> &'static SyncSender<AssetJob> {
     })
 }
 
+/// A device page file's CSP, as core's pages site: sandboxed with scripts, loading only from the
+/// asset scheme, given as source (`pages::asset_source`; there this webview gets only its own
+/// folder), and no requests from script, frames or forms.
+fn asset_csp(s: &str) -> String {
+    format!("sandbox allow-scripts; default-src 'none'; script-src {s}; style-src {s}; img-src {s} data: blob:; font-src {s} data:; media-src {s} data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'")
+}
+
 fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static str)>) {
     #[cfg(feature = "native-test")]
     native_test::log(
@@ -2784,11 +2791,8 @@ fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static st
     #[cfg(not(feature = "native-test"))]
     let _ = (&job.label, &job.path);
     let (body, kind) = found.unwrap_or((Vec::new(), "text/plain"));
-    // As core's pages site: sandboxed with scripts, loading only from the asset scheme (where
-    // this webview gets only its own folder), and no requests from script, frames or forms.
-    let s = device::ASSET_SCHEME;
     let csp = if status == 200 {
-        format!("sandbox allow-scripts; default-src 'none'; script-src {s}:; style-src {s}:; img-src {s}: data: blob:; font-src {s}: data:; media-src {s}: data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'")
+        asset_csp(&pages::asset_source(&device::asset_base()))
     } else {
         "sandbox; default-src 'none'".to_string()
     };
@@ -3373,6 +3377,34 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_device_page_loads_its_files_from_the_asset_scheme_as_served() {
+        // Linux and macOS serve the asset scheme by its name; Windows as an http origin.
+        for (base, source) in [
+            ("pluxy-app://localhost/", "pluxy-app:"),
+            ("http://pluxy-app.localhost/", "http://pluxy-app.localhost"),
+        ] {
+            let csp = asset_csp(&pages::asset_source(base));
+            for directive in [
+                "script-src",
+                "style-src",
+                "img-src",
+                "font-src",
+                "media-src",
+            ] {
+                let listed = csp
+                    .split(';')
+                    .map(str::trim)
+                    .find_map(|d| d.strip_prefix(directive))
+                    .unwrap_or_default();
+                assert!(
+                    listed.split_whitespace().any(|s| s == source),
+                    "{directive} does not list {source}: {csp}"
+                );
+            }
+        }
+    }
 
     fn managed(state: &'static str, version: u64) -> View {
         View {
