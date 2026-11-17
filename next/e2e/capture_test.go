@@ -160,6 +160,7 @@ func sections(text, title string) []string {
 }
 
 func TestUpstreamCapture(t *testing.T) {
+	t.Parallel()
 	refusing, serving := newCaptureUpstream(t, true), newCaptureUpstream(t, false)
 	proxy := newHTTPProxy(t, true)
 	manifest, frames := tapPackage(t, "pluxy/openai-compatible", filepath.Join(binDir, "openai-compatible"))
@@ -486,6 +487,7 @@ func wantNoCutSecretPart(t *testing.T, text string) {
 // to the upstream sections of the request log, which leave out the bytes beside a cut that could
 // be part of one, whatever its characters.
 func TestUpstreamCaptureCutKeepsNoConfigSecretPart(t *testing.T) {
+	t.Parallel()
 	t.Run("request", func(t *testing.T) {
 		serving := newCaptureUpstream(t, false)
 		dir := t.TempDir()

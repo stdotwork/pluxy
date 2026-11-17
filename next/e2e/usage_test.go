@@ -257,6 +257,7 @@ func TestUsageRecordsRequests(t *testing.T) {
 // usage-statistics-enabled turns the record off and on through the settings call, in both
 // config formats; while it is off, requests are not recorded and what was recorded stays.
 func TestUsageStatisticsSwitch(t *testing.T) {
+	t.Parallel()
 	for _, f := range formats() {
 		t.Run(f.name, func(t *testing.T) {
 			c := startManaged(t, f.yaml)

@@ -152,6 +152,7 @@ func TestManageAccountCooldowns(t *testing.T) {
 // PATCH /accounts/{id} changes a login account's routing fields along with disabled, checks them
 // as the config's are checked and changes nothing when one is bad; null sets one back.
 func TestManageAccountFields(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	base, _ := startOAuthCore(t)
 	deviceLogin(t, base, srv, "work")
@@ -623,6 +624,7 @@ func reauthDevice(t *testing.T, base string, srv *oauthtest.Server, id string) l
 // account's credential as it was; one that signs in as the same user (letter case aside) replaces
 // it, as today's core does.
 func TestReloginIdentityCheck(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	base, _ := startOAuthCore(t)
 	deviceLogin(t, base, srv, "work")

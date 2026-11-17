@@ -332,6 +332,10 @@ func startCoreBin(t *testing.T, bin, path string, args ...string) (string, *core
 		close(exited)
 	}()
 	t.Cleanup(func() {
+		// A connection the client dialled but never sent a request on counts as busy to
+		// core's http.Server.Shutdown until it is 5 s old; closing the idle ones lets core
+		// stop at once.
+		http.DefaultClient.CloseIdleConnections()
 		cancel()
 		<-exited
 	})
@@ -685,12 +689,14 @@ func TestClientDisconnectCancelsUpstream(t *testing.T) {
 // object with fields the model has no place for. The reviewer's case: an 8 MiB fingerprint and
 // 60 MiB of text came back as a 200 of 71,303,351 bytes.
 func TestNonStreamingChatCountsKeptFields(t *testing.T) {
+	t.Parallel()
 	big := strings.Repeat("f", 8<<20)
 	for _, c := range []struct{ name, first, usage string }{
 		{"fingerprint", fmt.Sprintf(`,"system_fingerprint":%q`, big), ""},
 		{"usage", "", fmt.Sprintf(`{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"extra":%q}`, big)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			u := newUpstream(t)
 			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -722,12 +728,14 @@ func TestNonStreamingChatCountsKeptFields(t *testing.T) {
 // The upstream's response id and model, which Messages and Gemini replies carry, count toward
 // core's 64 MiB limit on a non-streamed reply.
 func TestNonStreamingReplyCountsIDAndModel(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ path, body string }{
 		{"/v1/messages", `{"model":"gpt-test","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`},
 		{"/v1beta/models/gpt-test:generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`},
 	} {
 		path, body := c.path, c.body
 		t.Run(path, func(t *testing.T) {
+			t.Parallel()
 			u := newUpstream(t)
 			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -756,6 +764,7 @@ func TestNonStreamingReplyCountsIDAndModel(t *testing.T) {
 // The upstream's usage object, which Responses, Messages and Gemini aggregators keep with fields
 // they have no place for, counts toward core's 64 MiB limit on a non-streamed reply.
 func TestNonStreamingReplyCountsUsage(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ path, body string }{
 		{"/v1/responses", `{"model":"gpt-test","input":"hi"}`},
 		{"/v1/messages", `{"model":"gpt-test","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`},
@@ -763,6 +772,7 @@ func TestNonStreamingReplyCountsUsage(t *testing.T) {
 	} {
 		path, body := c.path, c.body
 		t.Run(path, func(t *testing.T) {
+			t.Parallel()
 			u := newUpstream(t)
 			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -792,6 +802,7 @@ func TestNonStreamingReplyCountsUsage(t *testing.T) {
 // Responses, Messages and Gemini clients collect the reply in different aggregators; all are
 // bounded.
 func TestNonStreamingReplyIsBounded(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ path, body string }{
 		{"/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`},
 		{"/v1/responses", `{"model":"gpt-test","input":"hi"}`},
@@ -800,6 +811,7 @@ func TestNonStreamingReplyIsBounded(t *testing.T) {
 	} {
 		path, body := c.path, c.body
 		t.Run(path, func(t *testing.T) {
+			t.Parallel()
 			const total = 128 << 20 // twice core's 64 MiB limit
 			u := newUpstream(t)
 			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {

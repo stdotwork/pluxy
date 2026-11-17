@@ -150,6 +150,7 @@ func waitLog(t *testing.T, c *mcore, query, s string) logLines {
 // main.log that reaches 10 MB is rotated by the real core, and the folder's cap removes the
 // oldest log files, never main.log.
 func TestLogFileRotationAndCap(t *testing.T) {
+	t.Parallel()
 	c := startManaged(t, false)
 	dir := c.logsDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
