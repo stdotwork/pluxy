@@ -144,6 +144,10 @@ struct Mode {
     describe_vault: Option<Value>,
     /// Adds to `summary`'s output what it holds at this descriptor or handle number (`probe`).
     probe: Option<u64>,
+    /// Its first this many starts in this folder end at once as `wsl.exe` ends a start WSL 1
+    /// refused: its error text, in UTF-16, on stderr (on stdout with `wsl_refuse_stdout`).
+    wsl_refuse: u64,
+    wsl_refuse_stdout: bool,
 }
 
 impl Mode {
@@ -182,6 +186,8 @@ impl Mode {
             exit_after_describe: v["exit_after_describe"] == true,
             describe_vault: v.get("describe_vault").cloned(),
             probe: v["probe"].as_u64(),
+            wsl_refuse: v["wsl_refuse"].as_u64().unwrap_or_default(),
+            wsl_refuse_stdout: v["wsl_refuse_stdout"] == true,
         }
     }
 }
@@ -1017,6 +1023,26 @@ pub fn main() -> ! {
         }
     }
     let mode = Mode::read();
+    if mode.wsl_refuse > 0 {
+        let count = "wsl-refused";
+        let n: u64 = std::fs::read_to_string(count)
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or_default();
+        if n < mode.wsl_refuse {
+            let _ = std::fs::write(count, (n + 1).to_string());
+            let text: Vec<u8> = "Error: 0xd0000225\r\nError code: Wsl/Service/0xd0000225\r\n"
+                .encode_utf16()
+                .flat_map(|u| u.to_le_bytes())
+                .collect();
+            if mode.wsl_refuse_stdout {
+                let _ = std::io::stdout().write_all(&text);
+            } else {
+                let _ = std::io::stderr().write_all(&text);
+            }
+            std::process::exit(1);
+        }
+    }
     let manifest: Value = std::fs::read("pluxy-extension.json")
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())

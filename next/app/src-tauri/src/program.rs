@@ -138,6 +138,8 @@ pub struct Limits {
     pub stable: Duration,
     /// How long a replaced release's calls may take before it is stopped.
     pub drain: Duration,
+    /// Between the tries of a start WSL refused (`environments::WSL_RETRIES`).
+    pub wsl_retry: Duration,
 }
 
 impl Default for Limits {
@@ -152,6 +154,7 @@ impl Default for Limits {
             quarantine_after: 5,
             stable: Duration::from_secs(600),
             drain: Duration::from_secs(600),
+            wsl_retry: crate::environments::WSL_RETRY_PAUSE,
         }
     }
 }
@@ -667,6 +670,9 @@ enum StartError {
     Refused(CallError),
     /// The start failed: the calls waiting on it get this too.
     Failed(CallError),
+    /// WSL refused to start the tool (`environments::wsl_refused_start`): tried again, and only
+    /// counted as a crash once the tries are over.
+    WslRefused(CallError),
 }
 
 /// Why a running tool is being stopped.
@@ -728,9 +734,38 @@ struct Run {
     describing: Mutex<Option<(String, Vec<String>)>>,
     /// Its last stderr line, as logged: why it stopped, if it says.
     last_line: Mutex<Option<String>>,
+    /// It said hello.
+    greeted: AtomicBool,
+    /// In WSL, before hello: the first bytes of its stderr as they came, which may be
+    /// `wsl.exe`'s own text in UTF-16 (`wsl_refusal`).
+    early_err: Mutex<Vec<u8>>,
 }
 
+/// How much of what `wsl.exe` prints before hello is kept to read why it did not start.
+const WSL_TEXT: usize = 4096;
+
 impl Run {
+    /// It runs in WSL, so `wsl.exe` may have printed instead of it.
+    fn in_wsl(&self) -> bool {
+        !self.spec.environment.is_local()
+    }
+
+    /// Why WSL refused to start it, if that is why it ended before hello: `wsl.exe`'s text on
+    /// stdout (its pipe broken with it) or on stderr naming the refusal.
+    fn wsl_refusal(&self) -> Option<String> {
+        if !self.in_wsl() || self.greeted.load(Ordering::SeqCst) {
+            return None;
+        }
+        if let Some(End::Failed(w)) = self.end.lock().unwrap().as_ref() {
+            if crate::environments::wsl_refused_start(w) {
+                return Some(w.clone());
+            }
+        }
+        let said = crate::environments::wsl_said(&self.early_err.lock().unwrap());
+        crate::environments::wsl_refused_start(&said)
+            .then(|| format!("did not start: wsl.exe said {said}"))
+    }
+
     fn pid(&self) -> Option<u32> {
         match self.pid.load(Ordering::SeqCst) {
             0 => None,
@@ -1084,25 +1119,31 @@ impl Host {
                             if slot.phase == Phase::Starting {
                                 slot.phase = Phase::Idle;
                             }
-                            let e = match e {
-                                StartError::Refused(e) => e,
-                                StartError::Failed(e) => {
-                                    slot.last = Some(e.message.clone());
-                                    slot.failed = Some((n, e.clone()));
-                                    e
-                                }
+                            let (e, refused) = match e {
+                                StartError::Refused(e) => (e, None),
+                                StartError::Failed(e) => (e, Some(false)),
+                                StartError::WslRefused(e) => (e, Some(true)),
                             };
-                            inner.changed.notify_all();
-                            if !instance.environment.is_local()
-                                && retried < crate::environments::WSL_RETRIES
-                                && crate::environments::wsl_refused_start(&e.message)
+                            if refused == Some(true) && retried < crate::environments::WSL_RETRIES
                             {
+                                // Tried again after a pause, with no crash counted.
+                                slot.last = Some(e.message.clone());
+                                inner.changed.notify_all();
                                 retried += 1;
                                 drop(slots);
-                                std::thread::sleep(crate::environments::WSL_RETRY_PAUSE);
+                                std::thread::sleep(inner.limits.wsl_retry);
                                 slots = inner.slots();
                                 continue;
                             }
+                            if let Some(wsl) = refused {
+                                slot.last = Some(e.message.clone());
+                                slot.failed = Some((n, e.clone()));
+                                // A start WSL still refused once the tries are over: one crash.
+                                if wsl {
+                                    slot.phase = count_crash(slot, &inner.limits);
+                                }
+                            }
+                            inner.changed.notify_all();
                             return Err(e);
                         }
                         continue;
@@ -1939,6 +1980,8 @@ fn new_run(
         saver: inner.saver.get().cloned(),
         describing: Mutex::new(None),
         last_line: Mutex::new(None),
+        greeted: AtomicBool::new(false),
+        early_err: Mutex::new(Vec::new()),
     });
     Ok((run, hello_rx, cmd))
 }
@@ -2038,6 +2081,12 @@ fn start(
                 true,
             );
             wait_reaped(inner, &run);
+            if let Some(why) = run.wsl_refusal() {
+                return Err(StartError::WslRefused(fail(
+                    "extension_unavailable",
+                    format!("{id} {why}"),
+                )));
+            }
             Err(failed(e.message))
         }
     }
@@ -2357,6 +2406,7 @@ fn supervise(
         Err(e) => e.to_string(),
     };
     let last_line = run.last_line.lock().unwrap().clone();
+    let refused = run.wsl_refusal();
     let mut slots = inner.slots();
     if let Some(slot) = slots.get_mut(&run.spec.key()) {
         // Calls it did not answer are of unknown outcome. They are recorded here, before the
@@ -2403,19 +2453,16 @@ fn supervise(
                 ),
             };
             // A crash: backoff before the next start, or quarantine after too many in a row. A
-            // clean stop (idle, or one the host asked for) ends the crashes in a row.
-            slot.phase = if phase == Phase::Crashed {
+            // clean stop (idle, or one the host asked for) ends the crashes in a row. A start WSL
+            // refused is not a crash yet: the start tries again, and counts one only when the
+            // tries are over.
+            slot.phase = if refused.is_some() {
+                Phase::Idle
+            } else if phase == Phase::Crashed {
                 if run.started.elapsed() >= inner.limits.stable {
                     slot.crashes = 0;
                 }
-                slot.crashes += 1;
-                if slot.crashes >= inner.limits.quarantine_after.max(1) {
-                    slot.retry_at = None;
-                    Phase::Quarantined
-                } else {
-                    slot.retry_at = Some(Instant::now() + backoff(&inner.limits, slot.crashes));
-                    Phase::Crashed
-                }
+                count_crash(slot, &inner.limits)
             } else {
                 if matches!(phase, Phase::Idle | Phase::Stopped) {
                     slot.crashes = 0;
@@ -2428,6 +2475,19 @@ fn supervise(
     }
     run.reaped.store(true, Ordering::SeqCst);
     inner.changed.notify_all();
+}
+
+/// Counts one more crash in a row in slot: its backoff, or quarantine after too many. Gives the
+/// phase it leaves the slot in.
+fn count_crash(slot: &mut Slot, limits: &Limits) -> Phase {
+    slot.crashes += 1;
+    if slot.crashes >= limits.quarantine_after.max(1) {
+        slot.retry_at = None;
+        Phase::Quarantined
+    } else {
+        slot.retry_at = Some(Instant::now() + backoff(limits, slot.crashes));
+        Phase::Crashed
+    }
 }
 
 fn spawn_named(
@@ -2456,8 +2516,16 @@ fn read_frames(run: &Arc<Run>, mut stdout: ChildStdout) {
         while buf.len() >= 4 {
             let len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
             if len > MAX_FRAME {
-                // Before hello in WSL, that is `wsl.exe`'s own error text, not a frame.
-                if run.spec.wsl.is_some() && !said_hello {
+                // Before hello in WSL, that is `wsl.exe`'s own error text, not a frame: all of
+                // it, up to its end (`wsl.exe` exits once it has said it), is read first.
+                if run.in_wsl() && !said_hello {
+                    while buf.len() < WSL_TEXT {
+                        match read_some(&run.closed, &mut stdout, &mut chunk) {
+                            Some(n) => buf.extend_from_slice(&chunk[..n]),
+                            None => break,
+                        }
+                    }
+                    buf.truncate(WSL_TEXT);
                     run.violation(format!(
                         "did not start: wsl.exe said {}",
                         crate::environments::wsl_said(&buf)
@@ -2476,6 +2544,9 @@ fn read_frames(run: &Arc<Run>, mut stdout: ChildStdout) {
             if let Err(why) = deliver(run, &frame, &mut said_hello) {
                 run.violation(why);
                 break 'read;
+            }
+            if said_hello {
+                run.greeted.store(true, Ordering::SeqCst);
             }
         }
     }
@@ -2860,6 +2931,11 @@ fn read_log(run: &Run, mut stderr: ChildStderr) {
         left_out: 0,
     };
     while let Some(n) = read_some(&run.closed, &mut stderr, &mut chunk) {
+        if run.in_wsl() && !run.greeted.load(Ordering::SeqCst) {
+            let mut early = run.early_err.lock().unwrap();
+            let room = WSL_TEXT.saturating_sub(early.len()).min(n);
+            early.extend_from_slice(&chunk[..room]);
+        }
         for &b in &chunk[..n] {
             if b == b'\n' {
                 if !skipping {

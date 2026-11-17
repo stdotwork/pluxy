@@ -66,6 +66,7 @@ fn fast() -> Limits {
         quarantine_after: 5,
         stable: Duration::from_secs(600),
         drain: Duration::from_secs(10),
+        wsl_retry: Duration::from_millis(100),
     }
 }
 
@@ -3344,6 +3345,60 @@ fn an_instance_in_wsl_has_its_own_slot_and_starts_only_from_its_own_record() {
     assert!(h.status(ID).last.is_none());
     let asked = asked.lock().unwrap().clone();
     assert!(asked.contains(&ID.to_string()) && asked.contains(&alice_i.key()));
+}
+
+/// A host whose WSL instance for bob runs the fixture here, as this computer's program with that
+/// instance's environment (no `wsl.exe` off Windows), in mode; and that instance.
+fn wsl_here(mode: Value) -> (Host, Instance) {
+    let bob = wsl_record("bob");
+    let spec = Spec {
+        environment: bob.environment(),
+        ..package(mode)
+    };
+    let instance = Instance {
+        package: ID.into(),
+        environment: bob.environment(),
+    };
+    let (folder, want) = (Folder(spec.dir.clone()), instance.clone());
+    let h = Host::for_tests(
+        Box::new(move |i: &Instance| {
+            let _ = &folder;
+            if *i == want {
+                Ok(spec.clone())
+            } else {
+                Err(format!("{} is not installed on this device", i.name()))
+            }
+        }),
+        fast(),
+    );
+    (h, instance)
+}
+
+// WSL 1 can refuse a start (`0xd0000225`, wsl.exe's text on stderr or in place of a frame): such a
+// start is tried again, twice, 2 seconds apart, and none of those tries counts as a crash; only
+// when the last one is refused too does one crash count, with its backoff.
+#[test]
+fn a_start_wsl_refused_is_tried_again_and_counts_as_one_crash_only_when_it_stays_refused() {
+    for stdout in [false, true] {
+        let (h, bob) = wsl_here(json!({"wsl_refuse": 2, "wsl_refuse_stdout": stdout}));
+        let v = call_in(&h, &bob).unwrap();
+        assert_eq!(v["count"], 0, "stdout {stdout}");
+        let st = h.status_in(&bob);
+        assert_eq!((st.state, st.crashes), ("ready", 0), "{st:?}");
+        h.stop_all();
+    }
+    let (h, bob) = wsl_here(json!({"wsl_refuse": 10}));
+    let e = call_in(&h, &bob).unwrap_err();
+    assert!(
+        e.message.contains("wsl.exe said") && e.message.contains("0xd0000225"),
+        "{e:?}"
+    );
+    let st = h.status_in(&bob);
+    assert_eq!((st.state, st.crashes), ("crashed", 1), "{st:?}");
+    // Its backoff holds the next call, which starts nothing.
+    let e = call_in(&h, &bob).unwrap_err();
+    assert!(e.message.contains("may restart it in"), "{e:?}");
+    h.stop_all();
 }
 
 // The program host and the spawn service against a real WSL distribution (`wsl_real_*`, ignored
