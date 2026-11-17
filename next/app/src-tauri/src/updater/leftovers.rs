@@ -150,15 +150,29 @@ impl Drop for Folder {
     }
 }
 
-/// A folder's identity on Unix: device and inode, read without following a link. Refused unless
-/// path is a folder of this user's.
+/// The identity on Unix of folder path, just made (`Folder::new`): device and inode, read through
+/// one open of it that does not follow a link. Refused unless what that open reached is a folder
+/// of this user's, mode 0700 and empty, all read through the same open folder.
 #[cfg(unix)]
 pub(super) fn folder_id(path: &Path) -> Result<String, String> {
-    use std::os::unix::fs::MetadataExt;
-    let m = std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    use std::os::unix::io::AsRawFd;
+    let shown = |e: std::io::Error| format!("{}: {e}", path.display());
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(shown)?;
+    let m = f.metadata().map_err(shown)?;
     // SAFETY: geteuid has no preconditions.
-    if !m.is_dir() || m.uid() != unsafe { libc::geteuid() } {
-        return Err(format!("{} is not a folder of yours", path.display()));
+    if !m.is_dir() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o7777 != 0o700 {
+        return Err(format!(
+            "{} is not a private folder of yours",
+            path.display()
+        ));
+    }
+    if !entries(f.as_raw_fd()).map_err(shown)?.is_empty() {
+        return Err(format!("{} is not empty", path.display()));
     }
     Ok(format!("{}:{}", m.dev(), m.ino()))
 }
@@ -209,43 +223,13 @@ const DEEPEST: usize = 64;
 /// change first (a bundle's folders may be read-only).
 #[cfg(unix)]
 fn empty(fd: std::os::unix::io::RawFd, depth: usize) -> std::io::Result<()> {
-    use std::ffi::CStr;
     use std::io::Error;
     if depth > DEEPEST {
         return Err(Error::other("too deep"));
     }
     // SAFETY: fd is an open folder; a failure leaves it as it was.
     unsafe { libc::fchmod(fd, 0o700) };
-    let names = {
-        // SAFETY: dup of an open descriptor; fdopendir takes the copy and closedir closes it.
-        let copy = unsafe { libc::dup(fd) };
-        if copy < 0 {
-            return Err(Error::last_os_error());
-        }
-        let d = unsafe { libc::fdopendir(copy) };
-        if d.is_null() {
-            let e = Error::last_os_error();
-            unsafe { libc::close(copy) };
-            return Err(e);
-        }
-        let mut names = vec![];
-        loop {
-            // SAFETY: d is an open directory stream.
-            let e = unsafe { libc::readdir(d) };
-            if e.is_null() {
-                break;
-            }
-            // SAFETY: d_name is NUL-terminated within the entry readdir returned.
-            let name = unsafe { CStr::from_ptr((*e).d_name.as_ptr()) }.to_owned();
-            if name.as_bytes() != b"." && name.as_bytes() != b".." {
-                names.push(name);
-            }
-        }
-        // SAFETY: d came from fdopendir and is closed once.
-        unsafe { libc::closedir(d) };
-        names
-    };
-    for name in names {
+    for name in entries(fd)? {
         let mut st: libc::stat = unsafe { std::mem::zeroed() };
         // SAFETY: fd is open, name is NUL-terminated, st is written on success.
         if unsafe { libc::fstatat(fd, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
@@ -278,10 +262,51 @@ fn empty(fd: std::os::unix::io::RawFd, depth: usize) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The names in the open folder fd but `.` and `..`, read through it.
+#[cfg(unix)]
+fn entries(fd: std::os::unix::io::RawFd) -> std::io::Result<Vec<std::ffi::CString>> {
+    use std::ffi::CStr;
+    use std::io::Error;
+    // SAFETY: dup of an open descriptor; fdopendir takes the copy and closedir closes it.
+    let copy = unsafe { libc::dup(fd) };
+    if copy < 0 {
+        return Err(Error::last_os_error());
+    }
+    let d = unsafe { libc::fdopendir(copy) };
+    if d.is_null() {
+        let e = Error::last_os_error();
+        unsafe { libc::close(copy) };
+        return Err(e);
+    }
+    let mut names = vec![];
+    loop {
+        // SAFETY: d is an open directory stream.
+        let e = unsafe { libc::readdir(d) };
+        if e.is_null() {
+            break;
+        }
+        // SAFETY: d_name is NUL-terminated within the entry readdir returned.
+        let name = unsafe { CStr::from_ptr((*e).d_name.as_ptr()) }.to_owned();
+        if name.as_bytes() != b"." && name.as_bytes() != b".." {
+            names.push(name);
+        }
+    }
+    // SAFETY: d came from fdopendir and is closed once.
+    unsafe { libc::closedir(d) };
+    Ok(names)
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::fs;
+
+    /// Device and inode of what path names, without following a link.
+    fn id_of(path: &Path) -> String {
+        use std::os::unix::fs::MetadataExt;
+        let m = fs::symlink_metadata(path).unwrap();
+        format!("{}:{}", m.dev(), m.ino())
+    }
 
     fn names(dir: &Path) -> Vec<String> {
         let mut v: Vec<String> = fs::read_dir(dir)
@@ -324,17 +349,17 @@ mod tests {
         // A staging folder this updater made and recorded.
         let ours = beside.join(".pluxy-update-1111111111111111");
         made(&ours, &outside, true);
-        record(&dir, &ours, folder_id(&ours).unwrap()).unwrap();
+        record(&dir, &ours, id_of(&ours)).unwrap();
         // A recorded staging folder replaced by another folder of the same name.
         let replaced = beside.join(".pluxy-update-2222222222222222");
         fs::create_dir(&replaced).unwrap();
-        record(&dir, &replaced, folder_id(&replaced).unwrap()).unwrap();
+        record(&dir, &replaced, id_of(&replaced)).unwrap();
         fs::rename(&replaced, tmp.join("moved")).unwrap();
         made(&replaced, &outside, false);
         // A recorded entry that is gone.
         let gone = beside.join(".pluxy-update-3333333333333333");
         fs::create_dir(&gone).unwrap();
-        record(&dir, &gone, folder_id(&gone).unwrap()).unwrap();
+        record(&dir, &gone, id_of(&gone)).unwrap();
         fs::remove_dir(&gone).unwrap();
 
         // This process recorded them: its own cleanup leaves them.
@@ -368,7 +393,7 @@ mod tests {
         let path = tmp.join(".pluxy-update-4444444444444444");
         let m = Made {
             path: path.clone(),
-            id: folder_id(&real).unwrap(),
+            id: id_of(&real),
         };
         std::os::unix::fs::symlink(&real, &path).unwrap();
         assert_eq!(remove_folder(&m), Outcome::NotThere);
@@ -419,6 +444,35 @@ mod tests {
         f.keep();
         drop(f);
         assert!(kept.exists());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A new folder's identity is recorded only if, opened without following a link, it is a
+    // folder of this user's, mode 0700 and empty: a link, a folder with something in it, and one
+    // others can open are refused.
+    #[test]
+    fn a_new_folder_is_recorded_only_if_it_is_private_empty_and_no_link() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let tmp = super::super::tests::temp("leftovers-new");
+        let private = |p: &Path| {
+            fs::create_dir(p).unwrap();
+            fs::set_permissions(p, fs::Permissions::from_mode(0o700)).unwrap();
+        };
+        let ok = tmp.join("ok");
+        private(&ok);
+        let m = fs::symlink_metadata(&ok).unwrap();
+        assert_eq!(folder_id(&ok).unwrap(), format!("{}:{}", m.dev(), m.ino()));
+        let full = tmp.join("full");
+        private(&full);
+        fs::write(full.join("file"), b"x").unwrap();
+        assert!(folder_id(&full).is_err(), "a folder with something in it");
+        let open = tmp.join("open");
+        private(&open);
+        fs::set_permissions(&open, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(folder_id(&open).is_err(), "a folder others can open");
+        let link = tmp.join("link");
+        std::os::unix::fs::symlink(&ok, &link).unwrap();
+        assert!(folder_id(&link).is_err(), "a link");
         fs::remove_dir_all(&tmp).unwrap();
     }
 
