@@ -332,10 +332,10 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `access_revoke` | Revokes a grant, answering once the reads under it have finished |
 | `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given |
 | `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, its vault journals, open and recently ended, or why they cannot be read, and its managed runtimes, running, ended or `unknown` (left running by a run of the app that did not stop them) |
-| `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID (Linux) |
-| `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one (Linux) |
-| `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key (Linux) |
-| `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it (Linux) |
+| `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID |
+| `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one |
+| `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key |
+| `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it |
 | `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it (Linux) |
 | `launcher_state` | The launcher's state: whether the execution program can be used, the remembered launches with their source, the recent folders and the notice setting |
 | `launcher_terminals` | The terminals the execution program finds, Automatic first |
@@ -1548,10 +1548,11 @@ app supported there:
     Windows, a LaunchAgent on macOS), the tray and the close preference;
   - the package session: the test package and the release gate ([Packages](#packages));
   - the tools sessions (`native/platform-tools.ts`, the `tools` shard): the signed tool sessions
-    run.ts runs on Linux (admission, the program host with its swaps, routing with jobs), and a
-    launcher check that uses managed launches only (`src-tauri/src/launcher_platform_native.rs`:
-    no detached agent, terminal or key entry, which wait for their own slices), in the app built
-    with the test trust, in local mode against a test core;
+    run.ts runs on Linux (admission, the program host with its swaps, routing with jobs, the vault
+    with client keys), and a launcher check that uses managed launches only
+    (`src-tauri/src/launcher_platform_native.rs`: no detached agent, terminal or key entry, which
+    wait for their own slices), in the app built with the test trust, in local mode against a test
+    core. The client keys are made on that test core, not on the app's own core as on Linux;
   - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
     test core, with the window's and page's command probes, the native confirmations, key entry and
     key rotation. [Limits](#limits) says how its input is made.
@@ -1562,12 +1563,12 @@ app supported there:
   managed runtimes and confirmed launches reach it at run time there; the app's own core, which
   would too, is refused (below).
 - Native tools run there as on Linux: enabling a package and its native imports, the router, the
-  program host, the launch service and the launcher, and the vault for tools' backups and
-  journals, with the differences [Windows and macOS](app-host/README.md#windows-and-macos) lists.
-  A client page reaches its writer tool only where that tool has a program for the system
-  ([app tools](../app-tools/README.md) says which do). Clippy, the Rust tests and the tools
-  sessions check this there; outside tests nothing can be installed to run, as there are no
-  production trust roots ([Limits](#limits)).
+  program host, the launch service and the launcher, and the vault for tools' backups and journals,
+  secret entry and client keys, with the differences
+  [Windows and macOS](app-host/README.md#windows-and-macos) lists. A client page reaches its writer
+  tool only where that tool has a program for the system ([app tools](../app-tools/README.md) says
+  which do). Clippy, the Rust tests and the tools sessions check this there; outside tests nothing
+  can be installed to run, as there are no production trust roots ([Limits](#limits)).
 - On Windows, the page document's address is `http://pluxy-page.localhost/`, and the app holds a
   page's frame to its site through WebView2's frame navigation event (`src-tauri/src/page_frames.rs`).
 - The app tools' readers, usage parsers and execution program, the writer library and the
@@ -1578,8 +1579,8 @@ Access gives no page anything there: approving a signer and making a grant are L
 signer or grant can be made. On Windows its commands and a page's Access calls are refused; on
 macOS its list, revocation and a page's calls answer, with nothing granted.
 
-Still refused at run time there: a native tool's `files` frames (saving a file), the vault's
-secret entry and list, client keys and core aliases, the app's own core
+Still refused at run time there: a native tool's `files` frames (saving a file), core aliases,
+the app's own core
 (on Windows the store of its versions does not open, so nothing installs or starts; on macOS the
 store opens, but installing, adopting and rolling back a version need the native confirmation,
 which core changes have on Linux only, so no version is installed and none starts), installing a
@@ -1595,21 +1596,19 @@ in the browser. The app updates itself only as a Linux AppImage.
   when the tool serving that call asks ([Launches and managed runtimes](app-host/README.md#launches-and-managed-runtimes));
   installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
-- Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
-  entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the
-  local data folder, private by its access list. Secrets are kept in a file
-  only the user may read (0600 on Linux and macOS) in the app's data folder, not in the system
-  keyring, and only exact values are redacted. On macOS the modes are checked, not extended access
-  lists. The window has no vault page yet. Secrets reach
-  native tools' pipes and the environment of a process a confirmed launch starts (the launching
-  tool holds only a reference); a client key is checked at each use, also at a launch's spawn and
-  each restart. Backups have no retention: a package keeps at most 256.
+- Vault: on Windows it is in the local data folder, private by its access list. Secrets are kept in
+  a file only the user may read (0600 on Linux and macOS) in the app's data folder, not in the
+  system keyring, and only exact values are redacted. On macOS the modes are checked, not extended
+  access lists. The window has no vault page yet. Secrets reach native tools' pipes and the
+  environment of a process a confirmed launch starts (the launching tool holds only a reference); a
+  client key is checked at each use, also at a launch's spawn and each restart. Backups have no
+  retention: a package keeps at most 256.
 - Access: signers and grants can be made on Linux only (5.8 or later: grants record the `statx`
   mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test runs on Linux, except its platform, package and dialogs sessions, which CI
-  runs on Windows and macOS ([Platforms](#platforms) says what they check and what still refuses
+- The native test runs on Linux, except its platform, package, tools and dialogs sessions, which
+  CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still refuses
   there).
 - The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
   account's known folders, which no environment variable redirects, so it refuses to start when
@@ -1638,8 +1637,7 @@ in the browser. The app updates itself only as a Linux AppImage.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.
 - Native key entry and confirmations have no webview entry fallback on any system
-  ([Platforms](#platforms) says where they run). Secret entry for the vault and client keys stays
-  Linux only, with the vault.
+  ([Platforms](#platforms) says where they run).
 - The native dialogs on Windows and macOS are not modal to the whole app: only key entry is modal,
   to the window. No dialog runs a modal loop of its own, which would hold the app's other work.
 - Hidden native entry keeps keys out of the webview API. It does not isolate them from another

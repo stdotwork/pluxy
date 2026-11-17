@@ -1,8 +1,8 @@
 //! What the native test sees of the real processes, threads and pipes, on each platform: the
-//! processes running a program, whether a process runs, this app's thread names, and the
-//! processes holding a pipe. Linux reads `/proc`; macOS asks libproc; Windows takes a Tool Help
-//! snapshot and asks each process or thread. These only look: nothing here signals, stops or
-//! changes a process.
+//! processes running a program, whether a process runs, this app's thread names, the processes
+//! holding a pipe, and a process's argv and environment. Linux reads `/proc`; macOS asks libproc
+//! and `sysctl`; Windows takes a Tool Help snapshot and asks each process or thread. These only
+//! look: nothing here signals, stops or changes a process.
 //!
 //! A process that has exited but not been reaped (a zombie, or on Windows a process whose handle
 //! is still held) does not run: it is in no `processes` set and not `alive`.
@@ -83,6 +83,16 @@ mod imp {
             }
         }
         Ok((pipe, holders))
+    }
+
+    /// The argv and environment of pid, as /proc has them.
+    pub(super) fn argv_env(pid: u64) -> String {
+        let read = |f: &str| std::fs::read(format!("/proc/{pid}/{f}")).unwrap_or_default();
+        format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&read("cmdline")),
+            String::from_utf8_lossy(&read("environ"))
+        )
     }
 }
 
@@ -263,6 +273,50 @@ mod imp {
             .collect();
         Ok((format!("pipe:{handle:#x}"), holders))
     }
+
+    /// The argv and environment of pid, a process of this user, as `sysctl(KERN_PROCARGS2)`
+    /// gives them: after the argument count, the program's path, each argument and each
+    /// environment string, separated by NULs. Empty when they cannot be read.
+    pub(super) fn argv_env(pid: u64) -> String {
+        let Ok(pid) = libc::c_int::try_from(pid) else {
+            return String::new();
+        };
+        let mut max: libc::c_int = 0;
+        let mut size = size_of::<libc::c_int>();
+        let mut mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
+        let got = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                2,
+                (&mut max as *mut libc::c_int).cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if got != 0 || max <= 0 {
+            return String::new();
+        }
+        let mut buf = vec![0u8; max as usize];
+        let mut size = buf.len();
+        let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+        let got = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                buf.as_mut_ptr().cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if got != 0 {
+            return String::new();
+        }
+        buf.truncate(size);
+        let args = buf.get(size_of::<libc::c_int>()..).unwrap_or_default();
+        String::from_utf8_lossy(args).into_owned()
+    }
 }
 
 #[cfg(windows)]
@@ -409,4 +463,11 @@ pub(super) fn threads() -> Vec<String> {
 #[cfg(unix)]
 pub(super) fn pipe_holders(pid: u64, fd: u32) -> Result<(String, BTreeSet<u64>), String> {
     imp::pipe_holders(pid, fd)
+}
+
+/// The argv and environment of pid, a process of this user. Windows gives no supported way to
+/// read another process's environment; there the tool reports its own.
+#[cfg(unix)]
+pub(super) fn argv_env(pid: u64) -> String {
+    imp::argv_env(pid)
 }

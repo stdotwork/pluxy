@@ -856,22 +856,22 @@ of the bytes or the chosen path is logged, and the answers carry neither.
 ## Secrets, references and the vault
 
 The app keeps a host-private **vault** in its data folder (`vault`; on Windows in its local data
-folder, which does not roam with the profile), owner-only: on Linux and macOS folders 0700 and
-files 0600 of the user; on Windows a protected access list whose allow entries name only the user
-and SYSTEM, set as each folder and file is made, and an owner that is the user, the token's default
-owner (Administrators for an elevated account) or SYSTEM, checked at each read. The vault holds
-each native tool's backups and journals on all three systems, and the secrets the person entered
-on Linux, the only system with secret entry yet. It is never a
-folder a package names or reads through the host, and no window or page API gives its paths, a
-secret's value, a backup's bytes or a journal's intent. A native tool has the user's full access
-and could read it directly: this separates APIs and storage, it is not an operating-system
-sandbox, and it does not protect a secret from another program of the same user.
+folder, which does not roam with the profile), owner-only: on Linux and macOS folders 0700 and files
+0600 of the user; on Windows a protected access list whose allow entries name only the user and
+SYSTEM, set as each folder and file is made, and an owner that is the user, the token's default
+owner (Administrators for an elevated account) or SYSTEM, checked at each read. The vault holds each
+native tool's backups and journals and the secrets the person entered, on all three systems. It is
+never a folder a package names or reads through the host, and no window or page API gives its paths,
+a secret's value, a backup's bytes or a journal's intent. A native tool has the user's full access
+and could read it directly: this separates APIs and storage, it is not an operating-system sandbox,
+and it does not protect a secret from another program of the same user.
 
 ### Secrets and references
 
 A secret enters only through native key entry (`vault_secret_add`, the app README's Commands):
-GTK's hidden entry reads it, and the window gets back its opaque ID (`s-` and 32 hexadecimal
-digits) and label, never the value. An operation's `secrets` fields carry secrets:
+the hidden entry (GTK's on Linux, Win32's on Windows, AppKit's on macOS) reads it, and the window
+gets back its opaque ID (`s-` and 32 hexadecimal digits) and label, never the value. An
+operation's `secrets` fields carry secrets:
 
 - From the window, a secret field holds a vault secret's ID.
 - From a native tool, it holds a reference the host gave that tool in the call it is serving,

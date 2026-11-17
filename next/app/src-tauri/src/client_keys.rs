@@ -19,9 +19,8 @@
 //! resolves it (the spawn, a managed runtime's start and each restart); once all of a launch's
 //! secrets are resolved, they are checked once more right before the spawn (`Launches`).
 //!
-//! Its checks run wherever the native stack does (Linux, Windows and macOS: the router and
-//! launches use them); capturing and entering a client key (`client_key_*`) stay Linux only, as
-//! the vault's secret commands do.
+//! It runs wherever the native stack does (Linux, Windows and macOS): capture and entry, and the
+//! checks the router and launches make.
 
 use crate::conn::{Caller, Connection};
 use crate::program::CallError;

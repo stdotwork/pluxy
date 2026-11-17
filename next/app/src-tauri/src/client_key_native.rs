@@ -3,19 +3,24 @@
 //! its signed fixture tools (`native/vault.ts`): pluxy/agent (a disposable agent: its `serve`
 //! asks core with the client key it is given) and pluxy/consumer (another tool). It drives the
 //! real app through the window's own commands, the real native confirmations and key entry, and
-//! the app's own core. The keys core makes are read from that core's config file, the independent
-//! record; the app never shows them. Each refusal has a positive control on the same route:
+//! the app's own core on Linux. On Windows and macOS, where the app's own core does not run yet, it
+//! uses the session's test core in local mode instead (`native/platform-tools.ts` names its config
+//! file in `core.json`). The keys core makes are read from that core's config file, the
+//! independent record; the app never shows them. Each refusal has a positive control on the same
+//! route:
 //!
 //! - cancel: a capture the person cancels adds no key to core and none to the vault;
 //! - capture: a confirmed capture adds one key to core's config and keeps it in the vault bound to
 //!   the core, core's key ID and the agent; the window gets the secret's ID and binding only;
 //! - serve: the agent, given the key for its `serve` after a native confirmation, is served by
-//!   core with it (200); the key is in neither the agent's argv nor its environment nor its log;
+//!   core with it (200); the key is in neither the agent's argv nor its environment nor its log
+//!   (argv and environment as the system has them, `proc_native.rs`; on Windows, which gives no
+//!   supported way to read another process's environment, as the agent reports its own);
 //! - recipient: the key given to another tool is refused before any confirmation;
 //! - deleted: a second captured key, deleted on core, is refused before any confirmation;
 //! - changed core: with the app connected to another core (a listener of this check's), the key
-//!   is refused before any confirmation and nothing reaches that core; connected to the app's own
-//!   core again, it serves the agent again;
+//!   is refused before any confirmation and nothing reaches that core; connected to the first core
+//!   again (signed in again through native key entry, in local mode), it serves the agent again;
 //! - enter: an existing client key typed into native key entry is kept bound the same way and
 //!   serves the agent; a key core does not accept is refused and not kept;
 //! - audit: no key reached the window's webview; the runner checks the app's stdout and stderr
@@ -42,6 +47,12 @@ const AGENT: &str = "pluxy/agent";
 const OTHER: &str = "pluxy/consumer";
 const LABEL: &str = "fixture agent key";
 const ENTRY: &str = "pluxy client key";
+/// The mode of the core the check uses: the app's own on Linux, a test core elsewhere.
+const MODE: &str = if cfg!(target_os = "linux") {
+    "managed"
+} else {
+    "local"
+};
 
 /// The client keys in the core config at path, its `client_keys` (the app writes that config as
 /// JSON, and core keeps a JSON config JSON when it changes it).
@@ -154,7 +165,7 @@ fn captured(r: &Value, base: &str, key: &str) -> Result<(String, String), String
         r["ok"] == true
             && v["id"].as_str().is_some_and(|i| i.starts_with("s-"))
             && v["label"] == LABEL
-            && ck["core"] == json!({"mode": "managed", "origin": base})
+            && ck["core"] == json!({"mode": MODE, "origin": base})
             && ck["client"] == AGENT
             && ck["masked"] == masked.as_str()
             && ck["key_id"].as_str().is_some_and(|i| !i.is_empty())
@@ -224,14 +235,19 @@ impl Drop for Listener {
     }
 }
 
-/// The process pid's argv and environment, as /proc has them.
-fn argv_env(pid: u64) -> String {
-    let read = |f: &str| std::fs::read(format!("/proc/{pid}/{f}")).unwrap_or_default();
-    format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&read("cmdline")),
-        String::from_utf8_lossy(&read("environ"))
-    )
+/// The agent's argv and environment, as the system has them for process pid.
+#[cfg(unix)]
+fn argv_env(pid: u64, _out: &Path) -> String {
+    super::procs::argv_env(pid)
+}
+
+/// The agent's argv and environment as it reports them itself, beside out (the fixture tool
+/// writes them there on Windows).
+#[cfg(windows)]
+fn argv_env(_pid: u64, out: &Path) -> String {
+    let mut seen = out.as_os_str().to_owned();
+    seen.push(".process");
+    std::fs::read_to_string(seen).unwrap_or_default()
 }
 
 pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<(), String> {
@@ -239,16 +255,27 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
     let at = |name: &str| work.join(name);
     let audit = fixtures.join("client-keys");
-    let config = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("core")
-        .join("config.json");
+    let config = if MODE == "managed" {
+        app.path()
+            .app_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("core")
+            .join("config.json")
+    } else {
+        let named: Value = serde_json::from_slice(
+            &std::fs::read(fixtures.join("core.json")).map_err(|e| format!("core.json: {e}"))?,
+        )
+        .map_err(|e| format!("core.json: {e}"))?;
+        PathBuf::from(
+            named["config"]
+                .as_str()
+                .ok_or("core.json names no config")?,
+        )
+    };
     let view = ok(main, "connection_get", json!({}))?;
     let base = view["target"].as_str().unwrap_or_default().to_string();
     require(
-        view["mode"] == "managed" && base.starts_with("http://127.0.0.1:"),
+        view["mode"] == MODE && base.starts_with("http://127.0.0.1:"),
         format!("the connection: {view}"),
     )?;
     watch(main)?;
@@ -339,7 +366,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "core did not serve the agent with the key",
             )?;
             let pid = r["value"]["pid"].as_u64().ok_or("no agent pid")?;
-            let seen = argv_env(pid);
+            let seen = argv_env(pid, &file);
             require(
                 !seen.is_empty(),
                 "the agent's argv and environment could not be read",
@@ -439,20 +466,33 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "the key was sent to the other core",
             )?;
             drop(other);
-            let v = ok(
-                main,
-                "connection_set",
-                json!({"change": {"mode": "managed", "core_source": saved["core_source"]}}),
-            )?;
+            let v = if MODE == "managed" {
+                ok(
+                    main,
+                    "connection_set",
+                    json!({"change": {"mode": "managed", "core_source": saved["core_source"]}}),
+                )?
+            } else {
+                // Another target forgets the key: the person signs in again with the kept one.
+                ok(
+                    main,
+                    "connection_set",
+                    json!({"change": {"mode": "local", "url": base}}),
+                )?;
+                let key = saved["key"].as_str().ok_or("no kept management key")?;
+                let r = super::key_entry_test::enter(app, main, key, true, false)?;
+                require(r["status"] == "signed_in", format!("signing in again: {r}"))?;
+                ok(main, "connection_get", json!({}))?
+            };
             require(
                 v["target"] == base.as_str() && v["signed_in"] == true,
-                format!("back to the app's own core: {v}"),
+                format!("back to the first core: {v}"),
             )?;
             let file = at("served-2");
             let r = serve(app, main, &first.0, &base, &file)?;
             require(
                 r["ok"] == true && r["value"]["status"] == 200,
-                format!("the agent's serve on the app's own core again: {r}"),
+                format!("the agent's serve on the first core again: {r}"),
             )
         })(),
     )?;

@@ -17,10 +17,7 @@ pub static PLUXY_TEST_BUILD: [u8; 31] = *b"PLUXY_TEST_BUILD_DO_NOT_RELEASE";
 pub mod access;
 pub mod artifact;
 pub mod client;
-// Built for the router and the runtimes; its key capture and entry commands (`client_key_*`)
-// stay Linux only until their Windows and macOS slice.
 #[cfg(native_stack)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod client_keys;
 mod command_names;
 #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
@@ -2559,11 +2556,11 @@ async fn launcher_settings(webview: Webview, notice: bool) -> Result<Value, Stri
 }
 
 /// Asks for a secret in native key entry and keeps it in the vault as label; gives its ID. The
-/// secret never passes through the window: GTK's hidden entry reads it.
+/// secret never passes through the window: the native hidden entry reads it.
 #[tauri::command]
 async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         if app
@@ -2596,10 +2593,10 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
         .await
         .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = label;
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2607,13 +2604,13 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
 #[tauri::command]
 fn vault_secrets(webview: Webview) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         Ok(serde_json::json!({"secrets": webview.state::<App>().vault.secrets()}))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2621,14 +2618,14 @@ fn vault_secrets(webview: Webview) -> Result<Value, String> {
 #[tauri::command]
 fn vault_secret_remove(webview: Webview, id: String) -> Result<(), String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         webview.state::<App>().vault.remove_secret(&id)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = id;
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2642,17 +2639,17 @@ async fn client_key_capture(
     client: String,
 ) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || client_keys::capture(&app, &label, &client))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = (label, client);
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2666,17 +2663,17 @@ async fn client_key_enter(
     client: String,
 ) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || client_keys::enter(&app, &label, &client))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = (label, client);
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 

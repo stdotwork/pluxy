@@ -42,7 +42,9 @@
 //!   for op `spawn`, a spawn request for that call), and answering with the host's answer;
 //! - `serve`, the client-key check's agent (`src/client_key_native.rs`): sends `GET /v1/models` to
 //!   the core at `base` (plain HTTP) with the secret delivered for `key` as its bearer token, writes
-//!   the status core answered to `out` and answers with it and its process ID;
+//!   the status core answered to `out` and answers with it and its process ID; on Windows, where the
+//!   check cannot read another process's argv and environment, it also writes its own to
+//!   `<out>.process`, one per line;
 //! - `export`, the save check's exporter (`src/save_native.rs`): reads the file `source` and hands
 //!   its bytes to the host's save service for the call, in `files` frames: `append` frames of at
 //!   most `chunk` bytes (default 700,000) at their offsets, then one `save` with `name` and the
@@ -231,6 +233,15 @@ fn windows_seen(out: &mut Value) {
     out["job"] = json!(ok != 0 && in_job != 0);
     out["std_pipes"] = json!([STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
         .map(|which| unsafe { GetFileType(GetStdHandle(which)) } == FILE_TYPE_PIPE));
+}
+
+/// Its own argv and environment, one per line (Windows: the client-key check reads them here).
+#[cfg(windows)]
+fn own_process() -> String {
+    let args = std::env::args_os().map(|a| a.to_string_lossy().into_owned());
+    let env = std::env::vars_os()
+        .map(|(k, v)| format!("{}={}", k.to_string_lossy(), v.to_string_lossy()));
+    args.chain(env).collect::<Vec<_>>().join("\n")
 }
 
 /// The file descriptors open in this process, but for the one listing them.
@@ -1419,6 +1430,8 @@ pub fn main() -> ! {
                             let status = serve(f["input"]["base"].as_str().unwrap_or(""), &key);
                             if let Some(out) = f["input"]["out"].as_str() {
                                 let _ = std::fs::write(out, status.to_string());
+                                #[cfg(windows)]
+                                let _ = std::fs::write(format!("{out}.process"), own_process());
                             }
                             write_frame(
                                 &mut output,

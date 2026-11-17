@@ -56,7 +56,8 @@
 //! that core again and quits.
 //!
 //! On Windows and macOS (`native/platform.ts`, `native/dialogs.ts`) the main run and the
-//! admission, program, routing and launcher sessions run; the other sessions are Linux's only.
+//! admission, program, routing, launcher and vault sessions run; the other sessions are Linux's
+//! only.
 //!
 //! Each step prints one line on stderr: `native-test: <step> <JSON>`.
 
@@ -83,7 +84,7 @@ mod claude_code;
 #[cfg(target_os = "linux")]
 #[path = "claude_desktop_native.rs"]
 mod claude_desktop;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "client_key_native.rs"]
 mod client_key;
 #[cfg(target_os = "linux")]
@@ -158,7 +159,7 @@ mod transactions;
 #[cfg(target_os = "linux")]
 #[path = "usage_native.rs"]
 mod usage;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "vault_native.rs"]
 mod vault;
 pub use ingress::{
@@ -776,7 +777,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
     // The vault, secret delivery and references, and journal recovery (vault_native.rs), in a
     // session of its own.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_VAULT") {
         vault::run(app, &main, dir.clone().into())?;
         // Native one-time client-key capture (client_key_native.rs), with the same tools.

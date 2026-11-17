@@ -37,7 +37,9 @@
 //!
 //! One line on stderr: `native-test: vault <JSON>`.
 
-use super::admission::{dialog_text, ok, press, require, settle, start, x};
+#[cfg(target_os = "linux")]
+use super::admission::x;
+use super::admission::{dialog_text, ok, press, require, settle, start};
 use super::key_entry_test::{clean_webview, watch};
 use super::routing::{call, enable, install, showing, Page};
 use super::{log, wait_for};
@@ -54,6 +56,7 @@ const REDACTED: &str = "[redacted]";
 
 /// Types key into the native key entry titled title, and accepts it. The bytes go to xdotool on
 /// its stdin, never in argv.
+#[cfg(target_os = "linux")]
 pub(super) fn type_key(title: &str, key: &str) -> Result<(), String> {
     let id = wait_for("the native secret entry", || {
         x(&["search", "--onlyvisible", "--name", &format!("^{title}$")])
@@ -80,6 +83,17 @@ pub(super) fn type_key(title: &str, key: &str) -> Result<(), String> {
         "xdotool type failed",
     )?;
     x(&["key", "--clearmodifiers", "alt+o"]).map(|_| ())
+}
+
+/// Types key into the native key entry titled title, and accepts it, through the UI driver
+/// (`ui_driver.rs`), as the dialogs session types the management key.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn type_key(title: &str, key: &str) -> Result<(), String> {
+    use crate::key_entry::text;
+    let app = super::admission::app()?;
+    super::ui::wait_shown(app, title)?;
+    super::ui::type_text(app, title, key)?;
+    super::ui::press(app, title, super::key_entry_test::access(text::OK))
 }
 
 /// The text of the native confirmation showing now that contains every one of needles.
