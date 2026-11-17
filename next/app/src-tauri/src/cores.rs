@@ -510,7 +510,14 @@ impl Store {
             );
             // Type and size first: never read a device or a FIFO, nor more than was installed.
             let m = file.metadata().map_err(|e| e.to_string())?;
-            if !m.is_file()
+            // macOS: an extended access list entry could let another user change it whatever
+            // the mode (`private_macos.rs`).
+            #[cfg(target_os = "macos")]
+            let listed = crate::private_macos::has_entries(&file).map_err(|e| e.to_string())?;
+            #[cfg(not(target_os = "macos"))]
+            let listed = false;
+            if listed
+                || !m.is_file()
                 || m.len() != f.size
                 || (m.permissions().mode() & 0o100 != 0) != f.executable
                 || m.permissions().mode() & 0o222 != 0
@@ -1229,6 +1236,31 @@ mod tests {
         ] {
             assert!(!has(d), "{}", d.display());
         }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// macOS: a version whose program an extended access list entry lets others change is not
+    /// run, as one with a write mode bit is not.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_program_with_an_access_list_entry_is_not_run() {
+        let dir = std::env::temp_dir().join(format!("pluxy-cores-acl-{}", random_key()));
+        fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("pluxy");
+        fs::write(&src, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o755)).unwrap();
+        let (sha, size) = sha256_of(File::open(&src).unwrap()).unwrap();
+        let store = Store::open(&dir.join("cores")).unwrap();
+        let (id, _) = store.adopt(&src, &sha, size).unwrap();
+        // The positive control: the version as installed is run.
+        store.program(&id).unwrap();
+        crate::private_macos::add_entry(&store.folder(&id).join(PROGRAM), "everyone allow write");
+        let e = store.program(&id).unwrap_err();
+        assert!(e.contains("changed since it was installed"), "{e}");
+        let _ = std::process::Command::new("/bin/chmod")
+            .args(["-R", "u+w"])
+            .arg(&dir)
+            .status();
         fs::remove_dir_all(dir).unwrap();
     }
 

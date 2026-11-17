@@ -384,6 +384,14 @@ mod fsx {
                 st.st_mode & 0o777
             )));
         }
+        // macOS: an extended access list entry could let another user in whatever the mode
+        // (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        if crate::private_macos::has_entries(&file)? {
+            return Err(io::Error::other(format!(
+                "{name} has an extended access list entry: remove it and start again"
+            )));
+        }
         let fl = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
         if fl < 0
             || unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, fl & !libc::O_NONBLOCK) } < 0
@@ -975,6 +983,22 @@ mod tests {
         crate::private_macos::add_entry(&d, "everyone allow list,add_file,file_inherit");
         let open = super::fsx::open_dir(&d).unwrap();
         assert!(!crate::private_macos::has_entries(&open).unwrap());
+    }
+
+    /// macOS: a 0600 lock an extended access list entry lets others write is refused, as a 0644
+    /// one is.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_lock_with_an_access_list_entry_is_refused() {
+        let t = temp();
+        let dir = t.0.join("instance");
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(dir.join(LOCK), b"").unwrap();
+        fs::set_permissions(dir.join(LOCK), fs::Permissions::from_mode(0o600)).unwrap();
+        crate::private_macos::add_entry(&dir.join(LOCK), "everyone allow write");
+        let e = start(&dir, Duration::from_millis(100)).err().unwrap();
+        assert!(e.contains("extended access list"), "{e}");
     }
 
     fn temp() -> Temp {
