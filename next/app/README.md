@@ -584,13 +584,14 @@ In this order:
    later start removes it. Removal at a later start goes through the record only. An entry that is
    still the recorded file or folder (and, on macOS, a folder of yours) is removed without
    following a link: on Windows through its open handle; on macOS what is in it through the open
-   folder, never entering a file system mounted in it, then the emptied folder by its name only
-   while that name still holds it. An entry whose name is gone or now holds something else (on
-   Windows a folder too) is dropped from the record and nothing is deleted; one still in use, or
-   with a file system mounted in it, stays recorded for the next start. A failed or cancelled
-   install removes what it made the same way, only while it is still what it made. The folder the
-   installed copy is in is never listed, so whatever someone else put there, even under one of
-   these names, stays.
+   folder, never entering a folder in it whose device differs from its own (a file system mounted
+   there; a mount that keeps the device, as a bind mount from the same file system does, is not
+   seen), then the emptied folder by its name only while that name still holds it. An entry whose
+   name is gone or now holds something else (on Windows a folder too) is dropped from the record
+   and nothing at that name is deleted; one still in use, or with a file system mounted in it,
+   stays recorded for the next start. A failed or cancelled install removes what it made the same
+   way, only while it is still what it made. The folder the installed copy is in is never listed,
+   so whatever someone else put there, even under one of these names, stays.
 7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
    that order; detached launches run on) and hides its window, but keeps its profile and starts the
    new version as its successor, handing the profile over so no other launch takes it meanwhile

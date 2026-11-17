@@ -29,8 +29,8 @@ pub(super) struct Made {
 pub(super) enum Outcome {
     /// It was that thing, and it is gone.
     Removed,
-    /// The path is gone, or holds something else (another folder or file, a link): nothing was
-    /// deleted.
+    /// The path is gone, or holds something else (another folder or file, a link): nothing at that
+    /// name was deleted.
     NotThere,
     /// It is that thing but could not be removed now (still in use, say, or a file system is
     /// mounted in it): kept for the next start.
