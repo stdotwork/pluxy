@@ -186,9 +186,7 @@ fn clear_core_folder(dir: &Path) -> io::Result<()> {
     if let Some(d) = open_beneath(&root, "credentials", true)? {
         clear_entries(&d)?;
         for e in fs::read_dir(dir.join("credentials"))? {
-            let name = e?.file_name();
-            let Some(name) = name.to_str() else { continue };
-            if let Some(f) = open_beneath(&d, name, false)? {
+            if let Some(f) = open_beneath(&d, e?.file_name(), false)? {
                 clear_entries(&f)?;
             }
         }

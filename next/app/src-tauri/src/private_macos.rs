@@ -186,9 +186,14 @@ pub fn clear_entries(f: &impl AsRawFd) -> io::Result<()> {
 /// Opens name in the folder open as dir, never through a link: a folder when folder is set,
 /// otherwise a plain file. None when nothing of that kind is there (missing, a link, or
 /// something else).
-pub fn open_beneath(dir: &impl AsRawFd, name: &str, folder: bool) -> io::Result<Option<File>> {
-    let n =
-        std::ffi::CString::new(name).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+pub fn open_beneath(
+    dir: &impl AsRawFd,
+    name: impl AsRef<std::ffi::OsStr>,
+    folder: bool,
+) -> io::Result<Option<File>> {
+    use std::os::unix::ffi::OsStrExt;
+    let n = std::ffi::CString::new(name.as_ref().as_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
     let flags = libc::O_RDONLY
         | libc::O_NOFOLLOW
         | libc::O_CLOEXEC
