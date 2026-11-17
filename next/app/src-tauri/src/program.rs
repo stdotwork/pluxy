@@ -202,36 +202,43 @@ impl From<&crate::device::Admitted> for Spec {
 pub struct ToolEnv {
     /// The app's own home folder: `HOME`.
     pub home: PathBuf,
-    /// `<app data>/tools`: each tool's data folder is `<publisher>/<name>` in it.
+    /// `<app data>/tools` (`<app local data>/tools` on Windows): each tool's data folder is
+    /// `<publisher>/<name>` in it.
     pub tools: PathBuf,
+    /// The app's own system folders a tool needs on Windows (`ToolEnv::system`); none elsewhere.
+    pub system: Vec<(&'static str, PathBuf)>,
 }
 
-/// The extra environment of spec's tool: `HOME` and its data folder, made now
-/// (`vault::tool_data_dir`); none without a `ToolEnv`. A folder that cannot be made fails the start.
+impl ToolEnv {
+    /// On Windows, `SystemRoot` (parts of Windows refuse to load without it), `APPDATA` and
+    /// `LOCALAPPDATA` (where some clients keep their files) as the app's own environment has them,
+    /// each only when it is a full path. None elsewhere.
+    pub fn system() -> Vec<(&'static str, PathBuf)> {
+        if !cfg!(windows) {
+            return Vec::new();
+        }
+        ["SystemRoot", "APPDATA", "LOCALAPPDATA"]
+            .into_iter()
+            .filter_map(|k| {
+                let v = PathBuf::from(std::env::var_os(k)?);
+                v.is_absolute().then_some((k, v))
+            })
+            .collect()
+    }
+}
+
+/// The extra environment of spec's tool: `HOME`, its data folder, made now
+/// (`vault::tool_data_dir`), and the system folders; none without a `ToolEnv`. A folder that
+/// cannot be made fails the start.
 fn tool_env(inner: &Inner, spec: &Spec) -> Result<Vec<(&'static str, PathBuf)>, String> {
     let Some(env) = inner.env.get() else {
         return Ok(Vec::new());
     };
-    // The vault, which makes the folder, is Linux's only until its Windows and macOS port (P8p3b)
-    // lands; until then a tool with a data folder is refused there, as before this module was
-    // built on those platforms.
-    #[cfg(not(target_os = "linux"))]
-    {
-        Err(format!(
-            "{}: a tool's data folder is made on Linux only for now ({})",
-            spec.id,
-            env.tools.display()
-        ))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let data = crate::vault::tool_data_dir(&env.tools, &spec.id)
-            .map_err(|e| format!("{}: its data folder: {e}", spec.id))?;
-        Ok(vec![
-            ("HOME", env.home.clone()),
-            ("PLUXY_TOOL_DATA_DIR", data),
-        ])
-    }
+    let data = crate::vault::tool_data_dir(&env.tools, &spec.id)
+        .map_err(|e| format!("{}: its data folder: {e}", spec.id))?;
+    let mut vars = vec![("HOME", env.home.clone()), ("PLUXY_TOOL_DATA_DIR", data)];
+    vars.extend(env.system.iter().cloned());
+    Ok(vars)
 }
 
 /// Gives the admitted record for a package ID, checked now, or why there is none. Only the

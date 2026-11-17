@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { platform } from "./admission";
 
 /** The page: says hello, then reports marker to its parent after each channel reply. */
 function pageScript(marker: string): string {
@@ -83,12 +84,6 @@ function pack(root: string, f: Fixture): string {
 function digest(path: string): { sha256: string; size: number } {
   const bytes = readFileSync(path);
   return { sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length };
-}
-
-/** Go's platform name for this machine, as registry artifacts are keyed. */
-function platform(): string {
-  const arch = { x64: "amd64", arm64: "arm64" }[process.arch as string] ?? process.arch;
-  return `${process.platform}/${arch}`;
 }
 
 /** Builds the fixtures in root and returns the registries file the app's config should hold. */

@@ -5,7 +5,7 @@ The signature verifier is shared Rust code in `src-tauri/src/artifact.rs`. The d
 installs page-only web packages and curated signed native tools on this device
 ([extensions on this device](../README.md#extensions-on-this-device)), grants signed web
 packages files through [Access](#access-for-web-packages), and runs an admitted tool's program
-on demand through the program host (`src-tauri/src/program.rs`, Linux).
+on demand through the program host (`src-tauri/src/program.rs`; Linux, Windows and macOS).
 Core recognizes app contributions to refuse app-only packages and use only the provider part of
 a mixed package. Start with the [tutorial](TUTORIAL.md).
 
@@ -168,8 +168,9 @@ reach.
 
 ## App program contract v0
 
-The Rust program host implements this contract on Linux; [The Linux host](#the-linux-host) says
-what it adds and what is still to come. It adds no provider operation and does not change
+The Rust program host implements this contract on Linux, Windows and macOS; [The Linux host](#the-linux-host)
+says what it adds and what is still to come, and [Windows and macOS](#windows-and-macos) how those
+differ. It adds no provider operation and does not change
 provider wire version 0.7. Start a verified absolute executable directly in its immutable
 package folder, with a cleared environment and only required platform values. Pass selected
 home/config/context explicitly; do not inherit shell credentials.
@@ -335,10 +336,24 @@ Still to come: deleting a tool's data folder from the Device page.
 
 ### Windows and macOS
 
-The host and the launch service (`program.rs`, `spawn.rs`) build and pass their tests on Windows
-and macOS, but the app does not start native tools there yet: enabling a package, its router and
-its confirmations are still Linux only. A tool that needs a data folder is refused there until
-the vault is. Every process the app starts goes through `src/owned/`, which is the only code in
+The app runs native tools on Windows and macOS as on Linux: enabling a package, its imports, the
+router, the program host, the launch service and the launcher (`program.rs`, `route.rs`,
+`spawn.rs`, `launcher.rs`) are built and wired there, under the rules of
+[The Linux host](#the-linux-host), with these differences:
+
+- On Windows a tool's `HOME` is the profile folder the person's clients use (`USERPROFILE`), and
+  it also gets `SystemRoot` (parts of Windows refuse to load without it), `APPDATA` and
+  `LOCALAPPDATA`, each as the app's own environment has it and only when it is a full path. Its
+  data folder is under the app's local data folder (`<app local data>/tools`), which does not
+  roam with the profile, made private by its access list as the vault's folders are.
+- On Windows an installed package's files and folders are read-only by their access lists: the
+  user and SYSTEM may read and run them, no one may write, delete or add to them, as 0444 and
+  0500 make them on Linux and macOS. A native release's program must be a `.exe` or `.com` file
+  starting `MZ` when it is installed.
+- Saving files (`files` frames, [Saving files](#saving-files)) stays Linux only: elsewhere the
+  host refuses them, as a host with no save service does.
+
+Every process the app starts goes through `src/owned/`, which is the only code in
 the app that signals or ends a process, and only one the app started and still holds: an unreaped
 child on Linux and macOS, the process handle and its job object on Windows. `owned_tests.rs`
 checks the sources for any other call that could end a process.
@@ -360,7 +375,7 @@ a WSL distribution.
 
 ## Calls between packages
 
-The Linux host routes every call of a native tool's operation, whoever makes it: the main window
+The host routes every call of a native tool's operation, whoever makes it: the main window
 (`program_call`), a page (its `native.call` method) or another native tool (a `call` frame on its
 pipe). Each call is checked against the catalog as it is at that moment, and the host, never the
 call, says who the caller is: the window, the page's webview and its package release, or the
@@ -844,10 +859,9 @@ The app keeps a host-private **vault** in its data folder (`vault`; on Windows i
 folder, which does not roam with the profile), owner-only: on Linux and macOS folders 0700 and
 files 0600 of the user; on Windows a protected access list whose allow entries name only the user
 and SYSTEM, set as each folder and file is made, and an owner that is the user, the token's default
-owner (Administrators for an elevated account) or SYSTEM, checked at each read. The Windows and
-macOS storage is built and unit tested, but only Linux uses the vault yet, since native tools run
-on Linux only. The vault holds the secrets the person entered, and each native tool's backups and
-journals. It is never a
+owner (Administrators for an elevated account) or SYSTEM, checked at each read. The vault holds
+each native tool's backups and journals on all three systems, and the secrets the person entered
+on Linux, the only system with secret entry yet. It is never a
 folder a package names or reads through the host, and no window or page API gives its paths, a
 secret's value, a backup's bytes or a journal's intent. A native tool has the user's full access
 and could read it directly: this separates APIs and storage, it is not an operating-system

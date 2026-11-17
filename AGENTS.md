@@ -158,6 +158,22 @@ so it is not the only guard: runs from forks need a maintainer's approval, and t
 runner host cancels any run from a fork that asks for its runners. Before approving a fork's run,
 check whether it changes `.github/workflows/`.
 
+A third variable, `PLUXY_MACOS_CLOUD_RUNNER`, sends some macOS jobs to another provider's
+runners, such as Blacksmith's. It holds a plain runner label, for example
+`blacksmith-6vcpu-macos-26`. When it is not set, those jobs run on `macos-latest`.
+
+It applies to these jobs:
+- the `app` job in `next-app-platforms.yml`;
+- the `tools` job in `next-app-tools-platforms.yml`;
+- the `build` jobs in `next-app-tools-pack.yml`.
+
+Some macOS jobs and every Windows job stay on GitHub's runners:
+- The `native` and `dialogs` jobs, and the app's Windows registry tests, run only on a runner that
+  reports itself GitHub-hosted. Another provider's runner reports itself self-hosted.
+- The Windows app-tool tests fail on Blacksmith's Windows runner.
+- The WSL jobs need GitHub's Windows runners.
+- The workflows a tag starts always use GitHub's runners.
+
 ## How changes flow
 
 - `main` is the only long-lived branch. Work on a task branch and open a PR against `main`.
