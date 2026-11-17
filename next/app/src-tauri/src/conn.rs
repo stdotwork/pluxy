@@ -771,7 +771,8 @@ impl Connection {
         match change {
             CoreChange::Install(staged) => {
                 let fresh = !store.installed(staged.version());
-                let id = store.install(staged)?;
+                let version = staged.version().to_string();
+                let id = self.replacing(&store, &version, || store.install(staged))?;
                 self.switch(&store, &id, fresh, true)
             }
             CoreChange::Rollback(id) => {
@@ -783,8 +784,10 @@ impl Connection {
                 self.switch(&store, &id, false, false)
             }
             CoreChange::Adopt { path, sha256, size } => {
-                let fresh = !store.installed(&Store::adopted_id(&sha256));
-                let (id, copied) = store.adopt(&path, &sha256, size)?;
+                let adopted = Store::adopted_id(&sha256);
+                let fresh = !store.installed(&adopted);
+                let (id, copied) =
+                    self.replacing(&store, &adopted, || store.adopt(&path, &sha256, size))?;
                 // The program is adopted before anything runs from it; a failed switch keeps
                 // it waiting for adoption again.
                 let pending = self.settings.core_path.take();
@@ -803,6 +806,35 @@ impl Connection {
                 r
             }
         }
+    }
+
+    /// Installs or copies in version id with put. Writing a version again moves its folder
+    /// aside, which Windows refuses while a program in it runs or is held open, so there the
+    /// core is stopped first when it runs id; if put fails, it runs again.
+    fn replacing<T>(
+        &mut self,
+        store: &Store,
+        id: &str,
+        put: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let stopped = cfg!(windows) && self.running.as_deref() == Some(id);
+        if stopped {
+            self.revision += 1;
+            self.stop_core();
+        }
+        put().map_err(|e| {
+            if !stopped {
+                return e;
+            }
+            match self.run_version(store, id) {
+                Ok(()) => format!("{e}; core {id} runs again"),
+                Err(again) => {
+                    let msg = format!("{e}; core {id} did not start again: {again}");
+                    self.error = Some(msg.clone());
+                    msg
+                }
+            }
+        })
     }
 
     /// Runs version id in place of the current core. fresh: id was installed for this switch, so

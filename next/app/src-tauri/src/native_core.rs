@@ -1,7 +1,9 @@
 //! The native test's managed-core steps (native-test builds only). Before the window shows core's
 //! pages, it drives the app's own core through the window's commands and the real native
-//! confirmation dialog (X input from xdotool), against the signed test artifacts the runner made
-//! (`native/run.ts`): `PLUXY_APP_TEST_CORE_SOURCE` names their index.
+//! confirmation dialog (worked through the UI driver, `ui_driver.rs`: X input from xdotool on
+//! Linux, Windows' and macOS' own input elsewhere), against the signed test artifacts the runner
+//! made (`native/run.ts` on Linux, `native/dialogs.ts` on Windows and macOS):
+//! `PLUXY_APP_TEST_CORE_SOURCE` names their index.
 //!
 //! 1. with no core installed the app is not connected; an install with no trust roots is refused
 //!    before any dialog, and nothing is installed; the runner then adds the roots;
@@ -12,11 +14,17 @@
 //! 6. an unknown rollback target is refused; a cancelled rollback changes nothing; a confirmed
 //!    one runs the installed 1.0.0;
 //! 7. a custom core program does not run until adopted; adopting copies it into the app's cores
-//!    and runs the copy; a rollback then runs 1.0.0 again.
+//!    and runs the copy; a rollback then runs 1.0.0 again;
+//! 8. with 2.0.0 installed again (the app keeps only the running version and the one before it,
+//!    so step 7 removed it), a file of the earlier 1.0.0 is changed: rolling back to it is
+//!    refused before any dialog, and installing it again, confirmed, repairs it and runs it;
+//! 9. installing the running 1.0.0 again, confirmed, writes it anew and runs it in a new process
+//!    (on Windows the core is stopped first: its folder cannot be moved aside while it runs).
 //!
 //! Each step prints `native-test: core_<step> <JSON>`; the runner checks the values.
 
-use crate::confirmation::native::{key, window};
+use crate::confirmation::text::CONFIRM_TITLE as DIALOG;
+use crate::native_test::ui::{self, Key};
 use crate::native_test::{eval, log, wait_for};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -24,7 +32,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
-const DIALOG: &str = "pluxy native confirmation";
+/// The confirmation's buttons: Confirm and Cancel (`confirmation::text`).
+const CONFIRM: Key = Key::Access('o');
+const CANCEL: Key = Key::Access('c');
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// One window command, as the Connection page calls it: Ok(value) or Err(the refusal).
@@ -60,6 +70,8 @@ fn require(ok: bool, what: impl Into<String>) -> Result<(), String> {
     }
 }
 
+/// Whether process pid runs (a zombie does not, on Linux; the app reaps its own elsewhere).
+#[cfg(target_os = "linux")]
 fn alive(pid: u64) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
         .ok()
@@ -67,20 +79,155 @@ fn alive(pid: u64) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "macos")]
+fn alive(pid: u64) -> bool {
+    // SAFETY: signal 0 only asks whether the process exists.
+    let found = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+    found || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(windows)]
+fn alive(pid: u64) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: the handle is checked and closed; code is written on success.
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+        if h.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code) != 0;
+        CloseHandle(h);
+        ok && code == STILL_ACTIVE as u32
+    }
+}
+
+/// The program process pid runs, with every link resolved; empty if it cannot be read.
+#[cfg(target_os = "linux")]
 fn exe(pid: u64) -> PathBuf {
     std::fs::read_link(format!("/proc/{pid}/exe")).unwrap_or_default()
 }
 
-/// The processes running program, by their executable.
-fn running(program: &Path) -> Vec<u64> {
-    let want = std::fs::canonicalize(program).unwrap_or_else(|_| program.into());
+#[cfg(target_os = "macos")]
+fn exe(pid: u64) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: buf holds the size given.
+    let n = unsafe { libc::proc_pidpath(pid as i32, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    if n <= 0 {
+        return PathBuf::new();
+    }
+    let path = PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..n as usize]));
+    std::fs::canonicalize(&path).unwrap_or(path)
+}
+
+#[cfg(windows)]
+fn exe(pid: u64) -> PathBuf {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    let mut buf = vec![0u16; 32_768];
+    let mut len = buf.len() as u32;
+    // SAFETY: the handle is checked and closed; buf holds len characters.
+    let ok = unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+        if h.is_null() {
+            return PathBuf::new();
+        }
+        let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) != 0;
+        CloseHandle(h);
+        ok
+    };
+    if !ok {
+        return PathBuf::new();
+    }
+    let path = PathBuf::from(std::ffi::OsString::from_wide(&buf[..len as usize]));
+    std::fs::canonicalize(&path).unwrap_or(path)
+}
+
+/// Every process ID on this computer.
+#[cfg(target_os = "linux")]
+fn pids() -> Vec<u64> {
     std::fs::read_dir("/proc")
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|d| d.file_name().to_str()?.parse::<u64>().ok())
-        .filter(|pid| std::fs::read_link(format!("/proc/{pid}/exe")).ok() == Some(want.clone()))
         .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn pids() -> Vec<u64> {
+    // SAFETY: a null buffer asks for the count; then buf holds the size given.
+    let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if n <= 0 {
+        return Vec::new();
+    }
+    let mut buf = vec![0 as libc::pid_t; n as usize + 64];
+    let size = (buf.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
+    let n = unsafe { libc::proc_listallpids(buf.as_mut_ptr().cast(), size) };
+    buf.truncate(n.max(0) as usize);
+    buf.into_iter().map(|p| p as u64).collect()
+}
+
+#[cfg(windows)]
+fn pids() -> Vec<u64> {
+    use windows_sys::Win32::System::ProcessStatus::K32EnumProcesses;
+    let mut buf = vec![0u32; 4096];
+    loop {
+        let mut used = 0u32;
+        let size = (buf.len() * 4) as u32;
+        // SAFETY: buf holds size bytes; used is written on success.
+        if unsafe { K32EnumProcesses(buf.as_mut_ptr(), size, &mut used) } == 0 {
+            return Vec::new();
+        }
+        if used < size {
+            buf.truncate(used as usize / 4);
+            return buf.into_iter().map(u64::from).collect();
+        }
+        buf.resize(buf.len() * 2, 0);
+    }
+}
+
+/// The processes running program, by their executable.
+fn running(program: &Path) -> Vec<u64> {
+    let want = std::fs::canonicalize(program).unwrap_or_else(|_| program.into());
+    pids().into_iter().filter(|pid| exe(*pid) == want).collect()
+}
+
+/// Whether process pid runs a program in the app's core store dir.
+fn in_store(pid: u64, dir: &Path) -> bool {
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.into());
+    exe(pid).starts_with(dir)
+}
+
+/// Changes the installed file at path as a program of this user could: made writable again (its
+/// owner may), and a byte added.
+fn tamper(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(windows)]
+    {
+        let f =
+            crate::private_windows::open_for_access_list(path, false).map_err(|e| e.to_string())?;
+        crate::private_windows::make_private(&f, false).map_err(|e| e.to_string())?;
+    }
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .and_then(|mut f| f.write_all(b" "))
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn installed(dir: &Path) -> Vec<String> {
@@ -119,12 +266,13 @@ fn seq(main: &Webview) -> Result<u64, String> {
     Ok(v["outcome"]["seq"].as_u64().unwrap_or(0))
 }
 
-/// Asks for a core action, answers its native dialog with keys, and returns its outcome.
-fn act(main: &Webview, cmd: &str, args: Value, keys: &str) -> Result<Value, String> {
+/// Asks for a core action, answers its native dialog with key, and returns its outcome.
+fn act(main: &Webview, cmd: &str, args: Value, key: Key) -> Result<Value, String> {
+    let app = main.app_handle();
     let before = seq(main)?;
     call(main, cmd, args)?;
-    wait_for("the native dialog", || window(DIALOG))?;
-    key(DIALOG, keys)?;
+    ui::wait_shown(app, DIALOG)?;
+    ui::press(app, DIALOG, key)?;
     outcome(main, before)
 }
 
@@ -133,7 +281,10 @@ fn refused(main: &Webview, cmd: &str, args: Value) -> Result<String, String> {
     let r = invoke(main, cmd, args)?;
     // No dialog at any point for two seconds after the refusal.
     for _ in 0..20 {
-        require(window(DIALOG).is_none(), format!("{cmd} opened a dialog"))?;
+        require(
+            !ui::shown(main.app_handle(), DIALOG),
+            format!("{cmd} opened a dialog"),
+        )?;
         std::thread::sleep(Duration::from_millis(100));
     }
     r.err().ok_or_else(|| format!("{cmd} was not refused"))
@@ -158,6 +309,10 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
         PathBuf::from(std::env::var("PLUXY_APP_TEST_CORE_CUSTOM").map_err(|e| e.to_string())?);
     let ready =
         PathBuf::from(std::env::var("PLUXY_APP_TEST_TRUST_READY").map_err(|e| e.to_string())?);
+    // Where the app keeps them (lib.rs): on Windows in the local application data.
+    #[cfg(windows)]
+    let data = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    #[cfg(not(windows))]
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let cores = data.join("cores");
     let config = data.join("core").join("config.json");
@@ -180,7 +335,7 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
     wait_for("the runner's trust roots", || ready.exists().then_some(()))?;
 
     // 2. The same install, with roots and confirmed: core 1.0.0 runs and the app connects.
-    let o = act(main, "core_install", json!({"version": "1.0.0"}), "alt+o")?;
+    let o = act(main, "core_install", json!({"version": "1.0.0"}), CONFIRM)?;
     let (version, pid, view) = current(main)?;
     let (status, reported) = status_version(app);
     let pid1 = pid.unwrap_or_default();
@@ -188,7 +343,7 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
         "core_install",
         json!({"outcome": o["result"], "version": version, "connected": !view["target"].is_null(),
                "signed_in": view["signed_in"], "status": status, "reported": reported,
-               "exe_in_app": exe(pid1).starts_with(&cores),
+               "exe_in_app": in_store(pid1, &cores),
                "installed": installed(&cores), "source": source}),
     );
 
@@ -201,7 +356,7 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
 
     // 4. v1 to v2: the old process is gone, the config the same.
     let before = std::fs::read(&config).map_err(|e| e.to_string())?;
-    let o = act(main, "core_install", json!({"version": "2.0.0"}), "alt+o")?;
+    let o = act(main, "core_install", json!({"version": "2.0.0"}), CONFIRM)?;
     let (version, pid, _) = current(main)?;
     let pid2 = pid.unwrap_or_default();
     let (status, reported) = status_version(app);
@@ -214,7 +369,7 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
     );
 
     // 5. A candidate that breaks its config and exits: config restored, 2.0.0 again.
-    let o = act(main, "core_install", json!({"version": "3.0.0"}), "alt+o")?;
+    let o = act(main, "core_install", json!({"version": "3.0.0"}), CONFIRM)?;
     let (version, pid, _) = current(main)?;
     let (status, reported) = status_version(app);
     let versions = call(main, "core_versions", json!({}))?;
@@ -230,9 +385,9 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
     // 6. Rollback: unknown refused; cancel changes nothing; confirmed runs 1.0.0.
     let detail = refused(main, "core_rollback", json!({"version": "9.9.9"}))?;
     let (_, pid_before, _) = current(main)?;
-    let cancel = act(main, "core_rollback", json!({"version": "1.0.0"}), "alt+c")?;
+    let cancel = act(main, "core_rollback", json!({"version": "1.0.0"}), CANCEL)?;
     let (cancel_version, cancel_pid, _) = current(main)?;
-    let o = act(main, "core_rollback", json!({"version": "1.0.0"}), "alt+o")?;
+    let o = act(main, "core_rollback", json!({"version": "1.0.0"}), CONFIRM)?;
     let (version, _, _) = current(main)?;
     let (status, reported) = status_version(app);
     log(
@@ -250,22 +405,55 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
         json!({"change": {"mode": "managed", "core_path": custom, "core_source": source}}),
     )?;
     let not_run = running(&custom).is_empty();
-    let o = act(main, "core_adopt", json!({}), "alt+o")?;
+    let o = act(main, "core_adopt", json!({}), CONFIRM)?;
     let (version, pid, _) = current(main)?;
     let pid_custom = pid.unwrap_or_default();
     let (status, _) = status_version(app);
-    let adopted_exe = exe(pid_custom);
+    let adopted_in_app = in_store(pid_custom, &cores);
     // While the adopted copy runs, before anything else changes.
     let custom_running = !running(&custom).is_empty();
-    let o2 = act(main, "core_rollback", json!({"version": "1.0.0"}), "alt+o")?;
+    let o2 = act(main, "core_rollback", json!({"version": "1.0.0"}), CONFIRM)?;
     let (back, _, _) = current(main)?;
     log(
         "core_adopt",
         json!({"pending": set["core"]["adopt"], "running_before": set["core"]["version"],
                "custom_not_run": not_run, "outcome": o["result"], "version": version,
-               "status": status, "exe_in_app": adopted_exe.starts_with(&cores),
+               "status": status, "exe_in_app": adopted_in_app,
                "custom_running": custom_running,
                "back": back, "back_outcome": o2["result"]}),
+    );
+
+    // 8. A changed installed version: refused before any dialog; installed again, it runs.
+    // 2.0.0 runs first, so 1.0.0 is the installed version before it, not the running one.
+    let o1 = act(main, "core_install", json!({"version": "2.0.0"}), CONFIRM)?;
+    let changed = cores
+        .join("versions")
+        .join("1.0.0")
+        .join("bundled")
+        .join("index.json");
+    tamper(&changed)?;
+    let detail = refused(main, "core_rollback", json!({"version": "1.0.0"}))?;
+    let o = act(main, "core_install", json!({"version": "1.0.0"}), CONFIRM)?;
+    let (version, _, _) = current(main)?;
+    let (status, reported) = status_version(app);
+    log(
+        "core_changed",
+        json!({"reinstalled": o1["result"], "refused": true, "detail": detail,
+               "repaired": o["result"], "version": version, "status": status,
+               "reported": reported, "installed": installed(&cores)}),
+    );
+
+    // 9. The running version installed again: written anew and run in a new process.
+    let (_, pid_before, _) = current(main)?;
+    let o = act(main, "core_install", json!({"version": "1.0.0"}), CONFIRM)?;
+    let (version, pid, _) = current(main)?;
+    let (status, reported) = status_version(app);
+    log(
+        "core_repair_running",
+        json!({"outcome": o["result"], "detail": o["detail"], "version": version,
+               "new_process": pid.is_some() && pid != pid_before,
+               "old_gone": pid_before.is_some_and(|p| !alive(p)),
+               "status": status, "reported": reported, "installed": installed(&cores)}),
     );
     Ok(())
 }

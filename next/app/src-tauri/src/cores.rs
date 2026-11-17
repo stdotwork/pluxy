@@ -48,14 +48,10 @@ const MAX_ARCHIVE: u64 = 512 * 1024 * 1024;
 const MAX_UNPACKED: u64 = 512 * 1024 * 1024;
 const MAX_ENTRIES: usize = 10_000;
 
-/// This computer's platform, as descriptors name it, such as `linux/amd64`.
+/// This computer's platform, as descriptors name it, with Go's names: `linux/amd64`,
+/// `darwin/arm64` (Rust says `macos`), `windows/amd64`.
 pub fn platform() -> String {
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "amd64",
-        "aarch64" => "arm64",
-        a => a,
-    };
-    format!("{}/{arch}", std::env::consts::OS)
+    crate::device::platform()
 }
 
 /// The core source's index: the release feed's format, of which this reads only core releases'
