@@ -173,6 +173,7 @@ fn a_tool_in_wsl_gets_the_contract_through_wslenv_and_nothing_else() {
             "PLUXY_APP_ARTIFACT_SHA256",
             "PLUXY_TOOL_DATA_DIR",
             "PLUXY_ENVIRONMENT",
+            "PLUXY_ENVIRONMENT_ACCOUNT",
             "WSLENV"
         ]
     );
@@ -184,10 +185,13 @@ fn a_tool_in_wsl_gets_the_contract_through_wslenv_and_nothing_else() {
         "/home/bob/.local/state/pluxy/tools/pluxy/claude-code"
     );
     assert_eq!(get("PLUXY_ENVIRONMENT"), "wsl:Ubuntu:bob");
+    // The record's user number and home: the tool checks them too, so a user made again under
+    // the name, or a home moved, runs nothing.
+    assert_eq!(get("PLUXY_ENVIRONMENT_ACCOUNT"), "1001:/home/bob");
     assert_eq!(
         get("WSLENV"),
         "PLUXY_APP_CONTRACT_VERSIONS/u:PLUXY_EXTENSION_ID/u:PLUXY_APP_ARTIFACT_SHA256/u:\
-         PLUXY_TOOL_DATA_DIR/u:PLUXY_ENVIRONMENT/u"
+         PLUXY_TOOL_DATA_DIR/u:PLUXY_ENVIRONMENT/u:PLUXY_ENVIRONMENT_ACCOUNT/u"
     );
     assert!(r.tool_env("claude-code", "x", "0", None).is_err());
 }

@@ -372,10 +372,12 @@ impl Record {
     }
 
     /// The Windows environment of `wsl.exe` for package's tool, at its Linux archive's digest:
-    /// `SystemRoot` (WSL 2 refuses a block without it), the contract's values, `PLUXY_ENVIRONMENT`
-    /// and the data folder, each passed on into the distribution unchanged by `WSLENV` (`/u`,
-    /// Windows to Linux only). Nothing else: no `PATH`, so WSL adds no Windows folders to the
-    /// tool's Linux `PATH`; WSL itself sets `HOME`, `USER`, `PATH` and its own variables there.
+    /// `SystemRoot` (WSL 2 refuses a block without it), the contract's values, `PLUXY_ENVIRONMENT`,
+    /// `PLUXY_ENVIRONMENT_ACCOUNT` (the record's user ID and home, `<uid>:<home>`, which the tool
+    /// checks too) and the data folder, each passed on into the distribution unchanged by
+    /// `WSLENV` (`/u`, Windows to Linux only). Nothing else: no `PATH`, so WSL adds no Windows
+    /// folders to the tool's Linux `PATH`; WSL itself sets `HOME`, `USER`, `PATH` and its own
+    /// variables there.
     pub fn tool_env(
         &self,
         package: &str,
@@ -391,6 +393,10 @@ impl Record {
             (
                 "PLUXY_ENVIRONMENT",
                 self.environment().label().unwrap_or_default(),
+            ),
+            (
+                "PLUXY_ENVIRONMENT_ACCOUNT",
+                format!("{}:{}", self.uid, self.home),
             ),
         ];
         let mut out: Vec<(String, String)> = Vec::new();
