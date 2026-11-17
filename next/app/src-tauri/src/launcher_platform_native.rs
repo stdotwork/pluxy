@@ -3,7 +3,8 @@
 //! drives the real app through the window's own commands, the real native confirmations (worked
 //! through `ui_driver.rs`) and the tray's Start… menu, with the signed pluxy/execution (the real
 //! execution program, built for this system) that `native/launcher.ts` packed, and the fixture
-//! program as the agent (`bin/pluxy-agent`), which writes what it sees of itself to its record.
+//! program as the agent (`bin/pluxy-agent`, `.exe` on Windows; `bin` first on the app's PATH),
+//! which writes what it sees of itself to its record.
 //!
 //! What Linux's check does with a detached agent, a terminal, native key entry or the
 //! StatusNotifier tray waits for the slices that bring those here (the spawn and lifetime session,
@@ -12,14 +13,21 @@
 //! - state: before the execution program is enabled the launcher says it is unavailable; once
 //!   it is enabled, available;
 //! - terminals: Automatic first;
-//! - launch: the window's launcher prepares a direct, managed launch of the agent through the
-//!   execution program; the native confirmation names the program, the agent and the lifetime;
-//!   remembered, the agent runs with its arguments in the cwd, the launcher lists it with its
-//!   source, and the tray's Start… menu gets an item for it (`launcher::refresh_tray`);
+//! - launch: the window's launcher prepares a direct, managed launch of the agent, found by name
+//!   on the search path, through the execution program, setting one variable; the native
+//!   confirmation names the program, the agent as found and the lifetime; remembered, the agent
+//!   runs with exactly that path and its arguments as its argv, in the cwd, with only the host's
+//!   session values (`spawn::BASE`, `LC_*` on macOS) as the app has them and the variable set (not
+//!   the canary variable the session gave the app); the launcher lists it with its executable,
+//!   arguments, cwd and source, its client's recent folders start with the cwd, and the tray's
+//!   Start… menu gets an item for it (`launcher::refresh_tray`);
 //! - one-click: the launcher's Start of it runs it again with no confirmation and shows the
 //!   host's launch notice; a second Start at once is refused;
-//! - tray: the Start… item's click (the menu event handler's `launcher::tray_start`, called with
-//!   the item's ID as the menu has it) runs it again with no confirmation;
+//! - tray: the Start… item's click runs it again with no confirmation. On Windows the click is the
+//!   menu's own: the `WM_COMMAND` with the item's command ID that Windows sends the tray icon's
+//!   window once a person picks it, which the menu library turns into the app's menu event. On
+//!   macOS the menu shows only while a person holds it open, so the check calls the menu event's
+//!   handler (`tray_menu_event`) with the item's ID;
 //! - forget: a forgotten launch leaves the launcher, and the Start… menu shows only "No
 //!   remembered launches";
 //! - disable: disabling the execution program with its managed runtimes running asks; cancelled,
@@ -40,6 +48,10 @@ const EXECUTION: &str = "pluxy/execution";
 const AGENT: &str = "pluxy-fixture-agent";
 const CLIENT: &str = "Fixture agent";
 const NOTICE: &str = "pluxy launch notice";
+/// The variable the launch sets, and its value.
+const ASKED: (&str, &str) = ("FIXTURE_LAUNCH_VALUE", "set-by-the-launch");
+/// The variable the session gives the app (`native/platform-tools.ts`), which no launch may get.
+const CANARY: &str = "PLUXY_TEST_LAUNCHER_CANARY";
 
 /// path without Windows' `\\?\` prefix on a drive path, as a person would type it (what
 /// `canonicalize` gives there); unchanged elsewhere.
@@ -112,6 +124,100 @@ fn notice(app: &AppHandle, needles: &[&str]) -> Result<String, String> {
     .map_err(|e| format!("{e}; the notice said: {last}"))
 }
 
+/// The agent's environment (env, its record's): the host's session values the app has, each as
+/// the app has it, and the variable the launch asked for, and nothing else; never the session's
+/// canary. On macOS CoreFoundation, which the agent links, sets `__CF_USER_TEXT_ENCODING` in its
+/// own environment as it starts, so that value is the agent's own.
+fn check_environment(env: &Value) -> Result<(), String> {
+    let own = |name: &str| cfg!(target_os = "macos") && name == "__CF_USER_TEXT_ENCODING";
+    let map = env
+        .as_object()
+        .ok_or(format!("no environment in the record: {env}"))?;
+    // Windows compares names ignoring case.
+    let same = |a: &str, b: &str| {
+        if cfg!(windows) {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    };
+    for name in map.keys() {
+        let base = crate::spawn::BASE.iter().any(|b| same(b, name))
+            || (cfg!(unix) && name.starts_with("LC_"));
+        require(
+            base || same(name, ASKED.0),
+            format!("the agent got {name}, which nothing selected or asked for"),
+        )?;
+    }
+    // Each session value the app has, as the app has it.
+    for (k, v) in std::env::vars_os() {
+        let k = k.to_string_lossy();
+        let base =
+            crate::spawn::BASE.iter().any(|b| same(b, &k)) || (cfg!(unix) && k.starts_with("LC_"));
+        if !base || own(&k) {
+            continue;
+        }
+        let got = map.iter().find(|(n, _)| same(n, &k)).map(|(_, v)| v);
+        require(
+            got.and_then(Value::as_str) == Some(v.to_string_lossy().as_ref()),
+            format!("the agent's {k} is not the app's"),
+        )?;
+    }
+    require(
+        map.iter()
+            .any(|(k, v)| same(k, ASKED.0) && v.as_str() == Some(ASKED.1)),
+        format!("the agent did not get the {} the launch set", ASKED.0),
+    )?;
+    require(map.keys().any(|k| same(k, "PATH")), "the agent has no PATH")?;
+    let canary = std::env::var(CANARY).map_err(|_| format!("the app has no {CANARY}"))?;
+    require(
+        !map.keys().any(|k| same(k, CANARY)) && !env.to_string().contains(&canary),
+        format!("the agent got the app's {CANARY}"),
+    )
+}
+
+/// Windows: clicks the tray's Start… item labelled label as Windows reports a person's pick of
+/// it: the `WM_COMMAND` with the item's command ID (read from the submenu's own menu handle)
+/// posted to the tray icon's window, whose menu library turns it into the app's menu event.
+#[cfg(windows)]
+fn tray_click(app: &AppHandle, label: &str) -> Result<(), String> {
+    use tauri::menu::ContextMenu;
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetMenuItemCount, GetMenuItemID, GetMenuStringW, PostMessageW, HMENU, MF_BYPOSITION,
+        WM_COMMAND,
+    };
+    let menu = crate::launcher::start_menu().ok_or("no Start… menu")?;
+    let hmenu = HMENU(menu.hpopupmenu().map_err(|e| e.to_string())? as _);
+    let tray = app.tray_by_id("pluxy").ok_or("no tray icon")?;
+    let hwnd = tray
+        .with_inner_tray_icon(|t| t.window_handle() as isize)
+        .map_err(|e| e.to_string())?;
+    // SAFETY: hmenu is the live submenu's handle; buf is as long as said.
+    let n = unsafe { GetMenuItemCount(Some(hmenu)) };
+    let mut found = Vec::new();
+    for i in 0..n.max(0) {
+        let mut buf = [0u16; 512];
+        let len = unsafe { GetMenuStringW(hmenu, i as u32, Some(&mut buf), MF_BYPOSITION) };
+        let text = String::from_utf16_lossy(&buf[..len.max(0) as usize]);
+        if text == label {
+            let id = unsafe { GetMenuItemID(hmenu, i) };
+            // SAFETY: hwnd is the tray icon's window, alive as long as the tray icon.
+            return unsafe {
+                PostMessageW(
+                    Some(HWND(hwnd as _)),
+                    WM_COMMAND,
+                    WPARAM(id as usize),
+                    LPARAM(0),
+                )
+            }
+            .map_err(|e| format!("posting the item's command: {e}"));
+        }
+        found.push(text);
+    }
+    Err(format!("no Start… item {label:?}: {found:?}"))
+}
+
 /// The tray's Start… items once they satisfy want.
 fn tray_items(
     what: &str,
@@ -142,11 +248,14 @@ fn enabled(main: &Webview) -> Result<bool, String> {
 pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<(), String> {
     let execution_version =
         std::fs::read_to_string(fixtures.join("execution-version")).unwrap_or_default();
-    let agent = canonical(&fixtures.join("bin").join(if cfg!(windows) {
+    // The agent as the execution program finds it by name: in bin, as the app's PATH has it (the
+    // session puts the fixtures' bin there as this path), with Windows' `.exe`.
+    let named = fixtures.join("bin").join(if cfg!(windows) {
         "pluxy-agent.exe"
     } else {
         "pluxy-agent"
-    }))?;
+    });
+    let agent = canonical(&named)?;
     let work = fixtures.join("work");
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
     let work = canonical(&work)?;
@@ -212,11 +321,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 main,
                 "launcher_launch",
                 json!({"launch": {
-                    "client": CLIENT, "kind": "direct", "program": s(&agent),
+                    "client": CLIENT, "kind": "direct", "program": "pluxy-agent",
                     "args": [AGENT, rec], "cwd": work, "lifetime": "managed",
+                    "environment": {"set": {ASKED.0: ASKED.1}},
                 }}),
             )?;
-            dialog_with(app, &[EXECUTION, "launch", &s(&agent), "managed"])?;
+            dialog_with(app, &[EXECUTION, "launch", &s(&named), "managed"])?;
             press("alt+r")?;
             press("alt+o")?;
             let r = settle(main, &slot)?;
@@ -227,18 +337,21 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 format!("no launcher entry or runtime for a remembered managed launch: {r}"),
             )?;
             first = record(&rec, 0)?;
-            let argv = first["argv"].as_array().cloned().unwrap_or_default();
             let cwd = first["cwd"]
                 .as_str()
                 .and_then(|c| canonical(Path::new(c)).ok());
             require(
-                argv.get(1..) == Some(&[json!(AGENT), json!(rec)][..])
-                    && cwd.as_ref() == Some(&work),
+                first["argv"] == json!([s(&named), AGENT, rec]) && cwd.as_ref() == Some(&work),
                 format!(
-                    "the agent's argv and cwd: {} {}",
-                    first["argv"], first["cwd"]
+                    "the agent's argv and cwd: {} {}, expected [{}, {AGENT}, {}] and {}",
+                    first["argv"],
+                    first["cwd"],
+                    named.display(),
+                    rec.display(),
+                    work.display()
                 ),
             )?;
+            check_environment(&first["env"])?;
             require(
                 running(&first),
                 format!(
@@ -254,8 +367,19 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 .find(|e| e["id"] == entry.as_str())
                 .unwrap_or_default();
             require(
-                e["client"] == CLIENT && e["source"]["package"] == EXECUTION,
+                e["client"] == CLIENT
+                    && e["executable"] == json!(s(&named))
+                    && e["argv"] == json!([AGENT, rec])
+                    && e["cwd"] == json!(work)
+                    && e["source"]["package"] == EXECUTION,
                 format!("the launcher's entry: {e}"),
+            )?;
+            let st = ok(main, "launcher_state", json!({}))?;
+            require(
+                st["history"][CLIENT]
+                    .as_array()
+                    .is_some_and(|h| h.first() == Some(&json!(work))),
+                format!("the launcher's recent folders: {}", st["history"]),
             )?;
             // The tray's Start… menu, refreshed: an item for it, which can be clicked.
             let items = tray_items("the Start… menu to list the launch", |i| {
@@ -299,13 +423,23 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             let items = tray_items("the Start… menu's item for the launch", |i| {
                 i.iter().any(|(_, text, on)| *text == label && *on)
             })?;
-            let id = items
-                .iter()
-                .find(|(_, text, _)| *text == label)
-                .map(|(id, _, _)| id.clone())
-                .unwrap_or_default();
             let before = again["pid"].as_u64().unwrap_or(0);
-            crate::launcher::tray_start(app, &id);
+            #[cfg(windows)]
+            {
+                let _ = items;
+                tray_click(app, &label)?;
+            }
+            #[cfg(not(windows))]
+            {
+                let id = items
+                    .iter()
+                    .find(|(_, text, _)| *text == label)
+                    .map(|(id, _, _)| id.clone())
+                    .unwrap_or_default();
+                let handle = app.clone();
+                app.run_on_main_thread(move || crate::tray_menu_event(&handle, &id))
+                    .map_err(|e| e.to_string())?;
+            }
             let r = record(&rec, before)?;
             require(running(&r), format!("the tray start's agent: {r}"))?;
             require(!showing(), "the tray's start asked a native confirmation")

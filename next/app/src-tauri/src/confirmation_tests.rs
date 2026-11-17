@@ -604,8 +604,11 @@ fn opened_script_fexecve_requires_clearing_cloexec_and_uses_dev_fd_path() {
         .or_else(|| std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from))
         .unwrap_or_else(|| std::env::current_exe().unwrap().parent().unwrap().into());
     fs::create_dir_all(&target).unwrap();
+    // The folder of this test binary allows exec when the binary was started in the usual way,
+    // so a mount that forbids exec on the other two cannot make the test skip its check.
+    let binary_dir: PathBuf = std::env::current_exe().unwrap().parent().unwrap().into();
     let mut executable_root = None;
-    for root in [target, std::env::temp_dir()] {
+    for root in [target, binary_dir, std::env::temp_dir()] {
         let f = File::open(&root).unwrap();
         let mut vfs = std::mem::MaybeUninit::<libc::statvfs>::uninit();
         assert_eq!(
@@ -617,10 +620,11 @@ fn opened_script_fexecve_requires_clearing_cloexec_and_uses_dev_fd_path() {
             break;
         }
     }
-    let Some(root) = executable_root else {
-        eprintln!("SKIP fexecve fixture: target temporary directory and system temporary directory are mounted noexec");
-        return;
-    };
+    // No skip: a test that returns here without launching proves nothing, in CI or anywhere.
+    let root = executable_root.expect(
+        "no folder allows exec: the target folder, the folder of this test binary and the system \
+         temporary folder are all mounted noexec, so the fexecve launch check cannot run",
+    );
     let (dir, mut c, a) = fixture_in(&root);
     let exe = &a.launch.as_ref().unwrap().executable;
     fs::write(

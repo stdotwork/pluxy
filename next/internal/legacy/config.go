@@ -201,7 +201,7 @@ const (
 
 type rule struct {
 	status int
-	note   string // the slice that brings it (later) or why it is dropped
+	note   string // what brings it (later) or why it is dropped
 }
 
 // rules classify each setting by its v8 path. A rule covers its path and everything below it.
@@ -229,7 +229,7 @@ var rules = map[string]rule{
 	"routing.strategy":                                  {supported, ""},
 	"routing.session-affinity":                          {supported, ""},
 	"routing.session-affinity-ttl":                      {supported, ""},
-	"routing.session-affinity-subagents":                {later, ""},
+	"routing.session-affinity-subagents":                {dropped, "a subagent stays on its session's account, and no need was found to spread subagents over the pool"},
 	"routing.session-affinity-rebind-on":                {dropped, "no need found"},
 	"routing.force-model-prefix":                        {supported, ""},
 	"routing.retry.max-retry-credentials":               {supported, ""},
@@ -249,8 +249,8 @@ var rules = map[string]rule{
 	"requests.nonstream-keepalive-interval":  {dropped, "off by default and no need found"},
 	"requests.streaming":                     {dropped, "off by default and no need found"},
 
-	"client.codex.enable-apply-patch":      {later, ""},
-	"client.codex.optimize-multi-agent-v2": {later, ""},
+	"client.codex.enable-apply-patch":      {later, "built when someone uses a non-Codex model through the Codex client and needs apply_patch on it"},
+	"client.codex.optimize-multi-agent-v2": {later, "built when Codex multi-agent v2 sub-agents need to reach non-Codex providers"},
 	"client.codex.web-search-result-cache": {dropped, "off by default and no need found"},
 	"client.claude.show-codex-commentary":  {dropped, "off by default and no need found"},
 
@@ -258,10 +258,10 @@ var rules = map[string]rule{
 	"upstream.codex.websocket-compression":                  {supported, ""}, // reported in translate
 	"upstream.codex.model-level-cooling":                    {supported, ""},
 	"upstream.claude.model-level-cooling":                   {supported, ""},
-	"upstream.codex.upstream-request-compression":           {later, ""},
-	"upstream.codex.upstream-request-compression-min-bytes": {later, ""},
-	"upstream.codex.stream-bootstrap-buffering":             {later, ""},
-	"upstream.codex.stream-bootstrap-timeout":               {later, ""},
+	"upstream.codex.upstream-request-compression":           {dropped, "it needs a compression library this core does not carry, for an off-by-default saving no one has measured"},
+	"upstream.codex.upstream-request-compression-min-bytes": {dropped, "it needs a compression library this core does not carry, for an off-by-default saving no one has measured"},
+	"upstream.codex.stream-bootstrap-buffering":             {later, "built when pooled Codex accounts are seen failing on overload errors that moving the turn to another account would hide"},
+	"upstream.codex.stream-bootstrap-timeout":               {later, "built when pooled Codex accounts are seen failing on overload errors that moving the turn to another account would hide"},
 	"upstream.codex.response-steering":                      {dropped, "experimental, no need found"},
 	"upstream.codex.orphan-delegation-compatibility":        {dropped, "off by default and no need found"},
 	"oauth.providers.codex.header-defaults":                 {dropped, "no need found"},
@@ -283,9 +283,8 @@ var rules = map[string]rule{
 	"oauth.providers.devin":                                {dropped, "rewriting words to get past a content filter is out of scope"},
 
 	"multimedia.disable-image-generation":                     {supported, ""},
-	"multimedia.gpt-image-2-base-model":                       {later, ""},
-	"multimedia.video-result-auth-cache-ttl":                  {later, ""},
-	"observability.logs":                                      {later, ""},
+	"multimedia.gpt-image-2-base-model":                       {dropped, "it names the model of the Responses-based image path, which is not built; images use the Images API"},
+	"multimedia.video-result-auth-cache-ttl":                  {dropped, "it applies to video routes, which are not built"},
 	"observability.logs.logging-to-file":                      {supported, ""},
 	"observability.logs.logs-max-total-size-mb":               {supported, ""},
 	"observability.logs.debug":                                {dropped, "this core writes no debug-level log lines"},
@@ -295,7 +294,9 @@ var rules = map[string]rule{
 	"observability.usage.redis-usage-queue-retention-seconds": {dropped, "reading usage no longer removes it; the record keeps requests by usage.max_events and usage.max_age_ms"},
 	"observability.pprof.enable":                              {supported, ""},
 	"observability.pprof.addr":                                {supported, ""},
-	"models":                                                  {later, ""},
+	"models.catalog":                                          {dropped, "this core has no remote model catalog; each extension carries its model list"},
+	"models.codex-catalog":                                    {dropped, "this core has no remote model catalog; each extension carries its model list"},
+	"models.devin-catalog":                                    {dropped, "this core has no remote model catalog; each extension carries its model list"},
 	"plugins":                                                 {dropped, "replaced by packages"},
 	"credentials":                                             {dropped, "only the Home control plane used them"},
 
@@ -309,15 +310,15 @@ var rules = map[string]rule{
 	"api-keys.*[].models[].alias":                              {supported, ""},
 	"api-keys.*[].models[].display-name":                       {dropped, "list metadata only, no need found"},
 	"api-keys.*[].models[].max-context-length":                 {dropped, "list metadata only, no need found"},
-	"api-keys.*[].models[].force-mapping":                      {later, ""},
+	"api-keys.*[].models[].force-mapping":                      {later, "built when a client needs a reply's model to be the alias it asked for"},
 	"api-keys.*[].models[].is-compat":                          {dropped, "a single-provider quirk, no need found"},
 	"api-keys.*[].models[].thinking":                           {dropped, "the thinking suffix and extensions cover it"},
-	"api-keys.*[].models[].image":                              {later, ""},
+	"api-keys.*[].models[].image":                              {dropped, "images are served for Codex accounts only, and no use of OpenAI-compatible image models was found"},
 	"api-keys.*[].models[].input-modalities":                   {dropped, "list metadata only, no need found"},
 	"api-keys.*[].models[].output-modalities":                  {dropped, "list metadata only, no need found"},
 	"api-keys.*[].models[].use-max-completion-tokens":          {dropped, "a single-provider quirk, no need found"},
-	"api-keys.*[].models[].support-configuration-update":       {later, ""},
-	"api-keys.*[].models[].openapi":                            {later, ""},
+	"api-keys.*[].models[].support-configuration-update":       {dropped, "an off-by-default prompt-cache saving for one kind of relay, no need found"},
+	"api-keys.*[].models[].openapi":                            {later, "built when someone calls Vertex partner models (Claude, Llama, Mistral) through a key"},
 	"api-keys.*[].prefix":                                      {supported, ""},
 	"api-keys.*[].excluded-models":                             {supported, ""},
 	"api-keys.*[].headers":                                     {supported, ""},
@@ -329,10 +330,10 @@ var rules = map[string]rule{
 	"api-keys.codex[].websockets":                              {supported, ""},
 	"api-keys.codex[].disable-codex-cloaking":                  {supported, ""},
 	"api-keys.codex[].alpha-search":                            {supported, ""},
-	"api-keys.xai[].websockets":                                {later, ""},
+	"api-keys.xai[].websockets":                                {dropped, "xAI is served over HTTP, which gives the same replies"},
 	"api-keys.vertex[].interactions":                           {supported, ""},
-	"api-keys.vertex[].openapi":                                {later, ""},
-	"api-keys.vertex[].openapi-location":                       {later, ""},
+	"api-keys.vertex[].openapi":                                {later, "built when someone calls Vertex partner models (Claude, Llama, Mistral) through a key"},
+	"api-keys.vertex[].openapi-location":                       {later, "built when someone calls Vertex partner models (Claude, Llama, Mistral) through a key"},
 	"api-keys.openai-compatibility[].disabled":                 {supported, ""},
 	"api-keys.openai-compatibility[].support-prompt-cache-key": {dropped, "no need found: a payload rule can set a fixed key"},
 	"api-keys.openai-compatibility[].excluded-models":          {dead, ""}, // today's core has no such key there
@@ -344,17 +345,205 @@ var rules = map[string]rule{
 	"api-keys.meta":                                            {dropped, "the login is built; no need for a bare key"},
 }
 
+// aliasLater is the reason an oauth.model-alias entry's setting is not imported yet.
+var aliasLater = map[string]string{
+	"force-mapping": "built when a client needs a reply's model to be the alias it asked for",
+	"openapi":       "built when someone calls Vertex partner models (Claude, Llama, Mistral) through a key",
+}
+
 // tree is a decoded YAML mapping.
 type tree = map[string]any
+
+// literal is a scalar YAML reads as something other than text (a number, true or false, a
+// date): its value as yaml.v3 decodes it into any, and its text as written. Today's core
+// decodes its config into typed fields, so a text setting gets the text (api-key: 0123 is
+// "0123", not 83) and a number or true-or-false setting gets the value.
+type literal struct {
+	value any
+	text  string
+}
+
+// node decodes a YAML value as yaml.v3 decodes it into any, except that a scalar YAML reads
+// as something other than text is a literal. yaml.v3 itself resolves aliases and merge keys
+// and refuses repeated keys in each mapping.
+type node struct{ v any }
+
+func (d *node) UnmarshalYAML(n *yaml.Node) error {
+	switch {
+	case n.Kind == yaml.MappingNode && stringMap(n):
+		var m map[string]node
+		if err := n.Decode(&m); err != nil {
+			return err
+		}
+		t := make(tree, len(m))
+		for k, e := range m {
+			t[k] = e.v
+		}
+		d.v = t
+	case n.Kind == yaml.SequenceNode:
+		var list []node
+		if err := n.Decode(&list); err != nil {
+			return err
+		}
+		out := make([]any, len(list))
+		for i, e := range list {
+			out[i] = e.v
+		}
+		d.v = out
+	case n.Kind == yaml.ScalarNode:
+		var v any
+		if err := n.Decode(&v); err != nil {
+			return err
+		}
+		if _, isText := v.(string); isText || v == nil {
+			d.v = v
+		} else {
+			d.v = literal{value: v, text: n.Value}
+		}
+	default:
+		// A mapping with a key that is not text: as yaml.v3 decodes it into any (which the
+		// translation then refuses where it wants a mapping).
+		return n.Decode(&d.v)
+	}
+	return nil
+}
+
+// stringMap reports whether yaml.v3 decodes the mapping n into a map with text keys
+// (yaml.v3's isStringMap).
+func stringMap(n *yaml.Node) bool {
+	for i := 0; i < len(n.Content); i += 2 {
+		if t := n.Content[i].ShortTag(); t != "!!str" && t != "!!merge" {
+			return false
+		}
+	}
+	return true
+}
+
+// value returns v, or a literal's value.
+func value(v any) any {
+	if l, ok := v.(literal); ok {
+		return l.value
+	}
+	return v
+}
+
+// plain returns v with each literal below it replaced by its value: v as yaml.v3 decodes it
+// into any, for settings that go across as they are.
+func plain(v any) any {
+	switch v := v.(type) {
+	case literal:
+		return v.value
+	case tree:
+		out := make(tree, len(v))
+		for k, c := range v {
+			out[k] = plain(c)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, c := range v {
+			out[i] = plain(c)
+		}
+		return out
+	}
+	return v
+}
+
+// asText returns a literal's text, and anything else as plain does: a text field of a setting
+// that goes across as it is, which this core's own check then reads.
+func asText(v any) any {
+	if l, ok := v.(literal); ok {
+		return l.text
+	}
+	return plain(v)
+}
+
+// each returns the list v with f applied to each item, or v as plain does when it is not a
+// list.
+func each(v any, f func(any) any) any {
+	list, ok := v.([]any)
+	if !ok {
+		return plain(v)
+	}
+	out := make([]any, len(list))
+	for i, e := range list {
+		out[i] = f(e)
+	}
+	return out
+}
+
+// payloadRules returns payload rules with the field types of today's core
+// (config.PayloadConfig): a rule's params, and a model's match and not-match, hold values; a
+// model's name, protocol, from-protocol, headers, exist and not-exist, and a filter rule's
+// params, are text as written. Every key keeps its name as written, and anything else goes
+// across as plain does. The JSON config reads the result with encoding/json, which, unlike
+// today's core's YAML decoder, also matches a key written in another letter case (Name: is
+// name:); like it, it drops a key it does not know, so payload.Validate never sees one.
+func payloadRules(rules tree) tree {
+	model := func(v any) any {
+		m, ok := v.(tree)
+		if !ok {
+			return plain(v)
+		}
+		out := tree{}
+		for k, f := range m {
+			switch h, isMap := f.(tree); {
+			case k == "name", k == "protocol", k == "from-protocol":
+				out[k] = asText(f)
+			case k == "exist", k == "not-exist":
+				out[k] = each(f, asText)
+			case k == "headers" && isMap:
+				hs := tree{}
+				for name, val := range h {
+					hs[name] = asText(val)
+				}
+				out[k] = hs
+			default:
+				out[k] = plain(f)
+			}
+		}
+		return out
+	}
+	out := tree{}
+	for list, v := range rules {
+		out[list] = each(v, func(e any) any {
+			r, ok := e.(tree)
+			if !ok {
+				return plain(e)
+			}
+			o := tree{}
+			for k, f := range r {
+				switch {
+				case k == "models":
+					o[k] = each(f, model)
+				case k == "params" && list == "filter":
+					o[k] = each(f, asText)
+				default:
+					o[k] = plain(f)
+				}
+			}
+			return o
+		})
+	}
+	return out
+}
 
 // Translate turns the contents of a config.yaml written for today's core into this core's
 // config. It fails only where today's core would refuse the file too (it is not a mapping, a
 // key appears twice, config-version is not 8) or a value has the wrong type.
 func Translate(b []byte) (*Result, error) {
-	var root any
-	if err := yaml.Unmarshal(b, &root); err != nil {
+	// The first decode refuses what yaml.v3 refuses (repeated keys, an alias that contains
+	// itself, excessive aliasing) with its own errors, before the second, which decodes each
+	// mapping and list on its own and so does not see those limits.
+	var check any
+	if err := yaml.Unmarshal(b, &check); err != nil {
 		return nil, err
 	}
+	var doc node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	root := doc.v
 	t, ok := root.(tree)
 	if !ok {
 		if root == nil {
@@ -382,13 +571,13 @@ type translator struct {
 
 func (x *translator) run() error {
 	if v, ok := get(x.t, "config-version"); ok {
-		if n, isInt := v.(int); !isInt || n != 8 {
+		if n, isInt := value(v).(int); !isInt || n != 8 {
 			return errors.New("unsupported config-version (expected 8)")
 		}
 	}
 	for _, k := range newKeys {
 		if v, ok := x.t[k]; ok {
-			x.out[k] = v
+			x.out[k] = plain(v)
 			delete(x.t, k)
 		}
 	}
@@ -656,7 +845,7 @@ func (x *translator) options() error {
 	} else if on {
 		x.res.Import.InjectXSearch = true
 	}
-	switch v, _ := get(x.t, "multimedia.disable-image-generation"); v {
+	switch v, _ := get(x.t, "multimedia.disable-image-generation"); value(v) {
 	case nil, false, "false", "":
 	case true, "true":
 		x.res.Import.ImageGenerationTool = false
@@ -698,13 +887,16 @@ func (x *translator) options() error {
 		}
 		x.out["proxy_url"] = proxy
 	}
-	// The payload rules keep today's names, so they go across as they are; the config's own
-	// check (payload.Validate) refuses what this core cannot apply.
+	// The payload rules keep today's names, so they go across under those names, their text
+	// fields as written (payloadRules). The JSON config's reading of them differs from
+	// today's core on letter case (see payloadRules); its own check (payload.Validate)
+	// refuses what this core cannot apply.
 	if rules, _ := get(x.t, "requests.payload"); rules != nil {
-		if _, isMap := rules.(tree); !isMap {
+		m, isMap := rules.(tree)
+		if !isMap {
 			return errors.New("requests.payload must be a mapping")
 		}
-		x.out["payload"] = rules
+		x.out["payload"] = payloadRules(m)
 	}
 	return nil
 }
@@ -937,14 +1129,14 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 	key, _ := scalar(field(g, k, "api-key"), path)
 	a := map[string]any{"id": id, "credential": map[string]any{"kind": "api_key", "api_key": strings.TrimSpace(key)}}
 	if p := field(g, k, "priority"); p != nil {
-		n, ok := p.(int)
+		n, ok := value(p).(int)
 		if !ok {
 			return nil, fmt.Errorf("%s.priority must be a whole number", path)
 		}
 		a["priority"] = n
 	}
 	if d := field(g, k, "disable-cooling"); d != nil {
-		on, ok := d.(bool)
+		on, ok := value(d).(bool)
 		if !ok {
 			return nil, fmt.Errorf("%s.disable-cooling must be true or false", path)
 		}
@@ -956,7 +1148,7 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		rr = g["request-retry"]
 	}
 	if rr != nil {
-		n, ok := rr.(int)
+		n, ok := value(rr).(int)
 		if !ok {
 			return nil, fmt.Errorf("%s.request-retry must be a whole number", path)
 		}
@@ -965,7 +1157,7 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		}
 	}
 	if w := k["weight"]; w != nil {
-		n, ok := w.(int)
+		n, ok := value(w).(int)
 		if !ok || n < 0 || n > 1_000_000 {
 			return nil, fmt.Errorf("%s: weight must be a whole number from 0 to 1000000", path)
 		}
@@ -977,7 +1169,9 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 			return nil, fmt.Errorf("%s.models must be a list", path)
 		}
 		var models []any
-		public := map[string]bool{}
+		public := map[string]string{} // the name clients use, to the upstream name kept for it
+		var pooled []string           // the names clients use that later entries repeat, in order
+		dropped := map[string][]string{}
 		for _, m := range list {
 			e, ok := m.(tree)
 			if !ok {
@@ -991,18 +1185,34 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 			if err != nil {
 				return nil, err
 			}
-			// The name clients use is the alias, else the name; the first entry for a name
-			// wins, as in today's core.
+			// The name clients use is the alias, else the name; the first entry for a name wins.
+			// Today's core does the same in every section but openai-compatibility, where
+			// entries that share an alias are a pool its requests rotate over and fall back
+			// through; this core serves the first and names the others in a note.
 			name, alias = strings.TrimSpace(name), strings.TrimSpace(alias)
-			if name == "" || public[cmp.Or(alias, name)] {
+			if name == "" {
 				continue
 			}
-			public[cmp.Or(alias, name)] = true
+			pub := cmp.Or(alias, name)
+			if kept, seen := public[pub]; seen {
+				if f.v8 == "openai-compatibility" && kept != name && !slices.Contains(dropped[pub], name) {
+					if dropped[pub] == nil {
+						pooled = append(pooled, pub)
+					}
+					dropped[pub] = append(dropped[pub], name)
+				}
+				continue
+			}
+			public[pub] = name
 			if alias == "" || alias == name {
 				models = append(models, name)
 			} else {
 				models = append(models, map[string]any{"name": name, "alias": alias})
 			}
+		}
+		for _, pub := range pooled {
+			x.notes = append(x.notes, fmt.Sprintf("config.yaml: %s key %s: models: the alias %q lists %d upstream models, which today's core rotates over as a pool; this core does not pool models yet and serves only the first, %q; dropped: %s",
+				display(path), id, pub, len(dropped[pub])+1, public[pub], quoteAll(dropped[pub])))
 		}
 		if len(models) > 0 {
 			a["models"] = models
@@ -1219,7 +1429,7 @@ func (x *translator) oauthModels() error {
 				case "name", "alias", "display-name", "fork":
 				case "force-mapping", "openapi":
 					if !isZero(v) {
-						x.laterKeys = append(x.laterKeys, "oauth.model-alias."+k)
+						x.laterKeys = append(x.laterKeys, "oauth.model-alias."+k+" ("+aliasLater[k]+")")
 					}
 				default:
 					x.unknownKeys = append(x.unknownKeys, "oauth.model-alias."+k)
@@ -1343,6 +1553,11 @@ var defaults = map[string]any{
 	"observability.usage.redis-usage-queue-retention-seconds": 60,
 }
 
+// falseAsks are settings whose default is true, so false is the value that asks for something.
+var falseAsks = map[string]bool{
+	"routing.session-affinity-subagents": true,
+}
+
 // classify names, among the settings at path and below, those that are not supported, are
 // dropped or are not known. inherited is the rule of the nearest mapping above that has one.
 func (x *translator) classify(path string, v any, inherited *rule) {
@@ -1418,7 +1633,7 @@ func rulesBelow(path string) bool {
 func switchedOff(m tree) bool {
 	for _, k := range []string{"enabled", "enable"} {
 		if v, ok := m[k]; ok {
-			return v != true
+			return value(v) != true
 		}
 	}
 	return false
@@ -1441,7 +1656,10 @@ func asksNothing(path string, v any) bool {
 	case []any:
 		return len(v) == 0
 	}
-	if d, ok := defaults[path]; ok && d == v {
+	if value(v) == false && falseAsks[path] {
+		return false
+	}
+	if d, ok := defaults[path]; ok && d == value(v) {
 		return true
 	}
 	return isZero(v)
@@ -1467,8 +1685,17 @@ func lookup(path string) (rule, bool) {
 // display is how a setting is named in a notice.
 func display(path string) string { return strings.ReplaceAll(path, "[]", "") }
 
+// quoteAll writes names as quoted strings separated by commas.
+func quoteAll(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = strconv.Quote(n)
+	}
+	return strings.Join(q, ", ")
+}
+
 func isZero(v any) bool {
-	switch v := v.(type) {
+	switch v := value(v).(type) {
 	case nil:
 		return true
 	case bool:
@@ -1561,18 +1788,10 @@ func merge(cur, old any) any {
 	return c
 }
 
+// str reads the text setting at path (see scalar).
 func str(t tree, path string) (string, error) {
-	v, ok := get(t, path)
-	if !ok || v == nil {
-		return "", nil
-	}
-	switch v := v.(type) {
-	case string:
-		return v, nil
-	case int:
-		return strconv.Itoa(v), nil
-	}
-	return "", fmt.Errorf("%s must be text", path)
+	v, _ := get(t, path)
+	return scalar(v, path)
 }
 
 func integer(t tree, path string) (int, error) {
@@ -1580,7 +1799,7 @@ func integer(t tree, path string) (int, error) {
 	if !ok || v == nil {
 		return 0, nil
 	}
-	switch v := v.(type) {
+	switch v := value(v).(type) {
 	case int:
 		return v, nil
 	case string:
@@ -1609,28 +1828,23 @@ func stringList(v any, path string) ([]string, error) {
 	return out, nil
 }
 
-// scalar reads a text setting as today's core's typed decoder does: a number written without
-// quotes is its digits.
-//
-// shortcut: the digits are Go's rendering of the decoded number, so an unquoted number YAML
-// reads differently from its text (a leading zero, an exponent) is not kept as written;
-// decode yaml.Node scalars when such keys turn up.
+// scalar reads a text setting as today's core's typed decoder does: a scalar is its text as
+// written, whatever YAML reads it as (api-key: 0123 is "0123", true is "true"), and absent or
+// null is empty.
 func scalar(v any, path string) (string, error) {
 	switch v := v.(type) {
 	case nil:
 		return "", nil
 	case string:
 		return v, nil
-	case int:
-		return strconv.Itoa(v), nil
-	case float64:
-		return strconv.FormatFloat(v, 'f', -1, 64), nil
+	case literal:
+		return v.text, nil
 	}
 	return "", fmt.Errorf("%s must be text", path)
 }
 
-// headers reads a headers mapping as today's core does (upheader.Import): each value is text,
-// a number or true or false, written as text.
+// headers reads a headers mapping as today's core does (upheader.Import): each value is a
+// scalar, read as its text (see scalar).
 func headers(v any, path string) (map[string]string, []string, error) {
 	if v == nil {
 		return nil, nil, nil
@@ -1641,7 +1855,7 @@ func headers(v any, path string) (map[string]string, []string, error) {
 	}
 	text := map[string]string{}
 	for k, val := range m {
-		s, err := headerText(val, path+"."+k)
+		s, err := scalar(val, path+"."+k)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1654,25 +1868,21 @@ func headers(v any, path string) (map[string]string, []string, error) {
 	return h, dynamic, nil
 }
 
-// headerText returns a header value, as YAML decodes it, as text: text, a number, or true or false.
-func headerText(v any, path string) (string, error) {
-	if b, isBool := v.(bool); isBool {
-		return strconv.FormatBool(b), nil
+// HeaderText returns a header value of a provider section of a config.yaml as the header core
+// sends: its text as written, without the spaces around it (upheader.Import). ok is false for
+// a value core refuses.
+func HeaderText(n *yaml.Node) (text string, ok bool) {
+	var d node
+	if n.Decode(&d) != nil {
+		return "", false
 	}
-	return scalar(v, path)
-}
-
-// HeaderText returns a header value of a provider section of a config.yaml, as YAML decodes it,
-// as the header core sends: written as text, without the spaces around it (upheader.Import).
-// ok is false for a value core refuses.
-func HeaderText(v any) (text string, ok bool) {
-	s, err := headerText(v, "")
+	s, err := scalar(d.v, "")
 	return strings.TrimSpace(s), err == nil
 }
 
 // boolean_ reads a true or false setting; absent is false.
 func boolean_(v any, path string) (bool, error) {
-	switch v := v.(type) {
+	switch v := value(v).(type) {
 	case nil:
 		return false, nil
 	case bool:

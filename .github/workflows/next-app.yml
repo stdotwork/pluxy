@@ -193,6 +193,16 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Install
         run: bun install --frozen-lockfile
+      # The pinned downloads the test needs (the AppImage runtime and the bundler's tools, pinned
+      # in native/appimage.ts and package.ts), so a shard fetches them from GitHub's releases only
+      # when no run has kept them. The test checks every file against its SHA-256 whenever it uses
+      # one, so what the cache holds is never trusted. Within a job, the test package and the
+      # sessions already share this folder, since the job does not move XDG_CACHE_HOME.
+      - name: Cache the pinned downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pluxy-app-native
+          key: app-native-pinned-${{ hashFiles('next/app/native/appimage.ts', 'next/app/package.ts') }}
       - name: Native test
         timeout-minutes: 45
         env:

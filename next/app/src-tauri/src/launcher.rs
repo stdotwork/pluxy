@@ -479,6 +479,13 @@ pub fn tray_menu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
     Ok(menu)
 }
 
+/// The tray's Start… submenu itself, for the native test's click on Windows (through the menu's own
+/// window message).
+#[cfg(all(feature = "native-test", windows))]
+pub fn start_menu() -> Option<Submenu<Wry>> {
+    START.lock().unwrap().clone()
+}
+
 /// The label of a launch in the tray's Start… menu.
 fn tray_label(e: &Entry) -> String {
     format!(

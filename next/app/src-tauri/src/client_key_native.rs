@@ -14,8 +14,9 @@
 //!   the core, core's key ID and the agent; the window gets the secret's ID and binding only;
 //! - serve: the agent, given the key for its `serve` after a native confirmation, is served by
 //!   core with it (200); the key is in neither the agent's argv nor its environment nor its log
-//!   (argv and environment as the system has them, `proc_native.rs`; on Windows, which gives no
-//!   supported way to read another process's environment, as the agent reports its own);
+//!   (argv and environment as the system has them, `proc_native.rs`; on Windows the command line
+//!   as Windows has it, and the environment as the agent reports its own, since Windows gives no
+//!   supported way to read another process's);
 //! - recipient: the key given to another tool is refused before any confirmation;
 //! - deleted: a second captured key, deleted on core, is refused before any confirmation;
 //! - changed core: with the app connected to another core (a listener of this check's), the key
@@ -235,19 +236,56 @@ impl Drop for Listener {
     }
 }
 
-/// The agent's argv and environment, as the system has them for process pid.
+/// The agent's program in its package, as its argv names it.
+const PROGRAM: &str = if cfg!(windows) {
+    r"bin\tool.exe"
+} else {
+    "bin/tool"
+};
+
+/// The agent's argv and environment, as the system has them for process pid; empty when they
+/// cannot be read.
 #[cfg(unix)]
-fn argv_env(pid: u64, _out: &Path) -> String {
-    super::procs::argv_env(pid)
+fn argv_env(pid: u64, _out: &Path) -> (String, String) {
+    super::procs::argv_env(pid).unwrap_or_default()
 }
 
-/// The agent's argv and environment as it reports them itself, beside out (the fixture tool
-/// writes them there on Windows).
+/// The agent's command line as Windows has it for process pid (`Win32_Process.CommandLine`, read
+/// through PowerShell), and its environment as it reports it itself, beside out (the fixture
+/// tool writes it there): Windows gives no supported way to read another process's environment.
+/// Each empty when it cannot be read.
 #[cfg(windows)]
-fn argv_env(_pid: u64, out: &Path) -> String {
+fn argv_env(pid: u64, out: &Path) -> (String, String) {
+    let shell = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+        .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    let mut c = std::process::Command::new(shell);
+    c.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        &format!("(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"),
+    ])
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::null());
+    let argv = crate::owned::windows::std_spawn(&mut c)
+        .and_then(|c| c.wait_with_output())
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
     let mut seen = out.as_os_str().to_owned();
     seen.push(".process");
-    std::fs::read_to_string(seen).unwrap_or_default()
+    (argv, std::fs::read_to_string(seen).unwrap_or_default())
+}
+
+/// Whether argv and env, the agent's as read, are whole: its argv names its program, and its
+/// environment holds the extension ID the host gives every tool (it clears a tool's environment,
+/// then sets that: program.rs). A read that failed, or a reply without the environment, is not.
+fn whole(argv: &str, env: &str) -> bool {
+    argv.contains(PROGRAM) && env.contains("PLUXY_EXTENSION_ID=pluxy/agent")
 }
 
 pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<(), String> {
@@ -366,13 +404,19 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "core did not serve the agent with the key",
             )?;
             let pid = r["value"]["pid"].as_u64().ok_or("no agent pid")?;
-            let seen = argv_env(pid, &file);
+            let (argv, env) = argv_env(pid, &file);
             require(
-                !seen.is_empty(),
-                "the agent's argv and environment could not be read",
+                whole(&argv, &env),
+                format!(
+                    "the agent's argv and environment could not be read: {} and {} bytes",
+                    argv.len(),
+                    env.len()
+                ),
             )?;
             require(
-                !keys.iter().any(|k| seen.contains(k.as_str())),
+                !keys
+                    .iter()
+                    .any(|k| argv.contains(k.as_str()) || env.contains(k.as_str())),
                 "the key is in the agent's argv or environment",
             )?;
             let status = ok(main, "program_status", json!({"package": AGENT}))?;
@@ -432,7 +476,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         })(),
     )?;
 
-    // ---- changed core: another core, then the app's own again
+    // ---- changed core: another core, then the first again (the app's own on Linux, the session's
+    // test core elsewhere)
     step(
         "changed core",
         (|| {
@@ -545,4 +590,30 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     out["passed"] = json!(true);
     log("client_keys", out);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{whole, PROGRAM};
+
+    #[test]
+    fn a_read_without_the_agents_environment_is_refused() {
+        let argv = format!("/s/{PROGRAM}\0serve\0");
+        // Argv only, as macOS gives a reply without the environment.
+        assert!(!whole(&argv, ""));
+        assert!(!whole("", "PLUXY_EXTENSION_ID=pluxy/agent\0"));
+        assert!(whole(&argv, "HOME=/h\0PLUXY_EXTENSION_ID=pluxy/agent\0"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_process_linux_cannot_read_is_refused() {
+        // No such process.
+        let (argv, env) = super::super::procs::argv_env(u64::from(u32::MAX)).unwrap_or_default();
+        assert!(!whole(&argv, &env));
+        // This process: both read.
+        let (argv, env) = super::super::procs::argv_env(u64::from(std::process::id()))
+            .expect("this process's argv and environment");
+        assert!(!argv.is_empty() && !env.is_empty());
+    }
 }
