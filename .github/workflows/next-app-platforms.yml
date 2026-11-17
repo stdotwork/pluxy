@@ -12,7 +12,8 @@ on:
   workflow_call:
     inputs:
       # ci.yml sets this when the change touches neither next/app, next/ui nor the workflows: the
-      # native jobs build and run just the app and the kit, never the Go core.
+      # native jobs build the app and the kit. Some shards also start a test core with `go run`, so
+      # a change only to the Go code that core is built from does not rerun them.
       skip-native:
         type: boolean
         default: false
