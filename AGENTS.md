@@ -181,6 +181,7 @@ Some macOS jobs and every Windows job stay on GitHub's runners:
 - Commit messages and PR titles use Conventional Commits, scoped by folder: `app`, `next`, or
   `ci` for workflows, for example `fix(next): ...` or `ci: ...`. Repo-wide docs use `docs: ...`.
 - Open PRs ready for review, not as drafts. The owner reviews and merges.
-- Licensing: `extensions/app/` keeps its upstream MIT `LICENSE`. The notices of the removed old
-  core and old web panel are in `THIRD_PARTY_NOTICES.md`. The root license is not decided yet; do
-  not add one.
+- Licensing: `extensions/app/` keeps its upstream MIT `LICENSE`. The MIT notices of the removed old
+  core and old web panel, of the old desktop app, and of the Pi adapter in
+  `next/app-tools/pi-setup/adapter/`, and the files `next/` keeps or adapts from them, are in
+  `THIRD_PARTY_NOTICES.md`. The root license is not decided yet; do not add one.

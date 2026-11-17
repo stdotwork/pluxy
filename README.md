@@ -14,5 +14,7 @@ panel in `next/ui`.
 
 See [AGENTS.md](AGENTS.md) for how to build and test each folder and how changes are made.
 
-`extensions/app/` keeps its upstream MIT `LICENSE`. The notices of the removed old core and old web
-panel are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The root license is not decided yet.
+`extensions/app/` keeps its upstream MIT `LICENSE`. The MIT notices of the upstream projects this
+repository once held (the old core and old web panel) or still carries (the old desktop app and the
+Pi adapter in `next/app-tools/pi-setup/adapter/`), and the files `next/` keeps or adapts from them,
+are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The root license is not decided yet.
