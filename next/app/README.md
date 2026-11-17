@@ -1552,7 +1552,9 @@ app supported there:
     with client keys), and a launcher check that uses managed launches only
     (`src-tauri/src/launcher_platform_native.rs`: no detached agent, terminal or key entry, which
     wait for their own slices), in the app built with the test trust, in local mode against a test
-    core. The client keys are made on that test core, not on the app's own core as on Linux;
+    core. The client keys are made on that test core, not on the app's own core as on Linux. On
+    Windows the client-key check reads the agent's command line from Windows, but its environment
+    is the agent's own report, as Windows gives no supported way to read another process's;
   - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
     test core, with the window's and page's command probes, the native confirmations, key entry and
     key rotation. [Limits](#limits) says how its input is made.
