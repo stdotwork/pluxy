@@ -1459,3 +1459,58 @@ func TestAnyModelServesRequestWithoutModel(t *testing.T) {
 		t.Errorf("an unknown model: got %+v, want model not found", last)
 	}
 }
+
+// When every account is cooling, the reply says how long is left in whole seconds rounded up, and
+// the same wait goes in retry_after_ms: 0.2s left reads as 1s, not "0s"; 1.2s left reads as 2s.
+func TestCoolingErrorWaitRoundsUp(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		block time.Duration // the account's block
+		spent time.Duration // how much of it has passed
+		want  string
+		ms    int64
+	}{
+		{"a fifth of a second left", time.Second, 800 * time.Millisecond, "1s", 200},
+		{"a whole second left", time.Second, 0, "1s", 1000},
+		{"a second and a fifth left", 1200 * time.Millisecond, 0, "2s", 1200},
+		{"just under a minute left", time.Minute, 100 * time.Millisecond, "1m0s", 59900},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, Config{RequestRetry: rounds(0), MaxWaitMS: 120000}, accts("a")...)
+			h.on("a", rateLimited(c.block), ok())
+			h.run(h.req("m")) // the 429 that starts the block
+			h.now = h.now.Add(c.spent)
+			e := h.run(h.req("m"))[0].Error
+			if e == nil || e.ProviderCode != "model_cooldown" {
+				t.Fatalf("got %+v, want model_cooldown", e)
+			}
+			if want := fmt.Sprintf("every account for model %q is cooling down; try again in %s", "m", c.want); e.Message != want || e.RetryAfterMS != c.ms {
+				t.Errorf("message %q, retry_after_ms %d; want %q and %d", e.Message, e.RetryAfterMS, want, c.ms)
+			}
+		})
+	}
+}
+
+// A block that ends at the very moment of the request is over: the account serves it, and no
+// cooling error is built. One millisecond earlier it is still running, and the error says 1s, not
+// "0s". With no wait at all, coolingError itself still says 1s and sends a retry_after_ms and so a
+// Retry-After.
+func TestCoolingErrorNeverSaysZero(t *testing.T) {
+	h := newHarness(t, Config{RequestRetry: rounds(0), MaxWaitMS: 120000}, accts("a")...)
+	h.on("a", rateLimited(time.Second), ok())
+	h.run(h.req("m")) // the 429 that starts a 1s block
+	h.now = h.now.Add(time.Second - time.Millisecond)
+	e := h.run(h.req("m"))[0].Error
+	if e == nil || e.ProviderCode != "model_cooldown" || !strings.HasSuffix(e.Message, "try again in 1s") || e.RetryAfterMS != 1 {
+		t.Errorf("1ms before the block ends: %+v, want model_cooldown, try again in 1s, retry_after_ms 1", e)
+	}
+	h.now = h.now.Add(time.Millisecond)
+	h.runOK("m") // the block ends at now: the account serves it
+
+	for _, wait := range []time.Duration{0, -time.Second} {
+		e := coolingError("m", wait, nil)
+		if !strings.HasSuffix(e.Message, "try again in 1s") || e.RetryAfterMS != 1000 {
+			t.Errorf("wait %v: %q, retry_after_ms %d; want try again in 1s and 1000", wait, e.Message, e.RetryAfterMS)
+		}
+	}
+}
