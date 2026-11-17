@@ -181,8 +181,10 @@ pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
 /// keeps no extended access list entry, the rule of the app's other private folders
 /// (`private_macos.rs`): the folder, its config and the credentials and packages folders the
 /// config names by default are given an empty list, and so is each credential file with an
-/// entry (cleared, not refused: the core owns them, and refusing would stop it). Each is opened
-/// beneath the folder, never through a link. The core writes into folders that pass nothing on.
+/// entry (cleared, not refused: the core owns them, and refusing would stop it). The folder is
+/// opened by its path and `credentials` is listed by its path; what is inside the folder is
+/// opened beneath it, never through a link, so a linked credential file is skipped. The core
+/// writes into folders that pass nothing on.
 #[cfg(target_os = "macos")]
 fn clear_core_folder(dir: &Path) -> io::Result<()> {
     use crate::private_macos::{clear_entries, open_beneath};
@@ -931,7 +933,8 @@ mod tests {
 
     /// macOS: the core folder from an install whose folders others may use is emptied of
     /// extended access list entries before the core starts: the folder, its config, the
-    /// credentials and packages folders and each credential file. A link in it is not followed.
+    /// credentials and packages folders and each credential file. The folder is opened by its
+    /// path; a link inside it is not followed.
     #[cfg(target_os = "macos")]
     #[test]
     fn the_core_folder_keeps_no_access_list() {

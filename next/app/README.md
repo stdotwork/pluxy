@@ -1595,22 +1595,22 @@ in the browser. The app updates itself only as a Linux AppImage.
   native run.
 - Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
   entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the
-  local data folder, private by its access list. Secrets are kept in a file
-  only the user may read (0600 on Linux and macOS) in the app's data folder, not in the system
-  keyring, and only exact values are redacted. On macOS, where an extended access list can let
-  others in whatever the mode, a vault folder with any entry is given an empty list (as a too-open
-  one is tightened to 0700, so nothing made in it inherits an entry) and a vault file with any is
-  refused. The app's other private folders (Access's store, remembered launches, cores,
-  extensions, the instance folder and the app's core's folder) are emptied the same way; files
-  written privately are made with an empty list that takes nothing from their folder; and the
-  remembered launches file, the instance folder's lock and address and an installed core's files
-  are refused with any entry. In the core's folder its config, its `credentials` and `packages`
-  folders and each credential file are emptied of entries before the core starts, not refused: the
-  core owns them. Other files and folders already inside these folders keep any entry they had
-  from before. The window has no vault page yet. Secrets reach
-  native tools' pipes and the environment of a process a confirmed launch starts (the launching
-  tool holds only a reference); a client key is checked at each use, also at a launch's spawn and
-  each restart. Backups have no retention: a package keeps at most 256.
+  local data folder, private by its access list. Secrets are kept in a file only the user may read
+  (0600 on Linux and macOS) in the app's data folder, not in the system keyring, and only exact
+  values are redacted. On macOS, where an extended access list can let others in whatever the mode,
+  a vault folder with any entry is given an empty list (as a too-open one is tightened to 0700, so
+  nothing made in it inherits an entry) and a vault file with any is refused. The app's other
+  private folders (Access's store, remembered launches, cores, extensions, the instance folder and
+  the app's core's folder) are emptied the same way; files written privately are made, where the
+  volume supports access lists, with an empty list that takes nothing from their folder; and the
+  remembered launches file, the instance folder's lock and address and an installed core's files are
+  refused with any entry. In the core's folder its config, its `credentials` and `packages` folders
+  and each credential file (not one that is a link) are emptied of entries before the core starts,
+  not refused: the core owns them. Other files and folders already inside these folders keep any
+  entry they had from before. The window has no vault page yet. Secrets reach native tools' pipes
+  and the environment of a process a confirmed launch starts (the launching tool holds only a
+  reference); a client key is checked at each use, also at a launch's spawn and each restart.
+  Backups have no retention: a package keeps at most 256.
 - Access: signers and grants can be made on Linux only (5.8 or later: grants record the `statx`
   mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one

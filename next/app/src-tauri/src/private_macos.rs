@@ -9,8 +9,9 @@
 //! - where the app checks a private file's mode before using it (the vault's files, the
 //!   remembered launches, the instance folder's lock and address, an installed core's files), a
 //!   file with any entry is refused too (`has_entries`);
-//! - a file the app writes privately is made with an empty list that takes nothing from its
-//!   folder (`create_new`), so no entry is on it at any moment.
+//! - a file the app writes privately is made, where the volume supports access lists, with an
+//!   empty list that takes nothing from its folder (`create_new`), so no entry is on it at any
+//!   moment; on a volume without them it is made plainly (`create_new_in`).
 //!
 //! Files and folders already inside a folder when it is emptied keep what they had. Each check
 //! and change acts on an open descriptor, opened as the caller's mode check opens it: the vault,
