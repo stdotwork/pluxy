@@ -290,6 +290,21 @@ fn whole(argv: &str, env: &str) -> bool {
     argv.replace('\\', "/").contains(PROGRAM) && env.contains("PLUXY_EXTENSION_ID=pluxy/agent")
 }
 
+/// The agent's argv and environment as read (`argv_env`), only when whole (`whole`): a read that
+/// failed or came back partial fails, rather than leaving the key checks nothing to search.
+fn agent_seen(pid: u64, out: &Path) -> Result<(String, String), String> {
+    let (argv, env) = argv_env(pid, out);
+    if whole(&argv, &env) {
+        Ok((argv, env))
+    } else {
+        Err(format!(
+            "the agent's argv and environment could not be read: {} and {} bytes",
+            argv.len(),
+            env.len()
+        ))
+    }
+}
+
 pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<(), String> {
     let work = fixtures.join("client-keys-work");
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
@@ -406,15 +421,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "core did not serve the agent with the key",
             )?;
             let pid = r["value"]["pid"].as_u64().ok_or("no agent pid")?;
-            let (argv, env) = argv_env(pid, &file);
-            require(
-                whole(&argv, &env),
-                format!(
-                    "the agent's argv and environment could not be read: {} and {} bytes",
-                    argv.len(),
-                    env.len()
-                ),
-            )?;
+            let (argv, env) = agent_seen(pid, &file)?;
             require(
                 !keys
                     .iter()
@@ -629,5 +636,62 @@ mod tests {
         let (argv, env) = super::super::procs::argv_env(u64::from(std::process::id()))
             .expect("this process's argv and environment");
         assert!(!argv.is_empty() && !env.is_empty());
+    }
+
+    /// The serve step's read (`agent_seen`) of real processes: one it cannot read, one read whole
+    /// but not the agent, one with the agent's environment but another program, and the agent.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_serve_step_takes_only_the_agents_whole_read() {
+        use super::agent_seen;
+        use std::process::{Command, Stdio};
+        let dir = std::env::temp_dir().join(format!("ck-seen-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        let out = dir.join("out");
+        assert!(agent_seen(u64::from(u32::MAX), &out).is_err());
+        // This process: argv and environment both read, neither the agent's.
+        assert!(agent_seen(u64::from(std::process::id()), &out).is_err());
+        let tool = dir.join(PROGRAM);
+        std::os::unix::fs::symlink("/bin/sh", &tool).unwrap();
+        // A shell that waits on its input; as `bin/tool` it keeps the argv it was started with.
+        let start = |program: &std::path::Path, id: &str| {
+            Command::new(program)
+                .args(["-c", "read x; :"])
+                .env_clear()
+                .env("PLUXY_EXTENSION_ID", id)
+                .stdin(Stdio::piped())
+                .spawn()
+                .unwrap()
+        };
+        let mut other = start(&tool, "pluxy/other");
+        let mut shell = start(std::path::Path::new("/bin/sh"), "pluxy/agent");
+        let mut agent = start(&tool, "pluxy/agent");
+        // Each has started once its argv is its own, not the test's that forked it.
+        let read = |c: &std::process::Child| {
+            for _ in 0..100 {
+                if let Some((argv, _)) = super::super::procs::argv_env(u64::from(c.id())) {
+                    if argv.contains("read x") {
+                        return;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            panic!("process {} did not start", c.id());
+        };
+        for c in [&other, &shell, &agent] {
+            read(c);
+        }
+        let other_seen = agent_seen(u64::from(other.id()), &out);
+        let shell_seen = agent_seen(u64::from(shell.id()), &out);
+        let agent_read = agent_seen(u64::from(agent.id()), &out);
+        for c in [&mut other, &mut shell, &mut agent] {
+            drop(c.stdin.take());
+            c.wait().unwrap();
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(other_seen.is_err(), "{other_seen:?}");
+        assert!(shell_seen.is_err(), "{shell_seen:?}");
+        let (argv, env) = agent_read.expect("the agent's read");
+        assert!(argv.contains(PROGRAM) && env.contains("PLUXY_EXTENSION_ID=pluxy/agent"));
     }
 }
