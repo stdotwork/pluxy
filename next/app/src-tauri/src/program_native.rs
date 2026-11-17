@@ -246,10 +246,13 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         w
     };
     require(env == want, format!("the tool's environment: {env:?}"))?;
-    // On Windows each system folder the tool has is the app's own.
+    // On Windows each system folder the tool has is the app's own, and it has each the app has as
+    // a full path (none the app has as a relative one).
     #[cfg(windows)]
     for k in SYSTEM_ENV {
-        let app_value = std::env::var_os(k).map(|v| v.to_string_lossy().into_owned());
+        let app_value = std::env::var_os(k)
+            .filter(|v| Path::new(v).is_absolute())
+            .map(|v| v.to_string_lossy().into_owned());
         require(
             env.contains(k) == app_value.is_some() && first["system"][k] == json!(app_value),
             format!(
