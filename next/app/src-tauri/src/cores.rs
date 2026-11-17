@@ -10,11 +10,14 @@
 //! digest is kept and checked again before the core starts. Nothing in this module needs Tauri.
 //!
 //! Installing and starting a version open each folder and file without following a link
-//! (`Dir`): every folder and file is opened from the folder held open before it, on Unix by
-//! descriptor (`openat`), on Windows by handle (`NtCreateFile` relative to the folder,
-//! `vault::at`), and a link or other reparse point is refused. On Windows the store is in the
-//! local application data, on a fixed local drive, and its folders are private by their access
-//! lists (this user and SYSTEM, `private_windows.rs`).
+//! (`Dir`). The folder unpacked into (a staging folder) and a version's folder are opened by
+//! their paths, refusing a link or other reparse point at the last part; below them every folder
+//! and file is opened from the folder held open before it, on Unix by descriptor (`openat`), on
+//! Windows by handle (`NtCreateFile` relative to the folder, `vault::at`), refusing a link or other
+//! reparse point at each part. Moving a version into place, removing it, and making its files
+//! read-only go by path. On Windows the store is in the local application data, on a fixed local
+//! drive, and its folders are private by their access lists (this user and SYSTEM,
+//! `private_windows.rs`).
 
 use crate::artifact::{self, PublisherKeys, Tier, VerifiedArchive};
 use crate::managed::{random_key, write_private};
@@ -242,33 +245,62 @@ fn exclusive_dir(path: &Path) -> io::Result<()> {
     Dir::open(parent)?.make_new(name)
 }
 
-/// Refused unless path is on a fixed local drive (`C:\...`): not a network share or a mapped,
-/// removable or virtual drive, where the store's files would not stay on this computer.
+/// Refused unless path is on a fixed local drive of this computer: the drive of the folder's real
+/// path, every link and junction resolved (of its nearest folder that exists, as the store may not
+/// yet), as `GetVolumePathNameW` and `GetDriveTypeW` find it. A network share, a drive letter
+/// mapped to one, a link to one, and a removable drive are refused; a `subst` drive or a mounted
+/// virtual disk on this computer counts as the local drive it is. A share path (`\\server\share`)
+/// is refused without being opened.
 #[cfg(windows)]
 fn local_fixed(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::fs::OpenOptionsExt;
     use std::path::Prefix;
-    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetDriveTypeW, GetVolumePathNameW, FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE,
+    };
     /// `GetDriveTypeW`'s answer for a fixed local drive.
     const DRIVE_FIXED: u32 = 3;
-    let fixed = match path.components().next() {
-        Some(Component::Prefix(p)) => match p.kind() {
-            Prefix::Disk(d) | Prefix::VerbatimDisk(d) => {
-                let root = [u16::from(d), u16::from(b':'), u16::from(b'\\'), 0];
-                // SAFETY: root is a NUL-terminated wide string.
-                unsafe { GetDriveTypeW(root.as_ptr()) == DRIVE_FIXED }
-            }
-            _ => false,
-        },
-        _ => false,
-    };
-    if fixed {
-        Ok(())
-    } else {
-        Err(format!(
+    let refused = || {
+        format!(
             "{} is not on a local drive of this computer; the app keeps its core versions only there",
             path.display()
-        ))
+        )
+    };
+    match path.components().next() {
+        Some(Component::Prefix(p))
+            if matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) => {}
+        _ => return Err(refused()),
     }
+    let mut at = path;
+    let f = loop {
+        match OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(win::SHARE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(at)
+        {
+            Ok(f) => break f,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                at = at.parent().ok_or_else(refused)?
+            }
+            Err(e) => return Err(format!("{}: {e}", at.display())),
+        }
+    };
+    let real = crate::owned::windows::final_path(&f)?;
+    let wide: Vec<u16> = real.as_os_str().encode_wide().chain([0]).collect();
+    // The volume's root is never longer than the path it holds.
+    let mut root = vec![0u16; wide.len() + 1];
+    // SAFETY: wide is NUL-terminated; root holds the length given.
+    if unsafe { GetVolumePathNameW(wide.as_ptr(), root.as_mut_ptr(), root.len() as u32) } == 0 {
+        return Err(refused());
+    }
+    // SAFETY: GetVolumePathNameW wrote a NUL-terminated path into root.
+    if unsafe { GetDriveTypeW(root.as_ptr()) } != DRIVE_FIXED {
+        return Err(refused());
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -516,8 +548,9 @@ fn remove_tree(path: &Path) {
     let _ = fs::remove_dir_all(path);
 }
 
-/// Windows: a read-only file (`lock`) whose removal this user's rights on its folder do not
-/// allow is made private again first, as its owner may.
+/// Windows: should removing fail (a read-only file, `lock`, whose access list allows no delete,
+/// where its folder's rights do not make up for it), every file under path is made private again,
+/// as its owner may, and the removal tried once more.
 #[cfg(windows)]
 fn remove_tree(path: &Path) {
     if fs::remove_dir_all(path).is_ok() {
@@ -1273,6 +1306,8 @@ fn unpack(archive: impl Read, dir: &Path, limit: u64) -> Result<Vec<FileRecord>,
     let root = Dir::open(dir).map_err(|e| e.to_string())?;
     let mut tar = tar::Archive::new(bounded);
     let mut files = Vec::new();
+    // Each path unpacked so far and each folder on its way, by its lower-case spelling.
+    let mut spelled: std::collections::HashMap<String, String> = Default::default();
     let entries = tar.entries().map_err(read_err)?;
     for (n, entry) in entries.enumerate() {
         if n >= MAX_ENTRIES {
@@ -1283,6 +1318,22 @@ fn unpack(archive: impl Read, dir: &Path, limit: u64) -> Result<Vec<FileRecord>,
         let Some(path) = entry_path(&raw)? else {
             continue;
         };
+        // Where a file system ignores case (Windows; macOS by default), names that differ only
+        // in case are one name: a second spelling would merge with the first, so it is refused.
+        let mut end = 0;
+        for part in path.split('/') {
+            end += part.len();
+            let prefix = &path[..end];
+            let first = spelled
+                .entry(prefix.to_lowercase())
+                .or_insert_with(|| prefix.to_string());
+            if first != prefix {
+                return Err(format!(
+                    "archive entry {path} differs only in case from {first}, the same name on Windows and macOS"
+                ));
+            }
+            end += 1;
+        }
         let kind = entry.header().entry_type();
         if kind.is_dir() {
             let (parent, name) =
@@ -1617,10 +1668,14 @@ mod tests {
         // A file added.
         fs::write(store.folder("3.0.0").join("extra"), b"x").unwrap();
         changed("3.0.0");
-        // Its folder swapped for a link to a copy with the same files.
+        // Its folder swapped for a link to a copy with the same files, locked as installed ones
+        // are (the test archive's files are 0755), so only the link can make it fail.
         let copy = dir.join("copy");
         fs::create_dir(&copy).unwrap();
         fs::write(copy.join("index.json"), b"{}").unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(copy.join("index.json"), fs::Permissions::from_mode(0o755)).unwrap();
+        lock(&copy).unwrap();
         let bundled = store.folder("4.0.0").join("bundled");
         fs::rename(&bundled, dir.join("aside")).unwrap();
         link_folder(&copy, &bundled);
@@ -1676,7 +1731,16 @@ mod tests {
     #[test]
     fn the_store_is_private_and_its_files_read_only_on_windows() {
         use crate::private_windows::{is_private, is_read_only, open_for_access_list};
+        // The store's folder made beforehand, as any folder in the temporary folder is: not
+        // private (the control that the check below can fail), until the store opens it.
         let dir = temp("private");
+        fs::create_dir_all(&dir).unwrap();
+        let f = open_for_access_list(&dir, true).unwrap();
+        assert!(
+            !is_private(&f).unwrap(),
+            "a new temporary folder is private already"
+        );
+        drop(f);
         let store = Store::open(&dir).unwrap();
         install(&store, "1.0.0", &layout());
         let version = store.folder("1.0.0");
@@ -1715,7 +1779,17 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn names_windows_cannot_hold_are_refused() {
-        for name in ["a:stream", "CON", "nul.txt", "dot."] {
+        // Not `a:stream`: a one-letter name before `:` is a drive on Windows, refused as leaving
+        // the folder before this rule is reached.
+        for name in [
+            "ab:stream",
+            "CON",
+            "nul.txt",
+            "NUL .txt",
+            "COM\u{b9}",
+            "dot.",
+            "space ",
+        ] {
             let dir = temp("names");
             fs::create_dir_all(&dir).unwrap();
             let archive = gz_tar(&[
@@ -1726,16 +1800,43 @@ mod tests {
             assert!(e.contains("Windows cannot hold"), "{name}: {e}");
             remove_tree(&dir);
         }
-        // Two names that differ only in case are one name on Windows: the second is refused,
-        // not written over the first.
-        let dir = temp("names");
+    }
+
+    /// Two names that differ only in case, of files or of folders on the way to them, are one
+    /// name on Windows (and macOS by default): the second spelling is refused, never merged with
+    /// the first. Names that differ otherwise unpack.
+    #[test]
+    fn names_differing_only_in_case_are_refused() {
+        let twins: [&[(&str, tar::EntryType, Vec<u8>)]; 2] = [
+            &[
+                ("a.txt", tar::EntryType::Regular, b"one".to_vec()),
+                ("A.txt", tar::EntryType::Regular, b"two".to_vec()),
+            ],
+            &[
+                ("bundled/a", tar::EntryType::Regular, b"one".to_vec()),
+                ("Bundled/b", tar::EntryType::Regular, b"two".to_vec()),
+            ],
+        ];
+        for entries in twins {
+            let dir = temp("case");
+            fs::create_dir_all(&dir).unwrap();
+            let e = unpack(&gz_tar(entries)[..], &dir, MAX_UNPACKED).unwrap_err();
+            assert!(e.contains("differs only in case"), "{e}");
+            remove_tree(&dir);
+        }
+        // The control: other names, also in the same folder, unpack.
+        let dir = temp("case");
         fs::create_dir_all(&dir).unwrap();
-        let archive = gz_tar(&[
-            (PROGRAM, tar::EntryType::Regular, b"MZ".to_vec()),
-            ("a.txt", tar::EntryType::Regular, b"one".to_vec()),
-            ("A.txt", tar::EntryType::Regular, b"two".to_vec()),
-        ]);
-        assert!(unpack(&archive[..], &dir, MAX_UNPACKED).is_err());
+        let entries = [
+            ("bundled/a", tar::EntryType::Regular, b"one".to_vec()),
+            ("bundled/b", tar::EntryType::Regular, b"two".to_vec()),
+        ];
+        assert_eq!(
+            unpack(&gz_tar(&entries)[..], &dir, MAX_UNPACKED)
+                .unwrap()
+                .len(),
+            2
+        );
         remove_tree(&dir);
     }
 
@@ -1749,6 +1850,22 @@ mod tests {
         // The control: the test's own temporary folder is on one.
         let dir = temp("fixed");
         Store::open(&dir).unwrap();
+        // A link on that drive to the same folder through a share of this computer (the
+        // runner's administrative share `\\localhost\<drive>$`): its path starts with a fixed
+        // drive's letter, but its real path is the share.
+        let text = dir.to_string_lossy().into_owned();
+        let (drive, rest) = text.split_once(":\\").expect("a drive path");
+        let share = PathBuf::from(format!(r"\\localhost\{drive}$\{rest}"));
+        assert!(
+            fs::metadata(&share).is_ok(),
+            "{} is not reachable",
+            share.display()
+        );
+        let link = temp("fixed-link");
+        std::os::windows::fs::symlink_dir(&share, &link).unwrap();
+        let e = Store::open(&link.join("cores")).unwrap_err();
+        assert!(e.contains("not on a local drive"), "{e}");
+        fs::remove_dir(&link).unwrap();
         remove_tree(&dir);
     }
 }

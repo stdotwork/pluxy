@@ -109,11 +109,12 @@ The archive is a gzip tar file of the core's folder, as provider releases are pa
 Windows `pluxy.exe`) at the top, and anything beside it, such as `bundled/`. It may hold only
 regular files and folders, no links, devices or names that leave the folder, at most 10,000
 entries, and at most 512 MiB decompressed in all (headers and the data of folder entries count
-too). On Windows it may also hold no name Windows cannot hold plainly (a `:` stream, a device name
-such as `CON`, a trailing dot or space) and no two names that differ only in case. Each file is
-made from the folder held open before it, following no links (on Windows relative to the folder's
-handle, which is held so no one can rename the folder meanwhile). Release versions may not start
-with `custom-`, which adopted programs use.
+too), and no two names that differ only in case (one name on Windows and, by default, macOS). On
+Windows it may also hold no name Windows cannot hold plainly (a `:` stream, a device name such as
+`CON`, a trailing dot or space). The folder it is unpacked into is opened by its path, refusing a
+link there; below it each folder and file is made from the folder held open before it, following
+no links (on Windows relative to the folder's handle, which is held so no one can rename that
+folder meanwhile). Release versions may not start with `custom-`, which adopted programs use.
 
 **Install** (or **Update to** a newer version): the app copies the archive into its own folder and
 checks it with the shared verifier (`src-tauri/src/artifact.rs`) and the app's trust
@@ -127,10 +128,12 @@ every release; test builds trust only a test runner's temporary roots (below).
 Once confirmed, the app unpacks the archive into a new version folder, records each file's
 SHA-256 (in `cores/records/`, apart from the folders), and makes the files read-only (on Windows
 by their access lists: this user and SYSTEM may read them, no one may write; the folders are
-private to this user and SYSTEM). Before every start it opens every file beneath the version's
-folder without following links, checks that it is a regular file of the recorded size and still
-read-only, then its digest, and runs the core from the program file it just checked, not from its
-path again. A changed version does not start:
+private to this user and SYSTEM). Before every start it opens the version's folder by its path
+(refusing a link there) and every file beneath it without following links, checks that it is a
+regular file of the recorded size and still read-only, then its digest, and starts the core from
+the program file it just checked: on Linux from the open file itself; on macOS and Windows from
+the path that file has now, after checking that the path still names that same file
+(`src-tauri/src/owned/`). A changed version does not start:
 **Install … again** installs the same release over it, through the same checks and confirmation;
 a changed adopted copy is copied in again by adopting the same program again.
 
@@ -170,8 +173,8 @@ A **core program** you name on the Connection page (or `pluxy` beside the app) i
 place. **Adopt this core program** shows its path, size and SHA-256 in the native confirmation;
 once confirmed, the app copies it into a version of its own, `custom-<its SHA-256>`, if it is
 still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
-without being read; on Unix it must be executable, on Windows a program image named `.exe`), and
-runs the copy. Only the program is copied, nothing beside it (such as
+without being read; on Unix it must be executable, on Windows a program image named `.exe` or
+`.com`), and runs the copy. Only the program is copied, nothing beside it (such as
 `bundled/`), so an adopted core starts without the bundled packages a release brings. An adopted
 program has no signature.
 
@@ -1637,7 +1640,8 @@ in the browser. The app updates itself only as a Linux AppImage.
   the renderer writes alignment as inline style, which the notes' policy refuses.
 - The app's own core comes only from a local index file for now; an https source joins with the
   release feed. Installing, rolling back and adopting need the native confirmation, so they work
-  on Linux only; the store itself works on Windows too, checked by its unit tests there.
+  on Linux only. The store itself works on Windows too, which its unit tests check on the Windows
+  CI runner.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.
