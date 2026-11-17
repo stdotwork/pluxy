@@ -101,8 +101,23 @@ type Store struct {
 	now  func() time.Time
 }
 
-// Open loads the records the backend holds.
+// OpenError is the error of an Open that failed. Safe mode opens the store too, so starting
+// without extensions does not get past it.
+type OpenError struct{ Err error }
+
+func (e *OpenError) Error() string { return e.Err.Error() }
+func (e *OpenError) Unwrap() error { return e.Err }
+
+// Open loads the records the backend holds. Its error is an *OpenError.
 func Open(b Backend) (*Store, error) {
+	s, err := open(b)
+	if err != nil {
+		return nil, &OpenError{err}
+	}
+	return s, nil
+}
+
+func open(b Backend) (*Store, error) {
 	recs, err := b.Load()
 	if err != nil {
 		return nil, err
