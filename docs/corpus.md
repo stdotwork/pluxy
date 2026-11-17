@@ -1,10 +1,11 @@
 # The corpus: how the new core is held to the old one
 
-The core in `next/` replaces the old core (the Go proxy formerly in `core/`). Users of the old
-core should be able to move without their clients noticing, so the new core is checked against
-the old one on the same requests. The check is the differential test corpus in `next/corpus`.
-This page explains the bar it sets and how the old core it compares with is fixed. How to run it,
-write cases and re-record is in [`next/corpus/README.md`](../next/corpus/README.md).
+The core in `next/` replaces the old core, the Go proxy that was in `core/` until it was removed
+from the repository. Users of the old core should be able to move without their clients noticing,
+so the new core is checked against what the old one did on the same requests. The check is the
+differential test corpus in `next/corpus`. This page explains the bar it sets and how the old core
+it compares with is fixed. How to run it, write cases and re-record is in
+[`next/corpus/README.md`](../next/corpus/README.md).
 
 ## The bar
 
@@ -32,16 +33,15 @@ written reason: config settings in
 
 ## Recorded replies and the pinned old core
 
-Each case file holds the old core's observations, recorded from a live run (`recorded_old_core`).
-The everyday run compares the new core with those recordings and does not build or run the old
-core, so it is fast enough for every CI run; Next CI runs it with the rest of the tests. While
-`core/` is in the repository, the Next corpus workflow also runs the old core live, which catches
-a recording that no longer matches it.
+Each case file holds the old core's observations, recorded from a live run of it
+(`recorded_old_core`). The corpus compares the new core with those recordings and does not build
+or run the old core, so it is fast enough for every CI run; Next CI runs it with the rest of the
+tests. The old core is no longer in the repository and nothing in CI runs it live, so the
+recordings are the lasting regression check.
 
-The recordings, not a live old core, are the lasting regression check. Removing `core/` ends the
-live run in CI, so the old core is pinned to one commit: once `core/` is removed, "the old core"
-in the corpus means `core/` at the last commit that still has it, and
-[`next/corpus/README.md`](../next/corpus/README.md) names that commit from then on. Re-recording builds the old
-core from a worktree of that commit and points the corpus at the binary, so cases can still be
-added or re-recorded after `core/` is gone. The steps are in
+"The old core" in the corpus means the code that was in `core/` at one pinned commit, the last
+commit that changed it; [`next/corpus/README.md`](../next/corpus/README.md) names that commit.
+Re-recording a case, or comparing with the old core live, builds the old core from a worktree of
+that commit and points the corpus at the binary, so cases can still be added and re-recorded.
+The steps are in
 [Re-recording against the old core](../next/corpus/README.md#re-recording-against-the-old-core).

@@ -1,10 +1,16 @@
 # The design of pluxy's core
 
 pluxy's product is the core in `next/`, its extensions, and the web panel and desktop app built on
-one UI kit. It was written from scratch rather than ported from the old core (the Go proxy formerly
-in `core/`); the old core serves as a reference for behaviour, checked by the
-[test corpus](corpus.md). This page records the decisions behind that design and why they were
-made. The contracts themselves are in the READMEs it links to.
+one UI kit. It was written from scratch rather than ported from the old core (the Go proxy that was
+in `core/` until it was removed from the repository); the old core serves as a reference for
+behaviour, checked by the [test corpus](corpus.md). This page records the decisions behind that
+design and why they were made. The contracts themselves are in the READMEs it links to.
+
+Parity with the old core and the old desktop app means the same features and a similar UI and
+workflow, so that someone who knows the old ones finds things in the same places. It does not mean
+copying the old code's bugs. Each intended difference is written down: for the app in
+[`next/app/PARITY.md`](../next/app/PARITY.md), and for core's behaviour as `intended` exceptions in
+the corpus.
 
 ## A small core with extensions
 
