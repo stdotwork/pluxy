@@ -35,12 +35,15 @@ func declaration(params string) string {
 
 // Claude's VALIDATED mode wants a required property in every object, so today's core adds one to
 // each object that requires nothing: "reason" (a string) where there are no properties, "_" (a
-// boolean) where there are some and none is required. The expected schemas are today's core's
-// (corpus case tool-schema-forms-claude records the nested object), with one difference on
-// purpose: a function's response schema gets no placeholder here (today's core adds one to a
-// declaration's response and responseJsonSchema), as it describes what the client returns, not
-// what the model writes, and nothing would strip it. A site is left out where a client schema at
-// the same path declares the placeholder's name, so a strip never takes the client's key; today's
+// boolean) where there are some and none is required. The placeholders expected are today's core's
+// (corpus case tool-schema-forms-claude records the nested object); the rest of each schema is
+// what the extension's cleaner gives, which is not always today's core's (it sends allOf as it is
+// where today's core merges it). One difference on purpose: a function's response schema gets no
+// placeholder here (today's core adds one to a declaration's response and responseJsonSchema), as
+// it describes what the client returns, not what the model writes, and nothing would strip it. A
+// site is left out where a client schema at the same path, a union branch (also one Claude's
+// cleaning cuts), a tuple item or a function declared again under the same name, declares the
+// placeholder's name as a property or in required, so a strip never takes the client's key; today's
 // core keeps the placeholder in the model's calls there too.
 func TestPlaceholdersAdded(t *testing.T) {
 	const reason = `{"type":"string","description":"Brief explanation of why you are calling this tool"}`
@@ -125,7 +128,36 @@ func TestPlaceholdersAdded(t *testing.T) {
 			[]placeholderSite{{name: "reason"}}},
 		{"properties and no type, with a required property", true, true,
 			`{"properties":{"a":{"type":"string"}},"required":["a"]}`,
-			`{"properties":{"a":{"type":"string"}},"required":["a"]}`,
+			`{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}`,
+			nil},
+		{"no type, properties only from allOf", true, true,
+			`{"allOf":[{"type":"object","properties":{"a":{"type":"string"}}}]}`,
+			`{"type":"object","properties":{"_":{"type":"boolean"}},"required":["_"],"allOf":[{"type":"object","properties":{"a":{"type":"string"}}}]}`,
+			[]placeholderSite{{name: "_"}}},
+		{"Claude: a cut union branch declares _", true, true,
+			`{"type":"object","properties":{"u":{"anyOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"_":{"type":"string"}},"required":["_"]}]}},"required":["u"]}`,
+			`{"type":"object","properties":{"u":{"type":"object","description":"Accepts: object | object","properties":{"a":{"type":"string"},"_":{"type":"boolean"}},"required":["_"]}},"required":["u"]}`,
+			nil},
+		{"Claude: a cut union branch declares reason", true, true,
+			`{"type":"object","properties":{"u":{"oneOf":[{"type":"object"},{"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"]}]}},"required":["u"]}`,
+			`{"type":"object","properties":{"u":{"type":"object","description":"Accepts: object | object","properties":{"reason":` + reason + `},"required":["reason"]}},"required":["u"]}`,
+			nil},
+		{"Claude: a cut union branch declares _ through a $ref", true, true,
+			`{"type":"object","properties":{"u":{"anyOf":[{"$ref":"#/$defs/A"},{"$ref":"#/$defs/B"}]}},"required":["u"],
+				"$defs":{"A":{"type":"object","properties":{"a":{"type":"string"}}},"B":{"type":"object","properties":{"_":{"type":"string"}},"required":["_"]}}}`,
+			`{"type":"object","properties":{"u":{"type":"object","description":"Accepts: object | object","properties":{"a":{"type":"string"},"_":{"type":"boolean"}},"required":["_"]}},"required":["u"]}`,
+			nil},
+		{"a name only in required: reason", true, true,
+			`{"type":"object","properties":{"x":{"type":"object","required":["reason"]}},"required":["x"]}`,
+			`{"type":"object","properties":{"x":{"type":"object","properties":{"reason":` + reason + `},"required":["reason"]}},"required":["x"]}`,
+			nil},
+		{"a name only in required: _", true, true,
+			`{"type":"object","properties":{"x":{"properties":{"a":{"type":"string"}},"required":["_"]}},"required":["x"]}`,
+			`{"type":"object","properties":{"x":{"type":"object","properties":{"a":{"type":"string"},"_":{"type":"boolean"}},"required":["_"]}},"required":["x"]}`,
+			nil},
+		{"other models: an untyped schema with properties gets its type", false, false,
+			`{"properties":{"a":{"type":"string"},"n":{"properties":{"b":{"type":"string"}}}}}`,
+			`{"type":"object","properties":{"a":{"type":"string"},"n":{"type":"object","properties":{"b":{"type":"string"}}}}}`,
 			nil},
 		{"a union object gets none (anyOf)", false, true,
 			`{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"anyOf":[{"required":["a"]},{"required":["b"]}]}`,
@@ -171,6 +203,13 @@ func TestPlaceholdersLeaveResponseSchemas(t *testing.T) {
 	out, _ := cleanTools(json.RawMessage(in), true, true)
 	if !sameJSON(t, string(out), in) {
 		t.Errorf("cleaned tools %s, want %s", out, in)
+	}
+	// An untyped response schema with properties still gets its type, as in today's core.
+	untyped := `[{"functionDeclarations":[{"name":"f","parameters":{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]},"response":{"properties":{"r":{"type":"string"}}}}]}]`
+	typed := `[{"functionDeclarations":[{"name":"f","parameters":{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]},"response":{"type":"object","properties":{"r":{"type":"string"}}}}]}]`
+	out, _ = cleanTools(json.RawMessage(untyped), true, true)
+	if !sameJSON(t, string(out), typed) {
+		t.Errorf("cleaned tools %s, want %s", out, typed)
 	}
 }
 
@@ -249,18 +288,25 @@ func TestPlaceholdersSameNameDeclarations(t *testing.T) {
 		{"name":"f","parametersJsonSchema":{"type":"object","properties":{"a":{"type":"string"}}}},
 		{"name":"f","parametersJsonSchema":{"type":"object","properties":{"_":{"type":"string"}}}},
 		{"name":"g","parametersJsonSchema":{"type":"object","properties":{"a":{"type":"string"}}}}]}]`
-	_, added := cleanTools(json.RawMessage(in), true, true)
-	if len(added["f"]) != 0 {
-		t.Errorf("f's sites %+v, want none: the second declaration declares _", added["f"])
-	}
-	if want := []placeholderSite{{name: "_"}}; !reflect.DeepEqual(added["g"], want) {
-		t.Errorf("g's sites %+v, want %+v", added["g"], want)
+	// The same two declarations, the declaring one first.
+	reversed := `[{"functionDeclarations":[
+		{"name":"f","parametersJsonSchema":{"type":"object","properties":{"_":{"type":"string"}}}},
+		{"name":"f","parametersJsonSchema":{"type":"object","properties":{"a":{"type":"string"}}}}]}]`
+	for name, tools := range map[string]string{"declaring one second": in, "declaring one first": reversed} {
+		_, added := cleanTools(json.RawMessage(tools), true, true)
+		if len(added["f"]) != 0 {
+			t.Errorf("%s: f's sites %+v, want none: one declaration declares _", name, added["f"])
+		}
+		if want := []placeholderSite{{name: "_"}}; name == "declaring one second" && !reflect.DeepEqual(added["g"], want) {
+			t.Errorf("g's sites %+v, want %+v", added["g"], want)
+		}
 	}
 }
 
 // What the client sees of a call the model made: the arguments, and the raw chunks.
 type callReply struct {
 	args, raw string
+	path      string          // the Cloud Code method the request went to
 	upstream  json.RawMessage // the parameters of function f in the request Cloud Code got
 }
 
@@ -271,8 +317,10 @@ func generateCall(t *testing.T, model, parameters, args string) callReply {
 	t.Helper()
 	srv := agtest.New(t)
 	var sent []byte
+	var path string
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req agtest.Request) {
 		sent = req.Body
+		path = r.URL.Path
 		chunk := `{"response":{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"f","args":` + args + `}}]},` +
 			`"finishReason":"STOP","index":0}],"modelVersion":"agtest","responseId":"agtest"}}`
 		if strings.Contains(r.URL.Path, "streamGenerateContent") {
@@ -313,6 +361,7 @@ func generateCall(t *testing.T, model, parameters, args string) callReply {
 		t.Fatalf("Cloud Code got %s (%v)", sent, err)
 	}
 	reply.upstream = env.Request.Tools[0].Decls[0].Parameters
+	reply.path = path
 	return reply
 }
 
@@ -325,18 +374,22 @@ func TestGenerateStripsPlaceholders(t *testing.T) {
 		name, model, parameters, args string
 		sent                          string // the parameters Cloud Code must get
 		wantArgs                      string
+		path                          string // the Cloud Code method the model's path asks for
 		stripped                      bool
 	}{
 		{"Claude, streamed", "claude-sonnet-5-5", optional, `{"_":true,"a":"x"}`,
-			`{"type":"object","properties":{"a":{"type":"string"},"_":{"type":"boolean"}},"required":["_"]}`, `{"a":"x"}`, true},
+			`{"type":"object","properties":{"a":{"type":"string"},"_":{"type":"boolean"}},"required":["_"]}`, `{"a":"x"}`, "/v1internal:streamGenerateContent", true},
 		{"Gemini 3.1 Pro, one reply", "gemini-3.1-pro-high", `{"type":"object"}`, `{"reason":"why"}`,
-			`{"type":"object","properties":{"reason":{"type":"string","description":"Brief explanation of why you are calling this tool"}},"required":["reason"]}`, `{}`, true},
-		{"a model outside the group", "gemini-3-flash", optional, `{"_":true,"a":"x"}`, optional, `{"_":true,"a":"x"}`, false},
+			`{"type":"object","properties":{"reason":{"type":"string","description":"Brief explanation of why you are calling this tool"}},"required":["reason"]}`, `{}`, "/v1internal:generateContent", true},
+		{"a model outside the group", "gemini-3-flash", optional, `{"_":true,"a":"x"}`, optional, `{"_":true,"a":"x"}`, "/v1internal:generateContent", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got := generateCall(t, c.model, c.parameters, c.args)
 			if !sameJSON(t, string(got.upstream), c.sent) {
 				t.Errorf("Cloud Code got parameters\n %s\nwant\n %s", got.upstream, c.sent)
+			}
+			if got.path != c.path {
+				t.Errorf("the request went to %s, want %s", got.path, c.path)
 			}
 			if got.args != c.wantArgs {
 				t.Errorf("the client's call has arguments %s, want %s", got.args, c.wantArgs)

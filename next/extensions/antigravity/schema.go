@@ -82,9 +82,11 @@ const maxRefDepth = 16
 // parameters (parametersJsonSchema renamed to parameters) and its response. group is true for
 // Claude and Gemini 3 Pro, which keep titles and get placeholders in their parameters; the second
 // result says where the placeholders went, leaving out any that a client schema at the same path
-// (another union branch, a tuple item, a function declared again under the same name) declares a
-// property of the same name: stripping would take the client's key, so that placeholder is left
-// in the model's calls, as in today's core.
+// (another union branch, whole as the client wrote it even where Claude's cleaning keeps one; a
+// tuple item; a function declared again under the same name) declares a name the placeholder
+// has, as a property or in required: stripping would take the client's key, so that placeholder
+// is left in the model's calls, as in today's core. Every schema with properties and no type gets
+// type "object".
 func cleanTools(raw json.RawMessage, claude, group bool) (json.RawMessage, placeholders) {
 	var tools []map[string]json.RawMessage
 	if json.Unmarshal(raw, &tools) != nil {
@@ -195,10 +197,17 @@ func cleanParameters(raw json.RawMessage, mode schemaMode) (json.RawMessage, []p
 		}
 	}
 	cleaned := clean(root, defs, mode, 0)
+	typeObjects(cleaned, false)
 	var sites []placeholderSite
 	declared := declaredNames{}
 	if mode.placeholders && !mode.response {
-		collectDeclared(cleaned, nil, declared)
+		// The names client schemas declare are read from a tree whose unions are whole: for Claude,
+		// cleaned has cut each union to one branch, and the others' names are the client's too.
+		whole := cleaned
+		if mode.claude {
+			whole = clean(root, defs, schemaMode{keepTitle: mode.keepTitle}, 0)
+		}
+		collectDeclared(whole, nil, declared)
 		addPlaceholders(cleaned, nil, false, &sites)
 	}
 	out, err := json.Marshal(cleaned)
@@ -206,6 +215,22 @@ func cleanParameters(raw json.RawMessage, mode schemaMode) (json.RawMessage, []p
 		return raw, nil, nil
 	}
 	return out, sites, declared
+}
+
+// typeObjects gives type "object" to every schema that has properties and no type, as today's
+// core does, except an allOf branch, which merges into its object and takes that object's type.
+func typeObjects(node any, merged bool) {
+	m, ok := node.(map[string]any)
+	if !ok {
+		return
+	}
+	schemaChildren(m, nil, func(child any, _ []placeholderStep, mg bool) { typeObjects(child, mg) })
+	if _, typed := m["type"]; typed || merged {
+		return
+	}
+	if _, ok := m["properties"].(map[string]any); ok {
+		m["type"] = "object"
+	}
 }
 
 // pathKey names the values a path leads to, to compare the schemas at one path.
@@ -265,20 +290,30 @@ func schemaChildren(m map[string]any, path []placeholderStep, fn func(child any,
 	}
 }
 
-// collectDeclared records the property names every schema under node declares, before any
-// placeholder is added.
+// collectDeclared records the names every schema under node declares, as properties or in required
+// (a required name is the client's too), before any placeholder is added.
 func collectDeclared(node any, path []placeholderStep, declared declaredNames) {
 	m, ok := node.(map[string]any)
 	if !ok {
 		return
 	}
-	if props, ok := m["properties"].(map[string]any); ok && len(props) > 0 {
-		key := pathKey(path)
+	key := pathKey(path)
+	note := func(name string) {
 		if declared[key] == nil {
 			declared[key] = map[string]bool{}
 		}
+		declared[key][name] = true
+	}
+	if props, ok := m["properties"].(map[string]any); ok {
 		for name := range props {
-			declared[key][name] = true
+			note(name)
+		}
+	}
+	if list, ok := m["required"].([]any); ok {
+		for _, r := range list {
+			if name, ok := r.(string); ok {
+				note(name)
+			}
 		}
 	}
 	schemaChildren(m, path, func(child any, p []placeholderStep, _ bool) { collectDeclared(child, p, declared) })
@@ -310,8 +345,8 @@ func objectShape(m map[string]any, names, required map[string]bool) {
 
 // addPlaceholders adds a placeholder to every object schema under node, as today's core does, and
 // records each in sites. path leads to the values node describes. An object is a schema of type
-// "object", or with properties and no type (it then gets that type when it gets a placeholder). An
-// object that is a union (it has anyOf or oneOf) gets none, and an allOf branch is judged with the
+// "object", or one with no type whose properties come only from its allOf branches (typeObjects
+// has typed the others; it gets that type when it gets a placeholder). An object that is a union (it has anyOf or oneOf) gets none, and an allOf branch is judged with the
 // object it merges into, not alone.
 //
 // shortcut: an object with no declared properties gets "reason", which strip removes from the
@@ -341,7 +376,7 @@ func addPlaceholders(node any, path []placeholderStep, merged bool, sites *[]pla
 	names, required := map[string]bool{}, map[string]bool{}
 	objectShape(m, names, required)
 	typ, hasType := m["type"]
-	if !(typ == "object" || !hasType && (ownIsMap || len(names) > 0)) {
+	if !(typ == "object" || !hasType && len(names) > 0) {
 		return
 	}
 	if ownMap == nil {
