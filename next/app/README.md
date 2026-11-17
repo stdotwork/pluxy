@@ -1591,6 +1591,11 @@ in the browser. The app updates itself only as a Linux AppImage.
   when the tool serving that call asks ([Launches and managed runtimes](app-host/README.md#launches-and-managed-runtimes));
   installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
+- On macOS a launch you confirm may run a program from a folder that every administrator of the
+  Mac can change, such as `/Applications` or Homebrew's folders. Another administrator account can
+  swap that program in the moment between the app's check and its start, and can change at any
+  time what it loads from those folders (Homebrew's libraries, a script's interpreter). The app's
+  own core and native tools never run from such a folder: the app refuses them there.
 - Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
   entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the
   local data folder, private by its access list. Secrets are kept in a file

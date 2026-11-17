@@ -586,14 +586,15 @@ mod macos {
         file(&others, 0o702);
         refused(&others, &others, Writers::Nobody);
 
-        // A group writable file, in a group other than wheel (0) and admin (80).
+        // A group writable file, in any group: the user's own, and admin's.
         let group = dir.join("group");
         file(&group, 0o720);
-        let gid = unsafe { libc::getegid() };
-        assert!(gid != 0 && gid != 80, "the test runs with group {gid}");
-        let c = std::ffi::CString::new(group.as_os_str().as_encoded_bytes()).unwrap();
-        assert_eq!(unsafe { libc::chown(c.as_ptr(), u32::MAX, gid) }, 0);
+        set_group(&group, unsafe { libc::getegid() });
         refused(&group, &group, Writers::Nobody);
+        let admins = dir.join("admins");
+        file(&admins, 0o720);
+        set_group(&admins, admin_gid());
+        refused(&admins, &admins, Writers::Nobody);
 
         let open = dir.join("open");
         fs::create_dir(&open).unwrap();
@@ -721,6 +722,17 @@ mod macos {
             exec_target(&g, Writers::Nobody).is_err(),
             "a file replaced after it was opened"
         );
+
+        // Below a folder the admin group may write, it runs only under the rule that allows it.
+        let shared = dir.join("shared");
+        folder(&shared, 0o775);
+        set_group(&shared, admin_gid());
+        let r = shared.join("prog");
+        file(&r, 0o700);
+        let h = fs::File::open(&r).unwrap();
+        assert_eq!(exec_target(&h, Writers::Admins).unwrap(), r);
+        let e = exec_target(&h, Writers::Nobody).unwrap_err();
+        assert!(e.contains("may be changed by other users"), "{e}");
     }
 }
 

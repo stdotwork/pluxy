@@ -130,14 +130,20 @@ pub(crate) enum Writers {
     /// No one: the app's own core and its native tools, which it installs in its own data folder.
     Nobody,
     /// Also the members of the `admin` group, through a folder that group may write (never the
-    /// file itself): a launch's program, which the person chose wherever it is installed. macOS
-    /// makes `/Applications` root:admin 0775, and Homebrew makes the folders of its prefix the
-    /// installing user's, group admin, 0775 when that user is an admin; refusing them would
-    /// refuse every program in an app bundle or installed with Homebrew. What it costs: another
-    /// admin account on this Mac, or a process running as one, can put another program in its
-    /// place at any time, also between the check and the exec, so a launch can run a program
-    /// other than the one the person confirmed. Being in `admin` does not make that account root
-    /// (sudo still asks for its password): it needs no more than the folder's group write.
+    /// file itself): the program of a detached launch or of a managed runtime (`spawn.rs`), which
+    /// the person confirmed wherever it is installed. macOS makes `/Applications` root:admin 0775,
+    /// and Homebrew makes the folders of its prefix the installing user's, group admin, 0775 when
+    /// that user is an admin; refusing them would refuse a direct launch of any program installed
+    /// with Homebrew or inside an app in `/Applications`.
+    ///
+    /// What it costs: another admin account on this Mac, or a process running as one, can
+    /// replace the program between this check and the exec (a replacement before the check is
+    /// refused: the path then no longer names the opened file), and for a program inside an app
+    /// until it has loaded the app's frameworks. Larger, and true with or without this rule: such
+    /// a program loads other files from folders `admin` may write (Homebrew's libraries in
+    /// `Cellar` and `opt`, a script's interpreter and its modules under `lib`), which that account
+    /// can replace at any time, and nothing here checks them. Being in `admin` does not make that
+    /// account root (sudo asks for its password): it needs only the folder's group write.
     Admins,
 }
 
@@ -250,20 +256,28 @@ pub(crate) fn secure(path: &std::path::Path, writers: Writers) -> Result<(), Str
 }
 
 /// The `admin` group's number, looked up by its name: None, so that only the stricter rule holds,
-/// when this Mac has no such group or it cannot be read.
+/// when this Mac has no such group or it cannot be read. A group record larger than the buffer
+/// (`ERANGE`) is read again with twice the room, up to 1 MiB.
 #[cfg(target_os = "macos")]
 fn admin_gid() -> Option<u32> {
-    let mut g: libc::group = unsafe { std::mem::zeroed() };
-    let mut buf = vec![0 as libc::c_char; 16 << 10];
-    let mut found: *mut libc::group = std::ptr::null_mut();
-    let r = unsafe {
-        libc::getgrnam_r(
-            c"admin".as_ptr(),
-            &mut g,
-            buf.as_mut_ptr(),
-            buf.len(),
-            &mut found,
-        )
-    };
-    (r == 0 && !found.is_null()).then_some(g.gr_gid)
+    let mut size = 16 << 10;
+    loop {
+        let mut g: libc::group = unsafe { std::mem::zeroed() };
+        let mut buf = vec![0 as libc::c_char; size];
+        let mut found: *mut libc::group = std::ptr::null_mut();
+        let r = unsafe {
+            libc::getgrnam_r(
+                c"admin".as_ptr(),
+                &mut g,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut found,
+            )
+        };
+        if r == libc::ERANGE && size < 1 << 20 {
+            size *= 2;
+            continue;
+        }
+        return (r == 0 && !found.is_null()).then_some(g.gr_gid);
+    }
 }
