@@ -622,7 +622,26 @@ program's name) and `cwd`, and may name:
   folder is its own ([the execution program's `open`
   launch](../../app-tools/README.md#execution)). A desktop whose opener guesses types otherwise
   than GIO (KDE's `kde-open`, which xdg-open runs there) may still pick another app for a file
-  the check let through;
+  the check let through.
+
+  On Windows and macOS the system picks the app by the file's extension, not its content, so the
+  type is the extension's: `.txt` (`text/plain`), `.json`, `.jsonl`, `.ndjson`, `.md` or `.log`
+  (the types above), any other refused; the content is not read (`src/confirmation_open.rs`).
+  The folder may not be a drive's root or `/`, the home folder or a folder above it. The file,
+  the folder and every folder between them must be the person's own and writable by no one else:
+  on Windows their owner and access list (`src/win_acl.rs`: no allow entry giving anyone but the
+  person, SYSTEM or Administrators a right to change it, and not a link or junction); on macOS
+  their owner, mode and no access list entry at all. On Windows the file must also be on a local
+  drive (not a network path), name no alternate data stream, have a path shorter than 260
+  characters, and be named by its plain path (`C:\…`, never `\\?\`); the launch runs the
+  launching package's own program (the execution program, compared by identity) with argv
+  exactly `open`, `--` and the file, which hands the file to the app Windows opens its extension
+  with, and it starts with no console. On macOS the file has no execute bit and none of the
+  attributes that can choose another app for it (`com.apple.FinderInfo`,
+  `com.apple.ResourceFork`, `com.apple.LaunchServices.OpenWith`), and the launch runs
+  `/usr/bin/open` with argv exactly the file. The dialog's first line says "Opens the file <file>
+  (<type>, inside <folder>) with the app Windows (or macOS) opens .<ext> files with, through
+  <opener>.";
 - `stdin`: one of the launch's secret fields, whose secret the host writes to the launch's
   standard input and then closes: the private channel to a credential bridge, never argv, its
   environment or a file. The confirmation names it; it is part of the environment revision;

@@ -811,7 +811,9 @@ requester, action and outcome, including refusals. Page/Import pending entries h
 limit of 16; trusted requests have a separate limit of 64. Page dialogs focus Cancel and keep
 Confirm disabled for one second after mapping. (On macOS a button takes the keyboard focus only
 with full keyboard access turned on; Cancel is the default button there, which Return presses.)
-A launch that opens a file in the person's own app is refused before review off Linux. Non-UTF-8 paths are refused before review;
+A launch that opens a file in the person's own app takes the app the system picks: on Linux by
+the file's content type, on Windows and macOS by its extension
+([Launches and managed runtimes](app-host/README.md#launches-and-managed-runtimes)). Non-UTF-8 paths are refused before review;
 Unicode format characters (including bidi and zero-width characters), control characters and
 Pango line separators (U+2028/U+2029) are displayed as escaped Unicode.
 
@@ -1584,8 +1586,8 @@ the app's own core
 (on Windows the store of its versions does not open, so nothing installs or starts; on macOS the
 store opens, but installing, adopting and rolling back a version need the native confirmation,
 which core changes have on Linux only, so no version is installed and none starts), installing a
-package from a file, a launch that opens a file, changing the release feed and opening an address
-in the browser. The app updates itself only as a Linux AppImage.
+package from a file and changing the release feed. The app updates itself only as a Linux
+AppImage.
 
 ## Limits
 
@@ -1626,8 +1628,9 @@ in the browser. The app updates itself only as a Linux AppImage.
   one that crashes later, after accepting itself, is not. If the old app itself is killed during
   those 90 seconds, nothing puts the earlier version back: copy the newest file in
   `updates/kept/` in the app's data folder over the AppImage to run it again.
-- Changing the release feed needs the native confirmation, so it works on Linux only, and so
-  does opening an address in the browser.
+- Changing the release feed needs the native confirmation, so it works on Linux only. Opening an
+  address in the browser works on all three systems: GIO on Linux, the `https` class's `open`
+  verb (`ShellExecuteExW`) on Windows, `NSWorkspace` on macOS; only an https address reaches it.
 - Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
   the renderer writes alignment as inline style, which the notes' policy refuses.
 - The app's own core comes only from a local index file for now; an https source joins with the
