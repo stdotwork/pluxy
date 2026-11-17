@@ -68,3 +68,30 @@ fn clearing_a_folder_leaves_no_entry_and_nothing_for_new_files_to_inherit() {
     assert!(!has_entries(&fs::File::open(&before).unwrap()).unwrap());
     fs::remove_dir_all(d).unwrap();
 }
+
+#[test]
+fn a_new_file_takes_no_entry_from_its_folder_at_any_moment() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = temp("create");
+    add_entry(&d, "everyone allow read,write,file_inherit");
+    // The control: a file made the plain way inherits the entry.
+    let plain = d.join("plain");
+    fs::write(&plain, b"x").unwrap();
+    assert!(has_entries(&fs::File::open(&plain).unwrap()).unwrap());
+    // Checked on the descriptor it is made with, before anything else is done to it.
+    let p = d.join("new");
+    let f = create_new(&p, 0o600).unwrap();
+    assert!(!has_entries(&f).unwrap(), "{}", listed(&p));
+    assert_eq!(listed(&p), "");
+    assert_eq!(f.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+    // Never over what is there, nor through a link.
+    assert_eq!(
+        create_new(&p, 0o600).unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+    let link = d.join("link");
+    std::os::unix::fs::symlink(d.join("elsewhere"), &link).unwrap();
+    assert!(create_new(&link, 0o600).is_err());
+    assert!(!d.join("elsewhere").exists());
+    fs::remove_dir_all(d).unwrap();
+}

@@ -90,7 +90,11 @@ fn write_private_with_nonce(
         let mut name = name.to_os_string();
         name.push(format!(".{}.tmp", nonce()));
         let tmp = parent.join(name);
-        #[cfg(unix)]
+        // macOS: made with an empty extended access list that takes nothing from the folder's,
+        // so no entry is on it at any moment (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        let made = crate::private_macos::create_new(&tmp, 0o600);
+        #[cfg(all(unix, not(target_os = "macos")))]
         let made = {
             use std::os::unix::fs::OpenOptionsExt;
             fs::OpenOptions::new()
@@ -116,10 +120,6 @@ fn write_private_with_nonce(
             use std::os::unix::fs::PermissionsExt;
             f.set_permissions(fs::Permissions::from_mode(0o600))?;
         }
-        // macOS: nothing inherited from the folder's extended access list either
-        // (`private_macos.rs`).
-        #[cfg(target_os = "macos")]
-        crate::private_macos::clear_entries(&f)?;
         f.write_all(data)?;
         f.sync_all()?;
         drop(f);
@@ -896,8 +896,8 @@ mod tests {
 
     use super::*;
 
-    /// macOS: what a folder's inheritable access list entries would give a new file is taken
-    /// away, so the file is as private as its 0600 mode says.
+    /// macOS: a file written privately takes nothing from its folder's inheritable access list
+    /// entries, also while it is being written, so it is as private as its 0600 mode says.
     #[cfg(target_os = "macos")]
     #[test]
     fn private_write_has_no_access_list_on_macos() {

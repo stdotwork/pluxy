@@ -7,7 +7,8 @@
 //! - a private folder has no entries: one with any is given an empty list (`clear_entries`), as a
 //!   too-open folder is tightened to 0700, so what is made in it inherits none;
 //! - a private file the app reads has none: one with any is refused (`has_entries`);
-//! - a file the app has just made gets an empty list, whatever its folder passed on.
+//! - a file the app writes privately is made with an empty list that takes nothing from its
+//!   folder (`create_new`), so no entry is on it at any moment.
 //!
 //! Every check and change goes through the open descriptor, never a path a link could redirect.
 //! libc has no bindings for these calls: they are libSystem's (acl(3), `acl_get_fd_np`,
@@ -23,13 +24,76 @@ use std::os::raw::c_int;
 const ACL_TYPE_EXTENDED: c_int = 0x0000_0100;
 /// `acl_entry_id_t`'s `ACL_FIRST_ENTRY`.
 const ACL_FIRST_ENTRY: c_int = 0;
+/// `acl_flag_t`'s `ACL_FLAG_NO_INHERIT` (`sys/acl.h`), the kernel's `KAUTH_ACL_NO_INHERIT`.
+const ACL_FLAG_NO_INHERIT: c_int = 1 << 17;
+/// `filesec_property_t`'s `FILESEC_MODE` and `FILESEC_ACL` (`sys/fcntl.h`).
+const FILESEC_MODE: c_int = 4;
+const FILESEC_ACL: c_int = 5;
 
 extern "C" {
     fn acl_get_fd_np(fd: c_int, ty: c_int) -> *mut c_void;
     fn acl_set_fd_np(fd: c_int, acl: *mut c_void, ty: c_int) -> c_int;
     fn acl_init(count: c_int) -> *mut c_void;
     fn acl_get_entry(acl: *mut c_void, entry_id: c_int, entry: *mut *mut c_void) -> c_int;
+    fn acl_get_flagset_np(obj: *mut c_void, flagset: *mut *mut c_void) -> c_int;
+    fn acl_add_flag_np(flagset: *mut c_void, flag: c_int) -> c_int;
     fn acl_free(obj: *mut c_void) -> c_int;
+    fn filesec_init() -> *mut c_void;
+    fn filesec_set_property(fsec: *mut c_void, property: c_int, value: *const c_void) -> c_int;
+    fn filesec_free(fsec: *mut c_void);
+    fn openx_np(path: *const std::os::raw::c_char, flags: c_int, fsec: *mut c_void) -> c_int;
+}
+
+/// Makes a new file at path (failing if anything is there, a link too) with mode and an empty
+/// extended access list that inherits nothing from its folder, for writing. The kernel takes
+/// no entry from the folder when the list a file is made with is flagged `ACL_FLAG_NO_INHERIT`
+/// (`open_extended`, `kauth_acl_inherit`), so no other user's entry is on it at any moment.
+pub fn create_new(path: &std::path::Path, mode: libc::mode_t) -> io::Result<File> {
+    use std::os::unix::ffi::OsStrExt;
+    let p = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: a new, empty list, freed below.
+    let acl = unsafe { acl_init(0) };
+    if acl.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: a new file security description, freed below.
+    let fsec = unsafe { filesec_init() };
+    if fsec.is_null() {
+        let e = io::Error::last_os_error();
+        // SAFETY: acl came from acl_init and is freed once.
+        unsafe { acl_free(acl) };
+        return Err(e);
+    }
+    // SAFETY: acl and fsec are valid; filesec_set_property copies what it is given; the
+    // descriptor openx_np gives back is owned by the File.
+    let made = unsafe {
+        let mut flags = std::ptr::null_mut();
+        if acl_get_flagset_np(acl, &mut flags) != 0
+            || acl_add_flag_np(flags, ACL_FLAG_NO_INHERIT) != 0
+            || filesec_set_property(fsec, FILESEC_ACL, (&acl as *const *mut c_void).cast()) != 0
+            || filesec_set_property(fsec, FILESEC_MODE, (&mode as *const libc::mode_t).cast()) != 0
+        {
+            Err(io::Error::last_os_error())
+        } else {
+            let fd = openx_np(
+                p.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                fsec,
+            );
+            if fd < 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(File::from_raw_fd(fd))
+            }
+        }
+    };
+    // SAFETY: each came from its init call and is freed once.
+    unsafe {
+        filesec_free(fsec);
+        acl_free(acl);
+    }
+    made
 }
 
 /// Whether the file or folder open as f has an extended access list with any entry, allow or
