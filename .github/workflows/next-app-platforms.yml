@@ -11,8 +11,8 @@ on:
   # builds changed (see the changes job there).
   workflow_call:
     inputs:
-      # ci.yml sets this when the change touches neither next/app, next/ui nor the workflows: the
-      # native jobs build and run just the app and the kit, never the Go core.
+      # ci.yml sets this when the change reaches none of what the native jobs build: the app, the
+      # kit, the workflows, and the Go packages `go run ./e2e/panelcore` builds (see ci.yml).
       skip-native:
         type: boolean
         default: false

@@ -34,23 +34,26 @@ jobs:
   # the protocol's app-manifest cases the app's Rust tests read, go.mod and go.sum, and the Go
   # packages the app's tests build and run: e2e/panelcore, e2e/testext and cmd/pluxy, with
   # everything they import on Linux, Windows and macOS. `go list` works the packages out from the
-  # code being tested, so a new import counts at once. Its native jobs build and run only the app
-  # and the kit, so a change that reaches none of next/app, next/ui and the workflows skips them
-  # (next-app-platforms-native).
+  # code being tested, so a new import counts at once. Its native jobs build the app and the kit,
+  # and some of their sessions start a test core with `go run ./e2e/panelcore`, which builds those
+  # same Go packages. So the native jobs run for next/app, next/ui, the workflows, go.mod and
+  # go.sum, and a change to those Go packages; a change that reaches only the app-manifest cases
+  # skips them (next-app-platforms-native).
+  # next-app-tools-wsl is not a workflow: it says whether next-app-tools-platforms.yml runs its WSL
+  # jobs.
   changes:
     runs-on: ubuntu-latest
     outputs:
-      core: ${{ steps.paths.outputs.core }}
       app: ${{ steps.paths.outputs.app }}
       next-ci: ${{ steps.paths.outputs.next-ci }}
       next-app: ${{ steps.paths.outputs.next-app }}
       # Set by the paths step, or else by the go-packages step, which runs only when the paths
       # step left it open.
       next-app-platforms: ${{ steps.paths.outputs.next-app-platforms || steps.go-packages.outputs.next-app-platforms }}
-      next-app-platforms-native: ${{ steps.paths.outputs.next-app-platforms-native }}
+      next-app-platforms-native: ${{ (steps.paths.outputs.next-app-platforms-native == 'true' || steps.go-packages.outputs.next-app-platforms == 'true') && 'true' || 'false' }}
       next-app-tools-platforms: ${{ steps.paths.outputs.next-app-tools-platforms }}
+      next-app-tools-wsl: ${{ steps.paths.outputs.next-app-tools-wsl }}
       next-app-tools-pack: ${{ steps.paths.outputs.next-app-tools-pack }}
-      next-corpus: ${{ steps.paths.outputs.next-corpus }}
     steps:
       # Full history for the merge base, without file contents: the diff needs only trees.
       - name: Checkout
@@ -80,17 +83,17 @@ jobs:
           git diff --no-renames --name-only -z "${range[@]}" > "$RUNNER_TEMP/changed"
           echo "$(tr -cd '\0' < "$RUNNER_TEMP/changed" | wc -c) changed files"
           declare -A run=()
-          for w in core app next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-pack next-corpus; do run[$w]=false; done
+          for w in app next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-wsl next-app-tools-pack; do run[$w]=false; done
           native=false
           while IFS= read -r -d '' path; do
             case $path in
               .github/workflows/ci.yml) for w in "${!run[@]}"; do run[$w]=true; done ;;
             esac
             case $path in
-              next/app/* | next/ui/* | .github/workflows/next-app-platforms.yml | .github/workflows/ci.yml)
+              next/app/* | next/ui/* | next/go.mod | next/go.sum | .github/workflows/next-app-platforms.yml | \
+                .github/workflows/ci.yml)
                 native=true ;;
             esac
-            case $path in core/* | .github/workflows/core-pr-test-build.yml) run[core]=true ;; esac
             case $path in extensions/app/* | .github/workflows/app-ci.yml) run[app]=true ;; esac
             case $path in next/* | .github/workflows/next-ci.yml) run[next-ci]=true ;; esac
             case $path in next/* | .github/workflows/next-app.yml) run[next-app]=true ;; esac
@@ -102,14 +105,23 @@ jobs:
               # decides.
               next/*) printf '%s\0' "$path" >> "$RUNNER_TEMP/next-other" ;;
             esac
-            case $path in next/app-tools/* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
+            # The desktop app's files that exist for WSL run this workflow too, for its WSL jobs.
+            case $path in next/app-tools/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
+            # What the WSL jobs build and run: pluxy/wsl, pluxy-program, pluxy-transactions (with its
+            # fixture writer) and pluxy-files, which it depends on, the workspace's manifest and lock,
+            # pluxy/claude-code, and the desktop app's files that exist for WSL (its environments
+            # module and its wsl-named files). The app's general host files (program, vault, spawn,
+            # launcher, route) are left out: they change often, and their Linux and unit tests guard them.
+            case $path in
+              next/app-tools/wsl/* | next/app-tools/lib/program/* | next/app-tools/lib/transactions/* | next/app-tools/lib/files/* | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock | next/app-tools/claude-code/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | .github/workflows/next-app-tools-platforms.yml)
+                run[next-app-tools-wsl]=true ;;
+            esac
             # A tool's manifest, and the workspace's and every member's Cargo.toml (`*` matches `/`
             # too, so lib/<name>/Cargo.toml is one), where a program's [[bin]] is named.
             case $path in
               next/app-tools/*/pluxy-extension.json | next/app-tools/Cargo.toml | next/app-tools/*/Cargo.toml | next/app-tools/Cargo.lock | next/cmd/pluxy-pack/* | .github/workflows/next-app-tools-pack.yml)
                 run[next-app-tools-pack]=true ;;
             esac
-            case $path in next/* | core/* | .github/workflows/next-corpus.yml) run[next-corpus]=true ;; esac
           done < "$RUNNER_TEMP/changed"
           if [ "${run[next-app-platforms]}" = false ] && [ -s "$RUNNER_TEMP/next-other" ]; then
             unset 'run[next-app-platforms]'
@@ -165,12 +177,6 @@ jobs:
           done < "$RUNNER_TEMP/next-other"
           echo "next-app-platforms=$hit" | tee -a "$GITHUB_OUTPUT"
 
-  core:
-    name: Core CI
-    needs: changes
-    if: needs.changes.outputs.core == 'true'
-    uses: ./.github/workflows/core-pr-test-build.yml
-
   app:
     name: App CI
     needs: changes
@@ -202,6 +208,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.next-app-tools-platforms == 'true'
     uses: ./.github/workflows/next-app-tools-platforms.yml
+    with:
+      wsl: ${{ needs.changes.outputs.next-app-tools-wsl == 'true' }}
 
   next-app-tools-pack:
     name: Next app tools pack
@@ -209,28 +217,22 @@ jobs:
     if: needs.changes.outputs.next-app-tools-pack == 'true'
     uses: ./.github/workflows/next-app-tools-pack.yml
 
-  next-corpus:
-    name: Next corpus
-    needs: changes
-    if: needs.changes.outputs.next-corpus == 'true'
-    uses: ./.github/workflows/next-corpus.yml
-
   # The required check. It runs even when the run is cancelled (always()), so a cancelled run
   # fails it instead of leaving it skipped, which would count as passing. It passes only when
   # the changes job passed and every workflow it chose passed; a workflow it did not choose
-  # must have been skipped.
+  # must have been skipped. A job a chosen workflow skips itself (next-app-tools-platforms' WSL
+  # jobs when next-app-tools-wsl is false) is not one of these: the workflow's result is still
+  # its own, and only success passes.
   gate:
     if: always()
     needs:
       - changes
-      - core
       - app
       - next-ci
       - next-app
       - next-app-platforms
       - next-app-tools-platforms
       - next-app-tools-pack
-      - next-corpus
     runs-on: ubuntu-latest
     steps:
       - name: Every chosen workflow passed

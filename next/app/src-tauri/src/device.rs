@@ -433,7 +433,14 @@ fn private_dir(p: &Path) -> Result<(), String> {
         .create(p)
         .map_err(|e| format!("{}: {e}", p.display()))?;
     fs::set_permissions(p, fs::Permissions::from_mode(0o700))
-        .map_err(|e| format!("{}: {e}", p.display()))
+        .map_err(|e| format!("{}: {e}", p.display()))?;
+    // macOS: no extended access list entry either, so what is made in it inherits none
+    // (`private_macos.rs`).
+    #[cfg(target_os = "macos")]
+    fs::File::open(p)
+        .and_then(|d| crate::private_macos::clear_entries(&d))
+        .map_err(|e| format!("{}: {e}", p.display()))?;
+    Ok(())
 }
 #[cfg(windows)]
 fn private_dir(p: &Path) -> Result<(), String> {
@@ -1272,10 +1279,11 @@ fn local_path(p: &str) -> bool {
 }
 
 /// A local path that also stays inside its folder on Windows: no `:`, which names a drive or an
-/// alternate data stream there. Archive entries, the ui folder and local registry artifacts
-/// must be one.
+/// alternate data stream there, and no part that is a device's name (`vault::windows_device`),
+/// which opens the device there instead of a file. Checked on every system. Archive entries, the
+/// ui folder and local registry artifacts must be one.
 fn store_path(p: &str) -> bool {
-    local_path(p) && !p.contains(':')
+    local_path(p) && !p.contains(':') && !p.split('/').any(crate::vault::windows_device)
 }
 
 impl Ui {

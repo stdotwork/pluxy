@@ -1,10 +1,10 @@
 # next: the new pluxy core
 
-A new core for pluxy, built from scratch beside today's core, the Go proxy in `core/`. (In this
-README and in the corpus, "today's core" and "the old core" mean that core, and `core/...` paths
-are files in it. Once `core/` is removed from the repository, they mean `core/` at the last commit
-that still has it; the commit will be named here when that happens.) Core receives client requests and
-hands them to **provider extensions**: separate programs, one per kind of upstream, that core
+A new core for pluxy, built from scratch to replace the old core, the Go proxy that was in `core/`.
+(In this README and in the corpus, "today's core" and "the old core" mean that core, and `core/...`
+paths are files in it as they are at commit `0b84f013f18e1bbf528533b1c6f2c2dbdb19fc67`, the last commit
+that changed `core/`. The folder has since been removed from the repository.) Core receives client
+requests and hands them to **provider extensions**: separate programs, one per kind of upstream, that core
 starts and talks to over a local socket. Today it serves OpenAI Chat Completions, OpenAI
 Responses, Anthropic Messages and Gemini GenerateContent (streamed and not, over HTTP) through the
 OpenAI-compatible API-key provider, which talks to an upstream that speaks any of them. A request
@@ -167,7 +167,8 @@ counts the system text, each message's role and text, reasoning, tool calls and 
 tools' names, descriptions and parameters, and the tool choice; images and files add nothing.
 `token_count_estimate` (top level, default `true`) turns the estimate off: core then answers an
 error saying the account cannot count. When every account tried can count, an error from an
-upstream that counts (a 400, 401 or 429) stays an error.
+upstream that counts (a 400, 401 or 429) stays an error, and so does a refusal under
+`drop_policy` `"reject"`.
 
 A model name may end in a thinking setting in brackets, as today's core reads it: a level
 (`gpt-5(high)`; `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), `none`, `auto`, or a token
@@ -593,9 +594,9 @@ The model name is read in lower case, without a Bedrock prefix (`anthropic.`, or
 `apac.` or `global.` before it), a context window in brackets (`[1m]`) or a Vertex AI version
 after `@`; the same reading decides the thinking settings above, so Claude Mythos models get
 thinking from a reasoning effort too. Each one left out is reported as dropped, so
-`drop_policy` `"reject"` refuses a generation request that would lose one. A Messages client's own
-sampling settings go upstream as it wrote them. Today's core leaves both out
-of every translated request, on every model.
+`drop_policy` `"reject"` refuses a generation request, or a token count sent to Anthropic's own
+API, that would lose one. A Messages client's own sampling settings go upstream as it wrote them.
+Today's core leaves both out of every translated request, on every model.
 
 Every request, a Messages client's or a translated one, also gets the betas its body needs, after
 the client's own and without repeats, as today's core adds them: `advisor-tool-2026-03-01` for a
@@ -1130,7 +1131,22 @@ translated system instructions go as a user turn. Each function declaration's sc
 core cleans them: local `$ref`s inlined, `const` as an enum, constraints and short enums moved into
 the description as hints (`minLength: 1`, `Allowed: a, b`), a type list such as
 `["string","null"]` as one nullable type, and other JSON Schema keywords removed; for a Claude
-model, a union becomes its strongest branch. Claude models, Gemini 3 Pro and the image model are always
+model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
+object in a function's parameters that requires nothing gets a required placeholder property:
+`reason` (a string) where it has no properties, `_` (a boolean) where it has some and none is
+required. An object is a schema of type `object`, or one with no type whose properties come only
+from its `allOf` branches (it then gets that type); a union object (with `anyOf` or `oneOf`) gets
+none; an `allOf` branch counts with the object it merges into, so that object's properties and
+required names are the branches' too. Every schema with `properties` and no type gets type
+`object`, whatever the model, as in today's core; an `allOf` branch keeps its own type or none. A
+function's response schema gets no placeholder: today's core adds one there, but the schema
+describes what the client returns, and nothing would remove the placeholder. The extension removes
+the placeholders from the model's calls before any client format sees them; today's core does that
+only for Messages clients. It leaves a placeholder in a call where a client schema at the same path
+declares the name, as a property or in `required`: the other branches of a union (also those
+Claude's cleaning cuts), another item of a tuple, or a function declared again under that name. So
+it never removes a key the client declared; it does remove a key named `reason` that the model
+writes into an object with no declared properties, such as a free-form map. Claude models, Gemini 3 Pro and the image model are always
 asked on the stream method and gathered into one reply when the client wants one. Replies are
 taken out of the envelope's `response` field. A 429 is a used-up quota when Google says
 `QUOTA_EXHAUSTED` or asks for a wait of five minutes or more, and a rate limit otherwise, with the
@@ -1143,8 +1159,7 @@ reasoning (thought signatures travel in band, as for Gemini), the per-account mo
 (`fetchAvailableModels`), Responses compaction through Antigravity, structured output for Claude
 5.5 as prompt text, sensitive-word obfuscation (`antigravity.sensitive-words`), the connection
 pool settings (`antigravity.connection-pool.*`), the app version lookup at every start, token
-counting (core has no count-tokens route), and the placeholder property today's core adds to a
-Claude function's objects that require nothing.
+counting (core has no count-tokens route).
 
 **Quota.** Quota reads `POST {base_url}/v1internal:retrieveUserQuotaSummary` with the credential's project, and the plan from `POST {base_url}/v1internal:loadCodeAssist`, with the access token and the account's Antigravity user agent. Each bucket of each model group becomes a limit, such as "Gemini models 5-hour limit", with the share used, the reset time, the window length where known and the group's models. A login's grant carries `identity` `{"email"}`.
 
@@ -1220,8 +1235,7 @@ signature) is not retry-safe, and a reply that ends without its end frame is an 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
 through as given); a session's turn count (each request is a new session, as today's core sends
-for a client that names none); the account's plan and quota status (`GetUserStatus`) and a used-up
-quota's reset time; the remote model catalog refresh; Devin's names for older models
+for a client that names none); a used-up quota's reset time; the remote model catalog refresh; Devin's names for older models
 (`claude-haiku-4-5`, `gpt-4-1`, Sonnet 4.5, Claude 4.5 Opus) and the `-fast` variants built from a
 `<effort>-fast` request; the usage fallback from response dimensions; images in tool results;
 signature types other than `sealed`; namespace tools and custom (freeform) tools such as
@@ -1255,6 +1269,14 @@ its model and its endpoint), and a failure that ends after a later-started reque
 the same scope leaves no block and no last error. Among eligible accounts, core prefers the
 session's account (with session affinity on), then the highest `priority`, then picks by
 strategy.
+
+When every account is blocked, the reply tells the client how long is left in whole seconds,
+rounded up and at least 1 while anything is left: the message's "try again in 1s" (or `1m1s`),
+`Retry-After`, and the usage-limit reply's `reset_time`, `reset_seconds` and "reset after" all
+come from the same rounding, so they agree. `retry_after_ms` keeps the exact wait. Today's core
+rounds `Retry-After` and `reset_seconds` up, but shows `reset_time` and "reset after" to the
+nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next to
+`reset_seconds` 2; core says "2s" in all of them. That is an intended difference.
 
 ```json
 {
@@ -1939,17 +1961,41 @@ message refused before it starts a turn (an unknown type, no model, an `input` t
 list) is answered on the socket and not written. A reply over 1 MiB keeps its first 256 KiB and its last 768
 KiB, with a line saying how many bytes were left out between them. While only error logs are
 written, every request keeps its reply's start and end until it ends, in case it fails, so an
-error log keeps less of a reply: the first 32 KiB and the last 96 KiB.
+error log keeps less of a reply: the first 32 KiB and the last 96 KiB. A secret cut in two at
+that line would not be recognised, so the bytes beside it that could be part of one are left out
+too, and counted with the rest. On each side that is, first, a window of 12 bytes for each byte
+of the longest form of a secret the log removes that holds a character other than a key's (the
+secret as it is, or escaped, whichever is longest). That holds every part of such a secret the
+line cut in a spelling of up to 11 bytes for each of its bytes; the log also removes spellings
+with deeper escapes, and a part of one of those cut at the line can stay. Secrets made only of
+letters, digits and `-_.~+/=%\`, as API keys and tokens are, need no window: the run of those
+characters that goes on from the edge is left out in any case, and it holds any part of such a
+secret, whatever its length. Where the edge then cuts through a secret in one of its forms, 4
+bytes or more of it go. Where it cuts through a secret the log would find whole within a window
+of it, the edge moves to where that secret starts (or ends), and the run of key characters there
+goes too, so the edge never stands inside a run of key characters or inside a secret the log
+finds whole around it. Where the log's redaction gives up on the text around the edge (escapes
+that decode too many ways), or the edge still cuts through a secret after 4 moves, all of that
+side goes. With client keys, API keys and OAuth tokens the window is 0 and only the run goes. A
+secret with other characters makes it grow with the secret: a secret header's forms hold its
+name, so a 22-byte value of a header named `X-Gateway-Key` makes it 612 bytes, a 207-byte
+`Bearer` value 2,856 bytes and a 1,507-byte value about 18 KiB; an OAuth scope (`openid profile
+email offline_access`), 420 bytes. A service account's private key (PEM text, about 1.7 KB for a
+2048-bit key, with spaces and line breaks) makes it about 21 KiB a side, most of what an error
+log keeps of a reply's start. Where the text there is one long run of key characters, such as
+base64 data, all of that run goes. Text that repeats the start of a secret there, such as a
+secret header's name, loses one repeat, not all of them.
 
 A request log also holds what the provider extension sent upstream and what came back: between
 the client's request and its reply, an `=== UPSTREAM REQUEST ===` section (the account, time, the
 whole URL, method, headers and body) and an `=== UPSTREAM RESPONSE ===` section (time, status,
 headers and body, or the error that kept a response from coming) for each upstream request, so a
 refused attempt and the retry on another account show as two pairs. Each body keeps its first 32
-KiB and its last 96 KiB, a streamed reply recorded as the extension reads it, without holding it
-back; when a request made more than two upstream requests, the first and the last are kept, with
-a line saying how many were left out between them. A Responses WebSocket turn that opens the
-upstream socket holds its handshake; the messages on that socket are not written. This needs an
+KiB and its last 96 KiB, less what beside the cut could be part of a secret, as for the reply, a
+streamed reply recorded as the extension reads it, without holding it back; when a request made
+more than two upstream requests, the first and the last are kept, with a line saying how many
+were left out between them. A Responses WebSocket turn that opens the upstream socket holds its
+handshake; the messages on that socket are not written. This needs an
 extension that implements [protocol](protocol/README.md#upstream-capture) 0.13; it is captured
 only while `logs.request_log` is on, so error logs written with it off have no upstream sections,
 and with it off nothing is recorded or sent.
