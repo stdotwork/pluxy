@@ -444,7 +444,9 @@ their home, the processor and the Windows drives mounted there, kept in `environ
   (<home>).` above the review (the names quoted: neither holds a `"`), and that line is part of
   what a remembered approval names. A launch the launcher starts there shows its own line,
   `Starts in WSL: …`, and runs only if `pluxy/wsl`'s prepared launch is exactly the one asked for
-  (Windows' own `wsl.exe`, that distribution, user, folder, program, arguments and kind).
+  (Windows' own `wsl.exe` started in the app's home folder, that distribution, user, folder,
+  program, arguments and kind) and holds nothing else (only `executable`, `argv`, `cwd` and
+  `program`).
 - **Not yet.** A tool in WSL may use its vault, but its own calls, jobs, launches, runtimes and
   saves are refused.
 

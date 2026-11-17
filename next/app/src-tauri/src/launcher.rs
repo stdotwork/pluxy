@@ -488,15 +488,18 @@ fn wsl_prepare_input(req: &Value, record: &Record) -> Result<Value, String> {
 /// input and the Linux program.
 ///
 /// The reply is refused unless it is exactly the launch asked for, since the confirmation's line
-/// comes from record, not from the reply: Windows' own `wsl.exe` (in system_root's System32),
-/// argv `-d <distro> -u <user> --cd <folder> --exec <program>` then req's arguments, the folder
-/// req names (or, with none, an absolute one: the user's home), the program req's override names
-/// (or, with none, an absolute path: the one found on the PATH), and req's kind.
+/// comes from record, not from the reply: a launch of only `executable`, `argv`, `cwd` and
+/// `program` (nothing else of the launch comes from the reply; req's own fields are added after),
+/// Windows' own `wsl.exe` (in system_root's System32) started in home (the folder the app gives
+/// its tools), argv `-d <distro> -u <user> --cd <folder> --exec <program>` then req's arguments,
+/// the folder req names (or, with none, an absolute one: the user's home), the program req's
+/// override names (or, with none, an absolute path: the one found on the PATH), and req's kind.
 fn wsl_launch_input(
     prepared: &Value,
     req: &Value,
     record: &Record,
     system_root: Option<&Path>,
+    home: Option<&Path>,
 ) -> Result<(Value, String), String> {
     let kind = prepared["kind"].as_str().unwrap_or_default();
     if kind != "terminal" && kind != "direct" {
@@ -511,6 +514,21 @@ fn wsl_launch_input(
         .as_object()
         .cloned()
         .ok_or("pluxy/wsl prepared no launch")?;
+    if let Some(k) = input
+        .keys()
+        .find(|k| !["executable", "argv", "cwd", "program"].contains(&k.as_str()))
+    {
+        return Err(format!(
+            "pluxy/wsl prepared a launch with {k}, which it never prepares"
+        ));
+    }
+    let cwd = input.get("cwd").and_then(Value::as_str);
+    if cwd.is_none() || cwd != home.and_then(Path::to_str) {
+        return Err(format!(
+            "pluxy/wsl prepared a launch that starts wsl.exe in {}, not the app's home folder",
+            cwd.unwrap_or("no folder")
+        ));
+    }
     let program = input
         .remove("program")
         .and_then(|p| p.as_str().map(String::from))
@@ -603,11 +621,12 @@ fn run_in_wsl(
     req: &Value,
     record: &Record,
     system_root: Option<&Path>,
+    home: Option<&Path>,
     prepare: impl FnOnce(Value) -> Result<Value, String>,
     launch: impl FnOnce(Value, String) -> Result<(Value, Option<String>), String>,
 ) -> Result<InWsl, String> {
     let prepared = prepare(wsl_prepare_input(req, record)?)?;
-    let (input, program) = wsl_launch_input(&prepared, req, record, system_root)?;
+    let (input, program) = wsl_launch_input(&prepared, req, record, system_root, home)?;
     let line = wsl_launch_line(record, &program);
     // The folder in the distribution it starts in: `--cd`'s argument.
     let argv: Vec<&str> = input["argv"]
@@ -653,6 +672,8 @@ fn launch_in_wsl(
             )
         })?;
     let system_root = std::env::var_os("SystemRoot").map(PathBuf::from);
+    // The folder pluxy/wsl starts wsl.exe in: the home the app gives its tools (`ToolEnv`).
+    let home = std::env::home_dir();
     let InWsl {
         output,
         approval,
@@ -663,6 +684,7 @@ fn launch_in_wsl(
         req,
         &record,
         system_root.as_deref(),
+        home.as_deref(),
         |input| {
             call_of(
                 app,

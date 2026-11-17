@@ -70,6 +70,11 @@ fn windows() -> Option<&'static Path> {
     Some(Path::new(r"C:\Windows"))
 }
 
+/// The home folder the app gives its tools in these tests, where `wsl.exe` starts.
+fn home() -> Option<&'static Path> {
+    Some(Path::new(r"C:\Users\bob"))
+}
+
 /// What `pluxy/wsl`'s prepare gives for a launch of claude in /home/bob/p.
 fn prepared(kind: &str) -> Value {
     json!({"launch": {"executable": r"C:\Windows\System32\wsl.exe",
@@ -104,7 +109,7 @@ fn a_launch_in_wsl_gets_its_kind_applied_and_its_linux_program_only_shown() {
     let req = json!({"client": "c", "kind": "terminal", "cwd": "/home/bob/p",
         "environment": {"set": {"A": "1"}}});
     let (input, program) =
-        wsl_launch_input(&prepared("terminal"), &req, &bob(), windows()).unwrap();
+        wsl_launch_input(&prepared("terminal"), &req, &bob(), windows(), home()).unwrap();
     assert_eq!(program, "/usr/local/bin/claude");
     // The host cannot open a file in the distribution: no `program` for the confirmation to pin.
     assert!(input.get("program").is_none());
@@ -114,22 +119,23 @@ fn a_launch_in_wsl_gets_its_kind_applied_and_its_linux_program_only_shown() {
     let mut stdin = req.clone();
     stdin["stdin"] = json!("key");
     assert!(
-        wsl_launch_input(&prepared("terminal"), &stdin, &bob(), windows())
+        wsl_launch_input(&prepared("terminal"), &stdin, &bob(), windows(), home())
             .unwrap_err()
             .contains("keyboard")
     );
     let mut managed = req.clone();
     managed["lifetime"] = json!("managed");
     assert!(
-        wsl_launch_input(&prepared("terminal"), &managed, &bob(), windows())
+        wsl_launch_input(&prepared("terminal"), &managed, &bob(), windows(), home())
             .unwrap_err()
             .contains("detached only")
     );
     // A direct one may be managed (its own wsl.exe job ends the Linux side with it).
     managed["kind"] = json!("direct");
-    let (input, _) = wsl_launch_input(&prepared("direct"), &managed, &bob(), windows()).unwrap();
+    let (input, _) =
+        wsl_launch_input(&prepared("direct"), &managed, &bob(), windows(), home()).unwrap();
     assert_eq!(input["lifetime"], "managed");
-    assert!(wsl_launch_input(&prepared("open"), &req, &bob(), windows()).is_err());
+    assert!(wsl_launch_input(&prepared("open"), &req, &bob(), windows(), home()).is_err());
     let line = wsl_launch_line(&bob(), &program);
     assert_eq!(
         line,
@@ -162,15 +168,15 @@ fn a_launch_in_wsl_is_refused_unless_it_is_the_one_asked_for() {
         ]);
         p
     };
-    let (input, program) = wsl_launch_input(&good(), &req, &bob(), windows()).unwrap();
+    let (input, program) = wsl_launch_input(&good(), &req, &bob(), windows(), home()).unwrap();
     assert_eq!(program, "/usr/local/bin/claude");
     assert_eq!(input["argv"], good()["launch"]["argv"]);
     // System32's wsl.exe as Windows compares paths: another case or `\\?\` is the same file.
     let mut p = good();
     p["launch"]["executable"] = json!(r"\\?\c:\windows\system32\WSL.EXE");
-    assert!(wsl_launch_input(&p, &req, &bob(), windows()).is_ok());
+    assert!(wsl_launch_input(&p, &req, &bob(), windows(), home()).is_ok());
     let refused = |p: &Value, req: &Value, why: &str| {
-        let e = wsl_launch_input(p, req, &bob(), windows()).unwrap_err();
+        let e = wsl_launch_input(p, req, &bob(), windows(), home()).unwrap_err();
         assert!(e.contains(why), "{e} (expected {why})");
     };
     // Another executable, or no system root to compare with.
@@ -183,7 +189,7 @@ fn a_launch_in_wsl_is_refused_unless_it_is_the_one_asked_for() {
         p["launch"]["executable"] = json!(exe);
         refused(&p, &req, "not Windows' own wsl.exe");
     }
-    assert!(wsl_launch_input(&good(), &req, &bob(), None)
+    assert!(wsl_launch_input(&good(), &req, &bob(), None, home())
         .unwrap_err()
         .contains("not Windows' own wsl.exe"));
     // Another kind than asked for.
@@ -287,6 +293,30 @@ fn a_launch_in_wsl_is_refused_unless_it_is_the_one_asked_for() {
     ] {
         refused(&argv(a), &req, "not the launch asked for");
     }
+    // A launch with anything more than the four fields pluxy/wsl prepares (a file to open, a
+    // folder it must be within, a lifetime, environment, input or key the request did not ask
+    // for), or that starts wsl.exe in another folder than the app's home.
+    for (k, v) in [
+        ("file", json!(r"C:\x.txt")),
+        ("within", json!(r"C:\")),
+        ("lifetime", json!("managed")),
+        ("environment", json!({"set": {"A": "1"}})),
+        ("stdin", json!("key")),
+        ("key", json!("s-1")),
+    ] {
+        let mut p = good();
+        p["launch"][k] = v;
+        refused(&p, &req, &format!("prepared a launch with {k}"));
+    }
+    let mut p = good();
+    p["launch"]["cwd"] = json!(r"C:\Windows\Temp");
+    refused(&p, &req, "starts wsl.exe in");
+    let mut p = good();
+    p["launch"].as_object_mut().unwrap().remove("cwd");
+    refused(&p, &req, "starts wsl.exe in");
+    assert!(wsl_launch_input(&good(), &req, &bob(), windows(), None)
+        .unwrap_err()
+        .contains("starts wsl.exe in"));
     // A program that is not an absolute path inside WSL.
     let mut p = good();
     p["launch"]["argv"][7] = json!("claude");
@@ -307,7 +337,7 @@ fn a_launch_in_wsl_is_refused_unless_it_is_the_one_asked_for() {
         "/opt/c/claude"
     ]);
     p["launch"]["program"] = json!("/opt/c/claude");
-    assert!(wsl_launch_input(&p, &over, &bob(), windows()).is_ok());
+    assert!(wsl_launch_input(&p, &over, &bob(), windows(), home()).is_ok());
     p["launch"]["argv"][7] = json!("/usr/local/bin/claude");
     p["launch"]["program"] = json!("/usr/local/bin/claude");
     refused(&p, &over, "not the launch asked for");
@@ -405,6 +435,7 @@ fn a_launch_in_wsl_is_confirmed_with_the_environments_line() {
         &req,
         &bob(),
         windows(),
+        home(),
         |input| {
             *asked.borrow_mut() = Some(input);
             Ok(prepared("terminal"))
@@ -436,6 +467,7 @@ fn a_launch_in_wsl_is_confirmed_with_the_environments_line() {
         &req,
         &bob(),
         windows(),
+        home(),
         |_| Ok(other),
         |_, _| panic!("a launch that is not the one asked for ran"),
     )
