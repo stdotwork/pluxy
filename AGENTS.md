@@ -79,10 +79,9 @@ The native test builds the ones it packs.
 cd app-tools && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 ```
 
-`corpus/` is the differential test corpus (see `next/corpus/README.md`). By default it compares
-the new core with the old core's recorded replies. The old core is no longer in this repository:
-to run it live as well, or to re-record after changing a case, build it from the commit
-`next/corpus/README.md` names and follow that README's "Re-recording against the old core".
+`corpus/` is the differential test corpus (see `next/corpus/README.md`). It compares the new core
+with the old core's replies recorded in the case files. The old core is no longer in this
+repository and the corpus cannot run or re-record it: the recorded replies are the reference.
 
 ### `extensions/app/` (the old desktop app)
 

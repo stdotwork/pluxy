@@ -94,9 +94,8 @@ func pprofGet(t *testing.T, url string) (int, []byte) {
 
 // unclaimedAddr returns a free loopback address that core could bind but that no listener started
 // in the run can be given. Its port is below the system's ephemeral range (from 32768 on Linux,
-// from 49152 on macOS and Windows), where every core and test server here gets its port, and
-// below the corpus's old-core ports (20000-32767), which another package may bind at the same
-// time. A port from freePort could be the one core's own listener or extension pages take next.
+// from 49152 on macOS and Windows), where every core and test server here gets its port. A port
+// from freePort could be the one core's own listener or extension pages take next.
 func unclaimedAddr(t *testing.T) string {
 	t.Helper()
 	for range 1000 {

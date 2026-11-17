@@ -10,8 +10,7 @@ import (
 type Result struct {
 	Case    *Case
 	Verdict Verdict
-	// Err is set when the case could not run, or when the live old core no longer matches the
-	// recording.
+	// Err is set when the case could not run.
 	Err error
 }
 
