@@ -277,12 +277,14 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
+	// Kept before the reply is sent, as replayDecoder keeps a stream's turn: a client may send its
+	// next turn the moment it has the reply, and that turn must find what was kept.
+	turn.keepResponse(raw)
 	for _, ev := range events {
 		if err := send.Send(ev); err != nil {
 			return err
 		}
 	}
-	turn.keepResponse(raw)
 	return nil
 }
 

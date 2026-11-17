@@ -18,7 +18,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | Path | What it is |
 | --- | --- |
 | `cmd/pluxy` | The core program. |
-| `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index. |
+| `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index; packs the desktop app's native tools with `-app-tools`. |
 | `protocol/` | The extension protocol: [README](protocol/README.md), [tutorial](protocol/TUTORIAL.md), wire types and framing. |
 | `llm/` | The internal model of a request and its streamed reply, shared by core and extensions. |
 | `sdk/` | Go SDK for writing extensions. |
@@ -301,6 +301,19 @@ and platform, and `dist/bundled/index.json`, which pins each archive's SHA-256 a
 the same sources twice gives byte-identical archives and index. `-platforms` defaults to the host
 platform; `-extensions codex,claude` packs only those extension folders, by folder name or
 package ID. `go run ./cmd/pluxy-pack -h` lists the flags.
+
+With `-app-tools <folder>` it packs the desktop app's native tools under `app-tools/` instead
+(not the test fixture `usage-fixture`), each for the platforms among `-platforms` that its
+manifest names. It builds nothing: Rust tools are built on each platform's own runner, and it
+takes each program from `<folder>/<goos>-<goarch>/<program file name>`, failing when one is
+missing. It writes `dist/app-tools/<publisher>-<name>-<version>-<goos>-<goarch>.tar.gz` and
+`dist/app-tools/index.json`, an index for the app's device registries (no `protocol`). The app
+installs a native tool only with a curated signature, which this does not add, so nothing
+publishes these yet; `.github/workflows/next-app-tools-pack.yml` builds and packs them to check:
+
+```bash
+go run ./cmd/pluxy-pack -out dist -app-tools programs -platforms linux/amd64,windows/amd64
+```
 
 Core installs and enables every package the bundled index lists on its first start with an
 empty packages folder:
@@ -997,7 +1010,7 @@ Not built, and why:
   (a test in `format/openairesponses` pins this). pluxy sends no comment in its place: a long
   upstream silence reaches the client as silence.
 
-**Quota.** A Grok login's quota is what the Grok CLI shows: `GET {cli}/billing?format=credits` and `GET {cli}/billing` on the CLI's chat endpoint (the host the account's requests go to), and `GET {cli}/user?include=subscription` and `GET {cli}/settings` for the plan's name, with the login's token and the Grok CLI identity headers the requests carry. It reports the weekly credit window (`weekly`), the monthly credits (`monthly_credits`), the pay-as-you-go cap and use (`pay_as_you_go`) and the prepaid balance (`prepaid`), in `usd`. Nothing that spends from the account is sent (today's panel sent a one-token chat for paid accounts; that is not rebuilt). An API key answers unsupported. A Grok login's grant carries `identity` `{"sub", "email"}` from its ID token.
+**Quota.** A Grok login's quota is what the Grok CLI shows: `GET {cli}/billing?format=credits` and `GET {cli}/billing` on the CLI's chat endpoint (the host the account's requests go to), and `GET {cli}/user?include=subscription` and `GET {cli}/settings` for the plan's name, with the login's token and the Grok CLI identity headers the requests carry. It reports the weekly credit window (`weekly`), the monthly credits (`monthly_credits`), the pay-as-you-go cap and use (`pay_as_you_go`) and the prepaid balance (`prepaid`), in `usd`. Nothing that spends from the account is sent (the old panel sent a one-token chat for paid accounts; that is not rebuilt). An API key answers unsupported. A Grok login's grant carries `identity` `{"sub", "email"}` from its ID token.
 
 ## Meta
 
@@ -1716,7 +1729,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets (names are compared in lower case whatever joins their words, or none, so `accessToken` and `accesstoken` are `access_token`, with letters folded as core matches a JSON key to a setting, so `client_keyſ` is `client_keys`; `aws_secret_access_key`, `client_secrets` and `passwords` are ones too, and so is a name that ends in a number or a word saying how the value is written, such as `apiKey2`, `api_key_value` or `privateKeyPem`), header values about authentication (`Authorization`, `X-Api-Key`, cookies) or named like a secret in any mapping whose name holds `header` (`extra_headers`, `headers_override`), and any URL with a user name, password or query. Everything below a key named like a secret is a secret, however deep, also when given through a YAML alias (as a value, or as a key's name), as `GET /accounts` shows a login account's settings, except in today's core's provider sections at the top of a `config.yaml` (the sections of the v8 `api-keys` mapping, such as `codex`, and the older lists such as `codex-api-key`), whose entries are read by these rules; any other key of the v8 `api-keys` mapping is read as a secret key. A string secret of 8 bytes or more written again as a whole value anywhere else in the file (a note holding a key) is hidden there too; a shorter copy, or a number, is shown, and so is a copy of a value that is a secret only for being in a mapping below a secret key. `true`, `false`, `null` and the empty string never are secrets, as they carry none. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
 | `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything, placeholders put back as `PUT /config` puts them (below). 200 with `valid: true` and the `notices` a `config.yaml` load logs, or `valid: false` and `error`, such as for a placeholder where its secret is not. |
 | `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. Each placeholder goes back only where its own secret is in the file now: the same account or list item (by its `id` or `name` when it holds that item's secrets, else by its secrets), and the same keys, also where a YAML alias or merge key reads it (below). 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document, such as for a placeholder anywhere else, naming its line; a refused document writes nothing. |
-| `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as today's panel shows them; a key shorter than 8 characters is hidden whole). |
+| `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as the old panel showed them; a key shorter than 8 characters is hidden whole). |
 | `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
@@ -2076,6 +2089,13 @@ this core does not support yet, and one line naming the settings it ignores for 
 nothing and is not named, nor is any setting of a feature whose `enabled` switch is off.
 Neither line stops core from starting. Settings that did nothing in today's core either (marked
 "dead") are accepted without a word. A key today's core does not know is named as unknown.
+[`-import-auth`](#importing-todays-auth-folder) prints the same lines on standard error before it
+imports, so a migration sees them before core ever starts.
+
+A migrated config needs its management key set again once. Today's core writes a bcrypt hash over
+`management.secret-key` in the file after it reads the key, and this core cannot use a hash: it
+leaves the management API and the panel off and says why in its log. Replace the hash with the key
+itself, in plain text.
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
 `extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir` and `cors`
@@ -2210,7 +2230,9 @@ Environment variables today's core reads (`MANAGEMENT_PASSWORD`, `PGSTORE_*`, `G
 
 `-import-auth` copies the credential files in today's auth folder (the JSON files at its top
 level, as today's core reads them) into core's credential store (`credentials_dir`), prints what
-it imported and skipped, and exits. Run it while core is stopped, then start core. Each file
+it imported and skipped, and exits. Before that it prints the config's notices (the settings it
+ignores and a hashed management key, as in core's log) on standard error. Run it while core is
+stopped, then start core. Each file
 becomes an account added by login, with the file's name (less `.json`) as its ID, so running it
 again skips the files already imported. A file whose account ID the config or the store already
 uses is skipped, as is a file larger than 1 MiB. The import never changes the auth folder, and
