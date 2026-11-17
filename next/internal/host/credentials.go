@@ -36,6 +36,8 @@ func (e *Extension) Login(ctx context.Context, account protocol.Account, login p
 	}
 	l.conn = conn
 	l.stop = context.AfterFunc(ctx, func() { conn.Close() })
+	// The extension's output waits until the grant, which may be written in it, is recorded.
+	l.release = e.out.hold()
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpLogin, Account: &account, Login: &login}
 	if err := protocol.WriteFrame(conn, call); err != nil {
 		l.fail(l.readError(err))
@@ -58,6 +60,29 @@ type LoginCall struct {
 	redact   *protocol.Redactor
 	final    *protocol.Reply
 	onClose  func() // ends the call on its managed generation; safe to call more than once
+	release  func() // logs the extension's output held while the call ran; safe to call more than once
+
+	// Close may run on another goroutine while Next runs. Next may then have read a grant it has
+	// not recorded yet, so the output is released only once no Next runs (release).
+	rmu     sync.Mutex
+	reading bool // Next runs
+	closed  bool // Close ran
+}
+
+// endRelease releases the output held while the call ran, once the call is closed and no Next
+// runs.
+func (l *LoginCall) endRelease(closing bool) {
+	l.rmu.Lock()
+	if closing {
+		l.closed = true
+	} else {
+		l.reading = false
+	}
+	ready := l.closed && !l.reading
+	l.rmu.Unlock()
+	if ready && l.release != nil {
+		l.release()
+	}
 }
 
 // addSecrets adds what the user entered to what is removed from the frames the call returns.
@@ -80,6 +105,10 @@ func (l *LoginCall) redactor() *protocol.Redactor {
 
 // Next returns the next frame: a login.prompt, or the terminal login.done or error.
 func (l *LoginCall) Next() protocol.Reply {
+	l.rmu.Lock()
+	l.reading = true
+	l.rmu.Unlock()
+	defer l.endRelease(false)
 	if l.final != nil {
 		return *l.final
 	}
@@ -147,6 +176,7 @@ func (l *LoginCall) Close() {
 	if l.conn != nil {
 		l.conn.Close()
 	}
+	l.endRelease(true)
 }
 
 func (l *LoginCall) fail(e *llm.Error) {
@@ -174,6 +204,9 @@ func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*pro
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
+	// The extension's output waits until the new credential, which may be written in it, is
+	// recorded below.
+	defer e.out.hold()()
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpRefresh, Account: &account}
 	if err := protocol.WriteFrame(conn, call); err != nil {
 		return nil, callError(ctx, e, redact, err)
