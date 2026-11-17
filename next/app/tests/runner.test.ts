@@ -21,8 +21,15 @@ test("a GitHub-hosted runner passes", () => {
   ).toBe(true);
 });
 
-test("a cloud runner the workflow names passes", () => {
+test("a Blacksmith macOS runner the workflow names passes", () => {
   expect(onDisposableRunner(cloud)).toBe(true);
+  expect(
+    onDisposableRunner({
+      ...cloud,
+      PLUXY_EPHEMERAL_CI_RUNNER: "blacksmith-12vcpu-macos-15",
+      RUNNER_NAME: "blacksmith-12vcpu-macos-15-46cmtnbjfuqltbnn",
+    }),
+  ).toBe(true);
 });
 
 test("outside GitHub Actions nothing passes", () => {
@@ -50,7 +57,61 @@ test("a maintainer's self-hosted runner is refused even with the opt-in set", ()
   expect(onDisposableRunner({ ...cloud, RUNNER_NAME: undefined })).toBe(false);
 });
 
+test("a maintainer's runner named after its own label is refused", () => {
+  // A Mac registered as mac-mini-1 with the label mac-mini, the variable set to that label.
+  expect(
+    onDisposableRunner({ ...cloud, PLUXY_EPHEMERAL_CI_RUNNER: "mac-mini", RUNNER_NAME: "mac-mini-1" }),
+  ).toBe(false);
+  // A Windows machine registered as windows-1, the variable set to the default label by mistake.
+  expect(
+    onDisposableRunner({ ...cloud, PLUXY_EPHEMERAL_CI_RUNNER: "windows", RUNNER_NAME: "windows-1" }),
+  ).toBe(false);
+  // A pool of one-job runners on a maintainer's machine, named <set>-runner-<id>.
+  expect(
+    onDisposableRunner({
+      ...cloud,
+      PLUXY_EPHEMERAL_CI_RUNNER: "pluxy-mac",
+      RUNNER_NAME: "pluxy-mac-runner-x7k2p",
+    }),
+  ).toBe(false);
+});
+
+test("only Blacksmith's macOS labels count", () => {
+  // Blacksmith names its Windows machines blacksmith-<id>-<n>vcpu, and they stay on GitHub's runners.
+  expect(
+    onDisposableRunner({
+      ...cloud,
+      PLUXY_EPHEMERAL_CI_RUNNER: "blacksmith-4vcpu-windows-2025",
+      RUNNER_NAME: "blacksmith-01m7ncy73eqcfbb73g7wqgs893-4vcpu",
+    }),
+  ).toBe(false);
+  expect(
+    onDisposableRunner({
+      ...cloud,
+      PLUXY_EPHEMERAL_CI_RUNNER: "blacksmith-4vcpu-windows-2025",
+      RUNNER_NAME: "blacksmith-4vcpu-windows-2025-01m7ncy73eqcfbb73g7wqgs893",
+    }),
+  ).toBe(false);
+  expect(
+    onDisposableRunner({
+      ...cloud,
+      PLUXY_EPHEMERAL_CI_RUNNER: "blacksmith",
+      RUNNER_NAME: "blacksmith-y4lzca6yzyu5qsma",
+    }),
+  ).toBe(false);
+  expect(
+    onDisposableRunner({
+      ...cloud,
+      PLUXY_EPHEMERAL_CI_RUNNER: "Blacksmith-6vcpu-macos-26",
+      RUNNER_NAME: "Blacksmith-6vcpu-macos-26-y4lzca6yzyu5qsma",
+    }),
+  ).toBe(false);
+});
+
 test("the runner's name must be the label, a dash and the machine's own part", () => {
+  expect(onDisposableRunner({ ...cloud, RUNNER_NAME: `${label}-runner-y4lzca6yzyu5qsma` })).toBe(false);
+  expect(onDisposableRunner({ ...cloud, RUNNER_NAME: `${label}-Y4LZCA6YZYU5QSMA` })).toBe(false);
+  expect(onDisposableRunner({ ...cloud, RUNNER_NAME: `${label}-y4lz ca6y` })).toBe(false);
   expect(onDisposableRunner({ ...cloud, RUNNER_NAME: label })).toBe(false);
   expect(onDisposableRunner({ ...cloud, RUNNER_NAME: `${label}-` })).toBe(false);
   expect(onDisposableRunner({ ...cloud, RUNNER_NAME: `${label}x-6vzq7pn7rqfrtrja` })).toBe(false);

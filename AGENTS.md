@@ -166,7 +166,8 @@ It applies to these jobs:
 - the `app` job in `next-app-platforms.yml`;
 - the macOS legs of the `native` and `dialogs` jobs in `next-app-platforms.yml`. Their tests write
   the account's own folders, so they also check the runner (`next/app/native/runner.ts`): the job
-  passes the label in `PLUXY_EPHEMERAL_CI_RUNNER`, and the runner's name must start with it;
+  passes the label in `PLUXY_EPHEMERAL_CI_RUNNER`, and the check accepts only a Blacksmith macOS
+  label and a runner named after it. Another provider needs a change to that check;
 - the `tools` job in `next-app-tools-platforms.yml`;
 - the `build` jobs in `next-app-tools-pack.yml`.
 
