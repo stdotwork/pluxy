@@ -94,13 +94,14 @@ func fakeExtension(mode string) {
 			}
 		}
 	case "no-describe":
-		// Handshake, then never answer describe.
+		// Handshake, then never answer describe. The file "handshook" says the line is written.
 		socket := os.Getenv(protocol.EnvSocket)
 		ln, err := net.Listen("unix", socket)
 		if err != nil {
 			os.Exit(1)
 		}
 		fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+		_ = os.WriteFile("handshook", nil, 0o644)
 		go func() {
 			for {
 				conn, err := ln.Accept()
@@ -155,9 +156,9 @@ func TestStartFailuresStayUnderTheDeadline(t *testing.T) {
 		mode    string
 		wantErr string
 	}{
-		{"close-stdout", "closed its stdout"},
+		{"close-stdout", "closed its stdout without a handshake and did not exit within 2s (starting its process took "},
 		{"endless-line", "longer than"},
-		{"no-describe", "describe"},
+		{"no-describe", "did not answer describe within 2s (starting its process took "},
 		{"child-holds-stderr", "no handshake"},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
@@ -198,6 +199,79 @@ func TestStartFailuresStayUnderTheDeadline(t *testing.T) {
 				t.Errorf("after Start failed, process %d still exists or was not reaped (signal 0: %v)", pid, err)
 			}
 		})
+	}
+}
+
+// A start that passes its limit says how long starting the program took, whether the handshake
+// was readable and, on Linux, what the program was doing, read before it is killed.
+func TestStartLimitErrorSaysWhereTheStartWas(t *testing.T) {
+	const startTimeout = 500 * time.Millisecond
+	dir := fakePackage(t, "silent") // writes its pid, then sleeps without a handshake
+	_, err := Start(filepath.Join(dir, ManifestFile), Options{StartTimeout: startTimeout, Log: io.Discard})
+	if err == nil {
+		t.Fatal("Start succeeded, want an error")
+	}
+	msg := err.Error()
+	t.Log(msg)
+	if !strings.HasPrefix(msg, "extension hosttest/silent sent no handshake within 500ms (") {
+		t.Errorf("error = %q, want the start limit's error", msg)
+	}
+	var took time.Duration
+	_, rest, ok := strings.Cut(msg, "starting its process took ")
+	if ok {
+		took, err = time.ParseDuration(strings.FieldsFunc(rest, func(r rune) bool { return r == ';' || r == ')' })[0])
+	}
+	if !ok || err != nil || took <= 0 || took >= startTimeout {
+		t.Errorf("error = %q, want how long starting the process took, between 0 and %s", msg, startTimeout)
+	}
+	want := []string{"handshake: not read"}
+	if runtime.GOOS == "linux" {
+		// The program sleeps in time.Sleep, so it was sleeping (S) and waiting in the kernel.
+		want = []string{"; handshake: not read, no bytes waiting in its stdout;", "; process state S;", "; wchan "}
+	}
+	for _, w := range want {
+		if !strings.Contains(msg, w) {
+			t.Errorf("error = %q, want it to contain %q", msg, w)
+		}
+	}
+	pid := readPID(t, filepath.Join(dir, "pid"))
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Errorf("after Start failed, process %d still exists or was not reaped (signal 0: %v)", pid, err)
+	}
+}
+
+// A handshake that is readable only once the limit has passed fails the start with the start
+// limit's error, whichever of the handshake and the limit core sees first; it is not accepted, and
+// describe does not fail on its own with a timeout. Core is held up between starting the program
+// and waiting for the handshake until both are ready, as a stalled start in CI was, so each run
+// is a coin toss between the two; a dozen runs see both.
+func TestLateHandshakeFailsWithTheStartLimitError(t *testing.T) {
+	const startTimeout = 300 * time.Millisecond
+	for i := range 12 {
+		dir := fakePackage(t, "no-describe")
+		hold := func(deadline time.Time) {
+			for start := time.Now(); ; time.Sleep(5 * time.Millisecond) {
+				if _, err := os.Stat(filepath.Join(dir, "handshook")); err == nil {
+					break
+				}
+				if time.Since(start) > 30*time.Second {
+					t.Error("the fake extension wrote no handshake within 30s")
+					break
+				}
+			}
+			time.Sleep(time.Until(deadline) + 10*time.Millisecond)
+		}
+		ext, err := Start(filepath.Join(dir, ManifestFile), Options{StartTimeout: startTimeout, Log: io.Discard, beforeHandshakeWait: hold})
+		if err == nil {
+			ext.Stop()
+			t.Fatalf("run %d: Start accepted a handshake read after the limit", i)
+		}
+		msg := err.Error()
+		if !strings.HasPrefix(msg, "extension hosttest/no-describe sent no handshake within 300ms (") ||
+			!strings.Contains(msg, "; handshake: readable") {
+			t.Fatalf("run %d: error = %q, want the start limit's error with the handshake readable", i, msg)
+		}
 	}
 }
 
