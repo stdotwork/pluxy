@@ -785,7 +785,13 @@ fn settings_with_an_access_list_are_not_trusted_and_the_folder_is_emptied() {
     let loaded = Confirmations::open(c.settings.clone()).unwrap();
     assert!(!loaded.persistence_blocked);
     assert!(!has(&dir));
+    // Saving empties the folder too: an entry added after the open is not passed on to the
+    // settings file the save makes.
+    crate::private_macos::add_entry(&dir, "everyone allow add_file,file_inherit");
+    assert!(has(&dir));
     approve(&mut c, a, true);
+    assert!(c.settings.exists());
+    assert!(!has(&dir));
     assert!(!has(&c.settings));
     remove(&dir);
 }

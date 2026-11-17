@@ -226,9 +226,13 @@ fn a_vault_folder_with_an_access_list_is_emptied_and_passes_nothing_on() {
     let again = Vault::open(root.clone());
     assert_eq!(again.value(&id).as_deref(), Some(KEY));
     assert_private(&root);
+    // A save checks the folder again: an entry added since the open is emptied before the new
+    // secrets file is made in it, so the file takes none.
+    crate::private_macos::add_entry(&root, "everyone allow list,file_inherit,directory_inherit");
     again
         .add_secret("another", "sk-vault-test-other-0123456789")
         .unwrap();
+    assert_private(&root);
     assert_private(&root.join("secrets.json"));
 }
 

@@ -58,11 +58,22 @@ fn clearing_a_folder_leaves_no_entry_and_nothing_for_new_files_to_inherit() {
     clear_entries(&folder).unwrap();
     assert!(!has_entries(&folder).unwrap());
     assert_eq!(listed(&inner), "");
-    // After: a new file inherits none; clearing again changes nothing.
+    // After: a new file inherits none.
     let after = inner.join("after");
     fs::write(&after, b"x").unwrap();
     assert!(!has_entries(&fs::File::open(&after).unwrap()).unwrap());
+    // Clearing again changes nothing: the empty list counts as none, so it is not set again,
+    // which would change the folder's status-change time.
+    let changed = |f: &fs::File| {
+        use std::os::unix::fs::MetadataExt;
+        let m = f.metadata().unwrap();
+        (m.ctime(), m.ctime_nsec())
+    };
+    let before_again = changed(&folder);
+    std::thread::sleep(std::time::Duration::from_millis(20));
     clear_entries(&folder).unwrap();
+    assert_eq!(changed(&folder), before_again);
+    assert_eq!(listed(&inner), "");
     // A file is cleared through its own descriptor too.
     clear_entries(&fs::File::open(&before).unwrap()).unwrap();
     assert!(!has_entries(&fs::File::open(&before).unwrap()).unwrap());
