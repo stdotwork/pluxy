@@ -7,16 +7,22 @@ name: Next app platforms
 # next-app.yml.
 
 on:
-  # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
-  # its paths below are touched.
+  # Pull requests and merge-queue groups run this through ci.yml, which runs it only when what it
+  # builds changed (see the changes job there).
   workflow_call:
+    inputs:
+      # ci.yml sets this when the change touches neither next/app, next/ui nor the workflows: the
+      # native jobs build and run just the app and the kit, never the Go core.
+      skip-native:
+        type: boolean
+        default: false
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - 'next/**'
-      - '.github/workflows/next-app-platforms.yml'
+  # Not on every push to main: the merge queue already ran this for the last change it merges that
+  # touched what this builds, and the hosted macOS pool is short enough that re-runs on main starved
+  # the queue's own jobs. One run a day on main keeps main's caches fresh for the PR and
+  # merge-queue runs that restore them.
+  schedule:
+    - cron: '17 3 * * *'
 
 concurrency:
   # A literal name: called from ci.yml, github.workflow is the caller's name, the same for every
@@ -254,8 +260,10 @@ jobs:
   # The package shard builds the test package first (package.ts test: a folder bundle on Windows,
   # an app bundle on macOS, never an installer), then the dev app, since the package's builds
   # rename the program they make in target/debug.
+  # A schedule or manual run has no inputs: null is not true, so it runs these.
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
+    if: inputs.skip-native != true
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

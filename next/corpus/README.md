@@ -293,8 +293,8 @@ are set to it.
   are `client_more`, which the new core's observation does not have.
 
 `account-quota/<provider>/usage.json` compares the new core's `GET
-/v0/management/accounts/{id}/quota` with the quota requests today's panel makes through the
-relay (`extensions/panel/src/features/quota/`). Today's core fetches no quota on its own; the old
+/v0/management/accounts/{id}/quota` with the quota requests the old panel made through the
+relay (`extensions/panel/src/features/quota/` at commit `d0f7af2ff`, the last commit with the old panel; the cases' `source` fields write it `d0f7af2ff:<path>`). Today's core fetches no quota on its own; the old
 core's `old_client` replays the panel's requests for the provider, in the order the new core makes
 its own, with the panel's URLs moved to the fake upstream. What is compared is the upstream
 requests: method, path, headers, body and the token. Only these are compared, not the panel's

@@ -1,7 +1,7 @@
 {
-  "description": "A Muse Code login's quota: the new core's GET /v0/management/accounts/{id}/quota against the key-endpoint request today's panel sends through the old core's api-call relay.",
+  "description": "A Muse Code login's quota: the new core's GET /v0/management/accounts/{id}/quota against the key-endpoint request the old panel sends through the old core's api-call relay.",
   "source": [
-    "extensions/panel/src/features/quota/providers/meta/requests.ts createMetaQuotaFetcher",
+    "d0f7af2ff:extensions/panel/src/features/quota/providers/meta/requests.ts createMetaQuotaFetcher",
     "core/internal/api/handlers/management/api_tools.go APICall"
   ],
   "client": {"method":"GET","path":"/v0/management/accounts/corpus/quota","auth":"management-key"},

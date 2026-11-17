@@ -11,12 +11,12 @@ on:
   # its paths below are touched.
   workflow_call:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - 'next/app-tools/**'
-      - '.github/workflows/next-app-tools-platforms.yml'
+  # Not on every push to main: the merge queue already ran this for the last change it merges that
+  # touched what this builds, and the hosted macOS pool is short enough that re-runs on main starved
+  # the queue's own jobs. One run a day on main keeps main's caches fresh for the PR and
+  # merge-queue runs that restore them.
+  schedule:
+    - cron: '47 3 * * *'
 
 concurrency:
   # A literal name: called from ci.yml, github.workflow is the caller's name, the same for every
