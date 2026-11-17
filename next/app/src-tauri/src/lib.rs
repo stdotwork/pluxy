@@ -1753,6 +1753,9 @@ fn install_wsl(app: &AppHandle, id: &str, platform: &str) -> Result<device::View
         (device_view(&st, &catalog), catalog.take_cleanup())
     };
     // Its instances in WSL ran the Linux build this one replaces: their next call starts this one.
+    // shortcut: `stop_wsl` is tested, not this call of it: it needs the running app's
+    // `AppHandle`, which no test can make; test it once the app has a test harness for its Tauri
+    // state, or once this code takes that state instead of the handle.
     st.programs.stop_wsl(id);
     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
     match left {
@@ -2635,6 +2638,9 @@ fn environment_remove(webview: Webview, distro: String, user: String) -> Result<
         let removed = st.environments.lock().unwrap().remove(&env)?;
         st.programs.stop_in(&env);
         // Its remembered launches go too: one click would start them in whatever is there now.
+        // shortcut: the launcher's own `forget_environment` is tested, not this call of it: it
+        // needs a running app's `Webview`, which no test can make; test it once the app has a
+        // test harness for its Tauri state, or once this code takes that state instead.
         launcher::forget_environment(webview.app_handle(), &env)?;
         Ok(serde_json::json!({"removed": removed}))
     }

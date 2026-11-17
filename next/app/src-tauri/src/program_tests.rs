@@ -3416,7 +3416,7 @@ fn both_run(h: &Host, bob: &Instance) -> (u32, u32) {
 }
 
 /// A change of the package stops its instances in every environment; a removed environment's
-/// record stops only the instances there.
+/// record stops only the instances there, and so does a newly installed Linux build (`stop_wsl`).
 #[test]
 fn a_package_change_stops_its_instances_in_wsl_and_an_environment_removed_only_those() {
     let (h, bob) = here_and_in_wsl(package(Value::Null));
@@ -3434,6 +3434,12 @@ fn a_package_change_stops_its_instances_in_wsl_and_an_environment_removed_only_t
     h.stop_in(&Environment::Local);
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(h.status(ID).pid, Some(here));
+    call_in(&h, &bob).unwrap();
+    let wsl = h.status_in(&bob).pid.unwrap();
+    h.stop_wsl(ID);
+    until("the instance in WSL stopped", 10, || !alive(u64::from(wsl)));
+    assert_eq!(h.status(ID).pid, Some(here));
+    assert!(alive(u64::from(here)));
     h.stop_all();
 }
 
