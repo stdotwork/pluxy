@@ -3,8 +3,8 @@
 //! drives the real app through the window's own commands, the real native confirmations (worked
 //! through `ui_driver.rs`) and the tray's Start… menu, with the signed pluxy/execution (the real
 //! execution program, built for this system) that `native/launcher.ts` packed, and the fixture
-//! program as the agent (`bin/pluxy-agent`, `bin` first on the app's PATH), which writes what it
-//! sees of itself to its record.
+//! program as the agent (`bin/pluxy-agent`, `.exe` on Windows; `bin` first on the app's PATH),
+//! which writes what it sees of itself to its record.
 //!
 //! What Linux's check does with a detached agent, a terminal, native key entry or the
 //! StatusNotifier tray waits for the slices that bring those here (the spawn and lifetime session,

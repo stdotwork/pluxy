@@ -1,6 +1,7 @@
 // Fixtures for the native test's checks of the program host (src-tauri/src/program_native.rs, then
 // src-tauri/src/swap_native.rs in the same session): the disposable summary tool
-// (src-tauri/examples/program_fixture, which run.ts builds) in native app packages with a page,
+// (src-tauri/examples/program_fixture, which run.ts builds, and off Linux the workflow) in native
+// app packages with a page,
 // signed with a publisher key generated for this run, a curated registry listing them, and the
 // run's test trust profile in its HOME. The private key never leaves this process. The releases:
 // 1.0.0 and 1.1.0 behave; 1.2.0 describes an operation its manifest does not declare, so it is

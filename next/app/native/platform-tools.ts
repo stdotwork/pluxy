@@ -9,9 +9,10 @@
 //   after the app quit, none of the tool processes each names still runs;
 // - routing: cross-package routing, then declared jobs (routing_native.rs, jobs_native.rs;
 //   routing.ts);
-// - launcher: the execution program and the launcher (launcher_platform_native.rs; launcher.ts),
-//   with the fixtures' bin first on PATH; after the app quit, a file named stop in the fixtures'
-//   work folder ends any agent left running.
+// - launcher: the execution program and the launcher with managed launches
+//   (launcher_platform_native.rs; launcher.ts), with the fixtures' bin first on PATH and a canary
+//   variable no launch may get; after the app quit, a file named stop in the fixtures' work folder
+//   ends any agent left running.
 //
 // Each session gets a fresh app state and a private temporary HOME holding the test trust profile
 // (the app's updater gate and trust store read it from HOME). On macOS the app's folders come from
