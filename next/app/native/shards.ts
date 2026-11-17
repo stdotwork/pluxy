@@ -61,6 +61,9 @@ export const PLATFORM_SHARDS: Record<string, readonly string[]> = {
   // artifact-test-trust: a job of its own, since it builds that app, the fixture tool and the
   // execution program, and starts a test core.
   tools: ["admission", "program", "routing", "launcher", "vault"],
+  // The open session of native/platform-tools.ts, on the same build as the tools shard: a job of
+  // its own, as the tools shard's sessions take most of its time limit.
+  open: ["open"],
 };
 
 /** The sessions of shards, each named once across them. */

@@ -1,4 +1,4 @@
-// The tools shard of the Windows and macOS native test (platform.ts, PLATFORM_SHARDS in
+// The tools and open shards of the Windows and macOS native test (platform.ts, PLATFORM_SHARDS in
 // shards.ts): the sessions run.ts runs on Linux for signed tools, in the real app built with
 // native-test and artifact-test-trust, against a test core in local mode
 // (`go run ./e2e/panelcore -probe`, as dialogs.ts starts it):
@@ -18,7 +18,13 @@
 //   core, whose config file core.json in the fixtures names: the app's own core, which run.ts's
 //   session uses on Linux, does not run on these systems yet. Neither the vault's key and canary,
 //   the test core's management key nor a client key the check learned may appear in the app's
-//   output.
+//   output;
+// - open (the open shard, a job of its own): a tool's opening of a file in the system's own app,
+//   and the app's opening of an address in the default browser (open_platform_native.rs; open.ts,
+//   buildPlatformOpenFixtures), with the session's own https server (browser.ts). On macOS the
+//   session trusts that server's test authority for the run and deletes it afterwards, checking
+//   that macOS trusts the server's certificate only meanwhile; on Windows it removes the check's
+//   .jsonl file type if the app left it, and reports that.
 //
 // Each session gets a fresh app state and a private temporary HOME holding the test trust profile
 // (the app's updater gate and trust store read it from HOME). On macOS the app's folders come from
@@ -41,6 +47,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -48,13 +55,15 @@ import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
 import { buildAdmissionFixtures, EXE, PROFILE_FILE } from "./admission";
+import { macTrusts, type Served, serveHttps, trustOnMac } from "./browser";
 import { buildLauncherFixtures } from "./launcher";
+import { buildPlatformOpenFixtures, platformOpenSessions } from "./open";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
 import { buildVaultFixtures } from "./vault";
 
-/** The sessions of this shard, by their names in shards.ts. */
-export const TOOL_SESSIONS = ["admission", "program", "routing", "launcher", "vault"] as const;
+/** The sessions of these shards, by their names in shards.ts. */
+export const TOOL_SESSIONS = ["admission", "program", "routing", "launcher", "vault", "open"] as const;
 export type ToolSession = (typeof TOOL_SESSIONS)[number];
 
 /** What platform.ts gives these sessions. */
@@ -222,6 +231,9 @@ export async function toolSession(name: ToolSession, ctx: Context) {
   let data: string | undefined;
   let core: Awaited<ReturnType<typeof startCore>> | undefined;
   let proc: ChildProcess | undefined;
+  // The open session's https server, and on macOS what removes its trusted test authority.
+  let served: Served | undefined;
+  let untrust: (() => void) | undefined;
   try {
     if (windows) {
       home = ctx.privateFolder();
@@ -258,6 +270,31 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       ({ registries, nonce } = buildRoutingFixtures(fixtures, home, programFixture));
     } else if (name === "vault") {
       ({ registries, nonce, canaries } = buildVaultFixtures(fixtures, home, programFixture));
+    } else if (name === "open") {
+      const execution = join(appToolsTarget, "debug", `execution${EXE}`);
+      check(existsSync(execution), `the execution program ${execution} is not built`);
+      ({ registries, nonce } = buildPlatformOpenFixtures(
+        fixtures,
+        home,
+        programFixture,
+        execution,
+        join(next, "app-tools", "execution", "pluxy-extension.json"),
+      ));
+      // The session's own https address for the app's browser step, which macOS' browser asks for
+      // only once it trusts the server. A failure here is reported, and that step then fails.
+      served = serveHttps(fixtures);
+      if (!windows) {
+        try {
+          untrust = trustOnMac(served.certs, fixtures);
+          const t = macTrusts(served.certs, fixtures);
+          check(
+            t.ok,
+            `macOS does not trust the session's server after trusting its test authority: ${t.out}`,
+          );
+        } catch (e) {
+          check(false, `could not trust the session's test authority: ${(e as Error).message}`);
+        }
+      }
     } else {
       const execution = join(appToolsTarget, "debug", `execution${EXE}`);
       check(existsSync(execution), `the execution program ${execution} is not built`);
@@ -314,6 +351,7 @@ export async function toolSession(name: ToolSession, ctx: Context) {
     }
     if (name === "routing") env.PLUXY_APP_TEST_ROUTING = fixtures;
     if (name === "vault") env.PLUXY_APP_TEST_VAULT = fixtures;
+    if (name === "open") env.PLUXY_APP_TEST_OPEN = fixtures;
     if (launcherBin) {
       env.PLUXY_APP_TEST_LAUNCHER = fixtures;
       // In the app's environment, never in a launch's (launcher_platform_native.rs checks the
@@ -470,6 +508,12 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       say(`client keys ${JSON.stringify(c ?? {})}`);
     }
 
+    if (name === "open") {
+      const o = steps.get("open");
+      check(o?.passed === true, `the open check did not complete: ${failure}`);
+      say(`open ${JSON.stringify(o ?? {})}`);
+    }
+
     if (timedOut || code !== 0 || steps.has("failed")) say(`the app's last lines:\n  ${log.join("\n  ")}`);
   } finally {
     // An app still running here (the session failed before it quit): only the one it started.
@@ -482,6 +526,44 @@ export async function toolSession(name: ToolSession, ctx: Context) {
     if (name === "launcher" && existsSync(join(fixtures, "work"))) {
       writeFileSync(join(fixtures, "work", "stop"), "");
       await Bun.sleep(2000);
+    }
+    if (name === "open") {
+      served?.stop();
+      if (untrust && served) {
+        try {
+          untrust();
+          const t = macTrusts(served.certs, fixtures);
+          check(!t.ok, "macOS still trusts the session's server after its test authority was deleted");
+        } catch (e) {
+          check(false, `could not delete the session's test authority: ${(e as Error).message}`);
+        }
+      }
+      // The check removes its .jsonl file type itself; one left (the app ended first) is removed
+      // here, and reported.
+      if (windows) {
+        const left = ctx.powershell(
+          [
+            "$c = 'HKCU:\\Software\\Classes'",
+            "$left = @()",
+            'if (Test-Path -LiteralPath "$c\\PluxyTest.jsonl") { Remove-Item -LiteralPath "$c\\PluxyTest.jsonl" -Recurse; $left += \'PluxyTest.jsonl\' }',
+            '$k = Get-Item -LiteralPath "$c\\.jsonl" -ErrorAction SilentlyContinue',
+            "if ($k -and $k.GetValue('') -eq 'PluxyTest.jsonl') { $k.Dispose(); Remove-Item -LiteralPath \"$c\\.jsonl\" -Recurse; $left += '.jsonl' }",
+            "$left -join ','",
+          ].join("; "),
+        );
+        check(
+          left.status === 0 && left.out === "",
+          `the open check left its .jsonl file type registered, removed now: ${left.status} ${left.out}`,
+        );
+        // The junction, not what it leads to, before its folder is removed.
+        const junction = join(platformOpenSessions(home), "linked");
+        try {
+          rmdirSync(junction);
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT")
+            check(false, `could not remove the junction ${junction}: ${(e as Error).message}`);
+        }
+      }
     }
     if (core) {
       const c = core.proc;
