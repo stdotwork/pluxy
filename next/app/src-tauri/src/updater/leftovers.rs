@@ -97,6 +97,59 @@ pub(super) fn clean(dir: &Path, remove: impl Fn(&Made) -> Outcome) {
     }
 }
 
+/// A folder made beside the installed copy and recorded (`Folder::new`). Dropped, as a failed or
+/// cancelled install drops it, it is removed as a recorded entry is (`remove_folder`): only while
+/// it is still the folder made, never by its name alone. One kept (`keep`) stays.
+#[cfg(unix)]
+pub(super) struct Folder {
+    made: Made,
+    kept: bool,
+}
+
+#[cfg(unix)]
+impl Folder {
+    /// Makes folder path (this user's, mode 0700) and records it in the updates folder dir; if it
+    /// cannot be recorded it is removed again, the same way.
+    pub(super) fn new(dir: &Path, path: &Path) -> Result<Folder, String> {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let id = folder_id(path).inspect_err(|_| {
+            // Only an empty folder goes this way.
+            let _ = std::fs::remove_dir(path);
+        })?;
+        let made = Made {
+            path: path.to_path_buf(),
+            id,
+        };
+        if let Err(e) = record(dir, path, made.id.clone()) {
+            remove_folder(&made);
+            return Err(e);
+        }
+        Ok(Folder { made, kept: false })
+    }
+
+    pub(super) fn path(&self) -> &Path {
+        &self.made.path
+    }
+
+    /// Leaves the folder when dropped: it stays recorded for a later start's cleanup.
+    pub(super) fn keep(&mut self) {
+        self.kept = true;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Folder {
+    fn drop(&mut self) {
+        if !self.kept {
+            remove_folder(&self.made);
+        }
+    }
+}
+
 /// A folder's identity on Unix: device and inode, read without following a link. Refused unless
 /// path is a folder of this user's.
 #[cfg(unix)]
@@ -324,6 +377,48 @@ mod tests {
             folder_id(&path).is_err(),
             "a link is not a folder to record"
         );
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A folder made for an install and dropped (the install failed or was cancelled) goes, with
+    // what was put in it, only while it is still the folder made: a folder of the user's put in
+    // its place stays whole, and a link put there is not followed. One kept stays.
+    #[test]
+    fn a_dropped_folder_goes_only_while_it_is_still_the_one_made() {
+        let tmp = super::super::tests::temp("leftovers-drop");
+        let dir = tmp.join("updates");
+        let outside = tmp.join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep"), b"z").unwrap();
+        let path = tmp.join(".pluxy-update-5555555555555555");
+
+        let f = Folder::new(&dir, &path).unwrap();
+        assert_eq!(f.path(), path);
+        fs::write(path.join("file"), b"x").unwrap();
+        fs::create_dir_all(path.join("a/b")).unwrap();
+        drop(f);
+        assert!(!path.exists(), "dropped as made: removed");
+
+        let f = Folder::new(&dir, &path).unwrap();
+        fs::rename(&path, tmp.join("moved")).unwrap();
+        made(&path, &outside, false);
+        drop(f);
+        assert!(path.join("a/b/deep").exists(), "not the folder made");
+        assert!(tmp.join("moved").exists());
+        assert!(outside.join("keep").exists());
+
+        let linked = tmp.join(".pluxy-update-6666666666666666");
+        let f = Folder::new(&dir, &linked).unwrap();
+        fs::rename(&linked, tmp.join("moved2")).unwrap();
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        drop(f);
+        assert!(outside.join("keep").exists(), "the link was not followed");
+
+        let kept = tmp.join(".pluxy-update-7777777777777777");
+        let mut f = Folder::new(&dir, &kept).unwrap();
+        f.keep();
+        drop(f);
+        assert!(kept.exists());
         fs::remove_dir_all(&tmp).unwrap();
     }
 

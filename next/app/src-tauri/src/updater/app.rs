@@ -164,12 +164,12 @@ pub(super) fn remove(path: &Path) {
 }
 
 /// A checked bundle in its staging folder next to the installed one, ready to swap in. The
-/// folder is removed if it is not swapped in.
+/// folder is removed if it is not swapped in, only while it is still the folder made
+/// (`leftovers::Folder`).
 pub(super) struct Staged {
     digest: String,
-    staging: PathBuf,
+    staging: leftovers::Folder,
     bundle: PathBuf,
-    swapped: bool,
 }
 
 impl Staged {
@@ -178,27 +178,14 @@ impl Staged {
     }
 }
 
-impl Drop for Staged {
-    fn drop(&mut self) {
-        if !self.swapped {
-            let _ = fs::remove_dir_all(&self.staging);
-        }
-    }
-}
-
 /// A new staging folder of this user's next to the installed bundle, recorded in the updates
-/// folder dir (`leftovers.rs`); if it cannot be recorded it is removed again.
-fn staging(installed: &Path, dir: &Path) -> Result<PathBuf, String> {
+/// folder dir (`leftovers::Folder`).
+fn staging(installed: &Path, dir: &Path) -> Result<leftovers::Folder, String> {
     let folder = installed.parent().ok_or("The app bundle has no folder.")?;
     let mut nonce = [0u8; 8];
     getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
     let path = folder.join(format!(".pluxy-update-{}", crate::artifact::hex(&nonce)));
-    bundle::private_new_dir(&path)?;
-    if let Err(e) = leftovers::folder_id(&path).and_then(|id| leftovers::record(dir, &path, id)) {
-        let _ = fs::remove_dir(&path);
-        return Err(e);
-    }
-    Ok(path)
+    leftovers::Folder::new(dir, &path)
 }
 
 /// Unpacks the update's verified archive next to the installed bundle and checks it: the same
@@ -210,12 +197,12 @@ pub(super) fn stage(
     updates: &Path,
 ) -> Result<Staged, String> {
     let want = bundle::info(installed)?;
-    let dir = staging(installed, updates)?;
+    let staging = staging(installed, updates)?;
+    let dir = staging.path().to_path_buf();
     let mut s = Staged {
         digest: String::new(),
         bundle: PathBuf::new(),
-        staging: dir.clone(),
-        swapped: false,
+        staging,
     };
     s.bundle = bundle::unpack(&bytes, &dir)?;
     bundle::check(&s.bundle, &want, Some(version), CPU)?;
@@ -232,13 +219,12 @@ pub(super) fn stage_kept(
     updates: &Path,
 ) -> Result<Staged, String> {
     let want = bundle::info(installed)?;
-    let dir = staging(installed, updates)?;
+    let staging = staging(installed, updates)?;
     let name = installed.file_name().ok_or("The app bundle has no name.")?;
     let s = Staged {
         digest: pin.sha256.clone(),
-        bundle: dir.join(name),
-        staging: dir,
-        swapped: false,
+        bundle: staging.path().join(name),
+        staging,
     };
     bundle::copy_tree(kept, &s.bundle)
         .map_err(|e| format!("the kept copy {}: {e}", kept.display()))?;
@@ -263,7 +249,7 @@ pub(super) fn swap_in(installed: &Path, mut staged: Staged, _updates: &Path) -> 
         ));
     }
     // The old bundle is in the staging folder now: it stays until the old version has ended.
-    staged.swapped = true;
+    staged.staging.keep();
     Ok(())
 }
 

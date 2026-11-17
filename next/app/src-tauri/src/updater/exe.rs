@@ -27,7 +27,7 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Storage::FileSystem::{
     FileDispositionInfo, GetDriveTypeW, MoveFileExW, SetFileInformationByHandle, DELETE,
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     MOVEFILE_WRITE_THROUGH,
 };
 
@@ -234,10 +234,32 @@ fn file_id(f: &fs::File) -> std::io::Result<String> {
     crate::owned::windows::file_id(f).map(|id| crate::artifact::hex(&id))
 }
 
-/// Records path, the open file f's name now or once renamed, in the updates folder dir.
-fn record(dir: &Path, path: &Path, f: &fs::File) -> Result<(), String> {
+/// Records path, the open file f's name now or once renamed, in the updates folder dir: its
+/// identity as recorded.
+fn record(dir: &Path, path: &Path, f: &fs::File) -> Result<String, String> {
     let id = file_id(f).map_err(|e| format!("{}: {e}", path.display()))?;
-    leftovers::record(dir, path, id)
+    leftovers::record(dir, path, id.clone())?;
+    Ok(id)
+}
+
+/// Deletes the file open as f (with delete access) through its handle, never by its name: it
+/// goes when the last handle to it closes.
+fn delete_through(f: &fs::File) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    let delete = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: f is open with DELETE; delete is the structure the class names.
+    if unsafe {
+        SetFileInformationByHandle(
+            f.as_raw_handle() as _,
+            FileDispositionInfo,
+            (&delete as *const FILE_DISPOSITION_INFO).cast(),
+            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Removes what an earlier replace recorded that it left next to the installed program (the
@@ -255,7 +277,6 @@ pub(super) fn cleanup(dir: &Path) {
 /// stays recorded for the next start.
 fn remove_recorded(m: &Made) -> Outcome {
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-    use std::os::windows::io::AsRawHandle;
     let mut not_there = false;
     let r = while_busy(|| {
         let opened = fs::OpenOptions::new()
@@ -279,21 +300,8 @@ fn remove_recorded(m: &Made) -> Outcome {
             not_there = true;
             return Ok(());
         }
-        let delete = FILE_DISPOSITION_INFO { DeleteFile: true };
-        // SAFETY: f is open with DELETE; delete is the structure the class names. The file goes
-        // when f closes, at the end of this call.
-        if unsafe {
-            SetFileInformationByHandle(
-                f.as_raw_handle() as _,
-                FileDispositionInfo,
-                (&delete as *const FILE_DISPOSITION_INFO).cast(),
-                std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
-            )
-        } == 0
-        {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
+        // The file goes when f closes, at the end of this call.
+        delete_through(&f)
     });
     match r {
         Ok(()) if not_there => Outcome::NotThere,
@@ -341,9 +349,13 @@ fn while_busy(mut op: impl FnMut() -> std::io::Result<()>) -> std::io::Result<()
 
 /// Replaces the program with bytes (see the module): a new file next to it, recorded in the
 /// updates folder dir, written and flushed; the program recorded under its aside name, then
-/// renamed aside; the new file renamed into its place, or the program renamed back.
+/// renamed aside; the new file renamed into its place, or the program renamed back. A replace
+/// that fails deletes the new file only as the file it made: through the handle it made it with
+/// while that is open, then only while its name still holds the file recorded
+/// (`remove_recorded`).
 fn replace(installed: &Path, bytes: &[u8], dir: &Path) -> Result<(), String> {
     use std::io::Write;
+    use std::os::windows::fs::OpenOptionsExt;
     let folder = installed.parent().ok_or("The program has no folder.")?;
     let mut nonce = [0u8; 8];
     getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
@@ -354,35 +366,41 @@ fn replace(installed: &Path, bytes: &[u8], dir: &Path) -> Result<(), String> {
     let mut f = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
+        .access_mode(FILE_GENERIC_WRITE | DELETE | FILE_READ_ATTRIBUTES)
         .open(&new)
         .map_err(shown)?;
-    if let Err(e) = record(dir, &new, &f) {
-        drop(f);
-        let _ = fs::remove_file(&new);
-        return Err(e);
-    }
-    let written = f.write_all(bytes).and_then(|()| f.sync_all());
-    drop(f);
-    if let Err(e) = written {
-        let _ = fs::remove_file(&new);
+    let id = match record(dir, &new, &f) {
+        Ok(id) => id,
+        Err(e) => {
+            let _ = delete_through(&f);
+            return Err(e);
+        }
+    };
+    if let Err(e) = f.write_all(bytes).and_then(|()| f.sync_all()) {
+        let _ = delete_through(&f);
         return Err(shown(e));
     }
+    drop(f);
+    let made = Made {
+        path: new.clone(),
+        id,
+    };
     // The program as it is now is what the aside name will hold: recorded before the rename, so
     // what is left aside is always recorded.
     let program = fs::File::open(installed)
         .map_err(shown)
-        .and_then(|p| record(dir, &aside, &p));
+        .and_then(|p| record(dir, &aside, &p).map(drop));
     if let Err(e) = program {
-        let _ = fs::remove_file(&new);
+        remove_recorded(&made);
         return Err(e);
     }
     if let Err(e) = rename(installed, &aside) {
-        let _ = fs::remove_file(&new);
+        remove_recorded(&made);
         return Err(shown(e));
     }
     if let Err(e) = rename(&new, installed) {
         let back = rename(&aside, installed);
-        let _ = fs::remove_file(&new);
+        remove_recorded(&made);
         return Err(match back {
             Ok(()) => shown(e),
             Err(b) => format!(
@@ -538,6 +556,20 @@ pub(super) mod tests {
         let e = replace(&exe, &program_bytes("new"), &tmp.join("updates")).unwrap_err();
         assert!(started.elapsed() >= BUSY_FOR, "it waited for the file: {e}");
         drop(held);
+        assert_eq!(fs::read(&exe).unwrap(), program_bytes("old"));
+        assert_eq!(names(&tmp), ["pluxy.exe"]);
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A replace whose new file cannot be recorded changes nothing and leaves nothing beside the
+    // program: the new file is deleted through the handle it was made with.
+    #[test]
+    fn a_replace_that_cannot_record_leaves_nothing() {
+        let tmp = super::super::tests::temp("exe-norecord");
+        let exe = fixture(&tmp, "old");
+        // The updates folder's name holds a file: the record cannot be written.
+        fs::write(tmp.join("updates"), b"not a folder").unwrap();
+        assert!(replace(&exe, &program_bytes("new"), &tmp.join("updates")).is_err());
         assert_eq!(fs::read(&exe).unwrap(), program_bytes("old"));
         assert_eq!(names(&tmp), ["pluxy.exe"]);
         fs::remove_dir_all(&tmp).unwrap();
