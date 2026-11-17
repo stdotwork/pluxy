@@ -111,7 +111,8 @@ jobs:
                 next/app/src-tauri/src/program.rs | next/app/src-tauri/src/program_tests.rs | \
                 next/app/src-tauri/src/spawn.rs | next/app/src-tauri/src/vault.rs | \
                 next/app/src-tauri/src/vault_windows.rs | next/app/src-tauri/src/owned/mod.rs | \
-                next/app/src-tauri/src/owned/windows.rs | .github/workflows/next-app-tools-platforms.yml)
+                next/app/src-tauri/src/owned/windows.rs | next/app/src-tauri/src/managed.rs | \
+                next/app/src-tauri/src/private_windows.rs | .github/workflows/next-app-tools-platforms.yml)
                 run[next-app-tools-platforms]=true ;;
             esac
             # What the WSL jobs build and run: pluxy/wsl, pluxy-program, pluxy-transactions (with its
@@ -119,15 +120,18 @@ jobs:
             # pluxy/claude-code, and the desktop app's files its real-WSL tests (`wsl_real_*`) run:
             # its environments module and wsl-named files, the program host (program.rs, and
             # program_tests.rs, which holds those tests' helpers), the spawn service (spawn.rs), the
-            # vault (vault.rs, vault_windows.rs) and the Windows process code they start wsl.exe with
-            # (owned/mod.rs, owned/windows.rs). The launcher, the router and the Linux build's
-            # admission are left out: no real-WSL test runs them.
+            # vault (vault.rs, vault_windows.rs), the Windows process code they start wsl.exe with
+            # (owned/mod.rs, owned/windows.rs), the start-when-free wait and private writes the
+            # program host and spawn service use (managed.rs) and the private folders and files the
+            # vault and environments module make (private_windows.rs). The launcher, the router and
+            # the Linux build's admission are left out: no real-WSL test runs them.
             case $path in
               next/app-tools/wsl/* | next/app-tools/lib/program/* | next/app-tools/lib/transactions/* | next/app-tools/lib/files/* | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock | next/app-tools/claude-code/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | \
                 next/app/src-tauri/src/program.rs | next/app/src-tauri/src/program_tests.rs | \
                 next/app/src-tauri/src/spawn.rs | next/app/src-tauri/src/vault.rs | \
                 next/app/src-tauri/src/vault_windows.rs | next/app/src-tauri/src/owned/mod.rs | \
-                next/app/src-tauri/src/owned/windows.rs | .github/workflows/next-app-tools-platforms.yml)
+                next/app/src-tauri/src/owned/windows.rs | next/app/src-tauri/src/managed.rs | \
+                next/app/src-tauri/src/private_windows.rs | .github/workflows/next-app-tools-platforms.yml)
                 run[next-app-tools-wsl]=true ;;
             esac
             # A tool's manifest, and the workspace's and every member's Cargo.toml (`*` matches `/`
