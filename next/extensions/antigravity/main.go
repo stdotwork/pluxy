@@ -147,6 +147,11 @@ func streamOnly(model string) bool {
 }
 
 func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+	return generateTo(ctx, call, out)
+}
+
+// generateTo is generate writing to any sender of events, which a test can stand in for.
+func generateTo(ctx context.Context, call sdk.Call, out interface{ Send(llm.Event) error }) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
 		return err
@@ -196,7 +201,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return upstreamError(resp, call.Request.Model)
 	}
-	send := &reporting{Stream: out, tr: tr}
+	send := &reporting{out: out, tr: tr}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		return relayStream(ctx, resp.Body, send, added)
 	}
@@ -233,8 +238,8 @@ func unwrap(raw []byte) []byte {
 
 // reporting adds the translation report to the reply's response.start event.
 type reporting struct {
-	*sdk.Stream
-	tr *llm.Translation
+	out interface{ Send(llm.Event) error }
+	tr  *llm.Translation
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -243,7 +248,7 @@ func (r *reporting) Send(ev llm.Event) error {
 		info.Translation = r.tr
 		ev.Response = &info
 	}
-	return r.Stream.Send(ev)
+	return r.out.Send(ev)
 }
 
 // relayStream decodes the upstream stream and sends each event as soon as it is decoded. A

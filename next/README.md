@@ -1112,8 +1112,17 @@ the description as hints (`minLength: 1`, `Allowed: a, b`), a type list such as
 model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
 object in a function's parameters that requires nothing gets a required placeholder property:
 `reason` (a string) where it has no properties, `_` (a boolean) where it has some and none is
-required. The extension removes the placeholders from the model's calls before any client format
-sees them; today's core does that only for Messages clients. Claude models, Gemini 3 Pro and the image model are always
+required. An object is a schema of type `object`, or one with `properties` and no type (it then
+gets that type); a union object (with `anyOf` or `oneOf`) gets none; an `allOf` branch counts with
+the object it merges into, so that object's properties and required names are the branches' too. A
+function's response schema gets none: today's core adds one there, but the schema describes what
+the client returns, and nothing would remove the placeholder. The extension removes the
+placeholders from the model's calls before any client format sees them; today's core does that only
+for Messages clients. It leaves a placeholder in a call where a client schema at the same path (the
+other branch of a union, another item of a tuple, or a function declared again under that name)
+declares a property of the same name, as today's core does, so it never removes a key the client
+declared; it does remove a key named `reason` that the model writes into an object with no declared
+properties, such as a free-form map. Claude models, Gemini 3 Pro and the image model are always
 asked on the stream method and gathered into one reply when the client wants one. Replies are
 taken out of the envelope's `response` field. A 429 is a used-up quota when Google says
 `QUOTA_EXHAUSTED` or asks for a wait of five minutes or more, and a rate limit otherwise, with the

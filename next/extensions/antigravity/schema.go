@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -79,13 +81,17 @@ const maxRefDepth = 16
 // cleanTools returns a request's tools with every function declaration's schemas cleaned: its
 // parameters (parametersJsonSchema renamed to parameters) and its response. group is true for
 // Claude and Gemini 3 Pro, which keep titles and get placeholders in their parameters; the second
-// result says where the placeholders went.
+// result says where the placeholders went, leaving out any that a client schema at the same path
+// (another union branch, a tuple item, a function declared again under the same name) declares a
+// property of the same name: stripping would take the client's key, so that placeholder is left
+// in the model's calls, as in today's core.
 func cleanTools(raw json.RawMessage, claude, group bool) (json.RawMessage, placeholders) {
 	var tools []map[string]json.RawMessage
 	if json.Unmarshal(raw, &tools) != nil {
 		return raw, nil
 	}
 	var added placeholders
+	declared := map[string]declaredNames{} // by function name
 	for _, t := range tools {
 		for _, key := range []string{"functionDeclarations", "function_declarations"} {
 			var decls []map[string]json.RawMessage
@@ -100,11 +106,15 @@ func cleanTools(raw json.RawMessage, claude, group bool) (json.RawMessage, place
 					delete(d, "parametersJsonSchema")
 				}
 				if p, ok := d["parameters"]; ok {
-					cleaned, sites := cleanParameters(p, schemaMode{claude: claude, keepTitle: group, placeholders: group})
+					cleaned, sites, names := cleanParameters(p, schemaMode{claude: claude, keepTitle: group, placeholders: group})
 					d["parameters"] = cleaned
+					var name string
+					_ = json.Unmarshal(d["name"], &name)
+					if declared[name] == nil {
+						declared[name] = declaredNames{}
+					}
+					declared[name].merge(names)
 					if len(sites) > 0 {
-						var name string
-						_ = json.Unmarshal(d["name"], &name)
 						if added == nil {
 							added = placeholders{}
 						}
@@ -129,6 +139,14 @@ func cleanTools(raw json.RawMessage, claude, group bool) (json.RawMessage, place
 	out, err := json.Marshal(tools)
 	if err != nil {
 		return raw, nil
+	}
+	for name, sites := range added {
+		kept := slices.DeleteFunc(sites, func(s placeholderSite) bool { return declared[name][pathKey(s.path)][s.name] })
+		if len(kept) == 0 {
+			delete(added, name)
+		} else {
+			added[name] = kept
+		}
 	}
 	return out, added
 }
@@ -155,16 +173,16 @@ func cleanResponseSchema(gen map[string]json.RawMessage) bool {
 
 // cleanSchema returns a schema cleaned under mode.
 func cleanSchema(raw json.RawMessage, mode schemaMode) json.RawMessage {
-	out, _ := cleanParameters(raw, mode)
+	out, _, _ := cleanParameters(raw, mode)
 	return out
 }
 
-// cleanParameters returns a schema cleaned under mode, and where it added placeholders (only
-// when mode asks for them).
-func cleanParameters(raw json.RawMessage, mode schemaMode) (json.RawMessage, []placeholderSite) {
+// cleanParameters returns a schema cleaned under mode, where it added placeholders (only when
+// mode asks for them), and the property names the client's schemas declare.
+func cleanParameters(raw json.RawMessage, mode schemaMode) (json.RawMessage, []placeholderSite, declaredNames) {
 	var root any
 	if json.Unmarshal(raw, &root) != nil {
-		return raw, nil
+		return raw, nil, nil
 	}
 	defs := map[string]any{}
 	if m, ok := root.(map[string]any); ok {
@@ -178,54 +196,135 @@ func cleanParameters(raw json.RawMessage, mode schemaMode) (json.RawMessage, []p
 	}
 	cleaned := clean(root, defs, mode, 0)
 	var sites []placeholderSite
+	declared := declaredNames{}
 	if mode.placeholders && !mode.response {
-		addPlaceholders(cleaned, nil, &sites)
+		collectDeclared(cleaned, nil, declared)
+		addPlaceholders(cleaned, nil, false, &sites)
 	}
 	out, err := json.Marshal(cleaned)
 	if err != nil {
-		return raw, nil
+		return raw, nil, nil
 	}
-	return out, sites
+	return out, sites, declared
 }
 
-// addPlaceholders adds a placeholder to every object schema under node, as today's core does,
-// deepest first, and records each in sites. An object that is a union (it has anyOf or oneOf) gets
-// none. path leads to the value node describes.
-//
-// shortcut: an object with no declared properties gets "reason", which strip removes from the
-// model's calls wherever it stands in that object, so a key of that name the model means as data
-// (a free-form map's) is removed too; today's core tells these apart in part. Tell them apart
-// when a client's free-form map is seen to lose a "reason".
-func addPlaceholders(node any, path []placeholderStep, sites *[]placeholderSite) {
-	m, ok := node.(map[string]any)
-	if !ok {
-		return
+// pathKey names the values a path leads to, to compare the schemas at one path.
+func pathKey(path []placeholderStep) string {
+	parts := make([]string, len(path))
+	for i, st := range path {
+		if st.any {
+			parts[i] = "*"
+		} else {
+			parts[i] = strconv.Quote(st.key)
+		}
 	}
+	return strings.Join(parts, "/")
+}
+
+// declaredNames lists the property names client schemas declare, by pathKey of the values they
+// describe.
+type declaredNames map[string]map[string]bool
+
+func (d declaredNames) merge(other declaredNames) {
+	for k, names := range other {
+		if d[k] == nil {
+			d[k] = map[string]bool{}
+		}
+		for n := range names {
+			d[k][n] = true
+		}
+	}
+}
+
+// schemaChildren calls fn for each subschema of m with the path to the values it describes: a
+// property's, an array element's, or (for a union branch and an allOf branch) m's own. merged is
+// true for an allOf branch, whose properties and required names belong to m.
+func schemaChildren(m map[string]any, path []placeholderStep, fn func(child any, path []placeholderStep, merged bool)) {
 	step := func(s placeholderStep) []placeholderStep { return append(slices.Clone(path), s) }
 	if props, ok := m["properties"].(map[string]any); ok {
-		for name, p := range props {
-			addPlaceholders(p, step(placeholderStep{key: name}), sites)
+		for _, name := range slices.Sorted(maps.Keys(props)) {
+			fn(props[name], step(placeholderStep{key: name}), false)
 		}
 	}
 	for _, k := range []string{"items", "prefixItems"} {
 		switch items := m[k].(type) {
 		case map[string]any:
-			addPlaceholders(items, step(placeholderStep{any: true}), sites)
+			fn(items, step(placeholderStep{any: true}), false)
 		case []any:
 			for _, it := range items {
-				addPlaceholders(it, step(placeholderStep{any: true}), sites)
+				fn(it, step(placeholderStep{any: true}), false)
 			}
 		}
 	}
-	addPlaceholders(m["additionalProperties"], step(placeholderStep{any: true}), sites)
 	for _, k := range []string{"anyOf", "oneOf", "allOf"} {
 		if branches, ok := m[k].([]any); ok {
 			for _, b := range branches {
-				addPlaceholders(b, path, sites)
+				fn(b, path, k == "allOf")
 			}
 		}
 	}
-	if m["type"] != "object" {
+}
+
+// collectDeclared records the property names every schema under node declares, before any
+// placeholder is added.
+func collectDeclared(node any, path []placeholderStep, declared declaredNames) {
+	m, ok := node.(map[string]any)
+	if !ok {
+		return
+	}
+	if props, ok := m["properties"].(map[string]any); ok && len(props) > 0 {
+		key := pathKey(path)
+		if declared[key] == nil {
+			declared[key] = map[string]bool{}
+		}
+		for name := range props {
+			declared[key][name] = true
+		}
+	}
+	schemaChildren(m, path, func(child any, p []placeholderStep, _ bool) { collectDeclared(child, p, declared) })
+}
+
+// objectShape adds the property names and required names of m and of the allOf branches that merge
+// into it (as today's core merges them before it adds a placeholder).
+func objectShape(m map[string]any, names, required map[string]bool) {
+	if props, ok := m["properties"].(map[string]any); ok {
+		for name := range props {
+			names[name] = true
+		}
+	}
+	if list, ok := m["required"].([]any); ok {
+		for _, r := range list {
+			if name, ok := r.(string); ok {
+				required[name] = true
+			}
+		}
+	}
+	if branches, ok := m["allOf"].([]any); ok {
+		for _, b := range branches {
+			if bm, ok := b.(map[string]any); ok {
+				objectShape(bm, names, required)
+			}
+		}
+	}
+}
+
+// addPlaceholders adds a placeholder to every object schema under node, as today's core does, and
+// records each in sites. path leads to the values node describes. An object is a schema of type
+// "object", or with properties and no type (it then gets that type when it gets a placeholder). An
+// object that is a union (it has anyOf or oneOf) gets none, and an allOf branch is judged with the
+// object it merges into, not alone.
+//
+// shortcut: an object with no declared properties gets "reason", which strip removes from the
+// model's calls wherever it stands in that object, so a key of that name the model means as data
+// (a free-form map's) is removed too; today's core leaves such a key where the object takes extra
+// keys. Do the same when a client's free-form map is seen to lose a "reason".
+func addPlaceholders(node any, path []placeholderStep, merged bool, sites *[]placeholderSite) {
+	m, ok := node.(map[string]any)
+	if !ok {
+		return
+	}
+	schemaChildren(m, path, func(child any, p []placeholderStep, mg bool) { addPlaceholders(child, p, mg, sites) })
+	if merged {
 		return
 	}
 	if _, ok := m["anyOf"].([]any); ok {
@@ -234,44 +333,43 @@ func addPlaceholders(node any, path []placeholderStep, sites *[]placeholderSite)
 	if _, ok := m["oneOf"].([]any); ok {
 		return
 	}
-	props, has := m["properties"]
-	switch p := props.(type) {
-	case nil:
-		if has {
-			return // properties: null is left as it is
-		}
-		m["properties"] = map[string]any{"reason": map[string]any{"type": "string", "description": placeholderReason}}
+	own, hasOwn := m["properties"]
+	ownMap, ownIsMap := own.(map[string]any)
+	if hasOwn && !ownIsMap {
+		return // properties: null, or not an object, is left as it is
+	}
+	names, required := map[string]bool{}, map[string]bool{}
+	objectShape(m, names, required)
+	typ, hasType := m["type"]
+	if !(typ == "object" || !hasType && (ownIsMap || len(names) > 0)) {
+		return
+	}
+	if ownMap == nil {
+		ownMap = map[string]any{}
+	}
+	switch {
+	case len(names) == 0:
+		ownMap["reason"] = map[string]any{"type": "string", "description": placeholderReason}
 		m["required"] = []any{"reason"}
 		*sites = append(*sites, placeholderSite{path: path, name: "reason"})
-	case map[string]any:
-		if len(p) == 0 {
-			p["reason"] = map[string]any{"type": "string", "description": placeholderReason}
-			m["required"] = []any{"reason"}
-			*sites = append(*sites, placeholderSite{path: path, name: "reason"})
-			return
+	default:
+		for name := range required {
+			if names[name] {
+				return
+			}
 		}
-		if requiresAny(m["required"], p) {
-			return
-		}
-		if _, declared := p["_"]; !declared {
-			p["_"] = map[string]any{"type": "boolean"}
+		if !names["_"] {
+			ownMap["_"] = map[string]any{"type": "boolean"}
 			*sites = append(*sites, placeholderSite{path: path, name: "_"})
 		}
 		m["required"] = []any{"_"}
 	}
-}
-
-// requiresAny reports whether required names at least one of props.
-func requiresAny(required any, props map[string]any) bool {
-	list, _ := required.([]any)
-	for _, r := range list {
-		if name, ok := r.(string); ok {
-			if _, in := props[name]; in {
-				return true
-			}
-		}
+	if !hasOwn && len(ownMap) > 0 {
+		m["properties"] = ownMap
 	}
-	return false
+	if !hasType {
+		m["type"] = "object"
+	}
 }
 
 // strip removes the placeholders from the function calls of one GenerateContent response (or

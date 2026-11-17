@@ -3,11 +3,16 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/extensions/antigravity/agtest"
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk"
 )
 
 // sameJSON reports whether two JSON texts hold the same value.
@@ -31,7 +36,12 @@ func declaration(params string) string {
 // Claude's VALIDATED mode wants a required property in every object, so today's core adds one to
 // each object that requires nothing: "reason" (a string) where there are no properties, "_" (a
 // boolean) where there are some and none is required. The expected schemas are today's core's
-// (corpus case tool-schema-forms-claude records the nested object).
+// (corpus case tool-schema-forms-claude records the nested object), with one difference on
+// purpose: a function's response schema gets no placeholder here (today's core adds one to a
+// declaration's response and responseJsonSchema), as it describes what the client returns, not
+// what the model writes, and nothing would strip it. A site is left out where a client schema at
+// the same path declares the placeholder's name, so a strip never takes the client's key; today's
+// core keeps the placeholder in the model's calls there too.
 func TestPlaceholdersAdded(t *testing.T) {
 	const reason = `{"type":"string","description":"Brief explanation of why you are calling this tool"}`
 	any1 := placeholderStep{any: true}
@@ -81,6 +91,54 @@ func TestPlaceholdersAdded(t *testing.T) {
 			`{"type":"object","properties":{"u":{"anyOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"string"}]}},"required":["u"]}`,
 			`{"type":"object","properties":{"u":{"anyOf":[{"type":"object","properties":{"a":{"type":"string"},"_":{"type":"boolean"}},"required":["_"]},{"type":"string"}]}},"required":["u"]}`,
 			[]placeholderSite{{path: []placeholderStep{{key: "u"}}, name: "_"}}},
+		{"a sibling union branch declares _", false, true,
+			`{"type":"object","properties":{"u":{"anyOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"_":{"type":"string"}}}]}},"required":["u"]}`,
+			`{"type":"object","properties":{"u":{"anyOf":[{"type":"object","properties":{"a":{"type":"string"},"_":{"type":"boolean"}},"required":["_"]},{"type":"object","properties":{"_":{"type":"string"}},"required":["_"]}]}},"required":["u"]}`,
+			nil},
+		{"a sibling union branch declares reason", false, true,
+			`{"type":"object","properties":{"u":{"oneOf":[{"type":"object"},{"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"]}]}},"required":["u"]}`,
+			`{"type":"object","properties":{"u":{"oneOf":[{"type":"object","properties":{"reason":` + reason + `},"required":["reason"]},{"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"]}]}},"required":["u"]}`,
+			nil},
+		{"a tuple item declares _", true, true,
+			`{"type":"object","properties":{"t":{"type":"array","items":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"_":{"type":"string"}},"required":["_"]}]}},"required":["t"]}`,
+			`{"type":"object","properties":{"t":{"type":"array","items":[{"type":"object","properties":{"a":{"type":"string"},"_":{"type":"boolean"}},"required":["_"]},{"type":"object","properties":{"_":{"type":"string"}},"required":["_"]}]}},"required":["t"]}`,
+			nil},
+		{"an allOf branch requires a property", true, true,
+			`{"type":"object","allOf":[{"properties":{"a":{"type":"string"}},"required":["a"]}]}`,
+			`{"type":"object","allOf":[{"properties":{"a":{"type":"string"}},"required":["a"]}]}`,
+			nil},
+		{"allOf branches require nothing", true, true,
+			`{"type":"object","allOf":[{"properties":{"a":{"type":"string"}}},{"properties":{"b":{"type":"string"}}}]}`,
+			`{"type":"object","properties":{"_":{"type":"boolean"}},"required":["_"],"allOf":[{"properties":{"a":{"type":"string"}}},{"properties":{"b":{"type":"string"}}}]}`,
+			[]placeholderSite{{name: "_"}}},
+		{"an allOf branch declares _", true, true,
+			`{"type":"object","allOf":[{"properties":{"_":{"type":"string"}}}]}`,
+			`{"type":"object","required":["_"],"allOf":[{"properties":{"_":{"type":"string"}}}]}`,
+			nil},
+		{"properties and no type", true, true,
+			`{"properties":{"a":{"type":"string"}}}`,
+			`{"type":"object","properties":{"a":{"type":"string"},"_":{"type":"boolean"}},"required":["_"]}`,
+			[]placeholderSite{{name: "_"}}},
+		{"empty properties and no type", true, true,
+			`{"properties":{}}`,
+			`{"type":"object","properties":{"reason":` + reason + `},"required":["reason"]}`,
+			[]placeholderSite{{name: "reason"}}},
+		{"properties and no type, with a required property", true, true,
+			`{"properties":{"a":{"type":"string"}},"required":["a"]}`,
+			`{"properties":{"a":{"type":"string"}},"required":["a"]}`,
+			nil},
+		{"a union object gets none (anyOf)", false, true,
+			`{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"anyOf":[{"required":["a"]},{"required":["b"]}]}`,
+			`{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"anyOf":[{"required":["a"]},{"required":["b"]}]}`,
+			nil},
+		{"a union object gets none (oneOf)", false, true,
+			`{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"oneOf":[{"required":["a"]},{"required":["b"]}]}`,
+			`{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"oneOf":[{"required":["a"]},{"required":["b"]}]}`,
+			nil},
+		{"additionalProperties is gone before the placeholder", true, true,
+			`{"type":"object","additionalProperties":{"type":"object"}}`,
+			`{"type":"object","properties":{"reason":` + reason + `},"required":["reason"]}`,
+			[]placeholderSite{{name: "reason"}}},
 		{"other models get none", false, false,
 			`{"type":"object","properties":{"a":{"type":"string"}}}`,
 			`{"type":"object","properties":{"a":{"type":"string"}}}`,
@@ -180,5 +238,112 @@ func TestStreamStripsPlaceholders(t *testing.T) {
 	}
 	if strings.Contains(raw, `"_"`) || !strings.Contains(raw, `"a":1`) {
 		t.Errorf("the raw chunk is %s", raw)
+	}
+}
+
+// A function declared again under one name, with a schema that declares the placeholder's name,
+// keeps the placeholder the first declaration got in the model's calls: stripping would take the
+// second declaration's key. Another function's placeholder is stripped as usual.
+func TestPlaceholdersSameNameDeclarations(t *testing.T) {
+	in := `[{"functionDeclarations":[
+		{"name":"f","parametersJsonSchema":{"type":"object","properties":{"a":{"type":"string"}}}},
+		{"name":"f","parametersJsonSchema":{"type":"object","properties":{"_":{"type":"string"}}}},
+		{"name":"g","parametersJsonSchema":{"type":"object","properties":{"a":{"type":"string"}}}}]}]`
+	_, added := cleanTools(json.RawMessage(in), true, true)
+	if len(added["f"]) != 0 {
+		t.Errorf("f's sites %+v, want none: the second declaration declares _", added["f"])
+	}
+	if want := []placeholderSite{{name: "_"}}; !reflect.DeepEqual(added["g"], want) {
+		t.Errorf("g's sites %+v, want %+v", added["g"], want)
+	}
+}
+
+// What the client sees of a call the model made: the arguments, and the raw chunks.
+type callReply struct {
+	args, raw string
+	upstream  json.RawMessage // the parameters of function f in the request Cloud Code got
+}
+
+// generateCall sends a Gemini-format request for model, with function f's parameters, through
+// generateTo to the fake Cloud Code, which answers with a call to f with args, streamed or in one
+// reply as the model's path asks.
+func generateCall(t *testing.T, model, parameters, args string) callReply {
+	t.Helper()
+	srv := agtest.New(t)
+	var sent []byte
+	srv.Generate = func(w http.ResponseWriter, r *http.Request, req agtest.Request) {
+		sent = req.Body
+		chunk := `{"response":{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"f","args":` + args + `}}]},` +
+			`"finishReason":"STOP","index":0}],"modelVersion":"agtest","responseId":"agtest"}}`
+		if strings.Contains(r.URL.Path, "streamGenerateContent") {
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, "data: "+chunk+"\n\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, chunk)
+	}
+	access, refresh := srv.Grant()
+	body := `{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"tools":[{"functionDeclarations":[{"name":"f","parametersJsonSchema":` + parameters + `}]}]}`
+	call := sdk.Call{
+		Account: protocol.Account{ID: "a", Settings: srv.Settings(), Credential: signedIn(access, refresh)},
+		Request: llm.Request{Model: model, Native: &llm.Native{Format: llm.FormatGeminiGenerate, Body: json.RawMessage(body)}},
+	}
+	var c collect
+	if err := generateTo(context.Background(), call, &c); err != nil {
+		t.Fatal(err)
+	}
+	var reply callReply
+	for _, ev := range c.events {
+		if ev.Type == llm.EventToolInputDelta {
+			reply.args += ev.Delta
+		}
+		reply.raw += string(ev.Raw)
+	}
+	var env struct {
+		Request struct {
+			Tools []struct {
+				Decls []struct {
+					Parameters json.RawMessage `json:"parameters"`
+				} `json:"functionDeclarations"`
+			} `json:"tools"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(sent, &env); err != nil || len(env.Request.Tools) != 1 || len(env.Request.Tools[0].Decls) != 1 {
+		t.Fatalf("Cloud Code got %s (%v)", sent, err)
+	}
+	reply.upstream = env.Request.Tools[0].Decls[0].Parameters
+	return reply
+}
+
+// A placeholder the request carried never reaches the client in a call the model made, on a
+// streamed reply (Claude) and on a single reply (Gemini 3.1 Pro), and the model's other
+// arguments are as it wrote them. A model that gets no placeholder keeps every key it sent.
+func TestGenerateStripsPlaceholders(t *testing.T) {
+	const optional = `{"type":"object","properties":{"a":{"type":"string"}}}`
+	for _, c := range []struct {
+		name, model, parameters, args string
+		sent                          string // the parameters Cloud Code must get
+		wantArgs                      string
+		stripped                      bool
+	}{
+		{"Claude, streamed", "claude-sonnet-5-5", optional, `{"_":true,"a":"x"}`,
+			`{"type":"object","properties":{"a":{"type":"string"},"_":{"type":"boolean"}},"required":["_"]}`, `{"a":"x"}`, true},
+		{"Gemini 3.1 Pro, one reply", "gemini-3.1-pro-high", `{"type":"object"}`, `{"reason":"why"}`,
+			`{"type":"object","properties":{"reason":{"type":"string","description":"Brief explanation of why you are calling this tool"}},"required":["reason"]}`, `{}`, true},
+		{"a model outside the group", "gemini-3-flash", optional, `{"_":true,"a":"x"}`, optional, `{"_":true,"a":"x"}`, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := generateCall(t, c.model, c.parameters, c.args)
+			if !sameJSON(t, string(got.upstream), c.sent) {
+				t.Errorf("Cloud Code got parameters\n %s\nwant\n %s", got.upstream, c.sent)
+			}
+			if got.args != c.wantArgs {
+				t.Errorf("the client's call has arguments %s, want %s", got.args, c.wantArgs)
+			}
+			if c.stripped && (strings.Contains(got.raw, `"_"`) || strings.Contains(got.raw, `"reason"`)) {
+				t.Errorf("the raw reply still has the placeholder: %s", got.raw)
+			}
+		})
 	}
 }
