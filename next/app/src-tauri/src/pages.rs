@@ -53,7 +53,8 @@ pub struct Binding {
     pub url: Url,
     pub pages_origin: String,
     /// For a page of a package on this device: its release's folder on the asset scheme
-    /// (`pluxy-app://localhost/<id>/<sha256>/`), the only place the page's frame may load from.
+    /// (`pluxy-app://localhost/<id>/<sha256>/`; `http://pluxy-app.localhost/<id>/<sha256>/` on
+    /// Windows, `device::asset_base`), the only place the page's frame may load from.
     /// None for a page core lists, which loads from pages_origin.
     pub device: Option<String>,
 }
@@ -96,6 +97,26 @@ pub(crate) fn asset_source(base: &str) -> String {
         Ok(u) => format!("{}:", u.scheme()),
         Err(_) => format!("{}:", crate::device::ASSET_SCHEME),
     }
+}
+
+/// The requests a page webview refuses outright, as a WebView2 filter (`page_frames.rs`): the
+/// asset scheme's host over https. Where the asset scheme is served as `http://pluxy-app.localhost`
+/// (Windows), its CSP source (`asset_source`) also allows that host over https, as CSP lets an
+/// http source match its https form; the app serves nothing there (wry intercepts only the http
+/// form), so such a request would reach whatever answers on that host's port.
+pub fn refused_filter() -> String {
+    format!("https://{}.*", crate::device::ASSET_SCHEME)
+}
+
+/// Whether a page webview refuses url outright (`refused_filter`).
+pub fn refused_request(url: &str) -> bool {
+    Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "https"
+            && u.host_str().is_some_and(|h| {
+                h.strip_prefix(crate::device::ASSET_SCHEME)
+                    .is_some_and(|rest| rest.starts_with('.'))
+            })
+    })
 }
 
 #[derive(Default)]
@@ -1799,6 +1820,38 @@ mod tests {
         assert_eq!(p.take_closed(&label).unwrap().generation, gen);
         assert!(p.take_closed(&label).is_none());
     }
+    #[test]
+    fn a_page_refuses_the_asset_host_over_https() {
+        // What Windows' CSP source `http://pluxy-app.localhost` also allows, over https at any port.
+        let prefix = refused_filter().trim_end_matches('*').to_string();
+        for url in [
+            "https://pluxy-app.localhost/example/notes/x/index.html",
+            "https://pluxy-app.localhost:443/x.js",
+            "https://pluxy-app.localhost:8443/x.js",
+            "HTTPS://PLUXY-APP.LOCALHOST/x.js",
+        ] {
+            assert!(refused_request(url), "{url}");
+            // The filter WebView2 is given sees it too.
+            assert!(
+                Url::parse(url).unwrap().as_str().starts_with(&prefix),
+                "{url}"
+            );
+        }
+        for url in [
+            "http://pluxy-app.localhost/example/notes/x/index.html",
+            "pluxy-app://localhost/x.js",
+            "https://pluxy-page.localhost/",
+            "https://pluxy-apps.localhost/x.js",
+            "https://example.com/pluxy-app.x",
+            "not a url",
+        ] {
+            assert!(!refused_request(url), "{url}");
+            if let Ok(u) = Url::parse(url) {
+                assert!(!u.as_str().starts_with(&prefix), "{url}");
+            }
+        }
+    }
+
     #[test]
     fn a_device_frame_source_allows_the_asset_scheme_as_served() {
         // Linux and macOS serve the asset scheme by its name; Windows as an http origin.
