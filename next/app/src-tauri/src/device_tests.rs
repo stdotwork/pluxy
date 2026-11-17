@@ -599,6 +599,84 @@ fn writable(p: &Path, folder: bool) {
     make_private(&open_for_access_list(p, folder).unwrap(), folder).unwrap();
 }
 
+/// A Windows device's name, as any part of a path, alone or with an extension and in any case,
+/// never reaches the store: there it would open the device (`NUL`, `COM1`) instead of a file in the
+/// package folder. Checked on every system, as `:` is. Names that only start like one stay allowed.
+#[test]
+fn windows_device_names_never_reach_the_store() {
+    let mut refused = vec![
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "con",
+        "Nul",
+        "aUx",
+        "nul.txt",
+        "NUL.tar.gz",
+        "Con.json",
+        "COM¹",
+        "lpt³.log",
+        "NUL .txt",
+        "CON ",
+    ];
+    let numbered: Vec<String> = (1..=9)
+        .flat_map(|n| [format!("COM{n}"), format!("lpt{n}"), format!("Com{n}.x")])
+        .collect();
+    refused.extend(numbered.iter().map(String::as_str));
+    for name in refused {
+        for p in [
+            name.to_string(),
+            format!("pages/{name}"),
+            format!("{name}/index.html"),
+        ] {
+            assert!(!store_path(&p), "{p:?} is a store path");
+        }
+    }
+    for name in [
+        "CONSOLE",
+        "console.txt",
+        "nulls",
+        "AUXILIARY",
+        "PRNT.md",
+        "COM",
+        "COM0",
+        "COM10",
+        "LPT",
+        "lpt0.x",
+        "lpt10",
+        "COMA",
+        "xCON",
+        "x.con",
+        "con_x",
+        ".con",
+    ] {
+        for p in [name.to_string(), format!("pages/{name}")] {
+            assert!(store_path(&p), "{p:?} is not a store path");
+        }
+    }
+
+    // On the unpack route: an archive entry so named is refused before anything is written; the
+    // same archive with a near-miss name stages.
+    let root = temp();
+    let d = dirs(&root);
+    let m = manifest("example/w", "1", Value::Null);
+    let a = archive(&[
+        ("pluxy-extension.json", &m),
+        ("pages/index.html", b"x"),
+        ("pages/NUL.txt", b"x"),
+    ]);
+    let e = stage(&d, &a, local("w"), None, &NoRoots).unwrap_err();
+    assert!(e.contains("leaves the package folder"), "{e}");
+    let a = archive(&[
+        ("pluxy-extension.json", &m),
+        ("pages/index.html", b"x"),
+        ("pages/CONSOLE.txt", b"x"),
+    ]);
+    stage(&d, &a, local("w"), None, &NoRoots).unwrap();
+    done(root);
+}
+
 #[test]
 fn names_with_a_drive_or_stream_never_reach_the_store() {
     let root = temp();

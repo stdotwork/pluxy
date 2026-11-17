@@ -308,8 +308,8 @@ fn only_plain_names_are_vault_names() {
     }
     // What Windows paths cannot name plainly, refused there (and checked everywhere).
     for name in [
-        "CON", "con", "nul.txt", "Aux.json", "PRN", "COM1", "lpt9.x", "a:b", "a\\b", "x.", "x ",
-        "a*b", "a?b", "a<b", "a>b", "a|b", "a\"b", "a\tb",
+        "CON", "con", "nul.txt", "Aux.json", "PRN", "COM1", "lpt9.x", "COM²", "nul .txt", "a:b",
+        "a\\b", "x.", "x ", "a*b", "a?b", "a<b", "a>b", "a|b", "a\"b", "a\tb",
     ] {
         assert!(windows_refuses(name), "{name:?}");
         assert_eq!(check_name(name).is_err(), cfg!(windows), "{name:?}");

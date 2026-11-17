@@ -242,16 +242,40 @@ fn check_name(name: &str) -> Result<(), String> {
 }
 
 fn windows_refuses(name: &str) -> bool {
-    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
-    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
-            && stem.len() == 4
-            && matches!(stem.as_bytes()[3], b'1'..=b'9'));
-    device
+    windows_device(name)
         || name.ends_with(['.', ' '])
         || name
             .chars()
             .any(|c| c < ' ' || matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+}
+
+/// Whether name is a device's name on Windows, where a path naming it opens the device, in any
+/// folder: `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9` and `LPT1` to `LPT9` (the digit also `¹`,
+/// `²` or `³`), in any case, alone or followed by an extension (`NUL.txt` is `NUL`). A name whose
+/// part before the extension ends in spaces is taken as the name without them (`NUL .txt`):
+/// Windows drops trailing spaces as it reads a path. Vault file names and the device store's paths
+/// (`device::store_path`) are checked with it.
+pub(crate) fn windows_device(name: &str) -> bool {
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+        return true;
+    }
+    let Some(digit) = stem
+        .strip_prefix("COM")
+        .or_else(|| stem.strip_prefix("LPT"))
+    else {
+        return false;
+    };
+    let mut digit = digit.chars();
+    matches!(
+        (digit.next(), digit.next()),
+        (Some('1'..='9' | '¹' | '²' | '³'), None)
+    )
 }
 
 #[cfg(windows)]

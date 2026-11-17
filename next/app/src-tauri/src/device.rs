@@ -1295,10 +1295,11 @@ fn local_path(p: &str) -> bool {
 }
 
 /// A local path that also stays inside its folder on Windows: no `:`, which names a drive or an
-/// alternate data stream there. Archive entries, the ui folder and local registry artifacts
-/// must be one.
+/// alternate data stream there, and no part that is a device's name (`vault::windows_device`),
+/// which opens the device there instead of a file. Checked on every system. Archive entries, the
+/// ui folder and local registry artifacts must be one.
 fn store_path(p: &str) -> bool {
-    local_path(p) && !p.contains(':')
+    local_path(p) && !p.contains(':') && !p.split('/').any(crate::vault::windows_device)
 }
 
 impl Ui {

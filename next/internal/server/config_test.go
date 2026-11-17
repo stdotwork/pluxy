@@ -158,6 +158,51 @@ claude-api-key:
 	}
 }
 
+// A config.yaml's payload rules load as today's core reads them: the fields it reads as text
+// (a model's name, protocol, from-protocol, headers, exist and not-exist, a filter's params)
+// keep the text as written, however YAML would read it; a rule's params and a model's match
+// keep their values.
+func TestConfigYAMLPayloadText(t *testing.T) {
+	cfg := `
+api-keys: [k]
+auth-dir: auths
+payload:
+  override:
+    - models:
+        - name: 0123
+          protocol: codex
+          from-protocol: 0x1F
+          headers: {X-Pin: 0123, X-Flag: true}
+          exist: [0, 1e5]
+          not-exist: [2001-12-14]
+          match: [{a: 0123}]
+        - name: 2001-12-14
+      params: {p: 0123, q: true}
+  filter:
+    - models: [{name: "*"}]
+      params: [0, true]
+`
+	c, err := ParseConfig([]byte(cfg), "/srv/pluxy/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Payload.Override[0]
+	m := o.Models[0]
+	if m.Name != "0123" || m.FromProtocol != "0x1F" || !reflect.DeepEqual(m.Headers, map[string]string{"X-Pin": "0123", "X-Flag": "true"}) ||
+		!reflect.DeepEqual(m.Exist, []string{"0", "1e5"}) || !reflect.DeepEqual(m.NotExist, []string{"2001-12-14"}) {
+		t.Errorf("model %+v", m)
+	}
+	if n := o.Models[1].Name; n != "2001-12-14" {
+		t.Errorf("model name %q, want 2001-12-14", n)
+	}
+	if !reflect.DeepEqual(m.Match, []map[string]any{{"a": float64(83)}}) || !reflect.DeepEqual(o.Params, map[string]any{"p": float64(83), "q": true}) {
+		t.Errorf("match %v, params %v: want the values 83 and true", m.Match, o.Params)
+	}
+	if p := c.Payload.Filter[0].Params; !reflect.DeepEqual(p, []string{"0", "true"}) {
+		t.Errorf("filter params %q", p)
+	}
+}
+
 // An extension's model_alias and excluded_models apply to its accounts added by login as today's
 // oauth-model-alias and oauth-excluded-models apply to auth files: the account's own aliases
 // come first and an alias it has is not added again; its own exclusions replace the extension's.
