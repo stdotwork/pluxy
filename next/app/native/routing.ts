@@ -28,7 +28,7 @@
 import { generateKeyPairSync, type KeyObject } from "node:crypto";
 import { chmodSync, copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { artifact, type Fixture, platform, TOOL, tarGz, writeTrustProfile } from "./admission";
+import { artifact, EXE, type Fixture, PROGRAM, platform, TOOL, tarGz, writeTrustProfile } from "./admission";
 
 const ITEMS = ["alpha", "be", "gamma-delta"];
 const object = { type: "object" };
@@ -325,10 +325,11 @@ export function buildRoutingFixtures(root: string, home: string, program: string
   const untrustedFile = join(root, "untrusted.json");
   writeFileSync(curatedFile, JSON.stringify(index(curated)));
   writeFileSync(untrustedFile, JSON.stringify(index(untrusted)));
-  // What the launch-class calls name: a regular file to run, its arguments and folder. Never run
-  // (on Windows any regular file).
-  const executable = join(root, "launch-me");
-  writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  // What the launch-class calls name: a program to run, its arguments and folder. Never run. On
+  // Windows the app reviews only a file named as a program (`.exe`), so it is one, as the native
+  // fixtures' tool is (PROGRAM).
+  const executable = join(root, `launch-me${EXE}`);
+  writeFileSync(executable, PROGRAM, { mode: 0o755 });
   const longest = ITEMS.reduce((a, b) => (b.length > a.length ? b : a), "");
   writeFileSync(
     join(root, "expect.json"),
