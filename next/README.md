@@ -1939,17 +1939,41 @@ message refused before it starts a turn (an unknown type, no model, an `input` t
 list) is answered on the socket and not written. A reply over 1 MiB keeps its first 256 KiB and its last 768
 KiB, with a line saying how many bytes were left out between them. While only error logs are
 written, every request keeps its reply's start and end until it ends, in case it fails, so an
-error log keeps less of a reply: the first 32 KiB and the last 96 KiB.
+error log keeps less of a reply: the first 32 KiB and the last 96 KiB. A secret cut in two at
+that line would not be recognised, so the bytes beside it that could be part of one are left out
+too, and counted with the rest. On each side that is, first, a window of 12 bytes for each byte
+of the longest form of a secret the log removes that holds a character other than a key's (the
+secret as it is, or escaped, whichever is longest). That holds every part of such a secret the
+line cut in a spelling of up to 11 bytes for each of its bytes; the log also removes spellings
+with deeper escapes, and a part of one of those cut at the line can stay. Secrets made only of
+letters, digits and `-_.~+/=%\`, as API keys and tokens are, need no window: the run of those
+characters that goes on from the edge is left out in any case, and it holds any part of such a
+secret, whatever its length. Where the edge then cuts through a secret in one of its forms, 4
+bytes or more of it go. Where it cuts through a secret the log would find whole within a window
+of it, the edge moves to where that secret starts (or ends), and the run of key characters there
+goes too, so the edge never stands inside a run of key characters or inside a secret the log
+finds whole around it. Where the log's redaction gives up on the text around the edge (escapes
+that decode too many ways), or the edge still cuts through a secret after 4 moves, all of that
+side goes. With client keys, API keys and OAuth tokens the window is 0 and only the run goes. A
+secret with other characters makes it grow with the secret: a secret header's forms hold its
+name, so a 22-byte value of a header named `X-Gateway-Key` makes it 612 bytes, a 207-byte
+`Bearer` value 2,856 bytes and a 1,507-byte value about 18 KiB; an OAuth scope (`openid profile
+email offline_access`), 420 bytes. A service account's private key (PEM text, about 1.7 KB for a
+2048-bit key, with spaces and line breaks) makes it about 21 KiB a side, most of what an error
+log keeps of a reply's start. Where the text there is one long run of key characters, such as
+base64 data, all of that run goes. Text that repeats the start of a secret there, such as a
+secret header's name, loses one repeat, not all of them.
 
 A request log also holds what the provider extension sent upstream and what came back: between
 the client's request and its reply, an `=== UPSTREAM REQUEST ===` section (the account, time, the
 whole URL, method, headers and body) and an `=== UPSTREAM RESPONSE ===` section (time, status,
 headers and body, or the error that kept a response from coming) for each upstream request, so a
 refused attempt and the retry on another account show as two pairs. Each body keeps its first 32
-KiB and its last 96 KiB, a streamed reply recorded as the extension reads it, without holding it
-back; when a request made more than two upstream requests, the first and the last are kept, with
-a line saying how many were left out between them. A Responses WebSocket turn that opens the
-upstream socket holds its handshake; the messages on that socket are not written. This needs an
+KiB and its last 96 KiB, less what beside the cut could be part of a secret, as for the reply, a
+streamed reply recorded as the extension reads it, without holding it back; when a request made
+more than two upstream requests, the first and the last are kept, with a line saying how many
+were left out between them. A Responses WebSocket turn that opens the upstream socket holds its
+handshake; the messages on that socket are not written. This needs an
 extension that implements [protocol](protocol/README.md#upstream-capture) 0.13; it is captured
 only while `logs.request_log` is on, so error logs written with it off have no upstream sections,
 and with it off nothing is recorded or sent.
