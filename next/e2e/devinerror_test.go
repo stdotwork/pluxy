@@ -143,22 +143,39 @@ func TestDevinBrokenErrorBodyKeepsNoCredential(t *testing.T) {
 	}
 }
 
+// devinJWT is a session token's secret part in the shape Devin issues: an HS256 JWT. A session
+// token is it after the public prefix "devin-session-token$".
+const devinJWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLWUyZS0xMjMiLCJleHAiOjE5MDAwMDAwMDAsIm9yZyI6InBsdXh5LXRlc3QifQ.BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSY"
+
 // A text refusal read whole still holds part of a token the upstream echoed when the upstream
 // split it across lines or cut it short itself; core, removing only whole copies, would pass the
-// part on. The text is cleaned first: the parts are replaced, and the rest of the text stays.
+// part on. The text is cleaned first: the parts are replaced, those shorter than the 24-character
+// runs the generic cleaner catches too, and the words around them stay.
 func TestDevinTextErrorIsCleaned(t *testing.T) {
 	const secret = "devin-e2e-zz-secret-7f3a9c1d5e8b2a4f6c0d9e1b3a5c7f9e"
+	const jwt, token = devinJWT, "devin-session-token$" + devinJWT
+	n := len(jwt)
 	for _, tc := range []struct {
-		name, body, want string
-		parts            []string
+		name, token, body, want string
+		parts                   []string
 	}{
-		{"split across lines", "upstream failed for Authorization: Basic " + secret[:26] + "\n" + secret[26:] + "\n",
+		{"split across lines", secret, "upstream failed for Authorization: Basic " + secret[:26] + "\n" + secret[26:] + "\n",
 			`"upstream failed for Authorization: Basic [redacted] [redacted]"`, []string{secret[:20], secret[26:46]}},
-		{"cut by the upstream", "invalid session token " + secret[:30] + "... (truncated)",
+		{"cut by the upstream", secret, "invalid session token " + secret[:30] + "... (truncated)",
 			`"invalid session token [redacted] (truncated)"`, []string{secret[:20]}},
+		// The reviewer's three shapes, each leaving a piece shorter than 24 characters.
+		{"short end on its own line", token, "upstream failed for Authorization: Basic " + token[:len(token)-12] + "\n" + jwt[n-12:] + "\n",
+			`"upstream failed for Authorization: Basic [redacted] [redacted]"`, []string{jwt[:20], jwt[n-12:]}},
+		{"short start on its own", token, "token was " + jwt[:15] + "\n" + jwt[15:],
+			`"token was [redacted] [redacted]"`, []string{jwt[:15], jwt[15:40]}},
+		{"short middle cut by the upstream", token, "invalid session token " + jwt[40:60] + "… (truncated)",
+			`"invalid session token [redacted]… (truncated)"`, []string{jwt[40:60]}},
+		// A piece joined to the public prefix, as the Basic credential (token-token) sends it.
+		{"short end joined to the prefix", token, "header was …" + jwt[n-6:] + "-" + token[:10] + "… (truncated)",
+			`"header was …[redacted]… (truncated)"`, []string{jwt[n-6:]}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			status, got, logs := devinChatError(t, secret, textRefusal(tc.body))
+			status, got, logs := devinChatError(t, tc.token, textRefusal(tc.body))
 			if status != http.StatusInternalServerError {
 				t.Errorf("status %d, want the upstream's 500", status)
 			}
