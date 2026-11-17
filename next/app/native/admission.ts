@@ -20,7 +20,7 @@ export const EXE = process.platform === "win32" ? ".exe" : "";
 /** The path a native fixture package names as its program. */
 export const TOOL = `bin/tool${EXE}`;
 /** The native fixtures' program (TOOL), never run: on Windows the start of a program image. */
-const PROGRAM = process.platform === "win32" ? "MZ fixture\n" : "#!/bin/sh\nexit 0\n";
+export const PROGRAM = process.platform === "win32" ? "MZ fixture\n" : "#!/bin/sh\nexit 0\n";
 
 /** Packs the folder dir into archive, a gzipped tar of its contents (`./...`). On Windows with the
  * system's own bsdtar (System32\tar.exe) and relative paths: the tar first on PATH there may be
