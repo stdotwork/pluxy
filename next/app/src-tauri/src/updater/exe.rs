@@ -384,12 +384,12 @@ fn replace(installed: &Path, bytes: &[u8], dir: &Path) -> Result<(), String> {
     let id = match record(dir, &new, &f) {
         Ok(id) => id,
         Err(e) => {
-            let _ = delete_through(&f);
+            let _ = while_busy(|| delete_through(&f));
             return Err(e);
         }
     };
     if let Err(e) = f.write_all(bytes).and_then(|()| f.sync_all()) {
-        let _ = delete_through(&f);
+        let _ = while_busy(|| delete_through(&f));
         return Err(shown(e));
     }
     drop(f);

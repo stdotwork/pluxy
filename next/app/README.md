@@ -574,11 +574,14 @@ In this order:
      `RENAME_SWAP`): the bundle is the old one or the new one. The old one, now in the
      `.pluxy-update-<hex>` folder, is removed once the new version runs and the old one has ended.
 
-   What an install leaves beside the installed copy is recorded first, in
-   `updates/leftovers.json`, with what identifies it beyond its name: on Windows the new program
-   when it is created and the aside copy just before the rename (each by its volume serial number
-   and file ID), on macOS the `.pluxy-update-<hex>` folder when it is created (by its device and
-   inode). That removal at a later start goes through the record only: an entry that is still the
+   What an install leaves beside the installed copy is recorded in `updates/leftovers.json`
+   before the install goes on, with what identifies it beyond its name: on Windows the new program
+   right after it is created and the aside copy just before the rename (each by its volume serial
+   number and file ID), on macOS the `.pluxy-update-<hex>` folder right after it is created (by
+   its device and inode, read through the open folder, which must be empty and yours alone). When
+   the record cannot be written, the install deletes what it just made and stops. Should the app
+   stop in the moment between making one and recording it, that empty folder or file stays
+   unrecorded, and no later start removes it. That removal at a later start goes through the record only: an entry that is still the
    recorded file or folder (and, on macOS, a folder of yours) is removed without following a
    link, on Windows through its open handle and on macOS through the open folder; an entry whose
    name is gone or now holds something else is dropped from the record and nothing is deleted.
