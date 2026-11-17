@@ -42,8 +42,9 @@
 //!
 //! On Windows a confirmed open is a detached launch, which the app refuses while it runs in a job
 //! that does not let what it starts leave (`owned::windows::NO_BREAKAWAY`). Every step of a
-//! GitHub-hosted runner runs in such a job, so there the open and jsonl steps fail, saying so,
-//! unless the session starts the app outside that job.
+//! GitHub-hosted runner runs in such a job, so the session starts the app outside it
+//! (`native/platform-tools.ts`, as for the launcher session); started inside one, the open and
+//! jsonl steps fail, saying so.
 //!
 //! One line on stderr: `native-test: open <JSON>`.
 

@@ -26,8 +26,9 @@
 //   and the app's opening of an address in the default browser (open_platform_native.rs; open.ts,
 //   buildPlatformOpenFixtures), with the session's own https server (browser.ts). On macOS the
 //   session trusts that server's test authority for the run and deletes it afterwards, checking
-//   that macOS trusts the server's certificate only meanwhile; on Windows it removes the check's
-//   .jsonl file type if the app left it, and reports that.
+//   that macOS trusts the server's certificate only meanwhile; on Windows the app runs outside the
+//   runner's job as in the launcher session, as its confirmed opens are detached launches, and the
+//   session removes the check's .jsonl file type if the app left it, and reports that.
 //
 // Each session gets a fresh app state and a private temporary HOME holding the test trust profile
 // (the app's updater gate and trust store read it from HOME). On macOS the app's folders come from
@@ -37,8 +38,8 @@
 // tool's APPDATA and LOCALAPPDATA with the app's own.
 //
 // This test never kills or signals a process by its ID on Windows or macOS: the app it started is
-// stopped through its own child object (on Windows' launcher session, through the starter's,
-// which started it), and a tool process left running is reported, not stopped.
+// stopped through its own child object (on Windows' launcher and open sessions, through the
+// starter's, which started it), and a tool process left running is reported, not stopped.
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -411,7 +412,7 @@ export async function toolSession(name: ToolSession, ctx: Context) {
   let core: Awaited<ReturnType<typeof startCore>> | undefined;
   // The app's run, until it ended.
   let app: AppRun | undefined;
-  // Windows' launcher session: the private folder of its starter's files.
+  // Windows' launcher and open sessions: the private folder of their starter's files.
   let runFolder: string | undefined;
   // macOS' launcher session: whether Terminal ran before the app did.
   let terminalBefore: boolean | undefined;
@@ -550,8 +551,9 @@ export async function toolSession(name: ToolSession, ctx: Context) {
     say(`running ${ctx.bin}`);
     if (launcherBin && !windows) terminalBefore = terminalRuns();
     let run: AppRun;
-    if (launcherBin && windows) {
-      // The launcher's detached launches must be able to leave the app's job.
+    if ((launcherBin || name === "open") && windows) {
+      // The launcher's detached launches and the open session's confirmed opens (detached launches
+      // too) must be able to leave the app's job.
       say("starting it outside the runner's job");
       runFolder = ctx.privateFolder();
       run = await outsideJobRun(ctx, programFixture, root, env, runFolder);

@@ -1632,7 +1632,7 @@ AppImage.
 - The native test runs on Linux, except its platform, package, tools, open and dialogs sessions,
   which CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
   refuses there).
-- On Windows the tools shard's launcher session starts the app outside the job the runner's steps
+- On Windows the launcher and open sessions start the app outside the job the runner's steps
   run in, which lets no detached launch leave it: WMI's `Win32_Process.Create` starts the fixture
   program, which starts the app as its child, with the app's output in files the session reads.
   Its terminal launches run the execution program's test build, whose Console window does not wait
@@ -1647,8 +1647,8 @@ AppImage.
   only the browser it started: on Windows the windows of the processes started with the session's
   address, on macOS the default browser, which must not be running before. On Windows the opens
   of `.txt` and `.jsonl` files are detached launches, which the app refuses while it runs in a
-  job that keeps what it starts; every step of a GitHub-hosted runner runs in such a job, so those
-  two steps fail there until the session starts the app outside it.
+  job that keeps what it starts, so the session starts the app outside the runner's job as the
+  launcher session does.
 - On Windows the program session does not check which processes hold the tool's pipes, as it
   does on Linux and macOS: Windows lists no process's handles to an unprivileged one. It checks
   instead that the tool's three standard handles are pipes and that a file the app holds through
