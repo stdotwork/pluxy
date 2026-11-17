@@ -8,11 +8,12 @@
 //! - installed, and enabled in the native confirmation, the tool runs no process; a call while it
 //!   is disabled is refused and starts none;
 //! - three calls from the window at once start it once: each answers the expected summary from
-//!   the same process, which leads its own process group (on Windows: runs in a job) with the
-//!   child it started, has only the contract's environment (not the app's canary; the app's HOME
-//!   and its own data folder, 0700 on Linux and macOS; on Windows also the app's `SystemRoot`,
-//!   `APPDATA` and `LOCALAPPDATA`, `ToolEnv::system`) and only stdin, stdout and stderr open (on
-//!   Windows: its three standard handles are pipes), and runs in its package folder;
+//!   the same process, which leads its own process group (on Windows: its immediate job holds
+//!   only it and its child and ends them when closed) with the child it started, has only the
+//!   contract's environment (not the app's canary; the app's HOME and its own data folder, 0700
+//!   on Linux and macOS; on Windows also the app's `SystemRoot`, `APPDATA` and `LOCALAPPDATA`,
+//!   `ToolEnv::system`) and only stdin, stdout and stderr open (on Windows: its three standard
+//!   handles are pipes), and runs in its package folder;
 //! - the command thread that started it has ended while it runs on, with its supervisor thread;
 //! - its stdin and stdout pipes are held by the app and the tool only, no web process (Linux and
 //!   macOS: Windows lists no process's handles to an unprivileged one);
@@ -263,11 +264,20 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         )?;
     }
     let real = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
-    // On Linux and macOS its own process group; on Windows a job (of its own: the host's).
+    // On Linux and macOS it leads its own process group. On Windows its immediate job is the
+    // host's: it holds the tool and its child and nothing else, and ends them when it closes.
     #[cfg(unix)]
     let grouped = first["pgid"] == pid;
     #[cfg(windows)]
-    let grouped = first["job"] == true;
+    let grouped = {
+        let pids: BTreeSet<u64> = first["job"]["pids"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_u64).collect())
+            .unwrap_or_default();
+        first["job"]["assigned"] == 2
+            && pids == BTreeSet::from([pid, child])
+            && first["job"]["kill_on_close"] == true
+    };
     // Its folder as it reports it, resolved as the package folder is.
     let cwd = first["cwd"]
         .as_str()
