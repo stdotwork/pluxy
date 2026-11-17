@@ -585,6 +585,51 @@ fn wsl_launch_line(record: &Record, program: &str) -> String {
     )
 }
 
+/// What a launch in WSL gave: execution's output and remembered approval, and what the launcher
+/// remembers with it: the launch it ran, the line its confirmation showed and the folder in the
+/// distribution it started in.
+struct InWsl {
+    output: Value,
+    approval: Option<String>,
+    input: Value,
+    line: String,
+    folder: String,
+}
+
+/// A launch of req in record's environment: `prepare` (`pluxy/wsl`'s, given its input), the
+/// prepared launch checked against req and record (`wsl_launch_input`), then `launch`
+/// (execution's, given that launch and the line its confirmation shows above the review).
+fn run_in_wsl(
+    req: &Value,
+    record: &Record,
+    system_root: Option<&Path>,
+    prepare: impl FnOnce(Value) -> Result<Value, String>,
+    launch: impl FnOnce(Value, String) -> Result<(Value, Option<String>), String>,
+) -> Result<InWsl, String> {
+    let prepared = prepare(wsl_prepare_input(req, record)?)?;
+    let (input, program) = wsl_launch_input(&prepared, req, record, system_root)?;
+    let line = wsl_launch_line(record, &program);
+    // The folder in the distribution it starts in: `--cd`'s argument.
+    let argv: Vec<&str> = input["argv"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let folder = argv
+        .iter()
+        .position(|a| *a == "--cd")
+        .and_then(|i| argv.get(i + 1))
+        .map(|f| f.to_string())
+        .ok_or("pluxy/wsl prepared a launch with no folder")?;
+    let (output, approval) = launch(input.clone(), line.clone())?;
+    Ok(InWsl {
+        output,
+        approval,
+        input,
+        line,
+        folder,
+    })
+}
+
 /// `launch`, in a WSL environment the host has a record of: prepared by `pluxy/wsl` (its
 /// `prepare`, in the distribution as the user), then execution's `launch` of that `wsl.exe`
 /// command, confirmed with the environment's line.
@@ -607,35 +652,29 @@ fn launch_in_wsl(
                 environment.label().unwrap_or_default()
             )
         })?;
-    let (prepared, _) = call_of(
-        app,
-        crate::environments::WSL_PACKAGE,
-        "prepare",
-        wsl_prepare_input(req, &record)?,
-        None,
-        None,
-    )?;
     let system_root = std::env::var_os("SystemRoot").map(PathBuf::from);
-    let (input, program) = wsl_launch_input(&prepared, req, &record, system_root.as_deref())?;
-    let line = wsl_launch_line(&record, &program);
-    // The folder in the distribution it starts in: `--cd`'s argument.
-    let argv: Vec<&str> = input["argv"]
-        .as_array()
-        .map(|a| a.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
-    let folder = argv
-        .iter()
-        .position(|a| *a == "--cd")
-        .and_then(|i| argv.get(i + 1))
-        .map(|f| f.to_string())
-        .ok_or("pluxy/wsl prepared a launch with no folder")?;
-    let (output, approval) = call_of(
-        app,
-        PACKAGE,
-        "launch",
-        input.clone(),
-        None,
-        Some(line.clone()),
+    let InWsl {
+        output,
+        approval,
+        input,
+        line,
+        folder,
+    } = run_in_wsl(
+        req,
+        &record,
+        system_root.as_deref(),
+        |input| {
+            call_of(
+                app,
+                crate::environments::WSL_PACKAGE,
+                "prepare",
+                input,
+                None,
+                None,
+            )
+            .map(|(prepared, _)| prepared)
+        },
+        |input, line| call_of(app, PACKAGE, "launch", input, None, Some(line)),
     )?;
     let client = client_in(client, environment);
     let st = app.state::<App>();

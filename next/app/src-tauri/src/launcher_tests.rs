@@ -391,3 +391,55 @@ fn removing_an_environment_forgets_its_launches_and_folders() {
     assert!(l.forget_environment(&Environment::Local).is_empty());
     assert_eq!(l.store.entries.len(), 2);
 }
+
+/// A launch in WSL runs only what `pluxy/wsl` prepared for it, after the check, and its
+/// confirmation gets the line naming the record's distribution, user and home and the program;
+/// the launcher remembers it with that line and the folder in the distribution.
+#[test]
+fn a_launch_in_wsl_is_confirmed_with_the_environments_line() {
+    use std::cell::RefCell;
+    let req = json!({"client": "c", "kind": "terminal", "program": "claude", "cwd": "/home/bob/p"});
+    let asked = RefCell::new(None);
+    let shown = RefCell::new(None);
+    let w = run_in_wsl(
+        &req,
+        &bob(),
+        windows(),
+        |input| {
+            *asked.borrow_mut() = Some(input);
+            Ok(prepared("terminal"))
+        },
+        |input, line| {
+            assert_eq!(input["executable"], r"C:\Windows\System32\wsl.exe");
+            *shown.borrow_mut() = Some(line);
+            Ok((json!({"lifetime": "detached"}), Some("a-1".into())))
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        asked.into_inner(),
+        Some(wsl_prepare_input(&req, &bob()).unwrap())
+    );
+    let line =
+        "Starts in WSL: distribution \"Ubuntu\", user \"bob\" (/home/bob). The program inside \
+                WSL (/usr/local/bin/claude) is found when it starts; pluxy does not check it.";
+    assert_eq!(shown.into_inner().as_deref(), Some(line));
+    assert_eq!(w.line, line);
+    assert_eq!(w.folder, "/home/bob/p");
+    assert_eq!(w.approval.as_deref(), Some("a-1"));
+    assert_eq!(w.output, json!({"lifetime": "detached"}));
+    assert_eq!(w.input["argv"], prepared("terminal")["launch"]["argv"]);
+    // A prepared launch that is not the one asked for never reaches execution.
+    let mut other = prepared("terminal");
+    other["launch"]["argv"][3] = json!("root");
+    let e = run_in_wsl(
+        &req,
+        &bob(),
+        windows(),
+        |_| Ok(other),
+        |_, _| panic!("a launch that is not the one asked for ran"),
+    )
+    .err()
+    .unwrap();
+    assert!(e.contains("not the launch asked for"), "{e}");
+}
