@@ -78,11 +78,15 @@ jobs:
             case $path in next/* | .github/workflows/next-ci.yml) run[next-ci]=true ;; esac
             case $path in next/* | .github/workflows/next-app.yml) run[next-app]=true ;; esac
             case $path in next/* | .github/workflows/next-app-platforms.yml) run[next-app-platforms]=true ;; esac
-            case $path in next/app-tools/* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
+            # The desktop app's files that exist for WSL run this workflow too, for its WSL jobs.
+            case $path in next/app-tools/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
             # What the WSL jobs build and run: pluxy/wsl, pluxy-program, pluxy-transactions (with its
-            # fixture writer) and pluxy-files, which it depends on, and the workspace's manifest and lock.
+            # fixture writer) and pluxy-files, which it depends on, the workspace's manifest and lock,
+            # pluxy/claude-code, and the desktop app's files that exist for WSL (its environments
+            # module and its wsl-named files). The app's general host files (program, vault, spawn,
+            # launcher, route) are left out: they change often, and their Linux and unit tests guard them.
             case $path in
-              next/app-tools/wsl/* | next/app-tools/lib/program/* | next/app-tools/lib/transactions/* | next/app-tools/lib/files/* | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock | .github/workflows/next-app-tools-platforms.yml)
+              next/app-tools/wsl/* | next/app-tools/lib/program/* | next/app-tools/lib/transactions/* | next/app-tools/lib/files/* | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock | next/app-tools/claude-code/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | .github/workflows/next-app-tools-platforms.yml)
                 run[next-app-tools-wsl]=true ;;
             esac
             # A tool's manifest, and the workspace's and every member's Cargo.toml (`*` matches `/`
