@@ -13,6 +13,10 @@ func makeDir(dir string) error {
 	return os.Chmod(dir, dirMode)
 }
 
+// keepPrivate does nothing on unix: each file is 0600 from the moment it is made, so the
+// folder's mode never lets another user read a record, and a save sets the folder's mode.
+func keepPrivate(dir string) error { return nil }
+
 // createTemp creates a new temporary file in dir readable only by its owner (0600).
 func createTemp(dir string) (*os.File, error) {
 	f, err := os.CreateTemp(dir, tmpGlob) // created 0600

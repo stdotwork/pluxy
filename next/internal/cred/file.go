@@ -12,10 +12,11 @@ import (
 )
 
 // FileBackend keeps each record in its own JSON file in one folder: the minimal portable
-// backend. The folder is made private to core's user on each save, and each file is created
-// private: on unix by their modes (0700 and 0600), on Windows, where Go applies only the
-// read-only bit, by a protected access list (file_windows.go). A save writes a temporary file
-// in the same folder, syncs it and renames it over the old one, so a crash leaves the old
+// backend. Each file is created readable only by core's user, and the folder is made private on
+// each save: on unix by their modes (0700 and 0600); on Windows, where Go applies only the
+// read-only bit, by a protected access list (file_windows.go), and the folder is also checked
+// and made private when the records are loaded, before any is read. A save writes a temporary
+// file in the same folder, syncs it and renames it over the old one, so a crash leaves the old
 // record or the new one.
 //
 // shortcut: no file lock, so two cores must not share a folder (their refreshes would not be
@@ -33,6 +34,13 @@ const (
 
 // Load reads every record in the folder. A missing folder holds no records.
 func (f FileBackend) Load() ([]Record, error) {
+	// A record that is never renewed is never saved again, so the folder is made private here
+	// too, not only by the next save.
+	if err := keepPrivate(f.Dir); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(f.Dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
