@@ -49,7 +49,7 @@
 
 use crate::confirmation::{self, Authorized, Gesture};
 use crate::device::{self, Grant, Refused};
-use crate::environments::{Environment, Instance};
+use crate::environments::{Environment, Instance, Record};
 use crate::program::{self, CallError, Cancel, Context, Hop, Outbound};
 use crate::spawn::{self, Lifetime};
 use crate::vault::{Holder, Vault};
@@ -158,6 +158,13 @@ pub fn call_main_launch(
     )
 }
 
+/// The line a call's native confirmation shows above its review for where it runs: shown (the
+/// launcher's, for a launch it starts in WSL through a tool on this computer), else the line of
+/// the WSL environment's record it runs in; none on this computer.
+fn shown_line(shown: Option<String>, record: Option<&Record>) -> Option<String> {
+    shown.or_else(|| record.map(Record::confirmation_line))
+}
+
 /// `call_main_launch`, of instance: in a WSL environment the window chose, that the host has a
 /// record of, for a package that runs there (its Linux build installed for WSL), with that
 /// environment's line in the native confirmation; shown is the line to show instead (the
@@ -222,7 +229,7 @@ pub fn call_main_in(
         }
         Ok(g)
     };
-    let shown = shown.or_else(|| record.as_ref().map(|r| r.confirmation_line()));
+    let shown = shown_line(shown, record.as_ref());
     let approval: Arc<Mutex<Option<String>>> = Arc::default();
     let origin = Origin {
         packages: vec![device::main_window()],
@@ -1145,8 +1152,9 @@ fn authorize(
         .as_ref()
         .map(|(l, ..): &Spawning| format!(" {}", l.review()))
         .unwrap_or_default();
-    let action = confirmation::Action {
-        what: format!(
+    let action = native_action(
+        origin,
+        format!(
             "{} {}: {} ({}). Input: {}{}{}",
             grant.target.id(),
             grant.op.id,
@@ -1156,13 +1164,9 @@ fn authorize(
             secret_text(grant.target.id(), filled),
             lifetime_text
         ),
-        chain: origin.packages.clone(),
         executor,
-        native_tool: true,
-        files: vec![],
         launch,
-        environment: origin.shown.clone(),
-    };
+    );
     let refuse = |e: String| fail("permission", e);
     let st = app.state::<App>();
     // A page's or an import's confirmation is queued with the page limits and never remembered.
@@ -1242,6 +1246,26 @@ type Spawning = (
 );
 
 /// A launch's spawn, from what its confirmation opened (a) and what its input asked.
+/// The native confirmation of a call from origin to a native tool (executor): what it does, the
+/// chain that asked, its launch if any, and the line of where it runs (`shown_line`), which a
+/// remembered approval names too.
+fn native_action(
+    origin: &Origin,
+    what: String,
+    executor: confirmation::Package,
+    launch: Option<confirmation::Launch>,
+) -> confirmation::Action {
+    confirmation::Action {
+        what,
+        chain: origin.packages.clone(),
+        executor,
+        native_tool: true,
+        files: vec![],
+        launch,
+        environment: origin.shown.clone(),
+    }
+}
+
 fn spawnable(spawning: Option<Spawning>, a: Authorized) -> Option<spawn::Launch> {
     let (lifetime, request, secrets, named, argv, stdin) = spawning?;
     a.executable()?;
@@ -1525,6 +1549,41 @@ fn confirmed_authorized(app: &AppHandle, id: &str, cancel: &Cancel) -> Result<Au
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A call in WSL: its confirmation shows the record's line (or the launcher's own, for a
+    /// launch it starts there), and one on this computer shows none.
+    #[test]
+    fn a_call_in_wsl_shows_where_it_runs_in_its_confirmation() {
+        let bob = Record::from_check(
+            "Ubuntu",
+            "bob",
+            &json!({"distro": "Ubuntu", "user": "bob", "uid": 1001, "home": "/home/bob",
+                "arch": "amd64", "automount": "/mnt/", "drives": []}),
+            0,
+        )
+        .unwrap();
+        let origin = |environment: Environment, shown: Option<String>| Origin {
+            packages: vec![device::main_window()],
+            gesture: Arc::default(),
+            token: 0,
+            launch: Mutex::new(None),
+            save: Mutex::new(None),
+            approval: Arc::default(),
+            environment,
+            shown,
+        };
+        let action = |o: &Origin| native_action(o, "w".into(), device::main_window(), None);
+        let in_wsl = origin(bob.environment(), shown_line(None, Some(&bob)));
+        assert_eq!(
+            action(&in_wsl).environment,
+            Some(r#"Runs in WSL: distribution "Ubuntu", user "bob" (/home/bob)."#.into())
+        );
+        let line = "Starts in WSL: distribution \"Ubuntu\", user \"bob\" (/home/bob).";
+        let launched = origin(Environment::Local, shown_line(Some(line.into()), None));
+        assert_eq!(action(&launched).environment.as_deref(), Some(line));
+        let here = origin(Environment::Local, shown_line(None, None));
+        assert_eq!(action(&here).environment, None);
+    }
 
     #[test]
     fn a_launch_delivers_the_secrets_its_environment_gives_the_process() {
