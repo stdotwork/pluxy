@@ -8,6 +8,11 @@ on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
   # its paths below are touched.
   workflow_call:
+    inputs:
+      wsl:
+        description: Run the WSL jobs. ci.yml passes false when nothing they build or run changed.
+        type: boolean
+        default: true
   workflow_dispatch:
   # Not on every push to main: the merge queue already ran this for the last change it merges that
   # touched what this builds, and the hosted macOS pool is short enough that re-runs on main starved
@@ -92,6 +97,11 @@ jobs:
   # run and pass; a skipped or missing one fails it.
   wsl:
     name: WSL ${{ matrix.wsl }}
+    # The daily run and manual runs always run it; ci.yml decides for pull requests and merge
+    # groups. (On the daily and manual runs there is no wsl input, and an expression's null equals
+    # false, so the event is checked, not inputs.wsl != false. Called from ci.yml, the event is
+    # ci.yml's: pull_request or merge_group.)
+    if: (github.event_name != 'pull_request' && github.event_name != 'merge_group') || inputs.wsl
     runs-on: windows-latest
     timeout-minutes: 90
     strategy:
@@ -152,46 +162,128 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
-          # Runs wsl.exe; a launch WSL 1 refuses with 0xd0000225 (nothing ran) is tried again.
+          # Runs wsl.exe with a time limit; a launch WSL 1 refuses with 0xd0000225 (nothing ran) is
+          # tried again within it. The later steps use these helpers too.
           $helper = @'
           $WSL = "$env:SystemRoot\System32\wsl.exe"
           [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
-          function W([string[]]$a) {
-            $ErrorActionPreference = 'Continue'
-            for ($k = 1; $k -le 5; $k++) {
-              $out = (& $WSL @a 2>&1 | Out-String)
-              $code = $LASTEXITCODE
-              if ($code -eq -1 -and $out -match '0xd0000225' -and $k -lt 5) {
+          # When set, no wsl.exe call waits past it (the setup's own budget).
+          $script:Deadline = $null
+          $script:Calls = 0
+
+          # Reads a file another stream may still be writing.
+          function Read-Shared([string]$path) {
+            if (-not (Test-Path $path)) { return '' }
+            $s = [IO.FileStream]::new($path, 'Open', 'Read', 'ReadWrite')
+            try { [IO.StreamReader]::new($s).ReadToEnd() } finally { $s.Dispose() }
+          }
+
+          # What a stalled call was waiting on: its output so far, the WSL and installer processes
+          # still running, and what WSL says of itself, each with a short limit of its own.
+          function Show-Stall([string[]]$a, [int]$seconds, [string]$out, [string]$err) {
+            Write-Host "::error::wsl.exe $a did not finish in $seconds s"
+            Write-Host "--- what it wrote so far:"
+            Write-Host (Read-Shared $out)
+            Write-Host (Read-Shared $err)
+            Write-Host "--- WSL and installer processes still running:"
+            $names = '^(wsl|wslservice|wslhost|wslrelay|wslinstaller|msiexec|vmcompute|vmwp|vmmem)'
+            try {
+              Get-CimInstance Win32_Process -OperationTimeoutSec 20 | Where-Object Name -match $names |
+                Format-Table ProcessId, ParentProcessId, Name, CreationDate, CommandLine -AutoSize -Wrap | Out-String -Width 400 | Write-Host
+            } catch {
+              Get-Process | Where-Object Name -match $names | Format-Table Id, Name, StartTime -AutoSize | Out-String -Width 400 | Write-Host
+            }
+            foreach ($d in @(, @('--status')) + @(, @('--list', '--verbose'))) {
+              Write-Host "--- wsl.exe $d (30 s at most):"
+              $c = Invoke-Wsl $d 30 -Report:$false -Unbounded
+              Write-Host "$($script:WOut)(exit $(if ($null -eq $c) { 'none: it did not finish' } else { $c }))"
+            }
+          }
+
+          # Runs wsl.exe with args a for at most seconds s, and never past the deadline unless
+          # Unbounded: its exit code, or $null when it did not finish (then it was reported unless
+          # Report is false, and stopped). Both streams go to files as they come, so a stalled call
+          # still shows what it wrote; the text ends up in $script:WOut.
+          function Invoke-Wsl([string[]]$a, [int]$s, [bool]$Report = $true, [switch]$Unbounded) {
+            if ($script:Deadline -and -not $Unbounded) {
+              $left = [int][Math]::Floor(($script:Deadline - [DateTime]::UtcNow).TotalSeconds)
+              if ($left -lt $s) { $s = $left }
+              if ($s -le 0) { throw "the setup's time is up before wsl.exe $a" }
+            }
+            $script:Calls++
+            $out = Join-Path $env:RUNNER_TEMP "wsl-$($script:Calls).out"
+            $err = Join-Path $env:RUNNER_TEMP "wsl-$($script:Calls).err"
+            $si = [Diagnostics.ProcessStartInfo]::new($WSL)
+            foreach ($x in $a) { $si.ArgumentList.Add($x) }
+            $si.UseShellExecute = $false
+            $si.RedirectStandardInput = $true
+            $si.RedirectStandardOutput = $true
+            $si.RedirectStandardError = $true
+            $p = [Diagnostics.Process]::Start($si)
+            $p.StandardInput.Close()
+            $sinks = @($out, $err | ForEach-Object { [IO.FileStream]::new($_, 'Create', 'Write', 'ReadWrite', 1) })
+            $copies = [Threading.Tasks.Task[]]@($p.StandardOutput.BaseStream.CopyToAsync($sinks[0]), $p.StandardError.BaseStream.CopyToAsync($sinks[1]))
+            $done = $p.WaitForExit($s * 1000)
+            if (-not $done) {
+              if ($Report) { Show-Stall $a $s $out $err }
+              try { $p.Kill($true) } catch { Write-Host "stopping it: $_" }
+              $null = $p.WaitForExit(10000)
+            }
+            try { $null = [Threading.Tasks.Task]::WaitAll($copies, 10000) } catch { }
+            $sinks | ForEach-Object { $_.Dispose() }
+            $script:WOut = (Read-Shared $out) + (Read-Shared $err)
+            if ($done) { return $p.ExitCode }
+            return $null
+          }
+
+          # wsl.exe with args a, for at most seconds s in all, its output shown: its exit code, or
+          # $null when it did not finish (reported and stopped).
+          function W([string[]]$a, [int]$s = 600) {
+            $until = [DateTime]::UtcNow.AddSeconds($s)
+            for ($k = 1; ; $k++) {
+              $left = [int][Math]::Ceiling(($until - [DateTime]::UtcNow).TotalSeconds)
+              $code = Invoke-Wsl $a ([Math]::Max($left, 1))
+              if ($null -eq $code) { return $null }
+              if ($code -eq -1 -and $script:WOut -match '0xd0000225' -and $k -lt 5 -and $left -gt 5) {
                 Write-Host "retry: WSL refused a launch with 0xd0000225 ($k): $a"
                 Start-Sleep -Seconds 2
                 continue
               }
-              $script:WOut = $out
-              Write-Host $out
+              Write-Host $script:WOut
               return $code
             }
           }
-          function Must([string[]]$a) { $c = W $a; if ($c -ne 0) { throw "wsl.exe $a exited $c" } }
+          function Must([string[]]$a, [int]$s = 600) {
+            $c = W $a $s
+            if ($null -eq $c) { throw "wsl.exe $a did not finish in its time (reported above)" }
+            if ($c -ne 0) { throw "wsl.exe $a exited $c" }
+          }
           '@
           Set-Content -Path "$env:RUNNER_TEMP\wsl.ps1" -Value $helper
           . "$env:RUNNER_TEMP\wsl.ps1"
-          Must @('--version')
-          # The install has been seen to stall: given 15 minutes, then removed and tried once more.
+          # The time this step may take: each call below has a limit of its own (seconds), and none
+          # waits past a deadline 33 minutes from now. Calls in order, at most: version 60, two
+          # installs of 600 each (the install has been seen to stall), each failed one followed by an
+          # unregister of 60, set-version 300 (WSL 1 only), setup.sh 180, terminate 60, export 300,
+          # import 300, the user check 120, list 60, version 60: 2760 s in all, so the deadline is what
+          # holds. A call that reaches its limit or the deadline is reported once and the step fails:
+          # its output so far, the process query (20 s at most), wsl --status and wsl --list --verbose
+          # (30 s each, plus up to 20 s each to stop them if they hang too), and up to 20 s to stop
+          # the call itself: 140 s at most. So the step ends by 35 min 20 s, more than 4.5 minutes
+          # under its 40-minute limit. A setup that does not stall takes about 3 minutes.
+          $script:Deadline = [DateTime]::UtcNow.AddMinutes(33)
+          Must @('--version') 60
           $installed = $false
           for ($i = 1; $i -le 2 -and -not $installed; $i++) {
-            $p = Start-Process -FilePath $WSL -ArgumentList '--install', '-d', 'Ubuntu', '--no-launch' -NoNewWindow -PassThru
-            $null = $p.Handle
-            if ($p.WaitForExit(900000)) {
-              $installed = ($p.ExitCode -eq 0)
-              if (-not $installed) { Write-Host "install exited $($p.ExitCode) (attempt $i)" }
-            } else {
-              Write-Host "install stalled for 15 minutes (attempt $i)"
-              $p.Kill($true)
+            $code = W @('--install', '-d', 'Ubuntu', '--no-launch') 600
+            $installed = ($code -eq 0)
+            if (-not $installed) {
+              Write-Host "install $(if ($null -eq $code) { 'did not finish' } else { "exited $code" }) (attempt $i)"
+              $null = W @('--unregister', 'Ubuntu') 60
             }
-            if (-not $installed) { W @('--unregister', 'Ubuntu') | Out-Null }
           }
           if (-not $installed) { throw 'WSL could not install Ubuntu' }
-          if ($env:PLUXY_WSL_TEST_VERSION -eq '1') { Must @('--set-version', 'Ubuntu', '1') }
+          if ($env:PLUXY_WSL_TEST_VERSION -eq '1') { Must @('--set-version', 'Ubuntu', '1') 300 }
           $setup = @'
           set -e
           useradd -m -s /bin/bash alice
@@ -211,16 +303,17 @@ jobs:
           echo SETUP-OK
           '@
           [IO.File]::WriteAllText('C:\pluxy-wsl\setup.sh', $setup.Replace("`r`n", "`n"))
-          Must @('-d', 'Ubuntu', '-u', 'root', '--exec', '/bin/sh', '/mnt/c/pluxy-wsl/setup.sh')
-          Must @('--terminate', 'Ubuntu')
+          Must @('-d', 'Ubuntu', '-u', 'root', '--exec', '/bin/sh', '/mnt/c/pluxy-wsl/setup.sh') 180
+          Must @('--terminate', 'Ubuntu') 60
           # A second distribution, a copy of the first, for the wrong-distribution cases.
-          Must @('--export', 'Ubuntu', 'C:\pluxy-wsl\ubuntu.tar')
-          Must @('--import', 'Other', 'C:\pluxy-wsl\other', 'C:\pluxy-wsl\ubuntu.tar', '--version', $env:PLUXY_WSL_TEST_VERSION)
+          Must @('--export', 'Ubuntu', 'C:\pluxy-wsl\ubuntu.tar') 300
+          Must @('--import', 'Other', 'C:\pluxy-wsl\other', 'C:\pluxy-wsl\ubuntu.tar', '--version', $env:PLUXY_WSL_TEST_VERSION) 300
           Remove-Item 'C:\pluxy-wsl\ubuntu.tar'
-          Must @('-d', 'Ubuntu', '--exec', '/bin/sh', '-c', 'id -un; command -v pluxy-standin')
+          Must @('-d', 'Ubuntu', '--exec', '/bin/sh', '-c', 'id -un; command -v pluxy-standin') 120
           if ($script:WOut -notmatch 'alice') { throw "the default user is not alice: $script:WOut" }
-          Must @('--list', '--verbose')
-          "WSL: $((& $WSL --version | Out-String).Trim() -replace '\s+', ' ')" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          Must @('--list', '--verbose') 60
+          Must @('--version') 60
+          "WSL: $($script:WOut.Trim() -replace '\s+', ' ')" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
       - name: Linux tests inside the distribution, as a user that is not its default
         shell: pwsh
         run: |

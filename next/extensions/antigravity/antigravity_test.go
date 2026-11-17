@@ -149,7 +149,8 @@ func TestCleanTools(t *testing.T) {
 		"note":{"description":"Optional note ((nullable))","nullable":true,"type":"string"},"pattern":{"description":"pattern: ^a","type":"string"},
 		"where":{"properties":{"city":{"description":"minLength: 1","type":"string"}},"type":"object"}},"required":["where"],"type":"object"}}]}]`
 	var got, exp any
-	_ = json.Unmarshal(cleanTools(json.RawMessage(in), false, false), &got)
+	cleaned, _ := cleanTools(json.RawMessage(in), false, false)
+	_ = json.Unmarshal(cleaned, &got)
 	_ = json.Unmarshal([]byte(want), &exp)
 	g, _ := json.Marshal(got)
 	w, _ := json.Marshal(exp)
@@ -220,7 +221,7 @@ func TestStreamErrorAfterOutput(t *testing.T) {
 		name, body string
 		retryable  bool
 	}{{"first", limit, true}, {"after output", text + limit, false}} {
-		err := relayStream(context.Background(), strings.NewReader(c.body), discard{})
+		err := relayStream(context.Background(), strings.NewReader(c.body), discard{}, nil)
 		var e *llm.Error
 		if !errors.As(err, &e) || e.Code != llm.CodeRateLimit || e.Retryable != c.retryable {
 			t.Errorf("%s: err %v (retryable %v), want a rate limit with retryable %v", c.name, err, e != nil && e.Retryable, c.retryable)
