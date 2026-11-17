@@ -10,7 +10,10 @@
 //! is undone. Between the two renames (two metadata operations of this process) the folder holds
 //! no program under its name: a power loss there leaves the aside copy and the kept copy, and the
 //! README says how to put one back. What is left aside is removed once the version that replaced
-//! it holds the profile, when the earlier version has ended (`cleanup`).
+//! it holds the profile, when the earlier version has ended (`cleanup`): the new file and the
+//! aside copy are recorded with their volume serial and file ID before they are left there
+//! (`leftovers.rs`), and only a recorded file that is still that file is removed.
+use super::leftovers::{self, Made, Outcome};
 use super::{sha256, Pinned};
 use std::ffi::OsStr;
 use std::fs;
@@ -21,7 +24,12 @@ use tauri::AppHandle;
 use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION,
 };
-use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, MoveFileExW, MOVEFILE_WRITE_THROUGH};
+use windows_sys::Win32::Storage::FileSystem::{
+    FileDispositionInfo, GetDriveTypeW, MoveFileExW, SetFileInformationByHandle, DELETE,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    MOVEFILE_WRITE_THROUGH,
+};
 
 /// The updater's name for this system's artifact: Windows, this architecture, a program.
 #[cfg(target_arch = "x86_64")]
@@ -176,7 +184,12 @@ fn is_program(b: &[u8]) -> bool {
 }
 
 /// The update's verified bytes, if they are a program for this system.
-pub(super) fn stage(_installed: &Path, bytes: Vec<u8>, _version: &str) -> Result<Staged, String> {
+pub(super) fn stage(
+    _installed: &Path,
+    bytes: Vec<u8>,
+    _version: &str,
+    _dir: &Path,
+) -> Result<Staged, String> {
     if !is_program(&bytes) {
         return Err(format!(
             "The update is not a Windows program for this system ({TARGET})."
@@ -189,7 +202,12 @@ pub(super) fn stage(_installed: &Path, bytes: Vec<u8>, _version: &str) -> Result
 }
 
 /// The kept copy at kept, if it still has its pinned digest and is a program.
-pub(super) fn stage_kept(_installed: &Path, kept: &Path, pin: &Pinned) -> Result<Staged, String> {
+pub(super) fn stage_kept(
+    _installed: &Path,
+    kept: &Path,
+    pin: &Pinned,
+    _dir: &Path,
+) -> Result<Staged, String> {
     let bytes = fs::read(kept).map_err(|e| format!("the kept copy {}: {e}", kept.display()))?;
     if sha256(&bytes) != pin.sha256 || !is_program(&bytes) {
         return Err(format!("the kept copy {} changed", kept.display()));
@@ -200,9 +218,10 @@ pub(super) fn stage_kept(_installed: &Path, kept: &Path, pin: &Pinned) -> Result
     })
 }
 
-/// Puts staged in place of the installed program (see the module).
-pub(super) fn swap_in(installed: &Path, staged: Staged) -> Result<(), String> {
-    replace(installed, &staged.bytes)
+/// Puts staged in place of the installed program (see the module), recording what it leaves
+/// beside it in the updates folder dir.
+pub(super) fn swap_in(installed: &Path, staged: Staged, dir: &Path) -> Result<(), String> {
+    replace(installed, &staged.bytes, dir)
 }
 
 /// What starts the installed copy: the program itself.
@@ -210,40 +229,76 @@ pub(super) fn program(installed: &Path) -> PathBuf {
     installed.to_path_buf()
 }
 
-/// Whether name is one this module gives a file next to the program: `.pluxy-update-<hex>` or
-/// `.pluxy-old-<hex>.exe`, with 16 lowercase hex digits.
-fn ours(name: &str) -> bool {
-    let hex = |h: &str| h.len() == 16 && h.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'));
-    name.strip_prefix(".pluxy-update-").is_some_and(hex)
-        || name
-            .strip_prefix(".pluxy-old-")
-            .and_then(|r| r.strip_suffix(".exe"))
-            .is_some_and(hex)
+/// The volume serial number and file ID of the open file f, in hex: what a recorded file is.
+fn file_id(f: &fs::File) -> std::io::Result<String> {
+    crate::owned::windows::file_id(f).map(|id| crate::artifact::hex(&id))
 }
 
-/// Removes what an earlier replace left next to the installed program: the aside copy of a
-/// version that has ended, or a new file a failed replace did not take back. A file in use is
-/// waited out for `BUSY_FOR` (the earlier version's image can stay mapped for a moment after this
-/// app took the profile); one still in use then stays for the next start.
-pub(super) fn cleanup(installed: &Path) {
-    use std::os::windows::fs::MetadataExt;
-    let Some(folder) = installed.parent() else {
-        return;
-    };
-    let Ok(entries) = fs::read_dir(folder) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let plain = e.metadata().is_ok_and(|m| {
-            m.is_file()
-                && m.file_attributes()
-                    & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
-                    == 0
-        });
-        if plain && e.file_name().to_str().is_some_and(ours) {
-            let path = e.path();
-            let _ = while_busy(|| fs::remove_file(&path));
+/// Records path, the open file f's name now or once renamed, in the updates folder dir.
+fn record(dir: &Path, path: &Path, f: &fs::File) -> Result<(), String> {
+    let id = file_id(f).map_err(|e| format!("{}: {e}", path.display()))?;
+    leftovers::record(dir, path, id)
+}
+
+/// Removes what an earlier replace recorded that it left next to the installed program (the
+/// aside copy of a version that has ended, or a new file a failed replace did not take back),
+/// each only while it is still the file recorded (`remove_recorded`). The program's folder is not
+/// listed.
+pub(super) fn cleanup(dir: &Path) {
+    leftovers::clean(dir, remove_recorded);
+}
+
+/// Removes the recorded file m: opened without following a link and with delete access, it must
+/// be a plain file with the recorded volume serial and file ID; it is then deleted through that
+/// handle, never by its name. A file in use is waited out for `BUSY_FOR` (the earlier version's
+/// image can stay mapped for a moment after this app took the profile); one still in use then
+/// stays recorded for the next start.
+fn remove_recorded(m: &Made) -> Outcome {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use std::os::windows::io::AsRawHandle;
+    let mut not_there = false;
+    let r = while_busy(|| {
+        let opened = fs::OpenOptions::new()
+            .access_mode(DELETE | FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&m.path);
+        let f = match opened {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                not_there = true;
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+        let md = f.metadata()?;
+        if !md.is_file()
+            || md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || file_id(&f)? != m.id
+        {
+            not_there = true;
+            return Ok(());
         }
+        let delete = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: f is open with DELETE; delete is the structure the class names. The file goes
+        // when f closes, at the end of this call.
+        if unsafe {
+            SetFileInformationByHandle(
+                f.as_raw_handle() as _,
+                FileDispositionInfo,
+                (&delete as *const FILE_DISPOSITION_INFO).cast(),
+                std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    });
+    match r {
+        Ok(()) if not_there => Outcome::NotThere,
+        Ok(()) => Outcome::Removed,
+        Err(_) => Outcome::Kept,
     }
 }
 
@@ -284,9 +339,10 @@ fn while_busy(mut op: impl FnMut() -> std::io::Result<()>) -> std::io::Result<()
     }
 }
 
-/// Replaces the program with bytes (see the module): a new file next to it, written and flushed;
-/// the program renamed aside; the new file renamed into its place, or the program renamed back.
-fn replace(installed: &Path, bytes: &[u8]) -> Result<(), String> {
+/// Replaces the program with bytes (see the module): a new file next to it, recorded in the
+/// updates folder dir, written and flushed; the program recorded under its aside name, then
+/// renamed aside; the new file renamed into its place, or the program renamed back.
+fn replace(installed: &Path, bytes: &[u8], dir: &Path) -> Result<(), String> {
     use std::io::Write;
     let folder = installed.parent().ok_or("The program has no folder.")?;
     let mut nonce = [0u8; 8];
@@ -295,17 +351,30 @@ fn replace(installed: &Path, bytes: &[u8]) -> Result<(), String> {
     let new = folder.join(format!(".pluxy-update-{hex}"));
     let aside = folder.join(format!(".pluxy-old-{hex}.exe"));
     let shown = |e: std::io::Error| format!("{}: {e}", installed.display());
-    let written = fs::OpenOptions::new()
+    let mut f = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&new)
-        .and_then(|mut f| {
-            f.write_all(bytes)?;
-            f.sync_all()
-        });
+        .map_err(shown)?;
+    if let Err(e) = record(dir, &new, &f) {
+        drop(f);
+        let _ = fs::remove_file(&new);
+        return Err(e);
+    }
+    let written = f.write_all(bytes).and_then(|()| f.sync_all());
+    drop(f);
     if let Err(e) = written {
         let _ = fs::remove_file(&new);
         return Err(shown(e));
+    }
+    // The program as it is now is what the aside name will hold: recorded before the rename, so
+    // what is left aside is always recorded.
+    let program = fs::File::open(installed)
+        .map_err(shown)
+        .and_then(|p| record(dir, &aside, &p));
+    if let Err(e) = program {
+        let _ = fs::remove_file(&new);
+        return Err(e);
     }
     if let Err(e) = rename(installed, &aside) {
         let _ = fs::remove_file(&new);
@@ -380,37 +449,76 @@ pub(super) mod tests {
             ("not MZ", b"\x7fELF".to_vec()),
         ] {
             assert!(!is_program(&b), "{what}");
-            assert!(stage(Path::new("x"), b, "0.2.0").is_err(), "{what}");
+            assert!(
+                stage(Path::new("x"), b, "0.2.0", Path::new("u")).is_err(),
+                "{what}"
+            );
         }
+    }
+
+    /// The names in t, sorted, without the updates folder.
+    fn names(t: &Path) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(t)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n != "updates")
+            .collect();
+        v.sort();
+        v
     }
 
     // The new program is in place, the old one aside, and nothing else is left once cleaned up;
     // a running program is renamed aside the same way (the native test shows it on a runner).
+    // Only what the replace recorded goes: a file another user renamed to the aside pattern stays.
     #[test]
     fn the_replace_renames_aside_and_cleanup_removes_what_is_left() {
         let tmp = super::super::tests::temp("exe-replace");
+        let dir = tmp.join("updates");
         let exe = fixture(&tmp, "old");
         fs::write(tmp.join("other.txt"), b"not ours").unwrap();
-        fs::write(tmp.join(".pluxy-old-zz.exe"), b"not ours either").unwrap();
-        replace(&exe, &program_bytes("new")).unwrap();
+        fs::write(
+            tmp.join(".pluxy-old-0123456789abcdef.exe"),
+            b"not ours either",
+        )
+        .unwrap();
+        replace(&exe, &program_bytes("new"), &dir).unwrap();
         assert_eq!(fs::read(&exe).unwrap(), program_bytes("new"));
-        let names = |t: &Path| {
-            let mut v: Vec<String> = fs::read_dir(t)
-                .unwrap()
-                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-                .collect();
-            v.sort();
-            v
-        };
         let left = names(&tmp);
         assert_eq!(left.len(), 4, "{left:?}");
-        assert!(left.iter().any(|n| ours(n) && n.starts_with(".pluxy-old-")));
-        cleanup(&exe);
+        // The next version's cleanup, once this one has ended.
+        leftovers::forget_mine(&tmp);
+        cleanup(&dir);
         assert_eq!(
             names(&tmp),
-            [".pluxy-old-zz.exe", "other.txt", "pluxy.exe"],
-            "only this module's own names go"
+            [".pluxy-old-0123456789abcdef.exe", "other.txt", "pluxy.exe"],
+            "only what the replace recorded goes"
         );
+        assert_eq!(fs::read(&exe).unwrap(), program_bytes("new"));
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A recorded aside copy replaced by another file of the same name stays.
+    #[test]
+    fn cleanup_leaves_a_file_put_in_place_of_a_recorded_one() {
+        let tmp = super::super::tests::temp("exe-replaced");
+        let dir = tmp.join("updates");
+        let exe = fixture(&tmp, "old");
+        replace(&exe, &program_bytes("new"), &dir).unwrap();
+        let aside = names(&tmp)
+            .into_iter()
+            .find(|n| n.starts_with(".pluxy-old-"))
+            .map(|n| tmp.join(n))
+            .unwrap();
+        fs::rename(&aside, tmp.join("moved.exe")).unwrap();
+        fs::write(&aside, b"theirs").unwrap();
+        leftovers::forget_mine(&tmp);
+        cleanup(&dir);
+        assert_eq!(
+            fs::read(&aside).unwrap(),
+            b"theirs",
+            "not the file recorded"
+        );
+        assert!(tmp.join("moved.exe").exists());
         fs::remove_dir_all(&tmp).unwrap();
     }
 
@@ -427,11 +535,11 @@ pub(super) mod tests {
             .open(&exe)
             .unwrap();
         let started = Instant::now();
-        let e = replace(&exe, &program_bytes("new")).unwrap_err();
+        let e = replace(&exe, &program_bytes("new"), &tmp.join("updates")).unwrap_err();
         assert!(started.elapsed() >= BUSY_FOR, "it waited for the file: {e}");
         drop(held);
         assert_eq!(fs::read(&exe).unwrap(), program_bytes("old"));
-        assert_eq!(fs::read_dir(&tmp).unwrap().count(), 1);
+        assert_eq!(names(&tmp), ["pluxy.exe"]);
         fs::remove_dir_all(&tmp).unwrap();
     }
 
@@ -441,9 +549,12 @@ pub(super) mod tests {
     fn cleanup_waits_out_a_leftover_held_open_for_a_moment() {
         use std::os::windows::fs::OpenOptionsExt;
         let tmp = super::super::tests::temp("exe-cleanup-busy");
+        let dir = tmp.join("updates");
         let exe = fixture(&tmp, "new");
         let aside = tmp.join(".pluxy-old-0123456789abcdef.exe");
         fs::write(&aside, program_bytes("old")).unwrap();
+        record(&dir, &aside, &fs::File::open(&aside).unwrap()).unwrap();
+        leftovers::forget_mine(&tmp);
         let held = fs::OpenOptions::new()
             .read(true)
             .share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ)
@@ -454,7 +565,7 @@ pub(super) mod tests {
             drop(held);
         });
         let started = Instant::now();
-        cleanup(&exe);
+        cleanup(&dir);
         let_go.join().unwrap();
         assert!(!aside.exists(), "the aside copy is gone");
         // The hold did keep the first removal from going through.

@@ -172,7 +172,7 @@ pub(crate) fn final_path(f: &File) -> Result<PathBuf, String> {
 }
 
 /// Volume serial number and file ID.
-fn file_id(f: &File) -> io::Result<[u8; 24]> {
+pub(crate) fn file_id(f: &File) -> io::Result<[u8; 24]> {
     let mut info: FILE_ID_INFO = unsafe { std::mem::zeroed() };
     if unsafe {
         GetFileInformationByHandleEx(

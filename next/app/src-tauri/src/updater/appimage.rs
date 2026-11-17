@@ -132,7 +132,12 @@ impl Staged {
 }
 
 /// The update's verified bytes, if they are an AppImage.
-pub(super) fn stage(_installed: &Path, bytes: Vec<u8>, _version: &str) -> Result<Staged, String> {
+pub(super) fn stage(
+    _installed: &Path,
+    bytes: Vec<u8>,
+    _version: &str,
+    _dir: &Path,
+) -> Result<Staged, String> {
     if !is_appimage(&bytes) {
         return Err("The update is not a type-2 AppImage.".into());
     }
@@ -143,7 +148,12 @@ pub(super) fn stage(_installed: &Path, bytes: Vec<u8>, _version: &str) -> Result
 }
 
 /// The kept copy at kept, if it still has its pinned digest and is an AppImage.
-pub(super) fn stage_kept(_installed: &Path, kept: &Path, pin: &Pinned) -> Result<Staged, String> {
+pub(super) fn stage_kept(
+    _installed: &Path,
+    kept: &Path,
+    pin: &Pinned,
+    _dir: &Path,
+) -> Result<Staged, String> {
     let bytes = fs::read(kept).map_err(|e| format!("the kept copy {}: {e}", kept.display()))?;
     if sha256(&bytes) != pin.sha256 || !is_appimage(&bytes) {
         return Err(format!("the kept copy {} changed", kept.display()));
@@ -155,7 +165,7 @@ pub(super) fn stage_kept(_installed: &Path, kept: &Path, pin: &Pinned) -> Result
 }
 
 /// Puts staged in place of the installed AppImage (`replace`).
-pub(super) fn swap_in(installed: &Path, staged: Staged) -> Result<(), String> {
+pub(super) fn swap_in(installed: &Path, staged: Staged, _dir: &Path) -> Result<(), String> {
     replace(installed, &staged.bytes)
 }
 

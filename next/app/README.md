@@ -573,6 +573,17 @@ In this order:
    - macOS: the unpacked bundle and the installed one swap places in one step (`renamex_np` with
      `RENAME_SWAP`): the bundle is the old one or the new one. The old one, now in the
      `.pluxy-update-<hex>` folder, is removed once the new version runs and the old one has ended.
+
+   What an install leaves beside the installed copy is recorded first, in
+   `updates/leftovers.json`, with what identifies it beyond its name: on Windows the new program
+   when it is created and the aside copy just before the rename (each by its volume serial number
+   and file ID), on macOS the `.pluxy-update-<hex>` folder when it is created (by its device and
+   inode). That removal at a later start goes through the record only: an entry that is still the
+   recorded file or folder (and, on macOS, a folder of yours) is removed without following a
+   link, on Windows through its open handle and on macOS through the open folder; an entry whose
+   name is gone or now holds something else is dropped from the record and nothing is deleted.
+   The folder the installed copy is in is never listed, so whatever someone else put there, even
+   under one of these names, stays.
 7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
    that order; detached launches run on) and hides its window, but keeps its profile and starts the
    new version as its successor, handing the profile over so no other launch takes it meanwhile
