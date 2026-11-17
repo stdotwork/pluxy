@@ -60,7 +60,7 @@ export const PLATFORM_SHARDS: Record<string, readonly string[]> = {
   // The signed tool sessions in the real app (native/platform-tools.ts), on the build with
   // artifact-test-trust: a job of its own, since it builds that app, the fixture tool and the
   // execution program, and starts a test core.
-  tools: ["admission", "program", "routing", "launcher"],
+  tools: ["admission", "program", "routing", "launcher", "vault"],
 };
 
 /** The sessions of shards, each named once across them. */

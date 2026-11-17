@@ -29,8 +29,8 @@
 // - bundle release gate: the release command (package.ts release) passes a clean release build and
 //   a clean bundle of this system's kind around it, and refuses a bundle holding the test-feature
 //   dev app, the test package renamed and the test package itself;
-// - admission, program, routing, launcher: run.ts's sessions of the same names, for signed tools,
-//   in the app built with artifact-test-trust against a test core (native/platform-tools.ts).
+// - admission, program, routing, launcher, vault: run.ts's sessions of the same names, for signed
+//   tools, in the app built with artifact-test-trust against a test core (native/platform-tools.ts).
 //
 // These write what a real run writes: the user's registry or LaunchAgents folder, and on Windows
 // the app's own folder in the user's profile. So it runs only on a GitHub-hosted runner, whose user

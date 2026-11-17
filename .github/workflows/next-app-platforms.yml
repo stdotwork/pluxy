@@ -254,8 +254,8 @@ jobs:
   # The package shard builds the test package first (package.ts test: a folder bundle on Windows,
   # an app bundle on macOS, never an installer), then the dev app, since the package's builds
   # rename the program they make in target/debug. The tools shard (native/platform-tools.ts) runs
-  # run.ts's admission, program, routing and launcher sessions here, on the app built with the
-  # test trust (artifact-test-trust) against a test core it starts with `go run`.
+  # run.ts's admission, program, routing, launcher and vault sessions here, on the app built with
+  # the test trust (artifact-test-trust) against a test core it starts with `go run`.
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}

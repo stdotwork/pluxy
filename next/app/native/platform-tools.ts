@@ -11,7 +11,12 @@
 //   routing.ts);
 // - launcher: the execution program and the launcher (launcher_platform_native.rs; launcher.ts),
 //   with the fixtures' bin first on PATH; after the app quit, a file named stop in the fixtures'
-//   work folder ends any agent left running.
+//   work folder ends any agent left running;
+// - vault: the vault, secret delivery and references and journal recovery, then client-key capture
+//   and entry (vault_native.rs, client_key_native.rs; vault.ts). Client keys are made on the test
+//   core, whose config file core.json in the fixtures names: the app's own core, which run.ts's
+//   session uses on Linux, does not run on these systems yet. Neither the vault's key and canary
+//   nor a client key the check learned may appear in the app's output.
 //
 // Each session gets a fresh app state and a private temporary HOME holding the test trust profile
 // (the app's updater gate and trust store read it from HOME). On macOS the app's folders come from
@@ -41,9 +46,10 @@ import { buildAdmissionFixtures, EXE, PROFILE_FILE } from "./admission";
 import { buildLauncherFixtures } from "./launcher";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
+import { buildVaultFixtures } from "./vault";
 
 /** The sessions of this shard, by their names in shards.ts. */
-export const TOOL_SESSIONS = ["admission", "program", "routing", "launcher"] as const;
+export const TOOL_SESSIONS = ["admission", "program", "routing", "launcher", "vault"] as const;
 export type ToolSession = (typeof TOOL_SESSIONS)[number];
 
 /** What platform.ts gives these sessions. */
@@ -85,7 +91,7 @@ function knownFolders(ctx: Context): { roaming: string; local: string } {
   return { roaming: out[0] as string, local: out[1] as string };
 }
 
-async function startCore(): Promise<{ proc: ChildProcess; base: string; key: string }> {
+async function startCore(): Promise<{ proc: ChildProcess; base: string; key: string; config: string }> {
   const proc = spawn("go", ["run", "./e2e/panelcore", "-probe"], {
     cwd: next,
     stdio: ["pipe", "pipe", "inherit"],
@@ -184,6 +190,8 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       ({ registries, nonce } = buildProgramFixtures(fixtures, home, programFixture));
     } else if (name === "routing") {
       ({ registries, nonce } = buildRoutingFixtures(fixtures, home, programFixture));
+    } else if (name === "vault") {
+      ({ registries, nonce, canaries } = buildVaultFixtures(fixtures, home, programFixture));
     } else {
       const execution = join(appToolsTarget, "debug", `execution${EXE}`);
       check(existsSync(execution), `the execution program ${execution} is not built`);
@@ -208,6 +216,8 @@ export async function toolSession(name: ToolSession, ctx: Context) {
 
     say("starting the test core");
     core = await startCore();
+    // The core whose config file the client-key check reads the keys core makes from.
+    if (name === "vault") writeFileSync(join(fixtures, "core.json"), JSON.stringify({ config: core.config }));
     // The connection the app starts with: local mode, signed in with a kept key.
     writeFileSync(
       join(localDir, "connection.json"),
@@ -233,6 +243,7 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       env.PLUXY_TEST_PROGRAM_CANARY = randomUUID();
     }
     if (name === "routing") env.PLUXY_APP_TEST_ROUTING = fixtures;
+    if (name === "vault") env.PLUXY_APP_TEST_VAULT = fixtures;
     if (launcherBin) {
       env.PLUXY_APP_TEST_LAUNCHER = fixtures;
       // The agent the launcher finds by name comes first.
@@ -246,11 +257,14 @@ export async function toolSession(name: ToolSession, ctx: Context) {
     const steps = new Map<string, any>();
     const order: string[] = [];
     const log: string[] = [];
+    // Every line, for the client keys the check learns as it runs (vault).
+    const output: string[] = [];
     const onLine = (line: string) => {
       if (canaries.some((c) => line.includes(c))) {
-        check(false, "the launcher check's key appeared on the app's stdout/stderr");
+        check(false, `the ${name} check's key or canary appeared on the app's stdout/stderr`);
         return;
       }
+      output.push(line);
       log.push(line);
       if (log.length > 60) log.shift();
       const m = /^native-test: (\S+) (.*)$/.exec(line);
@@ -358,6 +372,27 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       const r = steps.get("launcher");
       check(r?.passed === true, `the launcher check did not complete: ${failure}`);
       say(`launcher ${JSON.stringify(r ?? {})}`);
+    }
+
+    if (name === "vault") {
+      const v = steps.get("vault");
+      check(v?.passed === true, `the vault check did not complete: ${failure}`);
+      const c = steps.get("client_keys");
+      check(c?.passed === true, `the client-key check did not complete: ${failure}`);
+      // The client keys the check captured, as it learned them (client_key_native.rs).
+      const file = join(fixtures, "client-keys");
+      const clientKeys = existsSync(file)
+        ? readFileSync(file, "utf8")
+            .split("\n")
+            .filter((k) => k.length > 0)
+        : [];
+      check(clientKeys.length === 2, `the client-key check noted ${clientKeys.length} keys, not 2`);
+      check(
+        !output.some((line) => clientKeys.some((k) => line.includes(k))),
+        "a client key from the client-key check appeared on the app's stdout/stderr",
+      );
+      say(`vault ${JSON.stringify(v ?? {})}`);
+      say(`client keys ${JSON.stringify(c ?? {})}`);
     }
 
     if (timedOut || code !== 0 || steps.has("failed")) say(`the app's last lines:\n  ${log.join("\n  ")}`);
