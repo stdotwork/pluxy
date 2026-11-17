@@ -17,6 +17,9 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
+// sizeNote is the note logged when held output passes maxHeldOutput.
+var sizeNote = fmt.Sprintf("[x] (the output held while a refresh or login runs passed its limit of %d bytes, counting %d for each line besides its text; the rest of the held output is left out until it ends)\n", maxHeldOutput, heldLineCost)
+
 func apiKey(key string) *protocol.Credential {
 	return &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key}
 }
@@ -53,7 +56,7 @@ func TestOutputIsHeldWhileACredentialIsMade(t *testing.T) {
 	for _, l := range []string{big, big, "over sk-third-1234", "over again"} {
 		o.line("[x] ", l)
 	}
-	note := fmt.Sprintf("[x] (more than %d bytes of output while a refresh or login runs; the rest is left out until it ends)\n", maxHeldOutput)
+	note := sizeNote
 	if got := log.String(); got != note {
 		t.Fatalf("past the limit, log = %q, want only %q", got, note)
 	}
@@ -97,7 +100,7 @@ func TestHeldOutputDropsTheRestAfterTheLimit(t *testing.T) {
 	o.line("[x] ", strings.Repeat("c", 200)) // does not fit
 	o.line("[x] ", "small")                  // would fit
 	release()
-	note := fmt.Sprintf("[x] (more than %d bytes of output while a refresh or login runs; the rest is left out until it ends)\n", maxHeldOutput)
+	note := sizeNote
 	if got, want := log.String(), note+"[x] "+big+"\n[x] (2 lines of output left out)\n"; got != want {
 		t.Errorf("log = %.200q...%q, want the first line and a count of the 2 left out", got, got[max(0, len(got)-100):])
 	}
@@ -130,6 +133,41 @@ func TestHeldOutputKeepsReplacedCredentials(t *testing.T) {
 	o.line("[x] ", "sk-cred0-1234 sk-cred1-1234 sk-cred2-1234 sk-cred3-1234")
 	if got, want := log.String(), "[x] using [redacted]\n[x] minted [redacted]\n[x] sk-cred0-1234 sk-cred1-1234 [redacted] [redacted]\n"; got != want {
 		t.Errorf("after the hold, log = %q, want %q", got, want)
+	}
+}
+
+// While output is held, at most maxReplaced replaced credentials are kept. Past that, they are no
+// longer kept, and the held lines, which may hold one of them, are left out with a note, as are
+// those that come later in the hold; none is logged in clear.
+func TestHeldOutputPastMaxReplacedIsLeftOut(t *testing.T) {
+	var log bytes.Buffer
+	h := &held{}
+	o := &output{w: &log, held: h, prefix: "[x] "}
+	key := func(i int) string { return fmt.Sprintf("sk-renewed-%04d", i) }
+	release := o.hold()
+	// Ten accounts renewed in turn: past each one's first two, each renewal replaces one.
+	renew := func(from, to int) {
+		for i := from; i < to; i++ {
+			h.add(fmt.Sprintf("account %d", i%10), apiKey(key(i)))
+		}
+	}
+	renew(0, 20+maxReplaced) // exactly maxReplaced replaced
+	if n := len(h.replaced); n != maxReplaced || h.overflow {
+		t.Fatalf("%d replaced kept (overflow %v), want %d kept", n, h.overflow, maxReplaced)
+	}
+	o.line("[x] ", "minted "+key(0)) // replaced long ago, still known
+	renew(20+maxReplaced, 21+maxReplaced)
+	if n := len(h.replaced); n != 0 || !h.overflow {
+		t.Fatalf("past the limit, %d replaced kept (overflow %v), want none and overflow", n, h.overflow)
+	}
+	o.line("[x] ", "later "+key(1))
+	release()
+	note := fmt.Sprintf("[x] (more than %d credentials were replaced while a refresh or login runs; the rest of the held output is left out until it ends)\n", maxReplaced)
+	if got, want := log.String(), note+"[x] (2 lines of output left out)\n"; got != want {
+		t.Errorf("log = %q, want %q", got, want)
+	}
+	if h.overflow || h.replaced != nil {
+		t.Errorf("after the hold, overflow %v and %d replaced kept, want neither", h.overflow, len(h.replaced))
 	}
 }
 
@@ -208,9 +246,11 @@ func TestFreshCredentialInOutputBeforeItsResult(t *testing.T) {
 	}
 }
 
-// gatedConn is a call connection that has received a whole frame: Read hands over all but its
-// last byte, then waits for gate before handing that over. Close does not stop it, as closing a
-// socket does not take back what has arrived.
+// gatedConn is a call connection that hands over a whole frame, all but its last byte at once and
+// the last only once gate is closed. It opens, for a test, the window a real one gives no way to
+// stop in: after ReadFrame has returned a login.done frame and before Next has recorded its grant
+// (held.add). Close does not end Read here, as it would on a real connection, so that Close can
+// run inside that window and Next still get the frame.
 type gatedConn struct {
 	net.Conn
 	data   []byte

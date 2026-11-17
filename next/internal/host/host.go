@@ -47,7 +47,8 @@ type Options struct {
 	// from them too (output): core ends a login after 15 minutes, but a refresh has no deadline,
 	// so one that hangs holds them until the program exits. At most 1 MiB is held, counting 64
 	// bytes for each line besides its text; past that, the rest of the held lines are left out,
-	// with notes. Default os.Stderr.
+	// with notes. When more than 256 credentials are replaced while lines are held, all of them
+	// are left out, with notes. Default os.Stderr.
 	Log io.Writer
 	// ProxyURL returns core's global proxy_url setting, read at each call: the proxy of every
 	// account without one of its own (proxyurl.Resolve). Nil: none.
@@ -82,11 +83,11 @@ type Extension struct {
 // held are the credentials core has given the extension or got back from it, so that its output
 // is logged without them: for each account the latest two (after a refresh the extension may
 // still write the one it replaced), the secrets of every settings it has had (a call still
-// running after changes has old ones), and what a user entered during a login. Nothing is
-// forgotten while the extension's program runs, so this grows only with the accounts it has
-// served and their settings changes, and goes with the program. A credential the extension makes
-// (a refresh or login result) is added when the result arrives; output is held until then
-// (output), and while it is, the credentials a newer one replaces are kept too (pin).
+// running after changes has old ones), and what a user entered during a login. Outside a hold,
+// this grows only with the accounts the extension has served and their settings changes, and goes
+// with the program. A credential the extension makes (a refresh or login result) is added when the
+// result arrives; output is held until then (output), and while it is, the credentials a newer one
+// replaces are kept too (pin), up to maxReplaced, and dropped when the last hold ends.
 type held struct {
 	mu       sync.Mutex
 	by       map[string][]heldCredential
@@ -94,8 +95,17 @@ type held struct {
 	settings map[string][]heldCredential // the secrets in each account's settings, apart in the same way
 	pins     int                         // output holds running
 	replaced []*protocol.Credential      // those the latest two replaced while pins > 0
+	overflow bool                        // more than maxReplaced were replaced during the holds running
 	redact   *protocol.Redactor
 }
+
+// maxReplaced bounds the credentials kept while output is held because newer ones replaced them.
+// Each change of a credential rebuilds the Redactor of all of them, so keeping many costs memory
+// and time that grow with every renewal of every account. A refresh's hold lasts as long as one
+// call and a login's at most 15 minutes, so far fewer than 256 renewals happen in one, unless a
+// call hangs. Past it, the held output is left out (output), so the replaced credentials need not
+// be kept.
+const maxReplaced = 256
 
 type heldCredential struct {
 	key string // the credential as JSON, to tell whether it changed
@@ -136,9 +146,12 @@ func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.
 	cc := *c
 	list = append(list, heldCredential{string(b), &cc})
 	if n > 0 && len(list) > n {
-		if h.pins > 0 {
+		if h.pins > 0 && !h.overflow {
 			for _, hc := range list[:len(list)-n] {
 				h.replaced = append(h.replaced, hc.c)
+			}
+			if len(h.replaced) > maxReplaced {
+				h.replaced, h.overflow = nil, true
 			}
 		}
 		list = list[len(list)-n:]
@@ -172,10 +185,21 @@ func (h *held) pin() {
 func (h *held) unpin() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.pins--; h.pins == 0 && h.replaced != nil {
-		h.replaced = nil
-		h.rebuild()
+	if h.pins--; h.pins == 0 {
+		h.overflow = false
+		if h.replaced != nil {
+			h.replaced = nil
+			h.rebuild()
+		}
 	}
+}
+
+// redactor returns the Redactor of every credential held now, and whether more than maxReplaced
+// were replaced during the holds running, so that some of them may be missing from it.
+func (h *held) redactor() (*protocol.Redactor, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.redact, h.overflow
 }
 
 // holdAccount records that the extension holds a's credential and the secrets in a's settings,
@@ -688,8 +712,9 @@ const heldLineCost = 64
 // streams, so while any refresh or login runs, all lines wait, those of other calls too. A line
 // read after the result is redacted with it anyway. While lines are held, no credential is
 // dropped from held (held.pin), so later renewals can't take one away before the lines it may be
-// in are logged. Once the held lines pass maxHeldOutput, the rest of them are left out, with
-// notes, rather than logged before their redaction is known. The hold lasts as long as the call:
+// in are logged. Once the held lines pass maxHeldOutput, or more than maxReplaced credentials have
+// been replaced while they wait, the rest of them are left out, with notes, rather than logged
+// before their redaction is known or with it incomplete. The hold lasts as long as the call:
 // core ends a login after 15 minutes, but a refresh has no deadline, so one that hangs keeps the
 // lines held until the program exits, which ends it.
 type output struct {
@@ -712,15 +737,42 @@ func (o *output) line(prefix, text string) {
 	switch cost := len(text) + heldLineCost; {
 	case o.minting == 0:
 		o.write(prefix, text)
-	case o.dropped > 0 || o.size+cost > maxHeldOutput:
-		if o.dropped == 0 {
-			fmt.Fprintf(o.w, "%s(more than %d bytes of output while a refresh or login runs; the rest is left out until it ends)\n", o.prefix, maxHeldOutput)
-		}
+	case o.dropped > 0:
 		o.dropped++
+	case o.overflowed():
+		o.dropQueue()
+		o.leaveOut(1, overflowNote)
+	case o.size+cost > maxHeldOutput:
+		o.leaveOut(1, fmt.Sprintf("the output held while a refresh or login runs passed its limit of %d bytes, counting %d for each line besides its text", maxHeldOutput, heldLineCost))
 	default:
 		o.queue = append(o.queue, heldLine{prefix, text})
 		o.size += cost
 	}
+}
+
+var overflowNote = fmt.Sprintf("more than %d credentials were replaced while a refresh or login runs", maxReplaced)
+
+// overflowed reports whether more than maxReplaced credentials were replaced during the holds
+// running, so that the held lines may hold one no longer known.
+func (o *output) overflowed() bool {
+	_, overflow := o.held.redactor()
+	return overflow
+}
+
+// leaveOut leaves out n lines, with a note of why the first time. o.mu is held.
+func (o *output) leaveOut(n int, why string) {
+	if o.dropped == 0 {
+		fmt.Fprintf(o.w, "%s(%s; the rest of the held output is left out until it ends)\n", o.prefix, why)
+	}
+	o.dropped += n
+}
+
+// dropQueue leaves out the lines held so far. o.mu is held.
+func (o *output) dropQueue() {
+	if len(o.queue) > 0 {
+		o.leaveOut(len(o.queue), overflowNote)
+	}
+	o.queue, o.size = nil, 0
 }
 
 func (o *output) write(prefix, text string) {
@@ -741,8 +793,14 @@ func (o *output) hold() (release func()) {
 		if o.minting--; o.minting > 0 {
 			return
 		}
+		// One Redactor for all the held lines: a renewal while they are written could otherwise
+		// pass maxReplaced and drop a credential one of them still holds.
+		r, overflow := o.held.redactor()
+		if overflow {
+			o.dropQueue()
+		}
 		for _, l := range o.queue {
-			o.write(l.prefix, l.text)
+			fmt.Fprintf(o.w, "%s%s\n", l.prefix, r.String(l.text))
 		}
 		if o.dropped > 0 {
 			fmt.Fprintf(o.w, "%s(%d lines of output left out)\n", o.prefix, o.dropped)
