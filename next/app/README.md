@@ -529,14 +529,17 @@ In this order:
      run the installer for those, and nothing here does: no installer, `msiexec`, elevation,
      scheduled task or service.
    - macOS: the program runs as `<name>.app/Contents/MacOS/<program>` of a bundle whose
-     `Info.plist` names this app's identifier and that program; the bundle is not running from a
-     translocated copy (macOS runs an app opened from Downloads or a disk image from a read-only
-     copy: move it into a folder of your own such as `~/Applications` first); the bundle and its
-     folder are yours and writable by no one else, so a bundle in `/Applications` is refused,
-     because other administrators can change that folder; and the volume is APFS, which swaps two
-     folders in one step. The stock plugin would ask for an administrator's password when it
-     cannot write the bundle; nothing here does (no `osascript`, `sudo`, `installer` or
-     `authopen`), and the quarantine attribute is neither added nor removed.
+     `Info.plist` names this app's identifier and that program; it was started by a path with no
+     link in it, neither the program nor any folder above it (Tauri refuses such a path on macOS,
+     and the plugin needs it: start the app from its real location, for example from Finder); the
+     bundle is not running from a translocated copy (macOS runs an app opened from Downloads or a
+     disk image from a read-only copy: move it into a folder of your own such as `~/Applications`
+     first); the bundle and its folder are yours and writable by no one else, so a bundle in
+     `/Applications` is refused, because other administrators can change that folder; and the
+     volume is APFS, which swaps two folders in one step. The stock plugin would ask for an
+     administrator's password when it cannot write the bundle; nothing here does (no
+     `osascript`, `sudo`, `installer` or `authopen`), and the quarantine attribute is neither
+     added nor removed.
 3. The plugin restores the release from the feed (`restore_update`): its default comparison
    allows only a version newer than the running one, and the signature must carry the announced
    version. No custom comparison is set, so the feed can never offer a downgrade.

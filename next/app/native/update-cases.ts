@@ -103,10 +103,12 @@ export const REFUSALS: Record<System, Refusal[]> = {
     { label: "nsis", case: "nsis", reason: /setup program/ },
     { label: "shared folder", case: "shared", reason: /only you can change/ },
   ],
-  // The program copied out of its app bundle, and an app bundle its group may change.
+  // The program copied out of its app bundle, an app bundle its group may change, and the
+  // installed bundle started by a path that goes through a link.
   darwin: [
     { label: "bare program", case: "bare", reason: /not in its app bundle/ },
     { label: "group-writable bundle", case: "group-writable", reason: /only you can change/ },
+    { label: "linked folder", case: "linked", reason: /goes through a link.*real location/s },
   ],
 };
 export const stepOf = (c: Refusal) => `update_${c.case.replaceAll("-", "_")}`;

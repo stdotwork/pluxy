@@ -442,9 +442,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, dir: PathBuf) -> Result<(), S
             set_source(app, main, &feed()?)?;
             refused(app, main, &dir, &case)?
         }
-        "deb" | "rpm" | "unknown" | "msi" | "nsis" | "shared" | "bare" | "group-writable" => {
-            refused(app, main, &dir, &case)?
-        }
+        "deb" | "rpm" | "unknown" | "msi" | "nsis" | "shared" | "bare" | "group-writable"
+        | "linked" => refused(app, main, &dir, &case)?,
         "open" => {
             check(main, &dir, "good", "0.2.0")?;
             let available = wait_for("the updater's view", || {

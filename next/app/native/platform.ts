@@ -33,7 +33,8 @@
 //   and refuses the rest, with update-cases.ts's cases (the same as Linux's update session): no
 //   updater trust; this system's crafted installs (Windows: an .msi- and a setup-program-patched
 //   program, a folder Everyone may change; macOS: the program outside its bundle, a bundle its
-//   group may change); macOS: a launch through LaunchServices (`/usr/bin/open`) is offered the
+//   group may change, the installed bundle started through a link on its path); macOS: the
+//   update route starts the bundle by its real path, and a launch through LaunchServices (`/usr/bin/open`) is offered the
 //   update; the update route with its third launch in the acceptance gap and its rollback; stand-ins
 //   for installers and elevation first on PATH never ran; macOS: no quarantine on the installed
 //   bundle.
@@ -1049,9 +1050,12 @@ async function update() {
 
     // The installed test package, a copy in a folder of this user's: Windows, its folder bundle
     // in a folder only this user (and SYSTEM and Administrators) may change; macOS, its app
-    // bundle in the profile's Applications folder.
+    // bundle in the profile's Applications folder, started by its real path.
     let installed: string;
     let program: string;
+    // macOS: the program by the path the bundle was put at, which goes through a link (the
+    // system's temporary folder is under /var, a link to /private/var): the "linked" refusal.
+    let linkedProgram = "";
     if (windows) {
       const folder = join(ownFolder(join(root, "install")), basename(made.bundle));
       mkdirSync(folder);
@@ -1059,10 +1063,16 @@ async function update() {
       copyFileSync(made.program, installed);
       program = installed;
     } else {
-      installed = join(privateFolder(join(home, "Applications")), basename(made.bundle));
-      const copied = run("ditto", ["--norsrc", "--noextattr", "--noqtn", made.bundle, installed]);
+      const put = join(privateFolder(join(home, "Applications")), basename(made.bundle));
+      const copied = run("ditto", ["--norsrc", "--noextattr", "--noqtn", made.bundle, put]);
       if (copied.status !== 0) throw new Error(`ditto: ${copied.out}`);
+      installed = realpathSync(put);
       program = join(installed, "Contents", "MacOS", exe);
+      linkedProgram = join(put, "Contents", "MacOS", exe);
+      check(
+        installed !== put,
+        `the installed copy's path ${put} has no link in it, so the linked case does not start the app through one`,
+      );
     }
     const v1 = pinOf(installed);
     writeFileSync(join(work, "v1.sha256"), v1);
@@ -1118,6 +1128,11 @@ async function update() {
 
     // This system's crafted installs, each in a folder of its own.
     for (const refusal of REFUSALS[system]) {
+      // The installed bundle itself, started through the link on its path.
+      if (refusal.case === "linked") {
+        await refuse(refusal, linkedProgram, trusted);
+        continue;
+      }
       const folder = ownFolder(join(root, `crafted-${refusal.case}`));
       let crafted: string;
       if (windows) {

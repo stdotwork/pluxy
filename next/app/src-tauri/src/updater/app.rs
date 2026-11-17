@@ -59,6 +59,18 @@ pub(super) fn provenance(app: &AppHandle) -> Result<PathBuf, String> {
             bundle.display()
         ));
     }
+    // The updater plugin cannot start for a program started by a path with a link in it (Tauri
+    // refuses that path on macOS), so such a start is refused here, before an update is offered.
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    if let Some(link) = bundle::linked(&exe) {
+        return Err(format!(
+            "This app was started by a path that goes through a link ({}), and the updater cannot \
+             start from there. Start the app from its real location ({}), for example from \
+             Finder, and update then.",
+            link.display(),
+            bundle.display()
+        ));
+    }
     let folder = bundle.parent().ok_or("The app bundle has no folder.")?;
     // shortcut: as on Linux, only the bundle and its folder are checked, and the swap goes by
     // path; a folder further up that others could change could be swapped. Upgrade by checking

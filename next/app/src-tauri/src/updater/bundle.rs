@@ -341,6 +341,14 @@ pub(super) fn check(
     Ok(())
 }
 
+/// The first link on path, path itself first and then each folder above it: the condition under
+/// which Tauri refuses this process's own path on macOS (`StartingBinary`, which the updater
+/// plugin needs to start), so a program started through a linked folder cannot update.
+pub(super) fn linked(path: &Path) -> Option<&Path> {
+    path.ancestors()
+        .find(|a| fs::symlink_metadata(a).is_ok_and(|m| m.file_type().is_symlink()))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -594,5 +602,31 @@ pub(crate) mod tests {
         library[12] = 6; // MH_DYLIB
         assert!(!macho_for(&library, ARM64));
         assert!(!macho_for(b"MZ\x90\x00", ARM64));
+    }
+
+    // A program started by a path with a link in it, at any level (the folder the bundle is in,
+    // one above it, or the program itself), is found; a path without one is not.
+    #[test]
+    fn a_link_anywhere_on_the_programs_path_is_found() {
+        // Resolved: on macOS the temporary folder is itself under /var, a link.
+        let tmp = super::super::tests::temp("linked").canonicalize().unwrap();
+        let real = tmp.join("real");
+        let bundle = make(&real, "0.1.0", "x");
+        let program = bundle.join("Contents/MacOS/pluxy-app-test");
+        assert_eq!(linked(&program), None, "no link on {}", program.display());
+        std::os::unix::fs::symlink(&real, tmp.join("via")).unwrap();
+        let through = tmp
+            .join("via")
+            .join("pluxy Test.app/Contents/MacOS/pluxy-app-test");
+        assert!(through.exists());
+        assert_eq!(linked(&through), Some(tmp.join("via").as_path()));
+        let above = tmp.join("above");
+        std::os::unix::fs::symlink(&tmp, &above).unwrap();
+        let higher = above.join("real/pluxy Test.app/Contents/MacOS/pluxy-app-test");
+        assert_eq!(linked(&higher), Some(above.as_path()));
+        let alias = bundle.join("Contents/MacOS/alias");
+        std::os::unix::fs::symlink(&program, &alias).unwrap();
+        assert_eq!(linked(&alias), Some(alias.as_path()));
+        fs::remove_dir_all(&tmp).unwrap();
     }
 }
