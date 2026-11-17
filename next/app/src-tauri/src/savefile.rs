@@ -1,5 +1,5 @@
 //! The host's save-file service: a file is saved only where the person chooses, in a native save
-//! dialog, never at a path a page or a tool names. Linux only, as the program host.
+//! dialog, never at a path a page or a tool names. Linux only: the dialog is GTK's.
 //!
 //! The dialog is GTK's `FileChooserNative` in save mode, as the Access chooser (the desktop portal's
 //! with `GTK_USE_PORTAL=1` or inside a sandbox, else GTK's own), titled with the package that asks

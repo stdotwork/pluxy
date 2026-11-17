@@ -11,9 +11,10 @@ on:
   # its paths below are touched.
   workflow_call:
   workflow_dispatch:
-  # Not on every push to main: the merge queue already ran this on the exact tree it merges, and
-  # the hosted macOS pool is short enough that re-runs on main starved the queue's own jobs. One
-  # run a day on main keeps main's caches fresh for the PR and merge-queue runs that restore them.
+  # Not on every push to main: the merge queue already ran this for the last change it merges that
+  # touched what this builds, and the hosted macOS pool is short enough that re-runs on main starved
+  # the queue's own jobs. One run a day on main keeps main's caches fresh for the PR and
+  # merge-queue runs that restore them.
   schedule:
     - cron: '47 3 * * *'
 
@@ -38,7 +39,11 @@ env:
 jobs:
   tools:
     name: app tools (${{ matrix.os }})
-    runs-on: ${{ matrix.os == 'windows-latest' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_WINDOWS_RUNNER && fromJSON(vars.PLUXY_WINDOWS_RUNNER) || matrix.os }}
+    # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
+    # to use instead of GitHub's (AGENTS.md, "Where jobs run"). On Windows the transaction and
+    # recipe tests fail on Blacksmith's runner, so the Windows leg stays on GitHub's (or the
+    # maintainers' PLUXY_WINDOWS_RUNNER).
+    runs-on: ${{ matrix.os == 'windows-latest' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_WINDOWS_RUNNER && fromJSON(vars.PLUXY_WINDOWS_RUNNER) || matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     strategy:
       fail-fast: false
       matrix:

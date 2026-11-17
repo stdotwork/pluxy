@@ -20,6 +20,27 @@ func TestConfigRefusesHugeTimings(t *testing.T) {
 	}
 }
 
+// An account that lists two upstream models under one name is refused, naming the alias and the
+// account, where it was used to serve the first and ignore the rest. The same model listed
+// twice, and one name per model, still load.
+func TestConfigRefusesRepeatedModelAlias(t *testing.T) {
+	cfg := func(models string) string {
+		return `{"listen":"127.0.0.1:0","client_keys":["k"],"extension":{"manifest":"m.json","accounts":[{"id":"pool","models":` + models + `}]}}`
+	}
+	_, err := ParseConfig([]byte(cfg(`[{"name":"up-a","alias":"pub"},{"name":"up-b","alias":"pub"}]`)), "/tmp/config.json")
+	if err == nil || !strings.Contains(err.Error(), `"pub"`) || !strings.Contains(err.Error(), `"pool"`) {
+		t.Errorf("ParseConfig = %v, want a refusal naming the alias \"pub\" and the account \"pool\"", err)
+	}
+	for _, models := range []string{
+		`[{"name":"up-a","alias":"pub"},{"name":"up-a","alias":"pub"}]`,
+		`[{"name":"up-a","alias":"pub-a"},{"name":"up-b","alias":"pub-b"},"up-c"]`,
+	} {
+		if _, err := ParseConfig([]byte(cfg(models)), "/tmp/config.json"); err != nil {
+			t.Errorf("models %s: ParseConfig = %v, want none", models, err)
+		}
+	}
+}
+
 // token_count_estimate is on unless the config turns it off, in a JSON config and, under the same
 // name, in a config.yaml. A value that is not a boolean is refused.
 func TestConfigTokenCountEstimate(t *testing.T) {

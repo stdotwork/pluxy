@@ -27,3 +27,29 @@ fn remembering_a_launch_again_hands_back_the_approval_it_replaces() {
     assert_eq!(l.replace(&id, "a-3"), None);
     assert_eq!(l.replace("l-none", "a-4"), None);
 }
+
+/// The execution program gets PATH's absolute folders, split as the system splits PATH.
+#[cfg(unix)]
+#[test]
+fn search_path_keeps_paths_absolute_folders_on_unix() {
+    let entries = path_entries(std::ffi::OsStr::new("/usr/local/bin::bin:./x:/usr/bin"));
+    assert_eq!(entries, ["/usr/local/bin", "/usr/bin"]);
+}
+
+/// On Windows PATH is split at `;`, an entry may be quoted, and a folder starts with its drive (or
+/// is a UNC path); a drive-relative or relative entry is left out.
+#[cfg(windows)]
+#[test]
+fn search_path_keeps_paths_absolute_folders_on_windows() {
+    let entries = path_entries(std::ffi::OsStr::new(
+        r#"C:\Windows\system32;;"C:\Program Files\Git\cmd";bin;C:rel;\\server\share\tools;\noroot"#,
+    ));
+    assert_eq!(
+        entries,
+        [
+            r"C:\Windows\system32",
+            r"C:\Program Files\Git\cmd",
+            r"\\server\share\tools"
+        ]
+    );
+}

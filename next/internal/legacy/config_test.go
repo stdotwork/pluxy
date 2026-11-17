@@ -357,7 +357,7 @@ observability:
 `)
 	n := notices(r)
 	for _, want := range []string{
-		"not supported yet, ignored: client.codex.enable-apply-patch\n",
+		"not supported yet, ignored: client.codex.enable-apply-patch (built when someone uses a non-Codex model through the Codex client and needs apply_patch on it)\n",
 		"dropped, ignored: plugins (replaced by packages), routing.session-affinity-rebind-on (no need found), server.commercial-mode (it turns off features this core does not have), upstream.claude.session-date-pin-days (making other clients look like Claude Code is out of scope), upstream.claude.tool-search (Codex's tool search on Claude accounts: off by default, with no panel or app control)\n",
 		"unknown keys, ignored: server.discovery-typo\n",
 		"websocket-compression: false is not supported",
@@ -374,13 +374,14 @@ observability:
 }
 
 // TestDecidedDroppedSettings: settings decided not to be built are named as dropped, with their
-// reason, and never as "not supported yet"; the neighbours that are still to come stay Later.
+// reason, and never as "not supported yet"; the settings that are still to come stay Later, each
+// with what would bring it.
 func TestDecidedDroppedSettings(t *testing.T) {
 	r := translate(t, `
 server:
   response-compression: {enabled: true, min-bytes: 10}
   discovery: {enabled: true, service-name: x}
-routing: {session-affinity-rebind-on: quota}
+routing: {session-affinity-rebind-on: quota, session-affinity-subagents: false}
 oauth:
   request-scoped-errors: [{status: 400}]
   providers:
@@ -400,8 +401,17 @@ api-keys:
         - {name: m, alias: m, display-name: D, max-context-length: 9, input-modalities: [text], output-modalities: [text], is-compat: true, use-max-completion-tokens: true, thinking: {levels: [low]}, force-mapping: true, image: true}
   vertex:
     - name: v
-      keys: [{api-key: k, openapi: true}]
-      models: [{name: m, support-configuration-update: true}]
+      keys: [{api-key: k, openapi: true, openapi-location: us-central1}]
+      models: [{name: m, support-configuration-update: true, openapi: true}]
+  xai:
+    - name: x
+      websockets: true
+      keys: [{api-key: k}]
+client: {codex: {enable-apply-patch: true, optimize-multi-agent-v2: true}}
+upstream:
+  codex: {upstream-request-compression: true, upstream-request-compression-min-bytes: 2048, stream-bootstrap-buffering: true, stream-bootstrap-timeout: 5s}
+multimedia: {gpt-image-2-base-model: gpt-6-image, video-result-auth-cache-ttl: 1h}
+models: {catalog: "https://example.com/models.json", codex-catalog: /etc/codex.json, devin-catalog: "https://example.com/devin.json"}
 `)
 	var later, dropped string
 	for _, n := range r.Notices {
@@ -421,6 +431,11 @@ api-keys:
 		"api-keys.openai-compatibility.models.input-modalities", "api-keys.openai-compatibility.models.output-modalities",
 		"api-keys.openai-compatibility.models.is-compat", "api-keys.openai-compatibility.models.use-max-completion-tokens",
 		"api-keys.openai-compatibility.models.thinking",
+		"api-keys.openai-compatibility.models.image", "api-keys.vertex.models.support-configuration-update",
+		"api-keys.xai.websockets", "routing.session-affinity-subagents (",
+		"upstream.codex.upstream-request-compression (", "upstream.codex.upstream-request-compression-min-bytes (",
+		"multimedia.gpt-image-2-base-model (", "multimedia.video-result-auth-cache-ttl (",
+		"models.catalog (", "models.codex-catalog (", "models.devin-catalog (",
 	} {
 		if !strings.Contains(dropped, want) {
 			t.Errorf("not named as dropped: %q\n%s", want, notices(r))
@@ -430,8 +445,10 @@ api-keys:
 		}
 	}
 	for _, want := range []string{
-		"api-keys.openai-compatibility.models.force-mapping", "api-keys.openai-compatibility.models.image",
-		"api-keys.vertex.models.support-configuration-update", "api-keys.vertex.openapi",
+		"api-keys.openai-compatibility.models.force-mapping (built when", "api-keys.vertex.openapi (built when",
+		"api-keys.vertex.openapi-location (built when", "api-keys.vertex.models.openapi (built when",
+		"client.codex.enable-apply-patch (built when", "client.codex.optimize-multi-agent-v2 (built when",
+		"upstream.codex.stream-bootstrap-buffering (built when", "upstream.codex.stream-bootstrap-timeout (built when",
 	} {
 		if !strings.Contains(later, want) {
 			t.Errorf("not named as not supported yet: %q\n%s", want, notices(r))
@@ -439,6 +456,31 @@ api-keys:
 		if strings.Contains(dropped, want) {
 			t.Errorf("named as dropped: %q\n%s", want, notices(r))
 		}
+	}
+}
+
+// TestSessionAffinitySubagents: true is today's default and asks for nothing; false asks to spread
+// subagents over the pool, which is not done here, so it is named.
+func TestSessionAffinitySubagents(t *testing.T) {
+	for _, v := range []string{"true", "false"} {
+		r := translate(t, "routing: {session-affinity: true, session-affinity-subagents: "+v+"}")
+		got := strings.Contains(notices(r), "routing.session-affinity-subagents")
+		if got != (v == "false") {
+			t.Errorf("subagents %s: named = %v\n%s", v, got, notices(r))
+		}
+	}
+}
+
+// TestContainerSettings: a setting of a container that has no rule of its own is an unknown key,
+// not one "not supported yet".
+func TestContainerSettings(t *testing.T) {
+	r := translate(t, "observability: {logs: {mystery: 1}}\nmodels: {mystery: 1}\n")
+	n := notices(r)
+	if !strings.Contains(n, "unknown keys, ignored: ") || !strings.Contains(n, "observability.logs.mystery") || !strings.Contains(n, "models.mystery") {
+		t.Errorf("notices:\n%s", n)
+	}
+	if strings.Contains(n, "not supported yet") {
+		t.Errorf("an unknown key is called not supported yet:\n%s", n)
 	}
 }
 
@@ -856,6 +898,47 @@ openai-compatibility:
 	}
 	if strings.Contains(n, "unknown") || strings.Contains(n, "force-model-prefix") || strings.Contains(n, "excluded-models,") {
 		t.Errorf("notices name a key that is read:\n%s", n)
+	}
+}
+
+// Entries of an openai-compatibility group that share an alias are a pool in today's core. The
+// import keeps the first and names the alias and every member it drops; a model listed twice
+// loses nothing and is not named, and in the other sections, where today's core also takes the
+// first entry, nothing is named.
+func TestAliasPoolIsNamedOnImport(t *testing.T) {
+	r := translate(t, `
+codex-api-key:
+  - api-key: k1
+    base-url: https://codex.example.com
+    models:
+      - {name: up-a, alias: pub-a}
+      - {name: up-c, alias: pub-a}
+openai-compatibility:
+  - name: compat
+    base-url: https://compat.example.com/v1
+    api-key-entries: [{api-key: k2}]
+    models:
+      - {name: deepseek-v3.1, alias: claude-opus-4.66}
+      - {name: glm-5, alias: claude-opus-4.66}
+      - {name: kimi-k2.5, alias: claude-opus-4.66}
+      - {name: glm-5, alias: claude-opus-4.66}
+      - {name: plain}
+      - {name: plain}
+`)
+	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
+	equalJSON(t, exts[OpenAICompatible].(map[string]any)["accounts"], `[{
+		"id": "compat", "models": [{"name": "deepseek-v3.1", "alias": "claude-opus-4.66"}, "plain"],
+		"settings": {"base_url": "https://compat.example.com/v1"},
+		"credential": {"kind": "api_key", "api_key": "k2"}
+	}]`)
+	n := notices(r)
+	for _, want := range []string{`openai-compatibility key compat`, `alias "claude-opus-4.66"`, `lists 3 upstream models`, `does not pool models yet`, `serves only the first, "deepseek-v3.1"`, `dropped: "glm-5", "kimi-k2.5"`} {
+		if !strings.Contains(n, want) {
+			t.Errorf("notices lack %q:\n%s", want, n)
+		}
+	}
+	if strings.Count(n, "claude-opus-4.66") != 1 || strings.Contains(n, "plain") || strings.Contains(n, "pub-a") {
+		t.Errorf("notices name more than the one pool:\n%s", n)
 	}
 }
 

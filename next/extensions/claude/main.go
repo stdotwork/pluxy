@@ -430,7 +430,8 @@ func isAnthropicBase(baseURL string) bool {
 
 // buildBody returns the Messages request body for req and how it was built. A Messages request
 // is sent unchanged but for the repairs every body gets (fixBody); any other is rebuilt from the
-// model, with its reasoning effort as thinking settings. A thinking suffix on the model name sets
+// model, with its reasoning effort as thinking settings and without the sampling settings the
+// model refuses (anthropicmessages.DropRefusedSampling). A thinking suffix on the model name sets
 // the thinking settings either way, in place of the request's own. Under the reject drop policy a
 // translation that drops anything is refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
@@ -482,6 +483,13 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 			// EncodeRequest reports the effort as dropped, leaving thinking to the provider.
 			losses = slices.DeleteFunc(losses, func(l llm.Loss) bool { return l.Path == "reasoning_effort" })
 		}
+	}
+	var dropped []llm.Loss
+	if body, dropped, err = anthropicmessages.DropRefusedSampling(body, req.Model); err != nil {
+		return nil, nil, err
+	}
+	for _, l := range dropped {
+		losses = llm.AddLoss(losses, l)
 	}
 	tr.Losses = losses
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
