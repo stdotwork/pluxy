@@ -11,11 +11,10 @@ on:
   # builds changed (see the changes job there).
   workflow_call:
     inputs:
-      # ci.yml sets this when the change touches none of next/app, next/ui, the app tools the tools
-      # shard builds (execution, lib/program, lib/files, the app tools' Cargo.toml and Cargo.lock)
-      # and the workflows: the native jobs build the app, the kit and those app tools. Some shards
-      # also start a test core with `go run`, so a change only to the Go code that core is built
-      # from does not rerun them.
+      # ci.yml sets this when the change reaches none of what the native jobs build: the app, the
+      # kit, the app tools the tools shard builds (execution, lib/program, lib/files, the app tools'
+      # Cargo.toml and Cargo.lock), the workflows, and the Go packages `go run ./e2e/panelcore`
+      # builds (see ci.yml).
       skip-native:
         type: boolean
         default: false

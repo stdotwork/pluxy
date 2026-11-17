@@ -375,14 +375,9 @@ mod tests {
 
     #[test]
     fn a_core_that_cannot_be_reached_is_status_0() {
-        // A port that was free a moment ago: nothing listens there.
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let r = Client::new(&format!("http://127.0.0.1:{port}"), None)
-            .call("k", "GET", "/status", None);
+        // Port 1 on loopback: no test listens there and nothing hands it out, unlike a port
+        // taken from `:0` and freed, which a test running at the same time can be given.
+        let r = Client::new("http://127.0.0.1:1", None).call("k", "GET", "/status", None);
         assert_eq!(r.status, 0);
         assert_eq!(r.error.unwrap().code, "io");
     }
