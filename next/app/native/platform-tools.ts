@@ -73,6 +73,8 @@ const PAGE = "ext/test/probe/probe";
 const UPDATER_KEY = "no-test-package";
 /** One app run: four minutes on Linux, with room for slower runners. */
 const TIMEOUT = 600_000;
+/** The test core's start: `go run` builds it first, once a minute or two on a runner. */
+const CORE_START = 180_000;
 
 /** The account's known folders on Windows, as the app finds them (SHGetKnownFolderPath). */
 function knownFolders(ctx: Context): { roaming: string; local: string } {
@@ -88,17 +90,45 @@ function knownFolders(ctx: Context): { roaming: string; local: string } {
   return { roaming: out[0] as string, local: out[1] as string };
 }
 
+/** Starts the test core and waits at most CORE_START for its first line. Past that, it closes
+ * the core's input, which ends it once it runs, waits up to 30 s for `go` to exit (then stops
+ * it), and fails. */
 async function startCore(): Promise<{ proc: ChildProcess; base: string; key: string }> {
   const proc = spawn("go", ["run", "./e2e/panelcore", "-probe"], {
     cwd: next,
     stdio: ["pipe", "pipe", "inherit"],
   });
-  const line = await new Promise<string>((resolve, reject) => {
-    proc.once("error", reject);
-    proc.once("exit", (code) => reject(new Error(`panelcore exited with ${code}`)));
-    if (proc.stdout) createInterface({ input: proc.stdout }).once("line", resolve);
-  });
-  return { proc, ...JSON.parse(line) };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const line = await new Promise<string>((resolve, reject) => {
+      proc.once("error", reject);
+      proc.once("exit", (code) => reject(new Error(`panelcore exited with ${code}`)));
+      if (proc.stdout) createInterface({ input: proc.stdout }).once("line", resolve);
+      timer = setTimeout(
+        () => reject(new Error(`the test core did not start within ${CORE_START / 1000} s`)),
+        CORE_START,
+      );
+    });
+    return { proc, ...JSON.parse(line) };
+  } catch (e) {
+    proc.stdin?.end();
+    if (proc.exitCode === null && proc.signalCode === null) {
+      await new Promise((r) => {
+        const t = setTimeout(() => {
+          // Only the process this session started.
+          proc.kill();
+          r(undefined);
+        }, 30_000);
+        proc.once("exit", () => {
+          clearTimeout(t);
+          r(undefined);
+        });
+      });
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** env with PATH's value replaced, under the name the environment has it (`Path` on Windows). */

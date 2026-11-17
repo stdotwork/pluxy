@@ -275,6 +275,9 @@ jobs:
     # Always GitHub's runners: the test runs only on a runner that reports itself GitHub-hosted
     # (RUNNER_ENVIRONMENT=github-hosted), since it writes the account's own folders and settings.
     runs-on: ${{ matrix.os }}
+    # The builds (about 3 minutes with the caches restored), then the native test's own limit
+    # (at most 60 minutes).
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -333,8 +336,11 @@ jobs:
           cargo build --locked --features native-test,artifact-test-trust --bin pluxy-app --example program_fixture
           cd ../../app-tools
           cargo build --locked -p execution --target-dir ../app/src-tauri/target/app-tools
+      # The tools shard runs four app sessions one after another, each after starting a test core
+      # (stopped after 3 minutes, CORE_START in native/platform-tools.ts) and each app stopped after
+      # 10 minutes (TIMEOUT there): 60 minutes lets every session report even when each app hangs.
       - name: Native test
-        timeout-minutes: 40
+        timeout-minutes: ${{ matrix.shard == 'tools' && 60 || 40 }}
         env:
           PLUXY_APP_NATIVE_SHARD: ${{ matrix.shard }}
           PLUXY_APP_TEST_PACKAGE: ${{ runner.temp }}/test-package
