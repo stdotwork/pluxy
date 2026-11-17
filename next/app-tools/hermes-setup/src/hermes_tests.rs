@@ -2,9 +2,11 @@
 
 use crate::hermes::{apply, read_back, yaml11_not_text, Settings};
 use crate::yaml::{leaves, Yamls};
-use crate::{default_home, settings};
+use crate::{default_home, recipe, settings};
 use pluxy_transactions::Merge;
 use serde_json::json;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 /// A person's config.yaml: their own endpoint selected with a key variable, the old app's legacy
 /// provider, other settings and comments.
@@ -274,26 +276,109 @@ fn a_key_with_yaml_syntax_is_quoted_and_reads_back_as_itself() {
     assert_eq!(v["providers"]["pluxy"]["api_key"], "k:#1");
 }
 
+/// An environment holding only vars.
+fn env(vars: &[(&str, &Path)]) -> impl Fn(&str) -> Option<OsString> {
+    let vars: Vec<(String, OsString)> = vars
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.as_os_str().to_owned()))
+        .collect();
+    move |k| vars.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone())
+}
+
+fn temp(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("hermes-setup-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
 #[test]
-fn the_default_file_follows_hermess_active_profile() {
-    let home = std::env::temp_dir().join(format!("hermes-setup-test-{}", std::process::id()));
-    let root = home.join(".hermes");
-    std::fs::create_dir_all(root.join("profiles").join("work")).unwrap();
-    // The test's own HOME: no other test reads it.
-    std::env::set_var("HOME", &home);
-    assert_eq!(default_home().unwrap(), root);
-    std::fs::write(root.join("active_profile"), "default\n").unwrap();
-    assert_eq!(default_home().unwrap(), root);
-    std::fs::write(root.join("active_profile"), "\u{feff}Work\n").unwrap();
-    assert_eq!(default_home().unwrap(), root.join("profiles").join("work"));
-    std::fs::write(root.join("active_profile"), "gone\n").unwrap();
-    assert!(default_home()
-        .unwrap_err()
-        .to_string()
-        .contains("active profile"));
-    std::fs::write(root.join("active_profile"), "../x\n").unwrap();
-    assert!(default_home().is_err());
+fn the_default_file_follows_hermess_active_profile_on_each_system() {
+    let home = temp("profile-home");
+    let local = temp("profile-local");
+    let vars = env(&[("HOME", &home), ("LOCALAPPDATA", &local)]);
+    // hermes_constants.py: ~/.hermes, and %LOCALAPPDATA%\hermes on Windows.
+    for (os, root) in [
+        ("linux", home.join(".hermes")),
+        ("macos", home.join(".hermes")),
+        ("windows", local.join("hermes")),
+    ] {
+        std::fs::create_dir_all(root.join("profiles").join("work")).unwrap();
+        // Linux and macOS share ~/.hermes: each starts with no active profile.
+        let _ = std::fs::remove_file(root.join("active_profile"));
+        assert_eq!(default_home(os, &vars).unwrap(), root, "{os}");
+        std::fs::write(root.join("active_profile"), "default\n").unwrap();
+        assert_eq!(default_home(os, &vars).unwrap(), root, "{os}");
+        std::fs::write(root.join("active_profile"), "\u{feff}Work\n").unwrap();
+        assert_eq!(
+            default_home(os, &vars).unwrap(),
+            root.join("profiles").join("work"),
+            "{os}"
+        );
+        std::fs::write(root.join("active_profile"), "gone\n").unwrap();
+        assert!(default_home(os, &vars)
+            .unwrap_err()
+            .to_string()
+            .contains("active profile"));
+        std::fs::write(root.join("active_profile"), "../x\n").unwrap();
+        assert!(default_home(os, &vars).is_err());
+    }
+    // Windows with no LOCALAPPDATA, a blank one (Hermes strips it) or one that is not a full path:
+    // AppData\Local in the home folder, as Hermes falls back.
+    let fallback = home.join("AppData").join("Local").join("hermes");
+    assert_eq!(
+        default_home("windows", &env(&[("HOME", &home)])).unwrap(),
+        fallback
+    );
+    for bad in ["  ", "AppData\\Local", "relative"] {
+        let vars = env(&[("HOME", &home), ("LOCALAPPDATA", Path::new(bad))]);
+        assert_eq!(default_home("windows", &vars).unwrap(), fallback, "{bad:?}");
+    }
+    assert!(default_home("linux", &env(&[("LOCALAPPDATA", &local)])).is_err());
     std::fs::remove_dir_all(&home).unwrap();
+    std::fs::remove_dir_all(&local).unwrap();
+}
+
+#[test]
+fn the_recipe_starts_the_installers_hermes_or_the_one_on_path() {
+    let home = temp("recipe-home");
+    let local = temp("recipe-local");
+    let vars = env(&[("HOME", &home), ("LOCALAPPDATA", &local)]);
+    let program = |os: &str| recipe(os, &vars).unwrap()["program"].clone();
+    for os in ["linux", "macos", "windows"] {
+        assert_eq!(program(os), "hermes", "{os}");
+    }
+    // The installers' copies: install.sh's ~/.local/bin/hermes, install.ps1's
+    // %LOCALAPPDATA%\hermes\bin\hermes.exe. Each is taken where this system would run it.
+    let unix = home.join(".local").join("bin").join("hermes");
+    let windows = local.join("hermes").join("bin").join("hermes.exe");
+    for p in [&unix, &windows] {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "MZ").unwrap();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(program("linux"), "hermes", "not executable");
+        std::fs::set_permissions(&unix, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&windows, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    // A file without an extension is no program on Windows.
+    let unix_program = if cfg!(unix) {
+        json!(unix)
+    } else {
+        json!("hermes")
+    };
+    assert_eq!(program("linux"), unix_program);
+    assert_eq!(program("macos"), unix_program);
+    assert_eq!(program("windows"), json!(windows));
+    let r = recipe("windows", &vars).unwrap();
+    assert_eq!(
+        (r["client"].clone(), r["kind"].clone(), r["args"].clone()),
+        (json!("Hermes Agent"), json!("terminal"), json!([]))
+    );
+    std::fs::remove_dir_all(&home).unwrap();
+    std::fs::remove_dir_all(&local).unwrap();
 }
 
 #[test]

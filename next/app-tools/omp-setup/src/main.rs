@@ -13,7 +13,6 @@ use omp::Settings;
 use pluxy_program::{run, Call, Error, Handler};
 use pluxy_transactions::{backup_call, data_dir, sha256_of, Pin, Selection, Target, Transactions};
 use serde_json::{json, Value};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use yaml::Yamls;
 
@@ -187,22 +186,33 @@ fn settings(input: &Value, key: &str) -> Result<Settings, Error> {
     })
 }
 
-/// Whether path is a file someone may run.
-fn executable(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+/// Where Oh My Pi's installs put `omp` on os, in the order the launcher looks: bun's global copy
+/// first (the old app's order; `~/.bun/bin`, as bun's installation page says), then the install
+/// script's (`~/.local/bin/omp` from `omp.sh/install`; `omp.exe` in `%LOCALAPPDATA%\omp` from
+/// `omp.sh/install.ps1` on Windows, when the app gave that folder).
+fn installed(os: &str, home: &Path, local: Option<&Path>) -> Vec<PathBuf> {
+    if os != "windows" {
+        return vec![home.join(".bun/bin/omp"), home.join(".local/bin/omp")];
+    }
+    let mut found = vec![home.join(".bun").join("bin").join("omp.exe")];
+    found.extend(
+        local
+            .filter(|l| l.is_absolute())
+            .map(|l| l.join("omp").join("omp.exe")),
+    );
+    found
 }
 
 /// How the launcher starts Oh My Pi: `omp` in a terminal, with no arguments or variables (the old
-/// app's launch). bun's global copy comes first (the old app's order), then the install script's
-/// `~/.local/bin` (often not on a desktop session's PATH), then `omp` from the PATH.
-fn recipe() -> Result<Value, Error> {
-    let home = home()?;
-    let program = [home.join(".bun/bin/omp"), home.join(".local/bin/omp")]
+/// app's launch): the first installed copy this system runs (often not on a desktop session's
+/// PATH), else `omp` from the PATH.
+fn recipe(os: &str, home: &Path, local: Option<&Path>) -> Value {
+    let program = installed(os, home, local)
         .into_iter()
-        .find(|p| executable(p))
+        .find(|p| pluxy_files::executable(p))
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "omp".to_string());
-    Ok(json!({"client": "Oh My Pi", "kind": "terminal", "program": program, "args": []}))
+    json!({"client": "Oh My Pi", "kind": "terminal", "program": program, "args": []})
 }
 
 impl Handler for Omp {
@@ -276,7 +286,13 @@ impl Handler for Omp {
                 &mut |_| {},
             ),
             "status" => Transactions::new(call, data_dir()?).status(),
-            "recipe" => recipe(),
+            "recipe" => Ok(recipe(
+                std::env::consts::OS,
+                &home()?,
+                std::env::var_os("LOCALAPPDATA")
+                    .map(PathBuf::from)
+                    .as_deref(),
+            )),
             op => Err(Error::unsupported(format!("no operation {op}"))),
         }
     }
