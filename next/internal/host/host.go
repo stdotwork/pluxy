@@ -47,8 +47,8 @@ type Options struct {
 	// from them too (output): core ends a login after 15 minutes, but a refresh has no deadline,
 	// so one that hangs holds them until the program exits. At most 1 MiB is held, counting 64
 	// bytes for each line besides its text; past that, the rest of the held lines are left out,
-	// with notes. When more than 256 credentials are replaced while lines are held, all of them
-	// are left out, with notes. Default os.Stderr.
+	// with notes. When more than 256 credentials are replaced while lines are held, all of the
+	// held lines are left out, with notes. Default os.Stderr.
 	Log io.Writer
 	// ProxyURL returns core's global proxy_url setting, read at each call: the proxy of every
 	// account without one of its own (proxyurl.Resolve). Nil: none.
@@ -99,12 +99,13 @@ type held struct {
 	redact   *protocol.Redactor
 }
 
-// maxReplaced bounds the credentials kept while output is held because newer ones replaced them.
+// maxReplaced bounds the credentials kept, while output is held, because newer ones replaced them.
 // Each change of a credential rebuilds the Redactor of all of them, so keeping many costs memory
-// and time that grow with every renewal of every account. A refresh's hold lasts as long as one
-// call and a login's at most 15 minutes, so far fewer than 256 renewals happen in one, unless a
-// call hangs. Past it, the held output is left out (output), so the replaced credentials need not
-// be kept.
+// and time that grow with every renewal. The count runs as long as any hold runs, so overlapping
+// holds share it, and it grows with the accounts the extension renews meanwhile: a busy extension,
+// or a hold that hangs, may pass it. Past it, the replaced credentials are no longer kept and every
+// held line is left out, with a note (output): lines are lost, never logged with a credential in
+// clear.
 const maxReplaced = 256
 
 type heldCredential struct {
@@ -710,11 +711,12 @@ const heldLineCost = 64
 // just before such a call is sent until its result is recorded (held.add), every line is held, and
 // then logged redacted with it. A line can't be told apart by call, as every call shares both
 // streams, so while any refresh or login runs, all lines wait, those of other calls too. A line
-// read after the result is redacted with it anyway. While lines are held, no credential is
-// dropped from held (held.pin), so later renewals can't take one away before the lines it may be
-// in are logged. Once the held lines pass maxHeldOutput, or more than maxReplaced credentials have
-// been replaced while they wait, the rest of them are left out, with notes, rather than logged
-// before their redaction is known or with it incomplete. The hold lasts as long as the call:
+// read after the result is redacted with it anyway. While lines are held, held also keeps the
+// credentials newer ones replace (held.pin), up to maxReplaced, so later renewals can't take one
+// away before the lines it may be in are logged. Once the held lines pass maxHeldOutput, the rest
+// of them are left out, with notes; once more than maxReplaced credentials have been replaced while
+// they wait, all of them are left out, with notes. No held line is logged before its redaction is
+// known or with it incomplete. The hold lasts as long as the call:
 // core ends a login after 15 minutes, but a refresh has no deadline, so one that hangs keeps the
 // lines held until the program exits, which ends it.
 type output struct {
@@ -743,14 +745,19 @@ func (o *output) line(prefix, text string) {
 		o.dropQueue()
 		o.leaveOut(1, overflowNote)
 	case o.size+cost > maxHeldOutput:
-		o.leaveOut(1, fmt.Sprintf("the output held while a refresh or login runs passed its limit of %d bytes, counting %d for each line besides its text", maxHeldOutput, heldLineCost))
+		o.leaveOut(1, sizeNote)
 	default:
 		o.queue = append(o.queue, heldLine{prefix, text})
 		o.size += cost
 	}
 }
 
-var overflowNote = fmt.Sprintf("more than %d credentials were replaced while a refresh or login runs", maxReplaced)
+// The notes on held lines left out.
+var (
+	sizeNote = fmt.Sprintf("the output held while a refresh or login runs passed its limit of %d bytes, counting %d for each line besides its text; the rest of the held output is left out until it ends",
+		maxHeldOutput, heldLineCost)
+	overflowNote = fmt.Sprintf("more than %d credentials were replaced while a refresh or login runs; all of the held output is left out until it ends", maxReplaced)
+)
 
 // overflowed reports whether more than maxReplaced credentials were replaced during the holds
 // running, so that the held lines may hold one no longer known.
@@ -759,17 +766,23 @@ func (o *output) overflowed() bool {
 	return overflow
 }
 
-// leaveOut leaves out n lines, with a note of why the first time. o.mu is held.
-func (o *output) leaveOut(n int, why string) {
+// leaveOut leaves out n lines, with note the first time. o.mu is held.
+func (o *output) leaveOut(n int, note string) {
 	if o.dropped == 0 {
-		fmt.Fprintf(o.w, "%s(%s; the rest of the held output is left out until it ends)\n", o.prefix, why)
+		o.note(note)
 	}
 	o.dropped += n
 }
 
-// dropQueue leaves out the lines held so far. o.mu is held.
+func (o *output) note(note string) { fmt.Fprintf(o.w, "%s(%s)\n", o.prefix, note) }
+
+// dropQueue leaves out the lines held so far, past maxReplaced, with its note: also after other
+// lines were left out for the size limit, whose note says only the rest is. o.mu is held.
 func (o *output) dropQueue() {
 	if len(o.queue) > 0 {
+		if o.dropped > 0 {
+			o.note(overflowNote)
+		}
 		o.leaveOut(len(o.queue), overflowNote)
 	}
 	o.queue, o.size = nil, 0

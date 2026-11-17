@@ -17,8 +17,10 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// sizeNote is the note logged when held output passes maxHeldOutput.
-var sizeNote = fmt.Sprintf("[x] (the output held while a refresh or login runs passed its limit of %d bytes, counting %d for each line besides its text; the rest of the held output is left out until it ends)\n", maxHeldOutput, heldLineCost)
+// The notes logged when held output passes maxHeldOutput, and when more than maxReplaced
+// credentials are replaced while it is held.
+var wantSizeNote = fmt.Sprintf("[x] (the output held while a refresh or login runs passed its limit of %d bytes, counting %d for each line besides its text; the rest of the held output is left out until it ends)\n", maxHeldOutput, heldLineCost)
+var wantOverflowNote = fmt.Sprintf("[x] (more than %d credentials were replaced while a refresh or login runs; all of the held output is left out until it ends)\n", maxReplaced)
 
 func apiKey(key string) *protocol.Credential {
 	return &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key}
@@ -56,7 +58,7 @@ func TestOutputIsHeldWhileACredentialIsMade(t *testing.T) {
 	for _, l := range []string{big, big, "over sk-third-1234", "over again"} {
 		o.line("[x] ", l)
 	}
-	note := sizeNote
+	note := wantSizeNote
 	if got := log.String(); got != note {
 		t.Fatalf("past the limit, log = %q, want only %q", got, note)
 	}
@@ -100,7 +102,7 @@ func TestHeldOutputDropsTheRestAfterTheLimit(t *testing.T) {
 	o.line("[x] ", strings.Repeat("c", 200)) // does not fit
 	o.line("[x] ", "small")                  // would fit
 	release()
-	note := sizeNote
+	note := wantSizeNote
 	if got, want := log.String(), note+"[x] "+big+"\n[x] (2 lines of output left out)\n"; got != want {
 		t.Errorf("log = %.200q...%q, want the first line and a count of the 2 left out", got, got[max(0, len(got)-100):])
 	}
@@ -143,31 +145,106 @@ func TestHeldOutputPastMaxReplacedIsLeftOut(t *testing.T) {
 	var log bytes.Buffer
 	h := &held{}
 	o := &output{w: &log, held: h, prefix: "[x] "}
-	key := func(i int) string { return fmt.Sprintf("sk-renewed-%04d", i) }
 	release := o.hold()
-	// Ten accounts renewed in turn: past each one's first two, each renewal replaces one.
-	renew := func(from, to int) {
-		for i := from; i < to; i++ {
-			h.add(fmt.Sprintf("account %d", i%10), apiKey(key(i)))
-		}
-	}
+	renew := renewer(h)
 	renew(0, 20+maxReplaced) // exactly maxReplaced replaced
 	if n := len(h.replaced); n != maxReplaced || h.overflow {
 		t.Fatalf("%d replaced kept (overflow %v), want %d kept", n, h.overflow, maxReplaced)
 	}
-	o.line("[x] ", "minted "+key(0)) // replaced long ago, still known
+	o.line("[x] ", "minted "+renewedKey(0)) // replaced long ago, still known
 	renew(20+maxReplaced, 21+maxReplaced)
 	if n := len(h.replaced); n != 0 || !h.overflow {
 		t.Fatalf("past the limit, %d replaced kept (overflow %v), want none and overflow", n, h.overflow)
 	}
-	o.line("[x] ", "later "+key(1))
+	o.line("[x] ", "later "+renewedKey(1))
 	release()
-	note := fmt.Sprintf("[x] (more than %d credentials were replaced while a refresh or login runs; the rest of the held output is left out until it ends)\n", maxReplaced)
-	if got, want := log.String(), note+"[x] (2 lines of output left out)\n"; got != want {
+	if got, want := log.String(), wantOverflowNote+"[x] (2 lines of output left out)\n"; got != want {
 		t.Errorf("log = %q, want %q", got, want)
 	}
 	if h.overflow || h.replaced != nil {
 		t.Errorf("after the hold, overflow %v and %d replaced kept, want neither", h.overflow, len(h.replaced))
+	}
+}
+
+func renewedKey(i int) string { return fmt.Sprintf("sk-renewed-%04d", i) }
+
+// renewer returns a function that renews ten accounts in turn with keys from to to: past each
+// account's first two, each renewal replaces one.
+func renewer(h *held) func(from, to int) {
+	return func(from, to int) {
+		for i := from; i < to; i++ {
+			h.add(fmt.Sprintf("account %d", i%10), apiKey(renewedKey(i)))
+		}
+	}
+}
+
+// Lines held when renewals pass maxReplaced, with no line after, are left out when the hold ends.
+func TestHeldLinesPastMaxReplacedAreLeftOutAtRelease(t *testing.T) {
+	var log bytes.Buffer
+	h := &held{}
+	o := &output{w: &log, held: h, prefix: "[x] "}
+	release := o.hold()
+	renew := renewer(h)
+	renew(0, 20)
+	o.line("[x] ", "minted "+renewedKey(0))
+	renew(20, 21+maxReplaced)
+	release()
+	if got, want := log.String(), wantOverflowNote+"[x] (1 lines of output left out)\n"; got != want {
+		t.Errorf("log = %q, want %q", got, want)
+	}
+}
+
+// When the size limit leaves out the last lines and then renewals pass maxReplaced, the lines held
+// before are left out too, and a note says so: the size limit's note says only the rest is.
+func TestHeldLinesPastBothLimitsNameTheCap(t *testing.T) {
+	var log bytes.Buffer
+	h := &held{}
+	o := &output{w: &log, held: h, prefix: "[x] "}
+	release := o.hold()
+	o.line("[x] ", strings.Repeat("b", maxHeldOutput-heldLineCost-10))
+	o.line("[x] ", "over the size limit")
+	renewer(h)(0, 21+maxReplaced)
+	release()
+	if got, want := log.String(), wantSizeNote+wantOverflowNote+"[x] (2 lines of output left out)\n"; got != want {
+		t.Errorf("log = %.400q, want %q", got, want)
+	}
+}
+
+// renewingWriter is a log that renews one more account on its first Write.
+type renewingWriter struct {
+	bytes.Buffer
+	renew func()
+}
+
+func (w *renewingWriter) Write(p []byte) (int, error) {
+	if w.renew != nil {
+		w.renew()
+		w.renew = nil
+	}
+	return w.Buffer.Write(p)
+}
+
+// The held lines are written with the credentials known when the hold ends, even when a renewal
+// while they are written passes maxReplaced and drops the replaced ones.
+func TestHeldLinesAreRedactedWithOneRedactor(t *testing.T) {
+	h := &held{}
+	renew := renewer(h)
+	passed := false
+	log := &renewingWriter{renew: func() {
+		renew(20+maxReplaced, 21+maxReplaced)
+		passed = h.overflow
+	}}
+	o := &output{w: log, held: h, prefix: "[x] "}
+	release := o.hold()
+	renew(0, 20+maxReplaced) // exactly maxReplaced replaced: renewedKey(0) is known only as replaced
+	o.line("[x] ", "first")
+	o.line("[x] ", "minted "+renewedKey(0))
+	release()
+	if !passed {
+		t.Fatal("the renewal while the lines were written did not pass maxReplaced")
+	}
+	if got, want := log.String(), "[x] first\n[x] minted [redacted]\n"; got != want {
+		t.Errorf("log = %q, want %q", got, want)
 	}
 }
 
@@ -247,10 +324,10 @@ func TestFreshCredentialInOutputBeforeItsResult(t *testing.T) {
 }
 
 // gatedConn is a call connection that hands over a whole frame, all but its last byte at once and
-// the last only once gate is closed. It opens, for a test, the window a real one gives no way to
-// stop in: after ReadFrame has returned a login.done frame and before Next has recorded its grant
-// (held.add). Close does not end Read here, as it would on a real connection, so that Close can
-// run inside that window and Next still get the frame.
+// the last only once gate is closed. The test's Close, run while Read waits for gate, stands in for
+// a Close in the window after ReadFrame has returned a login.done frame and before Next has
+// recorded its grant (held.add), which a real connection gives no way to stop in. Close does not
+// end Read here, as it would on a real connection, so that Next still gets the frame.
 type gatedConn struct {
 	net.Conn
 	data   []byte
