@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"strings"
 	"testing"
@@ -264,6 +266,42 @@ func TestStatusErrors(t *testing.T) {
 	}
 	if e := trailerError([]byte(`{"error":{"code":"canceled","message":"x"}}`)); e.Status != 499 {
 		t.Errorf("cancelled: status %d, want 499", e.Status)
+	}
+}
+
+// A refusal keeps its body as the error's Raw only when the message is the Connect body's own. Any
+// other body's message is its cleaned text, and the body itself, which the client and the
+// account's last error would get as it is, is not kept: it may hold part of the token.
+func TestRefusalRaw(t *testing.T) {
+	const tok = "devin-raw-secret-0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+	for _, tc := range []struct {
+		name, body, msg string
+		raw             bool
+	}{
+		{"Connect error", `{"code":"internal","message":"something broke"}`, "something broke", true},
+		{"other JSON", `{"error":{"message":"bad token ` + tok[:20] + `"}}`, `{"error":{"message":"bad token [redacted]"}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			settings, _ := json.Marshal(map[string]string{"base_url": srv.URL})
+			err := chat(context.Background(), sdk.Call{Account: protocol.Account{Settings: settings, Credential: tokenCredential(tok)},
+				Request: llm.Request{Model: "swe-2", Items: []llm.Item{{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "Hi"}}}}}}, &recorder{})
+			var e *llm.Error
+			if !errors.As(err, &e) {
+				t.Fatalf("err = %v, want an *llm.Error", err)
+			}
+			if e.Message != tc.msg {
+				t.Errorf("message %q, want %q", e.Message, tc.msg)
+			}
+			if got := e.Raw != nil; got != tc.raw {
+				t.Errorf("Raw %s kept: %v, want %v", e.Raw, got, tc.raw)
+			}
+		})
 	}
 }
 

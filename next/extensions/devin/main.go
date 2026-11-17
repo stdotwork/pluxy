@@ -48,6 +48,9 @@ const (
 	defaultAPIBaseURL = "https://api.devin.ai"
 	chatPath          = "/exa.api_server_pb.ApiServerService/GetChatMessage"
 
+	// maxBody is how much of a refusal's body, or of a quota reply, is read. A longer body is cut.
+	maxBody = 1 << 20
+
 	// opaqueFormat names Devin's reasoning signatures in a reply's reasoning items.
 	opaqueFormat = llm.OpaqueDevin
 )
@@ -192,8 +195,17 @@ func chat(ctx context.Context, call sdk.Call, out sender) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return statusError(resp.StatusCode, connectMessage(raw), raw, resp.Header.Get("Retry-After"))
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// The body broke off, perhaps inside a credential the upstream echoed: as with a cut
+			// body, the error says only the status.
+			return statusError(resp.StatusCode, "", nil, resp.Header.Get("Retry-After"))
+		}
+		msg, keep := connectMessage(raw, token)
+		return statusError(resp.StatusCode, msg, keep, resp.Header.Get("Retry-After"))
 	}
 	return newRelay(out, req.Model, tr).run(ctx, resp.Body)
 }
@@ -640,15 +652,24 @@ func connectStatus(code, msg string) int {
 	return http.StatusBadGateway
 }
 
-// connectMessage returns the message of a Connect error body ({"code", "message"}), or the body.
-func connectMessage(raw []byte) string {
+// connectMessage returns the message of a Connect error body ({"code", "message"}) and the body,
+// to keep as the error's Raw. Any other body gives its text as the message, cleaned by
+// sdk.UpstreamText with the pieces of token's secret part (the session token without its public
+// prefix), and no Raw: core removes only whole copies of a credential, and the body can hold part
+// of one the upstream echoed, split across lines, cut short by the upstream, or cut by the read.
+// The caller passes only a body whose read ended without an error; one that fills maxBody may
+// still have been cut there, so it gives no message.
+func connectMessage(raw []byte, token string) (string, []byte) {
 	var e struct {
 		Message string `json:"message"`
 	}
 	if json.Unmarshal(raw, &e) == nil && e.Message != "" {
-		return e.Message
+		return e.Message, raw
 	}
-	return strings.TrimSpace(string(raw))
+	if len(raw) >= maxBody {
+		return "", nil
+	}
+	return sdk.UpstreamText(string(raw), strings.TrimPrefix(token, tokenPrefix)), nil
 }
 
 // statusError classifies a refusal by its HTTP status. A 429 holds back only the model, as
