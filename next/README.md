@@ -1915,22 +1915,28 @@ KiB, with a line saying how many bytes were left out between them. While only er
 written, every request keeps its reply's start and end until it ends, in case it fails, so an
 error log keeps less of a reply: the first 32 KiB and the last 96 KiB. A secret cut in two at
 that line would not be recognised, so the bytes beside it that could be part of one are left out
-too, and counted with the rest. On each side that is, first, 12 bytes for each byte of the
-longest form of a secret the log removes that holds a character other than a key's (the secret
-as it is, or escaped, whichever is longest): more than any spelling of such a secret the log
-removes takes, up to 11 bytes for each of its bytes. Secrets made only of letters, digits and
-`-_.~+/=%\`, as API keys and tokens are, need no window: the run of those characters that goes
-on from the edge is left out in any case, and it holds any part of such a secret, whatever its
-length. Where the edge left then still cuts through a secret in one of its forms, 4 bytes or
-more of it go, and where it cuts through a secret the log would find whole, the edge moves to
-where that secret starts (or ends), so the edge only ever cuts text the log finds no secret in.
-With client keys, API keys and OAuth tokens that is no more than the run; a secret with other
-characters, such as a header form (`X-Gateway-Key: value`) or an OAuth scope, makes it under 1
-KiB; a service account's private key, about 21 KiB. Where the text there is one long run of key
-characters, such as base64 data, all of that run goes. Text that repeats the start of a secret
-there, such as a secret header's name, loses one repeat, not all of them. A secret with other
-characters spelled with more than 11 bytes for each of its bytes can still keep a part beside
-the line.
+too, and counted with the rest. On each side that is, first, a window of 12 bytes for each byte
+of the longest form of a secret the log removes that holds a character other than a key's (the
+secret as it is, or escaped, whichever is longest). That holds every part of such a secret the
+line cut in a spelling of up to 11 bytes for each of its bytes; the log also removes spellings
+with deeper escapes, and a part of one of those cut at the line can stay. Secrets made only of
+letters, digits and `-_.~+/=%\`, as API keys and tokens are, need no window: the run of those
+characters that goes on from the edge is left out in any case, and it holds any part of such a
+secret, whatever its length. Where the edge then cuts through a secret in one of its forms, 4
+bytes or more of it go. Where it cuts through a secret the log would find whole within a window
+of it, the edge moves to where that secret starts (or ends), and the run of key characters there
+goes too, so the edge never stands inside a run of key characters or inside a secret the log
+finds whole around it. Where the log's redaction gives up on the text around the edge (escapes
+that decode too many ways), or the edge still cuts through a secret after 4 moves, all of that
+side goes. With client keys, API keys and OAuth tokens the window is 0 and only the run goes. A
+secret with other characters makes it grow with the secret: a secret header's forms hold its
+name, so a 22-byte value of a header named `X-Gateway-Key` makes it 612 bytes, a 207-byte
+`Bearer` value 2,856 bytes and a 1,507-byte value about 18 KiB; an OAuth scope (`openid profile
+email offline_access`), 420 bytes. A service account's private key (PEM text, about 1.7 KB for a
+2048-bit key, with spaces and line breaks) makes it about 21 KiB a side, most of what an error
+log keeps of a reply's start. Where the text there is one long run of key characters, such as
+base64 data, all of that run goes. Text that repeats the start of a secret there, such as a
+secret header's name, loses one repeat, not all of them.
 
 A request log also holds what the provider extension sent upstream and what came back: between
 the client's request and its reply, an `=== UPSTREAM REQUEST ===` section (the account, time, the

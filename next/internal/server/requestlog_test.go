@@ -143,6 +143,21 @@ func checkGaps(t *testing.T, log, s string, r *protocol.Redactor, gaps int) {
 	}
 }
 
+// gapOffsets returns the places in a spelling n bytes long that the tests cut it at: every place
+// within 24 bytes of either end, where what is left on one side is short, and every 5th place
+// between them. Along a spelling made of escapes of one length, not a multiple of 5 (3 for %XX, 6
+// for \uXXXX, 17 for a byte of the 8-layer spelling), that lands at each place inside an escape
+// once the middle is 5 escapes long; a shorter spelling is cut at every place.
+func gapOffsets(n int) []int {
+	var out []int
+	for k := 1; k < n; k++ {
+		if k <= 24 || k >= n-24 || k%5 == 0 {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // writeAll writes body to c in uneven pieces, as a stream arrives.
 func writeAll(c *capture, body string) {
 	for p := body; len(p) > 0; {
@@ -186,8 +201,13 @@ func TestCaptureDropsSecretPartsAtTheGap(t *testing.T) {
 			bodyOf := func(c *capture, k, middle int) string {
 				return s + gapFill(c.headLimit-k-len(s)) + s + gapFill(middle) + s + gapFill(c.tailLimit-(len(s)-k))
 			}
-			// The request log's own bounds, with request-log on and off.
-			for _, all := range []bool{true, false} {
+			// The request log's own bounds: with request-log off for each spelling, and on (the
+			// same code, with bounds 8 times larger) for the plain one.
+			modes := []bool{false}
+			if tc.name == "plain" {
+				modes = append(modes, true)
+			}
+			for _, all := range modes {
 				l := &RequestLog{All: all, Redact: gapRedactor(tc.secret)}
 				c := l.newCapture()
 				body := bodyOf(c, len(s)/2, 4<<10)
@@ -200,7 +220,7 @@ func TestCaptureDropsSecretPartsAtTheGap(t *testing.T) {
 			// characters until they find no more does.
 			l := &RequestLog{All: true, Redact: gapRedactor(tc.secret)}
 			bound := gapWindow(l.Redact) + 4*len(s) + 256
-			for k := 1; k < len(s); k++ {
+			for _, k := range gapOffsets(len(s)) {
 				c := &capture{headLimit: bound, tailLimit: bound, redact: l.Redact}
 				body := bodyOf(c, k, 64)
 				writeAll(c, body)
@@ -243,7 +263,7 @@ func TestUpstreamLogDropsSecretPartsAtTheGap(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			l := &RequestLog{All: true, Redact: gapRedactor(tc.secret)}
 			s := tc.spelled
-			for k := 1; k < len(s); k++ {
+			for _, k := range gapOffsets(len(s)) {
 				// Text first, so that what checkGaps looks at near the cut stays in the body, away from
 				// the log's random trace ID.
 				head := gapFill(gapWindow(l.Redact)+2*len(s)+128) + s + gapFill(gapWindow(l.Redact)+256) + s[:k]
@@ -277,7 +297,7 @@ func TestCaptureKeepsCopiesAcrossTheWindowWhole(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Each side holds a whole copy before the window and one across the window's edge, j
 			// bytes into it.
-			for j := 1; j < len(s); j++ {
+			for _, j := range gapOffsets(len(s)) {
 				head := s + gapFill(256) + s + gapFill(n-(len(s)-j))
 				end := gapFill(n-j) + s + gapFill(256) + s
 				c := &capture{headLimit: len(head), tailLimit: len(end), redact: l.Redact}
@@ -322,6 +342,63 @@ func TestCaptureKeyOnlySecretsHaveNoWindow(t *testing.T) {
 	}
 	if n, part := longestPart(head[max(0, len(head)-4096):], jwt); n >= 4 {
 		t.Errorf("%d bytes of the token stay beside the cut: %q", n, part)
+	}
+}
+
+// testToken is a made-up OAuth token, 2,000 key characters: longer than any window.
+func testToken() string { return strings.Repeat("eyJhbGciOiJSUzI1NiJ9AbC", 100)[:2000] }
+
+// cutHead returns the request log of a reply whose kept start is head, and the reply's bytes.
+func cutHead(l *RequestLog, head string) (string, []byte) {
+	c := &capture{headLimit: len(head), tailLimit: 64, redact: l.Redact}
+	writeAll(c, head+gapFill(64)+gapFill(64))
+	return string(l.format(&requestEntry{method: "POST", url: &url.URL{Path: "/v1/chat/completions"},
+		reply: c, replyTitle: "RESPONSE"})), c.bytes()
+}
+
+// Where the redaction gives up on the text near the window's edge (escapes that decode too many
+// ways), the edge does not stop inside the token before that text, which no check around the edge
+// sees whole: a move measured on what the redaction gave back would put it there. That side goes
+// (keepWhole gives up too), and the run of key characters after each move would also take the
+// token.
+func TestKeepWholeDropsTheSideWhereTheRedactionGivesUp(t *testing.T) {
+	tok := testToken()
+	l := &RequestLog{All: true, Redact: protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "pass word!"},
+		&protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: tok})}
+	n := gapWindow(l.Redact)
+	giveUp := "%30%5C" + "\\" + "u0035%5C" + "\\" + "\\" + "u0070%2535"
+	if l.Redact.String("x;"+giveUp+"y") != protocol.Redacted {
+		t.Fatal("the redaction does not give up on the text")
+	}
+	for extra := 0; extra < 2*n; extra++ {
+		head := gapFill(500) + tok + ";" + giveUp + strings.Repeat(" ", extra)
+		log, reply := cutHead(l, head)
+		checkCount(t, reply, len(head)+128)
+		if k, part := longestPart(log, tok); k >= 4 {
+			t.Fatalf("with %d spaces after the text: %d bytes of the token stay: %.40q", extra, k, part)
+		}
+	}
+}
+
+// A move that the redaction makes longer than the text it stands for (here a 3-byte secret
+// spelled in 8 bytes, inside a copy of a longer secret, is replaced by the 10 of Redacted) does not
+// stop inside the token before the copy: a move whose length is not known in the text goes back
+// a whole window, and the run of key characters there goes after it.
+func TestKeepWholeDoesNotStopInsideAToken(t *testing.T) {
+	tok := testToken()
+	l := &RequestLog{All: true, Redact: protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k9z"},
+		&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "hi k9z yo there"},
+		&protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: tok})}
+	n := gapWindow(l.Redact)
+	spelled := "hi " + "\\" + "u006b9z yo there" // "hi k9z yo there", its k escaped
+	for edge := 1; edge < len(spelled); edge++ {
+		// The window's edge falls edge bytes into the copy, which follows the token at once.
+		head := gapFill(500) + tok + spelled + strings.Repeat(";", n-(len(spelled)-edge))
+		log, reply := cutHead(l, head)
+		checkCount(t, reply, len(head)+128)
+		if k, part := longestPart(log, tok); k >= 4 {
+			t.Fatalf("with the edge %d bytes into the copy: %d bytes of the token stay: %.40q", edge, k, part)
+		}
 	}
 }
 
