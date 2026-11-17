@@ -328,7 +328,8 @@ pub(super) mod tests {
     }
 
     // The swap leaves the new bundle in place and the old one in the staging folder, which
-    // cleanup removes, leaving anything else alone.
+    // cleanup removes while the bundle in place stays. A kept copy that changed is refused and
+    // its staging folder removed.
     #[test]
     fn the_swap_is_one_step_and_cleanup_removes_only_staging() {
         let tmp = super::super::tests::temp("app-swap");

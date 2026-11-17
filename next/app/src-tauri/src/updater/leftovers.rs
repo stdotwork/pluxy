@@ -32,7 +32,8 @@ pub(super) enum Outcome {
     /// The path is gone, or holds something else (another folder or file, a link): nothing was
     /// deleted.
     NotThere,
-    /// It is that thing but could not be removed now (still in use, say): kept for the next start.
+    /// It is that thing but could not be removed now (still in use, say, or a file system is
+    /// mounted in it): kept for the next start.
     Kept,
 }
 
