@@ -471,7 +471,7 @@ func each(v any, f func(any) any) any {
 // params, are text as written. Every key keeps its name as written, and anything else goes
 // across as plain does. The JSON config reads the result with encoding/json, which, unlike
 // today's core's YAML decoder, also matches a key written in another letter case (Name: is
-// name:) and drops a key it does not know.
+// name:); like it, it drops a key it does not know, so payload.Validate never sees one.
 func payloadRules(rules tree) tree {
 	model := func(v any) any {
 		m, ok := v.(tree)
@@ -882,8 +882,8 @@ func (x *translator) options() error {
 	}
 	// The payload rules keep today's names, so they go across under those names, their text
 	// fields as written (payloadRules). The JSON config's reading of them differs from
-	// today's core on letter case and unknown keys (see payloadRules); its own check
-	// (payload.Validate) refuses what this core cannot apply.
+	// today's core on letter case (see payloadRules); its own check (payload.Validate)
+	// refuses what this core cannot apply.
 	if rules, _ := get(x.t, "requests.payload"); rules != nil {
 		m, isMap := rules.(tree)
 		if !isMap {
