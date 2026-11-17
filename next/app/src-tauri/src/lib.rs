@@ -2534,7 +2534,12 @@ fn program_status(
             Err(e) => status["journals_error"] = Value::from(e),
         }
         // Its managed runtimes: running, ended, or left by a run of the app that did not stop.
-        status["runtimes"] = Value::from(st.runtimes.list(&package));
+        // A tool in WSL has none (its spawn frames are refused): the local ones are not its.
+        status["runtimes"] = if instance.environment.is_local() {
+            Value::from(st.runtimes.list(&package))
+        } else {
+            Value::Array(Vec::new())
+        };
         #[cfg(feature = "native-test")]
         {
             status["test_frames"] = program::test_frames(&package);
