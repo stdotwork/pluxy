@@ -448,10 +448,26 @@ fn wsl_prepare_input(req: &Value, record: &Record) -> Result<Value, String> {
 /// program is not passed as `program`: the host cannot open a file inside the distribution to
 /// check it, so it is shown in the argv and named in the confirmation's line instead. Gives the
 /// input and the Linux program.
-fn wsl_launch_input(prepared: &Value, req: &Value) -> Result<(Value, String), String> {
+///
+/// The reply is refused unless it is exactly the launch asked for, since the confirmation's line
+/// comes from record, not from the reply: Windows' own `wsl.exe` (in system_root's System32),
+/// argv `-d <distro> -u <user> --cd <folder> --exec <program>` then req's arguments, the folder
+/// req names (or, with none, an absolute one: the user's home), the program req's override names
+/// (or, with none, an absolute path: the one found on the PATH), and req's kind.
+fn wsl_launch_input(
+    prepared: &Value,
+    req: &Value,
+    record: &Record,
+    system_root: Option<&Path>,
+) -> Result<(Value, String), String> {
     let kind = prepared["kind"].as_str().unwrap_or_default();
     if kind != "terminal" && kind != "direct" {
         return Err("pluxy/wsl prepared a launch of no known kind".into());
+    }
+    if req.get("kind").and_then(Value::as_str) != Some(kind) {
+        return Err(format!(
+            "pluxy/wsl prepared a launch of another kind ({kind}) than asked for"
+        ));
     }
     let mut input = prepared["launch"]
         .as_object()
@@ -461,6 +477,47 @@ fn wsl_launch_input(prepared: &Value, req: &Value) -> Result<(Value, String), St
         .remove("program")
         .and_then(|p| p.as_str().map(String::from))
         .ok_or("pluxy/wsl prepared a launch with no program")?;
+    let executable = input
+        .get("executable")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !spawn::is_wsl_exe(Path::new(executable), system_root) {
+        return Err(format!(
+            "pluxy/wsl prepared a launch of {executable}, not Windows' own wsl.exe"
+        ));
+    }
+    let argv: Option<Vec<&str>> = input
+        .get("argv")
+        .and_then(Value::as_array)
+        .and_then(|a| a.iter().map(Value::as_str).collect());
+    let args: Option<Vec<&str>> = match req.get("args") {
+        None => Some(Vec::new()),
+        Some(a) => a
+            .as_array()
+            .and_then(|a| a.iter().map(Value::as_str).collect()),
+    };
+    // As pluxy/wsl reads them: an empty folder or override is none.
+    let asked = |k: &str| req.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
+    let fits = match (argv.as_deref(), args) {
+        (Some(["-d", d, "-u", u, "--cd", folder, "--exec", p, rest @ ..]), Some(args)) => {
+            *d == record.distro
+                && *u == record.user
+                && folder.starts_with('/')
+                && asked("cwd").is_none_or(|c| c == *folder)
+                && *p == program
+                && p.starts_with('/')
+                && asked("override").is_none_or(|o| o == *p)
+                && rest == args.as_slice()
+        }
+        _ => false,
+    };
+    if !fits {
+        return Err(format!(
+            "pluxy/wsl prepared a launch that is not the launch asked for: {} {}",
+            executable,
+            argv.unwrap_or_default().join(" ")
+        ));
+    }
     if kind == "terminal" {
         if req.get("stdin").is_some() {
             return Err(
@@ -520,7 +577,8 @@ fn launch_in_wsl(
         None,
         None,
     )?;
-    let (input, program) = wsl_launch_input(&prepared, req)?;
+    let system_root = std::env::var_os("SystemRoot").map(PathBuf::from);
+    let (input, program) = wsl_launch_input(&prepared, req, &record, system_root.as_deref())?;
     let line = wsl_launch_line(&record, &program);
     // The folder in the distribution it starts in: `--cd`'s argument.
     let argv: Vec<&str> = input["argv"]

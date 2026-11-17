@@ -65,6 +65,11 @@ fn bob() -> Record {
     .unwrap()
 }
 
+/// The Windows folder whose System32 holds Windows' own `wsl.exe` in these tests.
+fn windows() -> Option<&'static Path> {
+    Some(Path::new(r"C:\Windows"))
+}
+
 /// What `pluxy/wsl`'s prepare gives for a launch of claude in /home/bob/p.
 fn prepared(kind: &str) -> Value {
     json!({"launch": {"executable": r"C:\Windows\System32\wsl.exe",
@@ -98,7 +103,8 @@ fn a_launch_in_wsl_is_prepared_there_and_names_no_terminal() {
 fn a_launch_in_wsl_gets_its_kind_applied_and_its_linux_program_only_shown() {
     let req = json!({"client": "c", "kind": "terminal", "cwd": "/home/bob/p",
         "environment": {"set": {"A": "1"}}});
-    let (input, program) = wsl_launch_input(&prepared("terminal"), &req).unwrap();
+    let (input, program) =
+        wsl_launch_input(&prepared("terminal"), &req, &bob(), windows()).unwrap();
     assert_eq!(program, "/usr/local/bin/claude");
     // The host cannot open a file in the distribution: no `program` for the confirmation to pin.
     assert!(input.get("program").is_none());
@@ -107,24 +113,204 @@ fn a_launch_in_wsl_gets_its_kind_applied_and_its_linux_program_only_shown() {
     // A terminal launch: no standard input, detached only.
     let mut stdin = req.clone();
     stdin["stdin"] = json!("key");
-    assert!(wsl_launch_input(&prepared("terminal"), &stdin)
-        .unwrap_err()
-        .contains("keyboard"));
+    assert!(
+        wsl_launch_input(&prepared("terminal"), &stdin, &bob(), windows())
+            .unwrap_err()
+            .contains("keyboard")
+    );
     let mut managed = req.clone();
     managed["lifetime"] = json!("managed");
-    assert!(wsl_launch_input(&prepared("terminal"), &managed)
-        .unwrap_err()
-        .contains("detached only"));
+    assert!(
+        wsl_launch_input(&prepared("terminal"), &managed, &bob(), windows())
+            .unwrap_err()
+            .contains("detached only")
+    );
     // A direct one may be managed (its own wsl.exe job ends the Linux side with it).
-    let (input, _) = wsl_launch_input(&prepared("direct"), &managed).unwrap();
+    managed["kind"] = json!("direct");
+    let (input, _) = wsl_launch_input(&prepared("direct"), &managed, &bob(), windows()).unwrap();
     assert_eq!(input["lifetime"], "managed");
-    assert!(wsl_launch_input(&prepared("open"), &req).is_err());
+    assert!(wsl_launch_input(&prepared("open"), &req, &bob(), windows()).is_err());
     let line = wsl_launch_line(&bob(), &program);
     assert_eq!(
         line,
         "Starts in WSL: distribution Ubuntu, user bob (/home/bob). The program inside WSL \
          (/usr/local/bin/claude) is found when it starts; pluxy does not check it."
     );
+}
+
+/// The launch `pluxy/wsl` prepared runs only as the request and the record say: Windows' own
+/// `wsl.exe`, `-d <distro> -u <user> --cd <folder> --exec <program>` then the request's arguments,
+/// in the requested folder and of the requested kind. Any other reply is refused, so the
+/// confirmation's line (from the record) never names another distribution, user or program.
+#[test]
+fn a_launch_in_wsl_is_refused_unless_it_is_the_one_asked_for() {
+    let req = json!({"client": "c", "kind": "terminal", "program": "claude",
+        "args": ["--x", "a b"], "cwd": "/home/bob/p"});
+    let good = || {
+        let mut p = prepared("terminal");
+        p["launch"]["argv"] = json!([
+            "-d",
+            "Ubuntu",
+            "-u",
+            "bob",
+            "--cd",
+            "/home/bob/p",
+            "--exec",
+            "/usr/local/bin/claude",
+            "--x",
+            "a b"
+        ]);
+        p
+    };
+    let (input, program) = wsl_launch_input(&good(), &req, &bob(), windows()).unwrap();
+    assert_eq!(program, "/usr/local/bin/claude");
+    assert_eq!(input["argv"], good()["launch"]["argv"]);
+    // System32's wsl.exe as Windows compares paths: another case or `\\?\` is the same file.
+    let mut p = good();
+    p["launch"]["executable"] = json!(r"\\?\c:\windows\system32\WSL.EXE");
+    assert!(wsl_launch_input(&p, &req, &bob(), windows()).is_ok());
+    let refused = |p: &Value, req: &Value, why: &str| {
+        let e = wsl_launch_input(p, req, &bob(), windows()).unwrap_err();
+        assert!(e.contains(why), "{e} (expected {why})");
+    };
+    // Another executable, or no system root to compare with.
+    for exe in [
+        r"C:\Users\bob\wsl.exe",
+        r"C:\Windows\System32\cmd.exe",
+        "wsl.exe",
+    ] {
+        let mut p = good();
+        p["launch"]["executable"] = json!(exe);
+        refused(&p, &req, "not Windows' own wsl.exe");
+    }
+    assert!(wsl_launch_input(&good(), &req, &bob(), None)
+        .unwrap_err()
+        .contains("not Windows' own wsl.exe"));
+    // Another kind than asked for.
+    let mut p = good();
+    p["kind"] = json!("direct");
+    refused(&p, &req, "another kind");
+    // argv: another distribution, user, folder or program, an option added, an argument changed.
+    let argv = |a: Value| {
+        let mut p = good();
+        p["launch"]["argv"] = a;
+        p
+    };
+    for a in [
+        json!([
+            "-d",
+            "Debian",
+            "-u",
+            "bob",
+            "--cd",
+            "/home/bob/p",
+            "--exec",
+            "/usr/local/bin/claude",
+            "--x",
+            "a b"
+        ]),
+        json!([
+            "-d",
+            "Ubuntu",
+            "-u",
+            "root",
+            "--cd",
+            "/home/bob/p",
+            "--exec",
+            "/usr/local/bin/claude",
+            "--x",
+            "a b"
+        ]),
+        json!([
+            "-d",
+            "Ubuntu",
+            "-u",
+            "bob",
+            "--cd",
+            "/root",
+            "--exec",
+            "/usr/local/bin/claude",
+            "--x",
+            "a b"
+        ]),
+        json!([
+            "-d",
+            "Ubuntu",
+            "-u",
+            "bob",
+            "--cd",
+            "/home/bob/p",
+            "--exec",
+            "/bin/sh",
+            "--x",
+            "a b"
+        ]),
+        json!([
+            "-d",
+            "Ubuntu",
+            "-u",
+            "bob",
+            "-e",
+            "/bin/sh",
+            "--cd",
+            "/home/bob/p",
+            "--exec",
+            "/usr/local/bin/claude",
+            "--x",
+            "a b"
+        ]),
+        json!([
+            "-d",
+            "Ubuntu",
+            "-u",
+            "bob",
+            "--cd",
+            "/home/bob/p",
+            "--exec",
+            "/usr/local/bin/claude",
+            "--x",
+            "a b",
+            "--y"
+        ]),
+        json!([
+            "-d",
+            "Ubuntu",
+            "-u",
+            "bob",
+            "--cd",
+            "/home/bob/p",
+            "--exec",
+            "/usr/local/bin/claude",
+            "--x"
+        ]),
+        json!(["-d", "Ubuntu", "-u", "bob", "--cd", "/home/bob/p", "--exec"]),
+    ] {
+        refused(&argv(a), &req, "not the launch asked for");
+    }
+    // A program that is not an absolute path inside WSL.
+    let mut p = good();
+    p["launch"]["argv"][7] = json!("claude");
+    p["launch"]["program"] = json!("claude");
+    refused(&p, &req, "not the launch asked for");
+    // The program named an override for runs that file, and with no folder asked for, any
+    // absolute folder (the user's home) is taken.
+    let over = json!({"client": "c", "kind": "terminal", "override": "/opt/c/claude"});
+    let mut p = good();
+    p["launch"]["argv"] = json!([
+        "-d",
+        "Ubuntu",
+        "-u",
+        "bob",
+        "--cd",
+        "/home/bob",
+        "--exec",
+        "/opt/c/claude"
+    ]);
+    p["launch"]["program"] = json!("/opt/c/claude");
+    assert!(wsl_launch_input(&p, &over, &bob(), windows()).is_ok());
+    p["launch"]["argv"][7] = json!("/usr/local/bin/claude");
+    p["launch"]["program"] = json!("/usr/local/bin/claude");
+    refused(&p, &over, "not the launch asked for");
 }
 
 #[test]
