@@ -1153,6 +1153,21 @@ wait from Google's retry details or message. It holds back only that model on th
 today's core cools only the model that answered, except a used-up credit balance
 (`INSUFFICIENT_G1_CREDITS_BALANCE`), which holds back the account.
 
+A `functionCall` part of a Cloud Code reply is one whole call, as Gemini sends calls, and a part
+with no name is a call with no name. Today's core treats such a part three ways. A Messages client
+gets a nameless part that comes while a call is open as more input for that call
+(`core/internal/translator/antigravity/claude/antigravity_claude_response.go`). A Chat client gets
+it as a second call with an empty name. A Responses client does not get it. The Messages
+behaviour is not kept, because nothing shows that Cloud Code sends such parts in reply to the
+requests the extension makes. Google's Vertex AI documentation shows nameless parts only for
+streamed function call arguments (`streamFunctionCallArguments`, Gemini 3 and later), which a
+request has to ask for, and whose parts carry `partialArgs`, not `args`. Neither core nor the
+extension asks for it. Today's core added the behaviour to its Gemini Messages translator in
+December 2025 with no recorded stream, and to its Antigravity one in October 2026, eleven months
+after that translator was written. Its tests use made-up chunks. It also appends each part's
+whole `args` object to the call's input, so a second part with arguments gives the client
+`{"a":"1"}{"b":"2"}`, which is not JSON.
+
 Not built, from today's core: the paid Google AI credits fallback, its own cache of Antigravity's
 reasoning (thought signatures travel in band, as for Gemini), the per-account model probe
 (`fetchAvailableModels`), Responses compaction through Antigravity, structured output for Claude
