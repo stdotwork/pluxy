@@ -482,13 +482,18 @@ pieces as one text for a secret spelled with other escapes that it decodes (`\u0
 could complete (a backslash, `\u` with fewer than four hex digits, the first half of a surrogate pair,
 `%` with fewer than two hex digits), and the end of a piece that decodes to the start of a secret,
 and it never cuts a piece inside an escape. For that it holds back at most 12 bytes for each byte of
-the longest of those forms, which covers escapes of up to 11 bytes for each byte of a secret
-(`\u005cu0073`). A start of a secret written with longer escapes (some escapes of escapes, such as
-`\u005c%750073`, 13 bytes) is replaced with `[redacted]` whether it completes or not, together with
-what follows it that could still be part of it: bytes that can be part of a secret or an escape, up
-to the first other byte (such as a space or a comma), no more than 48 bytes past the length of the
-longest of those forms in a row without a backslash or `%`, and no more than 6^8 times that length
-in all. When a secret holds U+FFFD, core first reads each
+the longest of those forms, and at least 768 bytes, which covers escapes of up to 11 bytes for each
+byte of a secret (`\u005cu0073`), and runs of escapes nested by escaping the backslash again
+(`\\\\`, `\u005c\u005c`), which come through as they are. For one piece more it can hold back more,
+where the rest of a secret that began in what it had already sent goes on past the start of
+another (below). A start of a secret written with longer escapes (escapes of escapes, such as each
+character of `\u0073` escaped again, 36 bytes for each byte) is replaced with `[redacted]` whether it
+completes or not, together with what goes on with it in the decoded text up to the end of the
+secret it began; what follows that cannot go on with it comes through. Where an escape is nested so
+deep that core cannot follow what goes on with it within that limit, core replaces instead what
+follows that could still be part of a secret or an escape: bytes of those kinds, up to the first
+other byte (such as a space or a comma), and no more than 48 bytes past the length of the longest of
+those forms in a row without a backslash or `%`. When a secret holds U+FFFD, core first reads each
 byte of invalid UTF-8 in the body as U+FFFD, as a JSON decoder does. Where holding back would change
 what core finds in the text whole (for example text so heavily escaped that core replaces all of it
 with `[redacted]`), core sends at once all it has, redacted whole, but for the end of what it would

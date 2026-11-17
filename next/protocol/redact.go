@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -368,8 +369,22 @@ func unhex(c byte) byte {
 	return c - 'a' + 10
 }
 
-// span is where in the text being redacted some decoded bytes came from: text[start:end].
-type span struct{ start, end int }
+// span is where in the text being redacted some decoded bytes came from: text[start:end]. Its
+// fields are 32-bit, which halves what decoding a text takes; a text redacted is far shorter
+// than 2 GiB (a frame is at most 64 MiB).
+type span struct{ start, end int32 }
+
+// newSpan returns the span text[start:end].
+func newSpan(start, end int) span { return span{int32(start), int32(end)} }
+
+func (sp span) lo() int { return int(sp.start) }
+func (sp span) hi() int { return int(sp.end) }
+
+// endsAfter returns the index of the first of spans, which are in order, that ends after pos.
+func endsAfter(spans []span, pos int) int {
+	k, _ := slices.BinarySearchFunc(spans, pos, func(sp span, x int) int { return cmp.Compare(sp.hi(), x+1) })
+	return k
+}
 
 // unescapeLayer decodes one layer of the escapes of the given kinds in s (escapeAt) and reports
 // whether there were any. With track it also returns, for each byte of the result, the span of
@@ -404,7 +419,7 @@ func unescapeLayer(s string, from []span, track bool, kinds int) (string, []span
 			}
 		}
 		if track {
-			sp := span{i, i + n}
+			sp := newSpan(i, i+n)
 			if from != nil {
 				sp = span{from[i].start, from[i+n-1].end}
 			}
@@ -455,7 +470,7 @@ func (r *Redactor) escaped(s string) string {
 		}
 		b.WriteString(s[last:c.start])
 		b.WriteString(Redacted)
-		last = c.end
+		last = c.hi()
 	}
 	b.WriteString(s[last:])
 	return b.String()
@@ -598,10 +613,10 @@ func keepBytes(raw []byte, s string, spans []span, red string) []byte {
 	if spans != nil {
 		rawStart, rawEnd = 0, len(raw)
 		if p > 0 {
-			rawStart = spans[p-1].end
+			rawStart = spans[p-1].hi()
 		}
 		if q > 0 {
-			rawEnd = spans[len(s)-q].start
+			rawEnd = spans[len(s)-q].lo()
 		}
 	}
 	mid := encodeString(red[p : len(red)-q])
@@ -743,24 +758,29 @@ func (r *Redactor) Body() *BodyRedactor {
 // inside an escape that a decoding reads, which the text after the cut would read otherwise. It
 // holds back at most escapeHold bytes for a spelling: enough for a run shorter than the longest
 // form written with escapes of up to 11 bytes a byte (\u0073 is 6, \\u0073 7, %5Cu0073 8,
-// \u005cu0073 11), an escape at the end, and the start of a listed form after them. A spelling
-// that needs more (some escapes of escapes, as \u005c%750073 at 13 bytes a byte) is replaced with
-// [redacted] from where it starts, together with what follows that could still be part of it
-// (dropRun): bytes that can be part of a spelling (spells), no more than maxStretch of them in a
-// row without a backslash or a percent sign, and no more than maxDrop in all; from there it goes
-// on as before. Text with more decodings than String tries (maxDecodings), which String replaces
-// whole, is held back from the start of the run of such bytes at its end, within the same bound.
+// \u005cu0073 11), an escape at the end, and the start of a listed form after them, and at least
+// runHold, enough for an escape at the end of a run of escapes nested by escaping the backslash
+// again (\\\\, \u005c\u005c), so that such a run comes through as it is. A spelling that needs
+// more (escapes of escapes, as each character of \u0073 escaped again at 36 bytes a byte) is
+// replaced with [redacted] from where it starts, and so is what goes on with it in a decoding, up
+// to the end of the form it began (follow); what follows that cannot go on with it comes through.
+// Where following it would take more than escapeHold bytes (an escape nested so deep that what
+// more text could complete of it takes more), Write drops instead what follows that could still be
+// part of a spelling (dropRun): bytes that can be part of one (spells), no more than maxStretch of
+// them in a row without a backslash or a percent sign. Text with more decodings than String tries
+// (maxDecodings), which String replaces whole, is held back from the start of the run of such
+// bytes at its end, within the same bound.
 //
 // When a form holds U+FFFD, Write first reads each byte of invalid UTF-8 as U+FFFD, as a JSON
 // decoder does and as String does in text that is JSON, holding back the start of a character at
 // the end of a piece until the next piece completes it.
 //
-// So a body of any length passes through in bounded memory: after each Write it holds back at most
-// escapeHold bytes, or, when a form could be part of a number, escapeHold, maxNumberHold and the
-// longest form together, and the start of a character; for one Write more where the rest of a form
-// that began in what was sent goes on past where a listed form starts (emit). After Flush it holds
-// nothing. A stream is delayed only where a piece ends with what could start a form or complete an
-// escape, or with such a number.
+// So a body of any length passes through in bounded memory: Write reads a piece in parts of at most
+// maxChunk bytes, and after each Write it holds back at most escapeHold bytes, or, when a form could
+// be part of a number, escapeHold, maxNumberHold and the longest form together, and the start of a
+// character; for one Write more where the rest of a form that began in what was sent goes on past
+// where a listed form starts (emit). After Flush it holds nothing. A stream is delayed only where a
+// piece ends with what could start a form or complete an escape, or with such a number.
 //
 // It is never worse than redacting each piece on its own: where holding back would change what
 // String finds in the text whole (for example text String gives up on and replaces whole), Write
@@ -790,11 +810,19 @@ type BodyRedactor struct {
 	sent int
 	// partial is the start of a UTF-8 character that a piece ended with, when a form holds U+FFFD.
 	partial string
-	// drop is set while what arrives may continue a spelling that was replaced with [redacted]
-	// because holding it back would take more than escapeHold bytes; stretch and dropped count
-	// what was dropped since (dropRun).
-	drop             bool
-	stretch, dropped int
+	// cont is set after a spelling of a form was replaced with [redacted] because holding it back
+	// would take more than escapeHold bytes: held is then the end of what was replaced, from a
+	// position that no escape in a decoding spans, and Write drops what could still go on with a
+	// form that began before (follow).
+	cont bool
+	// next are the rests of the forms that what was replaced before held ends with the start of,
+	// one of which held may go on with.
+	next []string
+	// drop is set instead where that end would take more than escapeHold bytes: Write drops what
+	// comes while it could still be part of a spelling (dropRun). stretch counts the bytes since
+	// the last backslash or percent sign.
+	drop    bool
+	stretch int
 }
 
 // maxNumberHold bounds how much of a JSON number, and of what stands before it, Write holds back
@@ -806,11 +834,20 @@ const maxNumberHold = 64
 const escapeBytes = 12
 
 // escapeHold returns how many bytes Write holds back at most for a spelling of a form with escapes
-// that more text could complete: escapeBytes for each byte of the longest form, L. That covers a
-// run of at most L-1 decoded bytes written in at most 11 bytes each, an escape at the end that more
-// text could complete (at most 11 bytes, as \ud83d\udc0), and the start of a listed form after
-// them (at most L-1 bytes): 11(L-1) + 11 + L-1 < 12L.
-func (b *BodyRedactor) escapeHold() int { return escapeBytes * len(b.r.forms[0]) }
+// that more text could complete: escapeBytes for each byte of the longest form, L, and at least
+// runHold. That covers a run of at most L-1 decoded bytes written in at most 11 bytes each, an
+// escape at the end that more text could complete (at most 11 bytes, as \ud83d\udc0), and the
+// start of a listed form after them (at most L-1 bytes): 11(L-1) + 11 + L-1 < 12L.
+func (b *BodyRedactor) escapeHold() int { return max(escapeBytes*len(b.r.forms[0]), runHold) }
+
+// runHold is the least escapeHold, enough for an escape at the end that more text could complete
+// in a run of escapes nested by escaping the backslash again at each layer (\\ in JSON quoted
+// again and again), where each byte of the first decoding comes from an escape of at most 6
+// bytes (\u005c): a backslash of the last layer that is decoded further takes 6·2^(maxDepth-2)
+// bytes, and what follows it that the layers under it hold open less than that again. So text made
+// only of such escapes, such as a run of backslashes, is held back from no further back than that,
+// and comes through as it is.
+const runHold = 12 << (maxDepth - 2)
 
 // escapeWindow returns how far from the end of the text an escape of a spelling that more text
 // could complete lies at most, unless the spelling takes more than escapeHold bytes: such a
@@ -825,17 +862,6 @@ func (b *BodyRedactor) escapeWindow() int { return max(b.escapeHold(), 12*maxDep
 // form.
 func (b *BodyRedactor) maxStretch() int { return 6*maxDepth + len(b.r.forms[0]) }
 
-// maxDrop returns how long a spelling of a form can be: each layer of decoding takes at most 6
-// bytes for a byte (\u0073), so a spelling of the longest form takes at most 6^maxDepth bytes a
-// byte.
-func (b *BodyRedactor) maxDrop() int {
-	n := len(b.r.forms[0])
-	for range maxDepth {
-		n *= 6
-	}
-	return n
-}
-
 // escapeSyntax are the bytes, besides a form's own, that an escape that decodes to part of a form
 // is made of (escapeAt).
 const escapeSyntax = `\%"/bfnrtu0123456789abcdefABCDEF`
@@ -846,6 +872,10 @@ const escapeSyntax = `\%"/bfnrtu0123456789abcdefABCDEF`
 // so that what follows one that cannot starts a character.
 func (b *BodyRedactor) spells(c byte) bool { return b.spelled[c] }
 
+// maxChunk is the most of a piece Write reads at once: a larger piece is read in parts, so that
+// what decoding it takes stays bounded however large the piece.
+const maxChunk = 16 << 10
+
 // Write returns the redacted text of the body so far that more text cannot change.
 func (b *BodyRedactor) Write(piece string) string {
 	if b.r == nil || b.r.r == nil {
@@ -854,12 +884,30 @@ func (b *BodyRedactor) Write(piece string) string {
 	if b.r.fffd {
 		piece = b.fixUTF8(piece, false)
 	}
+	if len(piece) <= maxChunk {
+		return b.write(piece)
+	}
+	var out strings.Builder
+	out.Grow(len(piece))
+	for len(piece) > 0 {
+		n := min(len(piece), maxChunk)
+		out.WriteString(b.write(piece[:n]))
+		piece = piece[n:]
+	}
+	return out.String()
+}
+
+// write is Write for one part of a piece.
+func (b *BodyRedactor) write(piece string) string {
 	if b.drop {
 		q := b.dropRun(piece)
 		if q == len(piece) {
 			return ""
 		}
 		b.drop, piece = false, piece[q:]
+	}
+	if b.cont {
+		return b.follow(b.held+piece, false)
 	}
 	return b.emit(b.held+piece, false)
 }
@@ -877,6 +925,9 @@ func (b *BodyRedactor) Flush() string {
 	if b.drop {
 		q := b.dropRun(rest)
 		b.drop, rest = false, rest[q:]
+	}
+	if b.cont {
+		return b.follow(b.held+rest, true)
 	}
 	return b.emit(b.held+rest, true)
 }
@@ -914,13 +965,13 @@ func (b *BodyRedactor) fixUTF8(piece string, final bool) string {
 }
 
 // dropRun returns how much of t to drop while dropping what may continue a spelling that was
-// replaced: bytes that can be part of a spelling (spells), as long as the run without a backslash
-// or a percent sign is no longer than maxStretch and all that was dropped no longer than maxDrop,
-// and the bytes that end the character a dropped byte began.
+// replaced, where follow cannot tell: bytes that can be part of a spelling (spells), as long as the
+// run without a backslash or a percent sign is no longer than maxStretch, and the bytes that end
+// the character a dropped byte began.
 func (b *BodyRedactor) dropRun(t string) int {
 	for i := 0; i < len(t); i++ {
 		c := t[i]
-		if utf8.RuneStart(c) && (!b.spells(c) || b.stretch >= b.maxStretch() || b.dropped >= b.maxDrop()) {
+		if utf8.RuneStart(c) && (!b.spells(c) || b.stretch >= b.maxStretch()) {
 			return i
 		}
 		if c == '\\' || c == '%' {
@@ -928,7 +979,6 @@ func (b *BodyRedactor) dropRun(t string) int {
 		} else {
 			b.stretch++
 		}
-		b.dropped++
 	}
 	return len(t)
 }
@@ -956,7 +1006,7 @@ func (b *BodyRedactor) emit(s string, final bool) string {
 	}
 	if hold < cut {
 		if len(s)-hold > b.escapeHold() {
-			return b.replaceSpelling(s, skip, hold, lead, final)
+			return b.replaceSpelling(s, skip, hold, lead)
 		}
 		if cut = b.numberStart(s, hold); cut > b.sent {
 			cut = max(cut, skip)
@@ -982,16 +1032,13 @@ func (b *BodyRedactor) emit(s string, final bool) string {
 			// The cut would hide what String finds in the text whole: send it whole, and keep the
 			// end, so that a form starting there is still removed from what follows. Of that end,
 			// what the text whole changed counts as sent; the rest, the longest end of it that the
-			// text whole ends with as it was, is held back as before rather than sent, when
-			// redacting the text up to there gives the rest of the text whole (that the text whole
-			// merely ends like it, as a 0 standing for a number that ends in 0 does, is not
-			// enough). Otherwise all of it counts as sent.
+			// text whole ends with as it was, is held back as before rather than sent. That the
+			// text whole merely ends like it (a 0 standing for a number that ends in 0) is not
+			// enough: redacting the text up to there must give the rest of the text whole.
 			j := 0
-			for j < len(b.held) && !(utf8.RuneStart(b.held[j]) && strings.HasSuffix(whole, b.held[j:])) {
+			for j < len(b.held) && !(utf8.RuneStart(b.held[j]) && strings.HasSuffix(whole, b.held[j:]) &&
+				whole[:len(whole)-(len(b.held)-j)] == b.r.String(s[skip:cut+j])) {
 				j++
-			}
-			if j < len(b.held) && whole[:len(whole)-(len(b.held)-j)] != b.r.String(s[skip:cut+j]) {
-				j = len(b.held)
 			}
 			b.sent = j
 			return lead + whole[:len(whole)-(len(b.held)-j)]
@@ -1002,22 +1049,131 @@ func (b *BodyRedactor) emit(s string, final bool) string {
 
 // replaceSpelling returns what to send of s when what Write would hold back from at, the start of
 // a spelling of a form with escapes, takes more than escapeHold bytes: the text before at,
-// redacted, and [redacted] in place of the spelling and of what may continue it (dropRun). It
-// goes on with the text after that, or, when that takes all of s, drops what may continue it from
-// what comes next.
-func (b *BodyRedactor) replaceSpelling(s string, skip, at int, lead string, final bool) string {
+// redacted, and [redacted] in place of the spelling and of what may go on with it (follow). No
+// escape in a decoding spans at, so the text from there decodes as it does in s.
+func (b *BodyRedactor) replaceSpelling(s string, skip, at int, lead string) string {
 	out := lead
 	if at > skip {
 		out += b.r.String(s[skip:at])
 	}
-	out += Redacted
-	b.held, b.sent = "", 0
-	b.stretch, b.dropped = 0, 0
-	if q := at + b.dropRun(s[at:]); q < len(s) || final {
-		return out + b.emit(s[q:], final)
+	b.cont, b.next, b.sent = true, nil, len(s)-at
+	return out + Redacted + b.follow(s[at:], false)
+}
+
+// follow returns what to send of s, the text that a spelling replaced with [redacted] ended with,
+// from a position that no escape in a decoding spans, and what came after it; s[:b.sent] was
+// replaced. It drops the text up to the first position y from which sending s goes on with no
+// form that began before y in a decoding, and goes on from there as Write does (emit): y is past
+// the end of every form a decoding holds that starts before it, and no escape in a decoding
+// spans it. A form that began before s shows in its decodings as a run at their start that is one
+// of next, which is dropped too. While a form that began before y could still go on, or an escape
+// that began before y could still change, it keeps the end of s from the last position no escape
+// spans, with the rests of the forms that what it drops ends with the start of, unless that takes
+// more than escapeHold bytes (blind).
+func (b *BodyRedactor) follow(s string, final bool) string {
+	dropped := b.sent
+	root, ls, over := b.walk(s, false, final)
+	if over {
+		// The forms in s are not known.
+		return b.blind(s, dropped, final)
+	}
+	ls = append([]layer{root}, ls...)
+	y, undecided := dropped, false
+	for _, l := range ls {
+		for _, rest := range b.next {
+			switch {
+			case strings.HasPrefix(l.d, rest):
+				y = max(y, l.at(len(rest)-1).hi())
+			case strings.HasPrefix(rest, l.d):
+				// What is decided of l so far may still be the rest of a form.
+				undecided = !final
+				if final {
+					y = len(s)
+				}
+			}
+		}
+	}
+	for moved := true; moved && !undecided; {
+		moved = false
+		for _, l := range ls {
+			if l.open < y {
+				undecided = true // an escape that began before y could still change
+				break
+			}
+			for _, f := range b.r.forms {
+				for off := 0; ; off++ {
+					k := strings.Index(l.d[off:], f)
+					if k < 0 {
+						break
+					}
+					off += k
+					if a, e := l.at(off).lo(), l.at(off+len(f)-1).hi(); a < y && e > y {
+						y, moved = e, true
+					}
+				}
+			}
+			if k := b.startsForm(l.d); !final && k < len(l.d) && l.at(k).lo() < y {
+				undecided = true
+				break
+			}
+			if l.spans != nil {
+				// No escape a decoding reads spans y.
+				if k := endsAfter(l.spans, y); k < len(l.spans) && l.spans[k].lo() < y {
+					y, moved = l.spans[k].hi(), true
+				}
+			}
+		}
+	}
+	if !undecided {
+		b.cont, b.next, b.held, b.sent = false, nil, "", 0
+		return b.emit(s[y:], final)
+	}
+	g := len(s)
+	for _, l := range ls {
+		g = min(g, l.open)
+	}
+	if g = b.outside(s, 0, ls[1:], g); len(s)-g > b.escapeHold() {
+		return b.blind(s, len(s), final)
+	}
+	// What each decoding holds before g that a form could go on from: the rest of one of next
+	// that it starts with, or a run at its end that is the start of a form.
+	next := map[string]bool{}
+	for _, l := range ls {
+		m := g
+		if l.spans != nil {
+			m = endsAfter(l.spans, g)
+		}
+		for _, rest := range b.next {
+			if len(rest) > m && strings.HasPrefix(rest, l.d[:m]) {
+				next[rest[m:]] = true
+			}
+		}
+		for k := max(0, m-len(b.r.forms[0])+1); k < m; k++ {
+			for _, f := range b.byFirst[l.d[k]] {
+				if len(f) > m-k && strings.HasPrefix(f, l.d[k:m]) {
+					next[f[m-k:]] = true
+				}
+			}
+		}
+	}
+	b.next = slices.Sorted(maps.Keys(next))
+	b.held, b.sent = strings.Clone(s[g:]), len(s)-g
+	return ""
+}
+
+// blind returns what to send of s, which follow cannot follow, of which s[:from] was replaced: it
+// drops what may still be part of the spelling replaced (dropRun), and goes on after it as Write
+// does.
+func (b *BodyRedactor) blind(s string, from int, final bool) string {
+	b.cont, b.next, b.held, b.sent = false, nil, "", 0
+	b.stretch = from - (strings.LastIndexAny(s[:from], `\%`) + 1)
+	q := from + b.dropRun(s[from:])
+	if q < len(s) || final {
+		b.drop = false
+		return b.emit(s[q:], final)
 	}
 	b.drop = true
-	return out
+	return ""
 }
 
 // escapes follows the forms through each decoding String tries of s (decodings), as String finds
@@ -1050,47 +1206,115 @@ func (b *BodyRedactor) escapes(s string, sent, cut int, final bool) (hold, end, 
 		base = b.spelling(s)
 	}
 	t := s[base:]
-	var layers [][]span // where the bytes of each decoding came from, for outside
-	defer func() { inside, hold = b.outside(t, base, layers, inside), b.outside(t, base, layers, hold) }()
+	var ls []layer // the decodings of t, for outside
+	defer func() { inside, hold = b.outside(t, base, ls, inside), b.outside(t, base, ls, hold) }()
 	if !b.r.liveEscape(t) && (final || openEscape(t, allEscapes) == len(t) && openEscape(t, jsonEscapes) == len(t) &&
 		openEscape(t, percentEscapes) == len(t)) {
 		// No escape could decode to part of a form, nor one at the end become one.
 		return hold, 0, inside
 	}
-	// A layer is a decoding of t, or what of one more text cannot change: d, whose bytes came from
-	// t[spans[i].start:spans[i].end] (from t[i] when spans is nil), and open, where in t the text
-	// that could still change it starts.
-	type layer struct {
-		d     string
-		spans []span
-		open  int
-		live  bool // d holds an escape that could decode to part of a form (liveEscape)
-	}
-	at := func(l layer, i int) span {
-		if l.spans == nil {
-			return span{i, i + 1}
+	_, ls, over := b.walk(t, true, final)
+	if over {
+		// String gives up on text with this many decodings.
+		if final {
+			return len(s), b.spellsFrom(s, sent), inside
 		}
-		return l.spans[i]
+		// A run that goes on to the end of s is held back, as sent as it was.
+		if end = b.spellsFrom(s, sent); end == len(s) {
+			end = 0
+		}
+		return b.spelling(s), end, inside
 	}
-	type key struct {
-		d    string
-		open int
+	for _, c := range ls {
+		if !final {
+			hold = min(hold, base+c.open)
+			if k := b.startsForm(c.d); k < len(c.d) {
+				hold = min(hold, base+c.at(k).lo())
+			}
+		}
+		for _, f := range b.r.forms {
+			if sent == 0 {
+				break // only a form that sent cuts matters
+			}
+			for off := 0; ; {
+				k := strings.Index(c.d[off:], f)
+				if k < 0 {
+					break
+				}
+				k += off
+				if a, e := base+c.at(k).lo(), base+c.at(k+len(f)-1).hi(); a < sent && sent < e {
+					end = max(end, e)
+				}
+				off = k + 1
+			}
+		}
 	}
-	root := layer{t, nil, len(t), b.r.liveEscape(t)}
-	if b.r.holds(t) {
+	return hold, end, inside
+}
+
+// layer is a decoding of a text t, or what of one more text cannot change: d, whose bytes came from
+// t[spans[i].start:spans[i].end] (from t[i] when spans is nil); open, where in t the text that
+// could still change it starts; and tail, what that text decodes to as it is, so that d and tail
+// are the decoding of t as it is.
+type layer struct {
+	d     string
+	spans []span
+	open  int
+	live  bool // d holds an escape that could decode to part of a form (liveEscape)
+	tail  string
+}
+
+// decodedKey stands for a text in a map without copying all of it: its last keyEnd bytes (or all of
+// it when shorter) and the rest. Two keys are equal when the texts are.
+type decodedKey struct{ head, end string }
+
+// keyEnd is how many bytes at the end of a text a decodedKey keeps apart.
+const keyEnd = 64
+
+// keyOf returns the decodedKey of d+tail, copying only what of the end of d goes with tail when
+// tail is shorter than keyEnd.
+func keyOf(d, tail string) decodedKey {
+	if len(tail) >= keyEnd {
+		d, tail = d+tail, ""
+	}
+	k := max(0, len(d)+len(tail)-keyEnd)
+	if tail == "" {
+		return decodedKey{d[:k], d[k:]}
+	}
+	return decodedKey{d[:k], d[k:] + tail}
+}
+
+// at returns where in t the byte d[i] came from.
+func (l layer) at(i int) span {
+	if l.spans == nil {
+		return newSpan(i, i+1)
+	}
+	return l.spans[i]
+}
+
+// walk returns root, t (with each listed form replaced as String's replacer replaces it when
+// replace), and the decodings of it that String tries (decodings), each as far as more text cannot
+// change it unless final, and whether there are more of them than maxDecodings, String counting
+// each by what it decodes t to as it is (with its tail); then the decodings are not all there.
+func (b *BodyRedactor) walk(t string, replace, final bool) (root layer, ls []layer, over bool) {
+	root = layer{d: t, open: len(t), live: b.r.liveEscape(t)}
+	if replace && b.r.holds(t) {
 		root.d, root.spans = b.replaced(t)
 	}
+	type key struct {
+		d, tail string
+		open    int
+	}
 	// decoded counts the decodings, as decodings does; seen keeps each layer once.
-	decoded := map[string]bool{root.d: true}
+	decoded := map[decodedKey]bool{keyOf(root.d, ""): true}
 	seen := map[key]bool{}
-	var forms []span // the forms the decodings hold, where in t they are spelled
 	frontier := []layer{root}
 	for depth := 0; depth < maxDepth && len(frontier) > 0; depth++ {
 		var next []layer
 		for _, l := range frontier {
-			live := l.live
 			kinds := []int{allEscapes}
-			if strings.IndexByte(l.d, '\\') >= 0 && strings.IndexByte(l.d, '%') >= 0 {
+			if (strings.IndexByte(l.d, '\\') >= 0 || strings.IndexByte(l.tail, '\\') >= 0) &&
+				(strings.IndexByte(l.d, '%') >= 0 || strings.IndexByte(l.tail, '%') >= 0) {
 				// Otherwise decoding only one kind gives what decoding both gives, or nothing.
 				kinds = append(kinds, jsonEscapes, percentEscapes)
 			}
@@ -1099,73 +1323,41 @@ func (b *BodyRedactor) escapes(s string, sent, cut int, final bool) (hold, end, 
 				if !final {
 					p = openEscape(l.d, kind)
 				}
-				if !live && p == len(l.d) {
+				if !l.live && p == len(l.d) {
 					continue
 				}
-				c := layer{l.d[:p], nil, l.open, false}
+				c := layer{d: l.d[:p], open: l.open}
 				if l.spans != nil {
 					c.spans = l.spans[:p]
 				}
 				if p < len(l.d) {
-					c.open = at(l, p).start
+					c.open = l.at(p).lo()
 				}
-				changed := false
-				if live {
+				changed, tailChanged := false, false
+				if l.live {
 					// A layer that is not live gives one that is not either: its text is a start of it.
 					c.d, c.spans, changed = unescapeLayer(c.d, c.spans, true, kind)
 					c.live = b.r.liveEscape(c.d)
 				}
-				if !changed && p == len(l.d) || seen[key{c.d, c.open}] {
+				if rest := l.d[p:] + l.tail; rest != "" {
+					c.tail, _, tailChanged = unescapeLayer(rest, nil, false, kind)
+				}
+				if !changed && p == len(l.d) || seen[key{c.d, c.tail, c.open}] {
 					continue
 				}
-				seen[key{c.d, c.open}] = true
-				if changed {
-					if decoded[c.d] = true; len(decoded) > maxDecodings {
-						// String gives up on text with this many decodings.
-						if final {
-							return len(s), b.spellsFrom(s, sent), inside
-						}
-						// A run that goes on to the end of s is held back, as sent as it was.
-						if end = b.spellsFrom(s, sent); end == len(s) {
-							end = 0
-						}
-						return b.spelling(s), end, inside
+				seen[key{c.d, c.tail, c.open}] = true
+				if changed || tailChanged {
+					if decoded[keyOf(c.d, c.tail)] = true; len(decoded) > maxDecodings {
+						return root, ls, true
 					}
 				}
 				next = append(next, c)
-				if c.spans != nil {
-					layers = append(layers, c.spans)
-				}
-				if !final {
-					hold = min(hold, base+c.open)
-					if k := b.startsForm(c.d); k < len(c.d) {
-						hold = min(hold, base+at(c, k).start)
-					}
-				}
-				for _, f := range b.r.forms {
-					if sent == 0 {
-						break // only a form that sent cuts matters
-					}
-					for off := 0; ; {
-						k := strings.Index(c.d[off:], f)
-						if k < 0 {
-							break
-						}
-						k += off
-						forms = append(forms, span{base + at(c, k).start, base + at(c, k+len(f)-1).end})
-						off = k + 1
-					}
-				}
+				ls = append(ls, c)
 			}
 		}
 		frontier = next
 	}
-	for _, f := range forms {
-		if f.start < sent && sent < f.end {
-			end = max(end, f.end)
-		}
-	}
-	return hold, end, inside
+	return root, ls, false
 }
 
 // spelling returns where the run of bytes that can be part of a spelling of a form (spells) at the
@@ -1181,41 +1373,56 @@ func (b *BodyRedactor) spelling(s string) int {
 	return i
 }
 
-// outside returns pos, or, when it falls inside an escape that a decoding of t reads, the start of
-// that escape: the text from pos on, read on its own, would read it otherwise. t starts at base in
-// the text, and layers are where the bytes of each decoding of t came from.
-func (b *BodyRedactor) outside(t string, base int, layers [][]span, pos int) int {
+// outside returns pos, or, when it falls inside an escape of t or of a decoding of t (ls), the start
+// of that escape: the text from pos on, read on its own, would read it otherwise. That holds for an
+// escape in a decoding that is not decoded further too, which more text can make one that is. t
+// starts at base in the text.
+func (b *BodyRedactor) outside(t string, base int, ls []layer, pos int) int {
 	for moved := true; moved && pos > base && pos < base+len(t); {
 		moved = false
-		for _, kind := range []int{allEscapes, jsonEscapes, percentEscapes} {
-			// An escape that holds pos starts at most 12 bytes before it. Without a backslash
-			// there, only a percent sign in the 2 bytes before can start one, and no escape
-			// holds a percent sign, so each is where unescapeLayer stops.
-			i := 0
-			if strings.IndexByte(t[max(0, pos-base-12):pos-base], '\\') < 0 {
-				i = max(0, pos-base-2)
-				for i < pos-base && t[i] != '%' {
-					i++
-				}
-			}
-			for i < pos-base {
-				_, n := escapeAt(t, i, kind)
-				if base+i+n > pos {
-					pos, moved = base+i, true
+		for k := -1; k < len(ls); k++ {
+			d, m, from := t, pos-base, func(i int) int { return i }
+			if k >= 0 {
+				l := ls[k]
+				d, from = l.d, func(i int) int { return l.at(i).lo() }
+				// The first byte whose spelling ends past pos holds pos when it starts before it.
+				if m = endsAfter(l.spans, pos-base); m < len(l.spans) && base+l.spans[m].lo() < pos {
+					pos, moved = base+l.spans[m].lo(), true
 					break
 				}
-				i += max(n, 1)
 			}
-		}
-		for _, spans := range layers {
-			// The first byte whose spelling ends past pos holds pos when it starts before it.
-			k, _ := slices.BinarySearchFunc(spans, pos-base, func(sp span, x int) int { return cmp.Compare(sp.end, x+1) })
-			if k < len(spans) && base+spans[k].start < pos {
-				pos, moved = base+spans[k].start, true
+			if i := escapeHolding(d, m); i < m {
+				pos, moved = base+from(i), true
+				break
 			}
 		}
 	}
 	return pos
+}
+
+// escapeHolding returns where an escape of any kind in d that holds d[m] starts, or m when none
+// does.
+func escapeHolding(d string, m int) int {
+	for _, kind := range []int{allEscapes, jsonEscapes, percentEscapes} {
+		// An escape that holds m starts at most 12 bytes before it. Without a backslash there,
+		// only a percent sign in the 2 bytes before can start one, and no escape holds a percent
+		// sign, so each is where unescapeLayer stops.
+		i := 0
+		if strings.IndexByte(d[max(0, m-12):m], '\\') < 0 {
+			i = max(0, m-2)
+			for i < m && d[i] != '%' {
+				i++
+			}
+		}
+		for i < m {
+			_, n := escapeAt(d, i, kind)
+			if i+n > m {
+				return i
+			}
+			i += max(n, 1)
+		}
+	}
+	return m
 }
 
 // spellsFrom returns where the run of bytes that can be part of a spelling (spells) that goes on
@@ -1258,13 +1465,13 @@ func (b *BodyRedactor) replaced(t string) (string, []span) {
 			}
 		}
 		if n == 0 {
-			out, spans = append(out, t[i]), append(spans, span{i, i + 1})
+			out, spans = append(out, t[i]), append(spans, newSpan(i, i+1))
 			i++
 			continue
 		}
 		out = append(out, Redacted...)
 		for range len(Redacted) {
-			spans = append(spans, span{i, i + n})
+			spans = append(spans, newSpan(i, i+n))
 		}
 		i += n
 	}
