@@ -81,7 +81,16 @@ fn a_record_is_what_check_gave_for_that_distribution_and_user() {
     assert_eq!(r.checked_at, 7);
     assert_eq!(
         r.confirmation_line(),
-        "Runs in WSL: distribution Ubuntu, user bob (/home/bob)."
+        r#"Runs in WSL: distribution "Ubuntu", user "bob" (/home/bob)."#
+    );
+    // The names are quoted: a distribution named like the rest of a line (a name holds no `"`)
+    // reads as one name.
+    let mut o = check_output();
+    o["distro"] = json!("Ubuntu, user root (root)");
+    let odd = Record::from_check("Ubuntu, user root (root)", "bob", &o, 0).unwrap();
+    assert_eq!(
+        odd.confirmation_line(),
+        r#"Runs in WSL: distribution "Ubuntu, user root (root)", user "bob" (/home/bob)."#
     );
     let with = |k: &str, v: Value| {
         let mut o = check_output();

@@ -293,10 +293,12 @@ impl Record {
         format!("linux/{}", self.arch)
     }
 
-    /// The line native confirmations show above the review of an operation in it.
+    /// The line native confirmations show above the review of an operation in it. The names are
+    /// quoted (neither holds a `"`), so a distribution named like the rest of a line reads as one
+    /// name.
     pub fn confirmation_line(&self) -> String {
         format!(
-            "Runs in WSL: distribution {}, user {} ({}).",
+            "Runs in WSL: distribution \"{}\", user \"{}\" ({}).",
             self.distro, self.user, self.home
         )
     }

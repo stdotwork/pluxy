@@ -541,7 +541,7 @@ fn wsl_launch_input(
 /// The line the confirmation of a launch in record's environment shows above its review.
 fn wsl_launch_line(record: &Record, program: &str) -> String {
     format!(
-        "Starts in WSL: distribution {}, user {} ({}). The program inside WSL ({program}) is found \
+        "Starts in WSL: distribution \"{}\", user \"{}\" ({}). The program inside WSL ({program}) is found \
          when it starts; pluxy does not check it.",
         record.distro, record.user, record.home
     )

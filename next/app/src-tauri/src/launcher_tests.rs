@@ -133,7 +133,7 @@ fn a_launch_in_wsl_gets_its_kind_applied_and_its_linux_program_only_shown() {
     let line = wsl_launch_line(&bob(), &program);
     assert_eq!(
         line,
-        "Starts in WSL: distribution Ubuntu, user bob (/home/bob). The program inside WSL \
+        "Starts in WSL: distribution \"Ubuntu\", user \"bob\" (/home/bob). The program inside WSL \
          (/usr/local/bin/claude) is found when it starts; pluxy does not check it."
     );
 }
