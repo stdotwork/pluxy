@@ -224,7 +224,8 @@ const DEEPEST: usize = 64;
 /// Removes everything in the open folder fd, through it: each entry looked at without following
 /// a link, folders opened the same way and emptied first. The folder is made this user's to
 /// change first (a bundle's folders may be read-only). A folder in it on another device (a file
-/// system mounted there) is not entered: refused.
+/// system mounted there) is not entered: refused, by the device looked at before the open and
+/// again by the device of what the open reached.
 #[cfg(unix)]
 fn empty(fd: std::os::unix::io::RawFd, depth: usize) -> std::io::Result<()> {
     use std::io::Error;
@@ -248,6 +249,8 @@ fn empty(fd: std::os::unix::io::RawFd, depth: usize) -> std::io::Result<()> {
             if st.st_dev != own.st_dev {
                 return Err(Error::other("a file system is mounted in it"));
             }
+            #[cfg(test)]
+            tests::before_open(&name);
             // SAFETY: as above; the descriptor is closed below.
             let child = unsafe {
                 libc::openat(
@@ -258,6 +261,14 @@ fn empty(fd: std::os::unix::io::RawFd, depth: usize) -> std::io::Result<()> {
             };
             if child < 0 {
                 return Err(Error::last_os_error());
+            }
+            // Mounted on between that look and the open: what the open reached is checked too.
+            let mut opened: libc::stat = unsafe { std::mem::zeroed() };
+            // SAFETY: child is open; opened is written on success.
+            if unsafe { libc::fstat(child, &mut opened) } != 0 || opened.st_dev != own.st_dev {
+                // SAFETY: child is open and closed once.
+                unsafe { libc::close(child) };
+                return Err(Error::other("a file system is mounted in it"));
             }
             let r = empty(child, depth + 1);
             // SAFETY: child is open and closed once.
@@ -327,6 +338,22 @@ mod tests {
         };
         if let Some(f) = hook {
             f(path);
+        }
+    }
+
+    /// Run by `empty` between looking at a folder in the folder it empties and opening it, for the
+    /// name set here only: that name, the path it is at, and what to do to it.
+    static BEFORE_OPEN: Mutex<Option<BeforeOpen>> = Mutex::new(None);
+
+    type BeforeOpen = (std::ffi::CString, PathBuf, fn(&Path));
+
+    pub(super) fn before_open(name: &std::ffi::CStr) {
+        let hook = match &*BEFORE_OPEN.lock().unwrap() {
+            Some((n, p, f)) if n.as_c_str() == name => Some((p.clone(), *f)),
+            _ => None,
+        };
+        if let Some((p, f)) = hook {
+            f(&p);
         }
     }
 
@@ -564,6 +591,41 @@ mod tests {
         assert!(mounted.join("keep").exists(), "the mount was crossed");
         // SAFETY: as above.
         assert_eq!(unsafe { libc::umount(c(&mounted).as_ptr()) }, 0);
+
+        // Mounted on between the look at the folder and its open: not entered either.
+        let path = tmp.join(".pluxy-update-bbbbbbbbbbbbbbbb");
+        fs::create_dir(&path).unwrap();
+        let later = path.join("mounted-later");
+        fs::create_dir(&later).unwrap();
+        fn mount(p: &Path) {
+            let at = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+            // SAFETY: NUL-terminated strings that outlive the call; no data for tmpfs.
+            let r = unsafe {
+                libc::mount(
+                    c"tmpfs".as_ptr(),
+                    at.as_ptr(),
+                    c"tmpfs".as_ptr(),
+                    0,
+                    std::ptr::null(),
+                )
+            };
+            assert_eq!(r, 0, "{}", std::io::Error::last_os_error());
+            fs::write(p.join("keep"), b"z").unwrap();
+        }
+        *BEFORE_OPEN.lock().unwrap() = Some((c"mounted-later".into(), later.clone(), mount));
+        let m = Made {
+            path: path.clone(),
+            id: id_of(&path),
+        };
+        let r = remove_folder(&m);
+        *BEFORE_OPEN.lock().unwrap() = None;
+        assert_eq!(r, Outcome::Kept);
+        assert!(
+            later.join("keep").exists(),
+            "the mount made before the open was crossed"
+        );
+        // SAFETY: as above.
+        assert_eq!(unsafe { libc::umount(c(&later).as_ptr()) }, 0);
         fs::remove_dir_all(&tmp).unwrap();
     }
 
