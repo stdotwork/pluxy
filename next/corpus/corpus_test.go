@@ -16,10 +16,11 @@ import (
 
 // Environment switches:
 //
-//	PLUXY_CORPUS_OLD_CORE=1      also run today's core (built from ../../core; if that is missing the run stops at once) and compare live
-//	PLUXY_CORPUS_OLD_CORE_BIN=…  run this old-core binary live (alone, it also turns live on) instead of building one
+//	PLUXY_CORPUS_OLD_CORE_BIN=…  run this old-core binary live and compare with it (built from the pinned
+//	                             commit, next/corpus/README.md); OLD_CORE=1 and RECORD=1 need it
+//	PLUXY_CORPUS_OLD_CORE=1      run the old core live and compare (the old core is not in this repository,
+//	                             so without PLUXY_CORPUS_OLD_CORE_BIN the run stops at once)
 //	PLUXY_CORPUS_RECORD=1        run the old core live and write its observations into the case files
-//	                             (built from ../../core unless PLUXY_CORPUS_OLD_CORE_BIN names a binary)
 //	PLUXY_CORPUS_REPORT=path     also write the report to path
 //	PLUXY_CORPUS_CASE=regexp     run only cases whose format/provider/name matches
 //	PLUXY_CORPUS_DUMP_NEW=dir    write each new-core observation to dir/<format>.<provider>.<name>.json
@@ -47,45 +48,29 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// oldCoreDir is the old core's source folder, which setup builds the live old core from.
-var oldCoreDir = filepath.Join("..", "..", "core")
-
-// checkOldCoreDir reports, before anything is built, that dir (the old core's source) is not
-// there, and where the README says how to run an old core without it.
-func checkOldCoreDir(dir string) error {
-	if _, err := os.Stat(dir); err != nil {
-		return fmt.Errorf("the old core's source (%s) is not in this repository: build the old core from the last commit that has it and set PLUXY_CORPUS_OLD_CORE_BIN to the binary (next/corpus/README.md, %q)", dir, oldCoreReadmeSection)
+// oldCoreBinary returns the old-core binary a run uses: bin (PLUXY_CORPUS_OLD_CORE_BIN) when the
+// run is live, nothing otherwise. A live run without bin is refused before anything is built: the
+// old core is not in this repository, and the README says how to build it from the pinned commit.
+func oldCoreBinary(live bool, bin string) (string, error) {
+	if !live {
+		return "", nil
 	}
-	return nil
+	if bin == "" {
+		return "", fmt.Errorf("the old core is not in this repository: build it from the pinned commit and set PLUXY_CORPUS_OLD_CORE_BIN to the binary (next/corpus/README.md, %q)", oldCoreReadmeSection)
+	}
+	return bin, nil
 }
 
 // oldCoreReadmeSection is the heading in README.md that explains how to build and use an old-core binary.
 const oldCoreReadmeSection = "Re-recording against the old core"
 
 func setup() error {
-	bin := os.Getenv("PLUXY_CORPUS_OLD_CORE_BIN")
-	if liveOld && bin == "" {
-		if err := checkOldCoreDir(oldCoreDir); err != nil {
-			return err
-		}
-	}
-	if err := BuildNewCore("..", binDir); err != nil {
+	bin, err := oldCoreBinary(liveOld, os.Getenv("PLUXY_CORPUS_OLD_CORE_BIN"))
+	if err != nil {
 		return err
 	}
-	if !liveOld {
-		return nil
-	}
-	if bin != "" {
-		oldBinary = bin
-		return nil
-	}
-	oldBinary = filepath.Join(binDir, "old-core")
-	start := time.Now()
-	if err := BuildOldCore(oldCoreDir, oldBinary); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "corpus: built the old core in %s\n", time.Since(start).Round(time.Second))
-	return nil
+	oldBinary = bin
+	return BuildNewCore("..", binDir)
 }
 
 // coreSlots limits how many cores run at once; each old core holds tens of MB.
@@ -160,10 +145,7 @@ func TestCorpus(t *testing.T) {
 	}
 	reference := "the old core's recorded observations (next/corpus/README.md says how to run it live)"
 	if liveOld {
-		reference = "the old core, run live (built from core/)"
-		if bin := os.Getenv("PLUXY_CORPUS_OLD_CORE_BIN"); bin != "" {
-			reference = "the old core, run live (the binary at PLUXY_CORPUS_OLD_CORE_BIN: " + bin + ")"
-		}
+		reference = "the old core, run live (the binary at PLUXY_CORPUS_OLD_CORE_BIN: " + oldBinary + ")"
 	}
 	report := Report(ordered, reference, global.Exceptions, staleGlobal)
 	fmt.Println(report)
