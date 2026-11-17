@@ -90,10 +90,10 @@ fn write_private_with_nonce(
         let mut name = name.to_os_string();
         name.push(format!(".{}.tmp", nonce()));
         let tmp = parent.join(name);
-        // macOS: made with an empty extended access list that takes nothing from the folder's,
-        // so no entry is on it at any moment (`private_macos.rs`).
+        // macOS: where the volume keeps access lists, made with an empty one that takes nothing
+        // from the folder's, so no entry is on it at any moment (`private_macos.rs`).
         #[cfg(target_os = "macos")]
-        let made = crate::private_macos::create_new(&tmp, 0o600);
+        let made = crate::private_macos::create_new_in(&folder, &tmp, 0o600);
         #[cfg(all(unix, not(target_os = "macos")))]
         let made = {
             use std::os::unix::fs::OpenOptionsExt;

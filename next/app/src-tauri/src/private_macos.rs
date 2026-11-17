@@ -102,6 +102,43 @@ pub fn create_new(path: &std::path::Path, mode: libc::mode_t) -> io::Result<File
     made
 }
 
+/// Makes a new file at path, in the folder open as folder, for writing with mode: on a volume
+/// that keeps access lists by `create_new`; on one that does not (where the kernel refuses a
+/// file made with a list) by a plain exclusive open that follows no link. Either way the new
+/// file is refused, and removed, when it has an entry all the same (one a file server added).
+pub fn create_new_in(
+    folder: &impl AsRawFd,
+    path: &std::path::Path,
+    mode: libc::mode_t,
+) -> io::Result<File> {
+    // SAFETY: folder is an open descriptor; fpathconf only reads it.
+    let lists = unsafe { libc::fpathconf(folder.as_raw_fd(), libc::_PC_EXTENDED_SECURITY_NP) } > 0;
+    let f = if lists {
+        create_new(path, mode)?
+    } else {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode.into())
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)?
+    };
+    match has_entries(&f) {
+        Ok(false) => Ok(f),
+        found => {
+            drop(f);
+            let _ = std::fs::remove_file(path);
+            Err(found.err().unwrap_or_else(|| {
+                io::Error::other(format!(
+                    "{} has an extended access list entry as it is made",
+                    path.display()
+                ))
+            }))
+        }
+    }
+}
+
 /// Whether the file or folder open as f has an extended access list with any entry, allow or
 /// deny. No list is none (`acl_get_fd_np` gives none with `ENOENT`), and so is an empty one.
 pub fn has_entries(f: &impl AsRawFd) -> io::Result<bool> {

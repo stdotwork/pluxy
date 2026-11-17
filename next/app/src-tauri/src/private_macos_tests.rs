@@ -106,3 +106,63 @@ fn a_new_file_takes_no_entry_from_its_folder_at_any_moment() {
     assert!(!d.join("elsewhere").exists());
     fs::remove_dir_all(d).unwrap();
 }
+
+/// A volume that keeps no access lists (FAT, as on a USB stick), in a disk image this test makes
+/// and detaches: the kernel refuses a file made with a list there, so `create_new_in` makes the
+/// file plainly.
+#[test]
+fn a_volume_without_access_lists_gets_a_plain_new_file() {
+    use std::os::fd::AsRawFd;
+    let d = temp("fat");
+    let img = d.join("v.dmg");
+    let mnt = d.join("mnt");
+    fs::create_dir(&mnt).unwrap();
+    let hdiutil = |args: &[&std::ffi::OsStr]| {
+        let out = std::process::Command::new("/usr/bin/hdiutil")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "hdiutil {args:?}: {out:?}");
+    };
+    hdiutil(&[
+        "create".as_ref(),
+        "-size".as_ref(),
+        "4m".as_ref(),
+        "-fs".as_ref(),
+        "MS-DOS".as_ref(),
+        "-volname".as_ref(),
+        "PLUXYTEST".as_ref(),
+        img.as_os_str(),
+    ]);
+    hdiutil(&[
+        "attach".as_ref(),
+        "-nobrowse".as_ref(),
+        "-mountpoint".as_ref(),
+        mnt.as_os_str(),
+        img.as_os_str(),
+    ]);
+    let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let folder = fs::File::open(&mnt).unwrap();
+        // SAFETY: folder is an open descriptor.
+        let lists = unsafe { libc::fpathconf(folder.as_raw_fd(), libc::_PC_EXTENDED_SECURITY_NP) };
+        assert_eq!(lists, 0);
+        // What the plain route is for: a file made with a list is refused on this volume.
+        assert!(create_new(&mnt.join("listed.json"), 0o600).is_err());
+        let f = create_new_in(&folder, &mnt.join("plain.json"), 0o600).unwrap();
+        assert!(!has_entries(&f).unwrap());
+    }));
+    hdiutil(&["detach".as_ref(), mnt.as_os_str()]);
+    fs::remove_dir_all(d).unwrap();
+    checked.unwrap();
+}
+
+#[test]
+fn a_new_file_in_a_folder_takes_no_entry_from_it() {
+    let d = temp("create-in");
+    add_entry(&d, "everyone allow read,write,file_inherit");
+    let folder = fs::File::open(&d).unwrap();
+    let p = d.join("new");
+    let f = create_new_in(&folder, &p, 0o600).unwrap();
+    assert!(!has_entries(&f).unwrap(), "{}", listed(&p));
+    fs::remove_dir_all(d).unwrap();
+}
