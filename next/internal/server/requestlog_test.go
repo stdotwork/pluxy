@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -41,7 +43,9 @@ func TestCaptureKeepsHeadAndTail(t *testing.T) {
 }
 
 // gapSecrets are secrets as the request log redacts them (the config's), each with a spelling a
-// reply could carry it in.
+// reply could carry it in that the redaction removes whole: forms it lists (as is, JSON-escaped)
+// and spellings it only decodes (escapes of every character, of non-ASCII characters only,
+// lowercase percent-escapes, JSON quoted in JSON, percent-escapes 8 layers deep).
 func gapSecrets() []struct{ name, secret, spelled string } {
 	unicode := func(s string) string { // every character as a JSON \u escape
 		var b strings.Builder
@@ -50,26 +54,80 @@ func gapSecrets() []struct{ name, secret, spelled string } {
 		}
 		return b.String()
 	}
+	nonASCII := func(s string) string { // as Python's json.dumps writes it: \u for non-ASCII only
+		var b strings.Builder
+		for _, r := range s {
+			if r < 0x80 {
+				b.WriteRune(r)
+			} else {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			}
+		}
+		return b.String()
+	}
+	percent := func(s string, keep string) string { // lowercase percent-escapes but for letters, digits and keep
+		var b strings.Builder
+		for i := range len(s) {
+			c := s[i]
+			if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte(keep, c) >= 0 {
+				b.WriteByte(c)
+			} else {
+				fmt.Fprintf(&b, "%%%02x", c)
+			}
+		}
+		return b.String()
+	}
+	jsonInJSON := func(s string) string { // a JSON string holding s, inside a JSON string
+		once, _ := json.Marshal(s)
+		twice, _ := json.Marshal(string(once))
+		return string(twice[1 : len(twice)-1])
+	}
+	percent8 := func(s string) string { // every byte percent-escaped, then its percent signs 7 times more
+		var b strings.Builder
+		for i := range len(s) {
+			fmt.Fprintf(&b, "%%%02X", s[i])
+		}
+		s = b.String()
+		for range 7 {
+			s = strings.ReplaceAll(s, "%", "%25")
+		}
+		return s
+	}
 	const key = "sk-test-0123456789abcdefghijklmnop" // made up
 	return []struct{ name, secret, spelled string }{
 		{"plain", key, key},
 		{"escaped slashes", "sk/test/0123456789abcdefghijklmnop", `sk\/test\/0123456789abcdefghijklmnop`},
 		{"unicode escapes", key, unicode(key)},
 		{"with spaces", "correct horse battery staple!", "correct horse battery staple!"},
+		{"encodeURIComponent", "a!b c!d e!f g!h i!j", percent("a!b c!d e!f g!h i!j", "-_.!~*'()")},
+		{"non-ASCII escapes", "Grüße!Passwort2024", nonASCII("Grüße!Passwort2024")},
+		{"lowercase percent", "pässwörd: geheim", percent("pässwörd: geheim", "")},
+		{"lowercase percent, non-ASCII only", "pässwörd: geheim", percent("pässwörd: geheim", ": ")},
+		{"JSON in JSON", `tok_"quoted" & <tag>`, jsonInJSON(`tok_"quoted" & <tag>`)},
+		// Longer than the window trimGap leaves out (12 bytes for each of the 16 of the secret's
+		// base64), so only the run of key characters beyond the window removes it.
+		{"percent-escaped 8 times", "k3y-abcd1234", percent8("k3y-abcd1234")},
 	}
 }
 
 // gapFill returns n bytes of text made of bytes no spelling in gapSecrets holds, so any of a
 // secret's bytes in a log beside a cut is a part of the secret.
-func gapFill(n int) string { return strings.Repeat("QZ; ", n/4+1)[:n] }
+func gapFill(n int) string { return strings.Repeat("QZ;\n", n/4+1)[:n] }
+
+// gapRedactor returns the redactor of a config whose secret is secret.
+func gapRedactor(secret string) *protocol.Redactor {
+	return protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: secret})
+}
 
 // checkGaps fails t where log does not redact the whole secret s, has fewer than gaps cuts, or
-// keeps 4 bytes or more of s beside one of them.
-func checkGaps(t *testing.T, log, s string, gaps int) {
+// keeps 4 bytes or more of s anywhere a part of it could reach from one of them: within the
+// bytes trimGap leaves out for r and a spelling's length.
+func checkGaps(t *testing.T, log, s string, r *protocol.Redactor, gaps int) {
 	t.Helper()
 	if strings.Contains(log, s) || !strings.Contains(log, protocol.Redacted) {
 		t.Fatalf("the whole copy of the secret is not redacted")
 	}
+	reach := gapBytesPerFormByte*r.LongestForm() + 2*len(s) + 64
 	at := 0
 	for range gaps {
 		i := strings.Index(log[at:], " bytes not logged ...]")
@@ -77,7 +135,7 @@ func checkGaps(t *testing.T, log, s string, gaps int) {
 			t.Fatalf("fewer than %d cuts in the log", gaps)
 		}
 		at += i
-		near := log[max(0, at-2*len(s)-64):min(len(log), at+2*len(s)+64)]
+		near := log[max(0, at-reach):min(len(log), at+reach)]
 		if n, part := longestPart(near, s); n >= 4 {
 			t.Errorf("%d bytes of the secret stay beside a cut: %q", n, part)
 		}
@@ -85,64 +143,141 @@ func checkGaps(t *testing.T, log, s string, gaps int) {
 	}
 }
 
-// A secret that the middle a long reply's log leaves out cuts in two is not kept in part beside
-// the cut, however it is spelled: neither part is the whole secret, so the redaction cannot
-// recognise it.
-func TestCaptureDropsSecretPartsAtTheGap(t *testing.T) {
-	for _, tc := range gapSecrets() {
-		for _, all := range []bool{true, false} {
-			t.Run(fmt.Sprintf("%s/all=%v", tc.name, all), func(t *testing.T) {
-				l := &RequestLog{All: all, Redact: protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: tc.secret})}
-				c := l.newCapture()
-				s, k := tc.spelled, len(tc.spelled)/2
-				// A whole copy at the start, which the redaction removes; a copy across the end of
-				// the kept start; and one across the start of the kept end.
-				body := s + gapFill(c.headLimit-k-len(s)) + s + gapFill(1<<20) + s + gapFill(c.tailLimit-(len(s)-k))
-				for p := body; len(p) > 0; { // in uneven writes, as a stream arrives
-					n := min(len(p), 7001)
-					c.Write([]byte(p[:n]))
-					p = p[n:]
-				}
-				reply := c.bytes()
-				// What was left out beside the cut counts with the bytes not logged.
-				var kept, left int
-				if h, rest, ok := strings.Cut(string(reply), "\n[... "); !ok {
-					t.Fatalf("no cut in the reply")
-				} else if n, err := fmt.Sscanf(rest, "%d bytes not logged ...]\n", &left); n != 1 {
-					t.Fatal(err)
-				} else {
-					kept = len(h) + len(rest) - len(fmt.Sprintf("%d bytes not logged ...]\n", left))
-				}
-				if kept+left != len(body) {
-					t.Errorf("%d bytes kept and %d said to be left out, of %d", kept, left, len(body))
-				}
-				checkGaps(t, string(l.format(&requestEntry{method: "POST", url: &url.URL{Path: "/v1/chat/completions"},
-					reply: reply, replyTitle: "RESPONSE"})), s, 1)
-			})
-		}
+// writeAll writes body to c in uneven pieces, as a stream arrives.
+func writeAll(c *capture, body string) {
+	for p := body; len(p) > 0; {
+		n := min(len(p), 7001)
+		c.Write([]byte(p[:n]))
+		p = p[n:]
 	}
 }
 
-// The same holds for an upstream exchange's bodies: one the extension sent cut, and one core
-// cuts to the bounds.
-func TestUpstreamLogDropsSecretPartsAtTheGap(t *testing.T) {
+// checkCount fails t unless the bytes reply keeps and the bytes it says it left out add up to
+// size: what trimGap leaves out is counted.
+func checkCount(t *testing.T, reply []byte, size int) {
+	t.Helper()
+	h, rest, ok := strings.Cut(string(reply), "\n[... ")
+	if !ok {
+		t.Fatalf("no cut in the reply")
+	}
+	var left int
+	if n, err := fmt.Sscanf(rest, "%d bytes not logged ...]\n", &left); n != 1 {
+		t.Fatal(err)
+	}
+	kept := len(h) + len(rest) - len(fmt.Sprintf("%d bytes not logged ...]\n", left))
+	if kept+left != size {
+		t.Errorf("%d bytes kept and %d said to be left out, of %d", kept, left, size)
+	}
+}
+
+// A secret that the middle a long reply's log leaves out cuts in two is not kept in part beside
+// the cut, wherever in the secret the cut falls and however the secret is spelled: neither part
+// is the whole secret, so the redaction cannot recognise it.
+func TestCaptureDropsSecretPartsAtTheGap(t *testing.T) {
+	logOf := func(l *RequestLog, c *capture) string {
+		return string(l.format(&requestEntry{method: "POST", url: &url.URL{Path: "/v1/chat/completions"},
+			reply: c, replyTitle: "RESPONSE"}))
+	}
 	for _, tc := range gapSecrets() {
 		t.Run(tc.name, func(t *testing.T) {
-			l := &RequestLog{All: true, Redact: protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: tc.secret})}
-			tr := newTrace()
-			tr.captureUpstream(t.Context(), l.Redact)
-			s, k := tc.spelled, len(tc.spelled)/2
-			head := s + gapFill(protocol.CapturedHead-k-len(s)) + s[:k]
-			end := s[k:] + gapFill(protocol.CapturedEnd-(len(s)-k))
-			sent := protocol.CapturedBody{Body: head, BodyEnd: end, BodySize: int64(len(head)+len(end)) + 1<<20}
-			whole := head + s[k:] + gapFill(64<<10) + s[:k] + end
-			tr.upstream.add("acct", protocol.Diagnostic{Upstream: []protocol.UpstreamExchange{{
-				Request:  protocol.UpstreamRequest{Method: "POST", URL: "https://upstream.example.test/v1", CapturedBody: sent},
-				Response: &protocol.UpstreamResponse{Status: 200, CapturedBody: protocol.CapturedBody{Body: whole, BodySize: int64(len(whole))}},
-			}}})
-			checkGaps(t, string(l.format(&requestEntry{method: "POST", url: &url.URL{Path: "/v1/chat/completions"}, trace: tr,
-				replyTitle: "RESPONSE"})), s, 2)
+			s := tc.spelled
+			// A whole copy at the start, which the redaction removes; a copy across the end of the
+			// kept start; and one across the start of the kept end, each cut k bytes in.
+			bodyOf := func(c *capture, k, middle int) string {
+				return s + gapFill(c.headLimit-k-len(s)) + s + gapFill(middle) + s + gapFill(c.tailLimit-(len(s)-k))
+			}
+			// The request log's own bounds, with request-log on and off.
+			for _, all := range []bool{true, false} {
+				l := &RequestLog{All: all, Redact: gapRedactor(tc.secret)}
+				c := l.newCapture()
+				body := bodyOf(c, len(s)/2, 1<<20)
+				writeAll(c, body)
+				checkCount(t, c.bytes(), len(body))
+				checkGaps(t, logOf(l, c), s, l.Redact, 1)
+			}
+			// Every place in the secret the cut can fall, with smaller bounds. trimGap's one pass
+			// leaves out at least what repeating its last two steps until they find no more does.
+			l := &RequestLog{All: true, Redact: gapRedactor(tc.secret)}
+			for k := 1; k < len(s); k++ {
+				c := &capture{headLimit: 8 << 10, tailLimit: 8 << 10, redact: l.Redact}
+				body := bodyOf(c, k, 4<<10)
+				writeAll(c, body)
+				checkCount(t, c.bytes(), len(body))
+				checkGaps(t, logOf(l, c), s, l.Redact, 1)
+				head, end := body[:c.headLimit], body[len(body)-c.tailLimit:]
+				h, e := trimGap(l.Redact, head, end)
+				lh, le := repeatTrim(l.Redact, head, end)
+				if len(h) > len(lh) || len(e) > len(le) {
+					t.Errorf("cut %d bytes in: one pass keeps %d and %d bytes, repeating keeps %d and %d", k, len(h), len(e), len(lh), len(le))
+				}
+			}
 		})
+	}
+}
+
+// repeatTrim leaves out beside a cut the run of key characters and a part of a form of one of r's
+// secrets, over and over until neither finds more.
+func repeatTrim(r *protocol.Redactor, head, end string) (string, string) {
+	for {
+		h, e := r.TrimCut(strings.TrimRightFunc(head, secretChar), strings.TrimLeftFunc(end, secretChar))
+		if len(h) == len(head) && len(e) == len(end) {
+			return h, e
+		}
+		head, end = h, e
+	}
+}
+
+// The same holds for an upstream exchange's bodies: one the extension sent cut, wherever in the
+// secret the cut falls, and one core cuts to the bounds.
+func TestUpstreamLogDropsSecretPartsAtTheGap(t *testing.T) {
+	logOf := func(l *RequestLog, x protocol.UpstreamExchange) string {
+		tr := newTrace()
+		tr.captureUpstream(t.Context(), l.Redact)
+		tr.upstream.add("acct", protocol.Diagnostic{Upstream: []protocol.UpstreamExchange{x}})
+		return string(l.format(&requestEntry{method: "POST", url: &url.URL{Path: "/v1/chat/completions"}, trace: tr,
+			replyTitle: "RESPONSE"}))
+	}
+	for _, tc := range gapSecrets() {
+		t.Run(tc.name, func(t *testing.T) {
+			l := &RequestLog{All: true, Redact: gapRedactor(tc.secret)}
+			s := tc.spelled
+			for k := 1; k < len(s); k++ {
+				head := s + gapFill(4<<10) + s[:k]
+				end := s[k:] + gapFill(4<<10)
+				sent := protocol.CapturedBody{Body: head, BodyEnd: end, BodySize: int64(len(head)+len(end)) + 1<<20}
+				checkGaps(t, logOf(l, protocol.UpstreamExchange{
+					Request: protocol.UpstreamRequest{Method: "POST", URL: "https://upstream.example.test/v1", CapturedBody: sent},
+				}), s, l.Redact, 1)
+			}
+			k := len(s) / 2
+			whole := s + gapFill(protocol.CapturedHead-k-len(s)) + s + gapFill(64<<10) + s + gapFill(protocol.CapturedEnd-(len(s)-k))
+			checkGaps(t, logOf(l, protocol.UpstreamExchange{
+				Request:  protocol.UpstreamRequest{Method: "POST", URL: "https://upstream.example.test/v1"},
+				Response: &protocol.UpstreamResponse{Status: 200, CapturedBody: protocol.CapturedBody{Body: whole, BodySize: int64(len(whole))}},
+			}), s, l.Redact, 1)
+		})
+	}
+}
+
+// Text that repeats the start of a form of a secret beside the cut, as a reply that repeats a
+// secret header's name can, loses no more than other text there: most of what the log keeps of
+// the reply's start and end stays.
+func TestCaptureKeepsRepeatedSecretStarts(t *testing.T) {
+	var cs []*protocol.Credential
+	for _, f := range upheader.Forms(map[string]string{"Authorization": "Bearer sk-test-header-0123456789"}) {
+		cs = append(cs, &protocol.Credential{Kind: "header", APIKey: f})
+	}
+	l := &RequestLog{Redact: protocol.NewRedactor(cs...)}
+	c := l.newCapture()
+	unit := `"Authorization":`
+	writeAll(c, strings.Repeat(unit, (c.headLimit+c.tailLimit+(1<<20))/len(unit)))
+	reply := string(c.bytes())
+	head, end, _ := strings.Cut(reply, "\n[... ")
+	_, end, _ = strings.Cut(end, " ...]\n")
+	// The window, the rest of a repeat's run of key characters, and one start of a form.
+	most := gapBytesPerFormByte*l.Redact.LongestForm() + 2*len(unit)
+	if len(head) < c.headLimit-most || len(end) < c.tailLimit-most {
+		t.Errorf("kept %d bytes of the start and %d of the end, want at least %d and %d", len(head), len(end), c.headLimit-most, c.tailLimit-most)
 	}
 }
 

@@ -143,7 +143,7 @@ type requestEntry struct {
 	trace    *trace
 	status   int
 	rHeaders http.Header
-	reply    []byte
+	reply    *capture // made into text only when the log is written
 	// replyTitle names the reply's section: RESPONSE, or WEBSOCKET MESSAGES for a turn.
 	replyTitle string
 }
@@ -380,7 +380,9 @@ func (l *RequestLog) format(e *requestEntry) []byte {
 	}
 	writeHeaders(&b, e.rHeaders)
 	b.WriteString("\n")
-	b.Write(e.reply)
+	if e.reply != nil {
+		b.Write(e.reply.bytes())
+	}
 	b.WriteString("\n")
 	return []byte(l.Redact.String(b.String()))
 }
@@ -407,7 +409,7 @@ func logged(w http.ResponseWriter, r *http.Request, g *Generation, h func(w http
 	rec := &recorder{ResponseWriter: w, body: g.RequestLog.newCapture()}
 	h(rec, r)
 	g.RequestLog.write(&requestEntry{at: at, method: r.Method, url: r.URL, client: ClientIP(r), headers: r.Header, body: t.body, trace: t,
-		status: rec.status, rHeaders: rec.header, reply: rec.body.bytes(), replyTitle: "RESPONSE"})
+		status: rec.status, rHeaders: rec.header, reply: rec.body, replyTitle: "RESPONSE"})
 }
 
 // requestTrace returns r's trace, adding a new one when it has none. The request's access line

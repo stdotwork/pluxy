@@ -381,7 +381,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 		defer func() {
 			s.capture.Store(nil)
 			g.RequestLog.write(&requestEntry{at: arrived, method: s.r.Method, url: s.r.URL, client: ClientIP(s.r), headers: s.r.Header, body: nativeBody,
-				trace: turnTrace, reply: turnLog.bytes(), replyTitle: "WEBSOCKET MESSAGES"})
+				trace: turnTrace, reply: turnLog, replyTitle: "WEBSOCKET MESSAGES"})
 		}()
 	}
 	sessReq, err := openairesponses.ParseRequest(nativeBody)

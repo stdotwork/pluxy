@@ -218,20 +218,29 @@ func writeBody(b *bytes.Buffer, c protocol.CapturedBody, redact *protocol.Redact
 	b.WriteString(e)
 }
 
+// gapBytesPerFormByte is how many bytes beside a cut trimGap leaves out for each byte of the
+// longest form of a secret: the bound on how long a spelling of a secret with escapes is taken to
+// be, the same bound a streamed body's redaction uses for what it holds back of one.
+const gapBytesPerFormByte = 12
+
 // trimGap returns head and end, the start and the end of a body with bytes left out between them,
 // without what beside the gap could be part of a secret cut in two, which the redaction cannot
-// recognise as neither part is the whole secret: on each side, the run of characters a key or a
-// token is spelled with, escapes included (secretChar), and a part of at least 4 bytes of one of
-// r's secrets in a form r knows, whatever its characters (Redactor.TrimCut), until neither finds
-// more.
+// recognise as neither part is the whole secret. On each side, in one pass, it leaves out:
+//   - a window of 12 bytes for each byte of the longest form of r's secrets, which holds every part
+//     of a secret cut by the gap in any spelling the redaction decodes that takes at most that many
+//     bytes;
+//   - then the run of characters a key or a token is spelled with, escapes included (secretChar),
+//     so that a longer spelling made of them goes too;
+//   - then a part of at least 4 bytes of a form of one of r's secrets, whatever its characters
+//     (Redactor.TrimCut), where the edge the first two leave cuts through one.
+//
+// It does not go on: text that repeats the start of a form loses one repeat, not all of them.
+// A secret in a spelling the redaction decodes but does not list, with characters other than a
+// key's, that the edge the window leaves cuts in two keeps its part, as one the gap cut did.
 func trimGap(r *protocol.Redactor, head, end string) (string, string) {
-	for {
-		h, e := r.TrimCut(strings.TrimRightFunc(head, secretChar), strings.TrimLeftFunc(end, secretChar))
-		if len(h) == len(head) && len(e) == len(end) {
-			return h, e
-		}
-		head, end = h, e
-	}
+	n := gapBytesPerFormByte * r.LongestForm()
+	head, end = head[:len(head)-min(n, len(head))], end[min(n, len(end)):]
+	return r.TrimCut(strings.TrimRightFunc(head, secretChar), strings.TrimLeftFunc(end, secretChar))
 }
 
 // secretChar reports whether r can be part of a secret as text carries one: a key, a token, and

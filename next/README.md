@@ -1915,10 +1915,17 @@ KiB, with a line saying how many bytes were left out between them. While only er
 written, every request keeps its reply's start and end until it ends, in case it fails, so an
 error log keeps less of a reply: the first 32 KiB and the last 96 KiB. A secret cut in two at
 that line would not be recognised, so the bytes beside it that could be part of one are left
-out too, and counted with the rest: on each side, the run of letters, digits and `-_.~+/=%\`
-(what a key or token is spelled with, escapes included), and any part of 4 bytes or more of a
-secret the log removes, in a form it knows. Where a long reply is one such run, such as base64
-data, all of that run beside the line goes.
+out too, and counted with the rest. On each side that is 12 bytes for each byte of the longest
+form of a secret the log removes (the secret as it is, escaped or in base64, whichever is
+longest); then the run of letters, digits and `-_.~+/=%\` (what a key or token is spelled with,
+escapes included) that goes on from there; then, where that edge cuts through a secret in one
+of those forms, 4 bytes or more of it. With only client keys and API keys that is under 2 KiB a
+side; an account whose tokens are about 2 KB, as an OAuth account's can be, makes it about
+32 KiB, nearly all an error log keeps of a reply's start. Where the text there is one long run
+of such characters, such as base64 data, all of that run goes. Text that repeats the start of a
+secret there, such as a secret header's name, loses one repeat, not all of them. A secret
+spelled in a way the log removes but does not list, such as with only some of its characters
+percent-escaped, can still keep a part where that edge cuts through it.
 
 A request log also holds what the provider extension sent upstream and what came back: between
 the client's request and its reply, an `=== UPSTREAM REQUEST ===` section (the account, time, the
