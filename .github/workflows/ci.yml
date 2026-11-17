@@ -37,6 +37,8 @@ jobs:
   # code being tested, so a new import counts at once. Its native jobs build and run only the app
   # and the kit, so a change that reaches none of next/app, next/ui and the workflows skips them
   # (next-app-platforms-native).
+  # next-app-tools-wsl is not a workflow: it says whether next-app-tools-platforms.yml runs its WSL
+  # jobs.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -48,6 +50,7 @@ jobs:
       next-app-platforms: ${{ steps.paths.outputs.next-app-platforms || steps.go-packages.outputs.next-app-platforms }}
       next-app-platforms-native: ${{ steps.paths.outputs.next-app-platforms-native }}
       next-app-tools-platforms: ${{ steps.paths.outputs.next-app-tools-platforms }}
+      next-app-tools-wsl: ${{ steps.paths.outputs.next-app-tools-wsl }}
       next-app-tools-pack: ${{ steps.paths.outputs.next-app-tools-pack }}
     steps:
       # Full history for the merge base, without file contents: the diff needs only trees.
@@ -78,7 +81,7 @@ jobs:
           git diff --no-renames --name-only -z "${range[@]}" > "$RUNNER_TEMP/changed"
           echo "$(tr -cd '\0' < "$RUNNER_TEMP/changed" | wc -c) changed files"
           declare -A run=()
-          for w in app next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-pack; do run[$w]=false; done
+          for w in app next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-wsl next-app-tools-pack; do run[$w]=false; done
           native=false
           while IFS= read -r -d '' path; do
             case $path in
@@ -99,7 +102,17 @@ jobs:
               # decides.
               next/*) printf '%s\0' "$path" >> "$RUNNER_TEMP/next-other" ;;
             esac
-            case $path in next/app-tools/* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
+            # The desktop app's files that exist for WSL run this workflow too, for its WSL jobs.
+            case $path in next/app-tools/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
+            # What the WSL jobs build and run: pluxy/wsl, pluxy-program, pluxy-transactions (with its
+            # fixture writer) and pluxy-files, which it depends on, the workspace's manifest and lock,
+            # pluxy/claude-code, and the desktop app's files that exist for WSL (its environments
+            # module and its wsl-named files). The app's general host files (program, vault, spawn,
+            # launcher, route) are left out: they change often, and their Linux and unit tests guard them.
+            case $path in
+              next/app-tools/wsl/* | next/app-tools/lib/program/* | next/app-tools/lib/transactions/* | next/app-tools/lib/files/* | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock | next/app-tools/claude-code/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | .github/workflows/next-app-tools-platforms.yml)
+                run[next-app-tools-wsl]=true ;;
+            esac
             # A tool's manifest, and the workspace's and every member's Cargo.toml (`*` matches `/`
             # too, so lib/<name>/Cargo.toml is one), where a program's [[bin]] is named.
             case $path in
@@ -192,6 +205,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.next-app-tools-platforms == 'true'
     uses: ./.github/workflows/next-app-tools-platforms.yml
+    with:
+      wsl: ${{ needs.changes.outputs.next-app-tools-wsl == 'true' }}
 
   next-app-tools-pack:
     name: Next app tools pack
@@ -202,7 +217,9 @@ jobs:
   # The required check. It runs even when the run is cancelled (always()), so a cancelled run
   # fails it instead of leaving it skipped, which would count as passing. It passes only when
   # the changes job passed and every workflow it chose passed; a workflow it did not choose
-  # must have been skipped.
+  # must have been skipped. A job a chosen workflow skips itself (next-app-tools-platforms' WSL
+  # jobs when next-app-tools-wsl is false) is not one of these: the workflow's result is still
+  # its own, and only success passes.
   gate:
     if: always()
     needs:
