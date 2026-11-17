@@ -432,3 +432,119 @@ func TestUpstreamCapture(t *testing.T) {
 		t.Errorf("the gated stream's upstream response is not logged whole:\n%v", resps)
 	}
 }
+
+// cutSecret is a config secret (the management key) made mostly of characters a key is not
+// spelled with, so that only the config's own secrets, handed to the request log's upstream
+// sections, can tell a part of it beside a cut: no other text in a log holds 4 of its bytes in a
+// row.
+const cutSecret = "(q) [z] {x} !v? @j; #k: *9^ ~7|"
+
+// cutMessage is a client message of copies of cutSecret back to back, long enough that the
+// upstream request body is cut, so that each cut falls inside a copy, wherever the extension puts
+// the message in the body.
+var cutMessage = strings.Repeat(cutSecret, (300<<10)/len(cutSecret))
+
+// readLog returns the request log in dir/logs whose name matches pattern and that holds a cut
+// upstream body.
+func readLog(t *testing.T, dir, pattern string) string {
+	t.Helper()
+	matches, _ := filepath.Glob(filepath.Join(dir, "logs", pattern))
+	for _, m := range matches {
+		b, _ := os.ReadFile(m)
+		if strings.Contains(string(b), " bytes not logged ...]") {
+			return string(b)
+		}
+	}
+	t.Fatalf("no request log %s with a cut body among %v", pattern, matches)
+	return ""
+}
+
+// wantNoCutSecretPart fails t where the request log text keeps 4 or more bytes of cutSecret in a
+// row in an upstream request section, which also has to show that its body was cut.
+func wantNoCutSecretPart(t *testing.T, text string) {
+	t.Helper()
+	reqs := sections(text, "UPSTREAM REQUEST")
+	if len(reqs) == 0 {
+		t.Fatalf("no upstream request in the log:\n%.2000s", text)
+	}
+	for _, r := range reqs {
+		if !strings.Contains(r, " bytes not logged ...]") || !strings.Contains(r, "[redacted]") {
+			t.Errorf("the upstream request body is not cut, or holds no redacted copy:\n%.2000s", r)
+		}
+		for i := 0; i+4 <= len(cutSecret); i++ {
+			if j := strings.Index(r, cutSecret[i:i+4]); j >= 0 {
+				t.Errorf("the upstream request keeps part of the management key beside its cut: %q",
+					r[max(0, j-40):min(len(r), j+40)])
+				break
+			}
+		}
+	}
+}
+
+// A config secret that the cut of an upstream body splits in two is not kept in part beside the
+// cut, for a client request and for a Responses WebSocket turn: core hands its config's secrets
+// to the upstream sections of the request log, which leave out the bytes beside a cut that could
+// be part of one, whatever its characters.
+func TestUpstreamCaptureCutKeepsNoConfigSecretPart(t *testing.T) {
+	t.Run("request", func(t *testing.T) {
+		serving := newCaptureUpstream(t, false)
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.json")
+		b, _ := json.Marshal(map[string]any{
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": cutSecret,
+			"logs":           map[string]any{"request_log": true},
+			"extension": map[string]any{
+				"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+				"accounts": []any{map[string]any{"id": "cut", "settings": map[string]any{"base_url": serving.URL + "/v1"},
+					"credential": map[string]any{"kind": "api_key", "api_key": captureKeyB}}},
+			},
+		})
+		os.WriteFile(cfgPath, b, 0o600)
+		base, _ := runCoreFile(t, cfgPath, noWatch...)
+		body, _ := json.Marshal(map[string]any{"model": "gpt-cap", "messages": []any{map[string]any{"role": "user", "content": cutMessage}}})
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		resp := post(t, ctx, base, clientKey, string(body))
+		reply, _ := io.ReadAll(resp.Body) // to its end: the log is written before the reply ends
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(reply), "captured reply") {
+			t.Fatalf("request: %d %s", resp.StatusCode, reply)
+		}
+		if got := serving.received(); len(got) != 1 || !strings.Contains(got[0], cutSecret+cutSecret) {
+			t.Fatalf("the upstream did not get the message")
+		}
+		wantNoCutSecretPart(t, readLog(t, dir, "v1-chat-completions-*.log"))
+	})
+	t.Run("websocket turn", func(t *testing.T) {
+		u := newWSUpstream(t)
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.json")
+		b, _ := json.Marshal(map[string]any{
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": cutSecret,
+			"logs":           map[string]any{"request_log": true},
+			"extension": map[string]any{
+				"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
+				// Without websockets the turn goes upstream as an HTTP request, whose body is cut.
+				"accounts": []any{map[string]any{"id": "cut-ws", "models": []string{"gpt-test"},
+					"settings":   map[string]any{"base_url": u.URL + "/v1", "websockets": false},
+					"credential": map[string]any{"kind": "api_key", "api_key": "sk-ws-secret"}}},
+			},
+		})
+		os.WriteFile(cfgPath, b, 0o600)
+		base, _ := runCoreFile(t, cfgPath, noWatch...)
+		conn := dialResponses(t, base)
+		if m := wsTurn(t, conn, wsCreate(cutMessage, "")); m["type"] != "response.completed" {
+			t.Fatalf("turn: %v", m)
+		}
+		// A socket runs its turns one after another, each writing its log before the next starts:
+		// once a second turn ends, the first one's log is written.
+		if m := wsTurn(t, conn, wsCreate("after", "")); m["type"] != "response.completed" {
+			t.Fatalf("second turn: %v", m)
+		}
+		wantNoCutSecretPart(t, readLog(t, dir, "v1-responses-*.log"))
+	})
+}

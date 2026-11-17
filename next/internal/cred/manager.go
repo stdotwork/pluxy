@@ -508,7 +508,7 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 		if perr.RetryAfterMS > 0 {
 			wait = time.Duration(perr.RetryAfterMS) * time.Millisecond
 		}
-		log.Printf("credentials: account %q: renewing the credential failed (next try in %s): %s", cur.ID, wait.Round(time.Second), perr.Message)
+		log.Printf("credentials: account %q: renewing the credential failed (next try in %s): %s", cur.ID, llm.WholeSeconds(wait), perr.Message)
 		m.setRenewal(cur, &renewal{at: now, until: now.Add(wait), err: perr})
 		return cur, perr
 	}
