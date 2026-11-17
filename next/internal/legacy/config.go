@@ -465,10 +465,13 @@ func each(v any, f func(any) any) any {
 	return out
 }
 
-// payloadRules returns payload rules as today's core's typed decoder reads them
-// (config.PayloadConfig): a rule's params, and a model's match and not-match, hold values;
-// a model's name, protocol, from-protocol, headers, exist and not-exist, and a filter rule's
-// params, are text as written. Anything else goes across as it is, for payload.Validate.
+// payloadRules returns payload rules with the field types of today's core
+// (config.PayloadConfig): a rule's params, and a model's match and not-match, hold values; a
+// model's name, protocol, from-protocol, headers, exist and not-exist, and a filter rule's
+// params, are text as written. Every key keeps its name as written, and anything else goes
+// across as plain does. The JSON config reads the result with encoding/json, which, unlike
+// today's core's YAML decoder, also matches a key written in another letter case (Name: is
+// name:) and drops a key it does not know.
 func payloadRules(rules tree) tree {
 	model := func(v any) any {
 		m, ok := v.(tree)
@@ -877,9 +880,10 @@ func (x *translator) options() error {
 		}
 		x.out["proxy_url"] = proxy
 	}
-	// The payload rules keep today's names, so they go across as they are, read as today's
-	// core reads them (payloadRules); the config's own check (payload.Validate) refuses what
-	// this core cannot apply.
+	// The payload rules keep today's names, so they go across under those names, their text
+	// fields as written (payloadRules). The JSON config's reading of them differs from
+	// today's core on letter case and unknown keys (see payloadRules); its own check
+	// (payload.Validate) refuses what this core cannot apply.
 	if rules, _ := get(x.t, "requests.payload"); rules != nil {
 		m, isMap := rules.(tree)
 		if !isMap {

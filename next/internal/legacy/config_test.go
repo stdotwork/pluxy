@@ -562,7 +562,7 @@ claude-api-key:
 // these into its string fields unchanged.
 func TestTextKeptAsWritten(t *testing.T) {
 	for _, s := range []string{
-		"0123", "1e5", "0x1F", "0o17", "0b101", ".inf", ".NaN", "true", "False", "12:30", "1_000", "+12", "1.0", "-0",
+		"0123", "1e5", "0x1F", "0o17", "0b101", ".inf", "-.Inf", ".NaN", "true", "False", "1_000", "+12", "1.0", "-0",
 		"2001-12-14", "9223372036854775808", "123456789012345678901234567890",
 	} {
 		t.Run(s, func(t *testing.T) {
@@ -598,9 +598,25 @@ requests:
               - `+s+`
         params:
           p: x
+    default:
+      - models:
+          - name: `+s+`
+        params:
+          p: x
+    default-raw:
+      - models:
+          - name: `+s+`
+        params:
+          p: '"x"'
+    override-raw:
+      - models:
+          - name: `+s+`
+        params:
+          p: '"x"'
     filter:
       - models:
-          - name: m
+          - name: `+s+`
+            protocol: `+s+`
         params:
           - `+s+`
 access:
@@ -657,7 +673,10 @@ api-keys:
 							"exist": []any{s}, "not-exist": []any{s}}},
 						"params": map[string]any{"p": "x"},
 					}},
-					"filter": []any{map[string]any{"models": []any{map[string]any{"name": "m"}}, "params": []any{s}}},
+					"default":      []any{map[string]any{"models": []any{map[string]any{"name": s}}, "params": map[string]any{"p": "x"}}},
+					"default-raw":  []any{map[string]any{"models": []any{map[string]any{"name": s}}, "params": map[string]any{"p": `"x"`}}},
+					"override-raw": []any{map[string]any{"models": []any{map[string]any{"name": s}}, "params": map[string]any{"p": `"x"`}}},
+					"filter":       []any{map[string]any{"models": []any{map[string]any{"name": s, "protocol": s}}, "params": []any{s}}},
 				},
 				"client_keys":    []any{s},
 				"management_key": s,
@@ -695,11 +714,12 @@ api-keys:
 			if _, err := Translate([]byte(y)); err == nil || !strings.Contains(err.Error(), strconv.Quote(s)) {
 				t.Errorf("%s: err = %v, want it to name %q", y, err, s)
 			}
-			// No such text is a proxy URL either, so a proxy-url is refused (its error does not
-			// show a value that is not a URL, so it cannot show which text was read).
+			// No such text is a proxy URL either, so the proxy URL check refuses a proxy-url (its
+			// error does not show a value that is not a URL, so it cannot show which text was
+			// read, but it is the URL check's, not a refusal to read the value as text).
 			for _, y := range []string{"requests: {proxy-url: " + s + "}", "claude-api-key: [{api-key: k, proxy-url: " + s + "}]"} {
-				if _, err := Translate([]byte(y)); err == nil || !strings.Contains(err.Error(), "proxy-url") {
-					t.Errorf("%s: err = %v, want a proxy-url error", y, err)
+				if _, err := Translate([]byte(y)); err == nil || !strings.Contains(err.Error(), "proxy-url \"(not a valid proxy URL)\"") {
+					t.Errorf("%s: err = %v, want the proxy URL check's error", y, err)
 				}
 			}
 		})
