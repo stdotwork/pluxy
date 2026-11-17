@@ -40,10 +40,10 @@ defaults:
 jobs:
   app:
     name: app (${{ matrix.os }})
-    # matrix.os names the system; the repository variables PLUXY_MACOS_CLOUD_RUNNER and
-    # PLUXY_WINDOWS_CLOUD_RUNNER, when set, give the runner label to use for it instead (AGENTS.md,
-    # "Where jobs run").
-    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os == 'windows-latest' && vars.PLUXY_WINDOWS_CLOUD_RUNNER || matrix.os }}
+    # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
+    # to use instead of GitHub's (AGENTS.md, "Where jobs run"). Windows stays on GitHub's runner:
+    # the registry tests run only on a runner that reports itself GitHub-hosted.
+    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -266,10 +266,9 @@ jobs:
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
     if: inputs.skip-native != true
-    # matrix.os names the system; the repository variables PLUXY_MACOS_CLOUD_RUNNER and
-    # PLUXY_WINDOWS_CLOUD_RUNNER, when set, give the runner label to use for it instead (AGENTS.md,
-    # "Where jobs run").
-    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os == 'windows-latest' && vars.PLUXY_WINDOWS_CLOUD_RUNNER || matrix.os }}
+    # Always GitHub's runners: the test runs only on a runner that reports itself GitHub-hosted
+    # (RUNNER_ENVIRONMENT=github-hosted), since it writes the account's own folders and settings.
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -320,10 +319,9 @@ jobs:
   # the account's own.
   dialogs:
     name: dialogs (${{ matrix.os }})
-    # matrix.os names the system; the repository variables PLUXY_MACOS_CLOUD_RUNNER and
-    # PLUXY_WINDOWS_CLOUD_RUNNER, when set, give the runner label to use for it instead (AGENTS.md,
-    # "Where jobs run").
-    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os == 'windows-latest' && vars.PLUXY_WINDOWS_CLOUD_RUNNER || matrix.os }}
+    # Always GitHub's runners: the test runs only on a runner that reports itself GitHub-hosted
+    # (RUNNER_ENVIRONMENT=github-hosted), since it writes the account's own folders and settings.
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
