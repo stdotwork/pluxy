@@ -27,6 +27,19 @@ func LoginText(s string) string {
 	return boundText(s, MaxLoginText)
 }
 
+// MaxUpstreamText is the longest upstream error text an error message carries: room for a few
+// sentences of explanation, while an HTML error page stays a short line in the client's error and
+// core's log.
+const MaxUpstreamText = 1000
+
+// UpstreamText returns an upstream's error text that is not structured (not JSON with a message)
+// for an error message, cleaned as LoginText cleans it, with at most MaxUpstreamText characters.
+// Core removes only whole copies of an account's credential, so the parts of one such text can
+// hold (split across lines, or cut short) must be replaced here.
+func UpstreamText(s string) string {
+	return boundText(s, MaxUpstreamText)
+}
+
 // LoginCode returns a provider's OAuth error code, kept only if it looks like one: at most 64
 // letters, digits, and "_", "-", ".", ":".
 func LoginCode(s string) string {

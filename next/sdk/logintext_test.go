@@ -33,6 +33,28 @@ func TestLoginText(t *testing.T) {
 	}
 }
 
+// Upstream error text is cleaned as login text is, and may run longer.
+func TestUpstreamText(t *testing.T) {
+	for in, want := range map[string]string{
+		"service overloaded, try again later":                   "service overloaded, try again later",
+		"bad token\nabcdefghijklmnopqrstuvwxyz0123456789 given": "bad token [redacted] given",
+		"Authorization: Basic short-start":                      "Authorization: Basic [redacted]",
+		"invalid session token abcdefghijklmnopqrstuv... (cut)": "invalid session token [redacted] (cut)",
+	} {
+		if got := UpstreamText(in); got != want {
+			t.Errorf("UpstreamText(%q) = %q, want %q", in, got, want)
+		}
+	}
+	text := strings.Repeat("word ", 150) // 749 characters, more than login text keeps
+	if got := UpstreamText(text); got != strings.TrimSpace(text) {
+		t.Errorf("a 749-character text was changed: %d characters", len([]rune(got)))
+	}
+	// 2099 characters are cut to the first 1000 and an ellipsis.
+	if got, want := UpstreamText(strings.Repeat("ab ", 700)), strings.Repeat("ab ", 333)+"a…"; got != want {
+		t.Errorf("a 2099-character text became %d characters ending %q, want %d", len([]rune(got)), got[max(0, len(got)-8):], len([]rune(want)))
+	}
+}
+
 func TestLoginCode(t *testing.T) {
 	for in, want := range map[string]string{
 		"invalid_grant":                         "invalid_grant",

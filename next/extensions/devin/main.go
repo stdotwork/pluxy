@@ -200,7 +200,15 @@ func chat(ctx context.Context, call sdk.Call, out sender) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// The body broke off, perhaps inside a credential the upstream echoed: as with a cut
+			// body, the error says only the status.
+			return statusError(resp.StatusCode, "", nil, resp.Header.Get("Retry-After"))
+		}
 		return statusError(resp.StatusCode, connectMessage(raw), raw, resp.Header.Get("Retry-After"))
 	}
 	return newRelay(out, req.Model, tr).run(ctx, resp.Body)
@@ -648,10 +656,11 @@ func connectStatus(code, msg string) int {
 	return http.StatusBadGateway
 }
 
-// connectMessage returns the message of a Connect error body ({"code", "message"}), or the body
-// if it was read whole. A body that fills maxBody may have been cut, and the cut may fall inside a
-// credential the upstream echoed; core removes only whole copies of a credential, so the start of
-// one would reach the client and the log. Such a body gives no message.
+// connectMessage returns the message of a Connect error body ({"code", "message"}), or else the
+// body as text, cleaned by sdk.UpstreamText. Core removes only whole copies of a credential, and
+// text can hold part of one the upstream echoed: split across lines, cut short by the upstream, or
+// cut by the read. The caller passes only a body whose read ended without an error; one that
+// fills maxBody may still have been cut there, so it gives no message.
 func connectMessage(raw []byte) string {
 	var e struct {
 		Message string `json:"message"`
@@ -662,7 +671,7 @@ func connectMessage(raw []byte) string {
 	if len(raw) >= maxBody {
 		return ""
 	}
-	return strings.TrimSpace(string(raw))
+	return sdk.UpstreamText(string(raw))
 }
 
 // statusError classifies a refusal by its HTTP status. A 429 holds back only the model, as

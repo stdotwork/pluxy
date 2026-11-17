@@ -1196,6 +1196,15 @@ account. A monthly or unnamed quota holds back only the model. Devin's `canceled
 request (499), as in today's core. An error after Devin sent any frame (output, usage or a
 signature) is not retry-safe, and a reply that ends without its end frame is an error.
 
+A refusal with an HTTP error status takes its message from a Connect error body's `message`.
+Unlike today's core, which passes any other body on as it is, the extension passes such a body on
+only when it read the body whole (under 1 MiB, and not broken off), and cleaned: one line of at
+most 1000 characters, with `Bearer` and `Basic` values, the values of fields named like
+`access_token` or `api_key`, and runs of 24 or more token characters replaced by `[redacted]`.
+Core removes only whole copies of an account's credential, and such a body can hold part of one
+the upstream echoed. Otherwise the message names only the status (`Devin answered 500 Internal
+Server Error`), or, for a quota read whose reply broke off, says that it broke off.
+
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
 through as given); a session's turn count (each request is a new session, as today's core sends
