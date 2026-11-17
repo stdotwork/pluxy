@@ -266,6 +266,11 @@ export async function toolSession(name: ToolSession, ctx: Context) {
     if (name === "routing") env.PLUXY_APP_TEST_ROUTING = fixtures;
     if (launcherBin) {
       env.PLUXY_APP_TEST_LAUNCHER = fixtures;
+      // In the app's environment, never in a launch's (launcher_platform_native.rs checks the
+      // agent's).
+      const canary = randomUUID();
+      env.PLUXY_TEST_LAUNCHER_CANARY = canary;
+      canaries = [...canaries, canary];
       // The agent the launcher finds by name comes first.
       env = withPath(env, launcherBin);
     }
@@ -279,7 +284,7 @@ export async function toolSession(name: ToolSession, ctx: Context) {
     const log: string[] = [];
     const onLine = (line: string) => {
       if (canaries.some((c) => line.includes(c))) {
-        check(false, "the launcher check's key appeared on the app's stdout/stderr");
+        check(false, "the launcher check's key or canary appeared on the app's stdout/stderr");
         return;
       }
       log.push(line);

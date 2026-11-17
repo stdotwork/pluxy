@@ -1550,9 +1550,12 @@ app supported there:
   - the package session: the test package and the release gate ([Packages](#packages));
   - the tools sessions (`native/platform-tools.ts`, the `tools` shard): the signed tool sessions
     run.ts runs on Linux (admission, the program host with its swaps, routing with jobs), and a
-    launcher check that uses managed launches only (`src-tauri/src/launcher_platform_native.rs`:
-    no detached agent, terminal or key entry, which wait for their own slices), in the app built
-    with the test trust, in local mode against a test core;
+    launcher check that uses managed launches only (`src-tauri/src/launcher_platform_native.rs`),
+    in the app built with the test trust, in local mode against a test core. That check leaves out
+    what Linux checks with a detached agent, a terminal, key entry and the key consumers, and
+    its crash, chain, page, changed and idle steps, which wait for their own slices; on macOS its
+    tray step calls the menu's event handler with the item's ID, as no menu shows without a person
+    holding it open (on Windows it sends the menu's own command message);
   - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
     test core, with the window's and page's command probes, the native confirmations, key entry and
     key rotation. [Limits](#limits) says how its input is made.
