@@ -17,7 +17,7 @@ import (
 
 // A Muse Code login's quota is what Muse Code's key endpoint reports with the key it mints:
 // POST https://api.meta.ai/muse-code/key with the device token (the credential's refresh token), as
-// today's panel reads it. The device token renews the account, so it goes only where a renewal
+// the old panel read it. The device token renews the account, so it goes only where a renewal
 // sends it: Meta's own key endpoint (mint_url only in a test run, see sdk.TestLoginHost), never to
 // base_url, which an account may point at a relay. Meta has no other usage endpoint. The call makes a new API key; the reply's key is
 // dropped here, never returned and never kept, and the credential's own key is left alone: if Meta

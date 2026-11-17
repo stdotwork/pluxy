@@ -518,7 +518,9 @@ fn an_unanswered_cancel_stops_the_tool() {
         "{e}"
     );
     until("the tool to go", 5, || !alive(pid) && !alive(child));
-    assert_eq!(h.status(ID).state, "crashed");
+    // The host records the end once its supervisor has reaped the tool, which can come after
+    // the processes are gone: wait for the state, not a single read.
+    until("the crashed state", 5, || h.status(ID).state == "crashed");
 }
 
 #[test]
@@ -1043,6 +1045,9 @@ fn a_tool_that_floods_refused_calls_and_reads_no_answer_is_stopped() {
     let e = t.join().unwrap().unwrap_err();
     assert!(e.unknown, "{e}");
     until("the tool to go", 5, || !alive(pid));
+    // The host records why it stopped once its supervisor has reaped the tool, which can come
+    // after the process is gone: wait for the record, not a single read.
+    until("the stop to be recorded", 5, || h.status(ID).last.is_some());
     assert!(
         h.status(ID).last.unwrap_or_default().contains("faster"),
         "{:?}",

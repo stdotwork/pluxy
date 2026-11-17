@@ -1390,6 +1390,30 @@ func TestAccountRequestRetryMustNotBeNegative(t *testing.T) {
 	}
 }
 
+// An account's check refuses two models served under one name, naming the alias and the
+// account. Naming the same model twice loses nothing and passes, as does one name per model.
+func TestAccountCheckRefusesRepeatedModelName(t *testing.T) {
+	a := Account{ID: "pool", Models: []ModelEntry{{Name: "up-a", Alias: "pub"}, {Name: "up-b", Alias: "pub"}}}
+	err := a.Check()
+	if err == nil || !strings.Contains(err.Error(), `"pub"`) || !strings.Contains(err.Error(), `"pool"`) {
+		t.Errorf("Check = %v, want a refusal naming the alias \"pub\" and the account \"pool\"", err)
+	}
+	// A name with no alias is the name clients use, and an alias can take another entry's name.
+	a.Models = []ModelEntry{{Name: "m"}, {Name: "up-b", Alias: "m"}}
+	if err := a.Check(); err == nil {
+		t.Error("an alias equal to another entry's name passed the check")
+	}
+	for _, models := range [][]ModelEntry{
+		{{Name: "up-a", Alias: "pub"}, {Name: "up-a", Alias: "pub"}},
+		{{Name: "up-a", Alias: "pub-a"}, {Name: "up-b", Alias: "pub-b"}, {Name: "up-c"}},
+	} {
+		a.Models = models
+		if err := a.Check(); err != nil {
+			t.Errorf("models %v: Check = %v, want none", models, err)
+		}
+	}
+}
+
 // A request of an endpoint that takes no model and names none goes to every account, whatever
 // models each lists, and its attempts name no upstream model. One that names a model is routed
 // by it as any other, and without the flag an empty model serves nobody.
