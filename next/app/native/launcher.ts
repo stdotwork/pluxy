@@ -14,6 +14,11 @@
 // terminal, the first one Automatic picks) and `pluxy-agent` (`pluxy-agent.exe` on Windows: the
 // fixture program as the agent, found by name). override/agent is another copy, for an executable override. keys.json holds the
 // key the check types into native key entry, made here at random; the app never chose it.
+//
+// On Windows bin/ also holds `pluxy-node-agent.cmd`, an npm command shim (npm 9's cmd-shim layout,
+// which the execution program reads) of `pluxy-node-agent.js`, a Node script that writes what it
+// was started with to the file its first argument names; `pluxy-batch.cmd`, a batch file that is
+// no shim; and `pluxy-not-a-program.exe`, a text file named as a program.
 
 import { generateKeyPairSync, type KeyObject, randomBytes } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -33,6 +38,48 @@ const relay = {
 
 const EXECUTION = "pluxy/execution";
 const launchImport = { package: EXECUTION, contract: [1], operations: ["launch"], required: true };
+
+/** npm 9's command shim of a Node script at rel in the shim's folder, as cmd-shim 9.0.2 writes it
+ * (next/app-tools/execution/src/shim_tests.rs, NPM9_NODE). */
+function npmShim(rel: string): string {
+  return [
+    "@ECHO off",
+    "GOTO start",
+    ":find_dp0",
+    "SET dp0=%~dp0",
+    "EXIT /b",
+    ":start",
+    "SETLOCAL",
+    "CALL :find_dp0",
+    "",
+    'IF EXIST "%dp0%\\node.exe" (',
+    '  SET "_prog=%dp0%\\node.exe"',
+    ") ELSE (",
+    '  SET "_prog=node"',
+    ")",
+    "",
+    `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & "%_prog%"  "%dp0%\\${rel}" %*`,
+    "",
+  ].join("\r\n");
+}
+
+/** The Node agent: what it was started with (its argv, folder, the program running it, whether
+ * that is Bun, and whether its output is a console), written whole to the file its first argument
+ * names. */
+const NODE_AGENT = `"use strict";
+const fs = require("node:fs");
+const record = process.argv[2];
+const seen = {
+  pid: process.pid,
+  argv: process.argv,
+  cwd: process.cwd(),
+  exec_path: process.execPath,
+  bun: process.versions.bun ?? null,
+  tty: process.stdout.isTTY === true,
+};
+fs.writeFileSync(record + ".tmp", JSON.stringify(seen));
+fs.renameSync(record + ".tmp", record);
+`;
 
 export interface Launcher {
   /** The registries file the app's config should hold. */
@@ -107,7 +154,15 @@ export function buildLauncherFixtures(
     copyFileSync(program, to);
     chmodSync(to, 0o755);
   }
-  // Off Linux, the agent's working folder: it exits once a file named stop is in it.
+  if (process.platform === "win32") {
+    writeFileSync(join(bin, "pluxy-node-agent.cmd"), npmShim("pluxy-node-agent.js"));
+    writeFileSync(join(bin, "pluxy-node-agent.js"), NODE_AGENT);
+    // A plain batch file: cmd.exe would run it, and read its arguments its own way.
+    writeFileSync(join(bin, "pluxy-batch.cmd"), '@echo off\r\nnode "%~dp0\\pluxy-node-agent.js" %*\r\n');
+    writeFileSync(join(bin, "pluxy-not-a-program.exe"), "not a program\r\n");
+  }
+  // Off Linux, the agents' working folders: each agent exits once a file named stop is in the
+  // folder of its record (the check makes a folder for each launch inside work).
   if (process.platform !== "linux") mkdirSync(join(root, "work"));
   const keys = { key: `pluxy-launcher-key-${randomBytes(16).toString("hex")}` };
   writeFileSync(join(root, "keys.json"), JSON.stringify(keys));

@@ -112,7 +112,7 @@ mod jobs;
 #[cfg(target_os = "linux")]
 #[path = "launcher_native.rs"]
 mod launcher;
-// Off Linux, the launcher check that needs no detached agent, key entry or terminal.
+// Off Linux, the launcher check with this system's own terminal kinds and launch rules.
 #[cfg(all(native_stack, not(target_os = "linux")))]
 #[path = "launcher_platform_native.rs"]
 mod launcher;
