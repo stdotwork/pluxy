@@ -90,24 +90,10 @@ fn write_private_with_nonce(
         let mut name = name.to_os_string();
         name.push(format!(".{}.tmp", nonce()));
         let tmp = parent.join(name);
-        // macOS: where the volume keeps access lists, made with an empty one that takes nothing
-        // from the folder's, so no entry is on it at any moment (`private_macos.rs`).
-        #[cfg(target_os = "macos")]
-        let made = crate::private_macos::create_new_in(&folder, &tmp, 0o600);
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let made = {
-            use std::os::unix::fs::OpenOptionsExt;
-            fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(&tmp)
-        };
-        // Windows: with a protected access list allowing only this user and SYSTEM, given as it
-        // is made (`private_windows.rs`).
+        #[cfg(unix)]
+        let made = create_temp(&folder, &tmp);
         #[cfg(windows)]
-        let made = crate::private_windows::create_new_private(&tmp);
+        let made = create_temp(&tmp);
         match made {
             Ok(f) => break (tmp, f),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -134,6 +120,31 @@ fn write_private_with_nonce(
         let _ = fs::remove_file(&tmp);
     }
     result
+}
+
+/// Makes tmp, in the folder open as folder, new and for writing, readable only by this user
+/// (`write_private`'s temporary file), never through a link. macOS: where the volume keeps access
+/// lists, with an empty one that takes nothing from the folder's, so no entry is on it at any
+/// moment (`private_macos.rs`).
+#[cfg(target_os = "macos")]
+fn create_temp(folder: &fs::File, tmp: &Path) -> io::Result<fs::File> {
+    crate::private_macos::create_new_in(folder, tmp, 0o600)
+}
+#[cfg(all(unix, not(target_os = "macos")))]
+fn create_temp(_folder: &fs::File, tmp: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(tmp)
+}
+/// Windows: with a protected access list allowing only this user and SYSTEM, given as it is made
+/// (`private_windows.rs`).
+#[cfg(windows)]
+fn create_temp(tmp: &Path) -> io::Result<fs::File> {
+    crate::private_windows::create_new_private(tmp)
 }
 
 /// The core config the app keeps, `<dir>/config.json`. The app writes it once, the first time,
@@ -907,6 +918,11 @@ mod tests {
         let plain = dir.join("plain.json");
         fs::write(&plain, b"{}").unwrap();
         assert!(has(&plain));
+        // The temporary file write_private makes, checked on the descriptor it is made with,
+        // before anything else is done to it.
+        let folder = fs::File::open(&dir).unwrap();
+        let made = create_temp(&folder, &dir.join("connection.json.tmp")).unwrap();
+        assert!(!crate::private_macos::has_entries(&made).unwrap());
         let path = dir.join("connection.json");
         write_private(&path, b"{}").unwrap();
         assert!(!has(&path));
