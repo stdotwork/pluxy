@@ -842,7 +842,13 @@ func credentialRefused(e *llm.Error) bool {
 	return e != nil && e.Code == llm.CodeAuth && (e.Scope == "" || e.Scope == llm.ScopeCredential)
 }
 
+// coolingError is the reply for a request that finds every account blocked. It is only built for
+// a block that is still running, so it never says there is no wait: a wait of 0 or less reads and
+// is sent as 1 second.
 func coolingError(model string, wait time.Duration, reason *llm.Error) *llm.Error {
+	if wait <= 0 {
+		wait = time.Second
+	}
 	e := &llm.Error{
 		Code:         llm.CodeRateLimit,
 		Status:       429,

@@ -1490,3 +1490,27 @@ func TestCoolingErrorWaitRoundsUp(t *testing.T) {
 		})
 	}
 }
+
+// A block that ends at the very moment of the request is over: the account serves it, and no
+// cooling error is built. One millisecond earlier it is still running, and the error says 1s, not
+// "0s". With no wait at all, coolingError itself still says 1s and sends a retry_after_ms and so a
+// Retry-After.
+func TestCoolingErrorNeverSaysZero(t *testing.T) {
+	h := newHarness(t, Config{RequestRetry: rounds(0), MaxWaitMS: 120000}, accts("a")...)
+	h.on("a", rateLimited(time.Second), ok())
+	h.run(h.req("m")) // the 429 that starts a 1s block
+	h.now = h.now.Add(time.Second - time.Millisecond)
+	e := h.run(h.req("m"))[0].Error
+	if e == nil || e.ProviderCode != "model_cooldown" || !strings.HasSuffix(e.Message, "try again in 1s") || e.RetryAfterMS != 1 {
+		t.Errorf("1ms before the block ends: %+v, want model_cooldown, try again in 1s, retry_after_ms 1", e)
+	}
+	h.now = h.now.Add(time.Millisecond)
+	h.runOK("m") // the block ends at now: the account serves it
+
+	for _, wait := range []time.Duration{0, -time.Second} {
+		e := coolingError("m", wait, nil)
+		if !strings.HasSuffix(e.Message, "try again in 1s") || e.RetryAfterMS != 1000 {
+			t.Errorf("wait %v: %q, retry_after_ms %d; want try again in 1s and 1000", wait, e.Message, e.RetryAfterMS)
+		}
+	}
+}
