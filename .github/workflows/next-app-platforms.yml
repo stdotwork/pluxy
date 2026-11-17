@@ -317,8 +317,11 @@ jobs:
           cargo build --locked --features native-test,artifact-test-trust --bin pluxy-app --example program_fixture
           cd ../../app-tools
           cargo build --locked -p execution --target-dir ../app/src-tauri/target/app-tools
+      # The tools shard runs five app sessions one after another, each after starting a test core
+      # and each stopped after 10 minutes (TIMEOUT in native/platform-tools.ts): 60 minutes lets
+      # every session report even when each one hangs.
       - name: Native test
-        timeout-minutes: 40
+        timeout-minutes: ${{ matrix.shard == 'tools' && 60 || 40 }}
         env:
           PLUXY_APP_NATIVE_SHARD: ${{ matrix.shard }}
           PLUXY_APP_TEST_PACKAGE: ${{ runner.temp }}/test-package
