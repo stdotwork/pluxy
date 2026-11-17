@@ -264,9 +264,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     // HOME is the app's own (on Windows its profile folder, `USERPROFILE`); the data folder is the
     // tool's, made private beside the vault (on Windows in the local data folder, which does not
     // roam).
+    // Windows: read from the app's environment here, not as the host finds it (`home_dir`).
     #[cfg(windows)]
     let (home, data) = (
-        std::env::home_dir().ok_or("the app has no home folder")?,
+        std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .ok_or("the app has no USERPROFILE")?,
         app.path()
             .app_local_data_dir()
             .map_err(|e| e.to_string())?
