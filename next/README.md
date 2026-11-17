@@ -1109,7 +1109,11 @@ translated system instructions go as a user turn. Each function declaration's sc
 core cleans them: local `$ref`s inlined, `const` as an enum, constraints and short enums moved into
 the description as hints (`minLength: 1`, `Allowed: a, b`), a type list such as
 `["string","null"]` as one nullable type, and other JSON Schema keywords removed; for a Claude
-model, a union becomes its strongest branch. Claude models, Gemini 3 Pro and the image model are always
+model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
+object in a function's parameters that requires nothing gets a required placeholder property:
+`reason` (a string) where it has no properties, `_` (a boolean) where it has some and none is
+required. The extension removes the placeholders from the model's calls before any client format
+sees them; today's core does that only for Messages clients. Claude models, Gemini 3 Pro and the image model are always
 asked on the stream method and gathered into one reply when the client wants one. Replies are
 taken out of the envelope's `response` field. A 429 is a used-up quota when Google says
 `QUOTA_EXHAUSTED` or asks for a wait of five minutes or more, and a rate limit otherwise, with the
@@ -1122,8 +1126,7 @@ reasoning (thought signatures travel in band, as for Gemini), the per-account mo
 (`fetchAvailableModels`), Responses compaction through Antigravity, structured output for Claude
 5.5 as prompt text, sensitive-word obfuscation (`antigravity.sensitive-words`), the connection
 pool settings (`antigravity.connection-pool.*`), the app version lookup at every start, token
-counting (core has no count-tokens route), and the placeholder property today's core adds to a
-Claude function's objects that require nothing.
+counting (core has no count-tokens route).
 
 **Quota.** Quota reads `POST {base_url}/v1internal:retrieveUserQuotaSummary` with the credential's project, and the plan from `POST {base_url}/v1internal:loadCodeAssist`, with the access token and the account's Antigravity user agent. Each bucket of each model group becomes a limit, such as "Gemini models 5-hour limit", with the share used, the reset time, the window length where known and the group's models. A login's grant carries `identity` `{"email"}`.
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -21,18 +22,41 @@ import (
 //   - a union with one non-null branch becomes that branch, nullable; for Claude models, whose
 //     backend rejects unions in function declarations, every union becomes its strongest branch
 //     (object over array over scalar) with the other types hinted ("Accepts: a | b");
-//   - other JSON Schema keywords are removed.
-//
-// shortcut: today's core also adds a placeholder property ("_" or "reason") to Claude's objects
-// that require nothing, and removes it from the model's function calls; add both if Claude is
-// seen to refuse such objects.
+//   - other JSON Schema keywords are removed;
+//   - for Claude and Gemini 3 Pro (the models today's core marks this way), a function's
+//     parameters get a required placeholder in every object that requires nothing: "reason" (a
+//     string) in one with no properties, "_" (a boolean) in one with properties and none
+//     required. Claude's VALIDATED mode, which the extension asks for, wants a required property
+//     in every object. cleanTools reports where each placeholder went, and placeholders.strip
+//     removes it from the model's function calls, in every client format.
 
 // schemaMode says which rules apply to a schema.
 type schemaMode struct {
-	response  bool // a response schema, not a function's parameters
-	claude    bool // a function declaration for a Claude model
-	keepTitle bool
+	response     bool // a response schema, not a function's parameters
+	claude       bool // a function declaration for a Claude model
+	keepTitle    bool
+	placeholders bool // add the placeholders to a function's parameters
 }
+
+// placeholderReason describes the "reason" placeholder, as today's core words it.
+const placeholderReason = "Brief explanation of why you are calling this tool"
+
+// placeholderStep is one step from a function call's arguments to an object: into the property
+// named key, or, when any is set, into every element of an array or every value of an object.
+type placeholderStep struct {
+	key string
+	any bool
+}
+
+// placeholderSite is an object that got a placeholder: the steps to it from the arguments, and
+// the placeholder's name.
+type placeholderSite struct {
+	path []placeholderStep
+	name string
+}
+
+// placeholders lists, by function name, where cleanTools added a placeholder to the parameters.
+type placeholders map[string][]placeholderSite
 
 // hintedConstraints move into the description, in this order, as today's core moves them.
 var hintedConstraints = []string{
@@ -53,12 +77,15 @@ var removedKeywords = []string{
 const maxRefDepth = 16
 
 // cleanTools returns a request's tools with every function declaration's schemas cleaned: its
-// parameters (parametersJsonSchema renamed to parameters) and its response.
-func cleanTools(raw json.RawMessage, claude, keepTitle bool) json.RawMessage {
+// parameters (parametersJsonSchema renamed to parameters) and its response. group is true for
+// Claude and Gemini 3 Pro, which keep titles and get placeholders in their parameters; the second
+// result says where the placeholders went.
+func cleanTools(raw json.RawMessage, claude, group bool) (json.RawMessage, placeholders) {
 	var tools []map[string]json.RawMessage
 	if json.Unmarshal(raw, &tools) != nil {
-		return raw
+		return raw, nil
 	}
+	var added placeholders
 	for _, t := range tools {
 		for _, key := range []string{"functionDeclarations", "function_declarations"} {
 			var decls []map[string]json.RawMessage
@@ -73,7 +100,16 @@ func cleanTools(raw json.RawMessage, claude, keepTitle bool) json.RawMessage {
 					delete(d, "parametersJsonSchema")
 				}
 				if p, ok := d["parameters"]; ok {
-					d["parameters"] = cleanSchema(p, schemaMode{claude: claude, keepTitle: keepTitle})
+					cleaned, sites := cleanParameters(p, schemaMode{claude: claude, keepTitle: group, placeholders: group})
+					d["parameters"] = cleaned
+					if len(sites) > 0 {
+						var name string
+						_ = json.Unmarshal(d["name"], &name)
+						if added == nil {
+							added = placeholders{}
+						}
+						added[name] = append(added[name], sites...)
+					}
 				}
 				for _, rk := range []string{"responseJsonSchema", "response_json_schema"} {
 					if r, ok := d[rk]; ok {
@@ -92,9 +128,9 @@ func cleanTools(raw json.RawMessage, claude, keepTitle bool) json.RawMessage {
 	}
 	out, err := json.Marshal(tools)
 	if err != nil {
-		return raw
+		return raw, nil
 	}
-	return out
+	return out, added
 }
 
 // cleanResponseSchema moves a generation config's response schema to responseSchema, as today's
@@ -119,9 +155,16 @@ func cleanResponseSchema(gen map[string]json.RawMessage) bool {
 
 // cleanSchema returns a schema cleaned under mode.
 func cleanSchema(raw json.RawMessage, mode schemaMode) json.RawMessage {
+	out, _ := cleanParameters(raw, mode)
+	return out
+}
+
+// cleanParameters returns a schema cleaned under mode, and where it added placeholders (only
+// when mode asks for them).
+func cleanParameters(raw json.RawMessage, mode schemaMode) (json.RawMessage, []placeholderSite) {
 	var root any
 	if json.Unmarshal(raw, &root) != nil {
-		return raw
+		return raw, nil
 	}
 	defs := map[string]any{}
 	if m, ok := root.(map[string]any); ok {
@@ -133,11 +176,221 @@ func cleanSchema(raw json.RawMessage, mode schemaMode) json.RawMessage {
 			}
 		}
 	}
-	out, err := json.Marshal(clean(root, defs, mode, 0))
+	cleaned := clean(root, defs, mode, 0)
+	var sites []placeholderSite
+	if mode.placeholders && !mode.response {
+		addPlaceholders(cleaned, nil, &sites)
+	}
+	out, err := json.Marshal(cleaned)
 	if err != nil {
-		return raw
+		return raw, nil
+	}
+	return out, sites
+}
+
+// addPlaceholders adds a placeholder to every object schema under node, as today's core does,
+// deepest first, and records each in sites. An object that is a union (it has anyOf or oneOf) gets
+// none. path leads to the value node describes.
+//
+// shortcut: an object with no declared properties gets "reason", which strip removes from the
+// model's calls wherever it stands in that object, so a key of that name the model means as data
+// (a free-form map's) is removed too; today's core tells these apart in part. Tell them apart
+// when a client's free-form map is seen to lose a "reason".
+func addPlaceholders(node any, path []placeholderStep, sites *[]placeholderSite) {
+	m, ok := node.(map[string]any)
+	if !ok {
+		return
+	}
+	step := func(s placeholderStep) []placeholderStep { return append(slices.Clone(path), s) }
+	if props, ok := m["properties"].(map[string]any); ok {
+		for name, p := range props {
+			addPlaceholders(p, step(placeholderStep{key: name}), sites)
+		}
+	}
+	for _, k := range []string{"items", "prefixItems"} {
+		switch items := m[k].(type) {
+		case map[string]any:
+			addPlaceholders(items, step(placeholderStep{any: true}), sites)
+		case []any:
+			for _, it := range items {
+				addPlaceholders(it, step(placeholderStep{any: true}), sites)
+			}
+		}
+	}
+	addPlaceholders(m["additionalProperties"], step(placeholderStep{any: true}), sites)
+	for _, k := range []string{"anyOf", "oneOf", "allOf"} {
+		if branches, ok := m[k].([]any); ok {
+			for _, b := range branches {
+				addPlaceholders(b, path, sites)
+			}
+		}
+	}
+	if m["type"] != "object" {
+		return
+	}
+	if _, ok := m["anyOf"].([]any); ok {
+		return
+	}
+	if _, ok := m["oneOf"].([]any); ok {
+		return
+	}
+	props, has := m["properties"]
+	switch p := props.(type) {
+	case nil:
+		if has {
+			return // properties: null is left as it is
+		}
+		m["properties"] = map[string]any{"reason": map[string]any{"type": "string", "description": placeholderReason}}
+		m["required"] = []any{"reason"}
+		*sites = append(*sites, placeholderSite{path: path, name: "reason"})
+	case map[string]any:
+		if len(p) == 0 {
+			p["reason"] = map[string]any{"type": "string", "description": placeholderReason}
+			m["required"] = []any{"reason"}
+			*sites = append(*sites, placeholderSite{path: path, name: "reason"})
+			return
+		}
+		if requiresAny(m["required"], p) {
+			return
+		}
+		if _, declared := p["_"]; !declared {
+			p["_"] = map[string]any{"type": "boolean"}
+			*sites = append(*sites, placeholderSite{path: path, name: "_"})
+		}
+		m["required"] = []any{"_"}
+	}
+}
+
+// requiresAny reports whether required names at least one of props.
+func requiresAny(required any, props map[string]any) bool {
+	list, _ := required.([]any)
+	for _, r := range list {
+		if name, ok := r.(string); ok {
+			if _, in := props[name]; in {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// strip removes the placeholders from the function calls of one GenerateContent response (or
+// stream chunk). Any other chunk, and a call with no placeholder in it, comes back as it is.
+func (p placeholders) strip(data []byte) []byte {
+	if len(p) == 0 || !bytes.Contains(data, []byte(`"functionCall"`)) {
+		return data
+	}
+	var chunk map[string]json.RawMessage
+	if json.Unmarshal(data, &chunk) != nil {
+		return data
+	}
+	var cands []map[string]json.RawMessage
+	if json.Unmarshal(chunk["candidates"], &cands) != nil {
+		return data
+	}
+	changed := false
+	for _, cand := range cands {
+		var content map[string]json.RawMessage
+		var parts []map[string]json.RawMessage
+		if json.Unmarshal(cand["content"], &content) != nil || json.Unmarshal(content["parts"], &parts) != nil {
+			continue
+		}
+		partsChanged := false
+		for _, part := range parts {
+			var call map[string]json.RawMessage
+			if json.Unmarshal(part["functionCall"], &call) != nil {
+				continue
+			}
+			var name string
+			_ = json.Unmarshal(call["name"], &name)
+			sites := p[name]
+			if len(sites) == 0 || len(call["args"]) == 0 {
+				continue
+			}
+			if args, ok := stripSites(call["args"], sites); ok {
+				call["args"] = args
+				part["functionCall"], _ = marshalPlain(call)
+				partsChanged = true
+			}
+		}
+		if partsChanged {
+			content["parts"], _ = marshalPlain(parts)
+			cand["content"], _ = marshalPlain(content)
+			changed = true
+		}
+	}
+	if !changed {
+		return data
+	}
+	chunk["candidates"], _ = marshalPlain(cands)
+	out, err := marshalPlain(chunk)
+	if err != nil {
+		return data
 	}
 	return out
+}
+
+// stripSites removes the placeholder of each site from a call's arguments, and reports whether it
+// removed any.
+func stripSites(args json.RawMessage, sites []placeholderSite) (json.RawMessage, bool) {
+	dec := json.NewDecoder(bytes.NewReader(args))
+	dec.UseNumber() // numbers come back as they were written
+	var root any
+	if dec.Decode(&root) != nil {
+		return args, false
+	}
+	removed := false
+	for _, s := range sites {
+		targets := []any{root}
+		for _, st := range s.path {
+			var next []any
+			for _, t := range targets {
+				switch v := t.(type) {
+				case map[string]any:
+					if st.any {
+						for _, c := range v {
+							next = append(next, c)
+						}
+					} else if c, ok := v[st.key]; ok {
+						next = append(next, c)
+					}
+				case []any:
+					if st.any {
+						next = append(next, v...)
+					}
+				}
+			}
+			targets = next
+		}
+		for _, t := range targets {
+			if m, ok := t.(map[string]any); ok {
+				if _, has := m[s.name]; has {
+					delete(m, s.name)
+					removed = true
+				}
+			}
+		}
+	}
+	if !removed {
+		return args, false
+	}
+	out, err := marshalPlain(root)
+	if err != nil {
+		return args, false
+	}
+	return out, true
+}
+
+// marshalPlain is json.Marshal without the escaping of <, > and &, which would change text the
+// model wrote in a call's arguments.
+func marshalPlain(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 func clean(v any, defs map[string]any, mode schemaMode, depth int) any {
