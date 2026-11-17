@@ -148,6 +148,9 @@ struct Mode {
     /// refused: its error text, in UTF-16, on stderr (on stdout with `wsl_refuse_stdout`).
     wsl_refuse: u64,
     wsl_refuse_stdout: bool,
+    /// With `wsl_refuse`, on Unix: it ends at once, and the text reaches stdout 300 ms later
+    /// from a process it leaves in a session of its own, after it has been reaped.
+    wsl_refuse_late: bool,
 }
 
 impl Mode {
@@ -188,6 +191,7 @@ impl Mode {
             probe: v["probe"].as_u64(),
             wsl_refuse: v["wsl_refuse"].as_u64().unwrap_or_default(),
             wsl_refuse_stdout: v["wsl_refuse_stdout"] == true,
+            wsl_refuse_late: v["wsl_refuse_late"] == true,
         }
     }
 }
@@ -1035,6 +1039,19 @@ pub fn main() -> ! {
                 .encode_utf16()
                 .flat_map(|u| u.to_le_bytes())
                 .collect();
+            #[cfg(unix)]
+            if mode.wsl_refuse_late {
+                // SAFETY: nothing else runs in this process yet; the child only sleeps, writes
+                // and ends.
+                if unsafe { libc::fork() } == 0 {
+                    unsafe { libc::setsid() };
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    let _ = std::io::stdout().write_all(&text);
+                    let _ = std::io::stdout().flush();
+                    unsafe { libc::_exit(0) };
+                }
+                std::process::exit(1);
+            }
             if mode.wsl_refuse_stdout {
                 let _ = std::io::stdout().write_all(&text);
             } else {

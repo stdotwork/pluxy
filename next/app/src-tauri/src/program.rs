@@ -116,6 +116,8 @@ const MAX_TICKET: usize = 64;
 const LOG_RATE: usize = 50;
 /// How often the supervisor looks at its tool, and the pipe readers at their stop flag.
 const TICK: Duration = Duration::from_millis(100);
+/// How long a reaped tool's pipe readers have to read what it wrote last.
+const READERS: Duration = Duration::from_secs(1);
 
 /// The host's time limits. `Default` is the contract's.
 #[derive(Clone, Copy, Debug)]
@@ -2350,7 +2352,7 @@ fn supervise(
     if let Some(e) = threads.iter().find_map(|t| t.as_ref().err()) {
         run.finish(End::Failed(format!("its pipe threads: {e}")), true);
     }
-    let [_, _, log_reader] = threads;
+    let [_, frame_reader, log_reader] = threads;
     let _ = spawned.send(Ok(()));
     let mut stopping: Option<Instant> = None;
     loop {
@@ -2408,10 +2410,17 @@ fn supervise(
     kill_group(&mut child);
     let status = child.wait();
     run.tx.lock().unwrap().take();
+    // What it wrote last is read before anything is decided: its last log lines (and the count of
+    // those left out) for the status, and what `wsl.exe` said instead of a frame on either pipe,
+    // which decides whether WSL refused the start. Its readers reach the end of its pipes on their
+    // own once it is reaped; a process it left holding one keeps them for at most `READERS`.
+    let readers: Vec<_> = [frame_reader, log_reader].into_iter().flatten().collect();
+    let until = Instant::now() + READERS;
+    while readers.iter().any(|t| !t.is_finished()) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     run.closed.store(true, Ordering::SeqCst);
-    // Its last lines, and the count of those left out of the log, reach the status. The reader
-    // stops within a tick once it is reaped.
-    if let Ok(t) = log_reader {
+    for t in readers {
         let _ = t.join();
     }
     run.pending.lock().unwrap().clear();

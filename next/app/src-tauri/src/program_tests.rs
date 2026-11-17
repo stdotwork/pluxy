@@ -3457,12 +3457,21 @@ fn a_swap_stops_the_instances_in_wsl_of_the_release_it_replaces() {
 // when the last one is refused too does one crash count, with its backoff.
 #[test]
 fn a_start_wsl_refused_is_tried_again_and_counts_as_one_crash_only_when_it_stays_refused() {
-    for stdout in [false, true] {
-        let (h, bob) = wsl_here(json!({"wsl_refuse": 2, "wsl_refuse_stdout": stdout}));
-        let v = call_in(&h, &bob).unwrap();
-        assert_eq!(v["count"], 0, "stdout {stdout}");
+    let mut modes = vec![
+        json!({"wsl_refuse": 2}),
+        json!({"wsl_refuse": 2, "wsl_refuse_stdout": true}),
+    ];
+    // The text arriving on stdout only after the start was reaped (wsl.exe's pipe outlives it):
+    // still read, and still a refusal.
+    if cfg!(unix) {
+        modes.push(json!({"wsl_refuse": 2, "wsl_refuse_late": true}));
+    }
+    for mode in modes {
+        let (h, bob) = wsl_here(mode.clone());
+        let v = call_in(&h, &bob).unwrap_or_else(|e| panic!("{mode}: {e:?}"));
+        assert_eq!(v["count"], 0, "{mode}");
         let st = h.status_in(&bob);
-        assert_eq!((st.state, st.crashes), ("ready", 0), "{st:?}");
+        assert_eq!((st.state, st.crashes), ("ready", 0), "{mode}: {st:?}");
         h.stop_all();
     }
     let (h, bob) = wsl_here(json!({"wsl_refuse": 10}));
