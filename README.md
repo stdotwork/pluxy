@@ -15,7 +15,8 @@ from your API keys and subscription sign-ins. It has three parts, all in `next/`
 | `next/app/` | The desktop app ([README](next/app/README.md)) |
 | `extensions/app/` | The old desktop app. It stays until the new app runs on Windows and macOS. |
 
-See [AGENTS.md](AGENTS.md) for how to build and test each folder and how changes are made.
+See [AGENTS.md](AGENTS.md) for how to build and test each folder and how changes are made, and
+[docs/design.md](docs/design.md) for why the new core is built the way it is.
 
 ## Credits and license
 
