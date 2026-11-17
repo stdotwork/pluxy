@@ -315,7 +315,10 @@ mod tests {
 
     /// Run by `remove_folder` between its identity check and emptying the folder, for the path
     /// set here only (tests run in parallel).
-    static SWAP: Mutex<Option<(PathBuf, fn(&Path))>> = Mutex::new(None);
+    static SWAP: Mutex<Option<Swap>> = Mutex::new(None);
+
+    /// The path a swap is for, and the swap.
+    type Swap = (PathBuf, fn(&Path));
 
     pub(super) fn after_check(path: &Path) {
         let hook = match &*SWAP.lock().unwrap() {
