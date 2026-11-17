@@ -90,7 +90,7 @@ impl Binding {
 /// where the webview serves it as a scheme of its own, its origin where it is served as http
 /// (`http://pluxy-app.localhost` on Windows, which a `pluxy-app:` source does not allow: WebView2
 /// would show its error page in the frame instead).
-fn asset_source(base: &str) -> String {
+pub(crate) fn asset_source(base: &str) -> String {
     match Url::parse(base) {
         Ok(u) if u.scheme() == "http" || u.scheme() == "https" => u.origin().ascii_serialization(),
         Ok(u) => format!("{}:", u.scheme()),
