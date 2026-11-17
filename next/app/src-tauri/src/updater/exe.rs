@@ -384,11 +384,15 @@ fn replace(installed: &Path, bytes: &[u8], dir: &Path) -> Result<(), String> {
     let id = match record(dir, &new, &f) {
         Ok(id) => id,
         Err(e) => {
+            #[cfg(test)]
+            tests::before_removing_new(&new);
             let _ = while_busy(|| delete_through(&f));
             return Err(e);
         }
     };
     if let Err(e) = f.write_all(bytes).and_then(|()| f.sync_all()) {
+        #[cfg(test)]
+        tests::before_removing_new(&new);
         let _ = while_busy(|| delete_through(&f));
         return Err(shown(e));
     }
@@ -403,15 +407,21 @@ fn replace(installed: &Path, bytes: &[u8], dir: &Path) -> Result<(), String> {
         .map_err(shown)
         .and_then(|p| record(dir, &aside, &p).map(drop));
     if let Err(e) = program {
+        #[cfg(test)]
+        tests::before_removing_new(&new);
         remove_recorded(&made);
         return Err(e);
     }
     if let Err(e) = rename(installed, &aside) {
+        #[cfg(test)]
+        tests::before_removing_new(&new);
         remove_recorded(&made);
         return Err(shown(e));
     }
     if let Err(e) = rename(&new, installed) {
         let back = rename(&aside, installed);
+        #[cfg(test)]
+        tests::before_removing_new(&new);
         remove_recorded(&made);
         return Err(match back {
             Ok(()) => shown(e),
@@ -428,6 +438,39 @@ fn replace(installed: &Path, bytes: &[u8], dir: &Path) -> Result<(), String> {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Run by `replace` just before it deletes its new file after a failure, for the folder set
+    /// here only (tests run in parallel).
+    static SWAP_NEW: Mutex<Option<SwapNew>> = Mutex::new(None);
+
+    /// The folder a swap is for, and the swap.
+    type SwapNew = (PathBuf, fn(&Path));
+
+    pub(super) fn before_removing_new(new: &Path) {
+        let hook = match &*SWAP_NEW.lock().unwrap() {
+            Some((folder, f)) if Some(folder.as_path()) == new.parent() => Some(*f),
+            _ => None,
+        };
+        if let Some(f) = hook {
+            f(new);
+        }
+    }
+
+    /// Moves the file at p aside (to `<p>.ours`) and puts another file, "theirs", at its name.
+    fn swap_new(p: &Path) {
+        fs::rename(p, p.with_extension("ours")).unwrap();
+        fs::write(p, b"theirs").unwrap();
+    }
+
+    /// The file named like a new program in t that is not the one moved aside.
+    fn theirs(t: &Path) -> Vec<u8> {
+        let n = names(t)
+            .into_iter()
+            .find(|n| n.starts_with(".pluxy-update-") && !n.ends_with(".ours"))
+            .unwrap();
+        fs::read(t.join(n)).unwrap()
+    }
 
     /// A minimal program header for this architecture, then v.
     fn program_bytes(v: &str) -> Vec<u8> {
@@ -573,6 +616,19 @@ pub(super) mod tests {
         // Its aside name was recorded before the rename was tried.
         let record = fs::read_to_string(tmp.join("updates").join("leftovers.json")).unwrap();
         assert!(record.contains(".pluxy-old-"), "{record}");
+        // The same with the new file's name taken over just before it is removed: the file now at
+        // that name is not the one recorded, and stays.
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ)
+            .open(&exe)
+            .unwrap();
+        *SWAP_NEW.lock().unwrap() = Some((tmp.clone(), swap_new));
+        let r = replace(&exe, &program_bytes("new"), &tmp.join("updates"));
+        *SWAP_NEW.lock().unwrap() = None;
+        drop(held);
+        assert!(r.is_err());
+        assert_eq!(theirs(&tmp), b"theirs");
         fs::remove_dir_all(&tmp).unwrap();
     }
 
@@ -661,6 +717,14 @@ pub(super) mod tests {
         assert!(replace(&exe, &program_bytes("new"), &tmp.join("updates")).is_err());
         assert_eq!(fs::read(&exe).unwrap(), program_bytes("old"));
         assert_eq!(names(&tmp), ["pluxy.exe"]);
+        // The same with the new file's name taken over just before it is deleted: what goes is
+        // the file made, through its handle, not the file now at its name.
+        *SWAP_NEW.lock().unwrap() = Some((tmp.clone(), swap_new));
+        let r = replace(&exe, &program_bytes("new"), &tmp.join("updates"));
+        *SWAP_NEW.lock().unwrap() = None;
+        assert!(r.is_err());
+        assert_eq!(theirs(&tmp), b"theirs");
+        assert_eq!(names(&tmp).len(), 2, "{:?}", names(&tmp));
         fs::remove_dir_all(&tmp).unwrap();
     }
 
