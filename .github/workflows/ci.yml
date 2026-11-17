@@ -21,12 +21,24 @@ permissions:
 
 jobs:
   # Lists the files the change touches: for a pull request, the same three-dot diff its path
-  # filters used (base...head); for a merge group, everything the group adds to the base branch,
-  # including the PRs queued ahead of it. (The group's base_sha is its parent commit, which is the
-  # group ahead of it in the queue when groups build side by side.)
+  # filters used (base...head); for a merge group, what it adds to its parent commit (base_sha):
+  # the group ahead of it in the queue, or the base branch for the first group. The PRs ahead were
+  # checked by their own groups, and the queue merges a group only when every group ahead of it
+  # passed too. That holds only while the ruleset's merge queue requires all groups to pass
+  # (grouping strategy ALLGREEN, "Only merge non-failing pull requests"); with HEADGREEN a PR
+  # ahead could merge on this group's run, which skipped what that PR changed.
   # Each output says whether a workflow's paths were touched, using the paths that workflow's
-  # own pull_request trigger had. A change to this file runs them all. next-app-tools-wsl is not a
-  # workflow: it says whether next-app-tools-platforms.yml runs its WSL jobs.
+  # own pull_request trigger had. A change to this file runs them all.
+  # next-app-platforms (the Windows and macOS jobs) is the exception: it runs only for a change to
+  # what those jobs build or read. That is next/app, next/ui (the kit the window is built from),
+  # the protocol's app-manifest cases the app's Rust tests read, go.mod and go.sum, and the Go
+  # packages the app's tests build and run: e2e/panelcore, e2e/testext and cmd/pluxy, with
+  # everything they import on Linux, Windows and macOS. `go list` works the packages out from the
+  # code being tested, so a new import counts at once. Its native jobs build and run only the app
+  # and the kit, so a change that reaches none of next/app, next/ui and the workflows skips them
+  # (next-app-platforms-native).
+  # next-app-tools-wsl is not a workflow: it says whether next-app-tools-platforms.yml runs its WSL
+  # jobs.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -34,7 +46,10 @@ jobs:
       app: ${{ steps.paths.outputs.app }}
       next-ci: ${{ steps.paths.outputs.next-ci }}
       next-app: ${{ steps.paths.outputs.next-app }}
-      next-app-platforms: ${{ steps.paths.outputs.next-app-platforms }}
+      # Set by the paths step, or else by the go-packages step, which runs only when the paths
+      # step left it open.
+      next-app-platforms: ${{ steps.paths.outputs.next-app-platforms || steps.go-packages.outputs.next-app-platforms }}
+      next-app-platforms-native: ${{ steps.paths.outputs.next-app-platforms-native }}
       next-app-tools-platforms: ${{ steps.paths.outputs.next-app-tools-platforms }}
       next-app-tools-wsl: ${{ steps.paths.outputs.next-app-tools-wsl }}
       next-app-tools-pack: ${{ steps.paths.outputs.next-app-tools-pack }}
@@ -54,12 +69,12 @@ jobs:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
           GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = merge_group ]; then
-            range=("refs/remotes/origin/${GROUP_BASE_REF#refs/heads/}...$GROUP_HEAD")
+            range=("$GROUP_BASE...$GROUP_HEAD")
           else
             range=("$PR_BASE...$PR_HEAD")
           fi
@@ -69,15 +84,27 @@ jobs:
           echo "$(tr -cd '\0' < "$RUNNER_TEMP/changed" | wc -c) changed files"
           declare -A run=()
           for w in core app next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-wsl next-app-tools-pack next-corpus; do run[$w]=false; done
+          native=false
           while IFS= read -r -d '' path; do
             case $path in
               .github/workflows/ci.yml) for w in "${!run[@]}"; do run[$w]=true; done ;;
+            esac
+            case $path in
+              next/app/* | next/ui/* | .github/workflows/next-app-platforms.yml | .github/workflows/ci.yml)
+                native=true ;;
             esac
             case $path in core/* | .github/workflows/core-pr-test-build.yml) run[core]=true ;; esac
             case $path in extensions/app/* | .github/workflows/app-ci.yml) run[app]=true ;; esac
             case $path in next/* | .github/workflows/next-ci.yml) run[next-ci]=true ;; esac
             case $path in next/* | .github/workflows/next-app.yml) run[next-app]=true ;; esac
-            case $path in next/* | .github/workflows/next-app-platforms.yml) run[next-app-platforms]=true ;; esac
+            case $path in
+              next/app/* | next/ui/* | next/protocol/testdata/app-manifests/* | next/go.mod | next/go.sum | \
+                .github/workflows/next-app-platforms.yml)
+                run[next-app-platforms]=true ;;
+              # Any other file in next/ may be in one of those Go packages: the go-packages step
+              # decides.
+              next/*) printf '%s\0' "$path" >> "$RUNNER_TEMP/next-other" ;;
+            esac
             # The desktop app's files that exist for WSL run this workflow too, for its WSL jobs.
             case $path in next/app-tools/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
             # What the WSL jobs build and run: pluxy/wsl, pluxy-program, pluxy-transactions (with its
@@ -97,9 +124,59 @@ jobs:
             esac
             case $path in next/* | core/* | .github/workflows/next-corpus.yml) run[next-corpus]=true ;; esac
           done < "$RUNNER_TEMP/changed"
+          if [ "${run[next-app-platforms]}" = false ] && [ -s "$RUNNER_TEMP/next-other" ]; then
+            unset 'run[next-app-platforms]'
+            echo "next-app-platforms: left to the go-packages step"
+          fi
           for w in "${!run[@]}"; do
             echo "$w=${run[$w]}" | tee -a "$GITHUB_OUTPUT"
           done
+          echo "next-app-platforms-native=$native" | tee -a "$GITHUB_OUTPUT"
+      # The checkout above has only .github; go list needs next/ as tested.
+      - name: Check out next/
+        if: steps.paths.outputs.next-app-platforms == ''
+        run: git sparse-checkout add next
+      - name: Set up Go
+        if: steps.paths.outputs.next-app-platforms == ''
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: false
+      # Fails, and so fails the gate, when go list cannot load those packages.
+      - name: Work out whether the platform jobs build a changed file
+        id: go-packages
+        if: steps.paths.outputs.next-app-platforms == ''
+        working-directory: next
+        run: |
+          set -euo pipefail
+          # Every system and architecture the platform jobs and this check run on, with and without
+          # cgo, so a file kept to one of them by a build constraint counts too.
+          for os in linux windows darwin; do
+            for arch in amd64 arm64; do
+              for cgo in 0 1; do
+                GOOS=$os GOARCH=$arch CGO_ENABLED=$cgo go list -deps \
+                  -f '{{if and .Module .Module.Main}}{{.Dir}}{{end}}' \
+                  ./e2e/panelcore ./e2e/testext ./cmd/pluxy
+              done
+            done
+          done | sort -u > "$RUNNER_TEMP/dirs"
+          # Repository paths of the package folders; a file anywhere under one counts (embedded files).
+          while IFS= read -r dir; do
+            case $dir in
+              "$PWD") echo next ;;
+              "$PWD"/*) echo "next/${dir#"$PWD"/}" ;;
+            esac
+          done < "$RUNNER_TEMP/dirs" > "$RUNNER_TEMP/prefixes"
+          echo "$(wc -l < "$RUNNER_TEMP/prefixes") package folders"
+          hit=false
+          while IFS= read -r -d '' path; do
+            # go build and go run leave out test files.
+            case $path in *_test.go) continue ;; esac
+            while IFS= read -r dir; do
+              case $path in "$dir"/*) hit=true; echo "$path is in $dir"; break 2 ;; esac
+            done < "$RUNNER_TEMP/prefixes"
+          done < "$RUNNER_TEMP/next-other"
+          echo "next-app-platforms=$hit" | tee -a "$GITHUB_OUTPUT"
 
   core:
     name: Core CI
@@ -130,6 +207,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.next-app-platforms == 'true'
     uses: ./.github/workflows/next-app-platforms.yml
+    with:
+      skip-native: ${{ needs.changes.outputs.next-app-platforms-native != 'true' }}
 
   next-app-tools-platforms:
     name: Next app tools platforms
