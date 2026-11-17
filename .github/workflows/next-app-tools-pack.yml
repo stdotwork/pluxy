@@ -31,7 +31,10 @@ jobs:
   # the test fixture usage-fixture), as programs/<goos>-<goarch>/<program file name>.
   build:
     name: build (${{ matrix.platform }})
-    runs-on: ${{ matrix.os }}
+    # matrix.os names the system; the repository variables PLUXY_MACOS_CLOUD_RUNNER and
+    # PLUXY_WINDOWS_CLOUD_RUNNER, when set, give the runner label to use for it instead (AGENTS.md,
+    # "Where jobs run").
+    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os == 'windows-latest' && vars.PLUXY_WINDOWS_CLOUD_RUNNER || matrix.os }}
     timeout-minutes: 40
     strategy:
       fail-fast: false

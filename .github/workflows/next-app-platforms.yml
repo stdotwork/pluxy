@@ -40,7 +40,10 @@ defaults:
 jobs:
   app:
     name: app (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    # matrix.os names the system; the repository variables PLUXY_MACOS_CLOUD_RUNNER and
+    # PLUXY_WINDOWS_CLOUD_RUNNER, when set, give the runner label to use for it instead (AGENTS.md,
+    # "Where jobs run").
+    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os == 'windows-latest' && vars.PLUXY_WINDOWS_CLOUD_RUNNER || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -263,7 +266,10 @@ jobs:
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
     if: inputs.skip-native != true
-    runs-on: ${{ matrix.os }}
+    # matrix.os names the system; the repository variables PLUXY_MACOS_CLOUD_RUNNER and
+    # PLUXY_WINDOWS_CLOUD_RUNNER, when set, give the runner label to use for it instead (AGENTS.md,
+    # "Where jobs run").
+    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os == 'windows-latest' && vars.PLUXY_WINDOWS_CLOUD_RUNNER || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -314,7 +320,10 @@ jobs:
   # the account's own.
   dialogs:
     name: dialogs (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    # matrix.os names the system; the repository variables PLUXY_MACOS_CLOUD_RUNNER and
+    # PLUXY_WINDOWS_CLOUD_RUNNER, when set, give the runner label to use for it instead (AGENTS.md,
+    # "Where jobs run").
+    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os == 'windows-latest' && vars.PLUXY_WINDOWS_CLOUD_RUNNER || matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
