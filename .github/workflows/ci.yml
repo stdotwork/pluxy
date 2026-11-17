@@ -44,7 +44,6 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      core: ${{ steps.paths.outputs.core }}
       app: ${{ steps.paths.outputs.app }}
       next-ci: ${{ steps.paths.outputs.next-ci }}
       next-app: ${{ steps.paths.outputs.next-app }}
@@ -55,7 +54,6 @@ jobs:
       next-app-tools-platforms: ${{ steps.paths.outputs.next-app-tools-platforms }}
       next-app-tools-wsl: ${{ steps.paths.outputs.next-app-tools-wsl }}
       next-app-tools-pack: ${{ steps.paths.outputs.next-app-tools-pack }}
-      next-corpus: ${{ steps.paths.outputs.next-corpus }}
     steps:
       # Full history for the merge base, without file contents: the diff needs only trees.
       - name: Checkout
@@ -85,7 +83,7 @@ jobs:
           git diff --no-renames --name-only -z "${range[@]}" > "$RUNNER_TEMP/changed"
           echo "$(tr -cd '\0' < "$RUNNER_TEMP/changed" | wc -c) changed files"
           declare -A run=()
-          for w in core app next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-wsl next-app-tools-pack next-corpus; do run[$w]=false; done
+          for w in app next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-wsl next-app-tools-pack; do run[$w]=false; done
           native=false
           while IFS= read -r -d '' path; do
             case $path in
@@ -96,7 +94,6 @@ jobs:
                 .github/workflows/ci.yml)
                 native=true ;;
             esac
-            case $path in core/* | .github/workflows/core-pr-test-build.yml) run[core]=true ;; esac
             case $path in extensions/app/* | .github/workflows/app-ci.yml) run[app]=true ;; esac
             case $path in next/* | .github/workflows/next-ci.yml) run[next-ci]=true ;; esac
             case $path in next/* | .github/workflows/next-app.yml) run[next-app]=true ;; esac
@@ -125,7 +122,6 @@ jobs:
               next/app-tools/*/pluxy-extension.json | next/app-tools/Cargo.toml | next/app-tools/*/Cargo.toml | next/app-tools/Cargo.lock | next/cmd/pluxy-pack/* | .github/workflows/next-app-tools-pack.yml)
                 run[next-app-tools-pack]=true ;;
             esac
-            case $path in next/* | core/* | .github/workflows/next-corpus.yml) run[next-corpus]=true ;; esac
           done < "$RUNNER_TEMP/changed"
           if [ "${run[next-app-platforms]}" = false ] && [ -s "$RUNNER_TEMP/next-other" ]; then
             unset 'run[next-app-platforms]'
@@ -181,12 +177,6 @@ jobs:
           done < "$RUNNER_TEMP/next-other"
           echo "next-app-platforms=$hit" | tee -a "$GITHUB_OUTPUT"
 
-  core:
-    name: Core CI
-    needs: changes
-    if: needs.changes.outputs.core == 'true'
-    uses: ./.github/workflows/core-pr-test-build.yml
-
   app:
     name: App CI
     needs: changes
@@ -227,12 +217,6 @@ jobs:
     if: needs.changes.outputs.next-app-tools-pack == 'true'
     uses: ./.github/workflows/next-app-tools-pack.yml
 
-  next-corpus:
-    name: Next corpus
-    needs: changes
-    if: needs.changes.outputs.next-corpus == 'true'
-    uses: ./.github/workflows/next-corpus.yml
-
   # The required check. It runs even when the run is cancelled (always()), so a cancelled run
   # fails it instead of leaving it skipped, which would count as passing. It passes only when
   # the changes job passed and every workflow it chose passed; a workflow it did not choose
@@ -243,14 +227,12 @@ jobs:
     if: always()
     needs:
       - changes
-      - core
       - app
       - next-ci
       - next-app
       - next-app-platforms
       - next-app-tools-platforms
       - next-app-tools-pack
-      - next-corpus
     runs-on: ubuntu-latest
     steps:
       - name: Every chosen workflow passed

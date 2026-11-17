@@ -2,24 +2,25 @@ package corpus
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestCheckOldCoreDir(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "core")
-	err := checkOldCoreDir(missing)
-	if err == nil {
-		t.Fatal("a missing old-core folder was accepted")
+func TestOldCoreBinary(t *testing.T) {
+	if bin, err := oldCoreBinary(false, ""); bin != "" || err != nil {
+		t.Errorf("recorded run: got %q, %v; want no binary and no error", bin, err)
 	}
-	for _, want := range []string{missing, "PLUXY_CORPUS_OLD_CORE_BIN", oldCoreReadmeSection} {
+	if bin, err := oldCoreBinary(true, "/x/old-core"); bin != "/x/old-core" || err != nil {
+		t.Errorf("live run with a binary: got %q, %v; want /x/old-core and no error", bin, err)
+	}
+	_, err := oldCoreBinary(true, "")
+	if err == nil {
+		t.Fatal("a live run with no old-core binary was accepted")
+	}
+	for _, want := range []string{"PLUXY_CORPUS_OLD_CORE_BIN", oldCoreReadmeSection} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
 		}
-	}
-	if err := checkOldCoreDir(t.TempDir()); err != nil {
-		t.Errorf("an existing old-core folder was refused: %v", err)
 	}
 }
 
