@@ -6,7 +6,8 @@ import (
 	"unicode/utf8"
 )
 
-// MaxLoginText is the longest provider text a login error carries.
+// MaxLoginText is how many characters of provider text a login error keeps; longer text is cut
+// there and ends in an ellipsis.
 const MaxLoginText = 200
 
 var (
@@ -21,10 +22,11 @@ var (
 	secretPair = regexp.MustCompile(`(?i)\b(access_token|refresh_token|id_token|device_code|authorization_code|user_code|code_verifier|client_secret|api[_-]?key|password|secret)\b(["']?\s*[:=]\s*["']?)[^\s"',;&]+`)
 )
 
-// LoginText returns provider text for a login error: one line of at most MaxLoginText characters
-// without control characters, with long token-like strings and the values of fields named like
-// access_token, device_code, client_secret or password replaced. Before an account has a credential core cannot redact what a provider echoes,
-// so this is the only safeguard.
+// LoginText returns provider text for a login error: one line without control characters, cut
+// after MaxLoginText characters with an ellipsis, with long token-like strings and the values of
+// fields named like access_token, device_code, client_secret or password replaced. Before an
+// account has a credential core cannot redact what a provider echoes, so this is the only
+// safeguard.
 func LoginText(s string) string {
 	return boundText(s, MaxLoginText, nil)
 }
