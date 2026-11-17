@@ -39,6 +39,7 @@ func TestClaudeExecutorStreamTruncationReportsError(t *testing.T) {
 
 	pluginName := "test-claude-passthrough-truncation"
 	plugin := &captureClaudeUsagePlugin{
+		authID:  t.Name(),
 		records: make(chan usage.Record, 4),
 	}
 	usage.RegisterNamedPlugin(pluginName, plugin)
@@ -47,7 +48,7 @@ func TestClaudeExecutorStreamTruncationReportsError(t *testing.T) {
 	})
 
 	exec := NewClaudeExecutor(&config.Config{})
-	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+	auth := &cliproxyauth.Auth{ID: t.Name(), Attributes: map[string]string{
 		"api_key":  "key-123",
 		"base_url": server.URL,
 	}}
@@ -115,6 +116,7 @@ func TestClaudeExecutorTranslatedStreamTruncationReportsError(t *testing.T) {
 
 	pluginName := "test-claude-translated-truncation"
 	plugin := &captureClaudeUsagePlugin{
+		authID:  t.Name(),
 		records: make(chan usage.Record, 4),
 	}
 	usage.RegisterNamedPlugin(pluginName, plugin)
@@ -123,7 +125,7 @@ func TestClaudeExecutorTranslatedStreamTruncationReportsError(t *testing.T) {
 	})
 
 	exec := NewClaudeExecutor(&config.Config{})
-	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+	auth := &cliproxyauth.Auth{ID: t.Name(), Attributes: map[string]string{
 		"api_key":  "key-123",
 		"base_url": server.URL,
 	}}
@@ -427,6 +429,7 @@ func TestClaudeExecutorStreamErrorEventDoesNotCommitContinuityAndMarksFailed(t *
 
 	pluginName := "test-claude-error-event-usage"
 	plugin := &captureClaudeUsagePlugin{
+		authID:  t.Name(),
 		records: make(chan usage.Record, 4),
 	}
 	usage.RegisterNamedPlugin(pluginName, plugin)
@@ -435,7 +438,7 @@ func TestClaudeExecutorStreamErrorEventDoesNotCommitContinuityAndMarksFailed(t *
 	})
 
 	exec := NewClaudeExecutor(&config.Config{})
-	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+	auth := &cliproxyauth.Auth{ID: t.Name(), Attributes: map[string]string{
 		"api_key":  "key-123",
 		"base_url": server.URL,
 	}}
@@ -786,11 +789,12 @@ func TestClaudeExecutorMultiLineDataMessageStopAndErrorEvents(t *testing.T) {
 
 type captureAnyProviderUsagePlugin struct {
 	provider string
+	authID   string
 	records  chan usage.Record
 }
 
 func (p *captureAnyProviderUsagePlugin) HandleUsage(_ context.Context, record usage.Record) {
-	if p == nil || (p.provider != "" && record.Provider != p.provider) {
+	if p == nil || (p.provider != "" && record.Provider != p.provider) || record.AuthID != p.authID {
 		return
 	}
 	select {
@@ -808,7 +812,7 @@ func TestTranslatedClaudeStreamTruncationPreservesBufferedUsageOnFailure(t *test
 		defer server.Close()
 
 		pluginName := "test-gemini-claude-truncation-usage"
-		plugin := &captureAnyProviderUsagePlugin{provider: "gemini", records: make(chan usage.Record, 4)}
+		plugin := &captureAnyProviderUsagePlugin{provider: "gemini", authID: t.Name(), records: make(chan usage.Record, 4)}
 		usage.RegisterNamedPlugin(pluginName, plugin)
 		t.Cleanup(func() {
 			usage.RegisterNamedPlugin(pluginName, noopClaudeUsagePlugin{})
@@ -816,6 +820,7 @@ func TestTranslatedClaudeStreamTruncationPreservesBufferedUsageOnFailure(t *test
 
 		exec := NewGeminiExecutor(&config.Config{})
 		auth := &cliproxyauth.Auth{
+			ID:       t.Name(),
 			Provider: "gemini",
 			Attributes: map[string]string{
 				"api_key":  "test-gemini-key",
@@ -857,7 +862,7 @@ func TestTranslatedClaudeStreamTruncationPreservesBufferedUsageOnFailure(t *test
 		defer server.Close()
 
 		pluginName := "test-vertex-claude-truncation-usage"
-		plugin := &captureAnyProviderUsagePlugin{provider: "vertex", records: make(chan usage.Record, 4)}
+		plugin := &captureAnyProviderUsagePlugin{provider: "vertex", authID: t.Name(), records: make(chan usage.Record, 4)}
 		usage.RegisterNamedPlugin(pluginName, plugin)
 		t.Cleanup(func() {
 			usage.RegisterNamedPlugin(pluginName, noopClaudeUsagePlugin{})
@@ -865,6 +870,7 @@ func TestTranslatedClaudeStreamTruncationPreservesBufferedUsageOnFailure(t *test
 
 		exec := NewGeminiVertexExecutor(&config.Config{})
 		auth := &cliproxyauth.Auth{
+			ID:       t.Name(),
 			Provider: "vertex",
 			Attributes: map[string]string{
 				"api_key":  "test-vertex-key",
@@ -901,10 +907,11 @@ func TestTranslatedClaudeStreamTruncationPreservesBufferedUsageOnFailure(t *test
 	t.Run("openai-compatibility", func(t *testing.T) {
 		reply := "data: {\"id\":\"chatcmpl-trunc-usage\",\"object\":\"chat.completion.chunk\",\"created\":1773896263,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"partial\"},\"finish_reason\":null}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":3,\"total_tokens\":12}}\n\n"
 		exec, auth, _ := newApplyPatchCompatTestExecutor(t, reply)
+		auth.ID = t.Name()
 		request := []byte(`{"model":"test","max_tokens":64,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
 
 		pluginName := "test-openai-compat-claude-truncation-usage"
-		plugin := &captureAnyProviderUsagePlugin{provider: exec.Identifier(), records: make(chan usage.Record, 4)}
+		plugin := &captureAnyProviderUsagePlugin{provider: exec.Identifier(), authID: t.Name(), records: make(chan usage.Record, 4)}
 		usage.RegisterNamedPlugin(pluginName, plugin)
 		t.Cleanup(func() {
 			usage.RegisterNamedPlugin(pluginName, noopClaudeUsagePlugin{})
@@ -966,14 +973,14 @@ func TestClaudeExecutorStreamCancel499RecordsLastPacketUsage(t *testing.T) {
 			defer server.Close()
 
 			pluginName := "test-claude-cancel-499-" + mode.name
-			plugin := &captureClaudeUsagePlugin{records: make(chan usage.Record, 4)}
+			plugin := &captureClaudeUsagePlugin{authID: t.Name(), records: make(chan usage.Record, 4)}
 			usage.RegisterNamedPlugin(pluginName, plugin)
 			t.Cleanup(func() {
 				usage.RegisterNamedPlugin(pluginName, noopClaudeUsagePlugin{})
 			})
 
 			exec := NewClaudeExecutor(&config.Config{})
-			auth := &cliproxyauth.Auth{Attributes: map[string]string{
+			auth := &cliproxyauth.Auth{ID: t.Name(), Attributes: map[string]string{
 				"api_key":  "key-123",
 				"base_url": server.URL,
 			}}

@@ -193,6 +193,12 @@ the reply's `id` matches the manifest.
 
 Anything the extension writes to stderr goes to core's log, prefixed with the extension ID. Never
 write credentials there. Anything written to stdout after the handshake line is also logged.
+Core removes the credentials it knows of from these lines. So that this covers the credential a
+`refresh` or `login` returns, core holds every line while either runs and logs them when it ends.
+Core ends a login after 15 minutes; a refresh has no deadline, so one that hangs holds the lines
+until the extension exits. At most 1 MiB is held, counting 64 bytes for each line besides its
+text; past that, the rest of the held lines are left out, with notes saying so. When more than
+256 credentials are replaced while lines are held, all of the held lines are left out, with notes.
 
 ## Shutdown
 
