@@ -34,9 +34,11 @@ jobs:
   # the protocol's app-manifest cases the app's Rust tests read, go.mod and go.sum, and the Go
   # packages the app's tests build and run: e2e/panelcore, e2e/testext and cmd/pluxy, with
   # everything they import on Linux, Windows and macOS. `go list` works the packages out from the
-  # code being tested, so a new import counts at once. Its native jobs build and run only the app
-  # and the kit, so a change that reaches none of next/app, next/ui and the workflows skips them
-  # (next-app-platforms-native).
+  # code being tested, so a new import counts at once. Its native jobs build and run the app and
+  # the kit, and their tools shard also builds the app tools' execution crate with the two
+  # libraries it uses (lib/program, lib/files). A change to those crates or to the app tools'
+  # Cargo.toml or Cargo.lock runs the workflow and its native jobs; a change that reaches none of
+  # them, next/app, next/ui and the workflows skips the native jobs (next-app-platforms-native).
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -98,6 +100,12 @@ jobs:
               next/app/* | next/ui/* | next/protocol/testdata/app-manifests/* | next/go.mod | next/go.sum | \
                 .github/workflows/next-app-platforms.yml)
                 run[next-app-platforms]=true ;;
+              # The app tools the native tools shard builds: `cargo build -p execution` in
+              # next-app-platforms.yml, which builds lib/program and lib/files with it.
+              next/app-tools/execution/* | next/app-tools/lib/program/* | next/app-tools/lib/files/* | \
+                next/app-tools/Cargo.toml | next/app-tools/Cargo.lock)
+                run[next-app-platforms]=true
+                native=true ;;
               # Any other file in next/ may be in one of those Go packages: the go-packages step
               # decides.
               next/*) printf '%s\0' "$path" >> "$RUNNER_TEMP/next-other" ;;
