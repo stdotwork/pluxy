@@ -9,8 +9,10 @@
 //   (.github/workflows/next-app-platforms.yml). These report themselves self-hosted, so the job
 //   opts in: on the jobs it sends to the cloud runner, and only there, it sets
 //   PLUXY_EPHEMERAL_CI_RUNNER to the runner label it asked for. The label must be one of
-//   Blacksmith's macOS labels (blacksmith-<n>vcpu-macos-<version>), and the runner's own name that
-//   label, a dash and the VM's id, as Blacksmith names them.
+//   Blacksmith's macOS labels with a numbered version (blacksmith-<n>vcpu-macos-<version>: the
+//   variable pins the image, so not macos-latest), and the runner's own name that label, a dash and
+//   the VM's id, as Blacksmith's macOS runners have been named (observed, not documented: if
+//   Blacksmith changes it, this refuses, and the jobs fail rather than run elsewhere).
 //
 // A runner's name and labels are whatever its owner registers, so the name proves only which pool
 // the job went to, not that the machine is thrown away afterwards. That is why the provider is

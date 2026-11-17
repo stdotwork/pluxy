@@ -77,7 +77,8 @@ test("a maintainer's runner named after its own label is refused", () => {
 });
 
 test("only Blacksmith's macOS labels count", () => {
-  // Blacksmith names its Windows machines blacksmith-<id>-<n>vcpu, and they stay on GitHub's runners.
+  // Windows stays on GitHub's runners, whatever Blacksmith names its Windows machines (this repo's
+  // canary saw blacksmith-<id>-<n>vcpu, other repos <label>-<id>).
   expect(
     onDisposableRunner({
       ...cloud,
