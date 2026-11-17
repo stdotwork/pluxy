@@ -342,6 +342,10 @@ mod fsx {
         if st.st_mode & 0o077 != 0 && unsafe { libc::fchmod(fd.as_raw_fd(), 0o700) } != 0 {
             return Err(io::Error::last_os_error());
         }
+        // macOS: no extended access list entry either, the 0700 mode's twin
+        // (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        crate::private_macos::clear_entries(&fd)?;
         Ok(fd)
     }
 
@@ -378,6 +382,14 @@ mod fsx {
             return Err(io::Error::other(format!(
                 "{name} is mode {:o}, not 600: remove it and start again",
                 st.st_mode & 0o777
+            )));
+        }
+        // macOS: an extended access list entry could let another user in whatever the mode
+        // (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        if crate::private_macos::has_entries(&file)? {
+            return Err(io::Error::other(format!(
+                "{name} has an extended access list entry: remove it and start again"
             )));
         }
         let fl = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
@@ -958,6 +970,35 @@ mod tests {
         return PathBuf::from("/private/tmp");
         #[cfg(not(target_os = "macos"))]
         std::env::temp_dir()
+    }
+
+    /// macOS: the instance folder keeps no extended access list entry, as it keeps no group or
+    /// other mode bits.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_instance_folder_keeps_no_access_list() {
+        let t = temp();
+        let d = t.0.join("run");
+        fs::create_dir(&d).unwrap();
+        crate::private_macos::add_entry(&d, "everyone allow list,add_file,file_inherit");
+        let open = super::fsx::open_dir(&d).unwrap();
+        assert!(!crate::private_macos::has_entries(&open).unwrap());
+    }
+
+    /// macOS: a 0600 lock an extended access list entry lets others write is refused, as a 0644
+    /// one is.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_lock_with_an_access_list_entry_is_refused() {
+        let t = temp();
+        let dir = t.0.join("instance");
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(dir.join(LOCK), b"").unwrap();
+        fs::set_permissions(dir.join(LOCK), fs::Permissions::from_mode(0o600)).unwrap();
+        crate::private_macos::add_entry(&dir.join(LOCK), "everyone allow write");
+        let e = start(&dir, Duration::from_millis(100)).err().unwrap();
+        assert!(e.contains("extended access list"), "{e}");
     }
 
     fn temp() -> Temp {

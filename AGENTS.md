@@ -1,38 +1,31 @@
 # AGENTS.md
 
-pluxy is a monorepo with three parts of one product: a proxy that serves OpenAI-, Gemini-,
-Claude- and Codex-compatible APIs, a desktop app that manages it, and a web panel for it. A new
-core with provider extensions is being built from scratch in `next/`, beside today's `core/`.
+pluxy is one product in three parts: a proxy (the core) that serves OpenAI-, Gemini-, Claude-
+and Codex-compatible APIs through provider extensions, a desktop app that manages it, and a web
+panel for it. All three are in `next/`, and all new work goes there. The old desktop app in
+`extensions/app/` stays until the new app in `next/app/` runs on Windows and macOS.
 
 ## Layout
 
-| Folder | What it is | Came from |
-| --- | --- | --- |
-| `core/` | Go proxy server | router-for-me/CLIProxyAPI |
-| `extensions/app/` | Tauri 2 desktop app (React front end, Rust back end) | router-for-me/EasyCLIProxyAPI |
-| `next/` | New Go core, its extension protocol and provider extensions | written for pluxy |
+| Folder | What it is |
+| --- | --- |
+| `next/` | The product. Its Go code (the core, the SDK, the extensions and their tests) is one module, `github.com/stdotwork/pluxy/next` |
+| `next/app/` | The desktop app: the UI kit's second build, in a Tauri 2 window |
+| `next/app-tools/` | Native programs the desktop app runs on demand, and the libraries they share: a cargo workspace of its own |
+| `next/ui/` | The UI kit, and the web panel, its browser build, which core embeds |
+| `next/extensions/` | Provider extensions: separate programs, one per kind of upstream, that core starts |
+| `next/corpus/` | The differential test corpus: the new core against the old core's recorded replies |
+| `next/protocol/` | The extension protocol between core and extensions |
+| `extensions/app/` | The old desktop app, a fork of router-for-me/EasyCLIProxyAPI: Tauri 2, with a React front end and a Rust back end |
 
-`core/` and `extensions/app/` still receive pulls from their upstream
-projects. Keep changes inside a folder contained: no sweeping renames, reformatting or file
-moves, so later upstream merges stay easy. `core/`'s Go module path stays
-`github.com/router-for-me/CLIProxyAPI/v8`. `next/` has no upstream; its module path is
-`github.com/stdotwork/pluxy/next`, and it does not import code from `core/`.
+`next/README.md` describes the rest of `next/`.
 
 ## Which rules apply
 
-A folder's own `AGENTS.md` (`core/AGENTS.md`) holds that folder's
-coding rules and applies to work inside it. The app has no `AGENTS.md`; follow nearby code.
-`next/` has no `AGENTS.md` either: follow nearby code, prefer the standard library (its only
-other dependencies are `github.com/coder/websocket` and `gopkg.in/yaml.v3`), and change the
-extension protocol only together with its README (`next/protocol/README.md`).
-
-The upstream process rules in those files and in upstream tooling do not apply in pluxy:
-
-- PRs go to `main`, not `dev`. There is no `dev` branch.
-- There is no AGENTS.md-change guard; edit agent files like any other file.
-- `core/AGENTS.md`: skip the `internal/translator/` permission check and the "file an issue and
-  stop" step. Translator-only changes are ordinary PRs here.
-- `core/AGENTS.md`: skip the note about updating the CLIProxyAPIHome repository.
+`next/` has no `AGENTS.md`: follow nearby code, prefer the standard library (its only other
+dependencies are `github.com/coder/websocket` and `gopkg.in/yaml.v3`), and change the extension
+protocol only together with its README (`next/protocol/README.md`). The old desktop app has no
+`AGENTS.md` either; follow nearby code there too.
 
 If `.private/AGENTS.md` exists, read it too: it holds the owner's private instructions and notes.
 Confirmed plans, decisions and major tradeoffs are written up in `docs/`.
@@ -40,23 +33,6 @@ Confirmed plans, decisions and major tradeoffs are written up in `docs/`.
 ## Build and test
 
 Run each command from the folder named in its heading.
-
-### `core/`
-
-Go version comes from `core/go.mod` (currently `go 1.26.10`). Set `CGO_ENABLED=1`: the plugin
-host needs cgo.
-
-```bash
-CGO_ENABLED=1 go build -o test-output ./cmd/server && rm test-output   # compile check
-CGO_ENABLED=1 go test ./...                                          # all tests
-CGO_ENABLED=1 go vet ./...
-gofmt -l .                                                           # must not list files you touched
-```
-
-`gofmt -l .` lists two inherited test files under `internal/runtime/executor/`; leave them
-unless your change touches them. Some `internal/runtime/executor` tests
-are sensitive to machine load and to repeated runs (`-count` above 1); rerun a failure there
-before assuming your change caused it.
 
 ### `next/`
 
@@ -104,15 +80,11 @@ cd app-tools && cargo fmt --check && cargo clippy --locked --all-targets -- -D w
 ```
 
 `corpus/` is the differential test corpus (see `next/corpus/README.md`). By default it compares
-the new core with the old core's recorded replies. To run today's core live as well, or to
-re-record after changing a case:
+the new core with the old core's recorded replies. The old core is no longer in this repository:
+to run it live as well, or to re-record after changing a case, build it from the commit
+`next/corpus/README.md` names and follow that README's "Re-recording against the old core".
 
-```bash
-PLUXY_CORPUS_OLD_CORE=1 go test -count=1 -v -run TestCorpus ./corpus   # builds core/ with cgo
-PLUXY_CORPUS_RECORD=1 go test -count=1 -run TestCorpus ./corpus        # rewrites recorded_old_core
-```
-
-### `extensions/app/`
+### `extensions/app/` (the old desktop app)
 
 Bun `1.3.14` (`packageManager` in `package.json`) and a stable Rust toolchain (none is pinned in
 the tree; CI uses 1.97.0). Building the Rust side on Linux needs the WebKitGTK 4.1 development
@@ -153,14 +125,11 @@ manual runs or tags, as its file says; the two Windows and macOS platform workfl
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
 | `ci.yml` | Every PR and every merge-queue group | Works out which folders the change touches (for a PR, the diff against its base; for a group, what it adds to the group ahead of it in the queue, or to `main` for the first group; sound only while the queue's ruleset keeps "Only merge non-failing pull requests" (ALLGREEN)), runs the workflows below whose paths it touches as reusable workflows, and runs `gate`, which passes only when every workflow it chose passed. A change to `ci.yml` runs them all. `next-release.yml` is not among them |
-| `core-pr-test-build.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `core/` | Refreshes the model catalog, then `go build ./cmd/server`, `go vet ./...` and `go test ./...` |
-| `core-release.yaml` | `core-v*` tags | Builds release archives and creates the GitHub release |
-| `app-ci.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `extensions/app/` | Front end: `bun run check`, `bun test`, `bun run build`; Rust: `cargo check --locked`, `cargo test --locked` |
+| `app-ci.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `extensions/app/` | The old desktop app. Front end: `bun run check`, `bun test`, `bun run build`; Rust: `cargo check --locked`, `cargo test --locked` |
 | `next-ci.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/` | UI type check, lint and unit tests; builds the panel; `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test -race ./...`; the panel's browser test in headless Chromium, and the extension pages test in Chromium, Firefox and WebKit; uploads the browser tests' screenshots and traces as an artifact for 7 days |
 | `next-app.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/` | The desktop app in `next/app`: type check, lint, unit tests and build of the window; `cargo fmt --check`, `cargo clippy`, `cargo test --locked` (unit tests and each connection mode against a real core); format, clippy and tests of `next/app-tools`. In parallel, the native test on Xvfb, which also builds and runs the test AppImage and checks the release gate, split into shard jobs that each build everything and run their own sessions (`next/app/native/shards.ts`) and upload each session's last screenshot as an artifact for 7 days. The `app` job passes only when every other job did |
 | `next-app-platforms.yml` | PRs and merge-queue groups (through `ci.yml`) changing what it builds: `next/app/`, `next/ui/`, `next/protocol/testdata/app-manifests/`, `next/go.mod` or `next/go.sum`, the workflow, or a file other than a test in a Go package the app's tests build (`e2e/panelcore`, `e2e/testext` and `cmd/pluxy` and what they import, as `go list` finds them), and its `native` jobs for the same changes except the app-manifest cases, since their sessions start a test core with `go run ./e2e/panelcore`; once a day on `main` (03:17 UTC); `workflow_dispatch` | The desktop app on `windows-latest` and `macos-latest`: the Rust crate's format, clippy and tests, and the native test's sessions that run there; the rest of the native test stays on Linux in `next-app.yml`. The workflow file says which jobs run and what each checks; `next/app/README.md` ("Limits") says which sessions run off Linux |
 | `next-app-tools-platforms.yml` | PRs and merge-queue groups (through `ci.yml`) touching `next/app-tools/` or the workflow, or the desktop app's files that exist for WSL (`next/app/src-tauri/src/environments*.rs` and its wsl-named files); once a day on `main` (03:47 UTC); `workflow_dispatch` | The app tools on `windows-latest` and `macos-latest` (clippy and tests, with the counts in the job summary), leaving out the tools not yet ported (the workflow's `NOT_PORTED`; `next/app-tools/README.md` names them), and the `WSL 2` and `WSL 1` jobs, which run the real-WSL tests on GitHub-hosted `windows-latest` (for PRs and merge-queue groups only when what they build or run changes, as `ci.yml` decides; always on the daily and manual runs). The workflow file says what each job checks |
-| `next-corpus.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/` or `core/` | Builds `core/` and runs the corpus against both cores live; the report is in the job summary |
 | `next-release.yml` | `next-v*` tags; PRs touching `next/Dockerfile`, `next/.dockerignore`, `next/compose.example.yaml`, `next/cmd/pluxy-pack/` or the workflow | PRs: builds the container image (amd64, and arm64 without running it), starts it with a temporary config, polls `/healthz`, checks the panel and the bundled packages, and packs every extension for the release platforms. Tags: also uploads the archives and `registry.json` to the GitHub release and pushes the image to `ghcr.io` once the checks pass |
 | `next-app-tools-pack.yml` | PRs and merge-queue groups (through `ci.yml`) touching the app tools' manifests or workspace, `next/cmd/pluxy-pack/` or the workflow; `next-v*` tags | Builds the app tools on each platform's own runner and packs them with `pluxy-pack -app-tools`, uploading nothing; the workflow file has the detail |
 
@@ -173,8 +142,8 @@ path case and a job for it in `ci.yml`, and add the job to `gate`'s `needs`.
 By default every job runs on GitHub's own runners. Two repository variables send some jobs to
 the maintainers' own machines instead:
 
-- `PLUXY_LINUX_RUNNER` takes the Linux jobs of `core-pr-test-build.yml`, `app-ci.yml`,
-  `next-app.yml` and `next-corpus.yml`, except `next-app.yml`'s native test shards: the
+- `PLUXY_LINUX_RUNNER` takes the Linux jobs of `app-ci.yml` and `next-app.yml`, except
+  `next-app.yml`'s native test shards: the
   document portal they start needs `/dev/fuse`, which the runner containers don't get.
   `next-ci.yml` stays on GitHub's runners.
 - `PLUXY_WINDOWS_RUNNER` takes the Windows leg of the `tools` job in
@@ -214,9 +183,10 @@ Some macOS jobs and every Windows job stay on GitHub's runners:
 
 - `main` is the only long-lived branch. Work on a task branch and open a PR against `main`.
 - One concern per PR. A change in behaviour goes in its own PR, and the PR title says so.
-- Commit messages and PR titles use Conventional Commits, scoped by folder: `core`, `app`,
-  `next`, or `ci` for workflows, for example `fix(core): ...` or `ci: ...`. Repo-wide docs use
-  `docs: ...`.
+- Commit messages and PR titles use Conventional Commits, scoped by folder: `next`, or `ci` for
+  workflows, for example `fix(next): ...` or `ci: ...`. Repo-wide docs use `docs: ...`. The scope
+  `app` is for the old desktop app in `extensions/app/` only; work on `next/app/` uses `next`.
 - Open PRs ready for review, not as drafts. The owner reviews and merges.
-- Licensing: each folder keeps its upstream MIT `LICENSE`. The notice of the removed old web
-  panel is in `THIRD_PARTY_NOTICES.md`. The root license is not decided yet; do not add one.
+- Licensing: the upstream MIT notices of the removed old core and old web panel are in
+  `THIRD_PARTY_NOTICES.md`; the old desktop app keeps its own in `extensions/app/LICENSE`. The
+  root license is not decided yet; do not add one.

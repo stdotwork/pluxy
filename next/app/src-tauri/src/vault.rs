@@ -372,6 +372,10 @@ impl Folder {
             f.set_permissions(fs::Permissions::from_mode(0o700))
                 .map_err(|e| format!("{what}: {e}"))?;
         }
+        // macOS: an extended access list is the mode's twin, so it is emptied too, and nothing
+        // made in the folder inherits an entry (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        crate::private_macos::clear_entries(&f).map_err(|e| format!("{what}: {e}"))?;
         Ok(Folder(f))
     }
 
@@ -461,7 +465,14 @@ impl Folder {
         }
         let mut f = unsafe { fs::File::from_raw_fd(fd) };
         let m = f.metadata().map_err(|e| e.to_string())?;
-        if !m.is_file() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o077 != 0 {
+        // macOS: a file with any extended access list entry is refused as one too open by its
+        // mode is (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        let listed = crate::private_macos::has_entries(&f).map_err(|e| format!("{name}: {e}"))?;
+        #[cfg(not(target_os = "macos"))]
+        let listed = false;
+        if !m.is_file() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o077 != 0 || listed
+        {
             return Err(format!(
                 "{name} must be a file of this user's that no one else may read"
             ));
