@@ -1,6 +1,7 @@
 // Fixtures for the native test's check of cross-package routing and import authorization
 // (src-tauri/src/routing_native.rs). Every native tool is the disposable fixture tool
-// (src-tauri/examples/program_fixture, which run.ts builds) in its own signed package; the
+// (src-tauri/examples/program_fixture, which run.ts builds, and off Linux the workflow) in its own
+// signed package; the
 // manifests differ only in what they declare:
 //
 // - pluxy/target, releases 1.0.0 and 2.0.0: exports summary and wait (read), store (write) and

@@ -134,6 +134,7 @@ mod imp {
 
     /// Every process ID, this user's or not.
     fn pids() -> Vec<libc::pid_t> {
+        // SAFETY: a null buffer of size 0 asks only for the count.
         let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
         if n <= 0 {
             return Vec::new();
@@ -141,6 +142,7 @@ mod imp {
         // Room for processes started since.
         let mut v: Vec<libc::pid_t> = vec![0; n as usize + 256];
         let bytes = (v.len() * size_of::<libc::pid_t>()) as libc::c_int;
+        // SAFETY: v holds bytes bytes.
         let got = unsafe { libc::proc_listallpids(v.as_mut_ptr().cast(), bytes) };
         v.truncate(got.max(0) as usize);
         v.retain(|p| *p > 0);
@@ -150,6 +152,7 @@ mod imp {
     /// The program file pid runs, while it runs (a zombie has none).
     fn path(pid: libc::pid_t) -> Option<PathBuf> {
         let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        // SAFETY: buf holds the length given.
         let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
         if n <= 0 {
             return None;
@@ -173,8 +176,10 @@ mod imp {
         let Ok(pid) = libc::pid_t::try_from(pid) else {
             return false;
         };
+        // SAFETY: an all-zero proc_bsdinfo is a valid value to fill.
         let mut info: libc::proc_bsdinfo = unsafe { zeroed() };
         let size = size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        // SAFETY: info is size bytes.
         let n = unsafe {
             libc::proc_pidinfo(
                 pid,
@@ -188,17 +193,21 @@ mod imp {
     }
 
     pub(super) fn threads() -> Vec<String> {
+        // SAFETY: getpid has no preconditions.
         let me = unsafe { libc::getpid() };
         let mut ids: Vec<u64> = vec![0; 4096];
         let bytes = (ids.len() * size_of::<u64>()) as libc::c_int;
+        // SAFETY: ids holds bytes bytes.
         let n = unsafe {
             libc::proc_pidinfo(me, PROC_PIDLISTTHREADS, 0, ids.as_mut_ptr().cast(), bytes)
         };
         ids.truncate((n.max(0) as usize) / size_of::<u64>());
         ids.into_iter()
             .filter_map(|id| {
+                // SAFETY: an all-zero proc_threadinfo is a valid value to fill.
                 let mut t: libc::proc_threadinfo = unsafe { zeroed() };
                 let size = size_of::<libc::proc_threadinfo>() as libc::c_int;
+                // SAFETY: t is size bytes.
                 let got = unsafe {
                     libc::proc_pidinfo(
                         me,
@@ -208,10 +217,13 @@ mod imp {
                         size,
                     )
                 };
+                // The name's buffer, up to its first NUL (none when the name fills it).
                 (got == size).then(|| {
-                    unsafe { CStr::from_ptr(t.pth_name.as_ptr()) }
-                        .to_string_lossy()
-                        .into_owned()
+                    let bytes: Vec<u8> = t.pth_name.iter().map(|c| *c as u8).collect();
+                    match CStr::from_bytes_until_nul(&bytes) {
+                        Ok(c) => c.to_string_lossy().into_owned(),
+                        Err(_) => String::from_utf8_lossy(&bytes).into_owned(),
+                    }
                 })
             })
             .collect()
@@ -219,8 +231,10 @@ mod imp {
 
     /// The pipe ends pid has open (the kernel's handles of each end), by descriptor.
     fn pipe_ends(pid: libc::pid_t) -> Vec<(i32, u64, u64)> {
+        // SAFETY: an all-zero proc_fdinfo is a valid value to fill.
         let mut fds: Vec<libc::proc_fdinfo> = vec![unsafe { zeroed() }; 4096];
         let bytes = (fds.len() * size_of::<libc::proc_fdinfo>()) as libc::c_int;
+        // SAFETY: fds holds bytes bytes.
         let n = unsafe {
             libc::proc_pidinfo(
                 pid,
@@ -234,8 +248,10 @@ mod imp {
         fds.into_iter()
             .filter(|f| f.proc_fdtype == libc::PROX_FDTYPE_PIPE as u32)
             .filter_map(|f| {
+                // SAFETY: an all-zero PipeFdInfo (plain integers) is a valid value to fill.
                 let mut info: PipeFdInfo = unsafe { zeroed() };
                 let size = size_of::<PipeFdInfo>() as libc::c_int;
+                // SAFETY: info is size bytes, laid out as `struct pipe_fdinfo`.
                 let got = unsafe {
                     libc::proc_pidfdinfo(
                         pid,
@@ -343,29 +359,30 @@ mod imp {
     use std::mem::{size_of, zeroed};
     use std::os::windows::ffi::OsStringExt;
     use std::path::{Path, PathBuf};
-    use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, LocalFree, HANDLE, INVALID_HANDLE_VALUE, WAIT_TIMEOUT,
+    };
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, Thread32First, Thread32Next,
         PROCESSENTRY32W, TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD, THREADENTRY32,
     };
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcessId, GetExitCodeProcess, GetThreadDescription, OpenProcess, OpenThread,
-        QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-        THREAD_QUERY_LIMITED_INFORMATION,
+        GetCurrentProcessId, GetThreadDescription, OpenProcess, OpenThread,
+        QueryFullProcessImageNameW, WaitForSingleObject, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, THREAD_QUERY_LIMITED_INFORMATION,
     };
-
-    /// `STILL_ACTIVE`: the exit code of a process that has not exited.
-    const STILL_ACTIVE: u32 = 259;
 
     /// A handle closed when dropped.
     struct Owned(HANDLE);
     impl Drop for Owned {
         fn drop(&mut self) {
+            // SAFETY: the handle is this value's own, closed once.
             unsafe { CloseHandle(self.0) };
         }
     }
 
     fn snapshot(what: u32) -> Option<Owned> {
+        // SAFETY: no pointers; the handle it returns is checked.
         let h = unsafe { CreateToolhelp32Snapshot(what, 0) };
         (h != INVALID_HANDLE_VALUE && !h.is_null()).then_some(Owned(h))
     }
@@ -374,33 +391,45 @@ mod imp {
         let Some(s) = snapshot(TH32CS_SNAPPROCESS) else {
             return Vec::new();
         };
+        // SAFETY: an all-zero PROCESSENTRY32W is a valid value to fill; its size is set below.
         let mut e: PROCESSENTRY32W = unsafe { zeroed() };
         e.dwSize = size_of::<PROCESSENTRY32W>() as u32;
         let mut out = Vec::new();
+        // SAFETY: s is a live snapshot; e is a sized entry.
         let mut more = unsafe { Process32FirstW(s.0, &mut e) } != 0;
         while more {
             if e.th32ProcessID != 0 {
                 out.push(e.th32ProcessID);
             }
+            // SAFETY: as above.
             more = unsafe { Process32NextW(s.0, &mut e) } != 0;
         }
         out
     }
 
-    /// pid, opened to query it, while it runs (not once it has exited, though held).
+    /// pid, opened to query it, while it runs (not once it has exited, though held): its handle is
+    /// not yet signalled. Its exit code would not do: a process may exit with 259, `STILL_ACTIVE`.
     fn running(pid: u32) -> Option<Owned> {
-        let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        // SAFETY: no pointers; the handle it returns is checked.
+        let h = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                0,
+                pid,
+            )
+        };
         if h.is_null() {
             return None;
         }
         let h = Owned(h);
-        let mut code = 0u32;
-        (unsafe { GetExitCodeProcess(h.0, &mut code) } != 0 && code == STILL_ACTIVE).then_some(h)
+        // SAFETY: h is a live process handle with SYNCHRONIZE; 0 ms only polls it.
+        (unsafe { WaitForSingleObject(h.0, 0) } == WAIT_TIMEOUT).then_some(h)
     }
 
     fn image(h: &Owned) -> Option<PathBuf> {
         let mut buf = vec![0u16; 32768];
         let mut len = buf.len() as u32;
+        // SAFETY: buf holds len characters.
         if unsafe {
             QueryFullProcessImageNameW(h.0, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len)
         } == 0
@@ -434,17 +463,23 @@ mod imp {
         let Some(s) = snapshot(TH32CS_SNAPTHREAD) else {
             return Vec::new();
         };
+        // SAFETY: no preconditions.
         let me = unsafe { GetCurrentProcessId() };
+        // SAFETY: an all-zero THREADENTRY32 is a valid value to fill; its size is set below.
         let mut e: THREADENTRY32 = unsafe { zeroed() };
         e.dwSize = size_of::<THREADENTRY32>() as u32;
         let mut out = Vec::new();
+        // SAFETY: s is a live snapshot; e is a sized entry.
         let mut more = unsafe { Thread32First(s.0, &mut e) } != 0;
         while more {
             if e.th32OwnerProcessID == me {
+                // SAFETY: no pointers; the handle it returns is checked.
                 let t = unsafe { OpenThread(THREAD_QUERY_LIMITED_INFORMATION, 0, e.th32ThreadID) };
                 if !t.is_null() {
                     let t = Owned(t);
                     let mut name: *mut u16 = std::ptr::null_mut();
+                    // SAFETY: t is a live thread handle; name receives a string the system
+                    // allocated, NUL-terminated, which LocalFree releases once read.
                     if unsafe { GetThreadDescription(t.0, &mut name) } >= 0 && !name.is_null() {
                         let len = (0..).take_while(|i| unsafe { *name.add(*i) } != 0).count();
                         let wide = unsafe { std::slice::from_raw_parts(name, len) };
@@ -453,6 +488,7 @@ mod imp {
                     }
                 }
             }
+            // SAFETY: as above.
             more = unsafe { Thread32Next(s.0, &mut e) } != 0;
         }
         out

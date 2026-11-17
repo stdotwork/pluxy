@@ -9,9 +9,10 @@
 //   after the app quit, none of the tool processes each names still runs;
 // - routing: cross-package routing, then declared jobs (routing_native.rs, jobs_native.rs;
 //   routing.ts);
-// - launcher: the execution program and the launcher (launcher_platform_native.rs; launcher.ts),
-//   with the fixtures' bin first on PATH; after the app quit, a file named stop in the fixtures'
-//   work folder ends any agent left running;
+// - launcher: the execution program and the launcher with managed launches
+//   (launcher_platform_native.rs; launcher.ts), with the fixtures' bin first on PATH and a canary
+//   variable no launch may get; after the app quit, a file named stop in the fixtures' work folder
+//   ends any agent left running;
 // - vault: the vault, secret delivery and references and journal recovery, then client-key capture
 //   and entry (vault_native.rs, client_key_native.rs; vault.ts). Client keys are made on the test
 //   core, whose config file core.json in the fixtures names: the app's own core, which run.ts's
@@ -32,9 +33,12 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -77,6 +81,8 @@ const PAGE = "ext/test/probe/probe";
 const UPDATER_KEY = "no-test-package";
 /** One app run: four minutes on Linux, with room for slower runners. */
 const TIMEOUT = 600_000;
+/** The test core's start: `go run` builds it first, once a minute or two on a runner. */
+const CORE_START = 180_000;
 
 /** The account's known folders on Windows, as the app finds them (SHGetKnownFolderPath). */
 function knownFolders(ctx: Context): { roaming: string; local: string } {
@@ -92,17 +98,45 @@ function knownFolders(ctx: Context): { roaming: string; local: string } {
   return { roaming: out[0] as string, local: out[1] as string };
 }
 
+/** Starts the test core and waits at most CORE_START for its first line. Past that, it closes
+ * the core's input, which ends it once it runs, waits up to 30 s for `go` to exit (then stops
+ * it), and fails. */
 async function startCore(): Promise<{ proc: ChildProcess; base: string; key: string; config: string }> {
   const proc = spawn("go", ["run", "./e2e/panelcore", "-probe"], {
     cwd: next,
     stdio: ["pipe", "pipe", "inherit"],
   });
-  const line = await new Promise<string>((resolve, reject) => {
-    proc.once("error", reject);
-    proc.once("exit", (code) => reject(new Error(`panelcore exited with ${code}`)));
-    if (proc.stdout) createInterface({ input: proc.stdout }).once("line", resolve);
-  });
-  return { proc, ...JSON.parse(line) };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const line = await new Promise<string>((resolve, reject) => {
+      proc.once("error", reject);
+      proc.once("exit", (code) => reject(new Error(`panelcore exited with ${code}`)));
+      if (proc.stdout) createInterface({ input: proc.stdout }).once("line", resolve);
+      timer = setTimeout(
+        () => reject(new Error(`the test core did not start within ${CORE_START / 1000} s`)),
+        CORE_START,
+      );
+    });
+    return { proc, ...JSON.parse(line) };
+  } catch (e) {
+    proc.stdin?.end();
+    if (proc.exitCode === null && proc.signalCode === null) {
+      await new Promise((r) => {
+        const t = setTimeout(() => {
+          // Only the process this session started.
+          proc.kill();
+          r(undefined);
+        }, 30_000);
+        proc.once("exit", () => {
+          clearTimeout(t);
+          r(undefined);
+        });
+      });
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** env with PATH's value replaced, under the name the environment has it (`Path` on Windows). */
@@ -115,7 +149,10 @@ function withPath(
 }
 
 /** The program path of process pid, if it runs: Windows from PowerShell's Get-Process (no output
- * when there is no such process), macOS from `ps -p <pid> -o comm=`. */
+ * when there is no such process), macOS from `ps -p <pid> -o comm=`. On macOS this relies on ps
+ * giving a process's full program path as `comm`, as it does for one started by that path (the
+ * host starts a tool by its path, and the tool its child by `current_exe`); a process started by
+ * a bare name would show only that name and not match. */
 function programOf(ctx: Context, pid: number): string | undefined {
   if (!Number.isInteger(pid) || pid <= 0) return undefined;
   if (windows) {
@@ -146,6 +183,31 @@ function samePath(a: string, b: string): boolean {
   return a === b || norm(a) === norm(b);
 }
 
+/** The app keeps the packages it installed read-only (device.rs `freeze`): on macOS each folder
+ * is 0500; on Windows each file and folder has a protected access list allowing no write or
+ * delete. The app removes them by making each writable first (device.rs `remove_tree`); this does
+ * the same for the package store in data, an app data folder this session made, so it can be
+ * removed. Windows: icacls gives each file and folder back the list it inherits (the store holds
+ * no links: device.rs refuses them when it unpacks). */
+function makeRemovable(data: string) {
+  const store = join(data, "device-packages");
+  if (!existsSync(store)) return;
+  if (windows) {
+    const icacls = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
+    const r = spawnSync(icacls, [store, "/reset", "/T", "/C", "/Q"], { encoding: "utf8" });
+    if (r.status !== 0)
+      throw new Error(`icacls ${store} /reset exited with ${r.status}: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+    return;
+  }
+  const walk = (dir: string) => {
+    const st = lstatSync(dir);
+    if (!st.isDirectory()) return;
+    if ((st.mode & 0o700) !== 0o700) chmodSync(dir, 0o700);
+    for (const e of readdirSync(dir)) walk(join(dir, e));
+  };
+  walk(store);
+}
+
 /** One session: its fixtures, a fresh app state, the app run, and run.ts's checks of its report. */
 export async function toolSession(name: ToolSession, ctx: Context) {
   const { check, say } = ctx;
@@ -156,6 +218,8 @@ export async function toolSession(name: ToolSession, ctx: Context) {
   let localDir: string;
   // The app's folders this session made, the only ones it removes (Windows).
   const made: string[] = [];
+  // The app's data folder (its package store's), once this session made it.
+  let data: string | undefined;
   let core: Awaited<ReturnType<typeof startCore>> | undefined;
   let proc: ChildProcess | undefined;
   try {
@@ -176,6 +240,7 @@ export async function toolSession(name: ToolSession, ctx: Context) {
     }
     mkdirSync(configDir, { recursive: true });
     mkdirSync(localDir, { recursive: true });
+    data = configDir;
     mkdirSync(fixtures);
 
     // The session's fixtures, and the test trust profile they write in HOME.
@@ -251,6 +316,11 @@ export async function toolSession(name: ToolSession, ctx: Context) {
     if (name === "vault") env.PLUXY_APP_TEST_VAULT = fixtures;
     if (launcherBin) {
       env.PLUXY_APP_TEST_LAUNCHER = fixtures;
+      // In the app's environment, never in a launch's (launcher_platform_native.rs checks the
+      // agent's).
+      const canary = randomUUID();
+      env.PLUXY_TEST_LAUNCHER_CANARY = canary;
+      canaries = [...canaries, canary];
       // The agent the launcher finds by name comes first.
       env = withPath(env, launcherBin);
     }
@@ -417,6 +487,13 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       const c = core.proc;
       c.stdin?.end();
       if (c.exitCode === null) await new Promise((r) => c.once("exit", r));
+    }
+    if (data) {
+      try {
+        makeRemovable(data);
+      } catch (e) {
+        check(false, `could not make the app's package store removable: ${(e as Error).message}`);
+      }
     }
     // Windows: its folders may stay in use a moment after the app quit (its WebView2 processes,
     // the agent the launcher started). Each is tried, and one left behind is a problem.

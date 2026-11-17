@@ -237,7 +237,19 @@ func TestResponsesWebsocketIdleUpstreamEOFIsSilent(t *testing.T) {
 		read()
 		_ = c.WriteMessage(websocket.TextMessage, []byte(lossCompleted))
 		if index == 1 {
-			close(closed)
+			defer close(closed)
+			// Send the EOF, then wait for core to close its end: it drops the socket from the
+			// session before closing it, so the continuation below cannot reach this socket.
+			tcp, ok := c.UnderlyingConn().(*net.TCPConn)
+			if !ok {
+				t.Errorf("upstream conn is %T, want *net.TCPConn", c.UnderlyingConn())
+				return
+			}
+			if errCloseWrite := tcp.CloseWrite(); errCloseWrite != nil {
+				t.Errorf("half-close upstream websocket: %v", errCloseWrite)
+				return
+			}
+			read()
 			return
 		}
 		read()

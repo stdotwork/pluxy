@@ -8,11 +8,14 @@
 //! - installed, and enabled in the native confirmation, the tool runs no process; a call while it
 //!   is disabled is refused and starts none;
 //! - three calls from the window at once start it once: each answers the expected summary from
-//!   the same process, which leads its own process group (on Windows: runs in a job) with the
-//!   child it started, has only the contract's environment (not the app's canary; the app's HOME
-//!   and its own data folder, 0700 on Linux and macOS; on Windows also the app's `SystemRoot`,
-//!   `APPDATA` and `LOCALAPPDATA`, `ToolEnv::system`) and only stdin, stdout and stderr open (on
-//!   Windows: its three standard handles are pipes), and runs in its package folder;
+//!   the same process, which leads its own process group (on Windows: its immediate job holds
+//!   only it and its child and ends them when closed) with the child it started, has only the
+//!   contract's environment (not the app's canary; the app's HOME and its own data folder, 0700
+//!   on Linux and macOS; on Windows also the app's `SystemRoot`, `APPDATA` and `LOCALAPPDATA`,
+//!   `ToolEnv::system`) and only stdin, stdout and stderr open (on Windows: its three standard
+//!   handles are pipes, and a file the app holds through an inheritable handle meanwhile is not
+//!   open in it at that handle's value, though a process std starts has it there), and runs in its
+//!   package folder;
 //! - the command thread that started it has ended while it runs on, with its supervisor thread;
 //! - its stdin and stdout pipes are held by the app and the tool only, no web process (Linux and
 //!   macOS: Windows lists no process's handles to an unprivileged one);
@@ -35,6 +38,10 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
 pub(super) const ID: &str = "pluxy/summary";
+/// The fixture's first argument that makes it print the file a handle value names
+/// (`examples/program_fixture/fixture.rs`, `HANDLE`).
+#[cfg(windows)]
+const HANDLE: &str = "pluxy-fixture-handle";
 /// The program commands a page webview must be refused.
 const PROGRAM_COMMANDS: &[&str] = &["program_call", "program_cancel", "program_status"];
 /// The environment app program contract v0 gives a tool, and nothing else: its three values,
@@ -60,6 +67,57 @@ pub(super) fn program_file(dir: &Path) -> PathBuf {
     } else {
         "summary"
     })
+}
+
+/// Windows: a file the app holds open through an inheritable handle while it starts the tool. The
+/// host passes a tool its three standard handles only (`owned::windows`), so the tool must not
+/// have this one.
+#[cfg(windows)]
+struct Canary {
+    file: std::fs::File,
+    path: PathBuf,
+    /// Its final path (`std::fs::canonicalize`, which asks `GetFinalPathNameByHandleW`), in
+    /// lower case.
+    real: String,
+}
+
+#[cfg(windows)]
+impl Canary {
+    fn open(dir: &Path) -> Result<Self, String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+        let path = dir.join("pluxy-inherit-canary");
+        let file = std::fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        // SAFETY: the handle is the open file's own.
+        if unsafe {
+            SetHandleInformation(
+                file.as_raw_handle() as _,
+                HANDLE_FLAG_INHERIT,
+                HANDLE_FLAG_INHERIT,
+            )
+        } == 0
+        {
+            return Err(format!(
+                "making the canary's handle inheritable: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let real = std::fs::canonicalize(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .to_string_lossy()
+            .to_lowercase();
+        Ok(Self { file, path, real })
+    }
+
+    fn value(&self) -> u64 {
+        use std::os::windows::io::AsRawHandle;
+        self.file.as_raw_handle() as usize as u64
+    }
+
+    /// Whether path, as `GetFinalPathNameByHandleW` gives it, is this file.
+    fn named(&self, path: &Value) -> bool {
+        path.as_str().is_some_and(|p| p.to_lowercase() == self.real)
+    }
 }
 
 fn summary(main: &Webview, items: &Value) -> Result<Value, String> {
@@ -130,13 +188,22 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     let s = status(main)?;
     require(s["state"] == "idle", format!("status once enabled: {s}"))?;
 
-    // Three calls at once: one start, the expected summary, from the same process.
+    // Three calls at once: one start, the expected summary, from the same process. On Windows the
+    // app holds a file open through an inheritable handle meanwhile, which the tool must not get.
+    #[cfg(windows)]
+    let canary = Canary::open(&fixtures)?;
+    #[allow(unused_mut)]
+    let mut input = json!({"items": items});
+    #[cfg(windows)]
+    {
+        input["handle"] = json!(canary.value());
+    }
     let slots: Vec<String> = (0..3)
         .map(|_| {
             start(
                 main,
                 "program_call",
-                json!({"package": ID, "op": "summary", "input": {"items": items}}),
+                json!({"package": ID, "op": "summary", "input": input}),
             )
         })
         .collect::<Result<_, _>>()?;
@@ -179,10 +246,13 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         w
     };
     require(env == want, format!("the tool's environment: {env:?}"))?;
-    // On Windows each system folder the tool has is the app's own.
+    // On Windows each system folder the tool has is the app's own, and it has each the app has as
+    // a full path (none the app has as a relative one).
     #[cfg(windows)]
     for k in SYSTEM_ENV {
-        let app_value = std::env::var_os(k).map(|v| v.to_string_lossy().into_owned());
+        let app_value = std::env::var_os(k)
+            .filter(|v| Path::new(v).is_absolute())
+            .map(|v| v.to_string_lossy().into_owned());
         require(
             env.contains(k) == app_value.is_some() && first["system"][k] == json!(app_value),
             format!(
@@ -194,9 +264,12 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     // HOME is the app's own (on Windows its profile folder, `USERPROFILE`); the data folder is the
     // tool's, made private beside the vault (on Windows in the local data folder, which does not
     // roam).
+    // Windows: read from the app's environment here, not as the host finds it (`home_dir`).
     #[cfg(windows)]
     let (home, data) = (
-        std::env::home_dir().ok_or("the app has no home folder")?,
+        std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .ok_or("the app has no USERPROFILE")?,
         app.path()
             .app_local_data_dir()
             .map_err(|e| e.to_string())?
@@ -261,13 +334,52 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             first["std_pipes"] == json!([true, true, true]),
             format!("the tool's standard handles: {}", first["std_pipes"]),
         )?;
+        require(
+            !canary.named(&first["handle_path"]),
+            format!(
+                "the tool got the app's inheritable handle {} to {}",
+                canary.value(),
+                canary.path.display()
+            ),
+        )?;
+        // The control: a process started by std's spawn, which passes on every inheritable
+        // handle, has it at that value.
+        let mut control = std::process::Command::new(&program);
+        control
+            .args([HANDLE, &canary.value().to_string()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        let o = crate::owned::windows::std_spawn(&mut control)
+            .and_then(|c| c.wait_with_output())
+            .map_err(|e| format!("the handle control: {e}"))?;
+        let seen = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        require(
+            canary.named(&json!(seen)),
+            format!(
+                "the handle control did not find {} at {}: {seen:?}",
+                canary.path.display(),
+                canary.value()
+            ),
+        )?;
+        out["inherit_control"] = json!(seen);
+        drop(canary);
     }
     let real = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
-    // On Linux and macOS its own process group; on Windows a job (of its own: the host's).
+    // On Linux and macOS it leads its own process group. On Windows its immediate job is the
+    // host's: it holds the tool and its child and nothing else, and ends them when it closes.
     #[cfg(unix)]
     let grouped = first["pgid"] == pid;
     #[cfg(windows)]
-    let grouped = first["job"] == true;
+    let grouped = {
+        let pids: BTreeSet<u64> = first["job"]["pids"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_u64).collect())
+            .unwrap_or_default();
+        first["job"]["assigned"] == 2
+            && pids == BTreeSet::from([pid, child])
+            && first["job"]["kill_on_close"] == true
+    };
     // Its folder as it reports it, resolved as the package folder is.
     let cwd = first["cwd"]
         .as_str()

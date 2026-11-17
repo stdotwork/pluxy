@@ -1,15 +1,18 @@
 // Fixtures for the native test's check of the execution program and the launcher
-// (src-tauri/src/launcher_native.rs):
+// (src-tauri/src/launcher_native.rs on Linux; on Windows and macOS
+// src-tauri/src/launcher_platform_native.rs, which uses pluxy/execution, `pluxy-agent` and work/
+// only):
 //
-// - pluxy/execution: the real execution program (next/app-tools/execution, which run.ts builds),
-//   packed with its own manifest's operations into a signed curated package;
+// - pluxy/execution: the real execution program (next/app-tools/execution, which run.ts builds,
+//   and off Linux the workflow), packed with its own manifest's operations into a signed curated
+//   package;
 // - pluxy/launch-relay: the disposable fixture tool (src-tauri/examples/program_fixture), whose
 //   `relay` calls pluxy/execution's `launch`: another chain to the same launch;
 // - pluxy/launch-page: a curated web package whose page imports pluxy/execution's `launch`.
 //
 // bin/ goes first on the app's PATH: `x-terminal-emulator` (the fixture program as a stand-in
-// terminal, the first one Automatic picks) and `pluxy-agent` (the fixture program as the agent,
-// found by name). override/agent is another copy, for an executable override. keys.json holds the
+// terminal, the first one Automatic picks) and `pluxy-agent` (`pluxy-agent.exe` on Windows: the
+// fixture program as the agent, found by name). override/agent is another copy, for an executable override. keys.json holds the
 // key the check types into native key entry, made here at random; the app never chose it.
 
 import { generateKeyPairSync, type KeyObject, randomBytes } from "node:crypto";

@@ -191,8 +191,9 @@ function webviewHolders(folder: string): string[] {
 }
 
 /** Windows: removes path once the WebView2 processes using webview (the app's WebView2 data
- * folder) have exited, retrying while the folder is busy (EBUSY, EPERM, ENOTEMPTY), for at most
- * FREE_MS. Then it fails, naming what still holds the folder. */
+ * folder) have exited, retrying while the folder is busy (EBUSY, ENOTEMPTY) or access is denied
+ * (EPERM, which a file still open for its deletion also gives), for at most FREE_MS. Then it
+ * fails, naming what still holds the folder or that access was denied. */
 function removeWhenFree(path: string, webview: string) {
   const deadline = Date.now() + FREE_MS;
   let holders: string[] = [];
@@ -207,7 +208,9 @@ function removeWhenFree(path: string, webview: string) {
         if (!["EBUSY", "EPERM", "ENOTEMPTY"].includes(code)) throw e;
         if (Date.now() >= deadline)
           throw new Error(
-            `${path} is still in use ${FREE_MS / 1000} s after the app quit: ${(e as Error).message}`,
+            code === "EPERM"
+              ? `access to ${path} was still denied ${FREE_MS / 1000} s after the app quit, with no WebView2 process holding it: ${(e as Error).message}`
+              : `${path} is still in use ${FREE_MS / 1000} s after the app quit: ${(e as Error).message}`,
           );
       }
     } else if (Date.now() >= deadline) {

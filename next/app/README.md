@@ -1454,7 +1454,8 @@ fails the run at setup, naming its package, and never skips:
 - the tray watcher service, which owns `org.kde.StatusNotifierWatcher`: the probe registers a
   status notifier item with it and finds the item in `RegisteredStatusNotifierItems`;
 - a disposable AppImage, built from a pinned release of the AppImage type 2 runtime (downloaded
-  into `~/.cache/pluxy-app-native`, its SHA-256 checked; `mksquashfs` builds the image), which runs
+  into `~/.cache/pluxy-app-native`, its SHA-256 checked; a refused or failed request (403, 429, 5xx,
+  a network error) is tried again within a minute, bytes with another digest never; `mksquashfs` builds the image), which runs
   with `APPIMAGE_EXTRACT_AND_RUN=1`, the FUSE-free way to run an AppImage, in the run's cleared
   environment. It is a fixture, not the app's own package.
 
@@ -1550,11 +1551,15 @@ app supported there:
   - the tools sessions (`native/platform-tools.ts`, the `tools` shard): the signed tool sessions
     run.ts runs on Linux (admission, the program host with its swaps, routing with jobs, the vault
     with client keys), and a launcher check that uses managed launches only
-    (`src-tauri/src/launcher_platform_native.rs`: no detached agent, terminal or key entry, which
-    wait for their own slices), in the app built with the test trust, in local mode against a test
-    core. The client keys are made on that test core, not on the app's own core as on Linux. On
-    Windows the client-key check reads the agent's command line from Windows, but its environment
-    is the agent's own report, as Windows gives no supported way to read another process's;
+    (`src-tauri/src/launcher_platform_native.rs`), in the app built with the test trust, in local
+    mode against a test core. The client keys are made on that test core, not on the app's own core
+    as on Linux. On Windows the client-key check reads the agent's command line from Windows, but
+    its environment is the agent's own report, as Windows gives no supported way to read another
+    process's. The launcher check leaves out what Linux checks with a detached agent, a terminal,
+    key entry and the key consumers, and its crash, chain, page, changed and idle steps, which wait
+    for their own slices; on macOS its tray step calls the menu's event handler with the item's ID,
+    as no menu shows without a person holding it open (on Windows it sends the menu's own command
+    message);
   - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
     test core, with the window's and page's command probes, the native confirmations, key entry and
     key rotation. [Limits](#limits) says how its input is made.
@@ -1611,8 +1616,12 @@ in the browser. The app updates itself only as a Linux AppImage.
   from a registry, not for a package installed from a file; document portal grants last one
   session.
 - The native test runs on Linux, except its platform, package, tools and dialogs sessions, which
-  CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still refuses
-  there).
+  CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
+  refuses there).
+- On Windows the program session does not check which processes hold the tool's pipes, as it
+  does on Linux and macOS: Windows lists no process's handles to an unprivileged one. It checks
+  instead that the tool's three standard handles are pipes and that a file the app holds through
+  an inheritable handle is not open in the tool.
 - The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
   account's known folders, which no environment variable redirects, so it refuses to start when
   they exist and removes only the ones it made. Its input, and the keys the tools shard's vault

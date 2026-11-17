@@ -242,13 +242,8 @@ func (t upstreamTransport) oneShot(proxy string) (http.RoundTripper, error) {
 		c.Proxy = http.ProxyURL(u)
 	}
 	c.DisableKeepAlives = true
-	// net/http turns HTTP/2 on by itself only for a transport without its own dialer or TLS
-	// config, and the copy gets a dialer below and base's TLS config, which net/http may have
-	// made for base. So the copy asks for HTTP/2 when base turned it on: Clone has set base up,
-	// and then base has an "h2" entry in TLSNextProto that the copy does not carry.
-	if c.Protocols == nil && c.TLSNextProto == nil && !c.ForceAttemptHTTP2 && t.base.TLSNextProto["h2"] != nil {
-		c.ForceAttemptHTTP2 = true
-	}
+	// The copy gets a dialer of its own below.
+	keepHTTP2(c, t.base)
 	conns := &dialedConns{}
 	dial := c.DialContext
 	if dial == nil {
@@ -376,6 +371,7 @@ func (p *proxyPool) get(base *http.Transport, proxy string) (*http.Transport, er
 		p.by = map[string]*http.Transport{}
 	}
 	t := base.Clone()
+	keepHTTP2(t, base)
 	// A transport the pool drops while a request still uses it must close its own idle
 	// connections, so none stays open for good.
 	if t.IdleConnTimeout <= 0 {
@@ -387,6 +383,19 @@ func (p *proxyPool) get(base *http.Transport, proxy string) (*http.Transport, er
 	t.Proxy = http.ProxyURL(u)
 	p.by[proxy] = t
 	return t, nil
+}
+
+// keepHTTP2 makes c, a copy of base made with base.Clone, ask for HTTP/2 when net/http turned it
+// on for base by itself. net/http does that only for a transport without a dialer or TLS config
+// of its own, and a copy carries the TLS config net/http may have made for base (and oneShot gives
+// its copy a dialer), so net/http would not turn HTTP/2 on for the copy, though its TLS config
+// offers h2. Clone has set base up, and then base has an "h2" entry in TLSNextProto, which the
+// copy does not carry. A base that chose its protocols (Protocols, its own TLSNextProto) or
+// already forces HTTP/2 keeps what it chose.
+func keepHTTP2(c, base *http.Transport) {
+	if c.Protocols == nil && c.TLSNextProto == nil && !c.ForceAttemptHTTP2 && base.TLSNextProto["h2"] != nil {
+		c.ForceAttemptHTTP2 = true
+	}
 }
 
 // parseProxy parses an account's proxy URL. Its error holds no part of the URL.
