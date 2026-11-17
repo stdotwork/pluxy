@@ -327,6 +327,31 @@ pub(super) mod tests {
         v
     }
 
+    // A staged bundle dropped without being swapped in (a failed or cancelled install) removes its
+    // staging folder only while that is still the folder made: a folder put at its name stays.
+    #[test]
+    fn a_dropped_stage_removes_only_the_folder_it_made() {
+        let tmp = super::super::tests::temp("app-drop");
+        let dir = tmp.join("updates");
+        let installed = fixture(&tmp, "old");
+        let kept = tmp.join("kept.app");
+        copy_new(&installed, &kept).unwrap();
+        let pin = Pinned {
+            version: "0.1.0".into(),
+            sha256: digest(&installed).unwrap(),
+        };
+        drop(stage_kept(&installed, &kept, &pin, &dir).unwrap());
+        assert!(staging_folders(&tmp).is_empty(), "dropped as made: removed");
+        let s = stage_kept(&installed, &kept, &pin, &dir).unwrap();
+        let staged = staging_folders(&tmp).remove(0);
+        fs::rename(&staged, tmp.join("moved")).unwrap();
+        fs::create_dir(&staged).unwrap();
+        fs::write(staged.join("theirs"), b"z").unwrap();
+        drop(s);
+        assert!(staged.join("theirs").exists(), "not the folder made");
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
     // The swap leaves the new bundle in place and the old one in the staging folder, which
     // cleanup removes while the bundle in place stays. A kept copy that changed is refused and
     // its staging folder removed.
