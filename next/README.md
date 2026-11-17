@@ -1256,6 +1256,14 @@ the same scope leaves no block and no last error. Among eligible accounts, core 
 session's account (with session affinity on), then the highest `priority`, then picks by
 strategy.
 
+When every account is blocked, the reply tells the client how long is left in whole seconds,
+rounded up and at least 1 while anything is left: the message's "try again in 1s" (or `1m1s`),
+`Retry-After`, and the usage-limit reply's `reset_time`, `reset_seconds` and "reset after" all
+come from the same rounding, so they agree. `retry_after_ms` keeps the exact wait. Today's core
+rounds `Retry-After` and `reset_seconds` up, but shows `reset_time` and "reset after" to the
+nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next to
+`reset_seconds` 2; core says "2s" in all of them. That is an intended difference.
+
 ```json
 {
   "routing": {

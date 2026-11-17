@@ -847,7 +847,7 @@ func coolingError(model string, wait time.Duration, reason *llm.Error) *llm.Erro
 		Code:         llm.CodeRateLimit,
 		Status:       429,
 		ProviderCode: "model_cooldown",
-		Message:      fmt.Sprintf("every account for model %q is cooling down; try again in %s", model, wait.Round(time.Second)),
+		Message:      fmt.Sprintf("every account for model %q is cooling down; try again in %s", model, llm.WholeSeconds(wait)),
 		RetryAfterMS: (wait + time.Millisecond - 1).Milliseconds(),
 	}
 	if reason != nil && reason.Code == llm.CodeQuota {
