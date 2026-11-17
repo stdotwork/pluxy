@@ -66,8 +66,10 @@ cap-std = "=4.0.3"
 # Bytes a page reads through Access travel as base64 in its channel's JSON.
 base64 = "=0.23.1"
 
-# The single-instance pipe and the Run key (src/instance/win.rs, src/startup/registry.rs); private
-# files (src/private_windows.rs) and the vault's folders (src/vault_windows.rs): access lists, and
+# The single-instance pipe and the Run key (src/instance/win.rs, src/startup/registry.rs); the
+# processes the app starts and holds (src/owned/windows.rs: CreateProcessW, job objects, console
+# control, file identity) and the core's listener check (src/managed.rs); private files
+# (src/private_windows.rs) and the vault's folders (src/vault_windows.rs): access lists, and
 # opening, renaming and listing relative to a held folder. Already in the tree through cap-std and
 # tauri's dirs; the version is the locked one.
 [target.'cfg(windows)'.dependencies]
@@ -76,10 +78,15 @@ windows-sys = { version = "=0.61.2", features = [
     "Wdk_Foundation",
     "Wdk_Storage_FileSystem",
     "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
     "Win32_System_IO",
+    "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_Registry",
     "Win32_System_SystemServices",

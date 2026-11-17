@@ -288,7 +288,7 @@ side touch shared files only by one line each:
 The priorities are a small, fast panel, and a kit the desktop app can build in unchanged.
 
 - **Preact** (`preact` 11, with hooks) is about 5 KB gzipped for a one-button page, against
-  57 KB for React 19 with react-dom, which today's panel and app use (both measured with Bun's
+  57 KB for React 19 with react-dom, which the old panel and the old app use (both measured with Bun's
   minifier). It keeps React's component model and JSX, so
   people who know React can work on the kit.
 - **Bun's bundler** compiles TypeScript and Preact's JSX and bundles the HTML page, its script
