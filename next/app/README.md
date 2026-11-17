@@ -1612,9 +1612,9 @@ in the browser. The app updates itself only as a Linux AppImage.
   mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test runs on Linux, except its platform, package and dialogs sessions, which CI
-  runs on Windows and macOS ([Platforms](#platforms) says what they check and what still refuses
-  there).
+- The native test runs on Linux, except its platform, package, tools and dialogs sessions, which
+  CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
+  refuses there).
 - On Windows the program session does not check which processes hold the tool's pipes, as it
   does on Linux and macOS: Windows lists no process's handles to an unprivileged one. It checks
   instead that the tool's three standard handles are pipes and that a file the app holds through
