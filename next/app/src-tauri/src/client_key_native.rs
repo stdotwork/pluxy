@@ -236,9 +236,11 @@ impl Drop for Listener {
     }
 }
 
-/// The agent's program in its package, as its argv names it.
+/// The agent's program in its package, as its manifest names it (`native/admission.ts` `TOOL`).
+/// The host starts it by its package folder joined with that, so on Windows its argv says
+/// `<store>\<digest>\bin/tool.exe`, a mix of separators; `whole` compares with each `\` read as `/`.
 const PROGRAM: &str = if cfg!(windows) {
-    r"bin\tool.exe"
+    "bin/tool.exe"
 } else {
     "bin/tool"
 };
@@ -285,7 +287,7 @@ fn argv_env(pid: u64, out: &Path) -> (String, String) {
 /// environment holds the extension ID the host gives every tool (it clears a tool's environment,
 /// then sets that: program.rs). A read that failed, or a reply without the environment, is not.
 fn whole(argv: &str, env: &str) -> bool {
-    argv.contains(PROGRAM) && env.contains("PLUXY_EXTENSION_ID=pluxy/agent")
+    argv.replace('\\', "/").contains(PROGRAM) && env.contains("PLUXY_EXTENSION_ID=pluxy/agent")
 }
 
 pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<(), String> {
@@ -603,6 +605,18 @@ mod tests {
         assert!(!whole(&argv, ""));
         assert!(!whole("", "PLUXY_EXTENSION_ID=pluxy/agent\0"));
         assert!(whole(&argv, "HOME=/h\0PLUXY_EXTENSION_ID=pluxy/agent\0"));
+    }
+
+    #[test]
+    fn a_windows_command_line_names_the_program_with_either_separator() {
+        let env = "PLUXY_EXTENSION_ID=pluxy/agent\0";
+        // As the host starts it on Windows (its folder joined with the manifest's `bin/...`), and
+        // with every separator `\`.
+        let mixed = format!(r#""C:\store\abc\{PROGRAM}" serve"#);
+        let back = mixed.replace('/', r"\");
+        assert!(whole(&mixed, env), "{mixed}");
+        assert!(whole(&back, env), "{back}");
+        assert!(!whole(r#""C:\store\abc\bin\other.exe" serve"#, env));
     }
 
     #[cfg(target_os = "linux")]
