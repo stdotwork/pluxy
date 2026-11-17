@@ -117,6 +117,12 @@ required check; otherwise each workflow's own triggers start it (pushes to `main
 manual runs or tags, as its file says; the two Windows and macOS platform workflows run on
 `main` once a day instead of on every push).
 
+A pull request's run leaves out the heavy jobs: `next-app.yml`'s Linux native shards and all of
+`next-app-platforms.yml`. Merge-queue groups always run them. Label a PR `full-ci` to run them on
+the PR too; adding the label reruns its checks. A manual run of either workflow on the branch also
+works. Label a PR whose change is mainly native or platform code, so failures show before it is
+queued; docs, core-only and CI PRs go without it.
+
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
 | `ci.yml` | Every PR and every merge-queue group | Works out which folders the change touches (for a PR, the diff against its base; for a group, what it adds to the group ahead of it in the queue, or to `main` for the first group; sound only while the queue's ruleset keeps "Only merge non-failing pull requests" (ALLGREEN)), runs the workflows below whose paths it touches as reusable workflows, and runs `gate`, which passes only when every workflow it chose passed. A change to `ci.yml` runs them all. `next-release.yml` is not among them |
