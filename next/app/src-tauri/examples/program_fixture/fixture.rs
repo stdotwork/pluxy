@@ -150,6 +150,7 @@ struct Mode {
     wsl_refuse_stdout: bool,
     /// With `wsl_refuse`, on Unix: it ends at once, and the text reaches stdout 300 ms later
     /// from a process it leaves in a session of its own, after it has been reaped.
+    #[cfg_attr(not(unix), allow(dead_code))]
     wsl_refuse_late: bool,
 }
 
