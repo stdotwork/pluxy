@@ -338,6 +338,8 @@ mod imp {
 
     /// pid, opened to query it, while it runs (not once it has exited, though held): its handle is
     /// not yet signalled. Its exit code would not do: a process may exit with 259, `STILL_ACTIVE`.
+    // shortcut: no run has a process exit with 259, so nothing shows a process that did counted
+    // as ended; upgrade when a fixture can exit with 259.
     fn running(pid: u32) -> Option<Owned> {
         // SAFETY: no pointers; the handle it returns is checked.
         let h = unsafe {

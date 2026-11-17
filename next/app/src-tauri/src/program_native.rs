@@ -248,6 +248,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     require(env == want, format!("the tool's environment: {env:?}"))?;
     // On Windows each system folder the tool has is the app's own, and it has each the app has as
     // a full path (none the app has as a relative one).
+    // shortcut: a runner's system folders are all full paths, so no run checks the relative case
+    // (left out of the tool's environment, `ToolEnv::system`), nor does a unit test; upgrade when
+    // a session can start the app with a relative APPDATA, LOCALAPPDATA or SystemRoot.
     #[cfg(windows)]
     for k in SYSTEM_ENV {
         let app_value = std::env::var_os(k)
