@@ -1,9 +1,9 @@
 {
-  "description": "An Antigravity login's quota: the new core's GET /v0/management/accounts/{id}/quota against the quota and subscription requests today's panel sends through the old core's api-call relay.",
+  "description": "An Antigravity login's quota: the new core's GET /v0/management/accounts/{id}/quota against the quota and subscription requests the old panel sends through the old core's api-call relay.",
   "source": [
-    "extensions/panel/src/features/quota/providers/antigravity/data.ts fetchAntigravityQuota",
-    "extensions/panel/src/services/api/antigravitySubscription.ts",
-    "extensions/panel/src/utils/quota/constants.ts ANTIGRAVITY_QUOTA_URLS, ANTIGRAVITY_CODE_ASSIST_URL, ANTIGRAVITY_REQUEST_HEADERS",
+    "d0f7af2ff:extensions/panel/src/features/quota/providers/antigravity/data.ts fetchAntigravityQuota",
+    "d0f7af2ff:extensions/panel/src/services/api/antigravitySubscription.ts",
+    "d0f7af2ff:extensions/panel/src/utils/quota/constants.ts ANTIGRAVITY_QUOTA_URLS, ANTIGRAVITY_CODE_ASSIST_URL, ANTIGRAVITY_REQUEST_HEADERS",
     "core/internal/api/handlers/management/api_tools.go APICall"
   ],
   "client": {"method":"GET","path":"/v0/management/accounts/corpus/quota","auth":"management-key"},

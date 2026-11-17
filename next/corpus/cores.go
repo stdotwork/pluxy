@@ -1241,12 +1241,14 @@ func waitModel(url string, models []string) error {
 }
 
 // isolatedEnv is the environment for a core under test: nothing from the caller's
-// environment except PATH, and HOME inside the test's folder.
+// environment except PATH, and HOME inside the test's folder. TZ is fixed to UTC: the old core
+// formats times in the host's zone, so a recording made or compared on another zone would differ.
 func isolatedEnv(dir string) []string {
 	home := filepath.Join(dir, "home")
 	_ = os.MkdirAll(home, 0o700)
 	return []string{
 		"PATH=" + os.Getenv("PATH"),
+		"TZ=UTC",
 		"HOME=" + home,
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
 		"XDG_DATA_HOME=" + filepath.Join(home, ".local", "share"),

@@ -49,6 +49,7 @@ jobs:
       next-app-platforms: ${{ steps.paths.outputs.next-app-platforms || steps.go-packages.outputs.next-app-platforms }}
       next-app-platforms-native: ${{ steps.paths.outputs.next-app-platforms-native }}
       next-app-tools-platforms: ${{ steps.paths.outputs.next-app-tools-platforms }}
+      next-app-tools-pack: ${{ steps.paths.outputs.next-app-tools-pack }}
       next-corpus: ${{ steps.paths.outputs.next-corpus }}
     steps:
       # Full history for the merge base, without file contents: the diff needs only trees.
@@ -79,7 +80,7 @@ jobs:
           git diff --no-renames --name-only -z "${range[@]}" > "$RUNNER_TEMP/changed"
           echo "$(tr -cd '\0' < "$RUNNER_TEMP/changed" | wc -c) changed files"
           declare -A run=()
-          for w in core app next-ci next-app next-app-platforms next-app-tools-platforms next-corpus; do run[$w]=false; done
+          for w in core app next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-pack next-corpus; do run[$w]=false; done
           native=false
           while IFS= read -r -d '' path; do
             case $path in
@@ -102,6 +103,12 @@ jobs:
               next/*) printf '%s\0' "$path" >> "$RUNNER_TEMP/next-other" ;;
             esac
             case $path in next/app-tools/* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
+            # A tool's manifest, and the workspace's and every member's Cargo.toml (`*` matches `/`
+            # too, so lib/<name>/Cargo.toml is one), where a program's [[bin]] is named.
+            case $path in
+              next/app-tools/*/pluxy-extension.json | next/app-tools/Cargo.toml | next/app-tools/*/Cargo.toml | next/app-tools/Cargo.lock | next/cmd/pluxy-pack/* | .github/workflows/next-app-tools-pack.yml)
+                run[next-app-tools-pack]=true ;;
+            esac
             case $path in next/* | core/* | .github/workflows/next-corpus.yml) run[next-corpus]=true ;; esac
           done < "$RUNNER_TEMP/changed"
           if [ "${run[next-app-platforms]}" = false ] && [ -s "$RUNNER_TEMP/next-other" ]; then
@@ -196,6 +203,12 @@ jobs:
     if: needs.changes.outputs.next-app-tools-platforms == 'true'
     uses: ./.github/workflows/next-app-tools-platforms.yml
 
+  next-app-tools-pack:
+    name: Next app tools pack
+    needs: changes
+    if: needs.changes.outputs.next-app-tools-pack == 'true'
+    uses: ./.github/workflows/next-app-tools-pack.yml
+
   next-corpus:
     name: Next corpus
     needs: changes
@@ -216,6 +229,7 @@ jobs:
       - next-app
       - next-app-platforms
       - next-app-tools-platforms
+      - next-app-tools-pack
       - next-corpus
     runs-on: ubuntu-latest
     steps:

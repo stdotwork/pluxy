@@ -131,7 +131,9 @@ so that is not support.
 ## What an optional tool costs
 
 - **Not installed:** none of its code is on disk. The client pages and Beginner Mode are part of the
-  window, but a client page whose tool is missing only says how to install it.
+  window. The navigation lists a client's page by default only when its tool is installed (the Manage
+  Clients page can list any, and Beginner Mode offers them all), and a client page whose tool is
+  missing only says how to install it.
 - **Installed, disabled:** its files sit in the app's package store. Nothing runs, and a call to it
   is refused.
 - **Enabled:** no process until something calls it. The app starts it for a call and stops it 30
@@ -161,7 +163,7 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Kimi Code, OpenClaw, ZCode, DeepSeek Harness, WorkBuddy, Antigravity CLI, Copilot CLI and VSCode Copilot setup and launch | Deferred | The rebuild covers the main clients first; these follow later | Not in the app yet |
 | Client setup inside WSL distributions | Deferred | Part of the later Windows work | `pluxy/wsl` lists distributions and users and prepares launches, but the app's side is not built |
 | Executable and folder overrides, terminal choice and recent working folders | Kept | They let a launch use the person's own install and folders | Each client's Start CLI and the Launcher page |
-| Showing, hiding, searching and resetting the list of clients | Kept: being built (P8-clientlist) | The person chooses which clients the navigation shows | Not in the app yet: all eight client pages always show |
+| Showing, hiding, searching and resetting the list of clients | Kept | The person chooses which clients the navigation shows | The Manage Clients page ([README](README.md#manage-clients)): by default the navigation lists the clients whose tool is installed |
 | Codex's OAuth sign-in method and its OpenAI provider-identity switch | Deferred | Not built now: the core takes no ChatGPT login from a client, so the sign-in could not reach it. A later change could add a separate Codex profile for it | Codex uses a client key |
 | Codex model catalog fetched silently | Dropped | The catalog changes only when the person asks | **Import models from core** on the Codex page |
 | Pi's provider plugin installed with `pi install` from npm | Replaced | npm serves whatever is published at that moment | A reviewed copy carried by `pluxy/pi-setup` |
@@ -200,9 +202,26 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | One app per profile, startup preferences, close and window preferences | Kept | | [README](README.md#one-app-per-profile) |
 | Privacy mode | Kept | | [README](README.md#privacy-mode) |
 | Release feed, release notes, channels, signed app update and rollback | Kept | | [README](README.md#version-management-and-release-notes) |
-| Portable replacement helper, upstream release addresses, the kernel version picker and preset mirrors | Dropped | The app updates only through the signed updater, from a feed address the person sets; the version picker could not be reached in the old app | — |
+| Portable replacement helper, upstream release addresses, the kernel version picker and preset mirrors | Dropped | The app updates only through the signed updater, from a feed address the person sets, which replaces the old app's core-version page (its `versions` page) | — |
 | MCP server and skills management | Dropped | The owner's decision; app packages are not agent skills | — |
 | Windows and macOS | Deferred | Later platform work. Some groundwork is merged (native key entry and confirmations, login items, one app per profile, test packages), but no native tool runs there | [README](README.md#platforms) |
+
+### Smaller old features not carried
+
+| Old app feature | Decision | Why | Where now |
+| --- | --- | --- | --- |
+| Model health sweep ("Check All") | Dropped | One click would spend a request on every model; the account's Test checks one model and says it spends one request | The account's Test |
+| Reverse proxy ("External access") | Dropped | Core serves TLS itself, so a second forwarder in the app is not needed | `listen` and the TLS settings in core's config |
+| Follow system proxy | Dropped | Core sends provider credentials through a proxy only when told to, so it does not read the system's or the environment's; set `proxy_url` once | `proxy_url` in core's config, or on an account's Edit form |
+| Browser choice for login links | Dropped | The sign-in link is shown, and can be copied or opened in any browser the person chooses | — |
+| Codex "Allow parallel tool calls" in the model catalog editor | Dropped | Codex no longer reads it: `supports_parallel_tool_calls` is not in Codex's model information, so the setting would change nothing | — |
+| Windows title bar and window materials | Dropped | Decoration with per-version rules that needs native code | — |
+| Thinking and Fast aliases ("Model Aliases") | Deferred | The same effect exists in config: a thinking suffix such as `gpt-5(high)`, a payload rule, or an account's model alias; no form yet | Core's config, in the Source tab |
+| Open-folder buttons | Deferred | Small value, and a new native action | — |
+| Installed and version badges on clients | Deferred | The client list says which clients can be set up; badges for what is installed come later | [README](README.md#beginner-mode) |
+| Languages (English, Simplified and Traditional Chinese, Japanese) | Deferred | English only for now; the string layer is ready for more | — |
+| Allow-LAN switch | Deferred | Exposing a service that holds provider credentials to the network is a choice that should be a visible edit. By hand: set `listen` to `0.0.0.0:<port>` in the Source tab and restart; the management API stays on this machine | `listen` in core's config |
+| Usage page of core requests (ranges, trend, analysis, request details, data management) | Kept in part | Totals and chart are on the Dashboard, and the panel's Usage page lists requests with a CSV export; prices and the storage cap are dropped, and analysis is not built | Dashboard and Usage in the panel |
 
 ## Evidence
 
