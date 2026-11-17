@@ -27,7 +27,9 @@ func TestRestoreKeepsEachPlacesType(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(string(red), "1234") {
+			// A placeholder ends in 24 random hex digits, which can spell 1234 themselves.
+			placeholder := regexp.MustCompile(PlaceholderPrefix + `[0-9a-f]{24}`)
+			if strings.Contains(placeholder.ReplaceAllString(string(red), ""), "1234") {
 				t.Fatalf("the redacted document holds the secret:\n%s", red)
 			}
 			back, err := r.Restore(red, []byte(tc.src), tc.isYAML)
@@ -35,7 +37,7 @@ func TestRestoreKeepsEachPlacesType(t *testing.T) {
 				t.Errorf("round trip = %s, %v; want %s", back, err, tc.src)
 			}
 			// Swap the list's two items, its last two placeholders: each goes back with its type.
-			at := regexp.MustCompile(PlaceholderPrefix+`[0-9a-f]{24}`).FindAllStringIndex(string(red), -1)
+			at := placeholder.FindAllStringIndex(string(red), -1)
 			if len(at) != 4 {
 				t.Fatalf("want 4 placeholders in the redacted document:\n%s", red)
 			}
