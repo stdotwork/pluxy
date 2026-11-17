@@ -12,15 +12,14 @@ import (
 )
 
 // FileBackend keeps each record in its own JSON file in one folder: the minimal portable
-// backend. The folder is created readable only by its owner (0700) and each file likewise
-// (0600). A save writes a temporary file in the same folder, syncs it and renames it over the
-// old one, so a crash leaves the old record or the new one.
+// backend. The folder is made private to core's user on each save, and each file is created
+// private: on unix by their modes (0700 and 0600), on Windows, where Go applies only the
+// read-only bit, by a protected access list (file_windows.go). A save writes a temporary file
+// in the same folder, syncs it and renames it over the old one, so a crash leaves the old
+// record or the new one.
 //
 // shortcut: no file lock, so two cores must not share a folder (their refreshes would not be
 // serialised against each other); add a lock or a lease when one folder serves several cores.
-//
-// shortcut: on Windows the modes do not restrict access (Go applies only the read-only bit);
-// files inherit the folder's ACL. Set an owner-only ACL before Windows is a supported platform.
 type FileBackend struct {
 	Dir string
 }
@@ -74,18 +73,14 @@ func (f FileBackend) Save(r Record) error {
 	if !ValidID(r.ID) {
 		return fmt.Errorf("credential store: account ID %q is not valid", r.ID)
 	}
-	if err := os.MkdirAll(f.Dir, dirMode); err != nil {
-		return err
-	}
-	// MkdirAll leaves an existing folder as it is and applies the umask to a new one.
-	if err := os.Chmod(f.Dir, dirMode); err != nil {
+	if err := makeDir(f.Dir); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(f.Dir, tmpGlob) // created 0600
+	tmp, err := createTemp(f.Dir)
 	if err != nil {
 		return err
 	}
@@ -96,9 +91,6 @@ func (f FileBackend) Save(r Record) error {
 			os.Remove(tmp.Name())
 		}
 	}()
-	if err := tmp.Chmod(fileMode); err != nil && runtime.GOOS != "windows" {
-		return err
-	}
 	if _, err := tmp.Write(b); err != nil {
 		return err
 	}
