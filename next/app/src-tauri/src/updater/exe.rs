@@ -274,7 +274,8 @@ pub(super) fn cleanup(dir: &Path) {
 /// be a plain file with the recorded volume serial and file ID; it is then deleted through that
 /// handle, never by its name. A file in use is waited out for `BUSY_FOR` (the earlier version's
 /// image can stay mapped for a moment after this app took the profile); one still in use then
-/// stays recorded for the next start.
+/// stays recorded for the next start. A folder or link at its name, which such an open refuses
+/// as access denied, is not the file: not there.
 fn remove_recorded(m: &Made) -> Outcome {
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     let mut not_there = false;
@@ -289,6 +290,17 @@ fn remove_recorded(m: &Made) -> Outcome {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 not_there = true;
                 return Ok(());
+            }
+            // Opened without FILE_FLAG_BACKUP_SEMANTICS, a folder is refused as access denied,
+            // which would read as busy: looked at again without opening it.
+            Err(e) if e.raw_os_error().map(|c| c as u32) == Some(ERROR_ACCESS_DENIED) => {
+                if fs::symlink_metadata(&m.path).is_ok_and(|md| {
+                    md.is_dir() || md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                }) {
+                    not_there = true;
+                    return Ok(());
+                }
+                return Err(e);
             }
             Err(e) => return Err(e),
         };
@@ -558,6 +570,28 @@ pub(super) mod tests {
         drop(held);
         assert_eq!(fs::read(&exe).unwrap(), program_bytes("old"));
         assert_eq!(names(&tmp), ["pluxy.exe"]);
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A folder at a recorded file's name is not that file: settled at once as not there, not
+    // waited out as a file in use, and left whole.
+    #[test]
+    fn a_folder_at_a_recorded_name_is_not_there() {
+        let tmp = super::super::tests::temp("exe-folder");
+        let path = tmp.join("pluxy.exe.old-0123456789abcdef");
+        fs::write(&path, b"x").unwrap();
+        let id = file_id(&fs::File::open(&path).unwrap()).unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("keep"), b"z").unwrap();
+        let start = Instant::now();
+        let m = Made {
+            path: path.clone(),
+            id,
+        };
+        assert_eq!(remove_recorded(&m), Outcome::NotThere);
+        assert!(start.elapsed() < BUSY_FOR, "waited {:?}", start.elapsed());
+        assert!(path.join("keep").exists());
         fs::remove_dir_all(&tmp).unwrap();
     }
 
