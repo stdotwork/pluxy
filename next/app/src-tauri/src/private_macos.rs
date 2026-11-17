@@ -14,8 +14,9 @@
 //! `acl_set_fd_np`), declared here.
 
 use std::ffi::c_void;
+use std::fs::File;
 use std::io;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::raw::c_int;
 
 /// `acl_type_t`'s `ACL_TYPE_EXTENDED`, the only type macOS has (`sys/acl.h`).
@@ -73,6 +74,33 @@ pub fn clear_entries(f: &impl AsRawFd) -> io::Result<()> {
         return Err(e);
     }
     Ok(())
+}
+
+/// Opens name in the folder open as dir, never through a link: a folder when folder is set,
+/// otherwise a plain file. None when nothing of that kind is there (missing, a link, or
+/// something else).
+pub fn open_beneath(dir: &impl AsRawFd, name: &str, folder: bool) -> io::Result<Option<File>> {
+    let n =
+        std::ffi::CString::new(name).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    let flags = libc::O_RDONLY
+        | libc::O_NOFOLLOW
+        | libc::O_CLOEXEC
+        | libc::O_NONBLOCK
+        | libc::O_NOCTTY
+        | if folder { libc::O_DIRECTORY } else { 0 };
+    // SAFETY: dir is an open descriptor and n a C string; a descriptor given back is owned below.
+    let fd = unsafe { libc::openat(dir.as_raw_fd(), n.as_ptr(), flags) };
+    if fd < 0 {
+        let e = io::Error::last_os_error();
+        return match e.raw_os_error() {
+            Some(libc::ENOENT | libc::ELOOP | libc::ENOTDIR) => Ok(None),
+            _ => Err(e),
+        };
+    }
+    // SAFETY: fd was just opened and nothing else owns it.
+    let f = unsafe { File::from_raw_fd(fd) };
+    let t = f.metadata()?.file_type();
+    Ok((if folder { t.is_dir() } else { t.is_file() }).then_some(f))
 }
 
 /// Tests: adds the access list entry `entry` (`chmod +a`'s form, such as `everyone allow read`)

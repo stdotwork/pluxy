@@ -1601,8 +1601,10 @@ in the browser. The app updates itself only as a Linux AppImage.
   others in whatever the mode, a vault folder with any entry is given an empty list (as a too-open
   one is tightened to 0700, so nothing made in it inherits an entry) and a vault file with any is
   refused; the app's other private folders and files (Access's store, remembered launches, cores,
-  extensions, the instance folder and files written privately) follow the same rule. The window
-  has no vault page yet. Secrets reach
+  extensions, the instance folder, the app's core's folder and files written privately) follow the
+  same rule. In the core's folder its config, its `credentials` and `packages` folders and each
+  credential file are emptied of entries before the core starts, not refused: the core owns them.
+  The window has no vault page yet. Secrets reach
   native tools' pipes and the environment of a process a confirmed launch starts (the launching
   tool holds only a reference); a client key is checked at each use, also at a launch's spawn and
   each restart. Backups have no retention: a package keeps at most 256.

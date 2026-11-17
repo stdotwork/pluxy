@@ -139,8 +139,13 @@ fn write_private_with_nonce(
 /// The core config the app keeps, `<dir>/config.json`. The app writes it once, the first time,
 /// with a free loopback port that then stays the core's, fresh keys and folders under dir; after
 /// that it is the person's to edit (core reloads it), and the app only reads the management key.
+/// On macOS dir is first emptied of extended access list entries (`clear_core_folder`).
 pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
     let path = dir.join("config.json");
+    #[cfg(target_os = "macos")]
+    fs::create_dir_all(dir)
+        .and_then(|_| clear_core_folder(dir))
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
     if path.exists() {
         return Ok(path);
     }
@@ -159,6 +164,36 @@ pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
     let text = serde_json::to_vec_pretty(&cfg).expect("a JSON value");
     write_private(&path, &text).map_err(|e| format!("writing {}: {e}", path.display()))?;
     Ok(path)
+}
+
+/// macOS: the app's core folder holds the core's keys (config.json) and its credentials, so it
+/// keeps no extended access list entry, the rule of the app's other private folders
+/// (`private_macos.rs`): the folder, its config and the credentials and packages folders the
+/// config names by default are given an empty list, and so is each credential file with an
+/// entry (cleared, not refused: the core owns them, and refusing would stop it). Each is opened
+/// beneath the folder, never through a link. The core writes into folders that pass nothing on.
+#[cfg(target_os = "macos")]
+fn clear_core_folder(dir: &Path) -> io::Result<()> {
+    use crate::private_macos::{clear_entries, open_beneath};
+    let root = fs::File::open(dir)?;
+    clear_entries(&root)?;
+    if let Some(f) = open_beneath(&root, "config.json", false)? {
+        clear_entries(&f)?;
+    }
+    if let Some(d) = open_beneath(&root, "packages", true)? {
+        clear_entries(&d)?;
+    }
+    if let Some(d) = open_beneath(&root, "credentials", true)? {
+        clear_entries(&d)?;
+        for e in fs::read_dir(dir.join("credentials"))? {
+            let name = e?.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if let Some(f) = open_beneath(&d, name, false)? {
+                clear_entries(&f)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The address core is to listen on, from `listen` in the core config at path: an IP address and
@@ -878,6 +913,47 @@ mod tests {
         write_private(&path, b"{}").unwrap();
         assert!(!has(&path));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// macOS: the core folder from an install whose folders others may use is emptied of
+    /// extended access list entries before the core starts: the folder, its config, the
+    /// credentials and packages folders and each credential file. A link in it is not followed.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_core_folder_keeps_no_access_list() {
+        use crate::private_macos::add_entry;
+        let base = temp("core-acl");
+        let dir = base.join("core");
+        ensure_config(&dir).unwrap();
+        let creds = dir.join("credentials");
+        let packages = dir.join("packages");
+        fs::create_dir_all(&creds).unwrap();
+        fs::create_dir_all(&packages).unwrap();
+        let cred = creds.join("account.json");
+        fs::write(&cred, b"{}").unwrap();
+        // A link to a file outside, whose entry is not the app's to change.
+        let outside = base.join("outside.json");
+        fs::write(&outside, b"{}").unwrap();
+        add_entry(&outside, "everyone allow read");
+        std::os::unix::fs::symlink(&outside, creds.join("link.json")).unwrap();
+        let inherit = "everyone allow list,file_inherit,directory_inherit";
+        add_entry(&dir, inherit);
+        add_entry(&dir.join("config.json"), "everyone allow write");
+        add_entry(&creds, inherit);
+        add_entry(&packages, inherit);
+        add_entry(&cred, "everyone allow read");
+        let has =
+            |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+        let all = [&dir, &dir.join("config.json"), &creds, &packages, &cred];
+        for p in all {
+            assert!(has(p), "{}", p.display());
+        }
+        ensure_config(&dir).unwrap();
+        for p in all {
+            assert!(!has(p), "{}", p.display());
+        }
+        assert!(has(&outside));
+        fs::remove_dir_all(base).unwrap();
     }
 
     fn temp(name: &str) -> PathBuf {
