@@ -326,15 +326,16 @@ jobs:
         run: cargo build --locked --features native-test
       # The tools shard: the app with the test hooks and the test trust, the fixture tool its signed
       # packages hold, and the execution program the launcher session installs, built into
-      # target/app-tools as run.ts builds it (without execution's native-test feature, which only
-      # run.ts's open session uses).
+      # target/app-tools with its native-test feature: on Windows a terminal launch's console window
+      # then does not wait for Enter, and its Command Prompt or PowerShell after the program runs one
+      # fixed command, which the launcher session reads back (never in a release build).
       - name: Build the app and tools for the tools sessions
         if: matrix.shard == 'tools'
         working-directory: next/app/src-tauri
         run: |
           cargo build --locked --features native-test,artifact-test-trust --bin pluxy-app --example program_fixture
           cd ../../app-tools
-          cargo build --locked -p execution --target-dir ../app/src-tauri/target/app-tools
+          cargo build --locked -p execution --features native-test --target-dir ../app/src-tauri/target/app-tools
       # The tools shard runs five app sessions one after another, each after starting a test core
       # (stopped after 3 minutes, CORE_START in native/platform-tools.ts) and each app stopped after
       # 10 minutes (TIMEOUT there), then removing what it made (at most 30 s for each of up to four
