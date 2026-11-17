@@ -1,5 +1,7 @@
 // Package corpus is the differential test corpus: cases taken from the old core, each
-// replayed against the new core and compared with what the old core does, at the HTTP seam.
+// replayed against the new core and compared, at the HTTP seam, with the reply the old core
+// gave when the case was recorded. The old core is gone from the repository; the recorded
+// replies are the reference.
 //
 // A case is one JSON file under cases/<client format>/<provider>/. It holds the client request,
 // the replies a fake upstream server gives, the old core's recorded observation and a list of
@@ -28,21 +30,20 @@ type Case struct {
 	// reply to the one before has ended: for behaviour that shows across requests, such as which
 	// account each request goes to or a cooldown a failure leaves. Not WebSocket requests.
 	Then []ClientRequest `json:"then,omitempty"`
-	// OldClient, when set, is sent to the old core instead of Client, for a call the two cores
-	// make through different management routes. OldClientMore are further requests sent to the old
-	// core after it, in order, one reply each (the panel's quota fetch makes several calls where
-	// the new core's quota call makes them itself). In these requests {{upstream}} stands for the
-	// fake upstream's base URL and {{auth_index}} for the auth_index the old core gives its one
-	// auth file. The old core's replies are observed as client (OldClient's) and client_more.
+	// OldClient and OldClientMore are what the old core was sent, instead of Client, when its
+	// reply was recorded, for a call the two cores make through different management routes (the
+	// old core's replies are the recorded client and client_more). Nothing runs them now: they
+	// stay because the case files that hold them have to load.
 	OldClient     *ClientRequest  `json:"old_client,omitempty"`
 	OldClientMore []ClientRequest `json:"old_client_more,omitempty"`
-	// AccountModels, when set, are the models the provider account lists in both cores. By
-	// default the old core lists the request's model (it serves only listed models), and so
-	// does the new core for a provider the old core takes from its api-keys block; for one set
-	// up from auth files the new core lists none (it serves its extension's catalog).
+	// AccountModels, when set, are the models the provider account lists in the new core (the
+	// old core listed them too, when its reply was recorded). By default the new core lists the
+	// request's model, except for a provider with CatalogModels, whose accounts list none (the
+	// extension serves its catalog).
 	AccountModels []string `json:"account_models,omitempty"`
-	// Accounts is how many provider accounts both cores have, all pointed at the fake
-	// upstream, each with its own key (see UpstreamKeys). Default 1.
+	// Accounts is how many provider accounts the core has (the old core had as many when its
+	// reply was recorded), all pointed at the fake upstream, each with its own key (see
+	// UpstreamKeys). Default 1.
 	Accounts int `json:"accounts,omitempty"`
 	// LabelAccounts replaces each account's upstream key in the requests the upstream received
 	// with "account-1", "account-2" and so on, numbered in the order the accounts were first
@@ -61,13 +62,14 @@ type Case struct {
 	// Unordered lists observation paths of arrays whose order is not compared (today's core
 	// lists models in no fixed order): after masking, each is sorted by its elements' JSON.
 	Unordered []string `json:"unordered,omitempty"`
-	// OldCore and NewCore add settings to each core's generated config for this case, in that
-	// core's own config format.
+	// OldCore is the settings added to the old core's config when its reply was recorded; nothing
+	// runs it now (see OldClient). NewCore adds settings to the new core's generated config.
 	OldCore *CoreOverride `json:"old_core,omitempty"`
 	NewCore *CoreOverride `json:"new_core,omitempty"`
 	// Exceptions lists known differences between the new core and the old one.
 	Exceptions []Exception `json:"exceptions,omitempty"`
-	// Recorded is the old core's observation, written by a record run.
+	// Recorded is the old core's observation, recorded before the old core was removed from the
+	// repository. It is not edited by hand or re-recorded.
 	Recorded json.RawMessage `json:"recorded_old_core,omitempty"`
 
 	// Set by Load.
@@ -85,8 +87,8 @@ type ClientRequest struct {
 	// User-Agent unless set here.
 	Headers map[string]string `json:"headers,omitempty"`
 	// Auth is "client-key" (default: the corpus client key as a bearer token), "management-key"
-	// (the corpus management key; a case that sends it turns the management API on in both
-	// cores), "none", or any other value, sent as the bearer token.
+	// (the corpus management key; a case that sends it turns the management API on), "none", or
+	// any other value, sent as the bearer token.
 	Auth string `json:"auth,omitempty"`
 	// Body is a JSON body. BodyText is a literal body, for requests that are not valid JSON.
 	Body     json.RawMessage `json:"body,omitempty"`
@@ -322,23 +324,6 @@ func (c *Case) validate() error {
 			return fmt.Errorf("client.websocket[%d]: set exactly one of send, send_text, read, await_drop, close or drop", i)
 		}
 	}
-	if c.OldClient == nil && len(c.OldClientMore) > 0 {
-		return fmt.Errorf("old_client_more needs old_client")
-	}
-	for i, r := range c.oldRequests() {
-		if c.OldClient == nil {
-			break
-		}
-		if r.Path == "" {
-			return fmt.Errorf("old_client[%d]: path is required", i)
-		}
-		if len(r.WebSocket) > 0 {
-			return fmt.Errorf("old_client[%d]: a websocket script is not supported", i)
-		}
-		if len(r.Body) > 0 && r.BodyText != nil {
-			return fmt.Errorf("old_client[%d]: set body or body_text, not both", i)
-		}
-	}
 	for i, r := range c.Upstream {
 		for j, s := range r.WebSocket {
 			if n := count(s.Receive, len(s.Send) > 0, s.Close != nil, s.Drop); n != 1 {
@@ -381,21 +366,10 @@ func (c *Case) validate() error {
 	return nil
 }
 
-// oldRequests returns the requests the old core gets: OldClient and OldClientMore, or Client alone.
-func (c *Case) oldRequests() []ClientRequest {
-	if c.OldClient == nil {
-		return []ClientRequest{c.Client}
-	}
-	return append([]ClientRequest{*c.OldClient}, c.OldClientMore...)
-}
-
-// UsesManagement reports whether the case calls the management API of either core, which
-// then runs with the corpus management key.
+// UsesManagement reports whether the case calls the management API, which then runs with the
+// corpus management key.
 func (c *Case) UsesManagement() bool {
-	if c.Client.Auth == AuthManagementKey {
-		return true
-	}
-	for _, r := range append(c.oldRequests(), c.Then...) {
+	for _, r := range append([]ClientRequest{c.Client}, c.Then...) {
 		if r.Auth == AuthManagementKey {
 			return true
 		}
@@ -435,32 +409,6 @@ func (e Exception) validate() error {
 		}
 	}
 	return nil
-}
-
-// SaveRecorded writes obs into the case file as its recorded old-core observation. The rest of
-// the file keeps its keys, order and values; the whole file is laid out by FormatJSON.
-func (c *Case) SaveRecorded(obs any) error {
-	b, err := os.ReadFile(c.Path)
-	if err != nil {
-		return err
-	}
-	root, err := parseOrdered(b)
-	if err != nil {
-		return err
-	}
-	if root.keys == nil {
-		return fmt.Errorf("case file is not a JSON object")
-	}
-	rec, err := json.Marshal(obs)
-	if err != nil {
-		return err
-	}
-	recNode, err := parseOrdered(rec)
-	if err != nil {
-		return err
-	}
-	root.set("recorded_old_core", recNode)
-	return os.WriteFile(c.Path, root.format(), 0o644)
 }
 
 func strictUnmarshal(b []byte, v any) error {
