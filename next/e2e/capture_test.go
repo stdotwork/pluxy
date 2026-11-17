@@ -548,3 +548,68 @@ func TestUpstreamCaptureCutKeepsNoConfigSecretPart(t *testing.T) {
 		wantNoCutSecretPart(t, readLog(t, dir, "v1-responses-*.log"))
 	})
 }
+
+// A secret that an extension's read of an upstream body stopped inside leaves no start of it at
+// the end of the request log's upstream response: here the provider reads the first MiB of an
+// error body, and the MiB ends inside the account's API key, or inside the management key, which
+// the upstream repeats as a gateway's error might.
+func TestUpstreamCaptureStoppedReadKeepsNoSecretStart(t *testing.T) {
+	for _, tc := range []struct {
+		name, secret string
+	}{{"credential", captureKeyB}, {"config secret", cutSecret}} {
+		t.Run(tc.name, func(t *testing.T) {
+			const mark = "MARK repeated "
+			// The first MiB, which the provider reads of an error, ends 10 bytes into the secret.
+			prefix := `{"error":{"type":"rate_limit","message":"`
+			// Words, not one run of a key's characters, which the log leaves out beside a cut.
+			fill := func(n int) string { return strings.Repeat("x ", n/2+1)[:n] }
+			reply := prefix + fill(1<<20-len(prefix)-len(mark)-10) + mark + tc.secret + fill(1<<20) + `"}}`
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				io.WriteString(w, reply)
+			}))
+			t.Cleanup(up.Close)
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.json")
+			b, _ := json.Marshal(map[string]any{
+				"listen":         "127.0.0.1:0",
+				"client_keys":    []string{clientKey},
+				"management_key": cutSecret,
+				"logs":           map[string]any{"request_log": true},
+				"extension": map[string]any{
+					"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+					"accounts": []any{map[string]any{"id": "stop", "settings": map[string]any{"base_url": up.URL + "/v1"},
+						"credential": map[string]any{"kind": "api_key", "api_key": captureKeyB}}},
+				},
+			})
+			os.WriteFile(cfgPath, b, 0o600)
+			base, _ := runCoreFile(t, cfgPath, noWatch...)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			resp := post(t, ctx, base, clientKey, `{"model":"gpt-cap","messages":[{"role":"user","content":"hi"}]}`)
+			io.Copy(io.Discard, resp.Body) // to its end: the log is written before the reply ends
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusTooManyRequests {
+				t.Fatalf("status %d, want the upstream's 429", resp.StatusCode)
+			}
+			text := readLog(t, dir, "v1-chat-completions-*.log")
+			resps := sections(text, "UPSTREAM RESPONSE")
+			if len(resps) == 0 {
+				t.Fatalf("no upstream response in the log:\n%.2000s", text)
+			}
+			for _, r := range resps {
+				if !strings.Contains(r, "Status: 429") || !strings.Contains(r, fill(64)) {
+					t.Errorf("the upstream response is not the error with its body:\n%.2000s", r)
+				}
+				for i := 0; i+4 <= len(tc.secret); i++ {
+					if j := strings.Index(r, tc.secret[i:i+4]); j >= 0 {
+						t.Errorf("the upstream response keeps part of the secret where the read stopped: %q",
+							r[max(0, j-40):min(len(r), j+40)])
+						break
+					}
+				}
+			}
+		})
+	}
+}

@@ -193,8 +193,13 @@ func writeUpstreamHeaders(b *bytes.Buffer, h map[string][]string, leftOut int) {
 // writeBody writes a captured body as the client side's capture does: all of it, or its start and
 // its end with a line saying how many bytes were left out between them. A secret of redact's cut
 // in two at the gap would not be recognised by the redaction, so what could be part of one on
-// each side of the gap is left out too (trimGap).
+// each side of the gap is left out too (trimGap). A body not read to its end (BodyStopped) ends
+// with a line saying so, and what before it could be the start of a secret is left out
+// (trimStop).
 func writeBody(b *bytes.Buffer, c protocol.CapturedBody, redact *protocol.Redactor) {
+	if c.BodyStopped {
+		defer b.WriteString("\n[... the extension read no further ...]")
+	}
 	head, end := c.Body, c.BodyEnd
 	if end == "" && len(head) > protocol.CapturedHead+protocol.CapturedEnd {
 		head, end = head[:protocol.CapturedHead], head[len(head)-protocol.CapturedEnd:]
@@ -207,15 +212,35 @@ func writeBody(b *bytes.Buffer, c protocol.CapturedBody, redact *protocol.Redact
 	kept := int64(len(head) + len(end))
 	skipped := max(c.BodySize, int64(len(c.Body)+len(c.BodyEnd))) - kept
 	if skipped <= 0 {
-		b.WriteString(head)
-		b.WriteString(end)
+		text := head + end
+		if c.BodyStopped {
+			text = trimStop(redact, text)
+		}
+		b.WriteString(text)
 		return
+	}
+	if c.BodyStopped && end != "" {
+		end = trimStop(redact, end)
 	}
 	h, e := trimGap(redact, head, end)
 	skipped += int64(len(head) - len(h) + len(end) - len(e))
 	b.WriteString(h)
 	fmt.Fprintf(b, "\n[... %d bytes not logged ...]\n", skipped)
 	b.WriteString(e)
+}
+
+// trimStop returns s, the end of a body whose read stopped, without what at its end could be the
+// start of a secret of r's cut off there: a run of at least 4 bytes that starts a form of one
+// (Redactor.TrimCut), then the run of key characters (secretChar), which holds the start of a
+// secret made of them in any spelling.
+//
+// shortcut: it leaves out no window as trimGap does, so a secret with other characters, spelled
+// with escapes beyond its forms, can keep a start here. Most streamed bodies end unread (their
+// extension stops at the reply's last event), and a window would leave out all of a short one.
+// Upgrade if such a start is seen in a log.
+func trimStop(r *protocol.Redactor, s string) string {
+	s, _ = r.TrimCut(s, "")
+	return strings.TrimRightFunc(s, secretChar)
 }
 
 // gapBytesPerFormByte is how many bytes beside a cut trimGap leaves out for each byte of the

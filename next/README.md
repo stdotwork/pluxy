@@ -1993,7 +1993,14 @@ refused attempt and the retry on another account show as two pairs. Each body ke
 KiB and its last 96 KiB, less what beside the cut could be part of a secret, as for the reply, a
 streamed reply recorded as the extension reads it, without holding it back; when a request made
 more than two upstream requests, the first and the last are kept, with a line saying how many
-were left out between them. A Responses WebSocket turn that opens the upstream socket holds its
+were left out between them. A body the extension did not read to its end (it read only the first
+MiB of an error, stopped at a stream's last event, or the connection broke) ends with the line
+`[... the extension read no further ...]`, and what before it could be the start of a secret cut
+off there is left out: 4 bytes or more that start a form of the account's credential or of a
+secret the log removes, then the run of letters, digits and `-_.~+/=%\` there. No window is left
+out there, so the start of a secret with other characters, spelled with escapes the log decodes
+beyond those forms, can stay. That needs protocol 0.16; with an older extension such a body
+ends as the read stopped. A Responses WebSocket turn that opens the upstream socket holds its
 handshake; the messages on that socket are not written. This needs an
 extension that implements [protocol](protocol/README.md#upstream-capture) 0.13; it is captured
 only while `logs.request_log` is on, so error logs written with it off have no upstream sections,

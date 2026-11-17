@@ -82,7 +82,7 @@ func (c *captureLog) roundTrip(rt http.RoundTripper, req *http.Request) (*http.R
 	// A 101's body is the switched connection (a WebSocket's), which its reader needs as it is;
 	// its messages are not recorded.
 	if resp.StatusCode != http.StatusSwitchingProtocols && resp.Body != nil {
-		x.body = &bodyCapture{}
+		x.body = &bodyCapture{eof: resp.Body == http.NoBody} // an empty body has nothing to read
 		resp.Body = teeBody{resp.Body, x.body}
 	}
 	return resp, nil
@@ -199,7 +199,7 @@ func capturedHeaders(h http.Header) (headers map[string][]string, leftOut int) {
 	return out, leftOut
 }
 
-// teeBody records what is read from a body as it is read.
+// teeBody records what is read from a body as it is read, and whether the read reached its end.
 type teeBody struct {
 	io.ReadCloser
 	c *bodyCapture
@@ -209,6 +209,11 @@ func (b teeBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	if n > 0 {
 		_, _ = b.c.Write(p[:n])
+	}
+	if err == io.EOF {
+		b.c.mu.Lock()
+		b.c.eof = true
+		b.c.mu.Unlock()
 	}
 	return n, err
 }
@@ -233,6 +238,7 @@ type bodyCapture struct {
 	tail    []byte // a ring of protocol.CapturedEnd bytes once full
 	at      int    // where the ring's oldest byte is
 	written int64
+	eof     bool // the body was read to its end
 }
 
 func (c *bodyCapture) Write(p []byte) (int, error) {
@@ -259,7 +265,8 @@ func (c *bodyCapture) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// captured returns what c kept: the whole body in Body when it fits, else its start and end.
+// captured returns what c kept: the whole body in Body when it fits, else its start and end,
+// with BodyStopped set when the body was not read to its end, however its read stopped.
 func (c *bodyCapture) captured() protocol.CapturedBody {
 	if c == nil {
 		return protocol.CapturedBody{}
@@ -268,7 +275,7 @@ func (c *bodyCapture) captured() protocol.CapturedBody {
 	defer c.mu.Unlock()
 	tail := string(c.tail[c.at:]) + string(c.tail[:c.at])
 	if c.written <= protocol.CapturedHead+protocol.CapturedEnd {
-		return protocol.CapturedBody{Body: string(c.head) + tail, BodySize: c.written}
+		return protocol.CapturedBody{Body: string(c.head) + tail, BodySize: c.written, BodyStopped: !c.eof}
 	}
-	return protocol.CapturedBody{Body: string(c.head), BodyEnd: tail, BodySize: c.written}
+	return protocol.CapturedBody{Body: string(c.head), BodyEnd: tail, BodySize: c.written, BodyStopped: !c.eof}
 }
