@@ -9,6 +9,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 // An extension timing too large for a time.Duration is refused, not wrapped into a negative
@@ -200,6 +201,41 @@ payload:
 	}
 	if p := c.Payload.Filter[0].Params; !reflect.DeepEqual(p, []string{"0", "true"}) {
 		t.Errorf("filter params %q", p)
+	}
+}
+
+// A config.yaml's payload rules change a request as they did in today's core. The want of each
+// case is the body today's core sent upstream for the same file (its loader, then its payload
+// code): a key in another letter case was never read, so it changes nothing; a -raw param that
+// is a date is sent as the JSON string of its date; a -raw param that is .inf, .nan or null is
+// skipped, with the rule's other params applied.
+func TestConfigYAMLPayloadLikeOldCore(t *testing.T) {
+	for _, c := range []struct{ name, rules, want, notice string }{
+		{"exact keys", "override:\n    - models: [{name: m}]\n      params: {p: 1}\n", `{"p":1}`, ""},
+		{"list in another case", "Override:\n    - models: [{name: m}]\n      params: {p: 1}\n", `{}`, "payload.Override"},
+		{"model name in another case", "override:\n    - models: [{Name: m}]\n      params: {p: 1}\n", `{}`, "payload.override.models.Name"},
+		{"model name as a number in another case", "override:\n    - models: [{Name: 0123}]\n      params: {p: 1}\n", `{}`, "payload.override.models.Name"},
+		{"params in another case", "override:\n    - models: [{name: m}]\n      Params: {p: 1}\n", `{}`, "payload.override.Params"},
+		{"raw date", "override-raw:\n    - models: [{name: m}]\n      params: {p: 2024-01-15}\n", `{"p":"2024-01-15T00:00:00Z"}`, ""},
+		{"default-raw date and time", "default-raw:\n    - models: [{name: m}]\n      params: {p: 2024-01-15T10:30:00Z}\n", `{"p":"2024-01-15T10:30:00Z"}`, ""},
+		{"raw .inf", "override-raw:\n    - models: [{name: m}]\n      params: {p: .inf, q: 1}\n", `{"q":1}`, `payload.override-raw.params["p"]`},
+		{"raw .nan", "default-raw:\n    - models: [{name: m}]\n      params: {p: .nan, q: 1}\n", `{"q":1}`, `payload.default-raw.params["p"]`},
+		{"raw null", "override-raw:\n    - models: [{name: m}]\n      params: {p: ~, q: 1}\n", `{"q":1}`, `payload.override-raw.params["p"]`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := ParseConfig([]byte("api-keys: [k]\nauth-dir: auths\npayload:\n  "+c.rules), "/srv/pluxy/config.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := payload.Apply(cfg.Payload, []byte(`{}`), payload.Input{Model: "m"})
+			if string(body) != c.want {
+				t.Errorf("the body sent is %s, want %s", body, c.want)
+			}
+			notice := strings.Join(cfg.Notices, "\n")
+			if c.notice == "" && strings.Contains(notice, "payload") || !strings.Contains(notice, c.notice) {
+				t.Errorf("notices do not name %q:\n%s", c.notice, notice)
+			}
+		})
 	}
 }
 

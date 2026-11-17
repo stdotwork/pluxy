@@ -1326,3 +1326,99 @@ func TestPayload(t *testing.T) {
 		t.Errorf("a payload list: err = %v", err)
 	}
 }
+
+// Today's core reads a config.yaml with yaml.v3, which matches a key to its field exactly: a key
+// written in another letter case, or not a payload key at all, is dropped, and the rule keeps
+// what else it has (a rule without models matches nothing; a model without a name matches
+// nothing). The importer drops the same keys and names each in a notice, where the JSON config's
+// decoder would have matched them case-insensitively and applied them. Each want is what today's
+// core's loader (config.ParseConfigBytes) kept of the same file.
+func TestPayloadKeysExact(t *testing.T) {
+	const rule = "    - models: [{name: m}]\n      params: {p: 1}\n"
+	for _, c := range []struct{ name, payload, want, notice string }{
+		{"list", "  Override:\n" + rule, `{}`, "requests.payload.Override (today's core reads override)"},
+		{"raw list", "  OVERRIDE-RAW:\n" + rule, `{}`, "requests.payload.OVERRIDE-RAW (today's core reads override-raw)"},
+		{"filter list", "  Filter:\n    - models: [{name: m}]\n      params: [a]\n", `{}`, "requests.payload.Filter (today's core reads filter)"},
+		{"models", "  override:\n    - Models: [{name: m}]\n      params: {p: 1}\n", `{"override": [{"params": {"p": 1}}]}`, "requests.payload.override.Models (today's core reads models)"},
+		{"params", "  override:\n    - models: [{name: m}]\n      Params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}]}]}`, "requests.payload.override.Params (today's core reads params)"},
+		{"name", "  override:\n    - models: [{Name: m, protocol: codex}]\n      params: {p: 1}\n", `{"override": [{"models": [{"protocol": "codex"}], "params": {"p": 1}}]}`, "requests.payload.override.models.Name (today's core reads name)"},
+		{"name as a number", "  override:\n    - models: [{Name: 0123, protocol: codex}]\n      params: {p: 1}\n", `{"override": [{"models": [{"protocol": "codex"}], "params": {"p": 1}}]}`, "requests.payload.override.models.Name (today's core reads name)"},
+		{"protocol", "  override:\n    - models: [{name: m, Protocol: codex}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override.models.Protocol (today's core reads protocol)"},
+		{"from-protocol", "  override:\n    - models: [{name: m, From-Protocol: claude}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override.models.From-Protocol (today's core reads from-protocol)"},
+		{"headers", "  override:\n    - models: [{name: m, Headers: {X-A: '*'}}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override.models.Headers (today's core reads headers)"},
+		{"match", "  override:\n    - models: [{name: m, Match: [{a: 1}]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override.models.Match (today's core reads match)"},
+		{"not-match", "  override:\n    - models: [{name: m, Not-Match: [{a: 1}]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override.models.Not-Match (today's core reads not-match)"},
+		{"exist", "  override:\n    - models: [{name: m, Exist: [a]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override.models.Exist (today's core reads exist)"},
+		{"not-exist", "  override:\n    - models: [{name: m, NOT-EXIST: [a]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override.models.NOT-EXIST (today's core reads not-exist)"},
+		{"filter params", "  filter:\n    - models: [{name: m}]\n      Params: [a]\n", `{"filter": [{"models": [{"name": "m"}]}]}`, "requests.payload.filter.Params (today's core reads params)"},
+		{"filter models", "  filter:\n    - Models: [{name: m}]\n      params: [a]\n", `{"filter": [{"params": ["a"]}]}`, "requests.payload.filter.Models (today's core reads models)"},
+		{"unknown keys", "  override:\n    - models: [{name: m, bogus: 1}]\n      params: {p: 1}\n      extra: 2\n  other: []\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`,
+			"requests.payload.other (not a payload key), requests.payload.override.extra (not a payload key), requests.payload.override.models.bogus (not a payload key)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			nested := "  " + strings.ReplaceAll(strings.TrimSuffix(c.payload, "\n"), "\n", "\n  ") + "\n"
+			for _, doc := range []string{"requests:\n  payload:\n" + nested, "payload:\n" + c.payload} {
+				r := translate(t, doc)
+				equalJSON(t, r.Config["payload"], c.want)
+				if n := notices(r); !strings.Contains(n, "payload keys ignored, as today's core ignores them (it matches key names exactly): ") || !strings.Contains(n, c.notice) {
+					t.Errorf("notices do not say %q:\n%s", c.notice, n)
+				}
+			}
+		})
+	}
+	// The exact spellings carry no notice about keys.
+	r := translate(t, "payload:\n  override:\n"+rule)
+	if n := notices(r); strings.Contains(n, "payload") {
+		t.Errorf("notices name payload for exact keys:\n%s", n)
+	}
+	// Only the payload's own keys are matched exactly: a path, a header name and a match key are
+	// the user's text and keep their case.
+	r = translate(t, "payload:\n  override:\n    - models: [{name: m, headers: {X-Mixed-Case: '*'}, match: [{Mixed.Path: 1}], exist: [Mixed.Path]}]\n      params: {Mixed.Path: 1}\n")
+	equalJSON(t, r.Config["payload"], `{"override": [{"models": [{"name": "m", "headers": {"X-Mixed-Case": "*"}, "match": [{"Mixed.Path": 1}], "exist": ["Mixed.Path"]}], "params": {"Mixed.Path": 1}}]}`)
+	if n := notices(r); strings.Contains(n, "payload") {
+		t.Errorf("notices name payload for user text:\n%s", n)
+	}
+}
+
+// A -raw rule's param goes across as today's core sent it upstream (found by running its loader
+// and its payloadRawValue on the same file): a string is the JSON text itself; any other value
+// is what json.Marshal makes of it, so a date YAML reads as one is the JSON string of its
+// RFC 3339 form; a param that is null, or that json.Marshal refuses (.inf, .nan, also inside a
+// list), is skipped, and the rule's other params still apply. The importer carries the first
+// two and drops the skipped ones, naming each.
+func TestPayloadRawParams(t *testing.T) {
+	for _, c := range []struct{ name, params, want, notice string }{
+		{"date", "{p: 2024-01-15}", `{"p": "\"2024-01-15T00:00:00Z\""}`, ""},
+		{"date and time", "{p: 2024-01-15T10:30:00Z}", `{"p": "\"2024-01-15T10:30:00Z\""}`, ""},
+		{"date and time with fractions", "{p: 2024-01-15T10:30:00.123456789Z}", `{"p": "\"2024-01-15T10:30:00.123456789Z\""}`, ""},
+		{"date in a list", "{p: [2024-01-15, 1]}", `{"p": ["2024-01-15T00:00:00Z", 1]}`, ""},
+		{"date in a mapping", "{p: {d: 2024-01-15}}", `{"p": {"d": "2024-01-15T00:00:00Z"}}`, ""},
+		{"+inf", "{p: .inf, q: 1}", `{"q": 1}`, `requests.payload.override-raw.params["p"] (its value is not JSON: json: unsupported value: +Inf)`},
+		{"-inf", "{p: -.inf, q: 1}", `{"q": 1}`, `requests.payload.override-raw.params["p"] (its value is not JSON: json: unsupported value: -Inf)`},
+		{"nan", "{p: .nan, q: 1}", `{"q": 1}`, `requests.payload.override-raw.params["p"] (its value is not JSON: json: unsupported value: NaN)`},
+		{"inf in a list", "{p: [.inf], q: 1}", `{"q": 1}`, `requests.payload.override-raw.params["p"] (its value is not JSON: json: unsupported value: +Inf)`},
+		{"null", "{p: ~, q: 1}", `{"q": 1}`, `requests.payload.override-raw.params["p"] (its value is null)`},
+		{"values and JSON text", `{p: 5, q: 0123, r: 1e5, s: true, t: 1.50, u: '{"a":1}'}`, `{"p": 5, "q": 83, "r": 100000, "s": true, "t": 1.5, "u": "{\"a\":1}"}`, ""},
+	} {
+		for _, list := range []string{"override-raw", "default-raw"} {
+			t.Run(c.name+" in "+list, func(t *testing.T) {
+				r := translate(t, "payload:\n  "+list+":\n    - models: [{name: m}]\n      params: "+c.params+"\n")
+				equalJSON(t, r.Config["payload"], `{"`+list+`": [{"models": [{"name": "m"}], "params": `+c.want+`}]}`)
+				n := notices(r)
+				if c.notice == "" {
+					if strings.Contains(n, "payload") {
+						t.Errorf("notices name payload:\n%s", n)
+					}
+					return
+				}
+				want := strings.ReplaceAll(c.notice, "override-raw", list)
+				if !strings.Contains(n, "payload -raw params skipped, as today's core skips them when it applies the rule: ") || !strings.Contains(n, want) {
+					t.Errorf("notices do not say %q:\n%s", want, n)
+				}
+			})
+		}
+	}
+	// A param of a rule that is not a -raw one keeps its value as it is: a date stays a date.
+	r := translate(t, "payload:\n  override:\n    - models: [{name: m}]\n      params: {p: 2024-01-15}\n")
+	equalJSON(t, r.Config["payload"], `{"override": [{"models": [{"name": "m"}], "params": {"p": "2024-01-15T00:00:00Z"}}]}`)
+}

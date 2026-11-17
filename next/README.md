@@ -2161,6 +2161,9 @@ this core does not support yet, and one line naming the settings it ignores for 
 nothing and is not named, nor is any setting of a feature whose `enabled` switch is off.
 Neither line stops core from starting. Settings that did nothing in today's core either (marked
 "dead") are accepted without a word. A key today's core does not know is named as unknown.
+Keys are matched exactly, as today's core matches them: `Port:` is not `port:`, so it is not
+read, and a key in another letter case in the `payload` rules is dropped and named in the log
+(see [Payload rules](#payload-rules)).
 [`-import-auth`](#importing-todays-auth-folder) prints the same lines on standard error before it
 imports, so a migration sees them before core ever starts.
 
@@ -2247,7 +2250,7 @@ are accepted silently.
 | `quota-exceeded.switch-project`, `quota-exceeded.switch-preview-model` | | Dead |
 | `requests.proxy-url` (`proxy-url`) | `proxy_url`: the [outbound proxy](#outbound-proxy) of every account. A value that is not an `http`, `https`, `socks5` or `socks5h` URL, `direct` or `none` fails the load, where today's core logs it and goes without the proxy. | Supported |
 | Every `proxy-url` on a group or key | The account's `proxy_url`: a key's own, else its group's. | Supported |
-| `requests.payload.*` (`payload`) | `payload`: the [payload rules](#payload-rules), with today's lists and fields. A path outside the parts today's example config uses, or a raw value that is not JSON, fails the load. Today's `protocol` named the upstream's API format; here it names the extension. | Supported |
+| `requests.payload.*` (`payload`) | `payload`: the [payload rules](#payload-rules), with today's lists and fields. A path outside the parts today's example config uses, or a `-raw` param that is a string and not JSON, fails the load. Today's `protocol` named the upstream's API format; here it names the extension. A key is matched exactly, as in today's core: one in another letter case (`Override:`, `Name:`) or not a payload key was never read there, so it is dropped and named in the log. A `-raw` param goes across as today's core sent it: a date (`2024-01-15`) is the JSON string `"2024-01-15T00:00:00Z"`, and a param that is `.inf`, `.nan` or null, which today's core skipped when it applied the rule, is dropped and named in the log; the rule's other params stay. | Supported |
 | `requests.tls-handshake-timeout-seconds`, `requests.passthrough-headers`, `requests.nonstream-keepalive-interval`, `requests.streaming.*` (each also at the top level) | A request is retried on another account until its reply starts. | Dropped: off by default and no need found |
 | `client.codex.enable-apply-patch` | Models without a Codex template are left out of the [Codex client catalog](#codex-client-catalog), so there is no entry to add `apply_patch` to. | Later: built when someone uses a non-Codex model through the Codex client and needs `apply_patch` on it |
 | `client.codex.optimize-multi-agent-v2` (`codex.optimize-multi-agent-v2`) | | Later: built when Codex multi-agent v2 sub-agents need to reach non-Codex providers |

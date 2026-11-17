@@ -7,8 +7,10 @@ package legacy
 
 import (
 	"cmp"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"regexp"
 	"slices"
@@ -472,52 +474,103 @@ func each(v any, f func(any) any) any {
 	return out
 }
 
+// The key names of today's payload types (config.PayloadConfig and the types under it). Today's
+// core reads a config.yaml with yaml.v3, which matches a key to a field exactly, so these are
+// the only spellings it reads.
+var (
+	payloadLists     = []string{"default", "default-raw", "override", "override-raw", "filter"}
+	payloadRuleKeys  = []string{"models", "params"}
+	payloadModelKeys = []string{"name", "protocol", "headers", "from-protocol", "match", "not-match", "exist", "not-exist"}
+)
+
 // payloadRules returns payload rules with the field types of today's core
 // (config.PayloadConfig): a rule's params, and a model's match and not-match, hold values; a
 // model's name, protocol, from-protocol, headers, exist and not-exist, and a filter rule's
-// params, are text as written. Every key keeps its name as written, and anything else goes
-// across as plain does. The JSON config reads the result with encoding/json, which, unlike
-// today's core's YAML decoder, also matches a key written in another letter case (Name: is
-// name:); like it, it drops a key it does not know, so payload.Validate never sees one.
-func payloadRules(rules tree) tree {
-	model := func(v any) any {
-		m, ok := v.(tree)
-		if !ok {
-			return plain(v)
-		}
+// params, are text as written. Anything else goes across as plain does.
+//
+// Today's core matches a key to its field exactly and drops any other key, so a key written in
+// another letter case (Override:, Name:) never took effect there. It is dropped here too, and
+// named in a notice: the JSON config is read with encoding/json, which would match it
+// case-insensitively and apply it.
+//
+// A -raw rule's param goes across as today's core sent it (rawParam), and one it skipped is
+// dropped and named.
+func (x *translator) payloadRules(rules tree) tree {
+	const base = "requests.payload"
+	var ignored, skipped []string
+	// keep returns the entries of m whose key is one of known, and records the others in
+	// ignored: a key that differs from a known one only in letter case with the spelling to use,
+	// any other as unknown.
+	keep := func(where string, m tree, known []string) tree {
 		out := tree{}
-		for k, f := range m {
-			switch h, isMap := f.(tree); {
-			case k == "name", k == "protocol", k == "from-protocol":
-				out[k] = asText(f)
-			case k == "exist", k == "not-exist":
-				out[k] = each(f, asText)
-			case k == "headers" && isMap:
-				hs := tree{}
-				for name, val := range h {
-					hs[name] = asText(val)
-				}
-				out[k] = hs
+		for _, k := range slices.Sorted(maps.Keys(m)) {
+			switch i := slices.IndexFunc(known, func(n string) bool { return strings.EqualFold(n, k) }); {
+			case i >= 0 && known[i] == k:
+				out[k] = m[k]
+			case i >= 0:
+				ignored = append(ignored, fmt.Sprintf("%s.%s (today's core reads %s)", where, k, known[i]))
 			default:
-				out[k] = plain(f)
+				ignored = append(ignored, fmt.Sprintf("%s.%s (not a payload key)", where, k))
 			}
 		}
 		return out
 	}
+	model := func(where string) func(any) any {
+		return func(v any) any {
+			m, ok := v.(tree)
+			if !ok {
+				return plain(v)
+			}
+			out := tree{}
+			for k, f := range keep(where, m, payloadModelKeys) {
+				switch h, isMap := f.(tree); {
+				case k == "name", k == "protocol", k == "from-protocol":
+					out[k] = asText(f)
+				case k == "exist", k == "not-exist":
+					out[k] = each(f, asText)
+				case k == "headers" && isMap:
+					hs := tree{}
+					for name, val := range h {
+						hs[name] = asText(val)
+					}
+					out[k] = hs
+				default:
+					out[k] = plain(f)
+				}
+			}
+			return out
+		}
+	}
 	out := tree{}
-	for list, v := range rules {
+	for list, v := range keep(base, rules, payloadLists) {
 		out[list] = each(v, func(e any) any {
 			r, ok := e.(tree)
 			if !ok {
 				return plain(e)
 			}
 			o := tree{}
-			for k, f := range r {
+			for k, f := range keep(base+"."+list, r, payloadRuleKeys) {
 				switch {
 				case k == "models":
-					o[k] = each(f, model)
+					o[k] = each(f, model(base+"."+list+".models"))
 				case k == "params" && list == "filter":
 					o[k] = each(f, asText)
+				case k == "params" && strings.HasSuffix(list, "-raw"):
+					params, isMap := f.(tree)
+					if !isMap {
+						o[k] = plain(f)
+						continue
+					}
+					ps := tree{}
+					for _, name := range slices.Sorted(maps.Keys(params)) {
+						raw, reason := rawParam(params[name])
+						if reason != "" {
+							skipped = append(skipped, fmt.Sprintf("%s.%s.params[%q] (%s)", base, list, name, reason))
+							continue
+						}
+						ps[name] = raw
+					}
+					o[k] = ps
 				default:
 					o[k] = plain(f)
 				}
@@ -525,7 +578,40 @@ func payloadRules(rules tree) tree {
 			return o
 		})
 	}
+	if len(ignored) > 0 {
+		x.notes = append(x.notes, "config.yaml: payload keys ignored, as today's core ignores them (it matches key names exactly): "+strings.Join(dedupe(ignored), ", "))
+	}
+	if len(skipped) > 0 {
+		x.notes = append(x.notes, "config.yaml: payload -raw params skipped, as today's core skips them when it applies the rule: "+strings.Join(dedupe(skipped), ", "))
+	}
 	return out
+}
+
+// rawParam returns what a -raw rule's param holds in this core's config, as today's core sent
+// it upstream. A string is JSON text and goes across as it is. Any other value is what
+// json.Marshal makes of it, as in today's core: a date YAML reads as one (2024-01-15) is a
+// time.Time there, which json.Marshal writes as the JSON string "2024-01-15T00:00:00Z", so
+// that text is returned. Today's core skips a param that is null or that json.Marshal refuses
+// (.inf and .nan, also inside a list or mapping), and still applies the rule's other params:
+// the second result then says why, and the caller drops the param.
+func rawParam(v any) (any, string) {
+	v = plain(v)
+	switch v := v.(type) {
+	case nil:
+		return nil, "its value is null"
+	case string:
+		return v, ""
+	case time.Time:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, "its value is not JSON: " + err.Error()
+		}
+		return string(b), ""
+	}
+	if _, err := json.Marshal(v); err != nil {
+		return nil, "its value is not JSON: " + err.Error()
+	}
+	return v, ""
 }
 
 // Translate turns the contents of a config.yaml written for today's core into this core's
@@ -888,15 +974,15 @@ func (x *translator) options() error {
 		x.out["proxy_url"] = proxy
 	}
 	// The payload rules keep today's names, so they go across under those names, their text
-	// fields as written (payloadRules). The JSON config's reading of them differs from
-	// today's core on letter case (see payloadRules); its own check (payload.Validate)
-	// refuses what this core cannot apply.
+	// fields as written, a key spelled in another letter case dropped as today's core drops it,
+	// and a -raw param as today's core sent it (payloadRules); the JSON config's own check
+	// (payload.Validate) refuses what this core cannot apply.
 	if rules, _ := get(x.t, "requests.payload"); rules != nil {
 		m, isMap := rules.(tree)
 		if !isMap {
 			return errors.New("requests.payload must be a mapping")
 		}
-		x.out["payload"] = payloadRules(m)
+		x.out["payload"] = x.payloadRules(m)
 	}
 	return nil
 }
