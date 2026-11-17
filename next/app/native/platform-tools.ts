@@ -26,9 +26,12 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -139,6 +142,31 @@ function samePath(a: string, b: string): boolean {
   return a === b || norm(a) === norm(b);
 }
 
+/** The app keeps the packages it installed read-only (device.rs `freeze`): on macOS each folder
+ * is 0500; on Windows each file and folder has a protected access list allowing no write or
+ * delete. The app removes them by making each writable first (device.rs `remove_tree`); this does
+ * the same for the package store in data, an app data folder this session made, so it can be
+ * removed. Windows: icacls gives each file and folder back the list it inherits (the store holds
+ * no links: device.rs refuses them when it unpacks). */
+function makeRemovable(data: string) {
+  const store = join(data, "device-packages");
+  if (!existsSync(store)) return;
+  if (windows) {
+    const icacls = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
+    const r = spawnSync(icacls, [store, "/reset", "/T", "/C", "/Q"], { encoding: "utf8" });
+    if (r.status !== 0)
+      throw new Error(`icacls ${store} /reset exited with ${r.status}: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+    return;
+  }
+  const walk = (dir: string) => {
+    const st = lstatSync(dir);
+    if (!st.isDirectory()) return;
+    if ((st.mode & 0o700) !== 0o700) chmodSync(dir, 0o700);
+    for (const e of readdirSync(dir)) walk(join(dir, e));
+  };
+  walk(store);
+}
+
 /** One session: its fixtures, a fresh app state, the app run, and run.ts's checks of its report. */
 export async function toolSession(name: ToolSession, ctx: Context) {
   const { check, say } = ctx;
@@ -149,6 +177,8 @@ export async function toolSession(name: ToolSession, ctx: Context) {
   let localDir: string;
   // The app's folders this session made, the only ones it removes (Windows).
   const made: string[] = [];
+  // The app's data folder (its package store's), once this session made it.
+  let data: string | undefined;
   let core: Awaited<ReturnType<typeof startCore>> | undefined;
   let proc: ChildProcess | undefined;
   try {
@@ -169,6 +199,7 @@ export async function toolSession(name: ToolSession, ctx: Context) {
     }
     mkdirSync(configDir, { recursive: true });
     mkdirSync(localDir, { recursive: true });
+    data = configDir;
     mkdirSync(fixtures);
 
     // The session's fixtures, and the test trust profile they write in HOME.
@@ -377,6 +408,13 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       const c = core.proc;
       c.stdin?.end();
       if (c.exitCode === null) await new Promise((r) => c.once("exit", r));
+    }
+    if (data) {
+      try {
+        makeRemovable(data);
+      } catch (e) {
+        check(false, `could not make the app's package store removable: ${(e as Error).message}`);
+      }
     }
     // Windows: its folders may stay in use a moment after the app quit (its WebView2 processes,
     // the agent the launcher started). Each is tried, and one left behind is a problem.
