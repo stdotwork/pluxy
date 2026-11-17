@@ -386,13 +386,16 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 		case h := <-lines:
 			if h.err == nil {
 				handshake = "readable, read after the limit"
+			} else {
+				handshake = "not readable, stdout closed"
 			}
 		default:
+			// The reader may hold part of a line it has read; only what is still in the pipe shows.
 			if f, ok := stdout.(*os.File); ok {
 				if n, ok := unreadBytes(f); ok && n > 0 {
-					handshake = fmt.Sprintf("readable, %d bytes in its stdout not yet read", n)
+					handshake = fmt.Sprintf("not read, %d bytes waiting in its stdout", n)
 				} else if ok {
-					handshake = "not readable"
+					handshake = "not read, no bytes waiting in its stdout"
 				}
 			}
 		}
@@ -450,11 +453,13 @@ func (e *Extension) checkHandshake(line string) error {
 	return nil
 }
 
-// describe asks the program to describe itself. A describe that fails once the deadline has passed
-// fails with the start limit's error, not with its own timeout.
+// describe asks the program to describe itself. A describe that times out at the start deadline
+// fails with the start limit's error, not with its own timeout; any other failure keeps its own
+// error.
 func (e *Extension) describe(deadline time.Time) error {
 	err := e.describeCall(deadline)
-	if err != nil && !time.Now().Before(deadline) {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
 		return e.startLimitError("did not answer describe", "read in time")
 	}
 	return err

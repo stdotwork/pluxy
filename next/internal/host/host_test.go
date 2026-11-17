@@ -156,9 +156,9 @@ func TestStartFailuresStayUnderTheDeadline(t *testing.T) {
 		mode    string
 		wantErr string
 	}{
-		{"close-stdout", "closed its stdout"},
+		{"close-stdout", "closed its stdout without a handshake and did not exit within 2s (starting its process took "},
 		{"endless-line", "longer than"},
-		{"no-describe", "describe"},
+		{"no-describe", "did not answer describe within 2s (starting its process took "},
 		{"child-holds-stderr", "no handshake"},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
@@ -227,7 +227,7 @@ func TestStartLimitErrorSaysWhereTheStartWas(t *testing.T) {
 	want := []string{"handshake: not read"}
 	if runtime.GOOS == "linux" {
 		// The program sleeps in time.Sleep, so it was sleeping (S) and waiting in the kernel.
-		want = []string{"; handshake: not readable;", "; process state S;", "; wchan "}
+		want = []string{"; handshake: not read, no bytes waiting in its stdout;", "; process state S;", "; wchan "}
 	}
 	for _, w := range want {
 		if !strings.Contains(msg, w) {
