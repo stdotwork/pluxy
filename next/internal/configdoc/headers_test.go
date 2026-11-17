@@ -8,13 +8,15 @@ import (
 
 // The placeholder GET /config shows for a secret header value is the one GET /accounts shows for
 // it (Redactor.Headers on the header core read): for text, a number and text with spaces around
-// it in a provider section of a config.yaml, which core reads as text without the spaces, and
-// for an account's headers in core's own layout, read as written. Restore puts each back as it
-// was, also a number and a string that read as the same header text.
+// it in a provider section of a config.yaml, which core reads as text as written (1e3, not
+// 1000) without the spaces, and for an account's headers in core's own layout, read as written.
+// Restore puts each back as it was, also a number and a string that read as the same header
+// text.
 func TestConfigHeaderPlaceholdersAreThoseOfAccounts(t *testing.T) {
 	for _, tc := range []struct {
 		name, src string
 		isYAML    bool
+		texts     map[string]string // header to the text core reads from it
 	}{
 		{"provider section", `listen: 127.0.0.1:8317
 access:
@@ -25,6 +27,7 @@ codex-api-key:
     headers:
       X-Api-Key: 12345678
       X-Auth-Float: 1e3
+      X-Date-Token: 2001-12-14
       Authorization: "  Bearer fake-padded-token  "
       X-Session-Token: fake-plain-token
 api-keys:
@@ -35,7 +38,7 @@ api-keys:
       keys:
         - api-key: fake-claude-key-1
 password: "12345678"
-`, true},
+`, true, map[string]string{"X-Api-Key": "12345678", "X-Auth-Float": "1e3", "X-Date-Token": "2001-12-14", "X-Gateway-Key": "0x1F"}},
 		{"core's layout", `listen: 127.0.0.1:8317
 access:
   api-keys: [fake-client-key-1]
@@ -46,9 +49,9 @@ extensions:
         headers:
           X-Api-Key: "  fake-kept-spaces  "
           Authorization: Bearer fake-yaml-bearer
-`, true},
+`, true, nil},
 		{"core's layout, json", `{"listen": "127.0.0.1:8317", "client_keys": ["fake-client-key-1"],
-  "extensions": {"pluxy/x": {"accounts": [{"id": "a", "headers": {"X-Api-Key": "  fake-json-spaces  "}}]}}}`, false},
+  "extensions": {"pluxy/x": {"accounts": [{"id": "a", "headers": {"X-Api-Key": "  fake-json-spaces  "}}]}}}`, false, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := loads(t, tc.src, tc.isYAML)
@@ -75,6 +78,11 @@ extensions:
 			}
 			if n == 0 {
 				t.Fatal("no secret header was read")
+			}
+			for name, text := range tc.texts {
+				if at := name + ": " + r.Placeholder(text); !strings.Contains(string(red), at) {
+					t.Errorf("GET /config does not hold %s, the placeholder of %q:\n%s", at, text, red)
+				}
 			}
 			back, err := r.Restore(red, []byte(tc.src), tc.isYAML)
 			if err != nil || string(back) != tc.src {

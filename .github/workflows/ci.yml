@@ -51,9 +51,11 @@ jobs:
   # the protocol's app-manifest cases the app's Rust tests read, go.mod and go.sum, and the Go
   # packages the app's tests build and run: e2e/panelcore, e2e/testext and cmd/pluxy, with
   # everything they import on Linux, Windows and macOS. `go list` works the packages out from the
-  # code being tested, so a new import counts at once. Its native jobs build and run only the app
-  # and the kit, so a change that reaches none of next/app, next/ui and the workflows skips them
-  # (next-app-platforms-native).
+  # code being tested, so a new import counts at once. Its native jobs build the app and the kit,
+  # and some of their sessions start a test core with `go run ./e2e/panelcore`, which builds those
+  # same Go packages. So the native jobs run for next/app, next/ui, the workflows, go.mod and
+  # go.sum, and a change to those Go packages; a change that reaches only the app-manifest cases
+  # skips them (next-app-platforms-native).
   # next-app-tools-wsl is not a workflow: it says whether next-app-tools-platforms.yml runs its WSL
   # jobs.
   changes:
@@ -66,7 +68,7 @@ jobs:
       # Set by the paths step, or else by the go-packages step, which runs only when the paths
       # step left it open.
       next-app-platforms: ${{ steps.paths.outputs.next-app-platforms || steps.go-packages.outputs.next-app-platforms }}
-      next-app-platforms-native: ${{ steps.paths.outputs.next-app-platforms-native }}
+      next-app-platforms-native: ${{ (steps.paths.outputs.next-app-platforms-native == 'true' || steps.go-packages.outputs.next-app-platforms == 'true') && 'true' || 'false' }}
       next-app-tools-platforms: ${{ steps.paths.outputs.next-app-tools-platforms }}
       next-app-tools-wsl: ${{ steps.paths.outputs.next-app-tools-wsl }}
       next-app-tools-pack: ${{ steps.paths.outputs.next-app-tools-pack }}
@@ -107,7 +109,8 @@ jobs:
               .github/workflows/ci.yml) for w in "${!run[@]}"; do run[$w]=true; done ;;
             esac
             case $path in
-              next/app/* | next/ui/* | .github/workflows/next-app-platforms.yml | .github/workflows/ci.yml)
+              next/app/* | next/ui/* | next/go.mod | next/go.sum | .github/workflows/next-app-platforms.yml | \
+                .github/workflows/ci.yml)
                 native=true ;;
             esac
             case $path in core/* | .github/workflows/core-pr-test-build.yml) run[core]=true ;; esac

@@ -28,9 +28,11 @@ name: Next app platforms
 # a folder of a Go package that `go list -deps` finds for ./e2e/panelcore, ./e2e/testext or
 # ./cmd/pluxy, the packages the Rust tests build and run with `go run`, checked for every
 # combination of linux, windows and darwin, amd64 and arm64, and cgo on and off. Of its jobs,
-# `native` is skipped (the `skip-native` input) unless a changed path is under next/app/ or
-# next/ui/, or is this file or ci.yml; `app` and `dialogs` always run with it. It also runs once a
-# day on `main` (03:17 UTC) and by hand, both with every job; it does not run on pushes.
+# `native` is skipped (the `skip-native` input) when the only such path is under
+# next/protocol/testdata/app-manifests/: its sessions build the app and the kit, and some start a
+# test core with `go run ./e2e/panelcore`, which builds those same Go packages. `app` and `dialogs`
+# always run with it. It also runs once a day on `main` (03:17 UTC) and by hand, both with every
+# job; it does not run on pushes.
 #
 # Runners: `app` uses GitHub's windows-latest, and on macOS the runner named by the repository
 # variable PLUXY_MACOS_CLOUD_RUNNER when it is set, else macos-latest. `native` and `dialogs`
@@ -42,8 +44,8 @@ on:
   # builds changed (see the changes job there).
   workflow_call:
     inputs:
-      # ci.yml sets this when the change touches neither next/app, next/ui nor the workflows: the
-      # native jobs build and run just the app and the kit, never the Go core.
+      # ci.yml sets this when the change reaches none of what the native jobs build: the app, the
+      # kit, the workflows, and the Go packages `go run ./e2e/panelcore` builds (see ci.yml).
       skip-native:
         type: boolean
         default: false
