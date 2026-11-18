@@ -266,14 +266,59 @@ fn seq(main: &Webview) -> Result<u64, String> {
     Ok(v["outcome"]["seq"].as_u64().unwrap_or(0))
 }
 
-/// Asks for a core action, answers its native dialog with key, and returns its outcome.
-fn act(main: &Webview, cmd: &str, args: Value, key: Key) -> Result<Value, String> {
+/// Asks for a core action, checks that its native dialog shows each of shows (what will run),
+/// answers it with key, and returns its outcome.
+fn act(
+    main: &Webview,
+    cmd: &str,
+    args: Value,
+    key: Key,
+    shows: &[String],
+) -> Result<Value, String> {
     let app = main.app_handle();
     let before = seq(main)?;
     call(main, cmd, args)?;
     ui::wait_shown(app, DIALOG)?;
+    let text = ui::texts(app, DIALOG)?.join("\n");
+    for want in shows {
+        require(
+            text.contains(want.as_str()),
+            format!("the {cmd} dialog does not show {want}: {text}"),
+        )?;
+    }
     ui::press(app, DIALOG, key)?;
     outcome(main, before)
+}
+
+/// The SHA-256 of release version's archive, as the core source's index (the runner's) gives it
+/// in the signed descriptor.
+fn archive_sha(source: &str, version: &str) -> Result<String, String> {
+    let index: Value = serde_json::from_slice(&std::fs::read(source).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let release = index["releases"]
+        .as_array()
+        .and_then(|r| r.iter().find(|r| r["version"] == version))
+        .ok_or_else(|| format!("no release {version} in {source}"))?;
+    let descriptor: Value = serde_json::from_str(
+        release["artifacts"][0]["descriptor"]
+            .as_str()
+            .unwrap_or_default(),
+    )
+    .map_err(|e| e.to_string())?;
+    descriptor["sha256"]
+        .as_str()
+        .map(String::from)
+        .ok_or_else(|| format!("release {version} has no SHA-256"))
+}
+
+/// The SHA-256 of the file at path, in hex.
+fn file_sha(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 /// A refusal before any dialog: the command fails and no dialog opens.
@@ -316,6 +361,10 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let cores = data.join("cores");
     let config = data.join("core").join("config.json");
+    // What an install's dialog must show: the version and its archive's SHA-256.
+    let install = |v: &str| -> Result<Vec<String>, String> {
+        Ok(vec![v.to_string(), archive_sha(&source, v)?])
+    };
 
     // 1. Missing core: not connected; no roots: refused before any dialog, nothing installed.
     let (_, _, view) = current(main)?;
@@ -335,7 +384,13 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
     wait_for("the runner's trust roots", || ready.exists().then_some(()))?;
 
     // 2. The same install, with roots and confirmed: core 1.0.0 runs and the app connects.
-    let o = act(main, "core_install", json!({"version": "1.0.0"}), CONFIRM)?;
+    let o = act(
+        main,
+        "core_install",
+        json!({"version": "1.0.0"}),
+        CONFIRM,
+        &install("1.0.0")?,
+    )?;
     let (version, pid, view) = current(main)?;
     let (status, reported) = status_version(app);
     let pid1 = pid.unwrap_or_default();
@@ -344,6 +399,7 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
         json!({"outcome": o["result"], "version": version, "connected": !view["target"].is_null(),
                "signed_in": view["signed_in"], "status": status, "reported": reported,
                "exe_in_app": in_store(pid1, &cores),
+               "pid_runs_program": running(&cores.join("versions").join("1.0.0").join(crate::cores::PROGRAM)).contains(&pid1),
                "installed": installed(&cores), "source": source}),
     );
 
@@ -356,7 +412,13 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
 
     // 4. v1 to v2: the old process is gone, the config the same.
     let before = std::fs::read(&config).map_err(|e| e.to_string())?;
-    let o = act(main, "core_install", json!({"version": "2.0.0"}), CONFIRM)?;
+    let o = act(
+        main,
+        "core_install",
+        json!({"version": "2.0.0"}),
+        CONFIRM,
+        &install("2.0.0")?,
+    )?;
     let (version, pid, _) = current(main)?;
     let pid2 = pid.unwrap_or_default();
     let (status, reported) = status_version(app);
@@ -369,7 +431,13 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
     );
 
     // 5. A candidate that breaks its config and exits: config restored, 2.0.0 again.
-    let o = act(main, "core_install", json!({"version": "3.0.0"}), CONFIRM)?;
+    let o = act(
+        main,
+        "core_install",
+        json!({"version": "3.0.0"}),
+        CONFIRM,
+        &install("3.0.0")?,
+    )?;
     let (version, pid, _) = current(main)?;
     let (status, reported) = status_version(app);
     let versions = call(main, "core_versions", json!({}))?;
@@ -385,9 +453,21 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
     // 6. Rollback: unknown refused; cancel changes nothing; confirmed runs 1.0.0.
     let detail = refused(main, "core_rollback", json!({"version": "9.9.9"}))?;
     let (_, pid_before, _) = current(main)?;
-    let cancel = act(main, "core_rollback", json!({"version": "1.0.0"}), CANCEL)?;
+    let cancel = act(
+        main,
+        "core_rollback",
+        json!({"version": "1.0.0"}),
+        CANCEL,
+        &["1.0.0".into()],
+    )?;
     let (cancel_version, cancel_pid, _) = current(main)?;
-    let o = act(main, "core_rollback", json!({"version": "1.0.0"}), CONFIRM)?;
+    let o = act(
+        main,
+        "core_rollback",
+        json!({"version": "1.0.0"}),
+        CONFIRM,
+        &["1.0.0".into()],
+    )?;
     let (version, _, _) = current(main)?;
     let (status, reported) = status_version(app);
     log(
@@ -405,14 +485,26 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
         json!({"change": {"mode": "managed", "core_path": custom, "core_source": source}}),
     )?;
     let not_run = running(&custom).is_empty();
-    let o = act(main, "core_adopt", json!({}), CONFIRM)?;
+    let o = act(
+        main,
+        "core_adopt",
+        json!({}),
+        CONFIRM,
+        &[custom.display().to_string(), file_sha(&custom)?],
+    )?;
     let (version, pid, _) = current(main)?;
     let pid_custom = pid.unwrap_or_default();
     let (status, _) = status_version(app);
     let adopted_in_app = in_store(pid_custom, &cores);
     // While the adopted copy runs, before anything else changes.
     let custom_running = !running(&custom).is_empty();
-    let o2 = act(main, "core_rollback", json!({"version": "1.0.0"}), CONFIRM)?;
+    let o2 = act(
+        main,
+        "core_rollback",
+        json!({"version": "1.0.0"}),
+        CONFIRM,
+        &["1.0.0".into()],
+    )?;
     let (back, _, _) = current(main)?;
     log(
         "core_adopt",
@@ -425,7 +517,13 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
 
     // 8. A changed installed version: refused before any dialog; installed again, it runs.
     // 2.0.0 runs first, so 1.0.0 is the installed version before it, not the running one.
-    let o1 = act(main, "core_install", json!({"version": "2.0.0"}), CONFIRM)?;
+    let o1 = act(
+        main,
+        "core_install",
+        json!({"version": "2.0.0"}),
+        CONFIRM,
+        &install("2.0.0")?,
+    )?;
     let changed = cores
         .join("versions")
         .join("1.0.0")
@@ -433,7 +531,13 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
         .join("index.json");
     tamper(&changed)?;
     let detail = refused(main, "core_rollback", json!({"version": "1.0.0"}))?;
-    let o = act(main, "core_install", json!({"version": "1.0.0"}), CONFIRM)?;
+    let o = act(
+        main,
+        "core_install",
+        json!({"version": "1.0.0"}),
+        CONFIRM,
+        &install("1.0.0")?,
+    )?;
     let (version, _, _) = current(main)?;
     let (status, reported) = status_version(app);
     log(
@@ -445,7 +549,13 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
 
     // 9. The running version installed again: written anew and run in a new process.
     let (_, pid_before, _) = current(main)?;
-    let o = act(main, "core_install", json!({"version": "1.0.0"}), CONFIRM)?;
+    let o = act(
+        main,
+        "core_install",
+        json!({"version": "1.0.0"}),
+        CONFIRM,
+        &install("1.0.0")?,
+    )?;
     let (version, pid, _) = current(main)?;
     let (status, reported) = status_version(app);
     log(

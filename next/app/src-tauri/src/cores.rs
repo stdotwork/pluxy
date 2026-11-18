@@ -541,7 +541,7 @@ fn valid_id(id: &str) -> bool {
 }
 
 #[cfg(unix)]
-fn remove_tree(path: &Path) {
+pub(crate) fn remove_tree(path: &Path) {
     let _ = fs::remove_dir_all(path);
 }
 
@@ -549,7 +549,7 @@ fn remove_tree(path: &Path) {
 /// where its folder's rights do not make up for it), every file under path is made private again,
 /// as its owner may, and the removal tried once more.
 #[cfg(windows)]
-fn remove_tree(path: &Path) {
+pub(crate) fn remove_tree(path: &Path) {
     if fs::remove_dir_all(path).is_ok() {
         return;
     }

@@ -10,9 +10,12 @@
 //
 // Then a second run, the core run: the app built with artifact-test-trust too, in managed mode with
 // a fresh profile, against signed test core releases made for this run (core-steps.ts), runs the
-// managed-core steps (native_core.rs) through the native confirmation: install, a bad signature
-// refused, update, a failed start put back, rollback (cancelled, then confirmed), adopt, and a
-// changed version refused and repaired. On Linux run.ts's core steps session runs the same steps.
+// managed-core steps (native_core.rs) through the native confirmation, each dialog checked to show
+// what will run (the version, and an install's archive SHA-256 or an adoption's path and SHA-256):
+// install, a bad signature refused, update, a failed start put back, rollback (cancelled, then
+// confirmed), adopt, a changed version refused and repaired, and the running version installed
+// again. A sentinel core this runner started before the app must still answer afterwards, its
+// config and program unchanged. On Linux run.ts's core steps session runs the same steps.
 //
 // It runs only on a disposable GitHub-hosted runner (GITHUB_ACTIONS=true and
 // RUNNER_ENVIRONMENT=github-hosted). On Windows the app's folders come from the account's known
@@ -39,7 +42,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
 import { MARKER_FILE, PROFILE_FILE } from "./admission";
-import { coreProblems, coreSource } from "./core-steps";
+import { coreProblems, coreSource, sentinelProblems, startSentinel, stopSentinel } from "./core-steps";
 
 const app = resolvePath(import.meta.dir, "..");
 const next = resolvePath(app, "..");
@@ -202,6 +205,8 @@ async function coreRun(
   const releases = join(prepared, "releases");
   mkdirSync(releases);
   const source = coreSource(releases, prepared);
+  // A core this run starts, not the app: it must outlive the app's run, untouched.
+  const sentinel = await startSentinel(join(prepared, "sentinel"), join(releases, "core-1.0.0"));
   const home = trustHome(root);
   writeFileSync(join(home, PROFILE_FILE), JSON.stringify({ roots: [] }), { mode: 0o600 });
   const nonce = randomBytes(32).toString("hex");
@@ -266,6 +271,11 @@ async function coreRun(
   }, TIMEOUT);
   const exit = await new Promise<number | null>((resolve) => proc.once("exit", (code) => resolve(code)));
   clearTimeout(timer);
+  try {
+    problems.push(...(await sentinelProblems(sentinel, (line) => console.log(`dialogs: core run: ${line}`))));
+  } finally {
+    await stopSentinel(sentinel);
+  }
   if (steps.has("failed"))
     problems.push(`the app's core steps failed: ${JSON.stringify(steps.get("failed"))}`);
   if (exit !== 0) problems.push(`the app exited with ${exit}`);

@@ -3,10 +3,11 @@
 // (dialogs.ts): signed test core releases with their index, made for one run, and what each step
 // must report.
 
-import { spawnSync } from "node:child_process";
-import { createHash, generateKeyPairSync, type KeyObject, randomUUID, sign } from "node:crypto";
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { createHash, generateKeyPairSync, type KeyObject, randomBytes, randomUUID, sign } from "node:crypto";
+import { cpSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
+import { createInterface } from "node:readline";
 
 const next = resolvePath(import.meta.dir, "..", "..");
 
@@ -155,6 +156,7 @@ export const CORE_STEPS: [string, Record<string, unknown>][] = [
       status: 200,
       reported: "1.0.0",
       exe_in_app: true,
+      pid_runs_program: true,
     },
   ],
   ["core_bad_signature", { refused: true, running: "1.0.0" }],
@@ -297,4 +299,92 @@ export function coreProblems(steps: Map<string, any>, core: CoreSource): string[
     "the changed version's refusal does not say why",
   );
   return problems;
+}
+
+/** A core the runner starts, which the app never started: it must outlive the app's run, its
+ * config and program untouched. */
+export interface Sentinel {
+  proc: ChildProcess;
+  base: string;
+  key: string;
+  config: string;
+  before: Buffer;
+  program: string;
+  /** The program's SHA-256, and its inode where the system keeps one per file (not Windows). */
+  digest: string;
+  ino?: number;
+}
+
+const digestOf = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
+
+/** Starts a sentinel core from a copy of the core folder from (a release's) in dir. */
+export async function startSentinel(dir: string, from: string): Promise<Sentinel> {
+  cpSync(from, dir, { recursive: true });
+  const key = randomBytes(32).toString("hex");
+  const config = join(dir, "config.json");
+  writeFileSync(
+    config,
+    JSON.stringify({
+      listen: "127.0.0.1:0",
+      client_keys: [randomBytes(32).toString("hex")],
+      management_key: key,
+      credentials_dir: join(dir, "credentials"),
+      packages: { dir: join(dir, "packages") },
+    }),
+    { mode: 0o600 },
+  );
+  const before = readFileSync(config);
+  const program = join(dir, PROGRAM);
+  const proc = spawn(program, ["-config", config], { cwd: dir, stdio: ["ignore", "ignore", "pipe"] });
+  const base = await new Promise<string>((resolve, reject) => {
+    proc.once("exit", (code) => reject(new Error(`the sentinel core exited with ${code}`)));
+    if (proc.stderr)
+      createInterface({ input: proc.stderr }).on("line", (line) => {
+        const m = /^pluxy: listening on (\S+)$/.exec(line);
+        if (m?.[1]) resolve(m[1]);
+      });
+  });
+  return {
+    proc,
+    base,
+    key,
+    config,
+    before,
+    program,
+    digest: digestOf(program),
+    ino: process.platform === "win32" ? undefined : statSync(program).ino,
+  };
+}
+
+/** What is wrong with the sentinel after the app's run: it must still run and answer its own
+ * management key, with its config and program as they were. Says what it found first. */
+export async function sentinelProblems(s: Sentinel, say: (line: string) => void): Promise<string[]> {
+  const running = s.proc.exitCode === null && s.proc.signalCode === null;
+  let status = 0;
+  try {
+    const r = await fetch(`${s.base}/v0/management/status`, {
+      headers: { Authorization: `Bearer ${s.key}` },
+    });
+    status = r.status;
+  } catch {
+    // no answer
+  }
+  const kept = readFileSync(s.config).equals(s.before);
+  const same = digestOf(s.program) === s.digest && (s.ino === undefined || statSync(s.program).ino === s.ino);
+  say(
+    `managed sentinel ${JSON.stringify({ alive: running, status, config_kept: kept, program_kept: same })}`,
+  );
+  const problems: string[] = [];
+  if (!running || status !== 200) problems.push("the sentinel core did not survive the app");
+  if (!kept) problems.push("the sentinel core's config changed");
+  if (!same) problems.push("the sentinel core's program changed");
+  return problems;
+}
+
+/** Stops the sentinel, the process the runner started, and waits for it to exit. */
+export async function stopSentinel(s: Sentinel) {
+  if (s.proc.exitCode !== null || s.proc.signalCode !== null) return;
+  const exited = new Promise((r) => s.proc.once("exit", r));
+  s.proc.kill("SIGTERM");
+  await exited;
 }

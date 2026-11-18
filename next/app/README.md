@@ -147,8 +147,10 @@ records the new version as the candidate, then starts it. On Linux and macOS the
 and hands the listening socket to the core (`-listen-fd`); on Windows the core binds it. It counts
 as started once it says it listens there, on this computer, every socket listening on that port
 belongs to the process the app started (read from `/proc` on Linux and from the system's TCP
-table on Windows; on macOS the app still holds the socket it handed over, which no other user can
-bind over), before the app sends anything there, it answers
+table on Windows; on macOS the core still runs and the address is the loopback socket the app
+bound and handed over, which it still holds and no other user can bind over, while other
+processes of your own user are not looked at, as they can read the core's config and its key
+anyway), before the app sends anything there, it answers
 `GET /v0/management/status` with the app's management key and, for a release, reports the
 version it was signed as, and the app has saved the new selection. If not, the app puts the
 config back as it was, removes a version it installed for this switch, and runs the version that
@@ -162,9 +164,12 @@ mark: then the next start puts the same config back once more. If the app stops 
 starts, it does the same at its next start, also when that was a reinstall or rollback of the
 selected version; a copy it cannot read is an error, and the config is left as it is. From the
 moment the app begins to stop its core, or sees it exit, it sends nothing more to that address.
-On Linux and macOS the app keeps its own copy of the core's listening socket for as long as
-anything in the app could still send there, so no other program can listen on that address in
-between: not while a crashed
+On Windows the core binds the address itself and the app keeps no copy of the socket: between
+a crash of the core and the moment the app sees it exit (up to a tenth of a second: it checks
+every 100 ms), a call already under way can still go to that address with the management key,
+where another user's program could have started listening ([Limits](#limits)). On Linux and macOS the app keeps its
+own copy of the core's listening socket for as long as anything in the app could still send
+there, so no other program can listen on that address in between: not while a crashed
 core's exit is being noticed, and not while the core drains after a stop, the app's or a SIGTERM
 from elsewhere (the core closes its listener as it starts draining). A call made in that time
 reaches the core or waits in the app's socket, and fails once the core has exited. This holds
@@ -185,7 +190,9 @@ without being read; on Unix it must be executable, on Windows a program image na
 program has no signature.
 
 The app only ever stops the core process it started. A core it did not start, such as a system
-service or another core of yours on this computer, is never stopped or signalled.
+service or another core of yours on this computer, is never stopped or signalled. The native
+test checks it on Linux, Windows and macOS: a core the runner started before the app still
+answers afterwards, with its config and program unchanged.
 
 Each change works once: while one waits for its confirmation, another is refused. The window
 hears `pluxy-connection` when it has ended, and `core_versions` says whether it was done,
@@ -1407,7 +1414,8 @@ with the config unchanged; that after 3.0.0 the config is restored and 2.0.0 run
 unknown rollback target is refused, a cancelled rollback changes nothing and a confirmed one runs
 1.0.0; that a core program does not run until it is adopted, after which the app's copy runs
 and the program itself does not; that with a file of the installed 1.0.0 changed, rolling back to
-it is refused before any dialog, and installing it again, confirmed, repairs it and runs it; and
+it is refused before any dialog, by the same check of every installed file (`Store::program`)
+that runs before every start, and installing it again, confirmed, repairs it and runs it; and
 that installing the running version again runs it in a new process. A sentinel core the runner started before the app must still
 answer, with its config and program unchanged, after the app has quit. `cargo test` covers a
 crash while a version starts,
@@ -1572,8 +1580,9 @@ app supported there:
     key rotation; then a second run in managed mode, against signed test core releases, with the
     app's own core steps as Linux's core steps session runs them (install, a bad signature
     refused, update, a failed start put back, rollback, adopt, a changed version refused and
-    repaired, the running version installed again), each change through the native confirmation. [Limits](#limits) says how its input
-    is made.
+    repaired, the running version installed again), each change through the native confirmation,
+    whose text is checked to show what will run; a core the runner started before the app must
+    still answer afterwards, untouched. [Limits](#limits) says how its input is made.
 - The vault's private storage is built and unit tested there ([Limits](#limits)).
 - How the app starts, holds and stops processes is built there (`src-tauri/src/owned/`: a job
   object on Windows, a process group on macOS), and CI checks that each of its lifetime tests ran
@@ -1651,6 +1660,10 @@ in the browser. The app updates itself only as a Linux AppImage.
   release feed. On Windows and macOS its steps run in the dialogs session's core run; the
   managed-core client-key check runs on Linux only. The store's Windows rules are checked by its
   unit tests on the Windows CI runner.
+- On Windows the app holds no copy of its core's listening socket, so in the moment between a
+  crash of the core and the app seeing it exit (up to a tenth of a second), a call already under
+  way can send the management key to that address, where another user's program could have
+  started listening. Linux and macOS hold the socket and have no such gap.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.

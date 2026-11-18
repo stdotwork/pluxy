@@ -239,11 +239,10 @@
 // that shard's sessions, and fails if one of them never started; without it, it runs them all.
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
-  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -252,7 +251,6 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -264,7 +262,14 @@ import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
 import { buildClaudeCodeFixtures } from "./claude-code";
 import { buildClaudeDesktopFixtures } from "./claude-desktop";
 import { buildCodexFixtures } from "./codex";
-import { type CoreSource, coreProblems, coreSource } from "./core-steps";
+import {
+  type CoreSource,
+  coreProblems,
+  coreSource,
+  sentinelProblems,
+  startSentinel,
+  stopSentinel,
+} from "./core-steps";
 import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
 import { buildGrokFixtures } from "./grok";
@@ -507,42 +512,6 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
     ...(ca ? { tls: { ca: readFileSync(ca, "utf8") } } : {}),
   } as RequestInit);
   return r.status;
-}
-
-function hex(b: Buffer | Uint8Array): string {
-  return Buffer.from(b).toString("hex");
-}
-
-/** A core this runner starts, which the app never started: it must outlive the app's run. */
-async function startSentinel(dir: string, from: string) {
-  cpSync(from, dir, { recursive: true });
-  const key = hex(randomBytes(32));
-  const config = join(dir, "config.json");
-  writeFileSync(
-    config,
-    JSON.stringify({
-      listen: "127.0.0.1:0",
-      client_keys: [hex(randomBytes(32))],
-      management_key: key,
-      credentials_dir: join(dir, "credentials"),
-      packages: { dir: join(dir, "packages") },
-    }),
-    { mode: 0o600 },
-  );
-  const before = readFileSync(config);
-  const proc = spawn(join(dir, "pluxy"), ["-config", config], {
-    cwd: dir,
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  const base = await new Promise<string>((resolve, reject) => {
-    proc.once("exit", (code) => reject(new Error(`the sentinel core exited with ${code}`)));
-    if (proc.stderr)
-      createInterface({ input: proc.stderr }).on("line", (line) => {
-        const m = /^pluxy: listening on (\S+)$/.exec(line);
-        if (m?.[1]) resolve(m[1]);
-      });
-  });
-  return { proc, base, key, config, before, exe: statSync(join(dir, "pluxy")).ino };
 }
 
 /** The management key in core's config file: its current one, also after a rotation. */
@@ -2417,20 +2386,10 @@ async function main(): Promise<number> {
             false,
             source,
           );
-          const status = await managementStatus(sentinel.base, sentinel.key);
-          const kept = readFileSync(sentinel.config).equals(sentinel.before);
-          console.log(
-            `managed sentinel ${JSON.stringify({ alive: alive(sentinel.proc.pid ?? 0), status, config_kept: kept })}`,
-          );
-          if (!alive(sentinel.proc.pid ?? 0) || status !== 200)
-            c.push("the sentinel core did not survive the app");
-          if (!kept) c.push("the sentinel core's config changed");
-          if (statSync(join(prepared, "sentinel", "pluxy")).ino !== sentinel.exe)
-            c.push("the sentinel core's program changed");
+          c.push(...(await sentinelProblems(sentinel, console.log)));
           problems.push(...c.map((x) => `managed, core steps: ${x}`));
         } finally {
-          sentinel.proc.kill("SIGTERM");
-          await new Promise((r) => sentinel.proc.once("exit", r));
+          await stopSentinel(sentinel);
         }
       }
       // The other runs need a core in the app's own store. The startup runs adopt the core_path
