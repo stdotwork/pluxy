@@ -35,7 +35,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Webview};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 mod app;
 #[cfg(target_os = "linux")]
 mod appimage;
