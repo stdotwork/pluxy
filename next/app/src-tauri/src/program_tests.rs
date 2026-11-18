@@ -1698,7 +1698,16 @@ fn after_stop_all_no_candidate_starts_and_a_prepared_one_is_reaped() {
 
 #[test]
 fn cancel_all_reaches_a_call_on_a_draining_release() {
-    let h = Arc::new(host(Value::Null));
+    // The new release is not stopped for idleness: the swap starts its idle time, and fast()'s
+    // idle delay is shorter than a loaded machine can take to reap the old release. Stopped idle,
+    // the package would start again from the record, which names the first release.
+    let h = Arc::new(host_for(
+        package(Value::Null),
+        Limits {
+            idle: Duration::from_secs(60),
+            ..fast()
+        },
+    ));
     let (old, _) = pids(&summary(&h, &[]).unwrap());
     let waiting = call_in_thread(&h, "wait", json!({}));
     until("the wait call", 5, || h.status(ID).state == "active");
