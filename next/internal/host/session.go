@@ -34,6 +34,7 @@ type Session struct {
 
 	mu         sync.Mutex
 	creds      []*protocol.Credential // every credential and settings' secrets the session has carried, for redaction
+	pieces     pieces                 // the secrets of every account version the session has carried (pieces)
 	running    bool                   // a turn has been sent and its terminal event not read
 	closeAfter bool                   // close once the running turn ends
 	closed     bool
@@ -89,7 +90,7 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		if reply.Error == nil {
 			return nil, e.protocolError("an error frame without an error")
 		}
-		ev := protocol.NewRedactor(creds...).Event(reply.Event)
+		ev := accountPieces(account).event(protocol.NewRedactor(creds...).Event(reply.Event))
 		return nil, ev.Error
 	default:
 		conn.Close()
@@ -99,7 +100,7 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		// ctx ended just as the session opened; its conn is closed.
 		return nil, &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
 	}
-	s := &Session{ext: e, conn: conn, accountID: account.ID, frames: make(chan sessionFrame), done: make(chan struct{}), closing: make(chan struct{})}
+	s := &Session{ext: e, conn: conn, accountID: account.ID, pieces: accountPieces(account), frames: make(chan sessionFrame), done: make(chan struct{}), closing: make(chan struct{})}
 	for _, c := range creds {
 		if c != nil {
 			s.creds = append(s.creds, c)
@@ -205,8 +206,10 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	if proxy != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, proxy) }) {
 		s.creds = append(s.creds, proxy)
 	}
+	s.pieces = s.pieces.add(accountPieces(account))
 	s.running = true
 	t.redact = protocol.NewRedactor(s.creds...)
+	t.pieces = slices.Clone(s.pieces)
 	s.mu.Unlock()
 
 	// A frame the extension sent between turns breaks the protocol; the connection ending
@@ -302,6 +305,7 @@ type SessionStream struct {
 	s      *Session
 	ctx    context.Context
 	redact *protocol.Redactor
+	pieces pieces
 	seq    llm.Sequence
 	stop   func() bool
 	final  *llm.Event
@@ -356,7 +360,7 @@ func (t *SessionStream) Next() llm.Event {
 			break
 		}
 		if t.capture != nil && f.reply.Diagnostic != nil {
-			t.capture(t.account, redactDiagnostic(t.redact, *f.reply.Diagnostic))
+			t.capture(t.account, t.pieces.diagnostic(redactDiagnostic(t.redact, *f.reply.Diagnostic)))
 		}
 	}
 	if err := t.seq.Check(f.reply.Event); err != nil {
@@ -365,7 +369,7 @@ func (t *SessionStream) Next() llm.Event {
 		t.fail(redacted(t.redact, s.ext.protocolError(err.Error())))
 		return *t.final
 	}
-	ev := t.redact.Event(f.reply.Event)
+	ev := t.pieces.event(t.redact.Event(f.reply.Event))
 	if ev.Terminal() {
 		t.final = &ev
 		t.end()

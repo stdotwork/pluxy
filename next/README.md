@@ -1259,11 +1259,12 @@ secret headers, its proxy's user name and password and the secrets in its settin
 `Basic` values; the values of fields named like `access_token`, `token` or `api_key`; and any
 other run of 24 or more token characters. A run is also read with its escapes decoded (JSON's
 `\/` and `\uXXXX`, `%XX`), so a piece written with escapes between its characters is replaced
-too. Core removes only whole copies of an account's secrets, and such text can hold part of one
-the upstream echoed, split across lines or cut short. Otherwise the message names only the status
-(`Devin answered 500 Internal Server Error`), or, for a quota read whose reply broke off, says
-that it broke off. The 4-character rule can also replace a word that shares 4 characters with
-one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
+too. Core removes whole copies of an account's secrets everywhere, and pieces of them by the same
+4-character rule from every extension's errors (see [Account checks](#account-checks)), but not
+the other rules or the bound, so the extension keeps its own cleaning. Otherwise the message
+names only the status (`Devin answered 500 Internal Server Error`), or, for a quota read whose
+reply broke off, says that it broke off. The 4-character rule can also replace a word that shares
+4 characters with one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
@@ -1515,7 +1516,17 @@ extension's own output, show `[redacted]` in place of the account's credential a
 secret in its settings (the values `GET /config` and `GET /accounts` show as placeholders), such
 as a `base_url` with a token in its query that an unreachable upstream's error quotes. A
 settings secret shorter than 8 bytes is left in text, since removing every occurrence of so
-short a string would mangle unrelated text. Each
+short a string would mangle unrelated text. An error's message and raw body, from every
+extension and for every call (requests, checks, quota and model reads, refreshes and sessions),
+also lose every run of token characters (letters, digits and `_-.+/=~`, read with JSON and
+percent escapes decoded) that holds 4 or more consecutive characters of one of the account's
+secrets: an upstream that refuses a key often echoes its start (`invalid x-api-key:
+sk-ant-api03-AbCdEf...`), which whole-secret redaction misses. The secrets are the credential's
+key and tokens, secret header values, the proxy's user name and password and the secrets in the
+settings, by their parts (the extension protocol's [Accounts](protocol/README.md#accounts)
+says which). The rule also takes a word of the error that shares 4 characters with a secret,
+such as `token` for a header `Bearer gw-token-…`; a reply that succeeded is never changed by it.
+Each
 extension checks with its upstream's model list, and only accounts with an API key:
 
 | Extension | Check |
@@ -2050,7 +2061,9 @@ such as a session token behind a public prefix (`devin-session-token$<jwt>`), th
 `Bearer` value or a cookie's value, has each part of 8 bytes or more removed on its own too (the
 extension protocol's [Accounts](protocol/README.md#accounts) lists the structures). Replies and upstream
 sections come from the extension with the account's own credential, the secrets in its settings,
-its proxy's password and its secret header values already removed; in the upstream sections the
+its proxy's password and its secret header values already removed, and an error's text and the
+body of an upstream reply with an error status (400 or more) without the pieces of the account's
+secrets (see [Account checks](#account-checks)); in the upstream sections the
 values of headers and query parameters whose names hold `auth`, `key`, `token`, `secret`,
 `cookie`, `session`, `password`, `passphrase` or `signature` are masked too, the URL's user name and password
 are left out, and the characters a secret could be made of on each side of a body's left-out

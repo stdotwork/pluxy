@@ -220,7 +220,7 @@ func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*pro
 		e.held.add(account.ID, r.Grant.Credential)
 		return r.Grant.Credential, nil
 	case r.Type == llm.EventError && r.Error != nil:
-		return nil, redact.Event(r.Event).Error
+		return nil, accountPieces(account).event(redact.Event(r.Event)).Error
 	}
 	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a refresh", e.manifest.ID, redact.String(r.Type))}
 }
