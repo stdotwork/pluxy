@@ -30,8 +30,8 @@ const Version = 0
 // minor 10 adds the subscription's end time to quota; minor 11 adds the account's proxy_url;
 // minor 12 adds the account's headers; minor 13 adds upstream capture (Call.Capture and the
 // diagnostic frame); minor 14 adds payload rules (Call.Payload); minor 15 has a session turn
-// carry them too.
-const Minor = 15
+// carry them too; minor 16 adds an error's dropped (llm.Error.Dropped).
+const Minor = 16
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
