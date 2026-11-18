@@ -1486,3 +1486,25 @@ fn only_the_execution_programs_own_program_opens_files_or_starts_windowless() {
     remove(&within);
     remove(&dir);
 }
+
+/// Windows and macOS: the within folder may not be a root, the home folder or a folder above it,
+/// and is refused when the home folder cannot be resolved to check that.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn the_within_folder_is_refused_when_the_home_folder_cannot_be_resolved() {
+    let (dir, _, _) = fixture();
+    let w = fs::canonicalize(&dir).unwrap();
+    let home = w.parent().unwrap();
+    assert!(open_os::root_or_home(&w, Some(home)).is_ok());
+    for (within, says) in [
+        (home, "a folder above it"),
+        (home.parent().unwrap(), "a folder above it"),
+        (w.ancestors().last().unwrap(), "cannot be a root"),
+    ] {
+        let e = open_os::root_or_home(within, Some(home)).unwrap_err();
+        assert!(e.contains(says), "{}: {e}", within.display());
+    }
+    let e = open_os::root_or_home(&w, None).unwrap_err();
+    assert!(e.contains("home folder could not be resolved"), "{e}");
+    remove(&dir);
+}

@@ -6,12 +6,13 @@
 //! `ShellExecuteExW`), on macOS `/usr/bin/open`.
 //!
 //! The file must be a regular file of one of `TYPES`, inside its within folder, which is neither
-//! a root, the home folder nor a folder above it. The file, the within folder and every folder
-//! between them must be this user's and writable by no one else: on Windows by their owner and
-//! access list (`win_acl.rs`), on macOS by their owner, mode and no access list entry at all. On
-//! Windows the file is on a local drive, names no alternate data stream, and its path is shorter
-//! than 260 characters (the shell's limit). On macOS it has no execute bit and none of the extended
-//! attributes that can choose another app for it.
+//! a root, the home folder nor a folder above it (refused when the home folder cannot be
+//! resolved). The file, the within folder and every folder between them must be this user's and
+//! writable by no one else: on Windows by their owner and access list (`win_acl.rs`), on macOS by
+//! their owner, mode and no access list entry at all. On Windows the file is on a local drive,
+//! names no alternate data stream, and its path is shorter than 260 characters (the shell's
+//! limit). On macOS it has no execute bit and none of the extended attributes that can choose
+//! another app for it.
 
 #[cfg(windows)]
 use super::identity;
@@ -234,16 +235,7 @@ pub(super) fn within(
         return Err("a launch's within folder is not a folder".into());
     }
     let home = std::env::home_dir().and_then(|h| fs::canonicalize(h).ok());
-    if w.identity.canonical.parent().is_none()
-        || home
-            .as_ref()
-            .is_some_and(|h| h.starts_with(&w.identity.canonical))
-    {
-        return Err(
-            "a launch's within folder cannot be a root, the home folder or a folder above it"
-                .into(),
-        );
-    }
+    root_or_home(&w.identity.canonical, home.as_deref())?;
     let f = OpenTarget::open(file)?;
     let t = file_rules(&f, &w)?;
     let named = |t: &Target| plain(&t.canonical).is_some_and(|p| Path::new(&p) == t.selected);
@@ -253,6 +245,21 @@ pub(super) fn within(
         );
     }
     Ok((f, w, t))
+}
+
+/// Refused when within (resolved) is a root, or home (resolved) or a folder above it; also when
+/// home is None, as the home folder could not be resolved to check that.
+pub(super) fn root_or_home(within: &Path, home: Option<&Path>) -> Result<(), String> {
+    let home = home.ok_or(
+        "the home folder could not be resolved, so a launch's within folder cannot be checked against it",
+    )?;
+    if within.parent().is_none() || home.starts_with(within) {
+        return Err(
+            "a launch's within folder cannot be a root, the home folder or a folder above it"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 /// Whether package, launching executable with adapter its own program, runs that program: on
