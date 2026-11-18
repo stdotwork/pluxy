@@ -36,8 +36,9 @@ jobs:
   # The checks other than the native test: type check, lint, unit tests, the window's build, Rust
   # format, clippy and tests, and the app tools.
   checks:
-    # Pinned: the package names below are Ubuntu 24.04's.
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    # Pinned: the package names below are Ubuntu 24.04's. PLUXY_LINUX_CLOUD_RUNNER first, then
+    # PLUXY_LINUX_RUNNER (AGENTS.md, "Where jobs run").
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -133,9 +134,10 @@ jobs:
   # keeps the programs executable, which upload-artifact does not.
   native-build:
     if: inputs.skip-native != true
-    # The same runner as the shards, which run what it builds, so never PLUXY_LINUX_RUNNER either.
-    # Pinned: the package names below are Ubuntu 24.04's.
-    runs-on: ubuntu-24.04
+    # The same runner as the shards, which run what it builds, so never PLUXY_LINUX_RUNNER either:
+    # GitHub's, or PLUXY_LINUX_CLOUD_RUNNER's (AGENTS.md, "Where jobs run"). Pinned: the package
+    # names below are Ubuntu 24.04's.
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -220,10 +222,11 @@ jobs:
     if: inputs.skip-native != true
     needs: native-build
     # Pinned: the package names below are Ubuntu 24.04's, and so are the file paths the native
-    # test starts services from (next/app/native/services.ts). Always on GitHub's runners, never
-    # PLUXY_LINUX_RUNNER: the document portal needs /dev/fuse, which the maintainers' runner
-    # containers don't get (FUSE in a container needs extra privilege).
-    runs-on: ubuntu-24.04
+    # test starts services from (next/app/native/services.ts). On GitHub's runners or
+    # PLUXY_LINUX_CLOUD_RUNNER's (Namespace's have /dev/fuse), never PLUXY_LINUX_RUNNER: the
+    # document portal needs /dev/fuse, which the maintainers' runner containers don't get (FUSE in a
+    # container needs extra privilege).
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || 'ubuntu-24.04' }}
     strategy:
       fail-fast: false
       matrix:
@@ -329,7 +332,8 @@ jobs:
   app:
     if: ${{ !cancelled() }}
     needs: [checks, native-build, native]
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    # Like checks: PLUXY_LINUX_CLOUD_RUNNER first, then PLUXY_LINUX_RUNNER.
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - name: Every job passed
         working-directory: .
