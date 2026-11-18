@@ -1112,6 +1112,7 @@ impl Confirmations {
                     open_os::shape(
                         &e.identity,
                         l.adapter_program.as_deref(),
+                        &l.terminal_adapter.id,
                         &l.argv,
                         &c.identity.canonical,
                         l.program.as_ref(),
@@ -1150,8 +1151,12 @@ impl Confirmations {
             };
             #[cfg(windows)]
             {
-                windowless =
-                    open_os::windowless(&e.identity, l.adapter_program.as_deref(), &l.argv);
+                windowless = open_os::windowless(
+                    &e.identity,
+                    l.adapter_program.as_deref(),
+                    &l.terminal_adapter.id,
+                    &l.argv,
+                );
             }
             let exact = ExactLaunch {
                 executable: e.identity.clone(),

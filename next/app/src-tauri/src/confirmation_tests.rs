@@ -1143,7 +1143,8 @@ fn only_program_images_are_programs() {
 }
 
 /// Makes action's launch open file inside within, as the execution program prepares it here: on
-/// Windows its own program (the fixture's) in its `open` mode, on macOS `/usr/bin/open`.
+/// Windows its own program (the fixture's, as `pluxy/execution`'s) in its `open` mode, on macOS
+/// `/usr/bin/open`.
 #[cfg(not(target_os = "linux"))]
 fn opening(action: &mut Action, file: &Path, within: &Path) {
     let shown = |p: &Path| PathBuf::from(open_os::plain(&fs::canonicalize(p).unwrap()).unwrap());
@@ -1159,6 +1160,7 @@ fn opening_named(action: &mut Action, file: &Path, within: &Path) {
     {
         l.argv = vec!["open".into(), "--".into(), f.to_string_lossy().into_owned()];
         l.adapter_program = Some(l.executable.clone());
+        l.terminal_adapter.id = crate::launcher::PACKAGE.into();
     }
     #[cfg(target_os = "macos")]
     {
@@ -1453,6 +1455,34 @@ fn an_opened_file_has_no_execute_bit_or_app_choosing_attribute() {
     let e = r.err().expect("an execute bit refused");
     assert!(e.contains("must not be executable"), "{e}");
     assert!(c.prepare(a, Origin::NativeUi).is_ok());
+    remove(&within);
+    remove(&dir);
+}
+
+/// Windows: only `pluxy/execution`'s own program opens a file, and only it starts with no
+/// console in its `open` or `app` mode; another package's own program does neither.
+#[cfg(windows)]
+#[test]
+fn only_the_execution_programs_own_program_opens_files_or_starts_windowless() {
+    let (dir, mut c, a, within, _, _) = nested_open();
+    assert!(c.prepare(a.clone(), Origin::NativeUi).unwrap().windowless);
+    let mut other = a.clone();
+    other.launch.as_mut().unwrap().terminal_adapter.id = "example/other".into();
+    let e = c.prepare(other, Origin::NativeUi).err().expect("refused");
+    assert!(
+        e.contains("runs pluxy/execution's own program in its open mode")
+            && e.contains("example/other"),
+        "{e}"
+    );
+    // Its `app` mode, which opens no file.
+    let mut app = a.clone();
+    let l = app.launch.as_mut().unwrap();
+    l.argv = vec!["app".into(), "--".into(), "example".into()];
+    l.cwd = dir.clone();
+    l.opens = None;
+    assert!(c.prepare(app.clone(), Origin::NativeUi).unwrap().windowless);
+    app.launch.as_mut().unwrap().terminal_adapter.id = "example/other".into();
+    assert!(!c.prepare(app, Origin::NativeUi).unwrap().windowless);
     remove(&within);
     remove(&dir);
 }

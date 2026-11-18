@@ -1,8 +1,9 @@
 //! A launch that opens a file, on Windows and macOS (`confirmation.rs` has Linux's rules). These
 //! systems choose the app by the file's extension (the shell's association; LaunchServices' type
 //! from the extension), not by its content, so the type is the extension's, from a fixed list, and
-//! the opener is fixed: on Windows the executing package's own program in its `open` mode (which
-//! calls `ShellExecuteExW`), on macOS `/usr/bin/open`.
+//! the opener is fixed: on Windows the execution program's (`pluxy/execution`, a reserved
+//! publisher's, so from a curated source only) own program in its `open` mode (which calls
+//! `ShellExecuteExW`), on macOS `/usr/bin/open`.
 //!
 //! The file must be a regular file of one of `TYPES`, inside its within folder, which is neither
 //! a root, the home folder nor a folder above it. The file, the within folder and every folder
@@ -254,12 +255,25 @@ pub(super) fn within(
     Ok((f, w, t))
 }
 
-/// The shape a launch that opens file (resolved) must have: on Windows the executing package's
-/// own program (adapter, compared by identity) with argv exactly `open -- <file>`; on macOS
-/// `/usr/bin/open <file>`; the file's folder as its cwd, no terminal program.
+/// Whether package, launching executable with adapter its own program, runs that program: on
+/// Windows only the execution program's (`launcher::PACKAGE`, a reserved publisher's, which only a
+/// curated source may install) counts, compared by identity.
+#[cfg(windows)]
+fn executions_own(executable: &Target, adapter: Option<&Path>, package: &str) -> bool {
+    package == crate::launcher::PACKAGE
+        && adapter
+            .and_then(|a| identity(a).ok())
+            .is_some_and(|i| i == (executable.dev, executable.ino))
+}
+
+/// The shape a launch that opens file (resolved) must have: on Windows the execution program's
+/// own program (`executions_own`: package launching with adapter its program) with argv exactly
+/// `open -- <file>`; on macOS `/usr/bin/open <file>`; the file's folder as its cwd, no terminal
+/// program.
 pub(super) fn shape(
     executable: &Target,
     adapter: Option<&Path>,
+    package: &str,
     argv: &[String],
     cwd: &Path,
     program: Option<&PathBuf>,
@@ -268,12 +282,10 @@ pub(super) fn shape(
     let path = plain(file).ok_or("the file a launch opens has no plain path")?;
     #[cfg(windows)]
     let want = {
-        let ours = adapter
-            .and_then(|a| identity(a).ok())
-            .is_some_and(|i| i == (executable.dev, executable.ino));
-        if !ours {
+        if !executions_own(executable, adapter, package) {
             return Err(format!(
-                "a launch that opens a file runs the launching package's own program in its open mode, not {}",
+                "a launch that opens a file runs {}'s own program in its open mode, not {} of {package}",
+                crate::launcher::PACKAGE,
                 shown(&executable.canonical)
             ));
         }
@@ -281,7 +293,7 @@ pub(super) fn shape(
     };
     #[cfg(target_os = "macos")]
     let want = {
-        let _ = adapter;
+        let _ = (adapter, package);
         if executable.canonical != Path::new(OPEN) {
             return Err(format!(
                 "a launch that opens a file runs {OPEN}, not {}",
@@ -321,13 +333,16 @@ pub(super) fn review_line(file: &Path, kind: &str, within: &Path, executable: &P
     )
 }
 
-/// Whether a confirmed launch runs the launching package's own program (adapter, compared with
-/// executable by identity) in its `open` or `app` mode, which shows no window itself: on Windows it
-/// starts with no console, so none flashes.
+/// Whether a confirmed launch runs the execution program's own program (`executions_own`) in its
+/// `open` or `app` mode, which shows no window itself: on Windows it starts with no console, so
+/// none flashes.
 #[cfg(windows)]
-pub(super) fn windowless(executable: &Target, adapter: Option<&Path>, argv: &[String]) -> bool {
+pub(super) fn windowless(
+    executable: &Target,
+    adapter: Option<&Path>,
+    package: &str,
+    argv: &[String],
+) -> bool {
     matches!(argv, [mode, dash, _] if (mode == "open" || mode == "app") && dash == "--")
-        && adapter
-            .and_then(|a| identity(a).ok())
-            .is_some_and(|i| i == (executable.dev, executable.ino))
+        && executions_own(executable, adapter, package)
 }
