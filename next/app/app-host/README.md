@@ -648,8 +648,8 @@ program's name) and `cwd`, and may name:
   <opener>." The spawn checks the file's identity and metadata again as on Linux. On Windows a
   permissions change on a folder above the file between confirming and launching can also
   refuse the open: setting a folder's access list as `icacls` does also goes through what is
-  inside it and changes the file's change time, though not its permissions, and the person then
-  confirms the open again;
+  inside it and changes the file's change time, even when the file's own permissions stay the
+  same (an inheritable entry changes them too), and the person then confirms the open again;
 - `stdin`: one of the launch's secret fields, whose secret the host writes to the launch's
   standard input and then closes: the private channel to a credential bridge, never argv, its
   environment or a file. The confirmation names it; it is part of the environment revision;

@@ -46,8 +46,9 @@ pub struct Launch {
     /// resolved, shown and bound, so a link to or a replacement by another file is refused.
     pub opens: Option<(PathBuf, PathBuf)>,
     pub terminal_adapter: Package,
-    /// The launching package's own program: on Windows a launch that opens a file, or starts an
-    /// app, runs it in its `open` or `app` mode (`confirmation_open.rs`).
+    /// The launching package's own program. On Windows a launch that opens a file runs
+    /// `pluxy/execution`'s own program in its `open` mode, and only that program starts with no
+    /// console, in its `open` or `app` mode (`confirmation_open::executions_own`).
     pub adapter_program: Option<PathBuf>,
     pub environment_revision: String,
     /// Names and non-secret changed values only; no secret bytes.
@@ -314,8 +315,8 @@ pub struct Prepared {
     program: Option<OpenTarget>,
     /// The file a launch opens and its folder, held open.
     opens: Option<(OpenTarget, OpenTarget)>,
-    /// On Windows, a confirmed launch of the launching package's own program in its `open` or
-    /// `app` mode, which starts with no console (`confirmation_open::windowless`).
+    /// On Windows, a confirmed launch of `pluxy/execution`'s own program in its `open` or `app`
+    /// mode, which starts with no console (`confirmation_open::windowless`).
     windowless: bool,
 }
 impl Prepared {
@@ -576,9 +577,10 @@ fn open_rules(f: &OpenTarget, w: &OpenTarget, x: &ExactOpen) -> Result<(), Strin
     w.check()?;
     // The change time is part of it. On Windows, setting a folder's access list through
     // `SetNamedSecurityInfo`, as `icacls` does, also goes through what is inside the folder, and
-    // moves a file's change time there though its permissions stay the same (a GitHub-hosted
-    // runner showed it): a permissions change on a folder above the file between confirming and
-    // launching refuses the open too, and the person confirms it again. Kept so: it fails closed.
+    // moves a file's change time there even when its own permissions stay the same (a
+    // GitHub-hosted runner showed it; an inheritable entry changes them too): a permissions
+    // change on a folder above the file between confirming and launching refuses the open, and
+    // the person confirms it again. Kept so: it fails closed.
     if Metadata::read(&f.file)? != x.metadata {
         return Err("the file to open changed since it was confirmed; review again".into());
     }
