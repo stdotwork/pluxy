@@ -59,6 +59,43 @@ static WAYS: [(&str, AtomicUsize); 6] = [
 /// How many access-key presses found their control disabled and waited for it (`until_enabled`).
 static WAITED: AtomicUsize = AtomicUsize::new(0);
 
+/// How long a press waits for its control to be enabled: a page's Confirm is disabled for its
+/// first second.
+const ENABLED_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Waits until the control with access key c in the dialog titled title is enabled, as
+/// `enabled` (the platform's) reads it: a press on a disabled control is dropped (it answers
+/// nothing, and the dialog waits out its lifetime), so a press must not go before. Fails naming
+/// the control when it stays disabled for ENABLED_WITHIN, or when no control has that key.
+fn until_enabled(
+    title: &str,
+    c: char,
+    enabled: impl Fn() -> Result<Option<bool>, String>,
+) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + ENABLED_WITHIN;
+    let mut waited = false;
+    loop {
+        match enabled()? {
+            Some(true) => break,
+            Some(false) if std::time::Instant::now() < deadline => {
+                waited = true;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Some(false) => {
+                return Err(format!(
+                    "the control with access key {c} in {title:?} stayed disabled for {} s",
+                    ENABLED_WITHIN.as_secs()
+                ))
+            }
+            None => return Err(format!("no control in {title:?} has the access key {c}")),
+        }
+    }
+    if waited {
+        WAITED.fetch_add(1, Ordering::SeqCst);
+    }
+    Ok(())
+}
+
 /// How many access-key presses so far waited for their control to be enabled.
 pub(crate) fn waited() -> usize {
     WAITED.load(Ordering::SeqCst)
