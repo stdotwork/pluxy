@@ -1065,12 +1065,17 @@ running the program after `-e` unless noted. A terminal launch runs `<terminal> 
 an existing absolute folder. The terminal finds the program by that path as it starts, after the
 app's checks, so the app refuses a terminal launch whose program another user could change or
 redirect by then: one below a folder others or a group may write (a sticky folder such as `/tmp`
-aside, and the person's own private group, as Homebrew on Linux and a umask of 002 make them),
+aside, and the person's own private group, as Homebrew on Linux and a umask of 002 make them: a
+group no other user in `/etc/passwd` and `/etc/group` has, users and groups from other sources
+such as LDAP being unseen),
 reached through a link such a user could change, through `/proc`, or that such a group may write
 (`../app/app-host/README.md`, "Launches and managed runtimes"). `launch` refuses, before the host
-is asked, a launch of a terminal of the list above that does not name as its `program` the
-argument right after the terminal's flag, and on Linux and macOS a launch that names a `program`
-but is no terminal's: the app checks `program` as the file the terminal runs.
+is asked, a launch of a terminal of the list above whose argv starts with its exec flag but that
+does not name as its `program` the argument right after it, one that names a `program` whose
+argv does not start with that flag, and on Linux and macOS a launch that names a `program` but
+is no terminal's: the app checks `program` as the file the terminal runs. A terminal of the list
+started without its exec flag and naming no `program` (its own window, or its own options) is a
+direct launch of it.
 
 A launch's `lifetime` is `detached` or `managed`, and **`managed` applies to direct launches only**.
 The host keeps and stops a managed runtime through the process it started, and for a terminal

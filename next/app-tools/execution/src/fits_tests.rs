@@ -111,4 +111,50 @@ fn on_linux_a_launch_of_a_known_terminal_names_its_program_after_its_flag() {
     // A program that is no terminal pluxy knows: a direct launch, naming no program.
     let direct = json!({"executable": "/bin/agent", "argv": ["-e", "/bin/x"], "cwd": "/"});
     assert!(launch_fits(&direct).is_ok());
+    // A known terminal started with no command, or with its own options only, naming no program:
+    // a direct launch of the terminal. Naming a program, it must run it after its exec flag.
+    for (exe, argv) in [
+        ("/usr/bin/kitty", json!([])),
+        ("/usr/bin/xterm", json!(["-fa", "Mono"])),
+    ] {
+        let mut plain = json!({"executable": exe, "argv": argv, "cwd": "/"});
+        assert!(launch_fits(&plain).is_ok(), "{plain}");
+        plain["program"] = json!("/bin/agent");
+        let e = launch_fits(&plain).unwrap_err();
+        assert!(
+            e.message.contains("runs its program after -e"),
+            "{}",
+            e.message
+        );
+    }
+    // Its exec flag first and no program: refused, the command would go unchecked.
+    let unnamed = json!({"executable": "/usr/bin/xterm", "argv": ["-e", "/tmp/x"], "cwd": "/"});
+    let e = launch_fits(&unnamed).unwrap_err();
+    assert!(
+        e.message.contains("the argument its terminal runs"),
+        "{}",
+        e.message
+    );
+}
+
+/// On macOS a terminal launch is the execution program's terminal mode: its program is the
+/// argument right after `--`, and one that names none, or another, is refused before the host is
+/// asked.
+#[cfg(target_os = "macos")]
+#[test]
+fn on_macos_a_terminal_launch_names_its_program_after_its_dashes() {
+    use super::launch_fits;
+    let me = super::recipe::os::this_program().unwrap();
+    let mut i = json!({"executable": me, "cwd": "/", "argv": [
+        "terminal", "--with", "terminal", "--app", "/T.app", "--", "/bin/agent", "/bin/other"]});
+    let e = launch_fits(&i).unwrap_err();
+    assert!(
+        e.message.contains("the argument its terminal runs"),
+        "{}",
+        e.message
+    );
+    i["program"] = json!("/bin/other");
+    assert!(launch_fits(&i).is_err(), "another argument passed");
+    i["program"] = json!("/bin/agent");
+    assert!(launch_fits(&i).is_ok());
 }

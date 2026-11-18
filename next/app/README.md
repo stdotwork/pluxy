@@ -1605,8 +1605,10 @@ in the browser. The app updates itself only as a Linux AppImage.
   terminal launch whose program another user could change or redirect by then: a program below a
   folder that others, or a group other than your own private group, may write, one reached
   through a link such a user could change, or one such a group may write. Your private group
-  (your primary group, named as you are, with no other member) may write them: Homebrew on Linux
-  makes its folders writable by it, and so does a umask of 002. The refusal names the path and a
+  (your primary group, named as you are, with no other member, no other user's primary group,
+  and no other group with its number) may write them: Homebrew on Linux makes its folders
+  writable by it, and so does a umask of 002. Users and groups are read from `/etc/passwd` and
+  `/etc/group`: ones from LDAP, sssd or systemd-userdb are not seen. The refusal names the path and a
   `chmod g-w,o-w` that fixes it. Nothing stops your own processes from swapping the program
   before the terminal starts it. A direct launch runs the file the app checked, wherever it is.
 - Vault: on Windows and macOS only native tools use it, for their backups and journals; secret

@@ -164,9 +164,10 @@ pub(crate) fn exec_target(f: &File, _: Writers) -> Result<PathBuf, String> {
 /// others only in a sticky folder (`/tmp`, `/nix/store`), where only the owner of an entry (root
 /// or this user, as checked) can rename or remove it, and by its group only when that group is
 /// this user's own private group (`private_group`): Homebrew on Linux makes its folders the
-/// user's, in the user's group, group-writable, and a umask of 002 (Debian's and Ubuntu's for a
-/// user with a private group) makes `~/.local/bin` and what npm or pipx install there 0775. Any
-/// other group is refused: Linux has no group like macOS' `admin` whose folders hold programs.
+/// user's, in the user's group, group-writable, and a umask of 002 (Debian's and Ubuntu's default
+/// for a user whose group is named as they are) makes `~/.local/bin` and what npm or pipx install
+/// there 0775. Any other group is refused: Linux has no group like macOS' `admin` whose folders
+/// hold programs.
 /// Links are followed as the kernel follows them, from the folder that holds each; a path through
 /// the process file system (`/proc`, and `/dev/fd` and `/dev/std*`, which lead there) is refused,
 /// since `/proc/self` and its links lead elsewhere for the terminal than for the app.
@@ -196,12 +197,12 @@ pub(crate) fn path_target_by(
             p.display()
         ))
     };
-    // A refusal for write permission, with the command that takes it away.
-    let writable = |p: &Path, why: &str| {
-        let quoted = p.to_string_lossy().replace('\'', r"'\''");
+    // A refusal for write permission, with the command that takes it away (`chmod_hint`).
+    let writable = |p: &Path, why: &str, owner: u32| {
         Err(format!(
-            "{} {why}: a terminal runs a launch's program by its path, so no other user may be able to change it (`chmod g-w,o-w '{quoted}'` makes it yours alone)",
-            p.display()
+            "{} {why}: a terminal runs a launch's program by its path, so no other user may be able to change it ({})",
+            p.display(),
+            chmod_hint(p, owner == 0)
         ))
     };
     // Whether a user but root and this one may write what m describes.
@@ -245,7 +246,7 @@ pub(crate) fn path_target_by(
                 return refuse(&at, "is not a file");
             }
             if others_write(&m) {
-                return writable(&at, "may be written by other users");
+                return writable(&at, "may be written by other users", m.uid());
             }
             let opened = f.metadata().map_err(|e| e.to_string())?;
             if !same(&m, &opened) {
@@ -260,10 +261,11 @@ pub(crate) fn path_target_by(
             return refuse(&at, "is not a folder");
         }
         if in_proc(&at) {
-            return refuse(
-                &at,
-                "is in the process file system, where a path leads elsewhere for the terminal",
-            );
+            return Err(format!(
+                "{} is in the process file system, where a path leads elsewhere for the terminal \
+                 than for the app: name the program by its own path",
+                at.display()
+            ));
         }
         if name == ".." {
             // A folder above one reached was checked on the way down.
@@ -273,7 +275,7 @@ pub(crate) fn path_target_by(
         // Its entries are changed only by root and this user, or, in a sticky folder, each by
         // its owner, whose entry this check reads next.
         if others_write(&m) && m.mode() & 0o1000 == 0 {
-            return writable(&at, "may be changed by other users");
+            return writable(&at, "may be changed by other users", m.uid());
         }
         let next = at.join(&name);
         let n = read(&next)?;
@@ -297,14 +299,59 @@ pub(crate) fn path_target_by(
     }
 }
 
-/// Whether group gid is this user's private group, as `USERGROUPS_ENAB` makes one: the user's
-/// primary group, named as the user, with no other member. A lookup that fails says no.
+/// The command that takes group and others' write permission from p, its path quoted for a
+/// shell: run as root when root owns p.
+#[cfg(target_os = "linux")]
+pub(crate) fn chmod_hint(p: &std::path::Path, root: bool) -> String {
+    let quoted = p.to_string_lossy().replace('\'', r"'\''");
+    if root {
+        format!("as root, `chmod g-w,o-w '{quoted}'` makes it root's alone")
+    } else {
+        format!("`chmod g-w,o-w '{quoted}'` makes it yours alone")
+    }
+}
+
+/// What `private` judges a group by.
+#[cfg(target_os = "linux")]
+pub(crate) struct Group<'a> {
+    /// This user's name and primary group.
+    pub user: &'a str,
+    pub primary: u32,
+    /// The group's name, number and members.
+    pub name: &'a str,
+    pub gid: u32,
+    pub members: &'a [String],
+    /// The primary group of every other user `/etc/passwd` lists.
+    pub others_primary: &'a [u32],
+    /// The number of every other line of `/etc/group`.
+    pub other_lines: &'a [u32],
+}
+
+/// Whether g is this user's private group, no one else's: this user's primary group, named as
+/// the user, with no member but the user, no other user's primary group, and the only line of
+/// `/etc/group` with its number. A group's name says nothing by itself: `USERGROUPS_ENAB` and
+/// `pam_umask` make no promise about who else is in it.
+#[cfg(target_os = "linux")]
+pub(crate) fn private(g: &Group) -> bool {
+    g.gid == g.primary
+        && g.name == g.user
+        && g.members.iter().all(|m| m == g.user)
+        && !g.others_primary.contains(&g.gid)
+        && !g.other_lines.contains(&g.gid)
+}
+
+/// Whether group gid is this user's private group (`private`): this user and the group as the
+/// system's user and group databases give them (`getpwuid_r`, `getgrgid_r`), and every other user
+/// and group line of `/etc/passwd` and `/etc/group`, read as files (`getpwent` and `getgrent` keep
+/// process-wide state, unsafe in the app's threads). A lookup or read that fails says no. Users
+/// and groups from other sources (LDAP, sssd, systemd-userdb) are not scanned, and the group
+/// database is trusted to list a group's members.
 #[cfg(target_os = "linux")]
 pub(crate) fn private_group(gid: u32) -> bool {
     use std::ffi::CStr;
     let me = unsafe { libc::geteuid() };
     let mut size = 16 << 10;
-    loop {
+    let (user, primary, name, members) = loop {
         let mut pw: libc::passwd = unsafe { std::mem::zeroed() };
         let mut gr: libc::group = unsafe { std::mem::zeroed() };
         let mut pbuf = vec![0 as libc::c_char; size];
@@ -322,26 +369,58 @@ pub(crate) fn private_group(gid: u32) -> bool {
             size *= 2;
             continue;
         }
-        if rp != 0 || rg != 0 || pfound.is_null() || gfound.is_null() || pw.pw_gid != gid {
+        if rp != 0 || rg != 0 || pfound.is_null() || gfound.is_null() {
             return false;
         }
         // SAFETY: both records were filled, their strings NUL-terminated in the buffers, and the
         // member list ends with a null pointer.
         unsafe {
-            let user = CStr::from_ptr(pw.pw_name);
-            if CStr::from_ptr(gr.gr_name) != user {
-                return false;
-            }
+            let text = |p: *const libc::c_char| CStr::from_ptr(p).to_string_lossy().into_owned();
+            let mut members = Vec::new();
             let mut m = gr.gr_mem;
             while !m.is_null() && !(*m).is_null() {
-                if CStr::from_ptr(*m) != user {
-                    return false;
-                }
+                members.push(text(*m));
                 m = m.add(1);
             }
+            break (text(pw.pw_name), pw.pw_gid, text(gr.gr_name), members);
         }
-        return true;
+    };
+    // The colon-separated fields of each entry of file: None when it cannot be read or an entry's
+    // number cannot. NIS compat entries (`+…`, `-…`) are left out, as other sources are.
+    let entries = |file: &str, number: usize| -> Option<Vec<(String, u32)>> {
+        let text = std::fs::read_to_string(file).ok()?;
+        text.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with(['+', '-']))
+            .map(|l| {
+                let f: Vec<&str> = l.split(':').collect();
+                Some((f.first()?.to_string(), f.get(number)?.parse().ok()?))
+            })
+            .collect()
+    };
+    let (Some(users), Some(mut lines)) = (entries("/etc/passwd", 3), entries("/etc/group", 2))
+    else {
+        return false;
+    };
+    let others_primary: Vec<u32> = users
+        .iter()
+        .filter(|(u, _)| *u != user)
+        .map(|(_, g)| *g)
+        .collect();
+    // This group's own line, if the file has it, is not another.
+    if let Some(i) = lines.iter().position(|(n, g)| *n == name && *g == gid) {
+        lines.remove(i);
     }
+    let other_lines: Vec<u32> = lines.iter().map(|(_, g)| *g).collect();
+    private(&Group {
+        user: &user,
+        primary,
+        name: &name,
+        gid,
+        members: &members,
+        others_primary: &others_primary,
+        other_lines: &other_lines,
+    })
 }
 
 /// What runs the opened file f: macOS cannot execute a descriptor, so the path f has now

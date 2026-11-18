@@ -532,7 +532,7 @@ mod unix {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::Temp;
-    use crate::owned::{path_target, path_target_by, private_group};
+    use crate::owned::{chmod_hint, path_target, path_target_by, private, private_group, Group};
     use std::fs::{self, File};
     use std::os::unix::fs::{symlink, PermissionsExt};
     use std::path::{Path, PathBuf};
@@ -631,8 +631,95 @@ mod linux {
         assert_eq!(by(&p, &other), Ok(()));
     }
 
-    /// The person's private group is their primary group, named as they are, with no other
-    /// member, as `id` and `getent` tell; and the real check takes group write from it alone.
+    /// A group is private only when it is this user's alone, by each of five conditions: each
+    /// one broken alone says no.
+    #[test]
+    fn a_group_is_private_only_when_each_condition_holds() {
+        let me = vec!["me".to_string()];
+        let bob = vec!["me".to_string(), "bob".to_string()];
+        let base = Group {
+            user: "me",
+            primary: 1000,
+            name: "me",
+            gid: 1000,
+            members: &me,
+            others_primary: &[100, 1001],
+            other_lines: &[0, 100, 1001],
+        };
+        assert!(private(&base));
+        assert!(
+            private(&Group {
+                members: &[],
+                ..base
+            }),
+            "no member listed"
+        );
+        assert!(
+            !private(&Group {
+                primary: 100,
+                ..base
+            }),
+            "not the primary group"
+        );
+        assert!(
+            !private(&Group {
+                name: "devs",
+                ..base
+            }),
+            "named otherwise"
+        );
+        assert!(
+            !private(&Group {
+                members: &bob,
+                ..base
+            }),
+            "another member"
+        );
+        assert!(
+            !private(&Group {
+                others_primary: &[100, 1000],
+                ..base
+            }),
+            "another user's primary group (useradd -g)"
+        );
+        assert!(
+            !private(&Group {
+                other_lines: &[0, 1000],
+                ..base
+            }),
+            "another group line with its number (devs:x:1000:bob)"
+        );
+    }
+
+    /// The hint quotes the path for a shell, a `'` in it too, and says when root must run it.
+    #[test]
+    fn the_chmod_hint_quotes_the_path_for_a_shell() {
+        let p = Path::new("/home/me/it's here");
+        assert_eq!(
+            chmod_hint(p, false),
+            r"`chmod g-w,o-w '/home/me/it'\''s here'` makes it yours alone"
+        );
+        assert_eq!(
+            chmod_hint(p, true),
+            r"as root, `chmod g-w,o-w '/home/me/it'\''s here'` makes it root's alone"
+        );
+        // What a shell makes of the quoted path is the path.
+        let quoted = chmod_hint(p, false);
+        let arg = quoted
+            .strip_prefix("`chmod g-w,o-w ")
+            .and_then(|q| q.split_once("` "))
+            .unwrap()
+            .0;
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", &format!("printf %s {arg}")])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), p.to_str().unwrap());
+    }
+
+    /// The person's private group as `id` and `getent` tell: their primary group, named as they
+    /// are, with no other member, no other user's primary group and no other group with its
+    /// number; and the real check takes group write from it alone.
     #[test]
     fn the_private_group_is_the_persons_own_and_no_other() {
         let user = id("-un");
@@ -641,10 +728,29 @@ mod linux {
             .split_whitespace()
             .map(|g| g.parse().unwrap())
             .collect();
+        // Every user's (name, primary group) and every group's (name, number), from getent.
+        let table = |db: &str, at: usize| -> Vec<(String, u32)> {
+            let out = std::process::Command::new("getent")
+                .arg(db)
+                .output()
+                .unwrap();
+            String::from_utf8(out.stdout)
+                .unwrap()
+                .lines()
+                .filter_map(|l| {
+                    let f: Vec<&str> = l.split(':').collect();
+                    Some((f.first()?.to_string(), f.get(at)?.parse().ok()?))
+                })
+                .collect()
+        };
+        let (users, lines) = (table("passwd", 3), table("group", 2));
         let expected = |g: u32| {
             g == primary
                 && group(g).is_some_and(|(name, members)| {
-                    name == user && members.iter().all(|m| *m == user)
+                    name == user
+                        && members.iter().all(|m| *m == user)
+                        && !users.iter().any(|(u, p)| *u != user && *p == g)
+                        && lines.iter().filter(|(_, n)| *n == g).count() == 1
                 })
         };
         for &g in groups.iter().chain([0, 65534].iter()) {

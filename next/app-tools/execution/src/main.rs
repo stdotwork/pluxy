@@ -94,9 +94,11 @@ fn launch_fits(input: &Value) -> Result<(), Error> {
 }
 
 /// Where a terminal launch's program must be in its argv, the argument its terminal runs, or None
-/// for a launch that is not a terminal's: on Linux right after the flag of a terminal of
-/// `recipe::TERMINALS` (refused when argv does not start with that flag), on macOS right after
-/// `--`. The host checks the program a launch names as the file its terminal runs.
+/// for a launch that is not a terminal's: on Linux right after the exec flag of a terminal of
+/// `recipe::TERMINALS`, when argv starts with that flag (a launch of such a terminal whose argv
+/// does not, and that names no program, runs no command of the launch's: a direct launch of the
+/// terminal); on macOS right after `--`. The host checks the program a launch names as the file
+/// its terminal runs.
 #[cfg(target_os = "linux")]
 fn program_at(input: &Value, _: bool) -> Result<Option<usize>, Error> {
     let executable = std::path::Path::new(input["executable"].as_str().unwrap_or_default());
@@ -111,6 +113,9 @@ fn program_at(input: &Value, _: bool) -> Result<Option<usize>, Error> {
         .map(Vec::as_slice)
         .unwrap_or_default();
     if argv.len() < t.flags.len() || argv.iter().zip(t.flags).any(|(a, f)| a != f) {
+        if input.get("program").is_none() {
+            return Ok(None);
+        }
         return Err(Error::invalid_request(format!(
             "a launch of {} runs its program after {}",
             t.id,

@@ -870,8 +870,9 @@ fn launch_of(
         .ok_or_else(|| fail("invalid_request", "a launch names its argv, as strings"))?;
     // The program a terminal runs: bound as the executable is, and it must be what argv runs,
     // since the spawn checks it as that (`spawn::command`): on Linux the argument right after the
-    // terminal's flag (the first argument), on macOS the one right after `--` (the execution
-    // program's terminal mode); elsewhere one of argv.
+    // terminal's exec flag (`-e`, `-x` or `--`, the first argument), on macOS the one right after
+    // `--` (the execution program's terminal mode); elsewhere one of argv. A launch that names no
+    // program is not checked as a terminal's: the app has no list of terminals.
     let program = match input.get("program") {
         None => None,
         Some(v) => {
@@ -879,7 +880,10 @@ fn launch_of(
                 .as_str()
                 .ok_or_else(|| fail("invalid_request", "a launch's program is a path"))?;
             #[cfg(target_os = "linux")]
-            let runs = argv.get(1).is_some_and(|a| a == p);
+            let runs = argv
+                .first()
+                .is_some_and(|f| ["-e", "-x", "--"].contains(&f.as_str()))
+                && argv.get(1).is_some_and(|a| a == p);
             #[cfg(target_os = "macos")]
             let runs = argv
                 .iter()
@@ -892,7 +896,7 @@ fn launch_of(
                 return Err(fail(
                     "invalid_request",
                     if cfg!(target_os = "linux") {
-                        "a launch's program must be the argument right after the terminal's flag"
+                        "a launch's program must be the argument right after the terminal's exec flag (-e, -x or --), its first"
                     } else if cfg!(target_os = "macos") {
                         "a launch's program must be the argument right after --"
                     } else {
@@ -1482,6 +1486,23 @@ mod tests {
             json!(["-e", "/bin/agent", "/bin/other"]),
             json!(["-e", "/bin/other", "/bin/agent"]),
         );
+        // Right after a flag that is not the exec flag: the terminal runs what follows `--`.
+        #[cfg(target_os = "linux")]
+        {
+            let e = launch(
+                json!(["--title", "/bin/agent", "--", "/tmp/x"]),
+                "/bin/agent",
+            )
+            .map(|_| ())
+            .unwrap_err();
+            assert!(e.message.contains("exec flag"), "{}", e.message);
+            for flag in ["-e", "-x", "--"] {
+                assert!(
+                    launch(json!([flag, "/bin/agent"]), "/bin/agent").is_ok(),
+                    "{flag}"
+                );
+            }
+        }
         #[cfg(target_os = "macos")]
         let (runs, other) = (
             json!([
