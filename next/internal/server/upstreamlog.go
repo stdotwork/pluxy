@@ -234,7 +234,11 @@ func writeBody(b *bytes.Buffer, c protocol.CapturedBody, redact *protocol.Redact
 // gap (the window, the part of a form, the run of key characters, then keepWhole), except that
 // the window reaches back no further than the last line break: no spelling of a secret the log
 // decodes holds a raw line break, and each line of a secret that spans lines is a secret of its
-// own. So a stream stopped after its last event, or inside one, keeps every whole event.
+// own. So a stream stopped after its last event, or inside one, keeps every whole event. A body
+// with no line break near its end (JSON on one line, Devin's binary frames) loses the whole
+// window, all of a short one, which is accepted for a body whose read really stopped; the Devin
+// extension reads its reply on past the end frame to the body's end, within a bound, so that a
+// complete one is not marked.
 //
 // shortcut: a secret that spans lines can keep its first line where the read stopped after that
 // line's break, when the line is 1 or 2 bytes: too short to be a secret of its own (8 bytes) and,

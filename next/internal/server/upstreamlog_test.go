@@ -89,6 +89,17 @@ func TestWriteBodyStopped(t *testing.T) {
 			t.Errorf("got %q, want the first line kept and the line saying the read stopped", got)
 		}
 	})
+	t.Run("config secret's start in escapes outside its forms", func(t *testing.T) {
+		// JSON's \u escape for a character that is not ASCII: the forms keep it as it is.
+		const umlaut = "pässwort!Geheim-2024-xyz"
+		const spelled = `p\u00e4sswort!Geheim-2024-xyz`
+		r := protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: umlaut})
+		got := write(r, stopped("event one\nMARK "+spelled[:16]))
+		noPart(t, got, umlaut, spelled)
+		if !strings.HasPrefix(got, "event one\n") || !strings.HasSuffix(got, stopLine) {
+			t.Errorf("got %q, want the first line kept and the line saying the read stopped", got)
+		}
+	})
 	t.Run("key-character secret's start spelled outside its forms", func(t *testing.T) {
 		// Lowercase percent escapes: the URL escape among the forms has them in capitals.
 		spelled := "sk-Stop%2fKey%2b0123456789abcdef"

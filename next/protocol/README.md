@@ -1255,10 +1255,10 @@ Rules:
   not in it. Set `body_stopped` on a body whose reader did not see its end, however the read
   stopped, unless every byte of a body of known length was read: a transport can send a request
   body's last byte, and the upstream answer, before its last read sees the end. A body known to
-  have nothing to read is read to its end; the Go SDK treats only a body
-  the transport gives as `http.NoBody` that way. A response with neither a length nor chunked
-  encoding whose connection closes early cannot be told from one that ended there (Go reads it
-  as the end, also over TLS closed without its closing alert): don't mark it, which would mark
+  have nothing to read is read to its end; the Go SDK treats only a body the transport gives as
+  `http.NoBody` that way. A response with neither a length nor chunked encoding whose connection
+  closes early cannot be told from one that ended there (Go reads it as the end, also over TLS
+  closed without its closing alert between two records): don't mark it, which would mark
   complete ones too.
 - A WebSocket handshake is an exchange: the `GET` request and the `101` response's status and
   headers, with no body. The messages on the socket are not captured. A turn that uses a socket an

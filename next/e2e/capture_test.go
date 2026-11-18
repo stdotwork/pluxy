@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stdotwork/pluxy/next/extensions/devin/devintest"
 )
 
 // Upstream capture: with request-log on, a request's log also holds what the extension sent
@@ -621,5 +623,51 @@ func TestUpstreamCaptureStoppedReadKeepsNoSecretStart(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A Devin reply that its upstream sends frame by frame, holding the stream open a moment after
+// its end frame, is logged whole: the extension reads on past the end frame to the body's end,
+// so the body is not taken for one whose read stopped, and the log does not leave out its end as
+// it would for a config secret's start, which here, with a character a key does not have, would
+// take all of a short reply.
+func TestUpstreamCaptureDevinReplyLoggedWhole(t *testing.T) {
+	srv := devintest.New(t)
+	srv.Chat = func(w http.ResponseWriter, r *http.Request, _ devintest.Request) {
+		devintest.Stream(w, r, 300*time.Millisecond, devintest.Text("devin-whole-"), devintest.Text("reply"),
+			devintest.Usage(11, 7), devintest.End(""))
+	}
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	b, _ := json.Marshal(map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": "mgmt@probe.example-key",
+		"logs":           map[string]any{"request_log": true},
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "devin", "pluxy-extension.json"),
+			"accounts": []any{map[string]any{"id": "devin", "models": []string{"swe-2"}, "settings": json.RawMessage(srv.Settings()),
+				"credential": map[string]any{"kind": "api_key", "api_key": srv.Token()}}},
+		},
+	})
+	os.WriteFile(cfgPath, b, 0o600)
+	base, _ := runCoreFile(t, cfgPath, noWatch...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	resp := post(t, ctx, base, clientKey, `{"model":"swe-2","messages":[{"role":"user","content":"hi"}]}`)
+	reply, _ := io.ReadAll(resp.Body) // to its end: the log is written before the reply ends
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(reply), "devin-whole-") {
+		t.Fatalf("request: %d %s", resp.StatusCode, reply)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "logs", "v1-chat-completions-*.log"))
+	if len(matches) != 1 {
+		t.Fatalf("request logs %v, want one", matches)
+	}
+	text, _ := os.ReadFile(matches[0])
+	resps := sections(string(text), "UPSTREAM RESPONSE")
+	if len(resps) != 1 || !strings.Contains(resps[0], "devin-whole-") || !strings.Contains(resps[0], "reply") ||
+		strings.Contains(resps[0], "not read past here") {
+		t.Errorf("the Devin reply is not logged whole:\n%v", resps)
 	}
 }
