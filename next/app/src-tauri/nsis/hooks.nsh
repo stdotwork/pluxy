@@ -12,12 +12,15 @@
 ;   they cannot tell whether the app runs.
 ;   shortcut: nothing holds the app from starting between this check and the template's own one
 ;   right after it, which closes an app started in that moment by force in silent and passive
-;   modes. Upgrade with a lock the app takes as it starts, if that moment matters.
-; - After uninstalling, once the template's own check passed and it removed the files it knows:
-;   what the app itself leaves in the install folder is removed, which the uninstaller does not
-;   know (it is written once, by the first version installed, and an update replaces the app's
-;   files, never the uninstaller): every `.pluxy-*` entry (an update's staging folder and the parts
-;   it set aside), `bundled\` and `pluxy.exe`, then the folder itself. Nothing is removed through a
+;   modes (the uninstall then goes on as usual). Upgrade with a lock the app takes as it starts,
+;   if that moment matters.
+; - Before uninstalling, once that check passed and before the template's own deletes: what the
+;   app itself leaves in the install folder is removed, which the uninstaller does not know (it is
+;   written once, by the first version installed, and an update replaces the app's files, never
+;   the uninstaller): every `.pluxy-*` entry (an update's staging folder and the parts it set
+;   aside), `bundled\` and `pluxy.exe`. Removed first, so the template's removal of the folders it
+;   knows finds them gone and never asks Windows to delete one at the next restart (its
+;   `RMDir /REBOOTOK` of a folder that still holds a file would). Nothing is removed through a
 ;   link: each entry's attributes are read before it is removed, and a link or junction, at any
 ;   depth, is removed itself and never entered (NSIS's own `RMDir /r` enters a junction and
 ;   empties what it points to). Unless the uninstaller runs for an update (/UPDATE), the app's own
@@ -158,7 +161,8 @@ Function un.PluxyRemove
   Pop $R0
 FunctionEnd
 
-; What the app leaves in $INSTDIR, then the folder, and its login item (see the top of this file).
+; What the app leaves in $INSTDIR, and its login item (see the top of this file). The template
+; removes the folder once it has removed its own files.
 !macro PLUXY_REMOVE_OWN
   StrCpy $PluxyDepth 0
   ; Each .pluxy-* entry, removed as the listing goes, as NSIS's own RMDir /r does; one that cannot
@@ -174,8 +178,6 @@ FunctionEnd
   Call un.PluxyRemove
   Push "$INSTDIR\pluxy.exe"
   Call un.PluxyRemove
-  ; The template's own RMDir of the folder ran before these were gone.
-  RMDir "$INSTDIR"
   ${If} $UpdateMode <> 1
     ReadRegStr $R6 HKCU "${PLUXY_RUN_KEY}" "${BUNDLEID}"
     ${If} $R6 == '"$INSTDIR\${MAINBINARYNAME}.exe" --autostart'
@@ -191,8 +193,5 @@ FunctionEnd
 
 !macro NSIS_HOOK_PREUNINSTALL
   !insertmacro PLUXY_REFUSE_WHILE_RUNNING "the uninstaller"
-!macroend
-
-!macro NSIS_HOOK_POSTUNINSTALL
   !insertmacro PLUXY_REMOVE_OWN
 !macroend

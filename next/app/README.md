@@ -1637,11 +1637,13 @@ shortcut and, when run silently (`/S`), a desktop shortcut. Its hooks
   (the app, `pluxy.exe`, or a program an interrupted update set aside), saying to quit it first
   (on the console when run silently or passively), where Tauri's would close it by force. They
   refuse too when Windows' Restart Manager, which they ask, cannot tell.
-- Once Tauri's uninstaller has removed the files it knows, it removes what the app itself leaves
-  in the folder, which it would not know (it stays the one the first version installed): an
-  update's `.pluxy-*` staging folder and asides, `bundled\` and `pluxy.exe`, then the folder. It
-  reads each entry before removing it, at any depth, and removes a link or junction itself,
-  never what it points to (NSIS's own recursive delete would follow a junction). It removes the
+- Before Tauri's uninstaller removes the files it knows, the uninstaller removes what the app
+  itself leaves in the folder, which it would not know (it stays the one the first version
+  installed): an update's `.pluxy-*` staging folder and asides, `bundled\` and `pluxy.exe`. So
+  Tauri's uninstaller then finds nothing it cannot remove, and never leaves a folder for Windows
+  to delete at the next restart. It reads each entry before removing it, at any depth, and
+  removes a link or junction itself, never what it points to (NSIS's own recursive delete would
+  follow a junction). It removes the
   app's login item (its `Run` value and Task Manager's value beside it) when that item runs this
   install's program. The app's data stays.
 
@@ -1776,12 +1778,9 @@ of a copy the per-user setup program installed, and as an app bundle on macOS
   [Platforms](#platforms) says what they check and what still refuses there). The setup's refusal
   when Restart Manager cannot start a session is not run: the test cannot make it fail.
 - The setup program and its uninstaller check that the app is not running, and then Tauri's
-  setup checks again and closes it by force if it is (silently and passively, without asking):
-  nothing keeps the app from starting in the moment between the two checks.
-- When the uninstaller runs after an update has left files in `bundled\` that the first version
-  did not have, Tauri's uninstaller cannot remove the folder and asks Windows to remove it at the
-  next restart (which writes a machine-wide pending rename, and only works for an administrator);
-  the hook removes it right after, so nothing is left either way.
+  setup checks again: nothing keeps the app from starting in the moment between the two checks,
+  and a copy started then is closed by force by Tauri's check (silently and passively, without
+  asking), and the uninstall goes on.
 - The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
   account's known folders, which no environment variable redirects, so it refuses to start when
   they exist and removes only the ones it made. Its input does not come from a keyboard: on

@@ -48,8 +48,8 @@
 //   item on, updates itself in place to its newer version and rolls back (update-cases.ts's
 //   route), the uninstall entry's DisplayVersion following each version that accepted itself; the
 //   setup and the uninstaller each refuse while the app runs and leave it running; once it quits,
-//   uninstalling removes the folder (with what the app left there), the login item and the
-//   uninstall entry and keeps the app's data; and a junction in bundled\ is removed without
+//   uninstalling removes the folder (with what the app left there, queuing nothing for Windows to
+//   delete at the next restart), the login item and the uninstall entry and keeps the app's data; and a junction in bundled\ is removed without
 //   removing what it points to.
 //
 // These write what a real run writes: the user's registry or LaunchAgents folder, and on Windows
@@ -1429,6 +1429,22 @@ function shortcuts(): { user: string[]; machine: string[]; expected: string[] } 
   };
 }
 
+/** What Windows will rename or delete at the next restart under folder (NSIS's /REBOOTOK
+ * fallback, MoveFileEx with MOVEFILE_DELAY_UNTIL_REBOOT, writes these machine-wide), or "". */
+function restartDeletes(folder: string): string {
+  const q = run("reg", [
+    "query",
+    "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager",
+    "/v",
+    "PendingFileRenameOperations",
+  ]);
+  if (q.status !== 0) return "";
+  return q.out
+    .split(/\\0|\r?\n/)
+    .filter((l) => l.toLowerCase().includes(folder.toLowerCase()))
+    .join("; ");
+}
+
 /** Folders a machine-wide install would have made. */
 const machineFolders = () =>
   [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]]
@@ -1776,17 +1792,9 @@ async function install() {
       "the uninstaller left Task Manager's StartupApproved value",
     );
     check(!regKeyExists(UNINSTALL_KEY), "the uninstaller left the uninstall entry");
-    // Tauri's uninstaller ran its RMDir /REBOOTOK of bundled\ while the later file was still in it
-    // (the hook removes it after): Windows may have a restart-time rename for it, machine-wide.
-    const pending = run("reg", [
-      "query",
-      "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager",
-      "/v",
-      "PendingFileRenameOperations",
-    ]);
-    say(
-      `restart-time renames naming the install folder: ${pending.out.toLowerCase().includes(folder.toLowerCase()) ? "yes" : "none"}`,
-    );
+    // The hook emptied bundled\ (with its later file) before Tauri's RMDir /REBOOTOK of it, so
+    // nothing was left for Windows to delete at the next restart.
+    check(!restartDeletes(folder), `the uninstall queued a delete at restart: ${restartDeletes(folder)}`);
     const after = shortcuts();
     check(
       after.user.length === 0 && after.machine.length === 0,
@@ -1821,6 +1829,7 @@ async function install() {
     );
     check(removed8.status === 0, `the uninstaller exited with ${removed8.status}: ${removed8.out}`);
     check(existsSync(kept), `the uninstaller followed a junction and removed ${kept}`);
+    check(!restartDeletes(folder), `the uninstall queued a delete at restart: ${restartDeletes(folder)}`);
     check(
       !existsSync(folder),
       `the install folder is still there, holding ${existsSync(folder) ? readdirSync(folder).join(", ") : ""}`,
