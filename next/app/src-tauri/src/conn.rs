@@ -843,10 +843,17 @@ impl Connection {
     pub fn prepare_adopt(&self) -> Result<(PathBuf, String, u64), String> {
         self.require_managed()?;
         let path = core_program(self.settings.core_path.as_deref())?;
-        // The program beside the app is the core that came with it, when it matches: the app
-        // installs that itself. A program the person names still goes through Adopt.
+        self.refuse_bundled(&path)?;
+        let (sha, size) = Store::inspect(&path)?;
+        Ok((path, sha, size))
+    }
+
+    /// The program beside the app (path, when the person named none) is the core that came with
+    /// it, when it matches: the app installs that itself, so it is not adopted. A program the
+    /// person names still goes through Adopt.
+    fn refuse_bundled(&self, path: &Path) -> Result<(), String> {
         if self.settings.core_path.as_deref().is_none_or(str::is_empty) {
-            if let Some(b) = self.bundled.as_ref().filter(|b| b.is_program(&path)) {
+            if let Some(b) = self.bundled.as_ref().filter(|b| b.is_program(path)) {
                 return Err(format!(
                     "{} is the core that came with the app, which the app installs itself as core {}",
                     path.display(),
@@ -854,8 +861,7 @@ impl Connection {
                 ));
             }
         }
-        let (sha, size) = Store::inspect(&path)?;
-        Ok((path, sha, size))
+        Ok(())
     }
 
     /// Applies a core change the person confirmed: installs or copies in the version and runs
@@ -2786,6 +2792,72 @@ mod tests {
             .unwrap()
             .contains("secret-key-123"));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Adopt refuses the program beside the app when it is the core that came with the app (the
+    /// app installs that itself, with no confirmation), by its size and SHA-256; another program
+    /// there, or a program the person names, is still adopted.
+    #[test]
+    fn adopt_refuses_the_bundled_core_beside_the_app_only() {
+        use crate::bundled_core::Place;
+        use crate::bundled_manifest::{Entry, Manifest};
+        let dir = std::env::temp_dir().join(format!(
+            "pluxy-adopt-bundled-{}",
+            crate::managed::random_key()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        // A program the store reads: on Unix, executable.
+        let write = |path: &Path, bytes: &[u8]| {
+            fs::write(path, bytes).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        };
+        let program = dir.join(cores::PROGRAM);
+        write(&program, b"the bundled core");
+        let (sha256, size) = Store::inspect(&program).unwrap();
+        let bundled = Bundled {
+            manifest: Manifest {
+                version: "1.2.3".into(),
+                descriptor_sha256: "a".repeat(64),
+                files: vec![Entry {
+                    path: cores::PROGRAM.into(),
+                    size,
+                    sha256,
+                    executable: true,
+                }],
+            },
+            place: Place {
+                program: program.clone(),
+                bundled: dir.join("bundled"),
+            },
+            app_version: "0.1.0".into(),
+        };
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+            cores: dir.join("cores"),
+        };
+        let mut c = Connection::open_with_bundled(dirs, None, false, Some(bundled));
+        let e = c.refuse_bundled(&program).unwrap_err();
+        assert!(
+            e.contains("is the core that came with the app") && e.contains("core 1.2.3"),
+            "{e}"
+        );
+        // Another program beside the app: adopted as before.
+        let other = dir.join("other");
+        write(&other, b"the bundled corf");
+        c.refuse_bundled(&other).unwrap();
+        // The person named the program: adopted, even when it is the bundled core's.
+        c.settings.core_path = Some(program.display().to_string());
+        c.refuse_bundled(&program).unwrap();
+        // An app without a bundled core adopts it.
+        c.settings.core_path = None;
+        c.bundled = None;
+        c.refuse_bundled(&program).unwrap();
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 
