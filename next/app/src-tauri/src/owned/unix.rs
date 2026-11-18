@@ -281,7 +281,7 @@ pub(crate) fn secure(path: &std::path::Path, writers: Writers) -> Result<(), Str
 /// judged like an entry set on them. An allow entry fails even where an earlier deny entry takes
 /// the same right away; a folder's `delete` lets that user, below a sticky folder anyone may add
 /// to, move the folder aside and put their own in its place; and an `OWNER@` entry (from a
-/// network volume) fails too, as its UUID names no user here.
+/// network volume) fails too: its UUID reads as a group (number 10), not as the file's owner.
 #[cfg(target_os = "macos")]
 fn acl_refusal(
     path: &std::path::Path,

@@ -872,13 +872,12 @@ mod macos {
                     );
                 }
             }
-            // Every read-only right at once passes.
-            let got = with_raw_entry(
-                &dir,
-                &format!("{on_folder}-reads"),
-                on_folder,
-                READ_ONLY as u32,
-            );
+            // Every read-only right at once passes: read, execute, readattr, readextattr,
+            // readsecurity, synchronize, generic_execute and generic_read (`sys/acl.h`), written
+            // out so that a bit added to `READ_ONLY` by mistake fails here.
+            let reads = 1 << 1 | 1 << 3 | 1 << 7 | 1 << 9 | 1 << 11 | 1 << 20 | 1 << 22 | 1 << 24;
+            assert_eq!(READ_ONLY, reads);
+            let got = with_raw_entry(&dir, &format!("{on_folder}-reads"), on_folder, reads as u32);
             assert_eq!(got, [Ok(()), Ok(())], "on a folder: {on_folder}");
             // A right no one names is refused, named by its number.
             let got = with_raw_entry(&dir, &format!("{on_folder}-unknown"), on_folder, 1 << 14);
@@ -929,6 +928,18 @@ mod macos {
             chmod(&["-N"], &f);
             assert_eq!(secure(&p, Writers::Nobody), Ok(()), "{right} cleared");
         }
+
+        // A folder is judged before what is below it: with an entry on both, the refusal names
+        // the folder. Walked from the program up, another user could swap the program and then
+        // remove their entry on the folder before it was read.
+        let both = dir.join("both");
+        folder(&both, 0o700);
+        let p = both.join("prog");
+        file(&p, 0o700);
+        add_entry(&both, "user:daemon allow add_file");
+        add_entry(&p, "user:daemon allow write");
+        refused(&p, &both, Writers::Nobody);
+        refused(&p, &both, Writers::Admins);
 
         // A deny entry, as a home folder carries.
         let home = dir.join("home");
