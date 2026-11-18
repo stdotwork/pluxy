@@ -6,6 +6,16 @@ name: CI
 # always runs: it works out which folders the change touches, runs those folders' workflows as
 # reusable workflows, and `gate` passes only when every one it ran passed. Each of those
 # workflows also runs by itself on pushes to `main` and by hand.
+#
+# The plan step, the last step of the `changes` job, picks the runner of each heavy job those
+# workflows run: the pool that would finish it first, from its median run times there
+# (.github/ci-pools.json) and the queued and running jobs it reads through the Actions API
+# (.github/scripts/plan.py; AGENTS.md, "Where jobs run"). The workflows get the picks as the input
+# `runners`, and a job the picks leave out uses its workflow's own runner. It reads the jobs of 30
+# active runs at most, and counts the rest as GitHub backlog. A plan step that fails, times out, or
+# meets an API error, its call cap or its deadline leaves `changes` successful and picks nothing,
+# and `gate` does not read the picks. It does not run for a pull request from a fork, which could edit the
+# script to send its jobs anywhere; such a run uses each workflow's own runners.
 
 on:
   pull_request:
@@ -43,8 +53,14 @@ jobs:
   # skips them (next-app-platforms-native).
   # next-app-tools-wsl is not a workflow: it says whether next-app-tools-platforms.yml runs its WSL
   # jobs.
+  # The plan step's tests run here too, so that a failing test fails the gate; they run for a
+  # change to the script, its table or a workflow it routes.
   changes:
     runs-on: ubuntu-latest
+    # actions: read for the plan step, which lists this repository's queued and running jobs.
+    permissions:
+      actions: read
+      contents: read
     outputs:
       app: ${{ steps.paths.outputs.app }}
       next-ci: ${{ steps.paths.outputs.next-ci }}
@@ -58,6 +74,9 @@ jobs:
       next-app-tools-pack: ${{ steps.paths.outputs.next-app-tools-pack }}
       # Whether next-app.yml runs its native shards: see FULL below.
       next-app-native: ${{ steps.paths.outputs.full }}
+      # The plan step's picks: a JSON object, or empty when the step failed. Not a workflow: gate's
+      # jq looks outputs up only by the names of its other needs.
+      runners: ${{ steps.plan.outputs.runners }}
     steps:
       # Full history for the merge base, without file contents: the diff needs only trees.
       - name: Checkout
@@ -94,9 +113,16 @@ jobs:
           declare -A run=()
           for w in app next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-wsl next-app-tools-pack; do run[$w]=false; done
           native=false
+          plan_tests=false
           while IFS= read -r -d '' path; do
             case $path in
               .github/workflows/ci.yml) for w in "${!run[@]}"; do run[$w]=true; done ;;
+            esac
+            case $path in
+              .github/scripts/* | .github/ci-pools.json | .github/workflows/ci.yml | .github/workflows/next-app.yml | \
+                .github/workflows/next-ci.yml | .github/workflows/next-app-platforms.yml | \
+                .github/workflows/next-app-tools-platforms.yml | .github/workflows/next-app-tools-pack.yml)
+                plan_tests=true ;;
             esac
             case $path in
               next/app/* | next/ui/* | next/go.mod | next/go.sum | .github/workflows/next-app-platforms.yml | \
@@ -146,6 +172,7 @@ jobs:
             echo "$w=${run[$w]}" | tee -a "$GITHUB_OUTPUT"
           done
           echo "next-app-platforms-native=$native" | tee -a "$GITHUB_OUTPUT"
+          echo "plan-tests=$plan_tests" | tee -a "$GITHUB_OUTPUT"
       # The checkout above has only .github; go list needs next/ as tested.
       - name: Check out next/
         if: steps.paths.outputs.next-app-platforms == ''
@@ -191,6 +218,37 @@ jobs:
             done < "$RUNNER_TEMP/prefixes"
           done < "$RUNNER_TEMP/next-other"
           echo "next-app-platforms=$hit" | tee -a "$GITHUB_OUTPUT"
+      - name: Test the runner plan
+        if: steps.paths.outputs.plan-tests == 'true'
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      # Picks the runners (see the top of this file). It never fails the job: continue-on-error, a
+      # short timeout, and plan.py writes `runners={}` on any error. Not for a fork's pull request,
+      # whose copy of plan.py this would run. CHANGES repeats this job's outputs above, which the
+      # step cannot read (test_plan.py checks they match).
+      - name: Pick the runners
+        id: plan
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CHANGES: >-
+            {"next-ci": "${{ steps.paths.outputs.next-ci }}",
+            "next-app": "${{ steps.paths.outputs.next-app }}",
+            "next-app-native": "${{ steps.paths.outputs.full }}",
+            "next-app-platforms": "${{ steps.paths.outputs.next-app-platforms || steps.go-packages.outputs.next-app-platforms }}",
+            "next-app-platforms-native": "${{ (steps.paths.outputs.next-app-platforms-native == 'true' || steps.go-packages.outputs.next-app-platforms == 'true') && 'true' || 'false' }}",
+            "next-app-tools-platforms": "${{ steps.paths.outputs.next-app-tools-platforms }}",
+            "next-app-tools-pack": "${{ steps.paths.outputs.next-app-tools-pack }}"}
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          ACTOR: ${{ github.actor }}
+          PLUXY_LINUX_CLOUD_RUNNER: ${{ vars.PLUXY_LINUX_CLOUD_RUNNER }}
+          PLUXY_MACOS_CLOUD_RUNNER: ${{ vars.PLUXY_MACOS_CLOUD_RUNNER }}
+          PLUXY_POOL_STATUS: ${{ vars.PLUXY_POOL_STATUS }}
+          PLUXY_LINUX_RUNNER: ${{ vars.PLUXY_LINUX_RUNNER }}
+          PLUXY_WINDOWS_RUNNER: ${{ vars.PLUXY_WINDOWS_RUNNER }}
+        run: python3 .github/scripts/plan.py
 
   app:
     name: App CI
@@ -203,6 +261,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.next-ci == 'true'
     uses: ./.github/workflows/next-ci.yml
+    with:
+      runners: ${{ needs.changes.outputs.runners }}
 
   next-app:
     name: Next app
@@ -211,6 +271,7 @@ jobs:
     uses: ./.github/workflows/next-app.yml
     with:
       skip-native: ${{ needs.changes.outputs.next-app-native != 'true' }}
+      runners: ${{ needs.changes.outputs.runners }}
 
   next-app-platforms:
     name: Next app platforms
@@ -219,6 +280,7 @@ jobs:
     uses: ./.github/workflows/next-app-platforms.yml
     with:
       skip-native: ${{ needs.changes.outputs.next-app-platforms-native != 'true' }}
+      runners: ${{ needs.changes.outputs.runners }}
 
   next-app-tools-platforms:
     name: Next app tools platforms
@@ -227,19 +289,23 @@ jobs:
     uses: ./.github/workflows/next-app-tools-platforms.yml
     with:
       wsl: ${{ needs.changes.outputs.next-app-tools-wsl == 'true' }}
+      runners: ${{ needs.changes.outputs.runners }}
 
   next-app-tools-pack:
     name: Next app tools pack
     needs: changes
     if: needs.changes.outputs.next-app-tools-pack == 'true'
     uses: ./.github/workflows/next-app-tools-pack.yml
+    with:
+      runners: ${{ needs.changes.outputs.runners }}
 
   # The required check. It runs even when the run is cancelled (always()), so a cancelled run
   # fails it instead of leaving it skipped, which would count as passing. It passes only when
   # the changes job passed and every workflow it chose passed; a workflow it did not choose
   # must have been skipped. A job a chosen workflow skips itself (next-app-tools-platforms' WSL
   # jobs when next-app-tools-wsl is false) is not one of these: the workflow's result is still
-  # its own, and only success passes.
+  # its own, and only success passes. The jq looks the changes job's outputs up only by the names
+  # of the other needs, so its `runners` output, the plan step's picks, never decides the gate.
   gate:
     if: always()
     needs:

@@ -9,6 +9,11 @@ name: Next app tools pack
 
 on:
   workflow_call:
+    inputs:
+      runners:
+        description: The runner ci.yml's plan step picked for each job, as JSON (AGENTS.md, "Where jobs run").
+        type: string
+        default: ''
   push:
     tags:
       - 'next-v*'
@@ -34,7 +39,7 @@ jobs:
     name: build (${{ matrix.platform }})
     # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
     # to use instead of GitHub's (AGENTS.md, "Where jobs run").
-    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    runs-on: ${{ fromJSON(inputs.runners || '{}')[format('next-app-tools-pack.yml/build/{0}', matrix.platform)] || matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     timeout-minutes: 40
     strategy:
       fail-fast: false

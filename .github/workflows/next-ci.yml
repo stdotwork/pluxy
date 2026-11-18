@@ -4,6 +4,11 @@ on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
   # its paths below are touched.
   workflow_call:
+    inputs:
+      runners:
+        description: The runner ci.yml's plan step picked for each job, as JSON (AGENTS.md, "Where jobs run").
+        type: string
+        default: ''
   workflow_dispatch:
   push:
     branches:
@@ -33,7 +38,7 @@ defaults:
 
 jobs:
   next:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runners || '{}')['next-ci.yml/next'] || 'ubuntu-latest' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
