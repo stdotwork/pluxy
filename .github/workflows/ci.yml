@@ -11,8 +11,10 @@ name: CI
 # workflows run: the pool that would finish it first, from its median run times there
 # (.github/ci-pools.json) and the queued and running jobs it reads through the Actions API
 # (.github/scripts/plan.py; AGENTS.md, "Where jobs run"). The workflows get the picks as the input
-# `runners`, and a job the picks leave out uses its workflow's own runner. A plan step that fails
-# or times out leaves `changes` successful and picks nothing, and `gate` does not read the picks.
+# `runners`, and a job the picks leave out uses its workflow's own runner. A plan step that fails,
+# times out or cannot read the whole load leaves `changes` successful and picks nothing, and `gate`
+# does not read the picks. It does not run for a pull request from a fork, which could edit the
+# script to send its jobs anywhere; such a run uses each workflow's own runners.
 
 on:
   pull_request:
@@ -219,10 +221,12 @@ jobs:
         if: steps.paths.outputs.plan-tests == 'true'
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
       # Picks the runners (see the top of this file). It never fails the job: continue-on-error, a
-      # short timeout, and plan.py writes `runners={}` on any error it cannot work around. CHANGES
-      # repeats this job's outputs above, which the step cannot read (test_plan.py checks they match).
+      # short timeout, and plan.py writes `runners={}` on any error. Not for a fork's pull request,
+      # whose copy of plan.py this would run. CHANGES repeats this job's outputs above, which the
+      # step cannot read (test_plan.py checks they match).
       - name: Pick the runners
         id: plan
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         continue-on-error: true
         timeout-minutes: 3
         env:

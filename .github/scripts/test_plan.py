@@ -65,15 +65,16 @@ def iso(t):
     return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def api(jobs_by_run, statuses=None):
-    """A fake fetch serving runs (all reported in_progress unless statuses says) and their jobs."""
+def api(jobs_by_run, statuses=None, names=None):
+    """A fake fetch serving runs (all reported in_progress unless statuses says, named by names)
+    and their jobs."""
     calls = []
 
     def fetch(path, params):
         calls.append((path, dict(params)))
         if path.endswith("/actions/runs"):
             runs = [
-                {"id": rid, "status": (statuses or {}).get(rid, "in_progress"), "created_at": iso(NOW - 600)}
+                {"id": rid, "name": (names or {}).get(rid, "CI"), "status": (statuses or {}).get(rid, "in_progress"), "created_at": iso(NOW - 600)}
                 for rid in jobs_by_run
                 if (statuses or {}).get(rid, "in_progress") == params["status"]
             ]
@@ -91,8 +92,9 @@ def recorded_fetch(path, params):
     return RECORDED["jobs"][path.split("/")[-2]]
 
 
-def job(labels, status="queued", started=None, created=NOW - 300):
+def job(labels, status="queued", started=None, created=NOW - 300, name=""):
     return {
+        "name": name,
         "labels": labels,
         "status": status,
         "started_at": iso(started) if started is not None else None,
@@ -106,6 +108,35 @@ def run_plan(e, fetch=None, now=NOW):
 
 def picks_of(runners, prefix):
     return {k: v for k, v in runners.items() if k.startswith(prefix)}
+
+
+R = "fromJSON(inputs.runners || '{}')"
+EVENTS = "(github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'))"
+MAC_VAR = "matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os"
+# Each routed job: (the key expression, the runs-on expression main had before the plan).
+ROUTED = {
+    ("next-app.yml", "checks"): ("'next-app.yml/checks'", f"{EVENTS} && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04'"),
+    ("next-app.yml", "native"): ("format('next-app.yml/native/{0}', matrix.shard)", "'ubuntu-24.04'"),
+    ("next-ci.yml", "next"): ("'next-ci.yml/next'", "'ubuntu-latest'"),
+    ("next-app-platforms.yml", "app"): ("format('next-app-platforms.yml/app/{0}', matrix.os)", MAC_VAR),
+    ("next-app-platforms.yml", "native"): ("format('next-app-platforms.yml/native/{0}/{1}', matrix.os, matrix.shard)", "matrix.os"),
+    ("next-app-platforms.yml", "dialogs"): ("format('next-app-platforms.yml/dialogs/{0}', matrix.os)", "matrix.os"),
+    ("next-app-tools-platforms.yml", "tools"): (
+        "format('next-app-tools-platforms.yml/tools/{0}', matrix.os)",
+        f"matrix.os == 'windows-latest' && {EVENTS} && vars.PLUXY_WINDOWS_RUNNER && fromJSON(vars.PLUXY_WINDOWS_RUNNER) || {MAC_VAR}",
+    ),
+    ("next-app-tools-pack.yml", "build"): ("format('next-app-tools-pack.yml/build/{0}', matrix.platform)", MAC_VAR),
+}
+
+
+def job_block(workflow, job_id):
+    """The lines of one job in a workflow file, up to the next job."""
+    jobs = "\n" + (WORKFLOWS / workflow).read_text().split("\njobs:\n", 1)[1]
+    return re.split(r"^  [\w-]+:\n", jobs.split(f"\n  {job_id}:\n", 1)[1], maxsplit=1, flags=re.M)[0]
+
+
+def runs_on(workflow, job_id):
+    return re.search(r"^    runs-on: (.*)$", job_block(workflow, job_id), re.M).group(1)
 
 
 class Medians(unittest.TestCase):
@@ -159,27 +190,34 @@ class Catalogue(unittest.TestCase):
         """Ties the catalogue to the workflow files: each routed job reads its key from
         inputs.runners, and the matrices have the legs the catalogue names."""
         text = {f: (WORKFLOWS / f).read_text() for f in ("next-app.yml", "next-ci.yml", "next-app-platforms.yml", "next-app-tools-platforms.yml", "next-app-tools-pack.yml")}
-        lookups = {
-            "next-app.yml": ["['next-app.yml/checks']", "[format('next-app.yml/native/{0}', matrix.shard)]"],
-            "next-ci.yml": ["['next-ci.yml/next']"],
-            "next-app-platforms.yml": [
-                "[format('next-app-platforms.yml/app/{0}', matrix.os)]",
-                "[format('next-app-platforms.yml/native/{0}/{1}', matrix.os, matrix.shard)]",
-                "[format('next-app-platforms.yml/dialogs/{0}', matrix.os)]",
-            ],
-            "next-app-tools-platforms.yml": ["[format('next-app-tools-platforms.yml/tools/{0}', matrix.os)]"],
-            "next-app-tools-pack.yml": ["[format('next-app-tools-pack.yml/build/{0}', matrix.platform)]"],
-        }
-        for name, needles in lookups.items():
+        for name in text:
             self.assertTrue(re.search(r"\n      runners:\n        description: .*\n        type: string\n        default: ''\n", text[name]), name)
-            for needle in needles:
-                self.assertTrue("fromJSON(inputs.runners || '{}')" + needle in text[name], f"{name}: {needle}")
         shards = re.search(r"shard: \[([^\]]*)\]", text["next-app.yml"]).group(1)
         self.assertEqual(tuple(s.strip() for s in shards.split(",")), plan.LINUX_NATIVE_SHARDS)
         native = text["next-app-platforms.yml"].split("\n  native:\n")[1].split("\n  dialogs:\n")[0]
         self.assertEqual(tuple(re.findall(r"^          - (\w+)$", native.split("shard:")[1], re.M)), plan.PLATFORM_SHARDS)
         self.assertIn("platform: 'darwin/arm64,darwin/amd64'", text["next-app-tools-pack.yml"])
 
+
+    def test_routed_runs_on_is_the_pick_or_mains_runner(self):
+        """Each routed job's runs-on is its key's pick, or else the expression main had before the
+        plan, pinned here: a change to either fallback must change this table too."""
+        for (workflow, job_id), (key, fallback) in ROUTED.items():
+            self.assertEqual(runs_on(workflow, job_id), "${{ " + f"{R}[{key}] || {fallback}" + " }}", f"{workflow} {job_id}")
+
+    def test_ephemeral_runner_env_follows_runs_on(self):
+        """PLUXY_EPHEMERAL_CI_RUNNER is the job's own runner when that is a Namespace profile label,
+        and empty otherwise: the same expression as runs-on, never a copy that can drift."""
+        found = []
+        for (workflow, job_id) in ROUTED:
+            block = job_block(workflow, job_id)
+            line = re.search(r"^      PLUXY_EPHEMERAL_CI_RUNNER: (.*)$", block, re.M)
+            if line is None:
+                continue
+            found.append((workflow, job_id))
+            inner = runs_on(workflow, job_id)[len("${{ ") : -len(" }}")]
+            self.assertEqual(line.group(1), "${{ " + f"startsWith({inner}, 'namespace-profile-') && ({inner}) || ''" + " }}", f"{workflow} {job_id}")
+        self.assertEqual(found, [("next-app-platforms.yml", "native"), ("next-app-platforms.yml", "dialogs")])
 
     def test_plan_step_repeats_the_changes_outputs(self):
         """The plan step cannot read its own job's outputs, so ci.yml repeats them in CHANGES: each
@@ -239,6 +277,31 @@ class Scoring(unittest.TestCase):
         # tools: 1.3 + 1.5 + 0.6 = 3.4 against GitHub's 1.6.
         self.assertIn("| `next-app-tools-platforms.yml/tools/macos-latest` | `\"macos-latest\"` | 3.4 | 1.6 |  |", lines)
 
+    def test_namespace_mac_job_ahead_takes_its_own_median(self):
+        # The package shard (7.0 on Namespace), started a minute ago: free in 6.0, so tools would
+        # finish at 6.0 + 1.5 + 0.6 = 8.1 there.
+        named = api({10: [job([MAC], "in_progress", started=NOW - 60, name="Next app platforms / native (macos-latest, package)")]})
+        _, lines = run_plan(env({"next-app-tools-platforms": "true"}), named)
+        self.assertIn("| `next-app-tools-platforms.yml/tools/macos-latest` | `\"macos-latest\"` | 8.1 | 1.6 |  |", lines)
+        # A run of the workflow by itself names the workflow in the run's name: pack's macOS build
+        # (0.8), queued behind nothing, frees the Mac at 0.8; tools then finishes at 2.9.
+        alone = api({10: [job([MAC], name="build (darwin/arm64,darwin/amd64)")]}, names={10: "Next app tools pack"})
+        _, lines = run_plan(env({"next-app-tools-platforms": "true"}), alone)
+        self.assertIn("| `next-app-tools-platforms.yml/tools/macos-latest` | `\"macos-latest\"` | 2.9 | 1.6 |  |", lines)
+
+    def test_key_from_name(self):
+        cases = {
+            ("Next app platforms / native (macos-latest, package)", "CI"): "next-app-platforms.yml/native/macos-latest/package",
+            ("Next app tools platforms / app tools (macos-latest)", "CI"): "next-app-tools-platforms.yml/tools/macos-latest",
+            ("Next app tools pack / build (darwin/arm64,darwin/amd64)", "CI"): "next-app-tools-pack.yml/build/darwin/arm64,darwin/amd64",
+            ("Next app / checks", "CI"): "next-app.yml/checks",
+            ("dialogs (macos-latest)", "Next app platforms"): "next-app-platforms.yml/dialogs/macos-latest",
+            ("App CI / Rust", "CI"): None,
+            ("gate", "CI"): None,
+        }
+        for (name, run), key in cases.items():
+            self.assertEqual(plan.key_from_name(name, run), key, name)
+
     def test_namespace_linux(self):
         runners, _ = run_plan(env(PLUXY_LINUX_CLOUD_RUNNER=json.dumps(LINUX)))
         linux = picks_of(runners, "next-")
@@ -269,10 +332,10 @@ class Scoring(unittest.TestCase):
 
 class Capacity(unittest.TestCase):
     def pools(self, e):
-        notes = []
-        pools = plan.build_pools(TABLE, e, RECORDED["recorded_at"], notes)
-        load = plan.read_load(recorded_fetch, e, RECORDED["recorded_at"], notes, float("inf"))
-        plan.add_load(pools, load, RECORDED["recorded_at"])
+        pools = plan.build_pools(TABLE, e, RECORDED["recorded_at"], [])
+        load, error = plan.read_load(recorded_fetch, e, RECORDED["recorded_at"], float("inf"))
+        self.assertIsNone(error)
+        plan.add_load(pools, load, RECORDED["recorded_at"], TABLE)
         return pools, load
 
     def test_recorded_counts(self):
@@ -315,11 +378,25 @@ class Capacity(unittest.TestCase):
         run_plan(env({}), fetch)
         self.assertEqual(fetch.log, [])
 
-    def test_runs_beyond_the_cap_are_left_out(self):
-        fetch = api({rid: [job(["ubuntu-24.04"])] for rid in range(100, 100 + plan.MAX_RUNS + 5)})
-        _, lines = run_plan(env(), fetch)
-        self.assertEqual(len(fetch.log), 2 + plan.MAX_RUNS)
-        self.assertTrue(any("read the jobs of the 40 oldest" in line for line in lines))
+    def test_more_runs_than_the_cap_give_no_picks(self):
+        fetch = api({rid: [job(["ubuntu-24.04"])] for rid in range(100, 100 + 21)})
+        runners, lines = run_plan(env(), fetch)
+        self.assertEqual(runners, {})
+        self.assertEqual(len(fetch.log), 2)
+        self.assertTrue(any("21 active runs, more than 20" in line for line in lines))
+        fetch = api({rid: [job(["ubuntu-24.04"])] for rid in range(100, 100 + 20)})
+        runners, _ = run_plan(env(), fetch)
+        self.assertEqual(len(runners), len(plan.catalogue(ALL)))
+        self.assertEqual(len(fetch.log), 22)
+        self.assertLessEqual(len(fetch.log), plan.MAX_CALLS)
+
+    def test_listing_with_more_than_one_page_gives_no_picks(self):
+        def fetch(path, params):
+            return {"total_count": 150, "workflow_runs": [{"id": i, "created_at": iso(NOW)} for i in range(100)]}
+
+        runners, lines = run_plan(env(), fetch)
+        self.assertEqual(runners, {})
+        self.assertTrue(any("more than 100 in_progress runs" in line for line in lines))
 
 
 class SelfHosted(unittest.TestCase):
@@ -441,31 +518,46 @@ class FailSafe(unittest.TestCase):
             self.assertEqual(json.loads(lines[0][len("runners="):]), runners)
             return runners, Path(summary).read_text()
 
-    def test_api_failure_keeps_the_picks_without_load(self):
+    def test_api_failure_gives_no_picks(self):
         def down(path, params):
             raise urllib.error.URLError("down")
 
         runners, summary = self.main(env(), down)
-        self.assertEqual(runners, plan.plan(env(), api({}), NOW, TABLE)[0])
-        self.assertIn("error reading the load", summary)
+        self.assertEqual(runners, {})
+        self.assertIn("Could not read the load (URLError: <urlopen error down>): no picks", summary)
 
-    def test_api_failure_part_way_keeps_what_was_read(self):
-        jobs = {10: [job(["macos-latest"]) for _ in range(5)], 11: [job(["macos-latest"])]}
-        good = api(jobs)
+    def test_api_failure_part_way_gives_no_picks(self):
+        good = api({10: [job(["macos-latest"]) for _ in range(5)], 11: [job(["macos-latest"])]})
 
         def flaky(path, params):
             if path.endswith("/11/jobs"):
                 raise TimeoutError("slow")
             return good(path, params)
 
-        _, lines = run_plan(env({"next-app-platforms": "true"}), flaky)
-        self.assertIn("| github | 20 | 0 | 5 |", lines)
-        self.assertTrue(any("TimeoutError: slow" in line for line in lines))
+        runners, summary = self.main(env({"next-app-platforms": "true"}), flaky)
+        self.assertEqual(runners, {})
+        self.assertIn("TimeoutError: slow", summary)
 
-    def test_deadline(self):
+    def test_deadline_gives_no_picks(self):
         with mock.patch.object(plan, "API_DEADLINE", -1):
-            _, lines = run_plan(env(), api({10: [job(["macos-latest"])]}))
+            runners, lines = run_plan(env(), api({10: [job(["macos-latest"])]}))
+        self.assertEqual(runners, {})
         self.assertTrue(any("ran out of time" in line for line in lines))
+
+    def test_call_cap_gives_no_picks(self):
+        fetch = api({rid: [job(["ubuntu-24.04"])] for rid in range(10, 15)})
+        calls = []
+
+        def capped(path, params):
+            calls.append(path)
+            if len(calls) > 4:
+                raise RuntimeError("more than 4 API calls")
+            return fetch(path, params)
+
+        runners, lines = run_plan(env(), capped)
+        self.assertEqual(runners, {})
+        self.assertTrue(any("RuntimeError: more than 4 API calls" in line for line in lines))
+        self.assertEqual(plan.MAX_CALLS, 25)
 
     def test_call_cap(self):
         class Response(io.BytesIO):

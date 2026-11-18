@@ -9,9 +9,10 @@ through the Actions API, and each pool's capacity. Jobs are placed longest first
 to its pool's load. Ties, and pools with no data, go Namespace, then GitHub, then self-hosted.
 
 It writes `runners`, a JSON object from job key to runs-on value, to GITHUB_OUTPUT, and a table of
-its picks to GITHUB_STEP_SUMMARY. It never fails the job: an error it cannot work around gives
-`runners={}`, and the called workflows then pick their runners as they did before the plan; an API
-error leaves the load it could not read out, and is logged. Standard library only.
+its picks to GITHUB_STEP_SUMMARY. It never fails the job. When it cannot read the whole load (an
+API error, the call cap, its deadline, or more than MAX_RUNS active runs), or meets any other
+error, it writes `runners={}` and says why in the summary, and the called workflows then pick their
+runners as they did before the plan. Standard library only.
 """
 
 import heapq
@@ -32,8 +33,8 @@ OSES = ("windows-latest", "macos-latest")
 SELF_LABELS = {"linux": ["self-hosted", "pluxy-linux"], "windows": ["self-hosted", "pluxy-windows"]}
 STATUS_MAX_AGE = 180  # seconds
 
-MAX_CALLS = 50
-MAX_RUNS = 40
+MAX_RUNS = 20  # more active runs than this: no picks
+MAX_CALLS = 2 + MAX_RUNS + 3  # two listings, one jobs page per run, and a few more pages
 LOOKBACK = 6 * 3600  # seconds
 API_DEADLINE = 90  # seconds for all API calls
 REQUEST_TIMEOUT = 15  # seconds
@@ -101,6 +102,44 @@ def median(table, key, kind):
             if value is not None:
                 return float(value)
     return float(table.get("default", 10))
+
+
+def measured(table, key, kind):
+    """The job's median minutes on a pool kind from its own or its family's entry, or None."""
+    medians = table.get("medians", {})
+    parts = key.split("/")
+    for n in range(len(parts), 0, -1):
+        entry = medians.get("/".join(parts[:n]))
+        if entry is not None and entry.get(kind) is not None:
+            return float(entry[kind])
+    return None
+
+
+# The workflows' names, as the jobs API shows them: before " / " in a job called from ci.yml, or as
+# the run's name in a run of the workflow by itself.
+WORKFLOW_FILES = {
+    "Next app": "next-app.yml",
+    "Next CI": "next-ci.yml",
+    "Next app platforms": "next-app-platforms.yml",
+    "Next app tools platforms": "next-app-tools-platforms.yml",
+    "Next app tools pack": "next-app-tools-pack.yml",
+}
+# Job ids whose display name differs.
+JOB_IDS = {"app tools": "tools"}
+
+
+def key_from_name(job_name, run_name):
+    """The job key of a job the jobs API lists, from its name, or None: "Next app platforms / native
+    (macos-latest, package)" is next-app-platforms.yml/native/macos-latest/package."""
+    workflow, _, name = job_name.rpartition(" / ")
+    workflow = workflow or run_name or ""
+    if workflow not in WORKFLOW_FILES:
+        return None
+    base, _, legs = name.partition(" (")
+    parts = [WORKFLOW_FILES[workflow], JOB_IDS.get(base, base)]
+    if legs.endswith(")"):
+        parts += legs[:-1].split(", ")
+    return "/".join(parts)
 
 
 def busy(cfg, os_):
@@ -274,10 +313,10 @@ def parse_time(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
 
 
-def read_load(fetch, env, now, notes, deadline):
+def read_load(fetch, env, now, deadline):
     """This repository's queued and running jobs from the last LOOKBACK seconds, as dicts with
-    labels, status, started (a timestamp or None) and created. Partial on an API error, which it
-    logs."""
+    labels, status, started (a timestamp or None), created and key (or None). Returns (jobs, None),
+    or (None, why) when it could not read them all."""
     repo = env["GITHUB_REPOSITORY"]
     own = str(env.get("GITHUB_RUN_ID", ""))
     since = datetime.fromtimestamp(now - LOOKBACK, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -285,27 +324,22 @@ def read_load(fetch, env, now, notes, deadline):
     jobs = []
     try:
         for status in ("in_progress", "queued"):
+            if time.monotonic() > deadline:
+                raise TimeoutError("ran out of time listing runs")
+            data = fetch(f"/repos/{repo}/actions/runs", {"status": status, "created": f">={since}", "per_page": 100})
+            batch = data.get("workflow_runs", [])
+            if data.get("total_count", len(batch)) > len(batch):
+                raise RuntimeError(f"more than {len(batch)} {status} runs")
+            for run in batch:
+                if str(run["id"]) != own:
+                    runs.setdefault(run["id"], run)
+        if len(runs) > MAX_RUNS:
+            raise RuntimeError(f"{len(runs)} active runs, more than {MAX_RUNS}")
+        for run in sorted(runs.values(), key=lambda r: r.get("created_at", "")):
             page = 1
             while True:
                 if time.monotonic() > deadline:
-                    raise TimeoutError("ran out of time listing runs")
-                data = fetch(f"/repos/{repo}/actions/runs", {"status": status, "created": f">={since}", "per_page": 100, "page": page})
-                batch = data.get("workflow_runs", [])
-                for run in batch:
-                    if str(run["id"]) != own:
-                        runs.setdefault(run["id"], run)
-                if len(batch) < 100 or page >= 3:
-                    break
-                page += 1
-        ordered = sorted(runs.values(), key=lambda r: r.get("created_at", ""))
-        if len(ordered) > MAX_RUNS:
-            notes.append(f"{len(ordered)} active runs; read the jobs of the {MAX_RUNS} oldest")
-            ordered = ordered[:MAX_RUNS]
-        for run in ordered:
-            if time.monotonic() > deadline:
-                raise TimeoutError("ran out of time reading jobs")
-            page = 1
-            while True:
+                    raise TimeoutError("ran out of time reading jobs")
                 data = fetch(f"/repos/{repo}/actions/runs/{run['id']}/jobs", {"filter": "latest", "per_page": 100, "page": page})
                 batch = data.get("jobs", [])
                 for job in batch:
@@ -316,19 +350,21 @@ def read_load(fetch, env, now, notes, deadline):
                                 "status": job["status"],
                                 "started": parse_time(job["started_at"]) if job["status"] == "in_progress" and job.get("started_at") else None,
                                 "created": job.get("created_at") or "",
+                                "key": key_from_name(job.get("name") or "", run.get("name")),
                             }
                         )
-                if len(batch) < 100 or page * 100 >= data.get("total_count", 0) or page >= 3:
+                if len(batch) < 100 or page * 100 >= data.get("total_count", 0):
                     break
                 page += 1
-    except Exception as e:  # noqa: BLE001: any API failure leaves the rest of the load unread
-        notes.append(f"error reading the load, which is left out from here on: {type(e).__name__}: {e}")
-    return jobs
+    except Exception as e:  # noqa: BLE001: any failure leaves the load unknown
+        return None, f"{type(e).__name__}: {e}"
+    return jobs, None
 
 
-def add_load(pools, load, now):
+def add_load(pools, load, now, table):
     """Places the jobs already queued or running elsewhere on their pools: running ones first,
-    then queued ones in the order they were created."""
+    then queued ones in the order they were created. A job on the Namespace Mac, where one job
+    holds the pool, takes its own median there when the table has it, else the pool's busy."""
     running = [j for j in load if j["status"] == "in_progress"]
     queued = sorted((j for j in load if j["status"] != "in_progress"), key=lambda j: j["created"])
     for job in running + queued:
@@ -343,6 +379,8 @@ def add_load(pools, load, now):
         else:
             pool.queued += 1
         length = busy(pool.cfg, os_)
+        if name == "namespace-macos" and job.get("key"):
+            length = measured(table, job["key"], "namespace") or length
         if job["started"] is not None:
             length = max(length - (now - job["started"]) / 60, 1.0)
         start = pool.start(os_)
@@ -403,9 +441,14 @@ def plan(env, fetch, now, table):
     pools = build_pools(table, env, now, notes)
     load = []
     if jobs:
-        deadline = time.monotonic() + API_DEADLINE
-        load = read_load(fetch, env, now, notes, deadline)
-    add_load(pools, load, now)
+        load, error = read_load(fetch, env, now, time.monotonic() + API_DEADLINE)
+        if error is not None:
+            return {}, [
+                "## Runner plan",
+                "",
+                f"Could not read the load ({error}): no picks, so every job uses its workflow's own runner.",
+            ] + ([""] + [f"- {n}" for n in notes] if notes else [])
+    add_load(pools, load, now, table)
     state = {name: (pool.running, pool.queued, len(pool.slots)) for name, pool in pools.items()}
     picks = assign(jobs, pools, table)
     runners = {}

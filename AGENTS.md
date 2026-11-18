@@ -167,7 +167,7 @@ pull requests from branches of this repository, except Dependabot's. Every other
 pull requests from a fork, runs on GitHub's runners. That check lives in the workflow files, which a fork can edit,
 so it is not the only guard: runs from forks need a maintainer's approval, and the maintainers'
 runner host cancels any run from a fork that asks for its runners. Before approving a fork's run,
-check whether it changes `.github/workflows/`.
+check whether it changes `.github/`.
 
 A third variable, `PLUXY_MACOS_CLOUD_RUNNER`, sends some macOS jobs to another provider's
 runners, such as Blacksmith's. It holds a plain runner label, for example
@@ -186,11 +186,13 @@ Some macOS jobs and every Windows job stay on GitHub's runners:
 - The workflows a tag starts always use GitHub's runners.
 
 In pull requests and merge-queue groups, the plan step, the last step of `ci.yml`'s `changes` job,
-picks the runner of each heavy job: the pool that would finish it first. It adds the job's median run time on each pool
-(`.github/ci-pools.json`) to that pool's wait, worked out from the queued and running jobs it reads
-through the Actions API (`.github/scripts/plan.py`; its job summary shows each pick and the times
-behind it). If it fails or times out, `changes` still passes, the step picks nothing, and each job
-runs where the variables above send it. The pools, and how to turn each off:
+picks the runner of each heavy job: the pool that would finish it first. It adds the job's median
+run time on each pool (`.github/ci-pools.json`) to that pool's wait, worked out from the queued and
+running jobs it reads through the Actions API (`.github/scripts/plan.py`; its job summary shows each pick and the times
+behind it). If it fails, times out, or cannot read the whole load (an API error, or more than 20
+active runs), `changes` still passes, the step picks nothing, and each job runs where the variables
+above send it. It does not run for pull requests from forks, which could edit the script. The
+pools, and how to turn each off:
 
 - Namespace's Linux runners: `PLUXY_LINUX_CLOUD_RUNNER`, a runner label as JSON, for example
   `"nscloud-ubuntu-24.04-amd64-4x8"`. The plan may send `next-app.yml`'s checks and native shards
@@ -198,9 +200,16 @@ runs where the variables above send it. The pools, and how to turn each off:
 - Namespace's macOS runner: `PLUXY_MACOS_CLOUD_RUNNER`. Off: `gh variable delete
   PLUXY_MACOS_CLOUD_RUNNER`.
 - The maintainers' runners: the idle runners in `PLUXY_POOL_STATUS`, which their supervisor writes;
-  a status older than 3 minutes counts as none. The plan sends them the jobs `PLUXY_LINUX_RUNNER`
-  and `PLUXY_WINDOWS_RUNNER` take, or, when the status lists jobs, only those, and only for the
-  events above. Off: stop the supervisor, then `gh variable delete PLUXY_POOL_STATUS`.
+  a status older than 3 minutes counts as none.
+  - When the status shows idle runners, the plan may send them the jobs `PLUXY_LINUX_RUNNER` and
+    `PLUXY_WINDOWS_RUNNER` take, or, when the status lists jobs, only those, and only for the events
+    above.
+  - It uses the labels in those variables, or `["self-hosted", "pluxy-linux"]` and
+    `["self-hosted", "pluxy-windows"]` when a variable is not set.
+  - A plan that picks overrides the variables: with no idle runner, a job `PLUXY_LINUX_RUNNER`
+    would send to the maintainers' runners goes to GitHub's or Namespace's instead.
+  - Off: stop the supervisor, then `gh variable delete PLUXY_POOL_STATUS`, and delete
+    `PLUXY_LINUX_RUNNER` and `PLUXY_WINDOWS_RUNNER` the same way.
 - GitHub's runners are always on.
 
 To refresh `.github/ci-pools.json`, measure each job's run time (`completed_at` less `started_at`
