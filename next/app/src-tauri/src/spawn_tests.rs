@@ -1311,10 +1311,21 @@ fn an_open_launch_gets_only_the_absolute_path_entries() {
             .find(|(k, _)| k == "PATH")
             .map(|(_, v)| v.to_string_lossy().into_owned())
     };
+    // macOS adds the system-wide client folders that exist (`/home/me` does not, so none of
+    // its own), then keeps the absolute entries.
+    #[cfg(target_os = "macos")]
+    let (all, absolute) = {
+        let added: String = ["/opt/homebrew/bin", "/usr/local/bin"]
+            .iter()
+            .filter(|d| Path::new(d).is_dir())
+            .map(|d| format!(":{d}"))
+            .collect();
+        (format!("{all}{added}"), format!("{absolute}{added}"))
+    };
     let mut r = Request::default();
-    assert_eq!(path(&r).as_deref(), Some(all));
+    assert_eq!(path(&r), Some(all.to_string()));
     r.absolute_path = true;
-    assert_eq!(path(&r).as_deref(), Some(absolute));
+    assert_eq!(path(&r), Some(absolute.to_string()));
 }
 
 /// A launch's files as the confirmation opened them, which records at each check whether its
