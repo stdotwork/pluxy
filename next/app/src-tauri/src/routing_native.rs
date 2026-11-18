@@ -714,11 +714,14 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         (|| {
             let launch = expect["launch"].clone();
             let argv = launch["argv"].clone();
+            // The review text is JSON, so the executable shows JSON-encoded (doubled backslashes
+            // on Windows) as `launch.executable.selected`.
+            let executable = launch["executable"].to_string();
             // Started by a native click: asks the first time; remembered, the next runs unasked.
             let rx = clicked(app, TARGET, "launch", launch.clone())?;
             let text = dialog_text(app)?;
             require(
-                text.contains(launch["executable"].as_str().unwrap_or("?"))
+                text.contains(&executable)
                     && text.contains("main window")
                     && text.contains(REMEMBER),
                 format!("the clicked launch's confirmation: {text}"),
@@ -764,8 +767,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             let text = dialog_text(app)?;
             require(
-                text.contains(launch["executable"].as_str().unwrap_or("?"))
-                    && text.contains("--routing-check"),
+                text.contains(&executable) && text.contains("--routing-check"),
                 format!("the launch confirmation: {text}"),
             )?;
             press("alt+c")?;
