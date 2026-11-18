@@ -489,7 +489,7 @@ takes a new format number, which this app refuses.
 | `published` | RFC 3339 in UTC, ending in `Z`, on a day its month has; second 60 (a leap second) is refused |
 | `notes` | Optional Markdown, at most 64 KiB |
 | `notes_url` | Optional `https://` address with a host and no user name or password, at most 2048 bytes as given and once normalised (percent-encoded) |
-| `update` | Optional, app releases only: signed update artifacts by the updater's target name; the app reads `linux-x86_64-appimage` (an AppImage), `windows-x86_64-exe` (the program) and `darwin-aarch64-app` or `darwin-x86_64-app` (the app bundle as a `.app.tar.gz`). Each is `{"url": <https address, as notes_url>, "signature": <Tauri updater signature, base64, at most 4096 characters>, "size": <exact bytes, 1 to 1 GiB>}` |
+| `update` | Optional, app releases only: signed update artifacts by the updater's target name; the app reads `linux-x86_64-appimage` (an AppImage), `windows-x86_64-set` (the program set as a `.tar.gz`) and `darwin-aarch64-app` or `darwin-x86_64-app` (the app bundle as a `.app.tar.gz`). Each is `{"url": <https address, as notes_url>, "signature": <Tauri updater signature, base64, at most 4096 characters>, "size": <exact bytes, 1 to 1 GiB>}` |
 
 The whole feed is at most 1 MiB. The feed is not signed: https is its only protection, and
 nothing in it is trusted as markup. Signed update artifacts have their own signatures. Production
@@ -505,8 +505,10 @@ installing, and puts the new version in place itself (`src-tauri/src/updater/`).
 is the installed copy:
 
 - Linux: the AppImage (`updater/appimage.rs`);
-- Windows: the program of a folder bundle, a folder of yours holding the one self-contained
-  `.exe` (`updater/exe.rs`);
+- Windows: the program set of a folder bundle, in a folder of yours: the app's program (one
+  self-contained `.exe`), the core beside it (`pluxy.exe`) and the core's packages (`bundled\`)
+  (`updater/exe.rs`, `updater/set.rs`). Anything else in the folder, such as an installer's
+  `uninstall.exe`, is not part of it;
 - macOS: the `.app` bundle (`updater/app.rs`).
 
 In this order:
@@ -527,7 +529,10 @@ In this order:
      network share or a mapped drive), and it and its folder are plain (no link or junction),
      yours, and writable by no one else (SYSTEM and Administrators aside). The stock plugin would
      run the installer for those, and nothing here does: no installer, `msiexec`, elevation,
-     scheduled task or service.
+     scheduled task or service. Two copies of the app with one identifier share their update
+     records, so an update or rollback that another copy left unfinished (its `pending.json`) is
+     left alone and refuses this one until that copy starts and finishes it (or, if that copy is
+     gone, the file is deleted); so does one of this copy's own whose parts are still aside.
    - macOS: the program runs as `<name>.app/Contents/MacOS/<program>` of a bundle whose
      `Info.plist` names this app's identifier and that program; it was started by a path with no
      link in it, neither the program nor any folder above it (Tauri refuses such a path on macOS,
@@ -548,48 +553,68 @@ In this order:
    for 30 seconds fails the download; **Cancel Download** stops it within that time and changes
    nothing.
 5. The plugin checks the signature against the compiled updater key. Then the bytes must be this
-   system's: a type-2 AppImage; a 64-bit Windows program (not a library) for this processor; or,
-   on macOS, a `.app.tar.gz` holding one `<name>.app` folder of folders and regular files only (no
-   links, devices, `..`, absolute paths, or setuid, setgid or sticky bits; at most 4096 entries
-   and 1 GiB), unpacked into a new folder of yours next to the bundle (`.pluxy-update-<hex>`),
-   whose `Info.plist` names this app's identifier and program and the announced version
-   (`CFBundleShortVersionString`), with a program for this Mac.
+   system's: a type-2 AppImage; on Windows a `.tar.gz` of the program set; or, on macOS, a
+   `.app.tar.gz` holding one `<name>.app` folder. Either archive holds folders and regular files
+   only (no links, devices, `..`, absolute paths, or setuid, setgid or sticky bits; at most 4096
+   entries and 1 GiB) and is unpacked into a new folder of yours (`.pluxy-update-<hex>`): on
+   Windows inside the program's folder, taking that folder's access list, and holding at its top
+   exactly the program (by this program's own name), `pluxy.exe` and the folder `bundled`, every
+   name one Windows holds as it is (no device name such as `CON`, no `:` stream, no trailing dot or
+   space, no backslash) and no two that differ only in case, with a 64-bit Windows program (not a
+   library) for this processor; on macOS next to the bundle, whose `Info.plist` names this app's
+   identifier and program and the announced version (`CFBundleShortVersionString`), with a program
+   for this Mac.
 6. The running version's copy is kept in the app's data folder (`updates/kept/`, the last three
-   versions), pinned in `updates/history.json` by its SHA-256 (on macOS, a digest of the bundle's
-   whole tree: every folder, file, size, content digest and execute bit), and
-   `updates/pending.json` records the install. The app records that digest as it starts; if the
-   installed copy has changed since, nothing is kept or installed and the page asks for a restart
-   first. Then the new version goes in place:
+   versions; on Windows the local data folder, on a fixed local drive, so it stays on this
+   computer when the profile roams), pinned in `updates/history.json` by its SHA-256 (on macOS, a
+   digest of the bundle's whole tree: every folder, file, size, content digest and execute bit; on
+   Windows, a digest of the program set: every folder and file of its three parts, with sizes and
+   content digests, and nothing else in its folder), and `updates/pending.json` records the
+   install (on Windows with the parts it moves, before any moves). The app records that digest as
+   it starts; if the installed copy has changed since, nothing is kept or installed and the page
+   asks for a restart first. Then the new version goes in place:
    - Linux: a temporary file in the same folder, flushed to disk, renamed over the AppImage, and
      the folder flushed: the AppImage is the old one or the new one.
-   - Windows: a running program can be renamed but not replaced, so the new program is written
-     next to it and flushed, the running one is renamed aside (`.pluxy-old-<hex>.exe`) and the new
-     one renamed into its place, each rename written through to disk (a file a virus scanner holds
-     is waited out for 5 seconds); if the second rename fails, the first is undone. Between the
-     two renames the folder has no program under its name: should the computer lose power right
-     then, rename the `.pluxy-old-<hex>.exe` beside it back (or copy the kept copy from
-     `updates/kept/`). What is left aside is removed once the new version runs and the old one has
-     ended.
+   - Windows: part by part, `bundled\` first, then `pluxy.exe`, then the program: each part is
+     renamed aside (`.pluxy-old-<hex>-<part>`) and the new one renamed into its place from the
+     staging folder, each rename written through to disk. A running program can be renamed but
+     not replaced, and nothing runs the core files beside the app (the app runs its own core from
+     its store), so the parts move while the app runs. A part another program holds (a virus
+     scanner, or a file open in `bundled\`) is waited out for 5 seconds; if it is still held, the
+     parts already moved are put back. Should the app stop part way through (a crash, a power
+     loss), the earlier version undoes it as it next starts, before it takes its start digest or
+     removes anything: it puts each part aside back, in reverse order, each only if it matches the
+     same part of the kept copy, and only when the version starting is the one the install came
+     from, started from the program its kept copy holds, in the folder the record names. A part it
+     cannot put back is left as it is, with the record; that version then installs nothing and the
+     page says why. Between the program's own two renames the folder has no program under its
+     name: should the computer lose power right then, rename the
+     `.pluxy-old-<hex>-<program>` beside the other parts back, and any other part whose
+     `.pluxy-old-<hex>-<part>` is there (or copy the three parts of the kept set from
+     `updates\kept\` in the local data folder). What is left aside, and the staging folder, are
+     removed once the new version runs and the old one has ended.
    - macOS: the unpacked bundle and the installed one swap places in one step (`renamex_np` with
      `RENAME_SWAP`): the bundle is the old one or the new one. The old one, now in the
      `.pluxy-update-<hex>` folder, is removed once the new version runs and the old one has ended.
 
    What an install leaves beside the installed copy is recorded in `updates/leftovers.json` before
-   the install goes on, with what identifies it beyond its name: on Windows the new program right
-   after it is created and the aside copy just before the rename (each by its volume serial number
-   and file ID), on macOS the `.pluxy-update-<hex>` folder right after it is created (by its device
-   and inode, read through the open folder, which must be empty and yours alone). When the record
-   cannot be written, the install deletes what it just made and stops. Should the app stop in the
-   moment between making one and recording it, that empty folder or file stays unrecorded, and no
-   later start removes it. Removal at a later start goes through the record only. An entry that is
+   the install goes on, with what identifies it beyond its name: the `.pluxy-update-<hex>` folder
+   right after it is created (read through one open of it, which must be an empty folder, and on
+   macOS yours alone), and on Windows each part just before it is renamed aside (by volume serial
+   number and file ID on Windows, by device and inode on macOS). When the record cannot be
+   written, the install deletes what it just made and stops. Should the app stop in the moment
+   between making the folder and recording it, that empty folder stays unrecorded, and no later
+   start removes it. Removal at a later start goes through the record only. An entry that is
    still the recorded file or folder (and, on macOS, a folder of yours) is removed without
-   following a link: on Windows through its open handle; on macOS what is in it through the open
+   following a link: on Windows through its open handle, a folder emptied through it first (each
+   entry in it opened relative to it, a link or junction removed as a link); on macOS what is in it through the open
    folder, never entering a folder in it whose device differs from its own (a file system mounted
    there; a mount that keeps the device, as a bind mount from the same file system does, is not
    seen), then the emptied folder by its name only while that name still holds it. An entry whose
-   name is gone or now holds something else (on Windows a folder too) is dropped from the record
-   and nothing at that name is deleted; one still in use, or with a file system mounted in it,
-   stays recorded for the next start. A failed or cancelled install removes what it made the same
+   name is gone or now holds something else is dropped from the record and nothing at that name
+   is deleted; one still in use, or with a file system mounted in it, stays recorded for the next
+   start, and so do, on Windows, the staging folder and aside parts of an install whose
+   `pending.json` is not finished. A failed or cancelled install removes what it made the same
    way, only while it is still what it made. The folder the installed copy is in is never listed,
    so whatever someone else put there, even under one of these names, stays.
 7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
@@ -603,7 +628,10 @@ In this order:
    `updates/accepted.json`, and the app lets it go and exits. If it ends first or does not accept
    in time, the app ends that process (and only it, with what it started), puts the kept copy
    (checked against its digest) back the same way, the page later says the update failed, and the
-   earlier version starts again with the profile. If the kept copy cannot be put back, nothing is
+   earlier version starts again with the profile. On Windows that put-back is recorded in
+   `pending.json` first, with its own parts; should it stop part way, whichever version's program
+   starts next finishes it, each part checked against the kept copy, and a version that is not
+   the kept one then installs nothing until the app is restarted. If the kept copy cannot be put back, nothing is
    started, and the page says which copy in `updates/kept/` to put in place of the installed one.
 
 **Roll back to <version>…** lists versions that ran here and were kept. It restores only such a
@@ -1580,14 +1608,17 @@ plugin scripts. The AppImage's type is still checked on the output.
 On Windows and macOS `package:test` makes no installer and no disk image. It builds the same two
 debug apps with the same overlay, with no Tauri bundle on Windows (whose bundles are all
 installers) and the `app` bundle on macOS. On Windows each build's program goes into a plain
-folder bundle of its own, `<out-dir>/pluxy Test/pluxy-app-test.exe` and
-`<out-dir>/update/pluxy Test/pluxy-app-test.exe`, and the update is that second exe, signed. On
+folder bundle of its own, `<out-dir>/pluxy Test/` and `<out-dir>/update/pluxy Test/`, each holding the program set the
+updater replaces: `pluxy-app-test.exe` and, until the app bundles its core, a stub `pluxy.exe` and
+`bundled\stub.txt` (text files that say the version; nothing runs them). The update is the second
+folder's set as a `.tar.gz` the command makes (`native/set-archive.ts`: its parts at the top,
+folders and regular files only, no owner or time), signed. On
 macOS each build's bundle is copied to `<out-dir>/pluxy Test.app` and
 `<out-dir>/update/pluxy Test.app` (with `ditto`, keeping modes and the program's signature, no
 extended attributes or quarantine), and the update is the second bundle as a `.app.tar.gz` made
 by the command (one top folder, no macOS metadata), signed; no signing identity or notarization
 is used. `test-package.json` names the bundle, the program in it, the public key and the update
-(its bundle, payload, feed target `windows-x86_64-exe` or `darwin-aarch64-app`, version and
+(its bundle, payload, feed target `windows-x86_64-set` or `darwin-aarch64-app`, version and
 signature). Nothing is downloaded there, so the builds run in the caller's environment, Cargo
 offline after `cargo fetch --locked` and every proxy variable pointing at a closed port.
 
@@ -1629,8 +1660,10 @@ app supported there:
     per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
     Windows, a LaunchAgent on macOS), the tray and the close preference;
   - the package session: the test package and the release gate ([Packages](#packages));
-  - the update session: the test package (a folder bundle on Windows, an app bundle on macOS)
-    updates itself to its signed newer version and rolls back, and crafted installs are refused
+  - the update session: the test package (a folder bundle's program set on Windows, an app
+    bundle on macOS) updates itself to its signed newer version and rolls back, and crafted
+    installs are refused; on Windows an update is also ended between two parts of the set, and
+    the earlier version, started again on the half-replaced folder, undoes it
     ([Application update](#application-update));
   - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
     test core, with the window's and page's command probes, the native confirmations, key entry and
@@ -1666,8 +1699,8 @@ store opens, but installing, adopting and rolling back a version need the native
 which core changes have on Linux only, so no version is installed and none starts), installing a
 package from a file, a launch that opens a file and opening an address in the browser. Changing
 the release feed works there through the native confirmation. The app updates itself, with test
-updater trust only, as an AppImage on Linux, as a folder bundle's program on Windows and as an
-app bundle on macOS ([Application update](#application-update)).
+updater trust only, as an AppImage on Linux, as a folder bundle's program set on Windows and as
+an app bundle on macOS ([Application update](#application-update)).
 
 ## Limits
 
@@ -1703,9 +1736,10 @@ app bundle on macOS ([Application update](#application-update)).
   what only a person at the machine would hit, such as another app taking the keyboard. The
   session's summary counts which way each input went.
 - No installer or bundled core yet: the only packages are the test AppImage, the test folder
-  bundle (Windows) and the test app bundle (macOS), which are not for release.
-  The app updates only itself: as an AppImage on Linux x86_64, as a folder bundle's program on
-  Windows x86_64 and as an app bundle on macOS, and only with test updater trust until release
+  bundle (Windows; its `pluxy.exe` and `bundled\` are stubs) and the test app bundle (macOS),
+  which are not for release.
+  The app updates only itself: as an AppImage on Linux x86_64, as a folder bundle's program set
+  on Windows x86_64 and as an app bundle on macOS, and only with test updater trust until release
   keys exist. The native test updates it on Linux, on Windows and on Apple silicon Macs; Intel
   Macs and Windows on ARM are built for but not run, and how a stock Mac's Gatekeeper and privacy
   prompts or Windows SmartScreen treat an updated copy is not tested (the app's own download
@@ -1713,7 +1747,8 @@ app bundle on macOS ([Application update](#application-update)).
   this profile; a new version that hangs is stopped after 90 seconds and the earlier one put back,
   but one that crashes later, after accepting itself, is not. If the old app itself is killed
   during those 90 seconds, nothing puts the earlier version back: put the newest copy in
-  `updates/kept/` in the app's data folder in place of the installed one to run it again. On
+  `updates/kept/` in the app's data folder (on Windows the three parts of the set in the local
+  data folder's `updates\kept\`) in place of the installed one to run it again. On
   Windows a new version waits at most 120 seconds for the old one to end and free the profile,
   then exits.
 - Opening an address in the browser works on Linux only.

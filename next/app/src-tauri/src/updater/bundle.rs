@@ -2,16 +2,11 @@
 //! their tests, on Linux too: an app bundle's tree digest, copying a bundle, unpacking an update's
 //! `.app.tar.gz` under strict rules, and what its `Info.plist` and program say.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
-use super::sha256;
+use super::{sha256, MAX_BYTES, MAX_ENTRIES};
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
-
-/// Most entries an update's archive may hold.
-const MAX_ENTRIES: usize = 4096;
-/// Most bytes its files may hold, unpacked.
-const MAX_BYTES: u64 = 1 << 30;
 
 /// The `pluxy-tree-v1` digest of the bundle at root: the SHA-256 (hex) of `pluxy-tree-v1\n`
 /// followed by a line per entry below root, sorted by relative path (`/`-separated, compared as
