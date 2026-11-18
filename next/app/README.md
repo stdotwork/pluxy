@@ -165,15 +165,17 @@ starts, it does the same at its next start, also when that was a reinstall or ro
 selected version; a copy it cannot read is an error, and the config is left as it is. From the
 moment the app begins to stop its core, or sees it exit, it sends nothing more to that address.
 On Windows the core binds the address itself and the app keeps no copy of the socket. Another
-user's program can listen on that port too: one that starts listening between a crash of the core
-and the moment the app sees it exit (up to a tenth of a second: it checks every 100 ms), or one
-already listening on a wildcard address (`0.0.0.0`) while the core holds a loopback one, which
-Windows allows another account and which gets the core's connections as soon as the core's
-socket closes. So before the app sends anything on a new connection to its core, it reads the
-system's TCP table: every connection the app has open to that address must have been accepted by
-the core's own process. If one was not, or the table does not settle within a second, the app
-sends nothing on it and the call fails. The app holds the core's process handle, so the core's
-process ID cannot pass to another process meanwhile. On Linux and macOS the app keeps its
+user's program can then get the core's connections: one that starts listening on that address
+between a crash of the core and the moment the app sees it exit (up to a tenth of a second: it
+checks every 100 ms), or one that stays bound to the wildcard address `0.0.0.0` on that port the
+whole time the core holds its loopback address, which Windows allows another account, and which
+receives the connections as soon as the core's socket closes. So before the app sends anything
+on a new connection to its core, it reads the system's TCP table: the other end of that very
+connection (its own addresses and ports) must belong to the core's own process. If it does not,
+or the table does not show it for at least a second, the app sends nothing on it, the call
+fails, and the app's log says which process answered. Each client of the core holds its own
+handle on the core's process for as long as it lives, so the core's process ID cannot pass to
+another process meanwhile, even after the core has ended. On Linux and macOS the app keeps its
 own copy of the core's listening socket for as long as anything in the app could still send
 there, so no other program can listen on that address in between: not while a crashed
 core's exit is being noticed, and not while the core drains after a stop, the app's or a SIGTERM
@@ -1677,6 +1679,10 @@ in the browser. The app updates itself only as a Linux AppImage.
   release feed. On Windows and macOS its steps run in the dialogs session's core run; the
   managed-core client-key check runs on Linux only. The store's Windows rules are checked by its
   unit tests on the Windows CI runner.
+- On Windows, other programs that call the app's core, such as agents with client keys, are not
+  covered by the app's check: after a crash of the core, another user's program listening on
+  the core's port (on its address, or on the wildcard address all along) gets their calls and
+  the client keys in them. Only the app's own calls are checked.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.

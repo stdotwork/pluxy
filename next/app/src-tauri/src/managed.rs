@@ -543,6 +543,18 @@ impl ManagedCore {
         self.pid
     }
 
+    /// On Windows, a handle on the core's process that keeps its process ID from passing to
+    /// another process for as long as it is held, past this `ManagedCore` too; it cannot end the
+    /// core (`owned::Child::pin`).
+    #[cfg(windows)]
+    pub(crate) fn pin(&self) -> Result<crate::owned::Pin, String> {
+        self.child
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pin()
+            .map_err(|e| format!("holding the core's process: {e}"))
+    }
+
     /// Set once this core is being stopped or has exited.
     pub fn gone(&self) -> Gone {
         Arc::clone(&self.gone)
@@ -789,18 +801,22 @@ fn tcp_table(class: i32) -> io::Result<Vec<TcpRow>> {
     Ok(rows)
 }
 
-/// On Windows, where the app holds no copy of its core's listening socket: checks that every
-/// connection this process has open to one of addrs was accepted by process pid, its core,
-/// before anything is sent on a new one (`client::Client::for_core`). The system's table of
-/// connections lists both ends of each, with the process that owns each end, every user's. The
-/// new connection is one of ours (the transport does not say which), so all are judged.
-/// Another program on the core's port gets nothing, not even the request line: one listening
-/// on the core's address since the core ended, or one that was listening on a wildcard address
-/// over it all along (Windows lets another account bind `0.0.0.0` beside a loopback listener),
-/// which gets the core's connections as soon as the core's socket closes. The app holds the
-/// core's process handle, so pid is not another process's meanwhile.
+/// On Windows, where the app holds no copy of its core's listening socket: checks that the
+/// connection this process just made from local to peer was accepted by process pid, its core,
+/// before anything is sent on it (`client::Client::for_core`). The system's table of
+/// connections lists both ends of each, with the process that owns each end, every user's; the
+/// connection's other end is the row from peer to local. Another program on the core's port
+/// gets nothing, not even the request line: one listening on the core's address since the core
+/// ended, or one that was listening on a wildcard address over it all along (Windows lets
+/// another account bind `0.0.0.0` beside a loopback listener), which gets the core's
+/// connections as soon as the core's socket closes. The caller holds a handle on the core's
+/// process (`owned::Pin`), so pid is not another process's meanwhile.
 #[cfg(windows)]
-pub(crate) fn accepted_by(pid: u32, addrs: &[std::net::SocketAddr]) -> Result<(), String> {
+pub(crate) fn accepted_by(
+    pid: u32,
+    local: std::net::SocketAddr,
+    peer: std::net::SocketAddr,
+) -> Result<(), String> {
     use windows_sys::Win32::NetworkManagement::IpHelper::TCP_TABLE_OWNER_PID_CONNECTIONS;
     // MIB_TCP_STATE_SYN_RCVD and MIB_TCP_STATE_ESTAB: the other end is still a live connection
     // (its closing states can be listed as no process's, and nothing sent there is read).
@@ -809,45 +825,30 @@ pub(crate) fn accepted_by(pid: u32, addrs: &[std::net::SocketAddr]) -> Result<()
     let same = |a: &std::net::SocketAddr, b: &std::net::SocketAddr| {
         a.ip().to_canonical() == b.ip().to_canonical() && a.port() == b.port()
     };
-    let me = std::process::id();
     // A connection the system has just made can be missing its other end in the table for a
-    // moment, or show it before the core's process is set as its owner: look again for up to a
-    // second before refusing.
-    let mut why = format!("could not tell which process answers at {addrs:?}");
+    // moment, or show it before the core's process is set as its owner: look again, for at
+    // least a second, before refusing.
+    let mut why = format!("the other end of {local} -> {peer} is not in this computer's table");
     for _ in 0..100 {
         let rows = tcp_table(TCP_TABLE_OWNER_PID_CONNECTIONS)
             .map_err(|e| format!("reading this computer's connections: {e}"))?;
-        let ours: Vec<&TcpRow> = rows
-            .iter()
-            .filter(|r| {
-                r.pid == me && r.state == ESTABLISHED && addrs.iter().any(|a| same(a, &r.remote))
-            })
-            .collect();
-        let mut settled = !ours.is_empty();
-        for o in &ours {
-            let other = rows.iter().find(|r| {
-                same(&r.local, &o.remote)
-                    && same(&r.remote, &o.local)
-                    && matches!(r.state, SYN_RCVD | ESTABLISHED)
-            });
-            match other {
-                Some(r) if r.pid == pid => {}
-                Some(r) => {
-                    why = format!(
-                        "{} is answered by process {}, not the app's core (process {pid})",
-                        o.remote, r.pid
-                    );
-                    settled = false;
-                }
-                None => settled = false,
+        let other = rows.iter().find(|r| {
+            same(&r.local, &peer)
+                && same(&r.remote, &local)
+                && matches!(r.state, SYN_RCVD | ESTABLISHED)
+        });
+        match other {
+            Some(r) if r.pid == pid => return Ok(()),
+            Some(r) => {
+                let by = r.pid;
+                why =
+                    format!("{local} -> {peer} was accepted by process {by}, not the core ({pid})");
             }
-        }
-        if settled {
-            return Ok(());
+            None => {}
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    Err(format!("{why}, so nothing is sent there"))
+    Err(why)
 }
 
 /// On macOS: core still runs and base is the address of the socket the app bound and gave it,
@@ -1250,87 +1251,86 @@ mod tests {
         }
         // On Windows, where the app holds no copy of the core's socket, a client for the core
         // checks the core's own process accepted each connection: it reaches the core, and is
-        // refused when another process is named as the core.
+        // refused when another process (this test) is named as the core.
         #[cfg(windows)]
         {
             use crate::client::Client;
-            let r = Client::for_core(&base, core.pid()).call(core.key(), "GET", "/status", None);
+            let r =
+                Client::for_core(&base, &core)
+                    .unwrap()
+                    .call(core.key(), "GET", "/status", None);
             assert_eq!(r.status, 200, "{r:?}");
-            let r = Client::for_core(&base, std::process::id()).call(
-                core.key(),
-                "GET",
-                "/status",
-                None,
-            );
+            let this = crate::owned::Pin::this_process_as(std::process::id());
+            let r = Client::with_pin(&base, this).call(core.key(), "GET", "/status", None);
             assert_eq!(r.status, 0, "{r:?}");
         }
-        // Another program (this test) listening on the wildcard address over the core's port
-        // while the core runs, as Windows lets another account do: connections still reach the
-        // core while it runs, and go to that program at once when it ends.
-        #[cfg(windows)]
-        let wildcard = match TcpListener::bind(("0.0.0.0", port)) {
-            Ok(l) => {
-                let r = crate::client::Client::for_core(&base, core.pid()).call(
-                    core.key(),
-                    "GET",
-                    "/status",
-                    None,
-                );
-                assert_eq!(r.status, 200, "with a wildcard listener beside it: {r:?}");
-                Some(l)
-            }
-            Err(e) => {
-                eprintln!("the wildcard over {base} could not be bound while the core ran: {e}");
-                None
-            }
-        };
         core.stop();
         let why = core.exited().expect("the core stopped");
         assert!(cfg!(windows) || why.contains("exit status: 0"), "{why}");
-        // Once the core has ended, another program (this test) listens where its connections
-        // go: on the wildcard bound above, or else on the core's own address from now on. A
-        // client for the core sends it nothing. The app holds the ended core's process handle,
-        // so its process ID is no other process's.
-        #[cfg(windows)]
-        {
-            use std::io::Read;
-            let addr = url::Url::parse(&base)
-                .unwrap()
-                .socket_addrs(|| None)
-                .unwrap()[0];
-            let deadline = Instant::now() + Duration::from_secs(10);
-            let other = wildcard
-                .map(Ok)
-                .unwrap_or_else(|| loop {
-                    match TcpListener::bind(addr) {
-                        Ok(l) => break Ok(l),
-                        Err(_) if Instant::now() < deadline => {
-                            std::thread::sleep(Duration::from_millis(100));
-                        }
-                        Err(e) => break Err(e),
-                    }
-                })
-                .unwrap_or_else(|e| panic!("listening on {addr} after the core ended: {e}"));
-            let server = std::thread::spawn(move || {
-                let (mut s, _) = other.accept().unwrap();
-                s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-                let mut got = Vec::new();
-                let _ = s.read_to_end(&mut got);
-                got.len()
-            });
-            let r = crate::client::Client::for_core(&base, core.pid()).call(
-                core.key(),
-                "GET",
-                "/status",
-                None,
-            );
-            assert_eq!(r.status, 0, "{r:?}");
-            assert_eq!(server.join().unwrap(), 0, "the key went to another program");
-        }
         assert!(
             owns_listener(&core, &base).is_err(),
             "a stopped core still owns {base}"
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// On Windows, where the app holds no copy of the core's socket: another program (this
+    /// test) listening all along on the wildcard address over the core's port, as Windows lets
+    /// another account do, gets the core's connections once the core has ended. A client for
+    /// the core, made while it ran and kept past its `ManagedCore`, sends that program nothing.
+    #[cfg(windows)]
+    #[test]
+    fn a_core_client_sends_nothing_to_a_listener_beside_the_core_once_it_ends() {
+        use std::io::Read;
+        let program = real_core();
+        let dir = temp("beside");
+        let mut core =
+            ManagedCore::start(File::open(&program).unwrap(), &program, &dir, None).unwrap();
+        let base = core.base().to_string();
+        let port = url::Url::parse(&base).unwrap().port().unwrap();
+        let key = core.key().to_string();
+        let client = crate::client::Client::for_core(&base, &core).unwrap();
+        let r = client.call(&key, "GET", "/status", None);
+        assert_eq!(r.status, 200, "{r:?}");
+        let other = TcpListener::bind(("0.0.0.0", port))
+            .expect("another listener on the wildcard address beside the core's");
+        let r = client.call(&key, "GET", "/status", None);
+        assert_eq!(
+            r.status, 200,
+            "with the wildcard listening beside the core: {r:?}"
+        );
+        core.stop();
+        assert!(core.exited().is_some(), "the core stopped");
+        // The client's own handle on the core's process keeps its process ID from now on.
+        drop(core);
+        other.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let mut s = loop {
+                match other.accept() {
+                    Ok((s, _)) => break s,
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(e) => return Err(format!("no connection reached the wildcard: {e}")),
+                }
+            };
+            s.set_nonblocking(false).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut got = Vec::new();
+            let _ = s.read_to_end(&mut got);
+            Ok(got.len())
+        });
+        let r = client.call(&key, "GET", "/status", None);
+        let got = server.join().unwrap();
+        assert_eq!(
+            got,
+            Ok(0),
+            "what the other program read, the call answered {r:?}"
+        );
+        assert_eq!(r.status, 0, "{r:?}");
         fs::remove_dir_all(dir).unwrap();
     }
 

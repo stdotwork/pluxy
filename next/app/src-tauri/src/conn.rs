@@ -687,7 +687,7 @@ impl Connection {
         let core = ManagedCore::start(program, &name, &self.dirs.core, self.on_core_exit.clone())?;
         ready(&core, expected.as_deref())?;
         self.gone = Some(core.gone());
-        self.client = Some(Client::for_core(core.base(), core.pid()));
+        self.client = Some(Client::for_core(core.base(), &core)?);
         self.key = Some(core.key().to_string());
         self.managed = Some(core);
         self.running = Some(id.to_string());
@@ -1587,7 +1587,7 @@ fn ready(core: &ManagedCore, expected: Option<&str>) -> Result<(), String> {
         .map_err(|e| format!("core said it listens on {}: {e}", core.base()))?;
     // The key goes only to a listener that is the started process's own.
     crate::managed::owns_listener(core, &base)?;
-    let client = Client::for_core(&base, core.pid());
+    let client = Client::for_core(&base, core)?;
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
         if let Some(why) = core.exited() {

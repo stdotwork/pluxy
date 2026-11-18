@@ -20,7 +20,7 @@ pub(crate) mod windows;
 #[cfg(windows)]
 pub(crate) use windows::{
     kill_group, leader, read_some, term_group, term_process, Child, ChildStderr, ChildStdin,
-    ChildStdout,
+    ChildStdout, Pin,
 };
 
 #[cfg(test)]

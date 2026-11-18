@@ -150,34 +150,159 @@ fn transport_kind(error: &ureq::Error) -> &'static str {
     }
 }
 
-/// Passes on a connection the default connector made only once `managed::accepted_by` says
-/// every connection of this process to that address is process .0's, the app's core.
+/// The Windows client for the app's own core: its own plain TCP connector and transport, since
+/// ureq's TCP transport keeps its socket private and the check needs the socket's two ends.
+/// Written against ureq's unversioned transport API, which changes in minor releases (ureq is
+/// pinned to 3.5 in Cargo.toml for this).
 #[cfg(windows)]
-#[derive(Debug)]
-struct AcceptedBy(u32);
+mod core_tcp {
+    use std::io::{self, Read, Write};
+    use std::net::TcpStream;
+    use std::sync::{Arc, Weak};
+    use ureq::unversioned::transport::{
+        Buffers, ConnectionDetails, Connector, LazyBuffers, NextTimeout, ShutdownHandle, Transport,
+    };
 
-#[cfg(windows)]
-impl ureq::unversioned::transport::Connector<Box<dyn ureq::unversioned::transport::Transport>>
-    for AcceptedBy
-{
-    type Out = Box<dyn ureq::unversioned::transport::Transport>;
+    /// Connects to the app's core and passes the connection on only once
+    /// `managed::accepted_by` says the core's own process accepted that very connection (its
+    /// own local and remote address and port). The pin keeps the core's process ID from passing
+    /// to another process for as long as this client lives.
+    #[derive(Debug)]
+    pub(super) struct CoreConnector(pub(super) Arc<crate::owned::Pin>);
 
-    fn connect(
-        &self,
-        details: &ureq::unversioned::transport::ConnectionDetails,
-        chained: Option<Self::Out>,
-    ) -> Result<Option<Self::Out>, ureq::Error> {
-        let Some(t) = chained else {
-            return Ok(None);
-        };
-        // A pooled connection is not connected again; this runs for each new one.
-        crate::managed::accepted_by(self.0, &details.addrs).map_err(|why| {
-            ureq::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                why,
-            ))
-        })?;
-        Ok(Some(t))
+    fn refused(why: String) -> ureq::Error {
+        ureq::Error::Io(io::Error::new(io::ErrorKind::PermissionDenied, why))
+    }
+
+    fn timed_out(e: io::Error, reason: ureq::Timeout) -> ureq::Error {
+        match e.kind() {
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => ureq::Error::Timeout(reason),
+            _ => ureq::Error::Io(e),
+        }
+    }
+
+    impl Connector for CoreConnector {
+        type Out = Box<dyn Transport>;
+
+        fn connect(
+            &self,
+            details: &ConnectionDetails,
+            _chained: Option<()>,
+        ) -> Result<Option<Self::Out>, ureq::Error> {
+            if details.uri.scheme_str() != Some("http") {
+                return Err(refused(
+                    "the app's core is reached over plain http on this computer only".into(),
+                ));
+            }
+            let wait = details.timeout.not_zero().map(|t| *t);
+            let mut last = None;
+            let mut stream = None;
+            for addr in details.addrs.iter() {
+                let tried = match wait {
+                    Some(t) => TcpStream::connect_timeout(addr, t),
+                    None => TcpStream::connect(addr),
+                };
+                match tried {
+                    Ok(s) => {
+                        stream = Some(s);
+                        break;
+                    }
+                    Err(e) => last = Some(e),
+                }
+            }
+            let stream = match (stream, last) {
+                (Some(s), _) => s,
+                (None, Some(e)) => return Err(timed_out(e, ureq::Timeout::Connect)),
+                (None, None) => {
+                    return Err(refused("the core's address resolved to nothing".into()))
+                }
+            };
+            if details.config.no_delay() {
+                stream.set_nodelay(true)?;
+            }
+            let (local, peer) = (stream.local_addr()?, stream.peer_addr()?);
+            if let Err(why) = crate::managed::accepted_by(self.0.id(), local, peer) {
+                // Addresses and process IDs only.
+                eprintln!("pluxy-app: nothing sent to the app's core: {why}");
+                return Err(refused(why));
+            }
+            let stream = Arc::new(stream);
+            (details.register_shutdown)(Arc::downgrade(&stream) as Weak<dyn ShutdownHandle>)?;
+            Ok(Some(Box::new(CoreStream {
+                stream,
+                buffers: LazyBuffers::new(
+                    details.config.input_buffer_size(),
+                    details.config.output_buffer_size(),
+                ),
+            })))
+        }
+    }
+
+    /// A plain TCP connection to the core, as ureq's own TCP transport is.
+    struct CoreStream {
+        stream: Arc<TcpStream>,
+        buffers: LazyBuffers,
+    }
+
+    impl std::fmt::Debug for CoreStream {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("CoreStream")
+                .field("peer", &self.stream.peer_addr().ok())
+                .finish()
+        }
+    }
+
+    /// The time left, or a timeout once none is.
+    fn left(t: NextTimeout) -> Result<Option<std::time::Duration>, ureq::Error> {
+        if t.after.is_zero() {
+            return Err(ureq::Error::Timeout(t.reason));
+        }
+        Ok(t.not_zero().map(|d| *d))
+    }
+
+    impl Transport for CoreStream {
+        fn buffers(&mut self) -> &mut dyn Buffers {
+            &mut self.buffers
+        }
+
+        fn transmit_output(
+            &mut self,
+            amount: usize,
+            timeout: NextTimeout,
+        ) -> Result<(), ureq::Error> {
+            let timeout = timeout.for_write();
+            self.stream.set_write_timeout(left(timeout)?)?;
+            let output = &self.buffers.output()[..amount];
+            (&*self.stream)
+                .write_all(output)
+                .map_err(|e| timed_out(e, timeout.reason))
+        }
+
+        fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+            let timeout = timeout.for_read();
+            self.stream.set_read_timeout(left(timeout)?)?;
+            let input = self.buffers.input_append_buf();
+            let amount = loop {
+                match (&*self.stream).read(input) {
+                    Ok(n) => break n,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(timed_out(e, timeout.reason)),
+                }
+            };
+            self.buffers.input_appended(amount);
+            Ok(amount > 0)
+        }
+
+        fn is_open(&mut self) -> bool {
+            // Open while nothing waits to be read and the connection is not closed.
+            let mut s = &*self.stream;
+            if s.set_nonblocking(true).is_err() {
+                return false;
+            }
+            let open =
+                matches!(s.read(&mut [0u8]), Err(e) if e.kind() == io::ErrorKind::WouldBlock);
+            s.set_nonblocking(false).is_ok() && open
+        }
     }
 }
 
@@ -186,21 +311,52 @@ impl Client {
     /// https replies are checked against those certificates only; otherwise against the usual
     /// public roots.
     pub fn new(base: &str, certs: Option<Vec<Certificate<'static>>>) -> Client {
-        Client::build(base, certs, None)
+        Client::build(base, certs)
     }
 
-    /// A client for the core the app started, process pid, at base on this computer. On
-    /// Windows, where the app holds no copy of the core's listening socket, each new connection
-    /// is checked to be the core's own before anything is sent on it
-    /// (`managed::accepted_by`): another program on the core's port (one listening there since
-    /// the core ended, or one on a wildcard address over it all along) gets no request,
-    /// management key and all, and the call fails as `io`. Elsewhere the app
-    /// holds the core's socket while it calls (`managed::ManagedCore::hold`).
-    pub fn for_core(base: &str, pid: u32) -> Client {
-        Client::build(base, None, Some(pid))
+    /// A client for the core the app started, at base on this computer. On Windows, where the
+    /// app holds no copy of the core's listening socket, each new connection is checked to be
+    /// the core's own before anything is sent on it (`managed::accepted_by`): another program
+    /// on the core's port (one listening there since the core ended, or one on a wildcard
+    /// address over it all along) gets no request, management key and all, the call fails as
+    /// `io`, and the app's log says why. The client holds a handle on the core's process for
+    /// as long as it lives (`ManagedCore::pin`), so the process ID it checks against is never
+    /// another process's. Elsewhere the app holds the core's socket while it calls
+    /// (`managed::ManagedCore::hold`).
+    pub fn for_core(base: &str, core: &crate::managed::ManagedCore) -> Result<Client, String> {
+        #[cfg(windows)]
+        {
+            Ok(Client::with_pin(base, core.pin()?))
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = core;
+            Ok(Client::build(base, None))
+        }
     }
 
-    fn build(base: &str, certs: Option<Vec<Certificate<'static>>>, core: Option<u32>) -> Client {
+    /// A client that sends only on connections the pinned process accepted (`for_core`).
+    #[cfg(windows)]
+    pub(crate) fn with_pin(base: &str, pin: crate::owned::Pin) -> Client {
+        use ureq::unversioned::resolver::DefaultResolver;
+        Client {
+            base: base.trim_end_matches('/').to_string(),
+            agent: ureq::Agent::with_parts(
+                Client::config(base, None),
+                core_tcp::CoreConnector(Arc::new(pin)),
+                DefaultResolver::default(),
+            ),
+        }
+    }
+
+    fn build(base: &str, certs: Option<Vec<Certificate<'static>>>) -> Client {
+        Client {
+            base: base.trim_end_matches('/').to_string(),
+            agent: Client::config(base, certs).into(),
+        }
+    }
+
+    fn config(base: &str, certs: Option<Vec<Certificate<'static>>>) -> ureq::config::Config {
         let roots = match certs {
             Some(c) => RootCerts::Specific(Arc::new(c)),
             None => RootCerts::WebPki,
@@ -213,7 +369,7 @@ impl Client {
         } else {
             ureq::Proxy::try_from_env()
         };
-        let config = ureq::Agent::config_builder()
+        ureq::Agent::config_builder()
             .proxy(proxy)
             .http_status_as_error(false)
             .max_redirects(0)
@@ -222,28 +378,7 @@ impl Client {
             .timeout_global(Some(Duration::from_secs(300)))
             .user_agent("pluxy-app")
             .tls_config(TlsConfig::builder().root_certs(roots).build())
-            .build();
-        #[cfg(windows)]
-        let agent = match core {
-            Some(pid) => {
-                use ureq::unversioned::{resolver::DefaultResolver, transport::Connector as _};
-                ureq::Agent::with_parts(
-                    config,
-                    ureq::unversioned::transport::DefaultConnector::new().chain(AcceptedBy(pid)),
-                    DefaultResolver::default(),
-                )
-            }
-            None => config.into(),
-        };
-        #[cfg(not(windows))]
-        let agent: ureq::Agent = {
-            let _ = core;
-            config.into()
-        };
-        Client {
-            base: base.trim_end_matches('/').to_string(),
-            agent,
-        }
+            .build()
     }
 
     pub fn base(&self) -> &str {
@@ -446,8 +581,9 @@ mod tests {
 
     /// On Windows a client for the app's core sends nothing on a connection another process
     /// accepted, on IPv4 and IPv6 loopback, and sends as usual on one the core accepted. The
-    /// listener is this test's own, so "another process" is process 4 (Windows' System
-    /// process), and the core is this one. `managed.rs` checks the same against the real core.
+    /// listener is this test's own: the client's pin holds this process, said to be process 4
+    /// (Windows' System process) for "another process" and this one's own ID for the core.
+    /// `managed.rs` checks the same with real processes, against the real core.
     #[cfg(windows)]
     #[test]
     fn a_core_client_sends_only_on_connections_the_core_accepted() {
@@ -476,9 +612,10 @@ mod tests {
                 got
             });
             let base = format!("http://{addr}");
-            let refused = Client::for_core(&base, 4).call("k", "GET", "/status", None);
-            let taken =
-                Client::for_core(&base, std::process::id()).call("k", "GET", "/status", None);
+            let other = crate::owned::Pin::this_process_as(4);
+            let refused = Client::with_pin(&base, other).call("k", "GET", "/status", None);
+            let this = crate::owned::Pin::this_process_as(std::process::id());
+            let taken = Client::with_pin(&base, this).call("k", "GET", "/status", None);
             let got = server.join().unwrap();
             assert_eq!(refused.status, 0, "{bind}: {refused:?}");
             assert_eq!(refused.error.unwrap().code, "io", "{bind}");
