@@ -317,6 +317,10 @@ fn a_launch_in_wsl_is_refused_unless_it_is_the_one_asked_for() {
     assert!(wsl_launch_input(&good(), &req, &bob(), windows(), None)
         .unwrap_err()
         .contains("starts wsl.exe in"));
+    // No folder in the reply and none known for the app: refused too, not taken as a match.
+    assert!(wsl_launch_input(&p, &req, &bob(), windows(), None)
+        .unwrap_err()
+        .contains("starts wsl.exe in no folder"));
     // A program that is not an absolute path inside WSL.
     let mut p = good();
     p["launch"]["argv"][7] = json!("claude");
