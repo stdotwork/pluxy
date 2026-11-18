@@ -87,7 +87,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: extensions/app/src-tauri -> target
-          save-if: ${{ runner.environment == 'github-hosted' }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' }}
 
       - name: Check Rust
         run: cargo check --locked

@@ -27,7 +27,8 @@ name: Next app tools platforms
 # Runners: on macOS, `tools` uses the runner named by the repository variable
 # PLUXY_MACOS_CLOUD_RUNNER when it is set, else macos-latest. On Windows it uses the maintainers'
 # runner named by PLUXY_WINDOWS_RUNNER when that is set and the event may use it, else
-# windows-latest (AGENTS.md, "Where jobs run").
+# windows-latest (AGENTS.md, "Where jobs run"). `wsl` always uses windows-latest. The Rust caches
+# are saved from `main` only (and by `tools` only on a GitHub-hosted runner).
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
@@ -88,7 +89,9 @@ jobs:
         with:
           workspaces: next/app-tools -> target
           key: ${{ matrix.os }}
-          save-if: ${{ runner.environment == 'github-hosted' }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' }}
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # Unit tests with an empty temporary home, so no test can reach the runner's own.
@@ -160,6 +163,9 @@ jobs:
         with:
           workspaces: next/app-tools -> target
           key: wsl
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the Windows tests and the Linux programs
         run: |
           cargo test --locked -p wsl --test real_wsl --no-run

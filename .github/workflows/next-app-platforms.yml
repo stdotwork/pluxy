@@ -35,10 +35,13 @@ name: Next app platforms
 # always run with it. It also runs once a day on `main` (03:17 UTC) and by hand, both with every
 # job; it does not run on pushes.
 #
-# Runners: `app` uses GitHub's windows-latest, and on macOS the runner named by the repository
-# variable PLUXY_MACOS_CLOUD_RUNNER when it is set, else macos-latest. `native` and `dialogs`
-# always use GitHub's runners, since they run only on a runner that reports itself GitHub-hosted
-# (AGENTS.md, "Where jobs run").
+# Runners: every job uses GitHub's windows-latest on Windows. On macOS, every job uses the runner
+# named by the repository variable PLUXY_MACOS_CLOUD_RUNNER when it is set, else macos-latest
+# (AGENTS.md, "Where jobs run"). `native` and `dialogs` write the account's own folders, so they
+# run only on a disposable runner (next/app/native/runner.ts) and pass the cloud runner's label to
+# the test in PLUXY_EPHEMERAL_CI_RUNNER; they have no cloud runner for Windows, whose tests need a
+# signed-in desktop. The Rust caches are saved from `main` only. `app` uploads nothing, `native`
+# uploads nothing, and `dialogs` uploads its log as `dialogs-<os>`.
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when what it
@@ -108,6 +111,9 @@ jobs:
         with:
           workspaces: next/app/src-tauri -> target
           key: ${{ matrix.os }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The Rust build embeds the built window (dist/).
       - name: UI kit install
         working-directory: next/ui
@@ -290,10 +296,11 @@ jobs:
             cargo test --locked --features artifact-test-trust --lib win_acl::
           fi
 
-  # The real app on a hosted Windows and macOS runner, as a person would use it, with the system's
-  # own tools reading back what it leaves in the registry or the LaunchAgents folder. The runner's
-  # user is thrown away after the job; the test removes what it made as well. The sessions are named
-  # in next/app/native/shards.ts (PLATFORM_SHARDS), one job per shard; the summary has the counts.
+  # The real app on a disposable Windows and macOS runner, as a person would use it, with the
+  # system's own tools reading back what it leaves in the registry or the LaunchAgents folder. The
+  # runner's user is thrown away after the job; the test removes what it made as well. The sessions
+  # are named in next/app/native/shards.ts (PLATFORM_SHARDS), one job per shard; the summary has
+  # the counts.
   # The package shard builds the test package first (package.ts test: a folder bundle on Windows,
   # an app bundle on macOS, never an installer), then the dev app, since the package's builds
   # rename the program they make in target/debug.
@@ -301,9 +308,15 @@ jobs:
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
     if: inputs.skip-native != true
-    # Always GitHub's runners: the test runs only on a runner that reports itself GitHub-hosted
-    # (RUNNER_ENVIRONMENT=github-hosted), since it writes the account's own folders and settings.
-    runs-on: ${{ matrix.os }}
+    # It writes the account's own folders and settings, so it runs only on a disposable runner
+    # (next/app/native/runner.ts): GitHub's, or on macOS the one PLUXY_MACOS_CLOUD_RUNNER names when
+    # set (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
+    # it to the test in PLUXY_EPHEMERAL_CI_RUNNER, which is empty on every other runner. Windows
+    # stays on GitHub's: this names no cloud runner there (Namespace's trial plan has no Windows),
+    # and the tests need a signed-in desktop.
+    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    env:
+      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -327,6 +340,9 @@ jobs:
         with:
           workspaces: next/app/src-tauri -> target
           key: ${{ matrix.os }}-native-${{ matrix.shard }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: UI kit install
         working-directory: next/ui
         run: bun install --frozen-lockfile
@@ -350,13 +366,19 @@ jobs:
 
   # The real app, built with the native-test feature, in local mode against a test core: its
   # native key entry, confirmations and key rotation, worked through native input
-  # (native/dialogs.ts). Only on these disposable hosted runners: on Windows the app's folders are
-  # the account's own.
+  # (native/dialogs.ts). Only on disposable runners: on Windows the app's folders are the
+  # account's own.
   dialogs:
     name: dialogs (${{ matrix.os }})
-    # Always GitHub's runners: the test runs only on a runner that reports itself GitHub-hosted
-    # (RUNNER_ENVIRONMENT=github-hosted), since it writes the account's own folders and settings.
-    runs-on: ${{ matrix.os }}
+    # It writes the account's own folders and settings, so it runs only on a disposable runner
+    # (next/app/native/runner.ts): GitHub's, or on macOS the one PLUXY_MACOS_CLOUD_RUNNER names when
+    # set (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
+    # it to the test in PLUXY_EPHEMERAL_CI_RUNNER, which is empty on every other runner. Windows
+    # stays on GitHub's: this names no cloud runner there (Namespace's trial plan has no Windows),
+    # and the tests need a signed-in desktop.
+    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    env:
+      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -384,6 +406,9 @@ jobs:
         with:
           workspaces: next/app/src-tauri -> target
           key: ${{ matrix.os }}-dialogs
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: UI kit install
         working-directory: next/ui
         run: bun install --frozen-lockfile

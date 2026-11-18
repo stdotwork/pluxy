@@ -34,10 +34,13 @@ func capture(ctx context.Context, info protocol.Info) CaptureFunc {
 }
 
 // redactDiagnostic removes r's credentials from every string of d. In a body it also removes the
-// bytes beside a cut that could be a secret cut in two (Redactor.TrimCut), redacts a start and an
-// end with nothing between them as one text and joins them (Redactor.Body), and it sets BodySize
-// to the length of what is left of the pieces plus the bytes left out between them, so a body
-// that was cut is told from one that only got shorter because a credential was replaced.
+// bytes beside a cut that could be a secret cut in two (Redactor.TrimCut), and, where the body was
+// not read to its end (BodyStopped), the bytes at its end that could be the start of a secret cut
+// off there; it redacts a start and an end with nothing between them as one text and joins them
+// (Redactor.Body), and it sets BodySize to the length of what is left of the pieces plus the bytes
+// left out between them, so a body that was cut is told from one that only got shorter because a
+// credential was replaced. The bytes removed where the read stopped are not counted: nothing
+// after them is either.
 func redactDiagnostic(r *protocol.Redactor, d protocol.Diagnostic) protocol.Diagnostic {
 	out := protocol.Diagnostic{UpstreamLeftOut: d.UpstreamLeftOut}
 	for _, x := range d.Upstream {
@@ -57,6 +60,9 @@ func redactDiagnostic(r *protocol.Redactor, d protocol.Diagnostic) protocol.Diag
 func redactBody(r *protocol.Redactor, b protocol.CapturedBody) protocol.CapturedBody {
 	head, end := b.Body, b.BodyEnd
 	left := max(0, b.BodySize-int64(len(head)+len(end))) // what the extension cut out between
+	if b.BodyStopped {
+		head, end = trimStop(r, head, end, left > 0)
+	}
 	if left > 0 {
 		h, e := r.TrimCut(head, end)
 		left += int64(len(head) - len(h) + len(end) - len(e))
@@ -75,7 +81,23 @@ func redactBody(r *protocol.Redactor, b protocol.CapturedBody) protocol.Captured
 		head = br.Write(head) + br.Write(end) + br.Flush()
 		end = ""
 	}
-	return protocol.CapturedBody{Body: head, BodyEnd: end, BodySize: int64(len(head)+len(end)) + left}
+	return protocol.CapturedBody{Body: head, BodyEnd: end, BodySize: int64(len(head)+len(end)) + left, BodyStopped: b.BodyStopped}
+}
+
+// trimStop returns head and end, the pieces of a body whose read stopped, without the run at the
+// body's end that is the start of a form of r's credential, of at least 4 bytes (TrimCut, on one
+// side): the redaction cannot recognise it. A start and an end with nothing between them (gap
+// false) are one text, so the run can reach back into the start.
+func trimStop(r *protocol.Redactor, head, end string, gap bool) (string, string) {
+	if gap && end != "" {
+		end, _ = r.TrimCut(end, "")
+		return head, end
+	}
+	text, _ := r.TrimCut(head+end, "")
+	if len(text) >= len(head) {
+		return head, text[len(head):]
+	}
+	return text, ""
 }
 
 func redactHeaders(r *protocol.Redactor, h map[string][]string) map[string][]string {

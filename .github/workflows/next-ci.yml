@@ -11,9 +11,11 @@ name: Next CI
 # Pull requests and merge-queue groups run it through ci.yml, when a changed path is under next/
 # or is this file. It also runs on pushes to `main` that touch those paths, and by hand.
 #
-# It always runs on GitHub's ubuntu-latest runner: PLUXY_LINUX_RUNNER does not apply to it. It
-# uploads the artifact `browser-test-output` (the panel's screenshots from every Chromium test
-# and the traces of failed tests), even when a step failed, and keeps it 7 days.
+# It runs on ubuntu-latest, or on the runner the repository variable PLUXY_LINUX_CLOUD_RUNNER
+# names when it is set and the event may use it (AGENTS.md, "Where jobs run"); PLUXY_LINUX_RUNNER
+# does not apply to it. It uploads the artifact `browser-test-output` (the panel's screenshots
+# from every Chromium test and the traces of failed tests), even when a step failed, and keeps it
+# 7 days.
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
@@ -48,7 +50,8 @@ defaults:
 
 jobs:
   next:
-    runs-on: ubuntu-latest
+    # PLUXY_LINUX_CLOUD_RUNNER, when set (AGENTS.md, "Where jobs run").
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || 'ubuntu-latest' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
