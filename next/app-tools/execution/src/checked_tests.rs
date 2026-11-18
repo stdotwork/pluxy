@@ -31,14 +31,27 @@ fn folder(p: &Path, mode: u32) {
     fs::set_permissions(p, fs::Permissions::from_mode(mode)).unwrap();
 }
 
-/// The `admin` group's number, as Directory Services gives it.
+/// The `admin` group's number, as Directory Services gives it: read once for every test, and
+/// asked again a few times when an answer is not a number (one CI run got such an answer while
+/// two tests asked at once).
 fn admin() -> u32 {
-    let out = std::process::Command::new("/usr/bin/dscl")
-        .args([".", "-read", "/Groups/admin", "PrimaryGroupID"])
-        .output()
-        .unwrap();
-    let text = String::from_utf8(out.stdout).unwrap();
-    text.split_whitespace().last().unwrap().parse().unwrap()
+    static GID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *GID.get_or_init(|| {
+        let mut answers = Vec::new();
+        for _ in 0..5 {
+            let out = std::process::Command::new("/usr/bin/dscl")
+                .args([".", "-read", "/Groups/admin", "PrimaryGroupID"])
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&out.stdout).into_owned();
+            if let Some(gid) = text.split_whitespace().last().and_then(|g| g.parse().ok()) {
+                return gid;
+            }
+            answers.push((text, String::from_utf8_lossy(&out.stderr).into_owned()));
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        panic!("dscl gave no admin group number: {answers:?}");
+    })
 }
 
 /// Gives p the group gid, which its owner may do only as a member of that group.
