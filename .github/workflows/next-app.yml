@@ -211,8 +211,9 @@ jobs:
   # call app commands. Each shard runs its own sessions (native/shards.ts, which lists these
   # shards in this order) on what native-build built, building none of it again; only the release
   # gate makes its own release builds, as it does wherever it runs. On main before the split the
-  # whole test took 35 minutes; a shard's sessions take up to 16, so the step allows about three
-  # times that for the sessions still being added.
+  # whole test took 35 minutes. Each shard's sessions take about 8 to 11 minutes (native/shards.ts
+  # gives the times), so the step allows about four times that for the sessions still being
+  # added.
   native:
     if: inputs.skip-native != true
     needs: native-build
@@ -224,7 +225,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [usage, tools, app, release]
+        shard: [usage, tools, agents, app, release]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
