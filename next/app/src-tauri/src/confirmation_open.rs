@@ -77,17 +77,19 @@ fn shown(p: &Path) -> String {
 }
 
 /// Refused unless path (resolved) is a file, or with folder a folder, of this user's that no one
-/// else may write.
+/// else may write (`win_acl`: by its owner, this user or the token's default owner, and its
+/// access list).
 #[cfg(windows)]
-fn own(path: &Path, folder: bool, what: &str) -> Result<(), String> {
+fn own(path: &Path, folder: bool, what: &str, _held: Option<&fs::File>) -> Result<(), String> {
     crate::win_acl::check(path, folder, crate::win_acl::Others::Read)
         .map_err(|e| format!("{what} must be your own, writable by no one else: {e}"))
 }
 
 /// Refused unless path (resolved) is a file, or with folder a folder, of this user's that no one
-/// else may write: its owner, its mode and no access list entry at all.
+/// else may write: its owner, its mode and no access list entry at all, read from held (path's
+/// open handle) when there is one.
 #[cfg(target_os = "macos")]
-fn own(path: &Path, folder: bool, what: &str) -> Result<(), String> {
+fn own(path: &Path, folder: bool, what: &str, held: Option<&fs::File>) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let m = fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if m.file_type().is_symlink() || m.is_dir() != folder || (!folder && !m.is_file()) {
@@ -99,7 +101,12 @@ fn own(path: &Path, folder: bool, what: &str) -> Result<(), String> {
     if m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o022 != 0 {
         return Err(format!("{what} must be your own, writable by no one else"));
     }
-    if has_acl(path)? {
+    let acl = match held {
+        Some(f) => has_acl_held(f),
+        None => has_acl(path),
+    }
+    .map_err(|e| format!("{}: {e}", path.display()))?;
+    if acl {
         return Err(format!(
             "{what} has an access list, which may let others write it: remove it (chmod -N)"
         ));
@@ -107,36 +114,67 @@ fn own(path: &Path, folder: bool, what: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether path (not followed) has an access list with any entry.
+// shortcut: the access list read as #410's `private_macos::has_entries` reads it; this folds into
+// it once main (#410) reaches this branch.
+/// The access list calls of `<sys/acl.h>`.
 #[cfg(target_os = "macos")]
-fn has_acl(path: &Path) -> Result<bool, String> {
-    use std::ffi::{c_int, c_void, CString};
-    use std::os::unix::ffi::OsStrExt;
-    /// `<sys/acl.h>`.
-    const ACL_TYPE_EXTENDED: c_int = 0x0000_0100;
+mod acl {
+    use std::ffi::{c_int, c_void};
+    pub const ACL_TYPE_EXTENDED: c_int = 0x0000_0100;
     const ACL_FIRST_ENTRY: c_int = 0;
     extern "C" {
-        fn acl_get_link_np(path: *const libc::c_char, kind: c_int) -> *mut c_void;
+        pub fn acl_get_link_np(path: *const libc::c_char, kind: c_int) -> *mut c_void;
+        pub fn acl_get_fd_np(fd: c_int, kind: c_int) -> *mut c_void;
         fn acl_get_entry(acl: *mut c_void, id: c_int, entry: *mut *mut c_void) -> c_int;
         fn acl_free(object: *mut c_void) -> c_int;
     }
-    let c = CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
-    // SAFETY: c is a NUL-terminated path; the list it returns is freed below.
-    let acl = unsafe { acl_get_link_np(c.as_ptr(), ACL_TYPE_EXTENDED) };
-    if acl.is_null() {
-        let e = std::io::Error::last_os_error();
-        // No access list.
-        if e.raw_os_error() == Some(libc::ENOENT) {
-            return Ok(false);
-        }
-        return Err(format!("{}: {e}", path.display()));
+
+    /// Clears `errno`, so that a call returning no list without setting it does not read a
+    /// leftover `ENOENT` as "no list".
+    pub fn clear_errno() {
+        // SAFETY: __error returns this thread's errno.
+        unsafe { *libc::__error() = 0 };
     }
-    let mut entry = std::ptr::null_mut();
-    // SAFETY: acl is a list acl_get_link_np returned; entry points into it, freed with it.
-    let any = unsafe { acl_get_entry(acl, ACL_FIRST_ENTRY, &mut entry) } == 0;
-    // SAFETY: acl came from acl_get_link_np and is not used after this.
-    unsafe { acl_free(acl) };
-    Ok(any)
+
+    /// Whether the list an `acl_get_*_np` call returned (null: none, or an error in errno) has
+    /// any entry; frees it.
+    pub fn any(list: *mut c_void) -> Result<bool, String> {
+        if list.is_null() {
+            let e = std::io::Error::last_os_error();
+            // No access list.
+            if e.raw_os_error() == Some(libc::ENOENT) {
+                return Ok(false);
+            }
+            return Err(e.to_string());
+        }
+        let mut entry = std::ptr::null_mut();
+        // SAFETY: list is a list an acl_get_*_np call returned; entry points into it, freed
+        // with it.
+        let any = unsafe { acl_get_entry(list, ACL_FIRST_ENTRY, &mut entry) } == 0;
+        // SAFETY: list is not used after this.
+        unsafe { acl_free(list) };
+        Ok(any)
+    }
+}
+
+/// Whether path (not followed) has an access list with any entry.
+#[cfg(target_os = "macos")]
+fn has_acl(path: &Path) -> Result<bool, String> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c = CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+    acl::clear_errno();
+    // SAFETY: c is a NUL-terminated path; `acl::any` frees the list.
+    acl::any(unsafe { acl::acl_get_link_np(c.as_ptr(), acl::ACL_TYPE_EXTENDED) })
+}
+
+/// Whether the file held in f has an access list with any entry.
+#[cfg(target_os = "macos")]
+fn has_acl_held(f: &fs::File) -> Result<bool, String> {
+    use std::os::fd::AsRawFd;
+    acl::clear_errno();
+    // SAFETY: f's descriptor is open while f lives; `acl::any` frees the list.
+    acl::any(unsafe { acl::acl_get_fd_np(f.as_raw_fd(), acl::ACL_TYPE_EXTENDED) })
 }
 
 /// Refused when the file held in f carries an extended attribute of `CHOOSERS`.
@@ -208,7 +246,7 @@ pub(super) fn file_rules(f: &OpenTarget, w: &OpenTarget) -> Result<String, Strin
     }
     #[cfg(target_os = "macos")]
     no_choosers(&f.file)?;
-    own(file, false, "the file a launch opens")?;
+    own(file, false, "the file a launch opens", Some(&f.file))?;
     for d in file.ancestors().skip(1) {
         if d == within {
             break;
@@ -217,9 +255,10 @@ pub(super) fn file_rules(f: &OpenTarget, w: &OpenTarget) -> Result<String, Strin
             d,
             true,
             &format!("the folder {} of the file a launch opens", shown(d)),
+            None,
         )?;
     }
-    own(within, true, "a launch's within folder")?;
+    own(within, true, "a launch's within folder", None)?;
     Ok(t.to_string())
 }
 
