@@ -73,6 +73,9 @@ mod admission;
 #[path = "backups_native.rs"]
 mod backups;
 #[cfg(target_os = "linux")]
+#[path = "chooser_native.rs"]
+mod chooser;
+#[cfg(target_os = "linux")]
 #[path = "claude_code_native.rs"]
 mod claude_code;
 #[cfg(target_os = "linux")]
