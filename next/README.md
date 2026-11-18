@@ -1139,7 +1139,10 @@ object in a function's parameters that requires nothing gets a required placehol
 required. An object is a schema of type `object`; a union object (with `anyOf` or `oneOf`) gets
 none. Every schema with `properties` and no type gets type `object`, whatever the model, as in
 today's core. A function's response schema gets no placeholder: today's core adds one there, but the schema
-describes what the client returns, and nothing would remove the placeholder. The extension removes
+describes what the client returns, and nothing would remove the placeholder. A response format's schema keeps
+the `title` of every schema in it, as today's core does: Google's Schema type has a `title` field. A
+function's parameters and response schema lose their titles except for Claude and Gemini 3 Pro, also
+as in today's core. The extension removes
 the placeholders from the model's calls before any client format sees them; today's core does that
 only for Messages clients. It leaves a placeholder in a call where a client schema at the same path
 declares the name, as a property or in `required`: the other branches of a union (also those
