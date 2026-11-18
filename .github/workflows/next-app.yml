@@ -80,8 +80,8 @@ jobs:
           workspaces: |
             next/app/src-tauri -> target
             next/app-tools -> target
-          # The native job's cache (the key the single job before the split used), read only: the
-          # release shard saves it.
+          # The native build's cache (the key the single job before the split used), read only: the
+          # native-build job saves it.
           shared-key: app
           save-if: false
       # The app builds the UI kit from next/ui, with its copy of preact.
@@ -126,14 +126,99 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
 
+  # What every native shard runs, built once (native/run.ts with PLUXY_APP_NATIVE_BUILD): the test
+  # package (the test AppImage and its signed update), the dev app with and without
+  # artifact-test-trust, the probe, the fixtures and the app tools. Each shard built all of it
+  # itself before, about 7 to 9 minutes of every shard. One archive carries it to the shards: tar
+  # keeps the programs executable, which upload-artifact does not.
+  native-build:
+    if: inputs.skip-native != true
+    # The same runner as the shards, which run what it builds, so never PLUXY_LINUX_RUNNER either.
+    # Pinned: the package names below are Ubuntu 24.04's.
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check the runner is Ubuntu 24.04
+        working-directory: .
+        run: |
+          . /etc/os-release
+          if [ "$VERSION_ID" != "24.04" ]; then
+            echo "::error::the packages and paths here are Ubuntu 24.04's; this runner is $PRETTY_NAME"
+            exit 1
+          fi
+          echo "$PRETTY_NAME"
+      # The same packages as the checks job: the build's libraries, and the services and tools
+      # run.ts checks for before it builds (the native job below says what each is for).
+      - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools and xdotool
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
+            xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+          no-cache: ${{ runner.environment != 'github-hosted' }}
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            next/app/src-tauri -> target
+            next/app-tools -> target
+          # The key the single job before the split used, which the checks job reads. Saved from
+          # main only: a cache saved on another ref serves only that ref and evicts main's.
+          shared-key: app
+          save-if: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' }}
+      # The app builds the UI kit from next/ui, with its copy of preact.
+      - name: UI kit install
+        working-directory: next/ui
+        run: bun install --frozen-lockfile
+      - name: Install
+        run: bun install --frozen-lockfile
+      # The native job below says what this holds.
+      - name: Cache the pinned downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pluxy-app-native
+          key: app-native-pinned-${{ hashFiles('next/app/native/appimage.ts', 'next/app/package.ts') }}
+      - name: Build for the native test
+        timeout-minutes: 30
+        env:
+          PLUXY_APP_NATIVE_BUILD: ${{ runner.temp }}/native-build
+        run: bun run test:native
+      - name: Pack the builds
+        working-directory: .
+        run: |
+          tar -C "$RUNNER_TEMP" -I 'zstd -T0' -cf "$RUNNER_TEMP/native-build.tar.zst" native-build
+          ls -l "$RUNNER_TEMP/native-build.tar.zst"
+          du -sh "$RUNNER_TEMP/native-build"
+      - name: Upload the builds
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-build
+          path: ${{ runner.temp }}/native-build.tar.zst
+          # Already compressed.
+          compression-level: 0
+          # One day: re-running only a failed shard needs it, so after a day re-run all jobs.
+          retention-days: 1
+          if-no-files-found: error
+
   # The real app on Xvfb in each mode (next/app/native/run.ts): extension page webviews cannot
-  # call app commands. Each shard builds everything the test builds, the test AppImage and the
-  # release gate's release builds included, then runs its own sessions (native/shards.ts, which
-  # lists these shards in this order). On main before the split the whole test took 35 minutes; a
-  # shard takes about 7 minutes of builds and up to 9 of sessions, so the step allows about three
-  # times that for the sessions still being added.
+  # call app commands. Each shard runs its own sessions (native/shards.ts, which lists these
+  # shards in this order) on what native-build built, building none of it again; only the release
+  # gate makes its own release builds, as it does wherever it runs. On main before the split the
+  # whole test took 35 minutes. Each shard's sessions take about 8 to 11 minutes (native/shards.ts
+  # gives the times), so the step allows about four times that for the sessions still being
+  # added.
   native:
     if: inputs.skip-native != true
+    needs: native-build
     # Pinned: the package names below are Ubuntu 24.04's, and so are the file paths the native
     # test starts services from (next/app/native/services.ts). Always on GitHub's runners, never
     # PLUXY_LINUX_RUNNER: the document portal needs /dev/fuse, which the maintainers' runner
@@ -142,7 +227,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [usage, tools, app, release]
+        shard: [usage, tools, agents, app, release]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -180,21 +265,19 @@ jobs:
         with:
           bun-version: '1.4.3'
           no-cache: ${{ runner.environment != 'github-hosted' }}
+      # Only the release gate builds here (the release app, and its validator).
       - name: Set up Rust
+        if: matrix.shard == 'release'
         uses: dtolnay/rust-toolchain@1.97.0
-        with:
-          components: rustfmt, clippy
       - name: Cache Rust dependencies and build outputs
+        if: matrix.shard == 'release'
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            next/app/src-tauri -> target
-            next/app-tools -> target
-          # One cache for every shard, under the key the single job before the split used. The
-          # release shard builds everything the others do and the release app too, so it alone
-          shared-key: app
-          # saves it, from main only (see app-ci.yml's cache step).
-          save-if: ${{ runner.environment == 'github-hosted' && matrix.shard == 'release' && github.ref == 'refs/heads/main' }}
+          workspaces: next/app/src-tauri -> target
+          # A cache of its own: native-build saves the debug builds' under app. Saved from main
+          # only, like that one.
+          shared-key: app-release
+          save-if: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' }}
       # The app builds the UI kit from next/ui, with its copy of preact.
       - name: UI kit install
         working-directory: next/ui
@@ -211,6 +294,16 @@ jobs:
         with:
           path: ~/.cache/pluxy-app-native
           key: app-native-pinned-${{ hashFiles('next/app/native/appimage.ts', 'next/app/package.ts') }}
+      - name: Download the builds
+        uses: actions/download-artifact@v4
+        with:
+          name: native-build
+          path: ${{ runner.temp }}
+      - name: Unpack the builds
+        working-directory: .
+        run: |
+          tar -C "$RUNNER_TEMP" -I zstd -xf "$RUNNER_TEMP/native-build.tar.zst"
+          rm "$RUNNER_TEMP/native-build.tar.zst"
       - name: Native test
         timeout-minutes: 45
         env:
@@ -218,6 +311,7 @@ jobs:
           PLUXY_APP_NATIVE_SHARD_INDEX: ${{ strategy.job-index }}
           PLUXY_APP_NATIVE_SHARD_TOTAL: ${{ strategy.job-total }}
           PLUXY_APP_TEST_SHOTS: ${{ runner.temp }}/native-shots
+          PLUXY_APP_NATIVE_PREBUILT: ${{ runner.temp }}/native-build
         run: bun run test:native
       # Each session's last screen, for a PR to link as proof of what the app showed. Kept 7 days.
       - name: Upload the native test screenshots
@@ -230,19 +324,21 @@ jobs:
           if-no-files-found: ignore
 
   # The workflow's one result, under the name of the single job before the split: it fails when
-  # the checks or any native shard did not pass. The shards may be skipped only when ci.yml said
-  # so (skip-native).
+  # the checks, the native build or any native shard did not pass. The build and the shards may be
+  # skipped only when ci.yml said so (skip-native).
   app:
     if: ${{ !cancelled() }}
-    needs: [checks, native]
+    needs: [checks, native-build, native]
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - name: Every job passed
         working-directory: .
         env:
           CHECKS: ${{ needs.checks.result }}
+          BUILD: ${{ needs.native-build.result }}
           NATIVE: ${{ needs.native.result }}
           SKIP_NATIVE: ${{ inputs.skip-native == true }}
         run: |
-          echo "checks: $CHECKS; native shards: $NATIVE (skip-native: $SKIP_NATIVE)"
-          [ "$CHECKS" = success ] && { [ "$NATIVE" = success ] || { [ "$SKIP_NATIVE" = true ] && [ "$NATIVE" = skipped ]; }; }
+          echo "checks: $CHECKS; native build: $BUILD; native shards: $NATIVE (skip-native: $SKIP_NATIVE)"
+          [ "$CHECKS" = success ] && { { [ "$BUILD" = success ] && [ "$NATIVE" = success ]; } ||
+            { [ "$SKIP_NATIVE" = true ] && [ "$BUILD" = skipped ] && [ "$NATIVE" = skipped ]; }; }
