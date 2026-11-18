@@ -103,7 +103,8 @@ impl Metadata {
 }
 
 /// Whether the opened regular file at path with metadata m is a program: on Unix, any execute
-/// bit; on Windows, which has none, its extension (`confirmation_windows.rs`).
+/// bit; on Windows, which has none, a `.exe` or `.com` name and first bytes `MZ`
+/// (`confirmation_windows.rs`).
 fn runnable(path: &Path, m: &Metadata) -> bool {
     #[cfg(unix)]
     {

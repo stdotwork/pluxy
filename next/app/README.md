@@ -1570,7 +1570,8 @@ app supported there:
     a tool's opening of a file through the system's own route
     (`src-tauri/src/open_platform_native.rs`: on Windows the execution program's `open` mode, on
     macOS `/usr/bin/open`) and the open rules' refusals, and the app's opening of an address in
-    the default browser, with the session's own https server on 127.0.0.1. It opens a `.txt` file
+    the system's handler for https addresses (normally the default browser), with the session's
+    own https server on 127.0.0.1. It opens a `.txt` file
     in Notepad or TextEdit, and on Windows a `.jsonl` file in the fixture program, through a
     per-user file type of the check's own that it removes again; on macOS no app opens `.jsonl`
     files on GitHub's image, so it checks that refusal there ([Limits](#limits));
@@ -1649,6 +1650,11 @@ AppImage.
   of `.txt` and `.jsonl` files are detached launches, which the app refuses while it runs in a
   job that keeps what it starts, so the session starts the app outside the runner's job as the
   launcher session does.
+- On Windows the execution program's `open` and `app` modes start with no console
+  (`CREATE_NO_WINDOW` instead of a console of their own), so none flashes. No test checks that
+  the flag reaches the process: the unit tests cannot start a detached launch inside the job
+  GitHub's runners run them in, and the native open session checks the app that opened the file,
+  not the opener's console.
 - On Windows the program session does not check which processes hold the tool's pipes, as it
   does on Linux and macOS: Windows lists no process's handles to an unprivileged one. It checks
   instead that the tool's three standard handles are pipes and that a file the app holds through
@@ -1670,7 +1676,8 @@ AppImage.
   those 90 seconds, nothing puts the earlier version back: copy the newest file in
   `updates/kept/` in the app's data folder over the AppImage to run it again.
 - Changing the release feed needs the native confirmation, so it works on Linux only. Opening an
-  address in the browser works on all three systems: GIO on Linux, the `https` class's `open`
+  address in the system's handler for https addresses (normally the default browser; an app that
+  claims the address's domain may take it instead) works on all three systems: GIO on Linux, the `https` class's `open`
   verb (`ShellExecuteExW`) on Windows, `NSWorkspace` on macOS; only an https address reaches it.
 - Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
   the renderer writes alignment as inline style, which the notes' policy refuses.

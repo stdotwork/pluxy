@@ -14,7 +14,8 @@ const EXIT_0: &[u8] = b"MZ fixture 0";
 #[cfg(windows)]
 const EXIT_1: &[u8] = b"MZ fixture 1";
 
-/// Writes a program at path: executable by its owner (on Windows its extension makes it one).
+/// Writes a program at path: executable by its owner (on Windows its `.exe` or `.com` name and its
+/// first bytes, `MZ`, make it one).
 fn program(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
     #[cfg(unix)]

@@ -115,7 +115,8 @@ const WINDOW_NAMES: &[&str] = &[
 #[cfg(windows)]
 const WINDOW_NAMES: &[&str] = &[];
 /// The folders a launch's PATH gets on macOS after the app's own, when they exist and it lacks
-/// them (app README, "Launches"; `~` is the app's HOME).
+/// them (app-host README, "What a launch gets"; `spawn::with_client_folders`; `~` is the app's
+/// HOME): kept here apart, so the session's expectation does not come from the code it checks.
 #[cfg(target_os = "macos")]
 const CLIENT_FOLDERS: &[&str] = &[
     "~/.local/bin",

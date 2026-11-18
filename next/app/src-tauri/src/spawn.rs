@@ -639,8 +639,9 @@ fn outside(s: &OsString, dir: &OsString) -> OsString {
 
 /// A launch's environment: the snapshot's session values (`BASE`, `LC_*`) but those request
 /// removes, with the AppImage's own folder taken out of PATH and the XDG folder lists when the app
-/// runs as one; then the variables request inherits from the snapshot, those it sets, and the
-/// resolved secrets (variable name, value).
+/// runs as one, and on macOS the client folders that exist added to the end of PATH
+/// (`with_client_folders`); then the variables request inherits from the snapshot, those it sets,
+/// and the resolved secrets (variable name, value).
 pub fn environment(
     snap: &Snapshot,
     request: &Request,

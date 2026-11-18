@@ -627,16 +627,20 @@ program's name) and `cwd`, and may name:
   On Windows and macOS the system picks the app by the file's extension, not its content, so the
   type is the extension's: `.txt` (`text/plain`), `.json`, `.jsonl`, `.ndjson`, `.md` or `.log`
   (the types above), any other refused; the content is not read (`src/confirmation_open.rs`).
-  The folder may not be a drive's root or `/`, the home folder or a folder above it. The file,
-  the folder and every folder between them must be the person's own and writable by no one else:
-  on Windows their owner and access list (`src/win_acl.rs`: no allow entry giving anyone but the
-  person, SYSTEM or Administrators a right to change it, and not a link or junction); on macOS
+  The folder may not be a drive's root or `/`, the home folder or a folder above it, and is
+  refused when the home folder cannot be resolved. The file, the folder and every folder between
+  them must be the person's own and writable by no one else: on Windows their owner and access
+  list (`src/win_acl.rs`: owned by the person or by the owner Windows gives the person's new
+  files, the token's default owner, which is the Administrators group for an elevated
+  administrator; no allow entry giving anyone but the person, SYSTEM or Administrators a right to
+  change it; and not a link or junction); on macOS
   their owner, mode and no access list entry at all. On Windows the file must also be on a local
   drive (not a network path), name no alternate data stream, have a path shorter than 260
-  characters, and be named by its plain path (`C:\…`, never `\\?\`); the launch runs the
-  launching package's own program (the execution program, compared by identity) with argv
-  exactly `open`, `--` and the file, which hands the file to the app Windows opens its extension
-  with, and it starts with no console. On macOS the file has no execute bit and none of the
+  characters, and be named by its plain path (`C:\…`, never `\\?\`); the launch runs
+  `pluxy/execution`'s own program (compared by identity; another package's own program is
+  refused) with argv exactly `open`, `--` and the file, which hands the file to the app Windows
+  opens its extension with, and it starts with no console (as does that program's `app` mode,
+  and no other launch). On macOS the file has no execute bit and none of the
   attributes that can choose another app for it (`com.apple.FinderInfo`,
   `com.apple.ResourceFork`, `com.apple.LaunchServices.OpenWith`), and the launch runs
   `/usr/bin/open` with argv exactly the file. The dialog's first line says "Opens the file <file>
@@ -706,7 +710,12 @@ started does not end with it.
   `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`) and the proxy variables (`http_proxy`,
   `https_proxy`, `no_proxy`, `all_proxy`, and the same in capitals); those it has are passed on,
   but those the launch removes. When the app runs as an AppImage, entries inside its own folder
-  are taken out of `PATH`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. Then come the variables the launch
+  are taken out of `PATH`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. On macOS `PATH` then gets, after
+  its own entries, the folders people's command-line clients are installed in that exist and it
+  lacks: `~/.local/bin`, `~/.npm-global/bin`, `~/.bun/bin`, `~/.cargo/bin`, `~/.volta/bin`,
+  `~/Library/pnpm` and `~/bin` (`~` the app's `HOME`), then `/opt/homebrew/bin` and
+  `/usr/local/bin`: an app started from the Finder or the Dock has launchd's `PATH`, which finds
+  none of them. Then come the variables the launch
   inherits by name, those it sets, and its secrets, which the host resolves from the vault at the
   spawn, each checked then as a delivery to the tool whose launch it is: the tool that asked holds
   references only. No shell is run to read a login environment.

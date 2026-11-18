@@ -541,7 +541,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
 const OPENED: &str = "pluxy-fixture-opened";
 
 /// Requires that no app has any of the session's files open: on Windows no process names one on
-/// its command line; on macOS TextEdit, if it runs, has none of them.
+/// its command line; on macOS TextEdit, if it runs, has none of them. On macOS it looks only when
+/// TextEdit runs, so it proves little there; the refusals it backs are made before anything is
+/// started, and the steps check those refusals themselves.
 fn nothing_opened(files: &Path) -> Result<(), String> {
     #[cfg(windows)]
     let open: Vec<String> = win::naming(&s(files))?
