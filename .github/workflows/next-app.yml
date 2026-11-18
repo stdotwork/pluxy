@@ -192,9 +192,9 @@ jobs:
             next/app-tools -> target
           # One cache for every shard, under the key the single job before the split used. The
           # release shard builds everything the others do and the release app too, so it alone
-          # saves it.
           shared-key: app
-          save-if: ${{ runner.environment == 'github-hosted' && matrix.shard == 'release' }}
+          # saves it, from main only (see app-ci.yml's cache step).
+          save-if: ${{ runner.environment == 'github-hosted' && matrix.shard == 'release' && github.ref == 'refs/heads/main' }}
       # The app builds the UI kit from next/ui, with its copy of preact.
       - name: UI kit install
         working-directory: next/ui
