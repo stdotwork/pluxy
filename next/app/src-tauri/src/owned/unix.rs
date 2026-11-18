@@ -209,7 +209,10 @@ const BY_PATH: &str =
 /// remove it. No part of path may be a link (it is `F_GETPATH`'s, which resolves them).
 ///
 /// An extended access list can let others in whatever the mode (`private_macos.rs`), so each
-/// part's entries, inherited ones too, are judged by what they allow (`acl_refusal`).
+/// part's entries, inherited ones too, are judged by what they allow (`acl_refusal`). Each part's
+/// mode and list are read together (`private_macos::status`), from `/` down to the file: a folder
+/// is read before what is below it, so a user who could swap something below it is refused for
+/// that folder, or, should they give up that right first, the swap is read as it is.
 #[cfg(target_os = "macos")]
 pub(crate) fn secure(path: &std::path::Path, writers: Writers) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
@@ -218,68 +221,67 @@ pub(crate) fn secure(path: &std::path::Path, writers: Writers) -> Result<(), Str
         Writers::Nobody => None,
         Writers::Admins => admin_gid(),
     };
-    let trusted_owner = |m: &std::fs::Metadata| m.uid() == 0 || m.uid() == me;
-    let others_write = |m: &std::fs::Metadata| m.mode() & 0o022 != 0;
+    let trusted_owner = |uid: u32| uid == 0 || uid == me;
+    let others_write = |sb: &libc::stat| sb.st_mode & 0o022 != 0;
     let admins_write =
-        |m: &std::fs::Metadata| m.mode() & 0o002 == 0 && admin.is_some_and(|g| m.gid() == g);
+        |sb: &libc::stat| sb.st_mode & 0o002 == 0 && admin.is_some_and(|g| sb.st_gid == g);
     let refuse = |p: &std::path::Path, why: &str| Err(format!("{} {why}: {BY_PATH}", p.display()));
-    let judge = |p: &std::path::Path, folder: bool| {
-        let entries = crate::private_macos::entries(p)
-            .map_err(|e| format!("{}: reading its access list: {e}", p.display()))?;
-        match acl_refusal(p, &entries, folder, me, if folder { admin } else { None }) {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
-    };
     if !path.is_absolute() {
         return refuse(path, "is not a full path");
     }
-    let parts: Vec<&std::path::Path> = path.ancestors().collect();
-    // From the file up to `/`; the entry below each folder is the one before it here.
+    let mut parts: Vec<&std::path::Path> = path.ancestors().collect();
+    parts.reverse();
+    let file = parts.len() - 1;
+    // From `/` down to the file; the entry below each folder is the one after it here.
     for (i, p) in parts.iter().enumerate() {
-        let m = std::fs::symlink_metadata(p).map_err(|e| format!("{}: {e}", p.display()))?;
-        let ft = m.file_type();
-        if ft.is_symlink() {
+        let (sb, entries) =
+            crate::private_macos::status(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let kind = sb.st_mode & libc::S_IFMT;
+        if kind == libc::S_IFLNK {
             return refuse(p, "is a link");
         }
-        if !trusted_owner(&m) {
+        if !trusted_owner(sb.st_uid) {
             return refuse(p, "belongs to another user");
         }
-        if i == 0 {
-            if !ft.is_file() {
+        let folder = i != file;
+        if !folder {
+            if kind != libc::S_IFREG {
                 return refuse(p, "is not a file");
             }
-            if others_write(&m) {
+            if others_write(&sb) {
                 return refuse(p, "may be written by other users");
             }
-            judge(p, false)?;
-            continue;
-        }
-        if !ft.is_dir() {
-            return refuse(p, "is not a folder");
-        }
-        if others_write(&m) && !admins_write(&m) {
-            let sticky = m.mode() & 0o1000 != 0;
-            let below = std::fs::symlink_metadata(parts[i - 1]).map_err(|e| e.to_string())?;
-            if !(sticky && trusted_owner(&below)) {
-                return refuse(p, "may be changed by other users");
+        } else {
+            if kind != libc::S_IFDIR {
+                return refuse(p, "is not a folder");
+            }
+            if others_write(&sb) && !admins_write(&sb) {
+                let sticky = sb.st_mode & 0o1000 != 0;
+                let below = std::fs::symlink_metadata(parts[i + 1]).map_err(|e| e.to_string())?;
+                if !(sticky && trusted_owner(below.uid())) {
+                    return refuse(p, "may be changed by other users");
+                }
             }
         }
-        judge(p, true)?;
+        let group = if folder { admin } else { None };
+        if let Some(e) = acl_refusal(p, &entries, folder, me, group) {
+            return Err(e);
+        }
     }
     Ok(())
 }
 
 /// Why `secure` refuses path for an entry of its access list (a file's, or with folder a
 /// folder's) that lets a user other than root and me change it, or None. Only an allow entry
-/// can: one that grants a right of `FILE_CHANGES` or `FOLDER_CHANGES` to anyone but root or me
-/// fails, except a grant to the group admin (given only for a folder when writers is `Admins`,
-/// as for its mode). A deny entry never does (a home folder carries `group:everyone deny
-/// delete`), nor an entry that applies only to what is made inside its folder: the program and
-/// each folder carry their own, inherited, copy of what reaches them, judged like an entry set on
-/// them. An allow entry fails even where an earlier deny entry takes the same right away, and a
-/// folder's `delete` counts as on the program: below a sticky folder anyone may add to, it lets
-/// that user move the folder aside and put their own in its place.
+/// can: one that holds any right outside `READ_ONLY`, a bit no one knows of yet too, for anyone
+/// but root or me fails, except one for the group admin (given only for a folder when writers is
+/// `Admins`, as for its mode), whatever rights it holds. A deny entry never does (a home folder
+/// carries `group:everyone deny delete`), nor an entry that applies only to what is made inside
+/// its folder: the program and each folder carry their own, inherited, copy of what reaches them,
+/// judged like an entry set on them. An allow entry fails even where an earlier deny entry takes
+/// the same right away; a folder's `delete` lets that user, below a sticky folder anyone may add
+/// to, move the folder aside and put their own in its place; and an `OWNER@` entry (from a
+/// network volume) fails too, as its UUID names no user here.
 #[cfg(target_os = "macos")]
 fn acl_refusal(
     path: &std::path::Path,
@@ -288,8 +290,8 @@ fn acl_refusal(
     me: u32,
     admin: Option<u32>,
 ) -> Option<String> {
-    use crate::private_macos::{Subject, FILE_CHANGES, FOLDER_CHANGES};
-    let changes = if folder { FOLDER_CHANGES } else { FILE_CHANGES };
+    use crate::private_macos::{Subject, FILE_CHANGES, FOLDER_CHANGES, READ_ONLY};
+    let names = if folder { FOLDER_CHANGES } else { FILE_CHANGES };
     entries.iter().find_map(|e| {
         if !e.allow || e.only_inherit {
             return None;
@@ -299,21 +301,36 @@ fn acl_refusal(
             Subject::Group(gid) => admin == Some(gid),
             Subject::Unknown(_) => false,
         };
-        let granted: Vec<&str> = changes
+        let changes = e.rights & !READ_ONLY;
+        if trusted || changes == 0 {
+            return None;
+        }
+        let named = names.iter().fold(0, |all, (bit, _)| all | bit);
+        let rights: Vec<String> = names
             .iter()
-            .filter(|(bit, _)| e.rights & bit != 0)
-            .map(|(_, name)| *name)
-            .collect();
-        (!trusted && !granted.is_empty()).then(|| {
-            format!(
-                "{p} has an access list entry, #{i}, that lets {who} change it ({rights}): {BY_PATH}; remove that entry with `chmod -a# {i} {p}`, or every entry with `chmod -N {p}`",
-                i = e.index,
-                p = path.display(),
-                who = e.subject,
-                rights = granted.join(","),
+            .filter(|(bit, _)| changes & bit != 0)
+            .map(|(_, name)| name.to_string())
+            .chain(
+                (0..64)
+                    .filter(|n| changes & !named & (1u64 << n) != 0)
+                    .map(|n| format!("bit {n}")),
             )
-        })
+            .collect();
+        let p = shell_quoted(path);
+        Some(format!(
+            "{} has an access list entry, #{i}, that lets {who} change it ({rights}): {BY_PATH}; remove that entry with `chmod -a# {i} {p}`, or every entry with `chmod -N {p}`",
+            path.display(),
+            i = e.index,
+            who = e.subject,
+            rights = rights.join(","),
+        ))
     })
+}
+
+/// path as one word for a POSIX shell: in single quotes, each `'` in it written `'\''`.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn shell_quoted(path: &std::path::Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
 }
 
 /// The `admin` group's number, looked up by its name: None, so that only the stricter rule holds,

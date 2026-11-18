@@ -530,6 +530,23 @@ mod unix {
     }
 }
 
+/// The paths in `secure`'s suggested commands are one shell word each, whatever they hold.
+#[cfg(unix)]
+#[test]
+fn a_path_is_quoted_as_one_shell_word() {
+    use std::os::unix::ffi::OsStrExt;
+    let p = Path::new("/Users/a b/it's here/$HOME`x`/prog");
+    let q = crate::owned::shell_quoted(p);
+    assert_eq!(q, r"'/Users/a b/it'\''s here/$HOME`x`/prog'");
+    let out = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("printf %s {q}"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(out.stdout, p.as_os_str().as_bytes());
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
     use super::Temp;
@@ -792,7 +809,7 @@ mod macos {
         let e = secure(&p, Writers::Admins).unwrap_err();
         assert!(e.contains("user:daemon"), "{e}");
         assert!(e.contains("(write)"), "{e}");
-        let remove = format!("`chmod -a# {i} {}`", p.display());
+        let remove = format!("`chmod -a# {i} {}`", crate::owned::shell_quoted(&p));
         assert!(e.contains(&remove), "{e} does not say {remove}");
         // Doing what it says passes.
         chmod(&["-a#", &i.to_string()], &p);
@@ -803,6 +820,88 @@ mod macos {
         file(&q, 0o700);
         add_entry(&q, "group:admin allow append");
         refused(&q, &q, Writers::Admins);
+
+        // An entry for everyone.
+        let r = dir.join("everyone");
+        file(&r, 0o700);
+        add_entry(&r, "everyone allow write");
+        refused(&r, &r, Writers::Nobody);
+        let e = secure(&r, Writers::Nobody).unwrap_err();
+        assert!(e.contains("group:everyone change it (write)"), "{e}");
+    }
+
+    /// Gives a new program, or a new folder above one, an entry for user:daemon holding exactly
+    /// rights, and what `secure` makes of it under each rule.
+    fn with_raw_entry(
+        dir: &Path,
+        name: &str,
+        on_folder: bool,
+        rights: u32,
+    ) -> [Result<(), String>; 2] {
+        let f = dir.join(name);
+        folder(&f, 0o700);
+        let p = f.join("prog");
+        file(&p, 0o700);
+        crate::private_macos::set_raw_entry(if on_folder { &f } else { &p }, "user:daemon", rights);
+        let part = if on_folder { &f } else { &p };
+        let got = [secure(&p, Writers::Nobody), secure(&p, Writers::Admins)];
+        for e in got.iter().filter_map(|r| r.as_ref().err()) {
+            assert!(
+                e.starts_with(&format!("{} ", part.display())),
+                "{e} is not for {}",
+                part.display()
+            );
+        }
+        got
+    }
+
+    #[test]
+    fn secure_refuses_every_right_that_changes_the_program_or_a_folder_above() {
+        use crate::private_macos::{FILE_CHANGES, FOLDER_CHANGES, READ_ONLY};
+        let t = Temp::new("acl-rights");
+        let dir = real(&t);
+        for (on_folder, names) in [(false, FILE_CHANGES), (true, FOLDER_CHANGES)] {
+            for (bit, name) in names {
+                let got =
+                    with_raw_entry(&dir, &format!("{on_folder}-{name}"), on_folder, *bit as u32);
+                for r in got {
+                    let e = r.expect_err(name);
+                    assert!(
+                        e.contains(&format!("user:daemon change it ({name})")),
+                        "{e}"
+                    );
+                }
+            }
+            // Every read-only right at once passes.
+            let got = with_raw_entry(
+                &dir,
+                &format!("{on_folder}-reads"),
+                on_folder,
+                READ_ONLY as u32,
+            );
+            assert_eq!(got, [Ok(()), Ok(())], "on a folder: {on_folder}");
+            // A right no one names is refused, named by its number.
+            let got = with_raw_entry(&dir, &format!("{on_folder}-unknown"), on_folder, 1 << 14);
+            for r in got {
+                let e = r.expect_err("bit 14");
+                assert!(e.contains("user:daemon change it (bit 14)"), "{e}");
+            }
+        }
+    }
+
+    #[test]
+    fn secure_refuses_the_generic_write_and_all_rights() {
+        let t = Temp::new("acl-generic");
+        let dir = real(&t);
+        for on_folder in [false, true] {
+            for (bit, name) in [(23, "generic_write"), (21, "generic_all")] {
+                let got = with_raw_entry(&dir, &format!("{on_folder}-{name}"), on_folder, 1 << bit);
+                for r in got {
+                    let e = r.expect_err(name);
+                    assert!(e.contains(&format!("({name})")), "{e}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -825,7 +924,7 @@ mod macos {
                 e.contains(&format!("user:daemon change it ({right})")),
                 "{e}"
             );
-            let clear = format!("`chmod -N {}`", f.display());
+            let clear = format!("`chmod -N {}`", crate::owned::shell_quoted(&f));
             assert!(e.contains(&clear), "{e} does not say {clear}");
             chmod(&["-N"], &f);
             assert_eq!(secure(&p, Writers::Nobody), Ok(()), "{right} cleared");
@@ -879,9 +978,10 @@ mod macos {
             &outer,
             "user:daemon allow add_file,directory_inherit,only_inherit",
         );
-        let early = outer.join("early");
-        file(&early, 0o700);
-        assert_eq!(secure(&early, Writers::Nobody), Ok(()));
+        // A file made in it takes nothing: the entry reaches folders only.
+        let plain = outer.join("plain");
+        file(&plain, 0o700);
+        assert_eq!(secure(&plain, Writers::Nobody), Ok(()));
 
         // A folder made in it inherits the entry, and is refused for it.
         let inner = outer.join("inner");
