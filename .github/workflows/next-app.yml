@@ -36,10 +36,9 @@ jobs:
   # The checks other than the native test: type check, lint, unit tests, the window's build, Rust
   # format, clippy and tests, and the app tools.
   checks:
-    # Pinned: the package names below are Ubuntu 24.04's. PLUXY_LINUX_RUNNER, else GitHub's; never
-    # PLUXY_LINUX_CLOUD_RUNNER: this job is shorter than native-build and the shards after it, so
-    # Namespace's vCPUs are kept for them (AGENTS.md, "Where jobs run").
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    # Pinned: the package names below are Ubuntu 24.04's. PLUXY_LINUX_CLOUD_RUNNER first, then
+    # PLUXY_LINUX_RUNNER (AGENTS.md, "Where jobs run").
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
