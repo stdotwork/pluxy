@@ -129,12 +129,13 @@ pub(crate) unsafe fn close_on_exec_from_3() -> io::Result<()> {
 pub(crate) enum Writers {
     /// No one: the app's own core and its native tools, which it installs in its own data folder.
     Nobody,
-    /// Also the members of the `admin` group, through a folder that group may write (never the
-    /// file itself): the program of a detached launch or of a managed runtime (`spawn.rs`), which
-    /// the person confirmed wherever it is installed. macOS makes `/Applications` root:admin 0775,
-    /// and Homebrew makes the folders of its prefix the installing user's, group admin, 0775 when
-    /// that user is an admin; refusing them would refuse a direct launch of any program installed
-    /// with Homebrew or inside an app in `/Applications`.
+    /// Also the members of the `admin` group, through a folder that group may write, by its mode
+    /// or an access list entry (never the file itself): the program of a detached launch or of a
+    /// managed runtime (`spawn.rs`), which the person confirmed wherever it is installed. macOS
+    /// makes `/Applications` root:admin 0775, and Homebrew makes the folders of its prefix the
+    /// installing user's, group admin, 0775 when that user is an admin; refusing them would
+    /// refuse a direct launch of any program installed with Homebrew or inside an app in
+    /// `/Applications`.
     ///
     /// What it costs: another admin account on this Mac, or a process running as one, can
     /// replace the program between this check and the exec (a replacement made before the check
@@ -196,11 +197,19 @@ fn same(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
         && (a.ctime(), a.ctime_nsec()) == (b.ctime(), b.ctime_nsec())
 }
 
+/// Why `secure` refuses a program.
+#[cfg(target_os = "macos")]
+const BY_PATH: &str =
+    "on macOS the app runs a program by its path, so no other user may be able to change it";
+
 /// Refused unless no user but root, this one and writers can change path or any folder above it:
 /// each is owned by root or this user and writable by neither its group nor others, except a
 /// folder writable by the `admin` group (and not others) when writers is `Admins`, and a sticky
 /// folder (`/tmp`), where only the owner of the entry below it (root or this user) can rename or
 /// remove it. No part of path may be a link (it is `F_GETPATH`'s, which resolves them).
+///
+/// An extended access list can let others in whatever the mode (`private_macos.rs`), so each
+/// part's entries, inherited ones too, are judged by what they allow (`acl_refusal`).
 #[cfg(target_os = "macos")]
 pub(crate) fn secure(path: &std::path::Path, writers: Writers) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
@@ -213,11 +222,14 @@ pub(crate) fn secure(path: &std::path::Path, writers: Writers) -> Result<(), Str
     let others_write = |m: &std::fs::Metadata| m.mode() & 0o022 != 0;
     let admins_write =
         |m: &std::fs::Metadata| m.mode() & 0o002 == 0 && admin.is_some_and(|g| m.gid() == g);
-    let refuse = |p: &std::path::Path, why: &str| {
-        Err(format!(
-            "{} {why}: on macOS the app runs a program by its path, so no other user may be able to change it",
-            p.display()
-        ))
+    let refuse = |p: &std::path::Path, why: &str| Err(format!("{} {why}: {BY_PATH}", p.display()));
+    let judge = |p: &std::path::Path, folder: bool| {
+        let entries = crate::private_macos::entries(p)
+            .map_err(|e| format!("{}: reading its access list: {e}", p.display()))?;
+        match acl_refusal(p, &entries, folder, me, if folder { admin } else { None }) {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     };
     if !path.is_absolute() {
         return refuse(path, "is not a full path");
@@ -240,6 +252,7 @@ pub(crate) fn secure(path: &std::path::Path, writers: Writers) -> Result<(), Str
             if others_write(&m) {
                 return refuse(p, "may be written by other users");
             }
+            judge(p, false)?;
             continue;
         }
         if !ft.is_dir() {
@@ -252,8 +265,55 @@ pub(crate) fn secure(path: &std::path::Path, writers: Writers) -> Result<(), Str
                 return refuse(p, "may be changed by other users");
             }
         }
+        judge(p, true)?;
     }
     Ok(())
+}
+
+/// Why `secure` refuses path for an entry of its access list (a file's, or with folder a
+/// folder's) that lets a user other than root and me change it, or None. Only an allow entry
+/// can: one that grants a right of `FILE_CHANGES` or `FOLDER_CHANGES` to anyone but root or me
+/// fails, except a grant to the group admin (given only for a folder when writers is `Admins`,
+/// as for its mode). A deny entry never does (a home folder carries `group:everyone deny
+/// delete`), nor an entry that applies only to what is made inside its folder: the program and
+/// each folder carry their own, inherited, copy of what reaches them, judged like an entry set on
+/// them. An allow entry fails even where an earlier deny entry takes the same right away, and a
+/// folder's `delete` counts as on the program: below a sticky folder anyone may add to, it lets
+/// that user move the folder aside and put their own in its place.
+#[cfg(target_os = "macos")]
+fn acl_refusal(
+    path: &std::path::Path,
+    entries: &[crate::private_macos::Entry],
+    folder: bool,
+    me: u32,
+    admin: Option<u32>,
+) -> Option<String> {
+    use crate::private_macos::{Subject, FILE_CHANGES, FOLDER_CHANGES};
+    let changes = if folder { FOLDER_CHANGES } else { FILE_CHANGES };
+    entries.iter().find_map(|e| {
+        if !e.allow || e.only_inherit {
+            return None;
+        }
+        let trusted = match e.subject {
+            Subject::User(uid) => uid == 0 || uid == me,
+            Subject::Group(gid) => admin == Some(gid),
+            Subject::Unknown(_) => false,
+        };
+        let granted: Vec<&str> = changes
+            .iter()
+            .filter(|(bit, _)| e.rights & bit != 0)
+            .map(|(_, name)| *name)
+            .collect();
+        (!trusted && !granted.is_empty()).then(|| {
+            format!(
+                "{p} has an access list entry, #{i}, that lets {who} change it ({rights}): {BY_PATH}; remove that entry with `chmod -a# {i} {p}`, or every entry with `chmod -N {p}`",
+                i = e.index,
+                p = path.display(),
+                who = e.subject,
+                rights = granted.join(","),
+            )
+        })
+    })
 }
 
 /// The `admin` group's number, looked up by its name: None, so that only the stricter rule holds,
