@@ -222,7 +222,7 @@ fn remembered_identity_binds_every_field_and_caches_only_unchanged_metadata() {
         )
         .is_err());
     fs::rename(exe, dir.join("old")).unwrap();
-    program(exe, b"replacement");
+    program(exe, b"MZ replacement");
     let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
     assert_eq!(c.hashes, 3);
     assert!(c
