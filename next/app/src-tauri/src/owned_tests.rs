@@ -633,14 +633,30 @@ mod macos {
         refused(Path::new("prog"), Path::new("prog"), Writers::Nobody);
     }
 
-    /// The `admin` group's number, as Directory Services gives it.
+    /// The `admin` group's number, looked up here with `getgrnam_r` (the thread-safe `getgrnam`),
+    /// not with the product's own lookup (`owned::admin_gid`), so the tests do not check the product
+    /// against itself. No subprocess: parsing `dscl`'s output, as this did before, now and then
+    /// found a last word that was not a number on cloud macOS runners, for a cause not found.
     fn admin_gid() -> u32 {
-        let out = std::process::Command::new("/usr/bin/dscl")
-            .args([".", "-read", "/Groups/admin", "PrimaryGroupID"])
-            .output()
-            .unwrap();
-        let text = String::from_utf8(out.stdout).unwrap();
-        text.split_whitespace().last().unwrap().parse().unwrap()
+        let mut g: libc::group = unsafe { std::mem::zeroed() };
+        let mut buf = vec![0 as libc::c_char; 1 << 20];
+        let mut found: *mut libc::group = std::ptr::null_mut();
+        let r = unsafe {
+            libc::getgrnam_r(
+                c"admin".as_ptr(),
+                &mut g,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut found,
+            )
+        };
+        assert!(
+            r == 0 && !found.is_null(),
+            "looking up the group admin: getgrnam_r returned {r} ({}), found {}",
+            std::io::Error::from_raw_os_error(r),
+            !found.is_null()
+        );
+        g.gr_gid
     }
 
     /// Gives p the group gid, which its owner may do only as a member of that group.
