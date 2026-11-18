@@ -458,10 +458,11 @@ impl Caller {
         // drains after a SIGTERM from outside the app (it closes its listener at once, with the
         // flag still unset), still goes out. On Linux and macOS it goes only to the core or into
         // the app's own copy of its listening socket (_hold): no other program can listen there
-        // while this caller holds it. On Windows the app holds no copy (_hold is None), so in
-        // the time before the app sees a crashed core's exit (up to 100 ms) such a call can
-        // reach another program that started listening there, key and all (README, Limits).
-        // Once the core has exited, the app refuses such waiting calls.
+        // while this caller holds it. On Windows the app holds no copy (_hold is None); there
+        // the client checks each new connection was accepted by the core's own process before
+        // sending on it (`Client::for_core`), so in the time before the app sees a crashed
+        // core's exit (up to 100 ms) another program that started listening there gets
+        // nothing. Once the core has exited, the app refuses such waiting calls.
         if self
             .gone
             .as_ref()
@@ -684,7 +685,7 @@ impl Connection {
         let core = ManagedCore::start(program, &name, &self.dirs.core, self.on_core_exit.clone())?;
         ready(&core, expected.as_deref())?;
         self.gone = Some(core.gone());
-        self.client = Some(Client::new(core.base(), None));
+        self.client = Some(Client::for_core(core.base(), core.pid()));
         self.key = Some(core.key().to_string());
         self.managed = Some(core);
         self.running = Some(id.to_string());
@@ -1584,7 +1585,7 @@ fn ready(core: &ManagedCore, expected: Option<&str>) -> Result<(), String> {
         .map_err(|e| format!("core said it listens on {}: {e}", core.base()))?;
     // The key goes only to a listener that is the started process's own.
     crate::managed::owns_listener(core, &base)?;
-    let client = Client::new(&base, None);
+    let client = Client::for_core(&base, core.pid());
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
         if let Some(why) = core.exited() {

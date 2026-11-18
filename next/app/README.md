@@ -164,10 +164,14 @@ mark: then the next start puts the same config back once more. If the app stops 
 starts, it does the same at its next start, also when that was a reinstall or rollback of the
 selected version; a copy it cannot read is an error, and the config is left as it is. From the
 moment the app begins to stop its core, or sees it exit, it sends nothing more to that address.
-On Windows the core binds the address itself and the app keeps no copy of the socket: between
-a crash of the core and the moment the app sees it exit (up to a tenth of a second: it checks
-every 100 ms), a call already under way can still go to that address with the management key,
-where another user's program could have started listening ([Limits](#limits)). On Linux and macOS the app keeps its
+On Windows the core binds the address itself and the app keeps no copy of the socket. Between a
+crash of the core and the moment the app sees it exit (up to a tenth of a second: it checks every
+100 ms), another user's program could start listening on that address. So before the app sends
+anything on a new connection to its core, it reads the system's TCP table: every connection the
+app has open to that address must have been accepted by the core's own process. If one was not,
+or the table does not settle within a second, the app sends nothing on it and the call fails. The
+app holds the core's process handle, so the core's process ID cannot pass to another process
+meanwhile. On Linux and macOS the app keeps its
 own copy of the core's listening socket for as long as anything in the app could still send
 there, so no other program can listen on that address in between: not while a crashed
 core's exit is being noticed, and not while the core drains after a stop, the app's or a SIGTERM
@@ -1660,10 +1664,6 @@ in the browser. The app updates itself only as a Linux AppImage.
   release feed. On Windows and macOS its steps run in the dialogs session's core run; the
   managed-core client-key check runs on Linux only. The store's Windows rules are checked by its
   unit tests on the Windows CI runner.
-- On Windows the app holds no copy of its core's listening socket, so in the moment between a
-  crash of the core and the app seeing it exit (up to a tenth of a second), a call already under
-  way can send the management key to that address, where another user's program could have
-  started listening. Linux and macOS hold the socket and have no such gap.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.

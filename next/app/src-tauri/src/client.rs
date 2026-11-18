@@ -150,11 +150,56 @@ fn transport_kind(error: &ureq::Error) -> &'static str {
     }
 }
 
+/// Passes on a connection the default connector made only once `managed::accepted_by` says
+/// every connection of this process to that address is process .0's, the app's core.
+#[cfg(windows)]
+#[derive(Debug)]
+struct AcceptedBy(u32);
+
+#[cfg(windows)]
+impl ureq::unversioned::transport::Connector<Box<dyn ureq::unversioned::transport::Transport>>
+    for AcceptedBy
+{
+    type Out = Box<dyn ureq::unversioned::transport::Transport>;
+
+    fn connect(
+        &self,
+        details: &ureq::unversioned::transport::ConnectionDetails,
+        chained: Option<Self::Out>,
+    ) -> Result<Option<Self::Out>, ureq::Error> {
+        let Some(t) = chained else {
+            return Ok(None);
+        };
+        // A pooled connection is not connected again; this runs for each new one.
+        crate::managed::accepted_by(self.0, &details.addrs).map_err(|why| {
+            ureq::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                why,
+            ))
+        })?;
+        Ok(Some(t))
+    }
+}
+
 impl Client {
     /// A client for the core at base (an origin, such as `http://127.0.0.1:8400`). With certs,
     /// https replies are checked against those certificates only; otherwise against the usual
     /// public roots.
     pub fn new(base: &str, certs: Option<Vec<Certificate<'static>>>) -> Client {
+        Client::build(base, certs, None)
+    }
+
+    /// A client for the core the app started, process pid, at base on this computer. On
+    /// Windows, where the app holds no copy of the core's listening socket, each new connection
+    /// is checked to be the core's own before anything is sent on it
+    /// (`managed::accepted_by`): a program that took the core's address after the core ended
+    /// gets no request, management key and all, and the call fails as `io`. Elsewhere the app
+    /// holds the core's socket while it calls (`managed::ManagedCore::hold`).
+    pub fn for_core(base: &str, pid: u32) -> Client {
+        Client::build(base, None, Some(pid))
+    }
+
+    fn build(base: &str, certs: Option<Vec<Certificate<'static>>>, core: Option<u32>) -> Client {
         let roots = match certs {
             Some(c) => RootCerts::Specific(Arc::new(c)),
             None => RootCerts::WebPki,
@@ -167,7 +212,7 @@ impl Client {
         } else {
             ureq::Proxy::try_from_env()
         };
-        let agent: ureq::Agent = ureq::Agent::config_builder()
+        let config = ureq::Agent::config_builder()
             .proxy(proxy)
             .http_status_as_error(false)
             .max_redirects(0)
@@ -176,8 +221,24 @@ impl Client {
             .timeout_global(Some(Duration::from_secs(300)))
             .user_agent("pluxy-app")
             .tls_config(TlsConfig::builder().root_certs(roots).build())
-            .build()
-            .into();
+            .build();
+        #[cfg(windows)]
+        let agent = match core {
+            Some(pid) => {
+                use ureq::unversioned::{resolver::DefaultResolver, transport::Connector as _};
+                ureq::Agent::with_parts(
+                    config,
+                    ureq::unversioned::transport::DefaultConnector::new().chain(AcceptedBy(pid)),
+                    DefaultResolver::default(),
+                )
+            }
+            None => config.into(),
+        };
+        #[cfg(not(windows))]
+        let agent: ureq::Agent = {
+            let _ = core;
+            config.into()
+        };
         Client {
             base: base.trim_end_matches('/').to_string(),
             agent,
@@ -380,6 +441,53 @@ mod tests {
         let r = Client::new("http://127.0.0.1:1", None).call("k", "GET", "/status", None);
         assert_eq!(r.status, 0);
         assert_eq!(r.error.unwrap().code, "io");
+    }
+
+    /// On Windows a client for the app's core sends nothing on a connection another process
+    /// accepted, on IPv4 and IPv6 loopback, and sends as usual on one the core accepted. The
+    /// listener is this test's own, so "another process" is process 4 (Windows' System
+    /// process), and the core is this one. `managed.rs` checks the same against the real core.
+    #[cfg(windows)]
+    #[test]
+    fn a_core_client_sends_only_on_connections_the_core_accepted() {
+        use std::io::{Read, Write};
+        for bind in ["127.0.0.1:0", "[::1]:0"] {
+            let listener = std::net::TcpListener::bind(bind).unwrap();
+            let addr = listener.local_addr().unwrap();
+            // The bytes each of two connections brought; a whole request is answered.
+            let server = std::thread::spawn(move || {
+                let mut got = Vec::new();
+                for _ in 0..2 {
+                    let (mut s, _) = listener.accept().unwrap();
+                    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    let mut head = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    while let Ok(n @ 1..) = s.read(&mut buf) {
+                        head.extend_from_slice(&buf[..n]);
+                        if head.windows(4).any(|w| w == b"\r\n\r\n") {
+                            s.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}")
+                                .unwrap();
+                            break;
+                        }
+                    }
+                    got.push(head.len());
+                }
+                got
+            });
+            let base = format!("http://{addr}");
+            let refused = Client::for_core(&base, 4).call("k", "GET", "/status", None);
+            let taken =
+                Client::for_core(&base, std::process::id()).call("k", "GET", "/status", None);
+            let got = server.join().unwrap();
+            assert_eq!(refused.status, 0, "{bind}: {refused:?}");
+            assert_eq!(refused.error.unwrap().code, "io", "{bind}");
+            assert_eq!(
+                got[0], 0,
+                "{bind}: the request went to a listener not the core's"
+            );
+            assert_eq!(taken.status, 200, "{bind}: {taken:?}");
+            assert!(got[1] > 0, "{bind}");
+        }
     }
 
     #[test]
