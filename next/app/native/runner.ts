@@ -5,20 +5,22 @@
 // Two kinds pass:
 //
 // - a GitHub-hosted runner: GITHUB_ACTIONS=true and RUNNER_ENVIRONMENT=github-hosted;
-// - one of Blacksmith's macOS runners, a VM made for one job, when the workflow names it
+// - one of Namespace's runners, a VM booted for one job, when the workflow names it
 //   (.github/workflows/next-app-platforms.yml). These report themselves self-hosted, so the job
 //   opts in: on the jobs it sends to the cloud runner, and only there, it sets
-//   PLUXY_EPHEMERAL_CI_RUNNER to the runner label it asked for. The label must be one of
-//   Blacksmith's macOS labels with a numbered version (blacksmith-<n>vcpu-macos-<version>: the
-//   variable pins the image, so not macos-latest), and the runner's own name that label, a dash and
-//   the VM's id, as Blacksmith's macOS runners have been named (observed, not documented: if
-//   Blacksmith changes it, this refuses, and the jobs fail rather than run elsewhere).
+//   PLUXY_EPHEMERAL_CI_RUNNER to the runner label it asked for. The label must be a Namespace
+//   runner profile (namespace-profile-<name>), the runner's own name nsc-runner-<instance id> (the
+//   instance Namespace starts for the job), and Namespace's own variable NAMESPACE_GITHUB_RUNTIME
+//   must be set. The names and the variable are what Namespace's runners showed in this repo's
+//   canary, each up for seconds when its job started; Namespace's docs don't describe them. If
+//   they change, this refuses, and the jobs fail rather than run elsewhere.
 //
 // A runner's name and labels are whatever its owner registers, so the name proves only which pool
 // the job went to, not that the machine is thrown away afterwards. That is why the provider is
 // named here rather than taken from the variable: a maintainer's own runner, or a pool of runners
 // on a maintainer's machine, does not pass whatever the variable says, unless it is registered
-// under Blacksmith's names. Another provider is a change to this file, with its review.
+// under Namespace's names and sets Namespace's variable. Another provider is a change to this
+// file, with its review.
 
 /** The environment variables the check reads. */
 export type RunnerEnv = Readonly<Record<string, string | undefined>>;
@@ -26,22 +28,20 @@ export type RunnerEnv = Readonly<Record<string, string | undefined>>;
 /** What a runner must be, for the refusal messages. */
 export const DISPOSABLE_RUNNER =
   "a disposable CI runner: GitHub-hosted (GITHUB_ACTIONS=true, RUNNER_ENVIRONMENT=github-hosted), " +
-  "or a Blacksmith macOS runner the workflow names in PLUXY_EPHEMERAL_CI_RUNNER (see native/runner.ts)";
+  "or a Namespace runner the workflow names in PLUXY_EPHEMERAL_CI_RUNNER (see native/runner.ts)";
 
-/** Blacksmith's macOS runner labels, such as blacksmith-6vcpu-macos-26. */
-const BLACKSMITH_MACOS_LABEL = /^blacksmith-[0-9]+vcpu-macos-[0-9][a-z0-9.]*$/;
-/** The id Blacksmith puts after the label in a runner's name, such as y4lzca6yzyu5qsma. */
-const BLACKSMITH_VM_ID = /^[a-z0-9]+$/;
+/** A Namespace runner profile's label, such as namespace-profile-macos-26. */
+const NAMESPACE_PROFILE_LABEL = /^namespace-profile-[a-z0-9][a-z0-9-]*$/;
+/** The name Namespace gives the runner it starts for a job, such as nsc-runner-sjv55ml7fcgn0. */
+const NAMESPACE_RUNNER_NAME = /^nsc-runner-[a-z0-9]{8,}$/;
 
 /** Whether env is that of a disposable CI runner, as this file's header says. */
 export function onDisposableRunner(env: RunnerEnv = process.env): boolean {
   if (env.GITHUB_ACTIONS !== "true") return false;
   if (env.RUNNER_ENVIRONMENT === "github-hosted") return true;
-  const label = env.PLUXY_EPHEMERAL_CI_RUNNER ?? "";
-  const name = env.RUNNER_NAME ?? "";
   return (
-    BLACKSMITH_MACOS_LABEL.test(label) &&
-    name.startsWith(`${label}-`) &&
-    BLACKSMITH_VM_ID.test(name.slice(label.length + 1))
+    NAMESPACE_PROFILE_LABEL.test(env.PLUXY_EPHEMERAL_CI_RUNNER ?? "") &&
+    NAMESPACE_RUNNER_NAME.test(env.RUNNER_NAME ?? "") &&
+    (env.NAMESPACE_GITHUB_RUNTIME ?? "") !== ""
   );
 }

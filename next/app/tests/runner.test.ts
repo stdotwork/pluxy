@@ -3,12 +3,13 @@ import { onDisposableRunner } from "../native/runner";
 
 // Which runners the Windows and macOS native tests start on (native/runner.ts).
 
-const label = "blacksmith-6vcpu-macos-26";
+// As a Namespace macOS runner showed it in this repo's canary.
 const cloud = {
   GITHUB_ACTIONS: "true",
   RUNNER_ENVIRONMENT: "self-hosted",
-  RUNNER_NAME: `${label}-6vzq7pn7rqfrtrja`,
-  PLUXY_EPHEMERAL_CI_RUNNER: label,
+  RUNNER_NAME: "nsc-runner-sjv55ml7fcgn0",
+  PLUXY_EPHEMERAL_CI_RUNNER: "namespace-profile-macos-26",
+  NAMESPACE_GITHUB_RUNTIME: "1",
 };
 
 test("a GitHub-hosted runner passes", () => {
@@ -21,15 +22,11 @@ test("a GitHub-hosted runner passes", () => {
   ).toBe(true);
 });
 
-test("a Blacksmith macOS runner the workflow names passes", () => {
+test("a Namespace runner the workflow names passes", () => {
   expect(onDisposableRunner(cloud)).toBe(true);
-  expect(
-    onDisposableRunner({
-      ...cloud,
-      PLUXY_EPHEMERAL_CI_RUNNER: "blacksmith-12vcpu-macos-15",
-      RUNNER_NAME: "blacksmith-12vcpu-macos-15-46cmtnbjfuqltbnn",
-    }),
-  ).toBe(true);
+  expect(onDisposableRunner({ ...cloud, PLUXY_EPHEMERAL_CI_RUNNER: "namespace-profile-mac-large-2" })).toBe(
+    true,
+  );
 });
 
 test("outside GitHub Actions nothing passes", () => {
@@ -44,77 +41,43 @@ test("a self-hosted runner without the workflow's opt-in is refused", () => {
   expect(onDisposableRunner({ ...cloud, PLUXY_EPHEMERAL_CI_RUNNER: "" })).toBe(false);
 });
 
-test("a maintainer's self-hosted runner is refused even with the opt-in set", () => {
-  // Its name is not the cloud label's.
-  expect(onDisposableRunner({ ...cloud, RUNNER_NAME: "pluxy-runner-1" })).toBe(false);
-  // A bare yes, or a generic label, is no label its name starts with.
-  expect(
-    onDisposableRunner({ ...cloud, RUNNER_NAME: "pluxy-runner-1", PLUXY_EPHEMERAL_CI_RUNNER: "1" }),
-  ).toBe(false);
-  expect(
-    onDisposableRunner({ ...cloud, RUNNER_NAME: "pluxy-runner-1", PLUXY_EPHEMERAL_CI_RUNNER: "self-hosted" }),
-  ).toBe(false);
+test("a maintainer's runner is refused even with the opt-in set", () => {
+  // Its own name and no Namespace variable.
+  const own = { ...cloud, RUNNER_NAME: "pluxy-runner-1", NAMESPACE_GITHUB_RUNTIME: undefined };
+  expect(onDisposableRunner(own)).toBe(false);
+  // Named like Namespace's runners but without Namespace's variable.
+  expect(onDisposableRunner({ ...cloud, NAMESPACE_GITHUB_RUNTIME: undefined })).toBe(false);
+  expect(onDisposableRunner({ ...cloud, NAMESPACE_GITHUB_RUNTIME: "" })).toBe(false);
+  // Namespace's variable copied onto a runner with its own name.
+  expect(onDisposableRunner({ ...cloud, RUNNER_NAME: "mac-mini-1" })).toBe(false);
   expect(onDisposableRunner({ ...cloud, RUNNER_NAME: undefined })).toBe(false);
 });
 
-test("a maintainer's runner named after its own label is refused", () => {
-  // A Mac registered as mac-mini-1 with the label mac-mini, the variable set to that label.
-  expect(
-    onDisposableRunner({ ...cloud, PLUXY_EPHEMERAL_CI_RUNNER: "mac-mini", RUNNER_NAME: "mac-mini-1" }),
-  ).toBe(false);
-  // A Windows machine registered as windows-1, the variable set to the default label by mistake.
-  expect(
-    onDisposableRunner({ ...cloud, PLUXY_EPHEMERAL_CI_RUNNER: "windows", RUNNER_NAME: "windows-1" }),
-  ).toBe(false);
-  // A pool of one-job runners on a maintainer's machine, named <set>-runner-<id>.
-  expect(
-    onDisposableRunner({
-      ...cloud,
-      PLUXY_EPHEMERAL_CI_RUNNER: "pluxy-mac",
-      RUNNER_NAME: "pluxy-mac-runner-x7k2p",
-    }),
-  ).toBe(false);
+test("only a Namespace profile label counts", () => {
+  for (const label of [
+    "1",
+    "self-hosted",
+    "mac-mini",
+    "macos-latest",
+    "nscloud-macos-tahoe-arm64-6x14",
+    "namespace-profile-",
+    "namespace-profile-Macos-26",
+    "namespace-profile-macos-26;container.privileged=true",
+    "namespace-profile-macos 26",
+    "blacksmith-6vcpu-macos-26",
+  ])
+    expect(onDisposableRunner({ ...cloud, PLUXY_EPHEMERAL_CI_RUNNER: label })).toBe(false);
 });
 
-test("only Blacksmith's macOS labels count", () => {
-  // Windows stays on GitHub's runners, whatever Blacksmith names its Windows machines (this repo's
-  // canary saw blacksmith-<id>-<n>vcpu, other repos <label>-<id>).
-  expect(
-    onDisposableRunner({
-      ...cloud,
-      PLUXY_EPHEMERAL_CI_RUNNER: "blacksmith-4vcpu-windows-2025",
-      RUNNER_NAME: "blacksmith-01m7ncy73eqcfbb73g7wqgs893-4vcpu",
-    }),
-  ).toBe(false);
-  expect(
-    onDisposableRunner({
-      ...cloud,
-      PLUXY_EPHEMERAL_CI_RUNNER: "blacksmith-4vcpu-windows-2025",
-      RUNNER_NAME: "blacksmith-4vcpu-windows-2025-01m7ncy73eqcfbb73g7wqgs893",
-    }),
-  ).toBe(false);
-  expect(
-    onDisposableRunner({
-      ...cloud,
-      PLUXY_EPHEMERAL_CI_RUNNER: "blacksmith",
-      RUNNER_NAME: "blacksmith-y4lzca6yzyu5qsma",
-    }),
-  ).toBe(false);
-  expect(
-    onDisposableRunner({
-      ...cloud,
-      PLUXY_EPHEMERAL_CI_RUNNER: "Blacksmith-6vcpu-macos-26",
-      RUNNER_NAME: "Blacksmith-6vcpu-macos-26-y4lzca6yzyu5qsma",
-    }),
-  ).toBe(false);
-});
-
-test("the runner's name must be the label, a dash and the machine's own part", () => {
-  expect(onDisposableRunner({ ...cloud, RUNNER_NAME: `${label}-runner-y4lzca6yzyu5qsma` })).toBe(false);
-  expect(onDisposableRunner({ ...cloud, RUNNER_NAME: `${label}-Y4LZCA6YZYU5QSMA` })).toBe(false);
-  expect(onDisposableRunner({ ...cloud, RUNNER_NAME: `${label}-y4lz ca6y` })).toBe(false);
-  expect(onDisposableRunner({ ...cloud, RUNNER_NAME: label })).toBe(false);
-  expect(onDisposableRunner({ ...cloud, RUNNER_NAME: `${label}-` })).toBe(false);
-  expect(onDisposableRunner({ ...cloud, RUNNER_NAME: `${label}x-6vzq7pn7rqfrtrja` })).toBe(false);
-  expect(onDisposableRunner({ ...cloud, RUNNER_NAME: `my-${label}-6vzq7pn7rqfrtrja` })).toBe(false);
+test("the runner's name must be nsc-runner- and the instance id", () => {
+  for (const name of [
+    "nsc-runner-",
+    "nsc-runner-abc",
+    "nsc-runner-SJV55ML7FCGN0",
+    "nsc-runner-sjv55ml7-fcgn0",
+    "nsc-runner-sjv55ml7fcgn0\n",
+    "my-nsc-runner-sjv55ml7fcgn0",
+    "namespace-profile-macos-26-sjv55ml7fcgn0",
+  ])
+    expect(onDisposableRunner({ ...cloud, RUNNER_NAME: name })).toBe(false);
 });
