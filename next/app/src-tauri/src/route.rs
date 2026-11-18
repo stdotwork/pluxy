@@ -230,7 +230,9 @@ pub fn call_main_in(
         Ok(g)
     };
     // shortcut: the tests check `shown_line` and `native_action` alone, not that this call passes
-    // its line on: it needs the running app's `AppHandle`, which no test can make; test it once the app has a test harness for its Tauri state, or once this code takes that state instead of the handle.
+    // its line on: it needs the running app's `AppHandle`, which no test can make; test it once
+    // the app has a test harness for its Tauri state, or once this code takes that state instead
+    // of the handle.
     let shown = shown_line(shown, record.as_ref());
     let approval: Arc<Mutex<Option<String>>> = Arc::default();
     let origin = Origin {
