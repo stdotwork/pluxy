@@ -21,9 +21,10 @@
 ;   aside), `bundled\` and `pluxy.exe`. Removed first, so the template's removal of the folders it
 ;   knows finds them gone and never asks Windows to delete one at the next restart (its
 ;   `RMDir /REBOOTOK` of a folder that still holds a file would). Nothing is removed through a
-;   link: each entry's attributes are read before it is removed, and a link or junction, at any
-;   depth, is removed itself and never entered (NSIS's own `RMDir /r` enters a junction and
-;   empties what it points to). Unless the uninstaller runs for an update (/UPDATE), the app's own
+;   link: each entry's attributes are read before it is removed, and a link or junction is
+;   removed itself and never entered (NSIS's own `RMDir /r` enters a junction and empties what it
+;   points to). The walk enters real folders at most 32 deep (PLUXY_DEEPEST) and leaves anything
+;   deeper where it is. Unless the uninstaller runs for an update (/UPDATE), the app's own
 ;   login item goes too: the `Run` value named with the app's identifier and Task Manager's value
 ;   of that name under `StartupApproved\Run`, only when the `Run` value is exactly this install's
 ;   command (`"<folder>\<program>.exe" --autostart`).
@@ -122,6 +123,10 @@ Function un.PluxyRemove
   Push $R3
   Push $0
   Push $1
+  ; shortcut: the attributes are read here and the folder is listed below by name, so a process
+  ; of the same user could swap a folder for a junction in between and have the walk enter it. It
+  ; gains nothing it could not delete itself. Upgrade by opening the folder once
+  ; (FILE_FLAG_OPEN_REPARSE_POINT), checking that handle and listing through it.
   System::Call 'kernel32::GetFileAttributesW(ws) i .r0' "$R0"
   ${If} $0 <> -1
     IntOp $1 $0 & 0x400 ; FILE_ATTRIBUTE_REPARSE_POINT

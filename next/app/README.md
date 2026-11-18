@@ -1641,9 +1641,9 @@ shortcut and, when run silently (`/S`), a desktop shortcut. Its hooks
   itself leaves in the folder, which it would not know (it stays the one the first version
   installed): an update's `.pluxy-*` staging folder and asides, `bundled\` and `pluxy.exe`. So
   Tauri's uninstaller then finds nothing it cannot remove, and never leaves a folder for Windows
-  to delete at the next restart. It reads each entry before removing it, at any depth, and
-  removes a link or junction itself, never what it points to (NSIS's own recursive delete would
-  follow a junction). It removes the
+  to delete at the next restart. It reads each entry before removing it and removes a link or
+  junction itself, never what it points to (NSIS's own recursive delete would follow a
+  junction). It enters real folders at most 32 deep and leaves anything deeper. It removes the
   app's login item (its `Run` value and Task Manager's value beside it) when that item runs this
   install's program. The app's data stays.
 
