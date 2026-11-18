@@ -164,14 +164,16 @@ mark: then the next start puts the same config back once more. If the app stops 
 starts, it does the same at its next start, also when that was a reinstall or rollback of the
 selected version; a copy it cannot read is an error, and the config is left as it is. From the
 moment the app begins to stop its core, or sees it exit, it sends nothing more to that address.
-On Windows the core binds the address itself and the app keeps no copy of the socket. Between a
-crash of the core and the moment the app sees it exit (up to a tenth of a second: it checks every
-100 ms), another user's program could start listening on that address. So before the app sends
-anything on a new connection to its core, it reads the system's TCP table: every connection the
-app has open to that address must have been accepted by the core's own process. If one was not,
-or the table does not settle within a second, the app sends nothing on it and the call fails. The
-app holds the core's process handle, so the core's process ID cannot pass to another process
-meanwhile. On Linux and macOS the app keeps its
+On Windows the core binds the address itself and the app keeps no copy of the socket. Another
+user's program can listen on that port too: one that starts listening between a crash of the core
+and the moment the app sees it exit (up to a tenth of a second: it checks every 100 ms), or one
+already listening on a wildcard address (`0.0.0.0`) while the core holds a loopback one, which
+Windows allows another account and which gets the core's connections as soon as the core's
+socket closes. So before the app sends anything on a new connection to its core, it reads the
+system's TCP table: every connection the app has open to that address must have been accepted by
+the core's own process. If one was not, or the table does not settle within a second, the app
+sends nothing on it and the call fails. The app holds the core's process handle, so the core's
+process ID cannot pass to another process meanwhile. On Linux and macOS the app keeps its
 own copy of the core's listening socket for as long as anything in the app could still send
 there, so no other program can listen on that address in between: not while a crashed
 core's exit is being noticed, and not while the core drains after a stop, the app's or a SIGTERM
@@ -772,7 +774,8 @@ a flag when a file is added and has no call that reports it, so no portal grant 
 the broker never reads the file behind it.
 
 Grants and approved signers are in `access.json` beside `connection.json`, readable only by your
-user (mode 0600, folder 0700), written by an exclusive temporary file, sync and rename. A damaged
+user (mode 0600, folder 0700, and on macOS no extended access list entry on the folder, so the
+file inherits none), written by an exclusive temporary file, sync and rename. A damaged
 or unsupported file is moved to `access.json.corrupt-<time>` and Access starts with no grants; if
 it cannot be moved, Access refuses grants and reads until it is fixed. Handles opened for reads
 are kept while the app runs; after a restart each target is opened again and its identity
@@ -803,8 +806,9 @@ a native notice and a log message. Symlinks, files owned by another user and
 group/world-writable files are refused; remembering stays disabled if the unsafe file cannot be
 safely preserved. Newly created settings folders use mode 0700 and files use 0600. On open and
 save, an existing folder owned by this user is tightened to 0700 if group/world-writable; a folder
-owned by another user is refused. Disabled persistence hides Remember. If saving fails after
-confirmation, the one-time token is still issued and a native notice/log reports the failure.
+owned by another user is refused. On macOS the folder is also emptied of extended access list
+entries, and a settings file with any entry is refused like a group/world-writable one. Disabled
+persistence hides Remember. If saving fails after confirmation, the one-time token is still issued and a native notice/log reports the failure.
 On Windows the same checks read the owner and access list instead of the mode: the file and
 folder must be owned by this user, by the owner this process gives what it makes (for an elevated
 administrator, the Administrators group) or by SYSTEM, and have a protected access list (one that
@@ -1626,13 +1630,22 @@ in the browser. The app updates itself only as a Linux AppImage.
   native run.
 - Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
   entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the
-  local data folder, private by its access list. Secrets are kept in a file
-  only the user may read (0600 on Linux and macOS) in the app's data folder, not in the system
-  keyring, and only exact values are redacted. On macOS the modes are checked, not extended access
-  lists. The window has no vault page yet. Secrets reach
-  native tools' pipes and the environment of a process a confirmed launch starts (the launching
-  tool holds only a reference); a client key is checked at each use, also at a launch's spawn and
-  each restart. Backups have no retention: a package keeps at most 256.
+  local data folder, private by its access list. Secrets are kept in a file only the user may read
+  (0600 on Linux and macOS) in the app's data folder, not in the system keyring, and only exact
+  values are redacted. On macOS, where an extended access list can let others in whatever the mode,
+  a vault folder with any entry is given an empty list (as a too-open one is tightened to 0700, so
+  nothing made in it inherits an entry) and a vault file with any is refused. The app's other
+  private folders (Access's store, remembered launches, cores, extensions, the instance folder and
+  the app's core's folder) are emptied the same way; files written privately are made, where the
+  volume supports access lists, with an empty list that takes nothing from their folder; and the
+  remembered launches file, the instance folder's lock and address and an installed core's files are
+  refused with any entry. In the core's folder its config, its `credentials` and `packages` folders
+  and each credential file (not one that is a link) are emptied of entries before the core starts,
+  not refused: the core owns them. Other files and folders already inside these folders keep any
+  entry they had from before. The window has no vault page yet. Secrets reach native tools' pipes
+  and the environment of a process a confirmed launch starts (the launching tool holds only a
+  reference); a client key is checked at each use, also at a launch's spawn and each restart.
+  Backups have no retention: a package keeps at most 256.
 - Access: signers and grants can be made on Linux only (5.8 or later: grants record the `statx`
   mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one

@@ -91,19 +91,9 @@ fn write_private_with_nonce(
         name.push(format!(".{}.tmp", nonce()));
         let tmp = parent.join(name);
         #[cfg(unix)]
-        let made = {
-            use std::os::unix::fs::OpenOptionsExt;
-            fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(&tmp)
-        };
-        // Windows: with a protected access list allowing only this user and SYSTEM, given as it
-        // is made (`private_windows.rs`).
+        let made = create_temp(&folder, &tmp);
         #[cfg(windows)]
-        let made = crate::private_windows::create_new_private(&tmp);
+        let made = create_temp(&tmp);
         match made {
             Ok(f) => break (tmp, f),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -132,11 +122,41 @@ fn write_private_with_nonce(
     result
 }
 
+/// Makes tmp, in the folder open as folder, new and for writing, readable only by this user
+/// (`write_private`'s temporary file), never through a link. macOS: where the volume keeps access
+/// lists, with an empty one that takes nothing from the folder's, so no entry is on it at any
+/// moment (`private_macos.rs`).
+#[cfg(target_os = "macos")]
+fn create_temp(folder: &fs::File, tmp: &Path) -> io::Result<fs::File> {
+    crate::private_macos::create_new_in(folder, tmp, 0o600)
+}
+#[cfg(all(unix, not(target_os = "macos")))]
+fn create_temp(_folder: &fs::File, tmp: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(tmp)
+}
+/// Windows: with a protected access list allowing only this user and SYSTEM, given as it is made
+/// (`private_windows.rs`).
+#[cfg(windows)]
+fn create_temp(tmp: &Path) -> io::Result<fs::File> {
+    crate::private_windows::create_new_private(tmp)
+}
+
 /// The core config the app keeps, `<dir>/config.json`. The app writes it once, the first time,
 /// with a free loopback port that then stays the core's, fresh keys and folders under dir; after
 /// that it is the person's to edit (core reloads it), and the app only reads the management key.
+/// On macOS dir is first emptied of extended access list entries (`clear_core_folder`).
 pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
     let path = dir.join("config.json");
+    #[cfg(target_os = "macos")]
+    fs::create_dir_all(dir)
+        .and_then(|_| clear_core_folder(dir))
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
     if path.exists() {
         return Ok(path);
     }
@@ -155,6 +175,36 @@ pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
     let text = serde_json::to_vec_pretty(&cfg).expect("a JSON value");
     write_private(&path, &text).map_err(|e| format!("writing {}: {e}", path.display()))?;
     Ok(path)
+}
+
+/// macOS: the app's core folder holds the core's keys (config.json) and its credentials, so it
+/// keeps no extended access list entry, the rule of the app's other private folders
+/// (`private_macos.rs`): the folder, its config and the credentials and packages folders the
+/// config names by default are given an empty list, and so is each credential file with an
+/// entry (cleared, not refused: the core owns them, and refusing would stop it). The folder is
+/// opened by its path and `credentials` is listed by its path; what is inside the folder is
+/// opened beneath it, never through a link, so a linked credential file is skipped. The core
+/// writes into folders that pass nothing on.
+#[cfg(target_os = "macos")]
+fn clear_core_folder(dir: &Path) -> io::Result<()> {
+    use crate::private_macos::{clear_entries, open_beneath};
+    let root = fs::File::open(dir)?;
+    clear_entries(&root)?;
+    if let Some(f) = open_beneath(&root, "config.json", false)? {
+        clear_entries(&f)?;
+    }
+    if let Some(d) = open_beneath(&root, "packages", true)? {
+        clear_entries(&d)?;
+    }
+    if let Some(d) = open_beneath(&root, "credentials", true)? {
+        clear_entries(&d)?;
+        for e in fs::read_dir(dir.join("credentials"))? {
+            if let Some(f) = open_beneath(&d, e?.file_name(), false)? {
+                clear_entries(&f)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The address core is to listen on, from `listen` in the core config at path: an IP address and
@@ -743,10 +793,12 @@ fn tcp_table(class: i32) -> io::Result<Vec<TcpRow>> {
 /// connection this process has open to one of addrs was accepted by process pid, its core,
 /// before anything is sent on a new one (`client::Client::for_core`). The system's table of
 /// connections lists both ends of each, with the process that owns each end, every user's. The
-/// new connection is one of ours (the transport does not say which), so all are judged: a
-/// program that took the core's address after the core ended gets nothing, not even the
-/// request line. The app holds the core's process handle, so pid is not another process's
-/// meanwhile.
+/// new connection is one of ours (the transport does not say which), so all are judged.
+/// Another program on the core's port gets nothing, not even the request line: one listening
+/// on the core's address since the core ended, or one that was listening on a wildcard address
+/// over it all along (Windows lets another account bind `0.0.0.0` beside a loopback listener),
+/// which gets the core's connections as soon as the core's socket closes. The app holds the
+/// core's process handle, so pid is not another process's meanwhile.
 #[cfg(windows)]
 pub(crate) fn accepted_by(pid: u32, addrs: &[std::net::SocketAddr]) -> Result<(), String> {
     use windows_sys::Win32::NetworkManagement::IpHelper::TCP_TABLE_OWNER_PID_CONNECTIONS;
@@ -945,6 +997,72 @@ mod tests {
     }
 
     use super::*;
+
+    /// macOS: a file written privately takes nothing from its folder's inheritable access list
+    /// entries, also while it is being written, so it is as private as its 0600 mode says.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn private_write_has_no_access_list_on_macos() {
+        let dir = temp("acl");
+        crate::private_macos::add_entry(&dir, "everyone allow list,file_inherit");
+        let has =
+            |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+        // The control: a file made the plain way inherits the entry.
+        let plain = dir.join("plain.json");
+        fs::write(&plain, b"{}").unwrap();
+        assert!(has(&plain));
+        // The temporary file write_private makes, checked on the descriptor it is made with,
+        // before anything else is done to it.
+        let folder = fs::File::open(&dir).unwrap();
+        let made = create_temp(&folder, &dir.join("connection.json.tmp")).unwrap();
+        assert!(!crate::private_macos::has_entries(&made).unwrap());
+        let path = dir.join("connection.json");
+        write_private(&path, b"{}").unwrap();
+        assert!(!has(&path));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// macOS: the core folder from an install whose folders others may use is emptied of
+    /// extended access list entries before the core starts: the folder, its config, the
+    /// credentials and packages folders and each credential file. The folder is opened by its
+    /// path; a link inside it is not followed.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_core_folder_keeps_no_access_list() {
+        use crate::private_macos::add_entry;
+        let base = temp("core-acl");
+        let dir = base.join("core");
+        ensure_config(&dir).unwrap();
+        let creds = dir.join("credentials");
+        let packages = dir.join("packages");
+        fs::create_dir_all(&creds).unwrap();
+        fs::create_dir_all(&packages).unwrap();
+        let cred = creds.join("account.json");
+        fs::write(&cred, b"{}").unwrap();
+        // A link to a file outside, whose entry is not the app's to change.
+        let outside = base.join("outside.json");
+        fs::write(&outside, b"{}").unwrap();
+        add_entry(&outside, "everyone allow read");
+        std::os::unix::fs::symlink(&outside, creds.join("link.json")).unwrap();
+        let inherit = "everyone allow list,file_inherit,directory_inherit";
+        add_entry(&dir, inherit);
+        add_entry(&dir.join("config.json"), "everyone allow write");
+        add_entry(&creds, inherit);
+        add_entry(&packages, inherit);
+        add_entry(&cred, "everyone allow read");
+        let has =
+            |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+        let all = [&dir, &dir.join("config.json"), &creds, &packages, &cred];
+        for p in all {
+            assert!(has(p), "{}", p.display());
+        }
+        ensure_config(&dir).unwrap();
+        for p in all {
+            assert!(!has(p), "{}", p.display());
+        }
+        assert!(has(&outside));
+        fs::remove_dir_all(base).unwrap();
+    }
 
     fn temp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("pluxy-app-{name}-{}", random_key()));
@@ -1146,12 +1264,33 @@ mod tests {
             );
             assert_eq!(r.status, 0, "{r:?}");
         }
+        // Another program (this test) listening on the wildcard address over the core's port
+        // while the core runs, as Windows lets another account do: connections still reach the
+        // core while it runs, and go to that program at once when it ends.
+        #[cfg(windows)]
+        let wildcard = match TcpListener::bind(("0.0.0.0", port)) {
+            Ok(l) => {
+                let r = crate::client::Client::for_core(&base, core.pid()).call(
+                    core.key(),
+                    "GET",
+                    "/status",
+                    None,
+                );
+                assert_eq!(r.status, 200, "with a wildcard listener beside it: {r:?}");
+                Some(l)
+            }
+            Err(e) => {
+                eprintln!("the wildcard over {base} could not be bound while the core ran: {e}");
+                None
+            }
+        };
         core.stop();
         let why = core.exited().expect("the core stopped");
         assert!(cfg!(windows) || why.contains("exit status: 0"), "{why}");
-        // Once the core has ended, another program (this test) listens on its address: a client
-        // for the core sends it nothing. The app holds the ended core's process handle, so its
-        // process ID is no other process's.
+        // Once the core has ended, another program (this test) listens where its connections
+        // go: on the wildcard bound above, or else on the core's own address from now on. A
+        // client for the core sends it nothing. The app holds the ended core's process handle,
+        // so its process ID is no other process's.
         #[cfg(windows)]
         {
             use std::io::Read;
@@ -1160,15 +1299,18 @@ mod tests {
                 .socket_addrs(|| None)
                 .unwrap()[0];
             let deadline = Instant::now() + Duration::from_secs(10);
-            let other = loop {
-                match TcpListener::bind(addr) {
-                    Ok(l) => break l,
-                    Err(_) if Instant::now() < deadline => {
-                        std::thread::sleep(Duration::from_millis(100));
+            let other = wildcard
+                .map(Ok)
+                .unwrap_or_else(|| loop {
+                    match TcpListener::bind(addr) {
+                        Ok(l) => break Ok(l),
+                        Err(_) if Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                        Err(e) => break Err(e),
                     }
-                    Err(e) => panic!("listening on {addr} after the core ended: {e}"),
-                }
-            };
+                })
+                .unwrap_or_else(|e| panic!("listening on {addr} after the core ended: {e}"));
             let server = std::thread::spawn(move || {
                 let (mut s, _) = other.accept().unwrap();
                 s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();

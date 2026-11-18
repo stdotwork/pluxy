@@ -54,6 +54,8 @@ mod page_frames;
 pub mod pages;
 mod place;
 mod privacy;
+#[cfg(target_os = "macos")]
+mod private_macos;
 #[cfg(windows)]
 mod private_windows;
 // Built and tested on every platform; the app starts tools where `native_stack` is set

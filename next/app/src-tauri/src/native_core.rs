@@ -279,17 +279,34 @@ fn act(
     let before = seq(main)?;
     call(main, cmd, args)?;
     ui::wait_shown(app, DIALOG)?;
-    let text = ui::texts(app, DIALOG)?.join("\n");
+    let texts = ui::texts(app, DIALOG)?;
+    let what = shown_what(&texts)
+        .ok_or_else(|| format!("the {cmd} dialog shows no action: {}", texts.join("\n")))?;
     for want in shows {
-        // The dialog shows the action as JSON too, where a Windows path's `\` is doubled.
-        let quoted = json!(want).to_string();
         require(
-            text.contains(want.as_str()) || text.contains(quoted.trim_matches('"')),
-            format!("the {cmd} dialog does not show {want}: {text}"),
+            what.contains(want.as_str()),
+            format!("the {cmd} dialog's action does not say {want}: {what}"),
         )?;
     }
     ui::press(app, DIALOG, key)?;
     outcome(main, before)
+}
+
+/// The `what` of the action the dialog shows. The dialog shows the action only as JSON, where
+/// the same values come again outside `what` (the executor's digest and contract, the selected
+/// files), so the checks read `what` alone, parsed: a Windows path's doubled `\` is undone.
+/// The dialog's labels come as one text, the action's JSON among them: the first JSON object in
+/// it that has a `what`.
+fn shown_what(texts: &[String]) -> Option<String> {
+    texts.iter().find_map(|t| {
+        t.match_indices('{').find_map(|(i, _)| {
+            let v = serde_json::Deserializer::from_str(&t[i..])
+                .into_iter::<Value>()
+                .next()?
+                .ok()?;
+            v["what"].as_str().map(String::from)
+        })
+    })
 }
 
 /// The SHA-256 of release version's archive, as the core source's index (the runner's) gives it
@@ -568,4 +585,34 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
                "status": status, "reported": reported, "installed": installed(&cores)}),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shown_what;
+
+    /// The dialog's text as the UI driver reads it: its labels, the action's JSON among them,
+    /// with values repeated outside `what`. Only `what` counts, with a Windows path as it is.
+    #[test]
+    fn only_the_actions_what_counts() {
+        let review = serde_json::to_string_pretty(&serde_json::json!({
+            "what": "Install core 1.2.0 from C:\\Users\\x\\core.tar.gz (SHA-256 aaa)",
+            "chain": [{"id": "pluxy app", "digest": "ccc"}],
+            "executor": {"digest": "bbb", "contract": "core 9.9.9"},
+            "files": [{"selected": "C:\\other\\core.tar.gz"}],
+        }))
+        .unwrap();
+        let texts = vec![format!("Confirm this action?\n{review}\nConfirm\nCancel")];
+        let what = shown_what(&texts).expect("the action's what");
+        for shown in ["1.2.0", "C:\\Users\\x\\core.tar.gz", "aaa"] {
+            assert!(what.contains(shown), "{shown} not in {what}");
+        }
+        for elsewhere in ["bbb", "ccc", "9.9.9", "C:\\other\\core.tar.gz"] {
+            assert!(
+                !what.contains(elsewhere),
+                "{elsewhere} taken from outside what"
+            );
+        }
+        assert_eq!(shown_what(&["Confirm\nCancel".to_string()]), None);
+    }
 }

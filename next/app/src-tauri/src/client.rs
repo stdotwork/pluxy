@@ -192,8 +192,9 @@ impl Client {
     /// A client for the core the app started, process pid, at base on this computer. On
     /// Windows, where the app holds no copy of the core's listening socket, each new connection
     /// is checked to be the core's own before anything is sent on it
-    /// (`managed::accepted_by`): a program that took the core's address after the core ended
-    /// gets no request, management key and all, and the call fails as `io`. Elsewhere the app
+    /// (`managed::accepted_by`): another program on the core's port (one listening there since
+    /// the core ended, or one on a wildcard address over it all along) gets no request,
+    /// management key and all, and the call fails as `io`. Elsewhere the app
     /// holds the core's socket while it calls (`managed::ManagedCore::hold`).
     pub fn for_core(base: &str, pid: u32) -> Client {
         Client::build(base, None, Some(pid))

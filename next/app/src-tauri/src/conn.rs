@@ -460,9 +460,11 @@ impl Caller {
         // the app's own copy of its listening socket (_hold): no other program can listen there
         // while this caller holds it. On Windows the app holds no copy (_hold is None); there
         // the client checks each new connection was accepted by the core's own process before
-        // sending on it (`Client::for_core`), so in the time before the app sees a crashed
-        // core's exit (up to 100 ms) another program that started listening there gets
-        // nothing. Once the core has exited, the app refuses such waiting calls.
+        // sending on it (`Client::for_core`). So in the time before the app sees a crashed
+        // core's exit (up to 100 ms), another program gets nothing: one that started listening
+        // there, or one already listening on a wildcard address over it, which connections
+        // reach at once when the core's socket closes. Once the core has exited, the app
+        // refuses such waiting calls.
         if self
             .gone
             .as_ref()

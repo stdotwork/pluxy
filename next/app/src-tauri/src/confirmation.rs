@@ -732,6 +732,12 @@ fn private_file(file: &File) -> Result<(), String> {
                 .into(),
         );
     }
+    // macOS: an extended access list entry could let another user change it whatever the mode
+    // (`private_macos.rs`).
+    #[cfg(target_os = "macos")]
+    if crate::private_macos::has_entries(file).map_err(|e| e.to_string())? {
+        return Err("settings must have no extended access list".into());
+    }
     Ok(())
 }
 /// Windows: a regular file with an accepted owner and a protected access list allowing only this
@@ -811,6 +817,10 @@ fn secure_parent(path: &Path, create: bool) -> Result<(), String> {
         f.set_permissions(fs::Permissions::from_mode(0o700))
             .map_err(|e| e.to_string())?;
     }
+    // macOS: no extended access list entry either, so no one else may change it through one and
+    // the settings file inherits none (`private_macos.rs`).
+    #[cfg(target_os = "macos")]
+    crate::private_macos::clear_entries(&f).map_err(|e| format!("settings folder: {e}"))?;
     Ok(())
 }
 /// Windows: the folder and any folders missing above it made private as they are made, and the
