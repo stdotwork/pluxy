@@ -1337,11 +1337,11 @@ impl Store {
         }
         let tmp = self.staging().join(random_key());
         let result = (|| {
-            exclusive_dir(&tmp).map_err(|e| BundledRefusal::Store(format!("{}: {e}", tmp.display())))?;
+            exclusive_dir(&tmp)
+                .map_err(|e| BundledRefusal::Store(format!("{}: {e}", tmp.display())))?;
             let root = Dir::open(&tmp).map_err(|e| BundledRefusal::Store(e.to_string()))?;
-            let open_source = |p: &Path| {
-                Dir::open_read(p).map_err(|e| damaged(format!("{}: {e}", p.display())))
-            };
+            let open_source =
+                |p: &Path| Dir::open_read(p).map_err(|e| damaged(format!("{}: {e}", p.display())));
             let program_name = place
                 .program
                 .file_name()
@@ -1353,9 +1353,10 @@ impl Store {
                 let (from, rel) = if f.path == PROGRAM {
                     (&programs, program_name)
                 } else {
-                    let rel = f.path.strip_prefix("bundled/").ok_or_else(|| {
-                        damaged(format!("{} is not under bundled/", f.path))
-                    })?;
+                    let rel = f
+                        .path
+                        .strip_prefix("bundled/")
+                        .ok_or_else(|| damaged(format!("{} is not under bundled/", f.path)))?;
                     if bundled.is_none() {
                         bundled = Some(open_source(&place.bundled)?);
                     }
@@ -1390,7 +1391,10 @@ impl Store {
                 io::copy(&mut (&src).take(f.size + 1), &mut h).map_err(missing)?;
                 let (got, copied) = (artifact::hex(&h.hash.finalize()), h.size);
                 if got != f.sha256 || copied != f.size {
-                    return Err(damaged(format!("{} differs from what the app lists", f.path)));
+                    return Err(damaged(format!(
+                        "{} differs from what the app lists",
+                        f.path
+                    )));
                 }
                 out.sync_all()
                     .map_err(|e| BundledRefusal::Store(format!("{}: {e}", f.path)))?;

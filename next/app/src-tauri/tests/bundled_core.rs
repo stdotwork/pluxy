@@ -157,12 +157,22 @@ fn packaging_checks_the_named_release_against_its_signed_descriptor() {
     let mut paths: Vec<&str> = m.files.iter().map(|f| f.path.as_str()).collect();
     paths.sort();
     assert_eq!(paths, ["bundled/notes.txt", "pluxy"]);
-    let notes = m.files.iter().find(|f| f.path == "bundled/notes.txt").unwrap();
+    let notes = m
+        .files
+        .iter()
+        .find(|f| f.path == "bundled/notes.txt")
+        .unwrap();
     assert_eq!(
         notes.sha256,
         pluxy_app::artifact::hex(&<sha2::Sha256 as sha2::Digest>::digest(b"core 1.0.0"))
     );
-    assert!(m.files.iter().find(|f| f.path == "pluxy").unwrap().executable);
+    assert!(
+        m.files
+            .iter()
+            .find(|f| f.path == "pluxy")
+            .unwrap()
+            .executable
+    );
     assert_eq!(Manifest::parse(m.to_json().as_bytes(), "pluxy").unwrap(), m);
 
     // A signature that does not verify, a version the source does not offer, and a key not
@@ -170,7 +180,11 @@ fn packaging_checks_the_named_release_against_its_signed_descriptor() {
     for (version, keys, why) in [
         ("2.1.0", &src.keys, "signature"),
         ("9.9.9", &src.keys, "offers no core 9.9.9"),
-        ("1.0.0", &Keys::new(Path::new("/elsewhere")), "unknown publisher key"),
+        (
+            "1.0.0",
+            &Keys::new(Path::new("/elsewhere")),
+            "unknown publisher key",
+        ),
     ] {
         let out = root.join(format!("refused-{version}-{why}"));
         let e = bundled_core::prepare(keys, &src.index, version, &out).unwrap_err();
@@ -191,7 +205,12 @@ fn a_fresh_profile_runs_the_bundled_core_from_the_store_and_copies_only_its_file
     std::fs::write(b.place.bundled.join("extra.txt"), "not listed").unwrap();
     let profile = root.join("profile");
     let mut conn = start(&profile, &b);
-    assert_eq!(running(&mut conn).as_deref(), Some("1.0.0"), "{:?}", conn.view());
+    assert_eq!(
+        running(&mut conn).as_deref(),
+        Some("1.0.0"),
+        "{:?}",
+        conn.view()
+    );
     let store = Store::open(&profile.join("cores")).unwrap();
     let pid = conn.core_pid().unwrap();
     assert!(
@@ -222,7 +241,12 @@ fn a_fresh_profile_runs_the_bundled_core_from_the_store_and_copies_only_its_file
     std::fs::write(&notes, "changed").unwrap();
     drop(conn);
     let mut conn = start(&profile, &b);
-    assert_eq!(running(&mut conn).as_deref(), Some("1.0.0"), "{:?}", conn.view());
+    assert_eq!(
+        running(&mut conn).as_deref(),
+        Some("1.0.0"),
+        "{:?}",
+        conn.view()
+    );
     assert_eq!(std::fs::read(&notes).unwrap(), b"core 1.0.0");
     conn.stop_core();
 }
@@ -308,8 +332,9 @@ fn a_store_version_with_other_files_is_a_conflict_and_stays() {
     let v = conn.versions();
     let problem = v.bundled.unwrap().problem.unwrap();
     assert!(
-        problem.contains("hold a core 1.0.0 with other files than the core 1.0.0 that came with the app")
-            && !problem.contains("damaged"),
+        problem.contains(
+            "hold a core 1.0.0 with other files than the core 1.0.0 that came with the app"
+        ) && !problem.contains("damaged"),
         "{problem}"
     );
     assert_eq!(v.installed.len(), 1);
@@ -329,13 +354,19 @@ fn the_app_moves_only_its_own_selection_once_per_change_of_its_version() {
     };
     let app = Some(Chooser::App);
     // A fresh profile gets the bundled core.
-    assert_eq!(bundled_move(&s(None, None, None), "1.0.0", "0.1.0"), BundledMove::Switch);
+    assert_eq!(
+        bundled_move(&s(None, None, None), "1.0.0", "0.1.0"),
+        BundledMove::Switch
+    );
     // Once applied for this app version, nothing moves, also after it failed to start.
     assert_eq!(
         bundled_move(&s(Some("1.0.0"), app, Some("0.2.0")), "2.0.0", "0.2.0"),
         BundledMove::Stay
     );
-    assert_eq!(bundled_move(&s(None, None, Some("0.2.0")), "2.0.0", "0.2.0"), BundledMove::Stay);
+    assert_eq!(
+        bundled_move(&s(None, None, Some("0.2.0")), "2.0.0", "0.2.0"),
+        BundledMove::Stay
+    );
     // A new app version, up or down, moves a selection the app made.
     assert_eq!(
         bundled_move(&s(Some("1.0.0"), app, Some("0.1.0")), "2.0.0", "0.2.0"),
@@ -389,7 +420,11 @@ fn app_updates_move_an_app_selection_and_keep_a_rollback_the_person_chose() {
             b.app_version
         );
         // The bundled core of the app that runs stays installed, to switch back to.
-        assert!(conn.versions().installed.iter().any(|i| i.id == b.version()));
+        assert!(conn
+            .versions()
+            .installed
+            .iter()
+            .any(|i| i.id == b.version()));
         conn.stop_core();
     }
 
@@ -428,7 +463,10 @@ fn a_bundled_core_that_does_not_start_is_not_tried_again_for_the_same_app_versio
         );
         let st = state(&profile);
         assert_eq!(st.selected.as_deref(), Some("1.0.0"));
-        assert_eq!(st.failed.as_ref().map(|f| f.version.as_str()), Some("3.0.0"));
+        assert_eq!(
+            st.failed.as_ref().map(|f| f.version.as_str()),
+            Some("3.0.0")
+        );
         assert_eq!(st.bundled_for.as_deref(), Some("0.2.0"));
         assert_eq!(
             std::fs::read_to_string(&starts).unwrap().lines().count(),

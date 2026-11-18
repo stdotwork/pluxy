@@ -38,6 +38,11 @@
 // binary is refused. Then the release command (package.ts release) must pass a clean release
 // build and a clean AppImage, and refuse the test package (renamed or not) and an AppImage holding
 // a test-feature binary.
+// In a session of its own (bundled.ts, bundled-session.ts, bundled-steps.ts, bundled_native.rs),
+// the core the test package comes with: a fresh managed profile runs it from the app's own cores
+// with its packages, with no confirmation; the update build moves the app's own selection to its
+// core and a rollback the person confirmed stays across app versions; an extra file beside it is
+// not copied; a damaged one and a conflicting store version are refused with their messages.
 // In a session of its own (update.ts, update-session.ts, update_native.rs), the signed
 // application update: the test package refuses to update without its trust profile and when its
 // program says it came from a .deb, an .rpm or no package; refuses a lower feed, a bad signature
@@ -259,6 +264,7 @@ import { createInterface } from "node:readline";
 import { buildAccessFixtures } from "./access";
 import { buildAdmissionFixtures, MARKER_FILE, PROFILE_FILE } from "./admission";
 import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
+import { runBundled } from "./bundled";
 import { buildClaudeCodeFixtures } from "./claude-code";
 import { buildClaudeDesktopFixtures } from "./claude-desktop";
 import { buildCodexFixtures } from "./codex";
@@ -3110,6 +3116,27 @@ func main() {
           problems.push(...upd.problems.map((x) => `update: ${x}`));
         } else {
           problems.push("update: there is no test package to update");
+        }
+      }
+
+      // The core that comes with the app (bundled.ts, bundled-session.ts, bundled-steps.ts,
+      // bundled_native.rs): the test package installs and selects its own core, keeps the
+      // person's choice, and refuses a damaged one and a conflicting store version.
+      if (runsSession("bundled core")) {
+        if (testPackage) {
+          const b = await runBundled({
+            packageJson: join(packageDir, "test-package.json"),
+            probe,
+            appImage,
+            timeoutMs: 900_000,
+            sessions,
+            stopSession,
+            removeRun,
+          });
+          if (b.setup !== undefined) throw new SetupError(b.setup);
+          problems.push(...b.problems.map((x) => `bundled core: ${x}`));
+        } else {
+          problems.push("bundled core: there is no test package to run");
         }
       }
     } finally {

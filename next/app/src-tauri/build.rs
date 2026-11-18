@@ -52,7 +52,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PLUXY_BUNDLED_CORE");
     let bundled = match std::env::var_os("PLUXY_BUNDLED_CORE").filter(|v| !v.is_empty()) {
         Some(path) => {
-            println!("cargo:rerun-if-changed={}", std::path::Path::new(&path).display());
+            println!(
+                "cargo:rerun-if-changed={}",
+                std::path::Path::new(&path).display()
+            );
             let bytes = std::fs::read(&path).expect("PLUXY_BUNDLED_CORE names no readable file");
             let program = if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
                 "pluxy.exe"
@@ -65,7 +68,8 @@ fn main() {
         }
         None => "null".into(),
     };
-    std::fs::write(out.join("bundled_core.json"), bundled).expect("write the bundled core's manifest");
+    std::fs::write(out.join("bundled_core.json"), bundled)
+        .expect("write the bundled core's manifest");
     println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
     println!("cargo:rerun-if-changed=tauri.conf.json");
     println!("cargo:rerun-if-changed=tauri.linux.conf.json");

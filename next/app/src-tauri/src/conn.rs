@@ -10,8 +10,8 @@
 //! Nothing in this module needs Tauri, so the tests drive it against a real core.
 
 use crate::artifact::PublisherKeys;
-use crate::client::{certificates, Client, Reply, ROTATE};
 use crate::bundled_core::Bundled;
+use crate::client::{certificates, Client, Reply, ROTATE};
 use crate::cores::{self, Chooser, ConfigSnapshot, Store};
 use crate::managed::{core_program, write_private, Gone, Hold, ManagedCore, OnExit};
 use crate::recovery::Recovery;

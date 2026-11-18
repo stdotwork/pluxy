@@ -49,7 +49,12 @@ export interface Versions {
   source?: string;
   available: { version: string }[];
   source_error?: string;
-  installed: { id: string; kind: "signed" | "adopted" | "bundled"; version?: string; adopted_from?: string }[];
+  installed: {
+    id: string;
+    kind: "signed" | "adopted" | "bundled";
+    version?: string;
+    adopted_from?: string;
+  }[];
   selected?: string;
   previous?: string;
   failed?: { version: string; reason: string };

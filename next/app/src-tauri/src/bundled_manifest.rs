@@ -28,7 +28,9 @@ pub struct Manifest {
 }
 
 fn sha256_hex(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// A release version the store can hold as a version of its own (`cores::valid_id`), and not in
@@ -87,7 +89,9 @@ impl Manifest {
             .and_then(Value::as_array)
             .ok_or_else(|| bad("files"))?
         {
-            let f = f.as_object().ok_or_else(|| bad("a file is not an object"))?;
+            let f = f
+                .as_object()
+                .ok_or_else(|| bad("a file is not an object"))?;
             if f.keys()
                 .any(|k| !["path", "size", "sha256", "executable"].contains(&k.as_str()))
             {

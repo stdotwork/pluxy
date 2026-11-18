@@ -300,6 +300,14 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Build the window
         run: bun run build
+      # The cores the test package comes with are test releases built here with Go (package.ts).
+      - name: Set up Go
+        if: matrix.shard == 'package'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
       - name: Test package
         if: matrix.shard == 'package'
         run: bun run package:test "$RUNNER_TEMP/test-package"

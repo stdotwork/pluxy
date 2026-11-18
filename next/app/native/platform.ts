@@ -26,7 +26,12 @@
 //   app (normal identifier, no test trust) with it, are refused at the gate;
 // - bundle release gate: the release command (package.ts release) passes a clean release build and
 //   a clean bundle of this system's kind around it, and refuses a bundle holding the test-feature
-//   dev app, the test package renamed and the test package itself.
+//   dev app, the test package renamed and the test package itself;
+// - bundled core: the core the test package comes with (bundled-steps.ts, also run on Linux): a
+//   fresh managed profile runs it from the app's own cores with its packages, with no
+//   confirmation; the update build moves the app's own selection to its core and a rollback the
+//   person confirmed stays across app versions; an extra file beside it is not copied; a damaged
+//   one and a conflicting store version are refused with their messages.
 //
 // These write what a real run writes: the user's registry or LaunchAgents folder, and on Windows
 // the app's own folder in the user's profile. So it runs only on a GitHub-hosted runner, whose user
@@ -41,6 +46,7 @@ import {
   appendFileSync,
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -54,6 +60,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { MARKER_FILE, PROFILE_FILE } from "./admission";
+import { bundledScenario } from "./bundled-steps";
 import { Launch, type Step } from "./launch";
 import { SESSIONS, selectShard } from "./shards";
 
@@ -693,7 +700,15 @@ interface BundlePackage {
   /** The app executable inside it. */
   program: string;
   updater_pubkey: string;
-  update: { bundle: string; payload: string; target: string; version: string; signature: string };
+  bundled_core: { version: string; packages: string[] };
+  update: {
+    bundle: string;
+    payload: string;
+    target: string;
+    version: string;
+    signature: string;
+    bundled_core: { version: string; packages: string[] };
+  };
 }
 
 function testPackage(): BundlePackage | undefined {
@@ -777,10 +792,12 @@ async function bundle() {
   const exe = windows ? "pluxy-app-test.exe" : "pluxy-app-test";
   // What the bundle is, read with the system's own tools.
   if (windows) {
-    const files = readdirSync(made.bundle);
+    // The program, and the core it comes with beside it.
+    const files = readdirSync(made.bundle).sort();
+    const want = ["bundled", exe, "pluxy.exe"].sort();
     check(
-      JSON.stringify(files) === JSON.stringify([exe]),
-      `the folder bundle holds ${files.join(", ")}, not only ${exe}`,
+      JSON.stringify(files) === JSON.stringify(want),
+      `the folder bundle holds ${files.join(", ")}, not ${want.join(", ")}`,
     );
     check(made.program === join(made.bundle, exe), `the program ${made.program} is not the bundle's ${exe}`);
     check(
@@ -965,6 +982,64 @@ async function bundleReleaseGate() {
   }
 }
 
+/** The core the test package comes with (bundled-steps.ts), on its folder bundles (Windows) or
+ * app bundles (macOS): a changeable copy is the bundle copied (with ditto on macOS). */
+async function bundledCore() {
+  const made = testPackage();
+  if (!made) return;
+  const exe = windows ? "pluxy-app-test.exe" : "pluxy-app-test";
+  const programOf = (bundle: string) =>
+    windows ? join(bundle, exe) : join(bundle, "Contents", "MacOS", exe);
+  const bundledOf = (bundle: string) =>
+    windows ? join(bundle, "bundled") : join(bundle, "Contents", "Resources", "core", "bundled");
+  const copies: string[] = [];
+  try {
+    await bundledScenario({
+      first: {
+        label: `app ${appVersion}`,
+        program: made.program,
+        core: made.bundled_core.version,
+        packages: made.bundled_core.packages,
+      },
+      update: {
+        label: `app ${made.update.version}`,
+        program: programOf(made.update.bundle),
+        core: made.update.bundled_core.version,
+        packages: made.update.bundled_core.packages,
+      },
+      profile: () => {
+        const p = makeProfile(TEST_ID);
+        // Where the app keeps connection.json and its cores (lib.rs): on Windows the local
+        // application data, which WebView2 uses too.
+        const secrets = windows ? join(process.env.LOCALAPPDATA as string, TEST_ID) : p.dir;
+        return { env: p.env, secrets, cores: join(secrets, "cores"), remove: p.remove };
+      },
+      copy: (app, label) => {
+        const dir = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), `pluxy-bundled-${label}-`));
+        copies.push(dir);
+        const bundle = join(dir, windows ? TEST_PRODUCT : `${TEST_PRODUCT}.app`);
+        const from = windows ? dirname(app.program) : dirname(dirname(dirname(app.program)));
+        if (windows) {
+          cpSync(from, bundle, { recursive: true });
+        } else {
+          const copied = run("ditto", [from, bundle]);
+          if (copied.status !== 0) throw new Error(`ditto: ${copied.out}`);
+        }
+        return { program: programOf(bundle), bundled: bundledOf(bundle) };
+      },
+      launch: (program, label, env) => {
+        const l = new Launch(program, label, env);
+        launches.push(l);
+        return l;
+      },
+      check,
+      say,
+    });
+  } finally {
+    for (const d of copies) rmSync(d, { recursive: true, force: true });
+  }
+}
+
 // ---- the run --------------------------------------------------------------------------------
 
 async function main() {
@@ -974,6 +1049,7 @@ async function main() {
     ["window and tray", windowAndTray],
     ["bundle", bundle],
     ["bundle release gate", bundleReleaseGate],
+    ["bundled core", bundledCore],
   ];
   for (const [name, body] of sessions) {
     if (!runsSession(name)) continue;

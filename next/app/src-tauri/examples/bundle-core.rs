@@ -74,7 +74,8 @@ fn main() {
         let manifest = pluxy_app::bundled_core::prepare(&keys, index, version, &core)?;
         readable(&core).map_err(|e| format!("{}: {e}", core.display()))?;
         let path = out.join("bundled-core.json");
-        std::fs::write(&path, manifest.to_json()).map_err(|e| format!("{}: {e}", path.display()))?;
+        std::fs::write(&path, manifest.to_json())
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(format!(
             "bundle-core: core {version} checked against its signed descriptor ({} files) in {}; manifest {}",
             manifest.files.len(),

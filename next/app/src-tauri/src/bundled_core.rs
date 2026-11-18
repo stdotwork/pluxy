@@ -177,10 +177,22 @@ mod tests {
         for (files, why) in [
             (vec![("bundled/index.json", false)], "no pluxy program"),
             (vec![("pluxy", true), ("other", false)], "neither"),
-            (vec![("pluxy", true), ("bundled/../x", false)], "not a plain path"),
-            (vec![("pluxy", true), ("bundled//x", false)], "not a plain path"),
-            (vec![("pluxy", true), ("/bundled/x", false)], "not a plain path"),
-            (vec![("pluxy", true), ("bundled/a\\b", false)], "not a plain path"),
+            (
+                vec![("pluxy", true), ("bundled/../x", false)],
+                "not a plain path",
+            ),
+            (
+                vec![("pluxy", true), ("bundled//x", false)],
+                "not a plain path",
+            ),
+            (
+                vec![("pluxy", true), ("/bundled/x", false)],
+                "not a plain path",
+            ),
+            (
+                vec![("pluxy", true), ("bundled/a\\b", false)],
+                "not a plain path",
+            ),
             (
                 vec![("pluxy", true), ("bundled/A", false), ("bundled/a", false)],
                 "named twice",
@@ -189,7 +201,8 @@ mod tests {
             let e = Manifest::parse(&manifest(&files), "pluxy").unwrap_err();
             assert!(e.contains(why), "{files:?}: {e}");
         }
-        let mut v: serde_json::Value = serde_json::from_slice(&manifest(&[("pluxy", true)])).unwrap();
+        let mut v: serde_json::Value =
+            serde_json::from_slice(&manifest(&[("pluxy", true)])).unwrap();
         v["version"] = "custom-1".into();
         assert!(Manifest::parse(&serde_json::to_vec(&v).unwrap(), "pluxy").is_err());
         v["version"] = "1.0.0".into();

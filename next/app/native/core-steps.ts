@@ -45,8 +45,16 @@ function tar(args: string[], cwd: string) {
   return run("tar", args, cwd, { ...process.env, COPYFILE_DISABLE: "1" });
 }
 
-/** One release in the index: the archive of folder, its descriptor and a signature by key. */
-function release(dir: string, version: string, folder: string, key: KeyObject, keyId: string, bad = false) {
+/** One release in the index: the archive of folder, its descriptor and a signature by key. The
+ * test package's bundled cores (package.ts) are made with it too. */
+export function release(
+  dir: string,
+  version: string,
+  folder: string,
+  key: KeyObject,
+  keyId: string,
+  bad = false,
+) {
   const name = `pluxy-core-${version}-${PLATFORM.replace("/", "-")}.tar.gz`;
   tar(["-czf", join(dir, name), "-C", folder, "."], dir);
   const bytes = readFileSync(join(dir, name));
