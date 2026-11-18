@@ -217,8 +217,10 @@ pub(crate) fn installed_here(app: &AppHandle) -> Option<PathBuf> {
     format::here(app)
 }
 
-/// The digest an installed copy is pinned by (see `Pinned`). For the native test.
-#[cfg_attr(not(feature = "native-test"), allow(dead_code))]
+/// The digest an installed copy is pinned by (see `Pinned`). For the native test, and on Windows
+/// for the version an update starts, to check it runs from the copy the update named
+/// (`instance`).
+#[cfg_attr(not(any(windows, feature = "native-test")), allow(dead_code))]
 pub(crate) fn digest(path: &Path) -> Result<String, String> {
     format::digest(path)
 }

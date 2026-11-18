@@ -251,9 +251,10 @@ An update or rollback ([Application update](#application-update)) hands the prof
 version it starts without the profile ever being free. On Linux and macOS the app hands that
 version the lock itself (its open file, which the new version adopts). On Windows a lock cannot be
 handed on, so the app stops listening, writes `instance/successor.json` (a random nonce, the
-program's path and its SHA-256) and starts the new version with that nonce in
-`PLUXY_APP_SUCCESSOR`. A launch that finds the lock held, its nonce in that record (at most five
-minutes old), and itself the program the record names, byte for byte, removes the record and is
+program's path and the digest of its program set, as the update pins it) and starts the new
+version with that nonce in `PLUXY_APP_SUCCESSOR`. A launch that finds the lock held, its nonce in
+that record (at most five minutes old), and itself the program the record names, its program set
+having that digest, removes the record and is
 the app at once: it listens, so a later launch raises its window, while it waits for the lock,
 which the earlier version holds until it ends. Without the lock within 120 seconds it exits. Any
 other launch is an ordinary later launch.
