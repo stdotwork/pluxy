@@ -537,7 +537,10 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, dir: PathBuf) -> Result<(), S
                 json!({"pending": updates.join("pending.json").exists(),
                        "kept": kept, "kept_sha": digest(&kept).unwrap_or_default(),
                        "installed_sha": r["installed_sha"], "beside": r["beside"],
-                       "version": r["version"]}),
+                       "version": r["version"],
+                       // The name this start was launched as (the session spells it otherwise).
+                       "launched_as": std::env::current_exe().ok()
+                           .and_then(|e| e.file_name().map(|n| n.to_string_lossy().into_owned()))}),
             );
         }
         "update" => match stage(&dir).as_str() {

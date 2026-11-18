@@ -185,12 +185,25 @@ fn windows_name_key(name: &str) -> String {
         .collect()
 }
 
+/// Whether name has the form of a short (8.3) name Windows makes for a longer one: a stem of at
+/// most 8 characters ending in `~` and digits, and an extension of at most 3. On a volume that
+/// makes such names, it may be another entry's second name.
+fn short_alias(name: &str) -> bool {
+    let (stem, ext) = name.rsplit_once('.').unwrap_or((name, ""));
+    stem.chars().count() <= 8
+        && ext.chars().count() <= 3
+        && stem.rsplit_once('~').is_some_and(|(head, n)| {
+            !head.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
 /// Unpacks the update's `.tar.gz` gz into the empty folder into, refusing (with into left to its
 /// caller to remove) anything but the set of the program exe: at its top the program and `pluxy.exe`
 /// as plain files and `bundled` as a folder, each there, and below `bundled` folders and plain files
 /// only, each once; relative paths without `..`; names Windows holds as they are (no device name, no
-/// stream, no trailing dot or space, none of `\:<>"|?*` or control characters) and no two that
-/// differ only in case; no setuid, setgid or sticky bit; at most `MAX_ENTRIES` entries and
+/// stream, no trailing dot or space, none of `\:<>"|?*` or control characters, none in the form
+/// of a short name such as `PACKAG~1`) and no two that differ only in case; no setuid, setgid or
+/// sticky bit; at most `MAX_ENTRIES` entries and
 /// `MAX_BYTES` bytes.
 pub(super) fn unpack(gz: &[u8], into: &Path, exe: &str) -> Result<(), String> {
     let refuse = |what: String| Err(format!("The update's archive is refused: {what}."));
@@ -221,6 +234,12 @@ pub(super) fn unpack(gz: &[u8], into: &Path, exe: &str) -> Result<(), String> {
         for c in path.components() {
             match c {
                 Component::Normal(s) => match s.to_str() {
+                    Some(s) if short_alias(s) => {
+                        return refuse(format!(
+                            "{s:?} has the form of a Windows short (8.3) name, which may be \
+                             another entry's"
+                        ))
+                    }
                     Some(s) if !crate::vault::windows_refuses(s) => names.push(s.to_string()),
                     Some(s) => {
                         return refuse(format!("{s:?} is not a name Windows holds as it is"))
@@ -702,6 +721,55 @@ pub(super) mod tests {
         fs::remove_dir_all(&tmp).unwrap();
     }
 
+    // On Windows any reparse point is refused for what it is, also one that is not a link (a
+    // tag of a program's own, here with no program to handle it): its attribute, not its kind.
+    #[cfg(windows)]
+    #[test]
+    fn a_reparse_point_in_a_set_has_no_digest() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+        const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00a4;
+        const FSCTL_DELETE_REPARSE_POINT: u32 = 0x0009_00ac;
+        let tmp = temp("set-reparse");
+        set(&tmp, "0.1.0");
+        let file = tmp.join("bundled/index.json");
+        // A REPARSE_GUID_DATA_BUFFER without data: tag 0x1234 (not Microsoft's, not a name
+        // surrogate), its length, a reserved field, then a GUID.
+        let mut buf = [0u8; 24];
+        buf[..4].copy_from_slice(&0x1234u32.to_le_bytes());
+        buf[8..].copy_from_slice(b"pluxy-reparse-te");
+        let control = |code: u32| {
+            let f = fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(&file)
+                .unwrap();
+            let mut returned = 0u32;
+            // SAFETY: f is an open handle; buf is the input buffer of the length given; no
+            // output buffer.
+            let ok = unsafe {
+                DeviceIoControl(
+                    f.as_raw_handle(),
+                    code,
+                    buf.as_ptr().cast(),
+                    buf.len() as u32,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut returned,
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_ne!(ok, 0, "{code:#x}: {}", io::Error::last_os_error());
+        };
+        control(FSCTL_SET_REPARSE_POINT);
+        let e = digest(&tmp, EXE).unwrap_err();
+        assert!(e.contains("a link or another kind of file"), "{e}");
+        control(FSCTL_DELETE_REPARSE_POINT);
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
     #[test]
     fn a_copied_set_has_the_same_digest() {
         let tmp = temp("set-copy");
@@ -803,6 +871,21 @@ pub(super) mod tests {
                 "setuid",
                 with(&[(b"bundled/s", b'0', 0o4755, b"e", "")]),
                 "setuid",
+            ),
+            (
+                "setgid",
+                with(&[(b"bundled/s", b'0', 0o2755, b"e", "")]),
+                "setgid",
+            ),
+            (
+                "sticky",
+                with(&[(b"bundled/s/", b'5', 0o1755, b"", "")]),
+                "sticky",
+            ),
+            (
+                "an 8.3 name",
+                with(&[(b"bundled/PACKAG~1/x", b'0', 0o644, b"e", "")]),
+                "short (8.3) name",
             ),
             (
                 "a device name",
@@ -1009,6 +1092,34 @@ pub(super) mod tests {
         };
         super::super::write_json(&dir.join("pending.json"), &p).unwrap();
         (folder, dir, p)
+    }
+
+    /// The new version in place after an update (its asides beside it) and the kept set of the
+    /// earlier one staged again in the staging folder `.pluxy-update-<hex>` for a put-back, whose
+    /// record is written; returns the folder, the updates folder, the update's record and the
+    /// put-back's.
+    fn putting_back(tmp: &Path, hex: &str) -> (PathBuf, PathBuf, Pending, Pending) {
+        let (folder, dir, update) = staged(tmp, "update");
+        apply(
+            &Stop::never(),
+            &folder,
+            update.moves.as_ref().unwrap(),
+            None,
+        )
+        .unwrap();
+        let m = Moves::new(&format!("{STAGING}{hex}"), EXE);
+        let kept = super::super::kept_path(&dir, &update.from);
+        fs::create_dir(folder.join(&m.staging)).unwrap();
+        copy(&kept, &folder.join(&m.staging), EXE).unwrap();
+        let p = Pending {
+            kind: "put-back".into(),
+            from: update.to.clone(),
+            to: update.from.clone(),
+            moves: Some(m),
+            ..update.clone()
+        };
+        super::super::write_json(&dir.join("pending.json"), &p).unwrap();
+        (folder, dir, update, p)
     }
 
     fn names(folder: &Path) -> Vec<String> {
@@ -1264,28 +1375,9 @@ pub(super) mod tests {
     fn a_put_back_that_stops_part_way_is_finished() {
         for n in 0..=6 {
             let tmp = temp(&format!("set-putback-{n}"));
-            let (folder, dir) = (tmp.join("app"), tmp.join("updates"));
             // The new version is in place, the earlier one kept; the kept set is staged again.
-            let (_, _, update) = staged(&tmp, "update");
-            apply(
-                &Stop::never(),
-                &folder,
-                update.moves.as_ref().unwrap(),
-                None,
-            )
-            .unwrap();
-            let m = Moves::new(".pluxy-update-44556677eeff0011", EXE);
-            let kept = super::super::kept_path(&dir, &update.from);
-            fs::create_dir(folder.join(&m.staging)).unwrap();
-            copy(&kept, &folder.join(&m.staging), EXE).unwrap();
-            let p = Pending {
-                kind: "put-back".into(),
-                from: update.to.clone(),
-                to: update.from.clone(),
-                moves: Some(m.clone()),
-                ..update.clone()
-            };
-            super::super::write_json(&dir.join("pending.json"), &p).unwrap();
+            let (folder, dir, update, p) = putting_back(&tmp, "44556677eeff0011");
+            let m = p.moves.clone().unwrap();
             let r = apply(&Stop::after(n), &folder, &m, None);
             assert_eq!(r.is_ok(), n == 6, "{n}");
             if n == 5 {
@@ -1316,28 +1408,9 @@ pub(super) mod tests {
     #[test]
     fn a_put_back_part_that_is_not_the_kept_ones_is_not_moved_in() {
         let tmp = temp("set-putback-changed");
-        let (folder, dir) = (tmp.join("app"), tmp.join("updates"));
-        let (_, _, update) = staged(&tmp, "update");
-        apply(
-            &Stop::never(),
-            &folder,
-            update.moves.as_ref().unwrap(),
-            None,
-        )
-        .unwrap();
-        let m = Moves::new(".pluxy-update-8899aabbccddeeff", EXE);
-        let kept = super::super::kept_path(&dir, &update.from);
-        fs::create_dir(folder.join(&m.staging)).unwrap();
-        copy(&kept, &folder.join(&m.staging), EXE).unwrap();
+        let (folder, dir, _, p) = putting_back(&tmp, "8899aabbccddeeff");
+        let m = p.moves.clone().unwrap();
         fs::write(folder.join(&m.staging).join(CORE), b"someone else's").unwrap();
-        let p = Pending {
-            kind: "put-back".into(),
-            from: update.to.clone(),
-            to: update.from.clone(),
-            moves: Some(m.clone()),
-            ..update.clone()
-        };
-        super::super::write_json(&dir.join("pending.json"), &p).unwrap();
         let r = recover(
             &Stop::never(),
             &dir,
@@ -1367,6 +1440,192 @@ pub(super) mod tests {
         for part in parts(EXE) {
             assert!(v.contains(&folder.join(m.aside(part))), "{part}");
         }
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+    // The form of a short name Windows may give a longer one, and names that only look near it.
+    #[test]
+    fn only_a_name_in_the_form_of_a_short_name_is_one() {
+        for name in ["PACKAG~1", "packa~12.tar", "A~1", "AB~123.GZ", "x~0"] {
+            assert!(short_alias(name), "{name}");
+        }
+        for name in [
+            "packages-long",
+            "~1",
+            "notes~",
+            "a~b1",
+            "longer-name~1",
+            "PACKAG~1.long",
+            "v~1.2.3-long",
+            "index.json",
+            "packag~12.tar",
+        ] {
+            assert!(!short_alias(name), "{name}");
+        }
+    }
+
+    // A put-back finishes only over parts that are the kept set's: one already moved in that has
+    // changed since stops it there, and the parts after it are not moved.
+    #[test]
+    fn a_put_back_part_already_in_place_that_changed_stops_it() {
+        let tmp = temp("set-putback-in-place");
+        let (folder, dir, _, p) = putting_back(&tmp, "0011223344556677");
+        let m = p.moves.clone().unwrap();
+        // bundled\ is moved in, then the put-back stops; then a file in it changes.
+        assert!(apply(&Stop::after(2), &folder, &m, None).is_err());
+        fs::write(folder.join("bundled/index.json"), b"changed").unwrap();
+        let r = recover(
+            &Stop::never(),
+            &dir,
+            &p,
+            &folder,
+            EXE,
+            "0.2.0",
+            &folder.join(EXE),
+        );
+        assert!(
+            matches!(&r, Recovery::Left(e) if e.contains("not the kept copy's bundled")),
+            "{r:?}"
+        );
+        assert_eq!(fs::read(folder.join(CORE)).unwrap(), b"core new");
+        assert!(dir.join("pending.json").exists());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A put-back is finished only by one of its two versions: another one leaves it.
+    #[test]
+    fn a_put_back_is_left_to_its_own_versions() {
+        let tmp = temp("set-putback-other");
+        let (folder, dir, _, p) = putting_back(&tmp, "8877665544332211");
+        let m = p.moves.clone().unwrap();
+        assert!(apply(&Stop::after(2), &folder, &m, None).is_err());
+        let mixed = digest(&folder, EXE).unwrap();
+        let r = recover(
+            &Stop::never(),
+            &dir,
+            &p,
+            &folder,
+            EXE,
+            "0.3.0",
+            &folder.join(EXE),
+        );
+        assert_eq!(r, Recovery::Nothing);
+        assert_eq!(digest(&folder, EXE).unwrap(), mixed, "nothing moved");
+        assert!(dir.join("pending.json").exists());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // The kept set an undo puts back from must still have its pin: one changed since (here a part
+    // the undo would not compare) leaves the record as it is.
+    #[test]
+    fn a_kept_set_that_changed_undoes_nothing() {
+        let tmp = temp("set-kept-changed");
+        let (folder, dir, p) = staged(&tmp, "update");
+        let m = p.moves.as_ref().unwrap();
+        let _ = apply(&Stop::after(2), &folder, m, None);
+        let mixed = digest(&folder, EXE).unwrap();
+        let kept = super::super::kept_path(&dir, &p.from);
+        fs::write(kept.join(CORE), b"core changed").unwrap();
+        let r = recover(
+            &Stop::never(),
+            &dir,
+            &p,
+            &folder,
+            EXE,
+            "0.1.0",
+            &folder.join(EXE),
+        );
+        assert!(
+            matches!(&r, Recovery::Left(e) if e.contains("pinned digest")),
+            "{r:?}"
+        );
+        assert_eq!(digest(&folder, EXE).unwrap(), mixed, "nothing moved");
+        assert!(dir.join("pending.json").exists());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A new update or rollback is refused while the record names another install, or this one
+    // with parts aside (or with no move list to put them back by); a resolved one of this
+    // install's, or none, lets it go on.
+    #[test]
+    fn an_unfinished_record_refuses_a_new_one() {
+        let tmp = temp("set-open-record");
+        let (folder, dir, p) = staged(&tmp, "update");
+        let m = p.moves.clone().unwrap();
+        let open = || super::super::open_record(&dir, &folder);
+        open().unwrap();
+        let elsewhere = Pending {
+            installed: tmp.join("elsewhere"),
+            ..p.clone()
+        };
+        super::super::write_json(&dir.join("pending.json"), &elsewhere).unwrap();
+        assert!(open().unwrap_err().contains("Another copy of pluxy"));
+        let no_list = Pending {
+            moves: None,
+            ..p.clone()
+        };
+        super::super::write_json(&dir.join("pending.json"), &no_list).unwrap();
+        assert!(open().unwrap_err().contains("left parts"));
+        super::super::write_json(&dir.join("pending.json"), &p).unwrap();
+        let _ = apply(&Stop::after(2), &folder, &m, None);
+        assert!(open().unwrap_err().contains("left parts"));
+        fs::remove_file(dir.join("pending.json")).unwrap();
+        open().unwrap();
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // After a replace that failed, the record stays only while parts it moved are aside.
+    #[test]
+    fn a_failed_replace_keeps_its_record_only_while_parts_are_aside() {
+        let tmp = temp("set-failed");
+        let (folder, dir, p) = staged(&tmp, "update");
+        let m = p.moves.clone().unwrap();
+        let record = dir.join("pending.json");
+        super::super::failed(&dir, &p);
+        assert!(!record.exists(), "nothing aside");
+        super::super::write_json(&record, &p).unwrap();
+        let _ = apply(&Stop::after(2), &folder, &m, None);
+        super::super::failed(&dir, &p);
+        assert!(record.exists(), "a part aside");
+        let no_list = Pending {
+            moves: None,
+            ..p.clone()
+        };
+        super::super::failed(&dir, &no_list);
+        assert!(!record.exists(), "no move list (Linux, macOS)");
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // What a start records after its recovery, and when it installs nothing until a restart.
+    #[test]
+    fn a_start_says_what_its_recovery_left() {
+        let tmp = temp("set-recovered");
+        let (folder, _, update) = staged(&tmp, "update");
+        let say = |r: &Recovery, p: &Pending, running: &str| {
+            super::super::recovered(r, p, running, &folder)
+        };
+        assert_eq!(say(&Recovery::Nothing, &update, "0.1.0"), (None, None));
+        assert_eq!(say(&Recovery::Undone, &update, "0.1.0"), (None, None));
+        let (last, held) = say(&Recovery::Left("a part changed".into()), &update, "0.1.0");
+        let last = last.unwrap();
+        assert!(
+            last.contains("a part changed") && last.contains("still aside"),
+            "{last}"
+        );
+        assert!(held.unwrap().contains("a part changed"));
+        let put_back = Pending {
+            kind: "put-back".into(),
+            from: update.to.clone(),
+            to: update.from.clone(),
+            ..update.clone()
+        };
+        // Finished by the version put back: it runs on; by the one that did not start: that one
+        // installs nothing until the app restarts into the version put back.
+        let (last, held) = say(&Recovery::PutBack, &put_back, "0.1.0");
+        assert!(last.unwrap().contains("0.1.0 was put back"));
+        assert_eq!(held, None);
+        let (last, held) = say(&Recovery::PutBack, &put_back, "0.2.0");
+        assert!(last.is_some());
+        assert!(held.unwrap().contains("restart the app"));
         fs::remove_dir_all(&tmp).unwrap();
     }
 }

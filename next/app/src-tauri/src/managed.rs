@@ -67,7 +67,8 @@ pub fn random_key() -> String {
 }
 
 /// Writes `path` readable only by this user, replacing it in one step: on Windows with a protected
-/// access list allowing only this user and SYSTEM.
+/// access list allowing only this user and SYSTEM, and the replace written through to disk before
+/// this returns (see `replace`).
 pub fn write_private(path: &Path, data: &[u8]) -> io::Result<()> {
     write_private_with_nonce(path, data, random_key)
 }
@@ -119,7 +120,10 @@ fn write_private_with_nonce(
         f.write_all(data)?;
         f.sync_all()?;
         drop(f);
+        #[cfg(unix)]
         fs::rename(&tmp, path)?;
+        #[cfg(windows)]
+        replace(&tmp, path)?;
         // The file is in place once renamed; syncing the folder only makes the rename durable
         // sooner, and some filesystems refuse it, so a failure here does not fail the write.
         #[cfg(unix)]
@@ -130,6 +134,39 @@ fn write_private_with_nonce(
         let _ = fs::remove_file(&tmp);
     }
     result
+}
+
+/// Windows: tmp replaces path, the rename written through to disk before this returns
+/// (`MoveFileExW` with `MOVEFILE_WRITE_THROUGH`). A record written this way is on disk before
+/// what follows it: the app's update writes `pending.json` and its record of leftovers so before
+/// it moves any part of the program set (`updater/set.rs`), whatever the volumes. When another
+/// program has path open, that rename is refused (access denied); then the standard library's
+/// rename replaces it (its POSIX-semantics replace), as before, which is not written through.
+#[cfg(windows)]
+fn replace(tmp: &Path, path: &Path) -> io::Result<()> {
+    use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+    // In their `\\?\` form, so a path longer than MAX_PATH works as with std's rename.
+    let from = crate::private_windows::verbatim(tmp)?;
+    let to = crate::private_windows::verbatim(path)?;
+    // SAFETY: both are NUL-terminated wide strings that outlive the call.
+    let moved = unsafe {
+        MoveFileExW(
+            from.as_ptr(),
+            to.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved != 0 {
+        return Ok(());
+    }
+    let e = io::Error::last_os_error();
+    if e.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) {
+        return fs::rename(tmp, path);
+    }
+    Err(e)
 }
 
 /// The core config the app keeps, `<dir>/config.json`. The app writes it once, the first time,
@@ -852,6 +889,14 @@ mod tests {
         super::write_private(&long, key.as_bytes()).unwrap();
         assert_eq!(std::fs::read(&long).unwrap(), key.as_bytes());
         assert!(private(&long));
+        // A file another handle has open (letting it be deleted, as std's opens do): the
+        // write-through replace is refused, and std's rename replaces it as before.
+        let held = std::fs::File::open(&path).unwrap();
+        let again = super::random_key();
+        super::write_private(&path, again.as_bytes()).unwrap();
+        drop(held);
+        assert_eq!(std::fs::read(&path).unwrap(), again.as_bytes());
+        assert!(private(&path));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

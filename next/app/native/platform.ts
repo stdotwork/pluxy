@@ -1252,9 +1252,12 @@ async function update() {
         `asides when the update was ended: ${asides.join(", ")}`,
       );
       check(existsSync(join(updates, "pending.json")), "the ended update left no pending.json");
+      // Launched by a spelling of its name in other case: the program's name in the set is the
+      // one the disk holds, not the launch's.
+      const spelled = join(installed, exe.toUpperCase());
       const undone = await launchChain({
         label: "parts undone",
-        program,
+        program: spelled,
         env: { ...trusted, PLUXY_APP_TEST_UPDATE_CASE: "parts-undone" },
         ms: LAUNCH_MS,
         check,
@@ -1263,6 +1266,8 @@ async function update() {
       for (const n of undone.names) seen.add(n);
       const u = undone.step("update_parts_undone")[0];
       say(`the start after: ${JSON.stringify(u)}`);
+      if (u?.launched_as !== exe.toUpperCase())
+        skip(`the start after was not launched as ${exe.toUpperCase()} but as ${u?.launched_as}`);
       check(u?.version === V1, `the earlier version did not start on the mixed folder: ${JSON.stringify(u)}`);
       check(
         u?.installed_sha === v1 && pinOf(installed) === v1,

@@ -438,7 +438,7 @@ pub(crate) fn create_private_dir_all(path: &std::path::Path) -> io::Result<()> {
 /// path as a NUL-terminated wide string for the calls that make files and folders: absolute, in
 /// its `\\?\` form (a share as `\\?\UNC\`), which takes any length, as std's own opens do for
 /// a long path. A plain path longer than MAX_PATH fails there with ERROR_PATH_NOT_FOUND.
-fn verbatim(path: &std::path::Path) -> io::Result<Vec<u16>> {
+pub(crate) fn verbatim(path: &std::path::Path) -> io::Result<Vec<u16>> {
     use std::os::windows::ffi::OsStrExt;
     let w: Vec<u16> = std::path::absolute(path)?
         .as_os_str()

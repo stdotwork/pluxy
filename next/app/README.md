@@ -588,12 +588,13 @@ In this order:
      same part of the kept copy, and only when the version starting is the one the install came
      from, started from the program its kept copy holds, in the folder the record names. A part it
      cannot put back is left as it is, with the record; that version then installs nothing and the
-     page says why. Between the program's own two renames the folder has no program under its
-     name: should the computer lose power right then, rename the
-     `.pluxy-old-<hex>-<program>` beside the other parts back, and any other part whose
-     `.pluxy-old-<hex>-<part>` is there (or copy the three parts of the kept set from
-     `updates\kept\` in the local data folder). What is left aside, and the staging folder, are
-     removed once the new version runs and the old one has ended.
+     page says why. `pending.json` and the record of what is left aside are written through to
+     disk too before any part moves, so the record the undo needs is there after a power loss.
+     Between the program's own two renames the folder has no program under its name: should the
+     app stop right then (a crash, a power loss), rename `.pluxy-old-<hex>-<program>` back to the
+     program's name and start it; that start puts the other parts back by the record. What is
+     left aside, and the staging folder, are removed once the new version runs and the old one has
+     ended.
    - macOS: the unpacked bundle and the installed one swap places in one step (`renamex_np` with
      `RENAME_SWAP`): the bundle is the old one or the new one. The old one, now in the
      `.pluxy-update-<hex>` folder, is removed once the new version runs and the old one has ended.
@@ -1751,7 +1752,9 @@ an app bundle on macOS ([Application update](#application-update)).
   `updates/kept/` in the app's data folder (on Windows the three parts of the set in the local
   data folder's `updates\kept\`) in place of the installed one to run it again. On
   Windows a new version waits at most 120 seconds for the old one to end and free the profile,
-  then exits.
+  then exits. That a Windows update's records reach the disk before its parts move is not tested
+  (no test cuts the power); and when another program has one of those records open as it is
+  written, it is replaced by a rename that is not written through.
 - Opening an address in the browser works on Linux only.
 - Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
   the renderer writes alignment as inline style, which the notes' policy refuses.
