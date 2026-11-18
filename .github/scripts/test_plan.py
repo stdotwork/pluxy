@@ -65,16 +65,16 @@ def iso(t):
     return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def api(jobs_by_run, statuses=None, names=None):
-    """A fake fetch serving runs (all reported in_progress unless statuses says, named by names)
-    and their jobs."""
+def api(jobs_by_run, statuses=None, names=None, created=None):
+    """A fake fetch serving runs (all reported in_progress unless statuses says, named by names,
+    created when created says) and their jobs."""
     calls = []
 
     def fetch(path, params):
         calls.append((path, dict(params)))
         if path.endswith("/actions/runs"):
             runs = [
-                {"id": rid, "name": (names or {}).get(rid, "CI"), "status": (statuses or {}).get(rid, "in_progress"), "created_at": iso(NOW - 600)}
+                {"id": rid, "name": (names or {}).get(rid, "CI"), "status": (statuses or {}).get(rid, "in_progress"), "created_at": iso((created or {}).get(rid, NOW - 600))}
                 for rid in jobs_by_run
                 if (statuses or {}).get(rid, "in_progress") == params["status"]
             ]
@@ -333,8 +333,8 @@ class Scoring(unittest.TestCase):
 class Capacity(unittest.TestCase):
     def pools(self, e):
         pools = plan.build_pools(TABLE, e, RECORDED["recorded_at"], [])
-        load, error = plan.read_load(recorded_fetch, e, RECORDED["recorded_at"], float("inf"))
-        self.assertIsNone(error)
+        load, read, unread, error = plan.read_load(recorded_fetch, e, RECORDED["recorded_at"], float("inf"))
+        self.assertEqual((unread, error), (0, None))
         plan.add_load(pools, load, RECORDED["recorded_at"], TABLE)
         return pools, load
 
@@ -378,25 +378,59 @@ class Capacity(unittest.TestCase):
         run_plan(env({}), fetch)
         self.assertEqual(fetch.log, [])
 
-    def test_more_runs_than_the_cap_give_no_picks(self):
-        fetch = api({rid: [job(["ubuntu-24.04"])] for rid in range(100, 100 + 21)})
+    def test_over_the_cap_reads_running_runs_then_the_oldest_queued(self):
+        # 25 running runs and 10 queued ones, the queued created one minute apart, oldest first in
+        # neither the dict nor the listing: it reads the 25 running and the 5 oldest queued.
+        queued = {100 + i: NOW - 3600 + 60 * ((i * 7) % 10) for i in range(10)}
+        jobs = {rid: [job(["ubuntu-24.04"])] for rid in list(range(10, 35)) + list(queued)}
+        fetch = api(jobs, statuses={rid: "queued" for rid in queued}, created=queued)
         runners, lines = run_plan(env(), fetch)
-        self.assertEqual(runners, {})
-        self.assertEqual(len(fetch.log), 2)
-        self.assertTrue(any("21 active runs, more than 20" in line for line in lines))
-        fetch = api({rid: [job(["ubuntu-24.04"])] for rid in range(100, 100 + 20)})
-        runners, _ = run_plan(env(), fetch)
-        self.assertEqual(len(runners), len(plan.catalogue(ALL)))
-        self.assertEqual(len(fetch.log), 22)
+        read = [int(path.split("/")[-2]) for path, _ in fetch.log if path.endswith("/jobs")]
+        self.assertEqual(sorted(read[:25]), list(range(10, 35)))
+        self.assertEqual(read[25:], sorted(queued, key=queued.get)[:5])
+        # At the cap: two listings and 30 jobs pages, within MAX_CALLS.
+        self.assertEqual(len(fetch.log), 32)
         self.assertLessEqual(len(fetch.log), plan.MAX_CALLS)
+        self.assertEqual((plan.MAX_RUNS, plan.MAX_CALLS), (30, 35))
+        self.assertEqual(len(runners), len(plan.catalogue(ALL)))
+        self.assertIn("- 5 active runs not read (over the cap of 30): estimated as 5 jobs queued on GitHub, the mean of 1.0 unfinished jobs per run read", lines)
 
-    def test_listing_with_more_than_one_page_gives_no_picks(self):
+    def test_unread_runs_push_mac_jobs_to_namespace(self):
+        # 15 runs with one queued Linux job each and 15 with none left: 0.5 jobs a run. Alone they
+        # leave GitHub slots free, and tools' macOS leg goes there (1.6 against Namespace's 2.1).
+        def runs(n):
+            return {rid: [job(["ubuntu-24.04"])] if rid % 2 else [] for rid in range(10, 10 + n)}
+
+        changes = {"next-app-tools-platforms": "true"}
+        runners, _ = run_plan(env(changes), api(runs(30)))
+        self.assertEqual(runners["next-app-tools-platforms.yml/tools/macos-latest"], "macos-latest")
+        # 20 more runs, unread: 10 more Linux jobs on GitHub fill its 20 slots for 16 minutes, so
+        # GitHub would finish at 16 + 1.6 = 17.6.
+        runners, lines = run_plan(env(changes), api(runs(50)))
+        self.assertEqual(runners["next-app-tools-platforms.yml/tools/macos-latest"], MAC)
+        self.assertIn("| `next-app-tools-platforms.yml/tools/macos-latest` | `\"namespace-profile-macos-26\"` | 2.1 | 17.6 |  |", lines)
+        self.assertIn("- 20 active runs not read (over the cap of 30): estimated as 10 jobs queued on GitHub, the mean of 0.5 unfinished jobs per run read", lines)
+
+    def test_estimate_splits_by_github_os(self):
+        pools = plan.build_pools(TABLE, env(), NOW, [])
+        load = [{"labels": [label]} for label in ["macos-latest"] * 1 + ["ubuntu-24.04"] * 2 + ["windows-latest"] + [MAC] * 4]
+        # 8 jobs over 4 runs read: 2 a run, 6 for 3 unread runs, split 1:2:1 as GitHub's were.
+        oses = [plan.classify(j["labels"], pools)[1] for j in plan.estimate(load, 4, 3, pools)]
+        self.assertEqual((oses.count("macos"), oses.count("linux"), oses.count("windows")), (2, 3, 1))
+        self.assertEqual({plan.classify(j["labels"], pools)[0] for j in plan.estimate(load, 4, 3, pools)}, {"github"})
+
+    def test_listing_past_its_first_page_counts_the_rest(self):
         def fetch(path, params):
-            return {"total_count": 150, "workflow_runs": [{"id": i, "created_at": iso(NOW)} for i in range(100)]}
+            if path.endswith("/actions/runs"):
+                if params["status"] == "in_progress":
+                    return {"total_count": 150, "workflow_runs": [{"id": i, "created_at": iso(NOW)} for i in range(100, 200)]}
+                return {"total_count": 0, "workflow_runs": []}
+            return {"total_count": 1, "jobs": [job(["ubuntu-24.04"], "in_progress", started=NOW)]}
 
         runners, lines = run_plan(env(), fetch)
-        self.assertEqual(runners, {})
-        self.assertTrue(any("more than 100 in_progress runs" in line for line in lines))
+        self.assertEqual(len(runners), len(plan.catalogue(ALL)))
+        # 70 listed and not read, 50 not listed.
+        self.assertIn("- 120 active runs not read (over the cap of 30): estimated as 120 jobs queued on GitHub, the mean of 1.0 unfinished jobs per run read", lines)
 
 
 class SelfHosted(unittest.TestCase):
@@ -557,7 +591,6 @@ class FailSafe(unittest.TestCase):
         runners, lines = run_plan(env(), capped)
         self.assertEqual(runners, {})
         self.assertTrue(any("RuntimeError: more than 4 API calls" in line for line in lines))
-        self.assertEqual(plan.MAX_CALLS, 25)
 
     def test_call_cap(self):
         class Response(io.BytesIO):

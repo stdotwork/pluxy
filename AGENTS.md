@@ -189,9 +189,10 @@ In pull requests and merge-queue groups, the plan step, the last step of `ci.yml
 picks the runner of each heavy job: the pool that would finish it first. It adds the job's median
 run time on each pool (`.github/ci-pools.json`) to that pool's wait, worked out from the queued and
 running jobs it reads through the Actions API (`.github/scripts/plan.py`; its job summary shows each pick and the times
-behind it). If it fails, times out, or cannot read the whole load (an API error, or more than 20
-active runs), `changes` still passes, the step picks nothing, and each job runs where the variables
-above send it. It does not run for pull requests from forks, which could edit the script. The
+behind it). It reads the jobs of 30 active runs at most, running ones first, and counts each run
+past that as GitHub backlog, at the mean number of unfinished jobs of the runs it read. If it
+fails, times out, or meets an API error, its call cap or its deadline, `changes` still passes, the
+step picks nothing, and each job runs where the variables above send it. It does not run for pull requests from forks, which could edit the script. The
 pools, and how to turn each off:
 
 - Namespace's Linux runners: `PLUXY_LINUX_CLOUD_RUNNER`, a runner label as JSON, for example

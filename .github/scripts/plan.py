@@ -9,10 +9,11 @@ through the Actions API, and each pool's capacity. Jobs are placed longest first
 to its pool's load. Ties, and pools with no data, go Namespace, then GitHub, then self-hosted.
 
 It writes `runners`, a JSON object from job key to runs-on value, to GITHUB_OUTPUT, and a table of
-its picks to GITHUB_STEP_SUMMARY. It never fails the job. When it cannot read the whole load (an
-API error, the call cap, its deadline, or more than MAX_RUNS active runs), or meets any other
-error, it writes `runners={}` and says why in the summary, and the called workflows then pick their
-runners as they did before the plan. Standard library only.
+its picks to GITHUB_STEP_SUMMARY. It never fails the job. On an API error, the call cap, its
+deadline or any other error it writes `runners={}` and says why in the summary, and the called
+workflows then pick their runners as they did before the plan. With more active runs than
+MAX_RUNS it reads the running ones first, then the oldest queued ones, and counts each run left
+unread as GitHub backlog. Standard library only.
 """
 
 import heapq
@@ -33,8 +34,8 @@ OSES = ("windows-latest", "macos-latest")
 SELF_LABELS = {"linux": ["self-hosted", "pluxy-linux"], "windows": ["self-hosted", "pluxy-windows"]}
 STATUS_MAX_AGE = 180  # seconds
 
-MAX_RUNS = 20  # more active runs than this: no picks
-MAX_CALLS = 2 + MAX_RUNS + 3  # two listings, one jobs page per run, and a few more pages
+MAX_RUNS = 30  # runs whose jobs it reads; the rest are estimated
+MAX_CALLS = 35  # two listings, one jobs page per run read, and a few more pages
 LOOKBACK = 6 * 3600  # seconds
 API_DEADLINE = 90  # seconds for all API calls
 REQUEST_TIMEOUT = 15  # seconds
@@ -315,12 +316,14 @@ def parse_time(value):
 
 def read_load(fetch, env, now, deadline):
     """This repository's queued and running jobs from the last LOOKBACK seconds, as dicts with
-    labels, status, started (a timestamp or None), created and key (or None). Returns (jobs, None),
-    or (None, why) when it could not read them all."""
+    labels, status, started (a timestamp or None), created and key (or None). Reads the jobs of
+    MAX_RUNS runs at most: the running ones first, then the oldest queued ones. Returns (jobs, runs
+    read, runs left unread, None), or (None, 0, 0, why) on an error."""
     repo = env["GITHUB_REPOSITORY"]
     own = str(env.get("GITHUB_RUN_ID", ""))
     since = datetime.fromtimestamp(now - LOOKBACK, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     runs = {}
+    unlisted = 0
     jobs = []
     try:
         for status in ("in_progress", "queued"):
@@ -328,14 +331,15 @@ def read_load(fetch, env, now, deadline):
                 raise TimeoutError("ran out of time listing runs")
             data = fetch(f"/repos/{repo}/actions/runs", {"status": status, "created": f">={since}", "per_page": 100})
             batch = data.get("workflow_runs", [])
-            if data.get("total_count", len(batch)) > len(batch):
-                raise RuntimeError(f"more than {len(batch)} {status} runs")
-            for run in batch:
+            # Past the first page: counted, not listed (the queued ones there are the newest).
+            unlisted += max(data.get("total_count", len(batch)) - len(batch), 0)
+            for run in sorted(batch, key=lambda r: r.get("created_at", "")):
                 if str(run["id"]) != own:
                     runs.setdefault(run["id"], run)
-        if len(runs) > MAX_RUNS:
-            raise RuntimeError(f"{len(runs)} active runs, more than {MAX_RUNS}")
-        for run in sorted(runs.values(), key=lambda r: r.get("created_at", "")):
+        ordered = list(runs.values())  # running ones first, then queued, each oldest first
+        read = ordered[:MAX_RUNS]
+        unread = max(len(ordered) - MAX_RUNS, 0) + unlisted
+        for run in read:
             page = 1
             while True:
                 if time.monotonic() > deadline:
@@ -357,17 +361,45 @@ def read_load(fetch, env, now, deadline):
                     break
                 page += 1
     except Exception as e:  # noqa: BLE001: any failure leaves the load unknown
-        return None, f"{type(e).__name__}: {e}"
-    return jobs, None
+        return None, 0, 0, f"{type(e).__name__}: {e}"
+    return jobs, len(read), unread, None
 
 
-def add_load(pools, load, now, table):
+GITHUB_LABELS = {"linux": "ubuntu-latest", "macos": "macos-latest", "windows": "windows-latest"}
+
+
+def estimate(load, read, unread, pools):
+    """The jobs of the runs left unread, as GitHub backlog: the mean number of unfinished jobs
+    among the runs read, queued on GitHub, split by operating system as GitHub's jobs read were."""
+    if not unread or not read:
+        return []
+    total = round(unread * len(load) / read)
+    oses = {"linux": 0, "macos": 0, "windows": 0}
+    for job in load:
+        name, os_ = classify(job["labels"], pools)
+        if name == "github":
+            oses[os_] += 1
+    seen = sum(oses.values())
+    if not seen:
+        oses, seen = {"linux": 1, "macos": 0, "windows": 0}, 1
+    counts = {os_: total * n // seen for os_, n in oses.items()}
+    for os_ in sorted(oses, key=lambda o: -(total * oses[o] % seen))[: total - sum(counts.values())]:
+        counts[os_] += 1
+    return [
+        {"labels": [GITHUB_LABELS[os_]], "status": "queued", "started": None, "created": "", "key": None}
+        for os_, n in counts.items()
+        for _ in range(n)
+    ]
+
+
+def add_load(pools, load, now, table, estimated=()):
     """Places the jobs already queued or running elsewhere on their pools: running ones first,
-    then queued ones in the order they were created. A job on the Namespace Mac, where one job
-    holds the pool, takes its own median there when the table has it, else the pool's busy."""
+    then queued ones in the order they were created, then the estimated ones. A job on the
+    Namespace Mac, where one job holds the pool, takes its own median there when the table has it,
+    else the pool's busy."""
     running = [j for j in load if j["status"] == "in_progress"]
     queued = sorted((j for j in load if j["status"] != "in_progress"), key=lambda j: j["created"])
-    for job in running + queued:
+    for job in running + queued + list(estimated):
         name, os_ = classify(job["labels"], pools)
         pool = pools.get(name)
         if pool is None:
@@ -439,16 +471,22 @@ def plan(env, fetch, now, table):
     changes = json.loads(env.get("CHANGES") or "{}")
     jobs = catalogue(changes)
     pools = build_pools(table, env, now, notes)
-    load = []
+    load, estimated = [], []
     if jobs:
-        load, error = read_load(fetch, env, now, time.monotonic() + API_DEADLINE)
+        load, read, unread, error = read_load(fetch, env, now, time.monotonic() + API_DEADLINE)
+        if error is None and unread:
+            estimated = estimate(load, read, unread, pools)
+            notes.append(
+                f"{unread} active runs not read (over the cap of {MAX_RUNS}): estimated as {len(estimated)} jobs queued on GitHub, "
+                f"the mean of {len(load) / max(read, 1):.1f} unfinished jobs per run read"
+            )
         if error is not None:
             return {}, [
                 "## Runner plan",
                 "",
                 f"Could not read the load ({error}): no picks, so every job uses its workflow's own runner.",
             ] + ([""] + [f"- {n}" for n in notes] if notes else [])
-    add_load(pools, load, now, table)
+    add_load(pools, load, now, table, estimated)
     state = {name: (pool.running, pool.queued, len(pool.slots)) for name, pool in pools.items()}
     picks = assign(jobs, pools, table)
     runners = {}
