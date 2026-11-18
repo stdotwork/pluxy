@@ -44,15 +44,13 @@ func AccountSecrets(a protocol.Account) []string {
 		if len(parts) == 0 {
 			parts = []string{s}
 		}
+		kept := slices.DeleteFunc(slices.Clone(parts), func(p string) bool { return wrapper(p, parts) })
 		min := minSideSecret
-		if short && !slices.ContainsFunc(parts, func(p string) bool { return len(p) >= minSideSecret }) {
+		if short && !slices.ContainsFunc(kept, func(p string) bool { return len(p) >= minSideSecret }) {
 			min = 1
 		}
-		for _, p := range parts {
-			if len(p) < min || wrapper(p, parts) {
-				continue
-			}
-			if !slices.Contains(out, p) {
+		for _, p := range kept {
+			if len(p) >= min && !slices.Contains(out, p) {
 				out = append(out, p)
 			}
 		}
@@ -80,16 +78,18 @@ func AccountSecrets(a protocol.Account) []string {
 }
 
 // wrapper reports whether the part p of a secret, among its parts, only wraps another part in
-// public words: it is split again into a part of minPiece bytes or more (a header line's
-// "Bearer <token>"), or it is Basic's decoded "user:password" (what a part decodes to from base64)
-// and its password is a part too. A part that merely holds another, such as a cookie's value
-// that holds another cookie's, is not one.
+// public words: it is split again into a part of any length (a header line's "Bearer <token>"), or
+// it is Basic's decoded "user:password" (what a part decodes to from base64) and its password is a
+// part too or empty. A part that merely holds another, such as a cookie's value that holds
+// another cookie's, is not one. Whether the parts it wraps are kept does not matter: a wrapper is
+// never a secret of its own, so a token that has the shape of one ("name:abcd") counts by its
+// inner part only, and is left out when that part is too short.
 func wrapper(p string, parts []string) bool {
-	if len(protocol.SecretParts(p, minPiece)) > 0 {
+	if len(protocol.SecretParts(p, 1)) > 0 {
 		return true
 	}
 	_, pass, ok := strings.Cut(p, ":")
-	return ok && slices.Contains(parts, pass) && (slices.Contains(parts, base64.StdEncoding.EncodeToString([]byte(p))) ||
+	return ok && (pass == "" || slices.Contains(parts, pass)) && (slices.Contains(parts, base64.StdEncoding.EncodeToString([]byte(p))) ||
 		slices.Contains(parts, base64.RawStdEncoding.EncodeToString([]byte(p))))
 }
 

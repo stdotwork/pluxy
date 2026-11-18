@@ -103,3 +103,34 @@ func TestAccountSecretsPartsHoldingParts(t *testing.T) {
 		}
 	}
 }
+
+// Wrappers are left out before the parts are measured: a credential written as a header line
+// around a short token adds the token; a header or setting around a token of 1 to 3 bytes adds
+// nothing, not the public words around it; Basic's decoded "user:" with an empty password is a
+// wrapper too, so the user name is not a piece.
+func TestAccountSecretsWrappersOfShortParts(t *testing.T) {
+	settings, _ := json.Marshal(map[string]string{"api_key": "X-Gateway: Bearer s12"})
+	basic := base64.StdEncoding.EncodeToString([]byte("ops@gw.example:"))
+	a := protocol.Account{
+		Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "Authorization: Bearer short1"},
+		Headers:    map[string]string{"Authorization": "Basic " + basic, "Cookie": "c=devin-session-token$s12"},
+		Settings:   settings,
+	}
+	got := AccountSecrets(a)
+	slices.Sort(got)
+	want := []string{basic, "short1"}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("AccountSecrets = %q\nwant %q", got, want)
+	}
+	for in, want := range map[string]string{
+		"invalid short1":                        "invalid [redacted]",
+		"the gateway refuses Bearer, use a key": "the gateway refuses Bearer, use a key",
+		"no devin session token":                "no devin session token",
+		"user ops@gw.example is not known":      "user ops@gw.example is not known",
+	} {
+		if got := UpstreamText(in, AccountSecrets(a)...); got != want {
+			t.Errorf("UpstreamText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
