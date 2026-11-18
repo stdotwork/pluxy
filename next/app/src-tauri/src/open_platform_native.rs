@@ -31,8 +31,11 @@
 //!   started: on Windows `WM_CLOSE` to the windows of the processes with that address on their
 //!   command line; on macOS it quits the default browser, which was not running before;
 //! - open: confirmed, the system's app for `.txt` files opens exactly that file: on Windows
-//!   Notepad, whose command line names it, closed with `WM_CLOSE`; on macOS TextEdit, whose
-//!   documents (read with `osascript`) include it, closed, and quit when the step started it;
+//!   Notepad, whose command line names it, closed with `WM_CLOSE`; on macOS TextEdit, one of
+//!   whose windows shows it, closed, and TextEdit quit when the step started it. Its windows are
+//!   read, closed and quit through System Events (`osascript`): a GitHub-hosted runner's image
+//!   lets `osascript` send Apple events to System Events and use accessibility, but send none to
+//!   TextEdit, so asking TextEdit itself waits for a consent no one gives;
 //! - jsonl: on Windows (on a GitHub-hosted runner only, failing loudly elsewhere), with no app for
 //!   `.jsonl` files the execution program refuses to prepare a session file; with a per-user
 //!   `HKCU\Software\Classes` file type of the check's own whose `open` command runs the fixture
@@ -549,7 +552,8 @@ fn nothing_opened(files: &Path) -> Result<(), String> {
     let open: Vec<String> = if mac::running(mac::TEXTEDIT)? {
         mac::textedit_documents()?
             .into_iter()
-            .filter(|d| Path::new(d).starts_with(files))
+            .filter(|(_, d)| d.starts_with(files))
+            .map(|(url, _)| url)
             .collect()
     } else {
         Vec::new()
@@ -600,20 +604,40 @@ fn opens(app: &AppHandle, input: Value, line: &str, file: &Path) -> Result<Value
 fn opens(app: &AppHandle, input: Value, line: &str, file: &Path) -> Result<Value, String> {
     let was = mac::running(mac::TEXTEDIT)?;
     confirmed(app, input, &[RELAY, line])?;
+    // What the last look found, for the timeout: whether TextEdit ran, and its windows' documents
+    // or why they could not be read.
+    let mut last = String::from("nothing yet");
     let docs = wait_for("TextEdit to have the file open", || {
-        let d = mac::running(mac::TEXTEDIT)
+        let d = match mac::running(mac::TEXTEDIT) {
+            Ok(true) => mac::textedit_documents(),
+            Ok(false) => Err("TextEdit does not run".into()),
+            Err(e) => Err(e),
+        };
+        last = format!("{d:?}");
+        let d = d.ok()?;
+        d.iter().any(|(_, p)| p == file).then_some(d)
+    })
+    .map_err(|e| format!("{e}; the last look found {last}"))?;
+    let urls: Vec<&str> = docs
+        .iter()
+        .filter(|(_, p)| p == file)
+        .map(|(u, _)| u.as_str())
+        .collect();
+    for u in &urls {
+        mac::textedit_close(u)?;
+    }
+    wait_for("TextEdit to close the file", || {
+        mac::textedit_documents()
             .ok()
-            .filter(|r| *r)
-            .and_then(|_| mac::textedit_documents().ok())?;
-        d.iter().any(|p| Path::new(p) == file).then_some(d)
+            .filter(|d| !d.iter().any(|(_, p)| p == file))
     })?;
-    mac::textedit_close(file)?;
     if !was {
-        mac::quit(mac::TEXTEDIT)?;
+        mac::textedit_quit()?;
         wait_for("TextEdit to quit", || {
             mac::running(mac::TEXTEDIT).ok().filter(|r| !r).map(|_| ())
         })?;
     }
+    let docs: Vec<&str> = docs.iter().map(|(u, _)| u.as_str()).collect();
     Ok(json!({"app": "TextEdit", "documents": docs, "quit": !was}))
 }
 
@@ -894,7 +918,7 @@ mod win {
 
 #[cfg(target_os = "macos")]
 mod mac {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
     use tauri::AppHandle;
@@ -962,15 +986,20 @@ mod mac {
         .map(|_| ())
     }
 
-    /// The paths of TextEdit's open documents (asked only while it runs).
-    pub(super) fn textedit_documents() -> Result<Vec<String>, String> {
+    /// The documents TextEdit's windows show, as their `file://` addresses and the files those
+    /// name (resolved, as the session's own paths are), read through System Events' accessibility
+    /// (each window's `AXDocument`): never an Apple event to TextEdit, which a runner refuses.
+    pub(super) fn textedit_documents() -> Result<Vec<(String, PathBuf)>, String> {
         let out = osascript(
             &[
                 "set out to \"\"",
-                "tell application id \"com.apple.TextEdit\"",
-                "repeat with d in documents",
-                "set p to path of d",
-                "if p is not missing value then set out to out & p & linefeed",
+                "tell application \"System Events\"",
+                "repeat with p in (every process whose bundle identifier is \"com.apple.TextEdit\")",
+                "repeat with w in (windows of p)",
+                "try",
+                "set out to out & (value of attribute \"AXDocument\" of w) & linefeed",
+                "end try",
+                "end repeat",
                 "end repeat",
                 "end tell",
                 "return out",
@@ -980,19 +1009,78 @@ mod mac {
         Ok(out
             .lines()
             .filter(|l| !l.is_empty())
-            .map(String::from)
+            .map(|u| {
+                let p = file_path(u);
+                let p = std::fs::canonicalize(&p).unwrap_or(p);
+                (u.to_string(), p)
+            })
             .collect())
     }
 
-    /// Closes TextEdit's documents of file, unsaved (nothing was changed).
-    pub(super) fn textedit_close(file: &Path) -> Result<(), String> {
+    /// The file a `file://` address names (its percent escapes decoded); else the address as is.
+    fn file_path(url: &str) -> PathBuf {
+        let Some(rest) = url.strip_prefix("file://") else {
+            return PathBuf::from(url);
+        };
+        let b = rest.as_bytes();
+        let mut out = Vec::with_capacity(b.len());
+        let mut i = 0;
+        while i < b.len() {
+            let hex = (b[i] == b'%')
+                .then(|| b.get(i + 1..i + 3))
+                .flatten()
+                .and_then(|h| std::str::from_utf8(h).ok())
+                .and_then(|h| u8::from_str_radix(h, 16).ok());
+            match hex {
+                Some(v) => {
+                    out.push(v);
+                    i += 3;
+                }
+                None => {
+                    out.push(b[i]);
+                    i += 1;
+                }
+            }
+        }
+        PathBuf::from(String::from_utf8_lossy(&out).into_owned())
+    }
+
+    /// Closes TextEdit's windows that show the document at url (unchanged, so none asks to save)
+    /// with their close buttons, through System Events' accessibility.
+    pub(super) fn textedit_close(url: &str) -> Result<(), String> {
         osascript(
             &[
                 "on run argv",
-                "tell application id \"com.apple.TextEdit\" to close (every document whose path is (item 1 of argv)) saving no",
+                "tell application \"System Events\"",
+                "repeat with p in (every process whose bundle identifier is \"com.apple.TextEdit\")",
+                "repeat with w in (windows of p)",
+                "set d to missing value",
+                "try",
+                "set d to value of attribute \"AXDocument\" of w",
+                "end try",
+                "if d is (item 1 of argv) then click (first button of w whose subrole is \"AXCloseButton\")",
+                "end repeat",
+                "end repeat",
+                "end tell",
                 "end run",
             ],
-            &[&file.to_string_lossy()],
+            &[url],
+        )
+        .map(|_| ())
+    }
+
+    /// Quits TextEdit with its own Quit command (its application menu's "Quit TextEdit", as an
+    /// English system names it), through System Events' accessibility.
+    pub(super) fn textedit_quit() -> Result<(), String> {
+        osascript(
+            &[
+                "tell application \"System Events\"",
+                "repeat with p in (every process whose bundle identifier is \"com.apple.TextEdit\")",
+                "click menu item \"Quit TextEdit\" of menu 1 of menu bar item \"TextEdit\" of menu bar 1 of p",
+                "end repeat",
+                "end tell",
+            ],
+            &[],
         )
         .map(|_| ())
     }
