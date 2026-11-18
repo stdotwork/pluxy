@@ -602,7 +602,9 @@ program's name) and `cwd`, and may name:
     resolved path and without following links, so a folder made writable or turned into a
     link since the confirmation is refused. Folders above the one it must be inside are not
     checked;
-  - a folder that is `/`, the home folder or a folder above it;
+  - a folder that is `/`, the home folder or a folder above it, or any folder when the home
+    folder cannot be found (`HOME`, else the user's passwd entry, is missing or does not
+    resolve), since it cannot be checked against it;
   - a file whose content type is not plain text (`text/plain`, `application/json`,
     `application/x-ndjson`, `application/jsonl`, `text/markdown` or `text/x-log`). The type is
     the one GIO guesses from the file's name and first bytes, with the shared-mime-info rules

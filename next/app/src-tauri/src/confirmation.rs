@@ -527,25 +527,35 @@ fn open_file_rules(f: &OpenTarget, w: &OpenTarget) -> Result<String, String> {
     }
     Ok(t)
 }
+/// The home-folder rule for a launch's within folder, given its resolved path and the home folder
+/// as resolved (`None` when it could not be): the folder is neither `/`, the home folder nor a
+/// folder above it. With no home folder to check against, the rule refuses rather than passes.
+#[cfg(target_os = "linux")]
+fn within_home_rule(within: &Path, home: Option<&Path>) -> Result<(), String> {
+    let Some(home) = home else {
+        return Err(
+            "the home folder could not be found, so a launch's within folder cannot be checked against it"
+                .into(),
+        );
+    };
+    if within == Path::new("/") || home.starts_with(within) {
+        return Err(
+            "a launch's within folder cannot be /, the home folder or a folder above it".into(),
+        );
+    }
+    Ok(())
+}
 /// A launch's file to open and the folder it must be inside, both opened and resolved, each named
-/// by its resolved path: the folder neither `/`, the home folder nor a folder above it, the file
-/// as `open_file_rules` says.
+/// by its resolved path: the folder neither `/`, the home folder nor a folder above it (refused
+/// too when the home folder cannot be found), the file as `open_file_rules` says.
 #[cfg(target_os = "linux")]
 fn open_within(file: &Path, within: &Path) -> Result<(OpenTarget, OpenTarget, String), String> {
     let w = OpenTarget::open(within)?;
     if !w.file.metadata().map_err(|e| e.to_string())?.is_dir() {
         return Err("a launch's within folder is not a folder".into());
     }
-    let home = std::env::var_os("HOME").and_then(|h| fs::canonicalize(h).ok());
-    if w.identity.canonical == Path::new("/")
-        || home
-            .as_ref()
-            .is_some_and(|h| h.starts_with(&w.identity.canonical))
-    {
-        return Err(
-            "a launch's within folder cannot be /, the home folder or a folder above it".into(),
-        );
-    }
+    let home = std::env::home_dir().and_then(|h| fs::canonicalize(h).ok());
+    within_home_rule(&w.identity.canonical, home.as_deref())?;
     let f = OpenTarget::open(file)?;
     let t = open_file_rules(&f, &w)?;
     if f.identity.selected != f.identity.canonical || w.identity.selected != w.identity.canonical {
