@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
@@ -33,32 +34,43 @@ func refusePieces(key string) error {
 	return &llm.Error{Code: llm.CodeAuth, Scope: llm.ScopeCredential, Message: msg, Raw: raw}
 }
 
-// echoPieces is an extension that refuses every call with refusePieces of the account's key. A
-// generate call first sends one request to the account's "base_url" setting, through
-// sdk.Upstream, so that the call captures the reply. A session opens on the account
-// "open-session" only, and its turns are refused.
+// echoPieces is an extension that refuses every call with refusePieces of the account's key, or
+// for a login, of the key entered. A generate call or a session's turn first sends one request to
+// the account's "base_url" setting, through sdk.Upstream, so that the call captures the reply; a
+// generate call on an account whose settings have "finish" finishes instead. A session opens on
+// the account "open-session" only, and its turns are refused.
 func echoPieces() {
 	err := sdk.Serve(sdk.Extension{
 		ID:      "hosttest/echo-pieces",
 		Version: "0.0.0",
 		Generate: func(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+			if err := askUpstream(ctx, call.Account); err != nil {
+				return err
+			}
 			var st struct {
-				BaseURL string `json:"base_url"`
+				Finish bool `json:"finish"`
 			}
 			_ = json.Unmarshal(call.Account.Settings, &st)
-			if st.BaseURL != "" {
-				req, err := http.NewRequestWithContext(ctx, "POST", st.BaseURL, strings.NewReader("{}"))
-				if err != nil {
+			if st.Finish {
+				if err := out.Start(llm.ResponseInfo{ID: "r", Model: "m"}); err != nil {
 					return err
 				}
-				resp, err := (&http.Client{Transport: sdk.Upstream(&http.Transport{})}).Do(req)
-				if err != nil {
-					return err
-				}
-				_, _ = io.Copy(io.Discard, resp.Body)
-				resp.Body.Close()
+				return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
 			}
 			return refusePieces(call.Account.Credential.APIKey)
+		},
+		CountTokens: func(_ context.Context, call sdk.Call, _ *sdk.Stream) error {
+			return refusePieces(call.Account.Credential.APIKey)
+		},
+		Endpoint: func(_ context.Context, call sdk.Call, _ *sdk.Stream) error {
+			return refusePieces(call.Account.Credential.APIKey)
+		},
+		LoginMethods: []protocol.LoginMethod{{Method: "api_key", Kind: protocol.LoginAPIKey, Label: "API key",
+			Inputs: []protocol.LoginInput{{Name: "api_key", Label: "API key", Secret: true}, {Name: "region", Label: "Region"}}}},
+		Login: func(_ context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*protocol.Grant, error) {
+			e := refusePieces(call.Input["api_key"]).(*llm.Error)
+			e.Message += " for " + call.Input["region"][3:] // the redactor takes the region whole
+			return nil, e
 		},
 		Check: func(_ context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
 			return nil, refusePieces(call.Account.Credential.APIKey)
@@ -84,9 +96,34 @@ func echoPieces() {
 	}
 }
 
+// askUpstream sends one request to account a's "base_url" setting, if it has one, through
+// sdk.Upstream, and reads the reply.
+func askUpstream(ctx context.Context, a protocol.Account) error {
+	var st struct {
+		BaseURL string `json:"base_url"`
+	}
+	_ = json.Unmarshal(a.Settings, &st)
+	if st.BaseURL == "" {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", st.BaseURL, strings.NewReader("{}"))
+	if err != nil {
+		return err
+	}
+	resp, err := (&http.Client{Transport: sdk.Upstream(&http.Transport{})}).Do(req)
+	if err != nil {
+		return err
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.Body.Close()
+}
+
 type refusingSession struct{}
 
-func (refusingSession) Turn(_ context.Context, call sdk.Call, _ *sdk.Stream) error {
+func (refusingSession) Turn(ctx context.Context, call sdk.Call, _ *sdk.Stream) error {
+	if err := askUpstream(ctx, call.Account); err != nil {
+		return err
+	}
 	return refusePieces(call.Account.Credential.APIKey)
 }
 func (refusingSession) Interrupt(json.RawMessage) {}
@@ -110,8 +147,9 @@ func wantNoPiece(t *testing.T, what string, e *llm.Error) {
 }
 
 // Every call on an account whose upstream refuses its key, echoing a piece of it, returns the
-// error without the piece: generate, check, quota, models, refresh, opening a session and a
-// session's turn.
+// error without the piece: generate, count_tokens, endpoint, check, quota, models, refresh,
+// opening a session, a session's turn, and a login, whose error loses the piece of the key the
+// user entered but keeps the region, an input the login does not mark secret.
 func TestErrorPiecesRemovedFromCalls(t *testing.T) {
 	ext, err := Start(filepath.Join(fakePackage(t, "echo-pieces"), ManifestFile), Options{Log: &syncBuffer{}})
 	if err != nil {
@@ -122,43 +160,77 @@ func TestErrorPiecesRemovedFromCalls(t *testing.T) {
 	account := func(id string) protocol.Account {
 		return protocol.Account{ID: id, Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: pieceKey}}
 	}
-	s := ext.Generate(ctx, account("a"), llm.Request{Model: "m"})
-	ev := s.Next()
-	s.Close()
-	wantNoPiece(t, "generate", ev.Error)
-	_, e := ext.Check(ctx, account("a"))
-	wantNoPiece(t, "check", e)
-	_, e = ext.Quota(ctx, account("a"))
-	wantNoPiece(t, "quota", e)
-	_, e = ext.Models(ctx, account("a"))
-	wantNoPiece(t, "models", e)
-	_, e = ext.Refresh(ctx, account("a"))
-	wantNoPiece(t, "refresh", e)
-	_, e = ext.OpenSession(ctx, account("a"), responsesSession)
-	wantNoPiece(t, "session", e)
-	sess, e := ext.OpenSession(ctx, account("open-session"), responsesSession)
-	if e != nil {
-		t.Fatalf("OpenSession: %+v", e)
+	stream := func(s *Stream) *llm.Error {
+		defer s.Close()
+		return s.Next().Error
 	}
-	defer sess.Close()
-	turn := sess.Turn(ctx, account("open-session"), llm.Request{Model: "m"})
-	ev = turn.Next()
-	turn.Close()
-	wantNoPiece(t, "session turn", ev.Error)
+	for _, c := range []struct {
+		name string
+		call func() *llm.Error
+	}{
+		{"generate", func() *llm.Error { return stream(ext.Generate(ctx, account("a"), llm.Request{Model: "m"})) }},
+		{"count_tokens", func() *llm.Error { return stream(ext.CountTokens(ctx, account("a"), llm.Request{Model: "m"})) }},
+		{"endpoint", func() *llm.Error { return stream(ext.Endpoint(ctx, account("a"), splitRequest("m"))) }},
+		{"check", func() *llm.Error { _, e := ext.Check(ctx, account("a")); return e }},
+		{"quota", func() *llm.Error { _, e := ext.Quota(ctx, account("a")); return e }},
+		{"models", func() *llm.Error { _, e := ext.Models(ctx, account("a")); return e }},
+		{"refresh", func() *llm.Error { _, e := ext.Refresh(ctx, account("a")); return e }},
+		{"session", func() *llm.Error { _, e := ext.OpenSession(ctx, account("a"), responsesSession); return e }},
+		{"session turn", func() *llm.Error {
+			sess, e := ext.OpenSession(ctx, account("open-session"), responsesSession)
+			if e != nil {
+				t.Fatalf("OpenSession: %+v", e)
+			}
+			defer sess.Close()
+			turn := sess.Turn(ctx, account("open-session"), llm.Request{Model: "m"})
+			defer turn.Close()
+			return turn.Next().Error
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) { wantNoPiece(t, c.name, c.call()) })
+	}
+	t.Run("login", func(t *testing.T) {
+		l := ext.Login(ctx, protocol.Account{ID: "new"}, protocol.Login{Method: "api_key",
+			Input: map[string]string{"api_key": pieceKey, "region": "eu-west-Zone7"}})
+		defer l.Close()
+		r := l.Next()
+		if r.Error == nil || r.Error.Message != "invalid x-api-key: [redacted] for west-Zone7" {
+			t.Errorf("login reply %+v, want the refusal without the key's piece, with the region", r.Error)
+		}
+	})
+}
+
+// core takes an account's settings secrets for pieces from its own rules (Options.SettingsSecrets):
+// a URL setting counts by its user name, password and secret query values, such as a sig, a
+// token_url is no secret, so an error keeps "https", "oauth" and "token", and neither is
+// turnkey_mode, which protocol.SecretName would take for one for holding "key".
+func TestAccountPiecesUseCoreSettingsRules(t *testing.T) {
+	e := &Extension{opts: Options{SettingsSecrets: configdoc.SettingsSecrets}}
+	settings := []byte(`{"token_url":"https://auth.example.com/oauth/token","base_url":"https://gw.example.com/v1?sig=Sg5Tb2Nq8Vc1Xz&model=m","turnkey_mode":"standard-ordering"}`)
+	p := e.accountPieces(protocol.Account{Settings: settings})
+	in := "POST https://auth.example.com/oauth/token failed: token expired, sig Sg5Tb2Nq given, standard ordering"
+	if got, want := protocol.RemovePieces(in, p...), "POST https://auth.example.com/oauth/token failed: token expired, sig [redacted] given, standard ordering"; got != want {
+		t.Errorf("RemovePieces = %q, want %q (pieces %q)", got, want, p)
+	}
 }
 
 // A call's capture loses the pieces of the account's key from the body of an upstream reply with
-// an error status, and keeps a successful reply's body as it came, words that share 4
-// characters with the key included.
+// an error status, and from a 200 reply's body when the call or session turn ended in an error (a
+// stream that ends in an error event); a call that succeeded keeps its reply's body as it came,
+// words that share 4 characters with the key included.
 func TestErrorPiecesRemovedFromCapture(t *testing.T) {
 	for _, c := range []struct {
-		name   string
-		status int
-		body   string
-		want   string
+		name    string
+		status  int
+		session bool // the call is a session's turn
+		finish  bool // the call succeeds
+		body    string
+		want    string
 	}{
-		{"refused", http.StatusUnauthorized, `{"error":"invalid x-api-key: ` + pieceEcho + `"}`, `{"error":"invalid x-api-key: [redacted]"}`},
-		{"succeeded", http.StatusOK, `{"text":"Ab3Cd5 and Kl3Mn5Op are words"}`, `{"text":"Ab3Cd5 and Kl3Mn5Op are words"}`},
+		{"refused", http.StatusUnauthorized, false, false, `{"error":"invalid x-api-key: ` + pieceEcho + `"}`, `{"error":"invalid x-api-key: [redacted]"}`},
+		{"failed after a 200", http.StatusOK, false, false, `data: {"error":"invalid x-api-key: ` + pieceEcho + `"}`, `data: {"error":"invalid x-api-key: [redacted]"}`},
+		{"session turn failed after a 200", http.StatusOK, true, false, `data: {"error":"invalid x-api-key: ` + pieceEcho + `"}`, `data: {"error":"invalid x-api-key: [redacted]"}`},
+		{"succeeded", http.StatusOK, false, true, `{"text":"Ab3Cd5 and Kl3Mn5Op are words"}`, `{"text":"Ab3Cd5 and Kl3Mn5Op are words"}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -178,12 +250,26 @@ func TestErrorPiecesRemovedFromCapture(t *testing.T) {
 				defer mu.Unlock()
 				got = append(got, d)
 			})
-			settings, _ := json.Marshal(map[string]string{"base_url": up.URL})
-			s := ext.Generate(ctx, protocol.Account{ID: "a", ProxyURL: "none", Settings: settings,
-				Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: pieceKey}}, llm.Request{Model: "m"})
-			for ev := s.Next(); !ev.Terminal(); ev = s.Next() {
+			settings, _ := json.Marshal(map[string]any{"base_url": up.URL, "finish": c.finish})
+			a := protocol.Account{ID: "a", ProxyURL: "none", Settings: settings,
+				Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: pieceKey}}
+			if c.session {
+				a.ID = "open-session"
+				sess, e := ext.OpenSession(context.Background(), a, responsesSession)
+				if e != nil {
+					t.Fatalf("OpenSession: %+v", e)
+				}
+				defer sess.Close()
+				turn := sess.Turn(ctx, a, llm.Request{Model: "m"})
+				for ev := turn.Next(); !ev.Terminal(); ev = turn.Next() {
+				}
+				turn.Close()
+			} else {
+				s := ext.Generate(ctx, a, llm.Request{Model: "m"})
+				for ev := s.Next(); !ev.Terminal(); ev = s.Next() {
+				}
+				s.Close()
 			}
-			s.Close()
 			mu.Lock()
 			defer mu.Unlock()
 			if len(got) != 1 || len(got[0].Upstream) != 1 || got[0].Upstream[0].Response == nil {
@@ -211,6 +297,8 @@ func TestPiecesEvent(t *testing.T) {
 	}
 	keep := []llm.Event{
 		{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeAuth, Message: "bad key Ab3 given, try again", Raw: json.RawMessage(`{"m":"Ab3 Cd5 Ef7"}`)}},
+		// An object key is a name, not upstream text.
+		{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeAuth, Message: "bad", Raw: json.RawMessage(`{"Ab3Cd5Ef" : "Ab3", "list": ["Ab3"]}`)}},
 		{Type: llm.EventTextDelta, Delta: "Ab3Cd5Ef7Gh9 is a word here"},
 	}
 	for _, in := range keep {
@@ -233,7 +321,7 @@ func TestPiecesRawNotJSON(t *testing.T) {
 }
 
 // A capture loses the pieces from an error reply's body, start and end, and its size counts
-// what is left; a successful reply's body and the request are kept.
+// what is left; a successful reply's body and the request are kept, unless the call failed.
 func TestPiecesDiagnostic(t *testing.T) {
 	p := pieces{"Ab3Cd5Ef7Gh9Ij1K"}
 	body := protocol.CapturedBody{Body: "bad key Ab3Cd5Ef", BodyEnd: "Ij1K end", BodySize: 100}
@@ -242,9 +330,16 @@ func TestPiecesDiagnostic(t *testing.T) {
 		{Request: protocol.UpstreamRequest{CapturedBody: body}, Response: &protocol.UpstreamResponse{Status: 200, CapturedBody: body}},
 		{Request: protocol.UpstreamRequest{CapturedBody: body}},
 	}}
-	out := p.diagnostic(d)
-	if got, want := out.Upstream[0].Response.CapturedBody, (protocol.CapturedBody{Body: "bad key [redacted]", BodyEnd: "[redacted] end", BodySize: 100 + 2 + 6}); got != want {
-		t.Errorf("error reply body %+v, want %+v", got, want)
+	cleaned := protocol.CapturedBody{Body: "bad key [redacted]", BodyEnd: "[redacted] end", BodySize: 100 + 2 + 6}
+	out := p.diagnostic(d, false)
+	if got := out.Upstream[0].Response.CapturedBody; got != cleaned {
+		t.Errorf("error reply body %+v, want %+v", got, cleaned)
+	}
+	// A call that failed loses the pieces from every reply's body, its request's kept.
+	failed := p.diagnostic(d, true)
+	if failed.Upstream[0].Response.CapturedBody != cleaned || failed.Upstream[1].Response.CapturedBody != cleaned ||
+		failed.Upstream[1].Request.CapturedBody != body {
+		t.Errorf("failed call's capture: %+v", failed.Upstream)
 	}
 	for i, x := range out.Upstream {
 		if x.Request.CapturedBody != body || i > 0 && x.Response != nil && x.Response.CapturedBody != body {

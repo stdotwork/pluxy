@@ -229,7 +229,9 @@ func TestCaptureHoldsNoSettingsSecret(t *testing.T) {
 // captureStop sends one GET to its settings' base_url with the path /<mode> and reads the
 // response body as mode says: "cut" reads its first MiB, as extensions read an error body; "stop"
 // reads its first settings.read bytes and closes it; "error" and "whole" read it to its end,
-// which for "error" is a broken connection. It fails the call.
+// which for "error" is a broken connection. It fails the call, but for "whole", which finishes
+// it: a failed call's capture also loses every piece of the account's secrets (pieces), which
+// would hide what "whole" checks.
 func captureStop() {
 	err := sdk.Serve(sdk.Extension{
 		ID:      "hosttest/capture-stop",
@@ -258,6 +260,12 @@ func captureStop() {
 				_, _ = io.ReadAll(resp.Body)
 			}
 			resp.Body.Close()
+			if st.Mode == "whole" {
+				if err := out.Start(llm.ResponseInfo{ID: "r", Model: "m"}); err != nil {
+					return err
+				}
+				return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+			}
 			return &llm.Error{Code: llm.CodeUnavailable, Message: "done"}
 		},
 	})

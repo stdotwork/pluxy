@@ -42,7 +42,7 @@ func (e *Extension) Check(ctx context.Context, account protocol.Account) (*proto
 	case r.Type == protocol.TypeCheckResult && r.Check != nil:
 		return &protocol.CheckResult{Detail: redact.String(r.Check.Detail)}, nil
 	case r.Type == llm.EventError && r.Error != nil:
-		return nil, accountPieces(account).event(redact.Event(r.Event)).Error
+		return nil, e.accountPieces(account).event(redact.Event(r.Event)).Error
 	}
 	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a check call", e.manifest.ID, redact.String(r.Type))}
 }

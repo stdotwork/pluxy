@@ -1518,19 +1518,21 @@ extension's own output, show `[redacted]` in place of the account's credential a
 secret in its settings (the values `GET /config` and `GET /accounts` show as placeholders), such
 as a `base_url` with a token in its query that an unreachable upstream's error quotes. A
 settings secret shorter than 8 bytes is left in text, since removing every occurrence of so
-short a string would mangle unrelated text. An error's message and raw body, from every
-extension and for every call (requests, checks, quota and model reads, refreshes and sessions),
-also lose every run of token characters (letters, digits and `_-.+/=~`, read with JSON and
-percent escapes decoded) that holds 4 or more consecutive characters of one of the account's
-secrets: an upstream that refuses a key often echoes its start (`invalid x-api-key:
-sk-ant-api03-AbCdEf...`), which whole-secret redaction misses. The secrets are the credential's
-key and tokens, secret header values, the proxy's user name and password and the secrets in the
-settings, by their parts (the extension protocol's [Accounts](protocol/README.md#accounts)
-says which). A key's public vendor prefix (`sk-proj-`, `sk-kimi-`, `xai-` and the like) gives
-no piece, so `project` or `kimi` stays in an error for such a key; a secret of under 16 bytes
-after its prefix keeps every piece. Any other word of the error that shares 4 characters with a
-secret goes too, such as `token` for a header `Bearer gw-token-12345`; a reply that succeeded is
-never changed by the rule.
+short a string would mangle unrelated text. An error's message and the string values of its raw
+body, from every extension and for every call (requests, checks, quota and model reads,
+refreshes, sessions and logins), also lose every run of token characters (letters, digits and
+`_-.+/=~`, read as written and with JSON and percent escapes decoded) that holds 4 or more
+consecutive characters of one of the account's secrets: an upstream that refuses a key often
+echoes its start (`invalid x-api-key: sk-ant-api03-AbCdEf...`), which whole-secret redaction
+misses. The secrets are the credential's key and tokens, secret header values, the proxy's user
+name and password and the secrets core finds in the settings (a URL by its user name, password
+and secret query values only), by their parts, and on a login the inputs it marks secret (the
+extension protocol's [Accounts](protocol/README.md#accounts) says which). A known vendor's
+public key prefix (`sk-proj-`, `sk-kimi-`, `xai-` and the others listed there) gives no piece,
+so `project` or `kimi` stays in an error for such a key; a secret of under 16 bytes after its
+prefix keeps every piece. Any other word of the error that shares 4 characters with a secret
+goes too, such as `token` for a header `Bearer gw-token-12345`; a reply that succeeded is never
+changed by the rule.
 Each
 extension checks with its upstream's model list, and only accounts with an API key:
 
@@ -2089,8 +2091,10 @@ such as a session token behind a public prefix (`devin-session-token$<jwt>`), th
 extension protocol's [Accounts](protocol/README.md#accounts) lists the structures). Replies and upstream
 sections come from the extension with the account's own credential, the secrets in its settings,
 its proxy's password and its secret header values already removed, and an error's text and the
-body of an upstream reply with an error status (400 or more) without the pieces of the account's
-secrets (see [Account checks](#account-checks)); in the upstream sections the
+body of an upstream reply with an error status (400 or more), or of every reply of a request
+that failed, without the pieces of the account's secrets (see [Account checks](#account-checks)):
+a failed request's log can lose words of the model's text that share 4 characters with a secret;
+in the upstream sections the
 values of headers and query parameters whose names hold `auth`, `key`, `token`, `secret`,
 `cookie`, `session`, `password`, `passphrase` or `signature` are masked too, the URL's user name and password
 are left out, and the characters a secret could be made of on each side of a body's left-out

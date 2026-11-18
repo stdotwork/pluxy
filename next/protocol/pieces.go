@@ -24,7 +24,8 @@ const minSideSecret = 8
 //   - the value of each header whose name is secret (SecretName);
 //   - the user name and password of proxy_url;
 //   - in settings, every string below a key whose name is secret (SecretName), and the
-//     user name, password and secret query values (by the same names) of every URL.
+//     user name, password and secret query values (secretQueryName) of every URL; a URL below a
+//     secret key counts by those parts only, as core's own rule for settings has it.
 //
 // A secret made of parts (SecretParts) counts by its parts only, not whole: the words of a
 // public prefix, scheme or cookie name ("devin-session-token$", "Bearer", "sid=") are not pieces,
@@ -37,6 +38,35 @@ const minSideSecret = 8
 // URL, a project ID, an OAuth scope) whose words would count as pieces, so an extension passes a
 // secret it keeps there itself (sdk.UpstreamText), and core does not remove pieces of it.
 func AccountSecrets(a Account) []string {
+	var settings []string
+	if len(a.Settings) > 0 {
+		var v any
+		if json.Unmarshal(a.Settings, &v) == nil {
+			settingsSecrets(v, false, func(s string) { settings = append(settings, s) })
+		}
+	}
+	return accountSecrets(a, settings)
+}
+
+// AccountSecretsWith is AccountSecrets with settings in place of the secrets AccountSecrets
+// finds in a's settings: core passes the ones its own rules for settings find, and a login's
+// secret inputs. A value that is an absolute URL counts by its user name, password and secret
+// query values only (its other words, such as "https", are no secret), and like every secret
+// but the credential's, one under 8 bytes adds nothing.
+func AccountSecretsWith(a Account, settings []string) []string {
+	var out []string
+	for _, s := range settings {
+		if absoluteURL(s) {
+			out = append(out, urlSecrets(s, false)...)
+		} else {
+			out = append(out, s)
+		}
+	}
+	return accountSecrets(a, out)
+}
+
+// accountSecrets is AccountSecrets with the settings' secrets given.
+func accountSecrets(a Account, settings []string) []string {
 	var out []string
 	add := func(s string, short bool) {
 		if s == "" || !short && len(s) < minSideSecret {
@@ -70,11 +100,8 @@ func AccountSecrets(a Account) []string {
 	for _, s := range urlSecrets(a.ProxyURL, true) {
 		add(s, false)
 	}
-	if len(a.Settings) > 0 {
-		var v any
-		if json.Unmarshal(a.Settings, &v) == nil {
-			settingsSecrets(v, false, func(s string) { add(s, false) })
-		}
+	for _, s := range settings {
+		add(s, false)
 	}
 	return out
 }
@@ -96,11 +123,12 @@ func wrapper(p string, parts []string) bool {
 }
 
 // settingsSecrets calls add with each secret in the settings value v: each string below a key
-// whose name is secret (secret says v is), and the secrets of each URL (urlSecrets).
+// whose name is secret (secret says v is) but an absolute URL, and the secrets of each URL
+// (urlSecrets).
 func settingsSecrets(v any, secret bool, add func(string)) {
 	switch v := v.(type) {
 	case string:
-		if secret {
+		if secret && !absoluteURL(v) {
 			add(v)
 		}
 		for _, s := range urlSecrets(v, false) {
@@ -117,8 +145,18 @@ func settingsSecrets(v any, secret bool, add func(string)) {
 	}
 }
 
+// absoluteURL reports whether s is an absolute URL with a host.
+func absoluteURL(s string) bool {
+	s = strings.TrimSpace(s)
+	if !strings.Contains(s, "://") {
+		return false
+	}
+	u, err := url.Parse(s)
+	return err == nil && u.Host != ""
+}
+
 // urlSecrets returns the user name and password of the URL s, and the values of its query
-// parameters whose names are secret (SecretName) unless proxy is set, as written and
+// parameters whose names are secret (secretQueryName) unless proxy is set, as written and
 // decoded; nothing for a string that is not an absolute URL.
 func urlSecrets(s string, proxy bool) []string {
 	s = strings.TrimSpace(s)
@@ -141,15 +179,44 @@ func urlSecrets(s string, proxy bool) []string {
 	}
 	for _, kv := range strings.Split(u.RawQuery, "&") {
 		k, v, _ := strings.Cut(kv, "=")
-		if name, err := url.QueryUnescape(k); err != nil || !SecretName(name) {
+		if name, err := url.QueryUnescape(k); err != nil || !secretQueryName(name) {
 			continue
 		}
 		out = append(out, v)
 		if d, err := url.QueryUnescape(v); err == nil && d != v {
 			out = append(out, d)
 		}
+		if d, err := url.PathUnescape(v); err == nil && d != v {
+			out = append(out, d)
+		}
 	}
 	return out
+}
+
+// secretQueryName reports whether a URL's query parameter is named like a secret, as core's
+// rule for settings (configdoc's secretParam) has it, as far as this package can: by SecretName,
+// as a signature (sig, sas), a password (pwd, pass, passwd, passcode), a signed token or
+// assertion (jwt, client_assertion, credential), an OAuth code or its verifier, or by a name that
+// ends in a secret's word (token, secret, password, apikey, privatekey, ...). Unlike configdoc it
+// does not fold letters as encoding/json does, nor drop a trailing word that says how the value
+// is written (api_key_value).
+func secretQueryName(name string) bool {
+	if SecretName(name) {
+		return true
+	}
+	joined := strings.ToLower(strings.NewReplacer("_", "", "-", "", ".", "", " ", "").Replace(name))
+	switch joined {
+	case "sig", "sas", "code", "codeverifier", "pwd", "pass", "passwd", "passcode", "jwt", "clientassertion",
+		"credential", "credentials":
+		return true
+	}
+	for _, suffix := range []string{"token", "secret", "secrets", "password", "passwords", "apikey", "secretkey",
+		"privatekey", "secretaccesskey", "passphrase"} {
+		if strings.HasSuffix(joined, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // minPiece is the shortest piece of a secret RemovePieces replaces, as TrimCut counts one.
@@ -164,13 +231,14 @@ var escapedRun = regexp.MustCompile(`(?:[A-Za-z0-9_\-.+/=~]|\\u[0-9A-Fa-f]{4}|\\
 
 // RemovePieces returns s with every run of token characters (letters, digits and "_-.+/=~") that
 // holds minPiece or more consecutive characters of one of secrets replaced by Redacted. A run is
-// read with its escapes decoded too (ReplaceRuns), so a piece written with escapes between its
-// characters is replaced. An upstream that refuses a credential often echoes a piece of it, such
-// as its first 24 characters and "...", which a NewRedactor's whole forms and parts miss.
+// read as written and with its escapes decoded (ReplaceRuns), so a piece written with escapes
+// between its characters is replaced, and so is one of a secret that holds such an escape itself.
+// An upstream that refuses a credential often echoes a piece of it, such as its first 24
+// characters and "...", which a NewRedactor's whole forms and parts miss.
 //
-// A secret's public prefix (publicKeyPrefix), such as "sk-proj-", gives no piece of its own: a
-// piece counts only when it holds at least one byte after the prefix, so words such as "project"
-// stay.
+// A secret's public vendor prefix (publicKeyPrefix), such as "sk-proj-", gives no piece of its
+// own: a piece counts only when it holds at least one byte after the prefix, so words such as
+// "project" stay.
 //
 // Text with words in it, such as a model's reply, would lose every word that shares minPiece
 // characters with a secret, so this is for error text: core applies it to an upstream's error
@@ -186,70 +254,70 @@ func RemovePieces(s string, secrets ...string) string {
 	if len(pieces) == 0 {
 		return s
 	}
-	return ReplaceRuns(s, func(_, d string) bool {
-		for i := 0; i+minPiece <= len(d); i++ {
-			if pieces[d[i:i+minPiece]] {
+	holds := func(t string) bool {
+		for i := 0; i+minPiece <= len(t); i++ {
+			if pieces[t[i:i+minPiece]] {
 				return true
 			}
 		}
 		return false
-	})
+	}
+	return ReplaceRuns(s, func(run, d string) bool { return holds(d) || d != run && holds(run) })
 }
 
-// maxKeyPrefix is the longest public prefix publicKeyPrefix takes off a secret, and the shortest
-// rest of the secret it leaves.
-const maxKeyPrefix = 16
+// publicKeyPrefixes are the public prefixes of vendors' API keys, longest first where one
+// starts another, so the longest that fits is taken.
+var publicKeyPrefixes = []string{
+	"sk-ant-admin01-", "sk-ant-api03-", "sk-ant-oat01-", "sk-ant-ort01-", "sk-svcacct-",
+	"sk-admin-", "sk-proj-", "sk-kimi-", "sk-or-v1-", "sk-ant-", "xai-", "gsk_", "sk-",
+}
 
-// publicKeyPrefix returns the length of the public vendor prefix secret starts with, such as
-// "sk-", "sk-proj-", "sk-svcacct-", "sk-ant-api03-", "sk-kimi-" or "xai-": groups of lowercase
-// letters and digits, each ending in "-" or "_", the first starting with a letter, at most
-// maxKeyPrefix bytes in all (the longest run of whole groups that fits). It is 0 when the
-// secret has no such prefix, or when less than maxKeyPrefix bytes follow it: a short secret
-// keeps every piece.
+// minAfterPrefix is how many bytes of a secret must follow its public prefix for the prefix to
+// count: a shorter secret keeps every piece.
+const minAfterPrefix = 16
+
+// publicKeyPrefix returns the length of the public vendor prefix secret starts with (one of
+// publicKeyPrefixes, the longest that fits), or 0 when it starts with none of them or less than
+// minAfterPrefix bytes follow it.
 func publicKeyPrefix(secret string) int {
-	if secret == "" || secret[0] < 'a' || secret[0] > 'z' {
-		return 0
-	}
-	n := 0
-	for i := 0; i < len(secret) && i < maxKeyPrefix; i++ {
-		c := secret[i]
-		switch {
-		case c == '-' || c == '_':
-			if i == n { // an empty group
-				return checkRest(secret, n)
+	for _, p := range publicKeyPrefixes {
+		if strings.HasPrefix(secret, p) {
+			if len(secret)-len(p) < minAfterPrefix {
+				return 0
 			}
-			n = i + 1
-		case c >= 'a' && c <= 'z' || c >= '0' && c <= '9':
-		default:
-			return checkRest(secret, n)
+			return len(p)
 		}
 	}
-	return checkRest(secret, n)
-}
-
-// checkRest returns n, a prefix length of secret, when at least maxKeyPrefix bytes follow it,
-// and 0 otherwise.
-func checkRest(secret string, n int) int {
-	if len(secret)-n < maxKeyPrefix {
-		return 0
-	}
-	return n
+	return 0
 }
 
 // ReplaceRuns returns s with every run of token characters and escapes for which match reports
 // true replaced by Redacted. match gets the run as written and decoded: JSON's \/, \\ and \uXXXX
-// (a surrogate pair as one character) and percent-encoding's %XX, nested up to 8 times.
+// (a surrogate pair as one character) and percent-encoding's %XX, nested up to 8 times. The word
+// of a Redacted already in s is never a run, so it never becomes "[[redacted]]".
 func ReplaceRuns(s string, match func(run, decoded string) bool) string {
-	return escapedRun.ReplaceAllStringFunc(s, func(run string) string {
+	var b strings.Builder
+	last := 0
+	for _, m := range escapedRun.FindAllStringIndex(s, -1) {
+		run := s[m[0]:m[1]]
+		if m[0] > 0 && m[1] < len(s) && s[m[0]-1:m[1]+1] == Redacted {
+			continue
+		}
 		d := run
 		if strings.ContainsAny(run, `\%`) {
 			d = decodeRun(run)
 		}
 		if match(run, d) {
-			return Redacted
+			b.WriteString(s[last:m[0]])
+			b.WriteString(Redacted)
+			last = m[1]
 		}
-		return run
-	})
+	}
+	if last == 0 {
+		return s
+	}
+	b.WriteString(s[last:])
+	return b.String()
 }
 
 // decodeRun returns run with its escapes decoded, layer by layer, until no escape is left or

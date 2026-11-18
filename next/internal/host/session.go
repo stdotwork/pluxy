@@ -90,7 +90,7 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		if reply.Error == nil {
 			return nil, e.protocolError("an error frame without an error")
 		}
-		ev := accountPieces(account).event(protocol.NewRedactor(creds...).Event(reply.Event))
+		ev := e.accountPieces(account).event(protocol.NewRedactor(creds...).Event(reply.Event))
 		return nil, ev.Error
 	default:
 		conn.Close()
@@ -100,7 +100,7 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		// ctx ended just as the session opened; its conn is closed.
 		return nil, &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
 	}
-	s := &Session{ext: e, conn: conn, accountID: account.ID, pieces: accountPieces(account), frames: make(chan sessionFrame), done: make(chan struct{}), closing: make(chan struct{})}
+	s := &Session{ext: e, conn: conn, accountID: account.ID, pieces: e.accountPieces(account), frames: make(chan sessionFrame), done: make(chan struct{}), closing: make(chan struct{})}
 	for _, c := range creds {
 		if c != nil {
 			s.creds = append(s.creds, c)
@@ -206,7 +206,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	if proxy != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, proxy) }) {
 		s.creds = append(s.creds, proxy)
 	}
-	s.pieces = s.pieces.add(accountPieces(account))
+	s.pieces = s.pieces.add(s.ext.accountPieces(account))
 	s.running = true
 	t.redact = protocol.NewRedactor(s.creds...)
 	t.pieces = slices.Clone(s.pieces)
@@ -306,6 +306,7 @@ type SessionStream struct {
 	ctx    context.Context
 	redact *protocol.Redactor
 	pieces pieces
+	held   heldCapture // the turn's capture until the turn ends (see Stream)
 	seq    llm.Sequence
 	stop   func() bool
 	final  *llm.Event
@@ -326,6 +327,9 @@ func (t *SessionStream) end() {
 		return
 	}
 	t.ended = true
+	for _, d := range t.held.take() {
+		t.capture(t.account, t.pieces.diagnostic(d, t.final == nil || t.final.Type == llm.EventError))
+	}
 	if t.stop != nil {
 		t.stop()
 	}
@@ -360,7 +364,7 @@ func (t *SessionStream) Next() llm.Event {
 			break
 		}
 		if t.capture != nil && f.reply.Diagnostic != nil {
-			t.capture(t.account, t.pieces.diagnostic(redactDiagnostic(t.redact, *f.reply.Diagnostic)))
+			t.held.hold(redactDiagnostic(t.redact, *f.reply.Diagnostic))
 		}
 	}
 	if err := t.seq.Check(f.reply.Event); err != nil {
