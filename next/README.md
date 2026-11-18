@@ -1647,6 +1647,16 @@ credential through the extension shortly before it expires. Only the extension t
 account ever receives its credential. The protocol side is in the
 [protocol README](protocol/README.md#login-and-refresh).
 
+On Windows, where file modes do not limit who can read a file, the folder and each file get a
+protected access list that lets in only core's user and SYSTEM. Core checks the folder each time it
+loads or saves the accounts and makes it private if it is not. It refuses to start, or to save, when
+`credentials_dir` is a link or a file, or a folder owned by another account than core's user (or
+SYSTEM). A folder made by pluxy run as administrator is owned by the Administrators group, so a run
+without administrator rights refuses it: take ownership of the folder and its files from an
+elevated prompt (`takeown /f <folder> /r`), or move the folder away and sign the accounts in again.
+A file in the folder that is a link, or that another account owns, is skipped with a notice in the
+log rather than loaded.
+
 An extension may return non-secret account settings with a login grant. When adding an
 account, core uses those as defaults: properties explicitly supplied in `POST /accounts.settings`
 win (including `null`; nested objects are replaced as a whole). The extension validates and
