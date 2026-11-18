@@ -220,6 +220,66 @@ fn merged_tauri_config_matches_build_order() {
     assert_eq!(config["identifier"], "dev.pluxy.desktop");
 }
 
+#[test]
+fn merged_lists_only_config_files_that_exist() {
+    // A listed file that does not exist would make Cargo rerun build.rs on every build.
+    for target in [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+    ] {
+        let f = Fixture::new();
+        fs::write(
+            f.dir.join("tauri.conf.json"),
+            br#"{"identifier":"dev.pluxy.desktop"}"#,
+        )
+        .unwrap();
+        let (_, files) = build_config::merged(&f.dir, target, None).unwrap();
+        assert_eq!(files, [f.dir.join("tauri.conf.json")], "{target}");
+    }
+}
+
+#[test]
+fn source_config_that_differs_from_the_snapshot_is_refused() {
+    // This build's own snapshot matches the app's config files.
+    let snapshot: Value = serde_json::from_str(include_str!(concat!(
+        env!("OUT_DIR"),
+        "/app-tauri-config.json"
+    )))
+    .unwrap();
+    let host = if cfg!(target_os = "macos") {
+        "apple-darwin"
+    } else if cfg!(target_os = "windows") {
+        "pc-windows"
+    } else {
+        "unknown-linux"
+    };
+    build_config::check_current(
+        &snapshot,
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        host,
+        std::env::var("TAURI_CONFIG").ok().as_deref(),
+    )
+    .unwrap();
+
+    let f = Fixture::new();
+    let target = "x86_64-unknown-linux-gnu";
+    fs::write(
+        f.dir.join("tauri.conf.json"),
+        br#"{"identifier":"dev.pluxy.desktop","productName":"pluxy"}"#,
+    )
+    .unwrap();
+    let (snapshot, _) = build_config::merged(&f.dir, target, None).unwrap();
+    build_config::check_current(&snapshot, &f.dir, target, None).unwrap();
+    // A platform file added after the build, or an overlay the build did not have.
+    let overlay = r#"{"identifier":"dev.pluxy.other"}"#;
+    let error = build_config::check_current(&snapshot, &f.dir, target, Some(overlay)).unwrap_err();
+    assert!(error.contains("the build is stale"), "{error}");
+    fs::write(f.dir.join("tauri.linux.conf.json"), overlay).unwrap();
+    let error = build_config::check_current(&snapshot, &f.dir, target, None).unwrap_err();
+    assert!(error.contains("the build is stale"), "{error}");
+}
+
 /// What goes into a fixture AppImage's image.
 #[derive(Clone, Copy)]
 #[cfg(target_os = "linux")]
