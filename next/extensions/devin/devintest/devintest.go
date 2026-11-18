@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -297,6 +298,21 @@ func Reply(w http.ResponseWriter, frames ...[]byte) {
 	w.Header().Set("Content-Type", "application/connect+proto")
 	for _, f := range frames {
 		w.Write(f)
+	}
+}
+
+// Stream writes a streamed chat reply of frames as a server that sends each as it comes does:
+// each is flushed on its own, so the reply has no Content-Length. After the last it holds the
+// stream open for hold, or until the request ends, before the transfer ends.
+func Stream(w http.ResponseWriter, r *http.Request, hold time.Duration, frames ...[]byte) {
+	w.Header().Set("Content-Type", "application/connect+proto")
+	for _, f := range frames {
+		w.Write(f)
+		w.(http.Flusher).Flush()
+	}
+	select {
+	case <-time.After(hold):
+	case <-r.Context().Done():
 	}
 }
 

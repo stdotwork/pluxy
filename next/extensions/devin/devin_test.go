@@ -371,3 +371,25 @@ func TestForwardInputsStops(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// A server that holds the stream open after the reply's end frame does not hold the reply back:
+// the extension reads on past the end frame for a moment only.
+func TestReplyNotHeldAfterEndFrame(t *testing.T) {
+	srv := devintest.New(t)
+	srv.Chat = func(w http.ResponseWriter, r *http.Request, _ devintest.Request) {
+		devintest.Stream(w, r, 30*time.Second, devintest.Text("Hi"), devintest.Usage(11, 7), devintest.End(""))
+	}
+	out := &recorder{}
+	start := time.Now()
+	err := chat(context.Background(), sdk.Call{Account: protocol.Account{Settings: srv.Settings(), Credential: tokenCredential(srv.Token())},
+		Request: llm.Request{Model: "swe-2", Items: []llm.Item{{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "Hi"}}}}}}, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("the reply took %v with the stream held open after its end frame", d)
+	}
+	if got := out.types(); !strings.HasSuffix(got, "finish") {
+		t.Errorf("events %s, want the reply to finish", got)
+	}
+}
