@@ -573,8 +573,11 @@ func ServesEndpoints(info protocol.Info) bool {
 }
 
 // Endpoint starts an endpoint call, answered as a generate call is (see Generate). The reply's
-// body is redacted across its pieces: a secret in one of the forms core removes that is cut between
-// them is removed, but for any part of its start that a piece redacted whole had already sent
+// body is redacted across its pieces: a secret in one of the forms core removes, or spelled with
+// other escapes core decodes, that is cut between them is removed, but for the part of its start
+// that a piece sent whole (redacted as one text, as when it is too heavily escaped to hold back)
+// had already sent as it was; after such a piece, an escape it began that the next completes is
+// replaced too, so the client does not read one there that spells a secret
 // (protocol.BodyRedactor). An extension that serves no endpoints answers at once with an
 // unsupported error about the account, so routing moves on to another account.
 func (e *Extension) Endpoint(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
@@ -744,10 +747,12 @@ func (s *Stream) last() llm.Event {
 }
 
 // bodyPiece returns a body piece as the JSON string a native event carries. BodyRedactor cuts
-// a body only where a form of a secret starts or ends, before an ASCII byte (a number, or the
-// colon, bracket or comma before one), or, after text sent whole, at the start of a character it
-// left as it was, each of which is where a character starts, so the piece is valid UTF-8 as the
-// decoded string it came from was, and encodes exactly.
+// a body only where a character starts: where a form of a secret, or its spelling with escapes,
+// starts or ends, at a backslash or percent sign that starts an escape, before the colon, bracket
+// or comma before a number or the number, where a run of bytes that can be part of a spelling
+// starts, or, after text it sent whole or replaced with [redacted], at the start of a character
+// it left as it was. So the piece is valid UTF-8 as the decoded string it came from was, and
+// encodes exactly.
 func bodyPiece(text string) json.RawMessage {
 	b, _ := json.Marshal(text)
 	return b
