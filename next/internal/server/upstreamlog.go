@@ -198,7 +198,7 @@ func writeUpstreamHeaders(b *bytes.Buffer, h map[string][]string, leftOut int) {
 // (trimStop).
 func writeBody(b *bytes.Buffer, c protocol.CapturedBody, redact *protocol.Redactor) {
 	if c.BodyStopped {
-		defer b.WriteString("\n[... the extension read no further ...]")
+		defer b.WriteString("\n[... the body was not read past here ...]")
 	}
 	head, end := c.Body, c.BodyEnd
 	if end == "" && len(head) > protocol.CapturedHead+protocol.CapturedEnd {
@@ -230,20 +230,28 @@ func writeBody(b *bytes.Buffer, c protocol.CapturedBody, redact *protocol.Redact
 }
 
 // trimStop returns s, the end of a body whose read stopped, without what at its end could be the
-// start of a secret of r's cut off there: a run of at least 4 bytes that starts a form of one
-// (Redactor.TrimCut), then the run of key characters (secretChar), which holds the start of a
-// secret made of them in any spelling.
+// start of a secret of r's cut off there, left out as trimGap leaves out the start's side of a
+// gap (the window, the part of a form, the run of key characters, then keepWhole), except that
+// the window reaches back no further than the last line break: no spelling of a secret the log
+// decodes holds a raw line break, and each line of a secret that spans lines is a secret of its
+// own. So a stream stopped after its last event, or inside one, keeps every whole event.
 //
-// shortcut: it leaves out no window as trimGap does, so the start of a secret with characters
-// other than a key's, written in escapes that are not among its forms (such as \u escapes of
-// every character, which the redaction recognises only in a whole secret), can stay here. Most
-// streamed bodies end unread, at the reply's last event, and a window would leave out all of a
-// short one. Upgrade when a capture tells a stop after the reply's last event from one in the
-// middle of a body, so that the window can go where the read stopped mid-body, or when such a
-// start is seen in a log.
+// shortcut: a secret that spans lines can keep its first line where the read stopped after that
+// line's break, when the line is 1 or 2 bytes: too short to be a secret of its own (8 bytes) and,
+// with its line break, to be the part of a form TrimCut removes (4). Upgrade if a config takes
+// such a secret.
 func trimStop(r *protocol.Redactor, s string) string {
-	s, _ = r.TrimCut(s, "")
-	return strings.TrimRightFunc(s, secretChar)
+	n := gapWindow(r)
+	q := len(s) - min(n, len(s))
+	if i := strings.LastIndexByte(s, '\n'); i >= q {
+		q = i + 1
+	}
+	h, _ := r.TrimCut(s[:q], "")
+	q = len(strings.TrimRightFunc(h, secretChar))
+	if n > 0 {
+		q = keepWhole(r, s, q, n, true)
+	}
+	return s[:q]
 }
 
 // gapBytesPerFormByte is how many bytes beside a cut trimGap leaves out for each byte of the

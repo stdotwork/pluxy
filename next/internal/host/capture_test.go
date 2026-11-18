@@ -333,9 +333,10 @@ func TestCaptureStoppedReadKeepsNoCredentialStart(t *testing.T) {
 			if i := strings.Index(got, secret[:4]); i >= 0 {
 				t.Errorf("the body keeps the credential's start where its read stopped: %q", got[max(0, i-len(mark)):])
 			}
-			// Only what could be part of the credential goes: the text before it stays.
+			// What could be part of the credential goes, and only that: the text before it stays.
 			if !strings.HasSuffix(got, mark) {
-				t.Errorf("more than the credential's start was left out: the body ends %q", got[max(0, len(got)-40):])
+				t.Errorf("the body does not end where the credential's start was: it ends %q, want it to end %q",
+					got[max(0, len(got)-40):], mark)
 			}
 		})
 	}

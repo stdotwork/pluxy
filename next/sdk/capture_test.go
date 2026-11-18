@@ -450,3 +450,53 @@ func TestCaptureMarksStoppedRead(t *testing.T) {
 		})
 	}
 }
+
+// lateEOF gives its text, then holds back the end of the body until release is closed.
+type lateEOF struct {
+	r       *strings.Reader
+	release <-chan struct{}
+}
+
+func (l *lateEOF) Read(p []byte) (int, error) {
+	if l.r.Len() == 0 {
+		<-l.release
+	}
+	return l.r.Read(p)
+}
+
+func (l *lateEOF) Close() error { return nil }
+
+// A request body of known length that the transport has sent whole is not marked as stopped,
+// even when the call's diagnostic is taken before the transport's last read sees the body's end:
+// the transport sends no more than the length, so the upstream can answer first.
+func TestCaptureRequestBodySentWhole(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		io.WriteString(w, "ok")
+	}))
+	t.Cleanup(srv.Close)
+	tr := &http.Transport{}
+	t.Cleanup(tr.CloseIdleConnections)
+	release := make(chan struct{})
+	defer close(release)
+	const body = `{"sent":"whole"}`
+	req, err := http.NewRequest(http.MethodPost, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Body, req.ContentLength = &lateEOF{r: strings.NewReader(body), release: release}, int64(len(body))
+	c := &captureLog{}
+	resp, err := c.roundTrip(tr, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	d := c.take()
+	if d == nil || len(d.Upstream) != 1 {
+		t.Fatalf("captured %+v, want one exchange", d)
+	}
+	if x := d.Upstream[0].Request; x.Body != body || x.BodyStopped {
+		t.Errorf("request body %q, stopped %v: want it whole and not stopped", x.Body, x.BodyStopped)
+	}
+}

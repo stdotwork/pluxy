@@ -1253,7 +1253,13 @@ Rules:
   its start and its end: never hold a whole stream, delay the request to read its body first, or
   delay a piece of a reply to record it. What the extension had not read when it sent the frame is
   not in it. Set `body_stopped` on a body whose reader did not see its end, however the read
-  stopped; a body with nothing to read (an empty response) is read to its end.
+  stopped, unless every byte of a body of known length was read: a transport can send a request
+  body's last byte, and the upstream answer, before its last read sees the end. A body known to
+  have nothing to read is read to its end; the Go SDK treats only a body
+  the transport gives as `http.NoBody` that way. A response with neither a length nor chunked
+  encoding whose connection closes early cannot be told from one that ended there (Go reads it
+  as the end, also over TLS closed without its closing alert): don't mark it, which would mark
+  complete ones too.
 - A WebSocket handshake is an exchange: the `GET` request and the `101` response's status and
   headers, with no body. The messages on the socket are not captured. A turn that uses a socket an
   earlier turn opened makes no exchange, and a socket opened by the `session` call itself, before
@@ -1271,9 +1277,10 @@ credential cut in two. A `body` and `body_end` with nothing left out between the
 core redacts them as it does an [endpoint](#endpoint) body's pieces, so a credential in one of the
 forms it removes that is cut between them is removed, and logs them joined. Where a body has
 `body_stopped`, its last bytes may be the start of a secret cut off where the read stopped: core
-drops a run of 4 bytes or more at its end that starts a form of the credential, and the log drops
-one that starts a form of a secret of its config, then the run of letters, digits and `-_.~+/=%\`
-there, and ends the body with a line saying the extension read no further. An extension older
+drops a run of 4 bytes or more at its end that starts a form of the credential, and the log leaves
+out what could be the start of a secret of its config as on the start's side of a cut, with its
+window reaching back no further than the last line break, and ends the body with a line saying it
+was not read past there. An extension older
 than 0.17 never sets `body_stopped`, so its bodies are logged as before: one whose read stopped
 can keep the start of a secret at its end.
 

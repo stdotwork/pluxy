@@ -38,7 +38,7 @@ func (c *captureLog) roundTrip(rt http.RoundTripper, req *http.Request) (*http.R
 	x.req.Headers, x.req.HeadersLeftOut = capturedHeaders(req.Header)
 	hasBody := req.Body != nil && req.Body != http.NoBody
 	if hasBody {
-		x.reqBody = &bodyCapture{} // set before x is published: take reads it
+		x.reqBody = &bodyCapture{size: req.ContentLength} // set before x is published: take reads it
 	}
 	if !c.add(x) {
 		return rt.RoundTrip(req)
@@ -64,7 +64,7 @@ func (c *captureLog) roundTrip(rt http.RoundTripper, req *http.Request) (*http.R
 				if err != nil {
 					return nil, err
 				}
-				bc := &bodyCapture{}
+				bc := &bodyCapture{size: req.ContentLength}
 				return &sentBody{teeBody: teeBody{b, bc}, use: use(bc)}, nil
 			}
 		}
@@ -82,7 +82,7 @@ func (c *captureLog) roundTrip(rt http.RoundTripper, req *http.Request) (*http.R
 	// A 101's body is the switched connection (a WebSocket's), which its reader needs as it is;
 	// its messages are not recorded.
 	if resp.StatusCode != http.StatusSwitchingProtocols && resp.Body != nil {
-		x.body = &bodyCapture{eof: resp.Body == http.NoBody} // an empty body has nothing to read
+		x.body = &bodyCapture{eof: resp.Body == http.NoBody, size: resp.ContentLength} // NoBody has nothing to read
 		resp.Body = teeBody{resp.Body, x.body}
 	}
 	return resp, nil
@@ -238,7 +238,8 @@ type bodyCapture struct {
 	tail    []byte // a ring of protocol.CapturedEnd bytes once full
 	at      int    // where the ring's oldest byte is
 	written int64
-	eof     bool // the body was read to its end
+	eof     bool  // the body was read to its end
+	size    int64 // the body's length when known (more than 0)
 }
 
 func (c *bodyCapture) Write(p []byte) (int, error) {
@@ -266,7 +267,10 @@ func (c *bodyCapture) Write(p []byte) (int, error) {
 }
 
 // captured returns what c kept: the whole body in Body when it fits, else its start and end,
-// with BodyStopped set when the body was not read to its end, however its read stopped.
+// with BodyStopped set when the body was not read to its end, however its read stopped. A body of
+// known length whose every byte was read was read to its end, whether or not a read has seen that
+// yet: a transport sends a request body's last byte, and the upstream can answer, before its last
+// read of the body.
 func (c *bodyCapture) captured() protocol.CapturedBody {
 	if c == nil {
 		return protocol.CapturedBody{}
@@ -274,8 +278,9 @@ func (c *bodyCapture) captured() protocol.CapturedBody {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	tail := string(c.tail[c.at:]) + string(c.tail[:c.at])
+	stopped := !c.eof && (c.size <= 0 || c.written < c.size)
 	if c.written <= protocol.CapturedHead+protocol.CapturedEnd {
-		return protocol.CapturedBody{Body: string(c.head) + tail, BodySize: c.written, BodyStopped: !c.eof}
+		return protocol.CapturedBody{Body: string(c.head) + tail, BodySize: c.written, BodyStopped: stopped}
 	}
-	return protocol.CapturedBody{Body: string(c.head), BodyEnd: tail, BodySize: c.written, BodyStopped: !c.eof}
+	return protocol.CapturedBody{Body: string(c.head), BodyEnd: tail, BodySize: c.written, BodyStopped: stopped}
 }
