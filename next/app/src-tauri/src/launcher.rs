@@ -263,6 +263,10 @@ pub fn forget_environment(app: &AppHandle, environment: &Environment) -> Result<
         let gone = l.forget_environment(environment);
         (gone, l.save())
     };
+    // shortcut: no test shows these revokes run when the save failed: revoking needs the running
+    // app's `AppHandle`, which no test can make (the tests check `Launcher::forget_environment`'s
+    // list alone); test it once the app has a test harness for its Tauri state, or once this code
+    // takes that state instead of the handle.
     for approval in gone {
         revoke_superseded(app, Some(approval));
     }
