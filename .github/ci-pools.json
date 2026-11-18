@@ -1,6 +1,6 @@
 {
   "_about": [
-    "Read by .github/scripts/plan.py, ci.yml's plan job. Times are in minutes.",
+    "Read by .github/scripts/plan.py, the plan step of ci.yml's changes job. Times are in minutes.",
     "medians: each job's median run time per pool (github, namespace, self-hosted), measured",
     "from completed jobs (completed_at - started_at). A key is a job key or a family: a prefix of",
     "job keys that ends before a '/'. A pool a key leaves out uses github's time; a job with no",

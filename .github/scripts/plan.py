@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Picks the runner for each heavy job of a CI run: ci.yml's plan job.
+"""Picks the runner for each heavy job of a CI run: the plan step
+of ci.yml's changes job.
 
 For every routed job the run will start, it estimates when the job would finish on each pool it
 may use (the job's median run time there, from .github/ci-pools.json, plus the wait for a free

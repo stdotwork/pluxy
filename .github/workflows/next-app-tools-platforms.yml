@@ -14,7 +14,7 @@ on:
         type: boolean
         default: true
       runners:
-        description: The runner ci.yml's plan job picked for each job, as JSON (AGENTS.md, "Where jobs run").
+        description: The runner ci.yml's plan step picked for each job, as JSON (AGENTS.md, "Where jobs run").
         type: string
         default: ''
   workflow_dispatch:

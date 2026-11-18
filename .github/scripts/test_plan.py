@@ -181,6 +181,23 @@ class Catalogue(unittest.TestCase):
         self.assertIn("platform: 'darwin/arm64,darwin/amd64'", text["next-app-tools-pack.yml"])
 
 
+    def test_plan_step_repeats_the_changes_outputs(self):
+        """The plan step cannot read its own job's outputs, so ci.yml repeats them in CHANGES: each
+        must be the same expression, and the whole a JSON object once they are filled in."""
+        text = (WORKFLOWS / "ci.yml").read_text()
+        block = text.split("\n  changes:\n", 1)[1].split("\n    steps:\n", 1)[0]
+        outputs = dict(re.findall(r"^      ([\w-]+): (\$\{\{.*\}\})$", block, re.M))
+        raw = text.split("          CHANGES: >-\n", 1)[1].split("\n          EVENT:", 1)[0]
+        repeated = dict(re.findall(r'"([\w-]+)": "(\$\{\{.*?\}\})"', raw))
+        read = {"next-ci", "next-app", "next-app-native", "next-app-platforms", "next-app-platforms-native", "next-app-tools-platforms", "next-app-tools-pack"}
+        self.assertEqual(set(repeated), read)
+        for name, expression in repeated.items():
+            self.assertEqual(expression, outputs[name], name)
+        filled = re.sub(r"\$\{\{.*?\}\}", "true", " ".join(line.strip() for line in raw.splitlines()))
+        self.assertEqual([j.key for j in plan.catalogue(json.loads(filled))], [j.key for j in plan.catalogue(ALL)])
+        self.assertEqual(outputs["runners"], "${{ steps.plan.outputs.runners }}")
+
+
 class Scoring(unittest.TestCase):
     def test_idle_pools_put_the_longest_mac_job_on_namespace(self):
         runners, _ = run_plan(env({"next-app-platforms": "true", "next-app-platforms-native": "true"}))
