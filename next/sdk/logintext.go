@@ -15,8 +15,6 @@ var (
 	// opaqueRun matches a long run of token characters, the shape of an access token, a refresh
 	// token, a JWT, a device code or an API key.
 	opaqueRun = regexp.MustCompile(`[A-Za-z0-9_\-.+/=~]{24,}`)
-	// pieceRun matches a run of the same token characters long enough to hold a piece of a secret.
-	pieceRun = regexp.MustCompile(`[A-Za-z0-9_\-.+/=~]{4,}`)
 	// bearerValue matches what follows "Bearer" or "Basic".
 	bearerValue = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[^\s"',;]+`)
 	// secretPair matches name=value or name: value for a name that carries a secret.

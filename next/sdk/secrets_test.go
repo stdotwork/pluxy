@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"slices"
 	"testing"
@@ -45,6 +46,57 @@ func TestAccountSecrets(t *testing.T) {
 		"cookie c2Vb5Nm8 expired, theme=dark":                    "cookie [redacted] expired, theme=dark",
 		"invalid JWT " + jwt[:20] + " (truncated)":               "invalid JWT [redacted] (truncated)",
 		"invalid devin-session-token for the gateway, try again": "invalid devin-session-token for the gateway, try again",
+	} {
+		if got := UpstreamText(in, AccountSecrets(a)...); got != want {
+			t.Errorf("UpstreamText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A header or cookie whose parts are all under 8 bytes adds nothing, as any side secret under 8
+// bytes does: the public words around them ("Bearer", "theme") are not pieces. The credential's own
+// value adds its short inner value, without the public prefix.
+func TestAccountSecretsShortParts(t *testing.T) {
+	a := protocol.Account{
+		Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "devin-session-token$short"},
+		Headers:    map[string]string{"Authorization": "Bearer short1", "Cookie": "theme=dark"},
+	}
+	if got, want := AccountSecrets(a), []string{"short"}; !slices.Equal(got, want) {
+		t.Errorf("AccountSecrets = %q, want %q", got, want)
+	}
+	for in, want := range map[string]string{
+		"this session refuses Bearer, and the theme is dark": "this session refuses Bearer, and the theme is dark",
+		"invalid devin-session-token: shor (truncated)":      "invalid devin-session-token: [redacted] (truncated)",
+	} {
+		if got := UpstreamText(in, AccountSecrets(a)...); got != want {
+			t.Errorf("UpstreamText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A cookie value that holds another cookie's value is a secret of its own, not a wrapper of the
+// other: the pieces of both go. A wrapper is Basic's decoded "user:password", when its password is
+// a part too, or a part split again (a header line's "Bearer <token>"): its user name, scheme or
+// prefix is not a piece.
+func TestAccountSecretsPartsHoldingParts(t *testing.T) {
+	basic := base64.StdEncoding.EncodeToString([]byte("ops@gw.example:gw-password-123"))
+	settings, _ := json.Marshal(map[string]string{"api_key": "X-Gateway: Bearer gw-token-0123456789"})
+	a := protocol.Account{Headers: map[string]string{
+		"Cookie":        "sid=session123; csrf=session123-tail99",
+		"Authorization": "Basic " + basic,
+	}, Settings: settings}
+	got := AccountSecrets(a)
+	slices.Sort(got)
+	want := []string{basic, "gw-password-123", "gw-token-0123456789", "session123", "session123-tail99"}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("AccountSecrets = %q\nwant %q", got, want)
+	}
+	for in, want := range map[string]string{
+		"csrf tail99 rejected":                       "csrf [redacted] rejected",
+		"user ops@gw.example is not known":           "user ops@gw.example is not known",
+		"the gateway refuses Bearer, use a key":      "the gateway refuses Bearer, use a key",
+		"the gateway rejected gw-token-0123 (short)": "the gateway rejected [redacted] (short)",
 	} {
 		if got := UpstreamText(in, AccountSecrets(a)...); got != want {
 			t.Errorf("UpstreamText(%q) = %q, want %q", in, got, want)

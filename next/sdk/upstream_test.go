@@ -240,6 +240,50 @@ func TestUpstreamSetsCallHeaders(t *testing.T) {
 	}
 }
 
+// A request made with Uncaptured goes as the call's other requests go, through the account's proxy
+// with its headers, but is left out of the call's capture, which still records the others.
+func TestUncapturedKeepsProxyAndHeaders(t *testing.T) {
+	type seen struct{ uri, key string }
+	got := make(chan seen, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- seen{r.RequestURI, r.Header.Get("X-Gateway-Key")}
+		_, _ = io.WriteString(w, `{"access_token":"minted"}`)
+	}))
+	defer proxy.Close()
+	rt := Upstream(&http.Transport{})
+	defer rt.(upstreamTransport).CloseIdleConnections()
+	call := protocol.Call{Op: protocol.OpGenerate, Capture: true, Account: &protocol.Account{ID: "a",
+		ProxyURL: proxy.URL, Headers: map[string]string{"X-Gateway-Key": "fake-gw"}}}
+	want := seen{"http://upstream.test/token", "fake-gw"}
+	for _, uncaptured := range []bool{true, false} {
+		ctx, capture := withUpstreamInfo(context.Background(), call)
+		if uncaptured {
+			ctx = Uncaptured(ctx)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://upstream.test/token", strings.NewReader("assertion=x"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := rt.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("uncaptured %v: %v", uncaptured, err)
+		}
+		_, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		select {
+		case s := <-got:
+			if s != want {
+				t.Errorf("uncaptured %v: the proxy got %+v, want %+v", uncaptured, s, want)
+			}
+		default:
+			t.Errorf("uncaptured %v: the request did not go through the proxy", uncaptured)
+		}
+		if d := capture.take(); (d != nil) == uncaptured {
+			t.Errorf("uncaptured %v: the capture holds %+v", uncaptured, d)
+		}
+	}
+}
+
 // An extension that has not wrapped any client in Upstream cannot send through a proxy, with an
 // account's headers or with a call's payload rules, so a call that carries any of them is
 // answered with an error and never reaches its handler or the upstream; a call without a proxy

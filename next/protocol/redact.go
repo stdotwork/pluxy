@@ -63,7 +63,7 @@ func NewRedactor(cs ...*Credential) *Redactor {
 	// A secret made of parts is secret part by part too: an upstream may echo only the token
 	// behind a public prefix or an authorization scheme, or one cookie of a list.
 	for _, s := range secrets {
-		secrets = append(secrets, SecretParts(s)...)
+		secrets = append(secrets, SecretParts(s, minFragment)...)
 	}
 	var variants []string
 	for _, s := range secrets {
@@ -94,22 +94,25 @@ func NewRedactor(cs ...*Credential) *Redactor {
 	return red
 }
 
-// SecretParts returns the parts of the secret s that are secret on their own, each at least 8
-// bytes long (shorter ones would match unrelated text), in the order found. NewRedactor removes
-// each of them, besides s. These structures are split, and each part split again, up to 4 times:
+// SecretParts returns the parts of the secret s that are secret on their own, each at least min
+// bytes long, in the order found; none when s has none of the structures below. NewRedactor
+// removes each part of 8 bytes or more (shorter ones would match unrelated text), besides s. With
+// a smaller min, a caller tells a secret whose parts are all short, which has some, from one with
+// no structure, which has none. These structures are split, and each part split again, up to 4
+// times:
 //
 //   - an authorization value, "Bearer <token>" or "Basic <base64>" (the scheme in any letter case):
 //     the token, or the base64 text, what it decodes to ("user:password") and the password;
 //   - a token behind a public prefix, "<prefix>$<token>" or "<prefix>:<token>" (such as Devin's
 //     "devin-session-token$<jwt>", Meta's "dca:<token>" or a header line "Name: value"), where
 //     the prefix is a letter and up to 31 more letters, digits, "-", "_" or ".", and the token
-//     (spaces after ":" aside) does not start with "/", so a URL's "scheme://" is not one: the
-//     token;
+//     (spaces and tabs after the "$" or ":" aside) does not start with "/", so a URL's
+//     "scheme://" is not one: the token;
 //   - a cookie list, "name=value; name=value" (or one pair): each value, its double quotes
 //     aside, where the name is an HTTP token and the value holds only cookie characters.
 //
 // A prefix, a scheme or a cookie name is never a part.
-func SecretParts(s string) []string {
+func SecretParts(s string, min int) []string {
 	var out []string
 	seen := map[string]bool{s: true}
 	var split func(string, int)
@@ -118,7 +121,7 @@ func SecretParts(s string) []string {
 			return
 		}
 		for _, p := range directParts(s) {
-			if len(p) >= minFragment && !seen[p] {
+			if len(p) >= min && len(p) > 0 && !seen[p] {
 				seen[p] = true
 				out = append(out, p)
 				split(p, depth+1)

@@ -591,12 +591,14 @@ structures, and each part again, up to 4 times:
   the token, or the base64 text, what it decodes to (`user:password`) and the password;
 - a token behind a public prefix, `<prefix>$<token>` or `<prefix>:<token>`, such as Devin's
   `devin-session-token$<jwt>`, Meta's `dca:<token>` or `Name: value`, where the prefix is a letter
-  and up to 31 more letters, digits, `-`, `_` or `.`, and the token (spaces after `:` aside) does
-  not start with `/`, so a URL's `scheme://` is not one: the token;
+  and up to 31 more letters, digits, `-`, `_` or `.`, and the token (spaces and tabs after the `$`
+  or `:` aside) does not start with `/`, so a URL's `scheme://` is not one: the token;
 - a cookie list, `name=value; name=value` (or one pair): each value, its double quotes aside,
   where the name is an HTTP token and the value holds only cookie characters.
 
-In Go, `protocol.SecretParts` returns a secret's parts.
+In Go, `protocol.SecretParts(s, 8)` returns a secret's parts. With a smaller minimum it also
+returns shorter parts, so that a secret whose parts are all short, which has some, can be told
+from one with none of these structures, which has none.
 
 ### Proxy
 

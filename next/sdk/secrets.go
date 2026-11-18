@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/url"
 	"slices"
@@ -24,9 +25,13 @@ const minSideSecret = 8
 //     user name, password and secret query values (by the same names) of every URL.
 //
 // A secret made of parts (protocol.SecretParts) counts by its parts only, not whole: the words of a
-// public prefix, scheme or cookie name ("devin-session-token$", "Bearer", "sid=") are not pieces.
-// A secret other than the credential's that is shorter than 8 bytes is left out, as core leaves it
-// in text. The credential's data is left out too: it mixes secrets with plain values (a base URL,
+// public prefix, scheme or cookie name ("devin-session-token$", "Bearer", "sid=") are not pieces,
+// and neither is a part that is only such words around another part (a header line's
+// "Bearer <token>"), nor Basic's decoded "user:password" when its password is a part. A secret
+// other than the credential's that is shorter than 8 bytes is left out, as core leaves it in
+// text, and so is such a part: a header, proxy or settings secret whose parts are all shorter adds
+// nothing. A credential's field whose parts are all shorter adds them, still without the words
+// around them. The credential's data is left out too: it mixes secrets with plain values (a base URL,
 // a project ID, an OAuth scope) whose words would count as pieces, so an extension passes a secret
 // it keeps there itself.
 func AccountSecrets(a protocol.Account) []string {
@@ -35,13 +40,16 @@ func AccountSecrets(a protocol.Account) []string {
 		if s == "" || !short && len(s) < minSideSecret {
 			return
 		}
-		parts := protocol.SecretParts(s)
+		parts := protocol.SecretParts(s, 1)
 		if len(parts) == 0 {
 			parts = []string{s}
 		}
+		min := minSideSecret
+		if short && !slices.ContainsFunc(parts, func(p string) bool { return len(p) >= minSideSecret }) {
+			min = 1
+		}
 		for _, p := range parts {
-			// A part that holds another is a wrapper of it, with public words around it.
-			if slices.ContainsFunc(parts, func(q string) bool { return q != p && strings.Contains(p, q) }) {
+			if len(p) < min || wrapper(p, parts) {
 				continue
 			}
 			if !slices.Contains(out, p) {
@@ -69,6 +77,20 @@ func AccountSecrets(a protocol.Account) []string {
 		}
 	}
 	return out
+}
+
+// wrapper reports whether the part p of a secret, among its parts, only wraps another part in
+// public words: it is split again into a part of minPiece bytes or more (a header line's
+// "Bearer <token>"), or it is Basic's decoded "user:password" (what a part decodes to from base64)
+// and its password is a part too. A part that merely holds another, such as a cookie's value
+// that holds another cookie's, is not one.
+func wrapper(p string, parts []string) bool {
+	if len(protocol.SecretParts(p, minPiece)) > 0 {
+		return true
+	}
+	_, pass, ok := strings.Cut(p, ":")
+	return ok && slices.Contains(parts, pass) && (slices.Contains(parts, base64.StdEncoding.EncodeToString([]byte(p))) ||
+		slices.Contains(parts, base64.RawStdEncoding.EncodeToString([]byte(p))))
 }
 
 // settingsSecrets calls add with each secret in the settings value v: each string below a key

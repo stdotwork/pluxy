@@ -38,8 +38,14 @@ func TestSecretParts(t *testing.T) {
 		{"json header line", `"Authorization":"Bearer x"`, nil},
 		{"scope", "openid profile email offline_access", nil},
 	} {
-		if got := SecretParts(c.secret); !slices.Equal(got, c.want) {
+		if got := SecretParts(c.secret, minFragment); !slices.Equal(got, c.want) {
 			t.Errorf("%s: SecretParts(%q) = %q, want %q", c.name, c.secret, got, c.want)
+		}
+	}
+	// With a smaller minimum, a secret whose parts are all short has them; a plain one has none.
+	for secret, want := range map[string][]string{"dca:short": {"short"}, "Bearer short1": {"short1"}, "theme=dark": {"dark"}, "short-plain": nil} {
+		if got := SecretParts(secret, 1); !slices.Equal(got, want) {
+			t.Errorf("SecretParts(%q, 1) = %q, want %q", secret, got, want)
 		}
 	}
 }
@@ -119,7 +125,7 @@ func TestRedactorKeepsPublicPartsOfSecrets(t *testing.T) {
 		t.Error("the parts add no form")
 	}
 	// A proxy URL adds nothing: core takes its user name and password out itself.
-	if p := SecretParts(secrets[len(secrets)-1]); p != nil {
+	if p := SecretParts(secrets[len(secrets)-1], minFragment); p != nil {
 		t.Errorf("SecretParts of a proxy URL = %q, want none", p)
 	}
 	if strings.Contains(r.String("dark"), Redacted) {
