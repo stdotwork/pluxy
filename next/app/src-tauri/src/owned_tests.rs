@@ -772,12 +772,17 @@ mod macos {
         let dir = real(&t);
 
         // Rights that change nothing pass.
-        let p = dir.join("prog");
-        file(&p, 0o700);
-        add_entry(&p, "user:daemon allow read,execute,readattr,readsecurity");
-        assert_eq!(secure(&p, Writers::Nobody), Ok(()));
+        let reads = dir.join("reads");
+        file(&reads, 0o700);
+        add_entry(
+            &reads,
+            "user:daemon allow read,execute,readattr,readsecurity",
+        );
+        assert_eq!(secure(&reads, Writers::Nobody), Ok(()));
 
         // write, with a deny entry beside it, so the allow entry need not come first.
+        let p = dir.join("prog");
+        file(&p, 0o700);
         add_entry(&p, "everyone deny delete");
         add_entry(&p, "user:daemon allow write");
         let i = entry_index(&p, "user:daemon allow write");
