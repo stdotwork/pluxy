@@ -187,11 +187,11 @@ Some macOS jobs and every Windows job stay on GitHub's runners:
 - The workflows a tag starts always use GitHub's runners.
 
 A fourth variable, `PLUXY_LINUX_CLOUD_RUNNER`, sends the heavy Linux jobs to Namespace's runners:
-`checks`, `native-build` and the native test shards in `next-app.yml`, and `next` in
-`next-ci.yml`. It holds a runner label as JSON, like the first two; the intended value is
-`"nscloud-ubuntu-24.04-amd64-4x8"` (4 vCPU, 8 GB). Only the events named above for the
-maintainers' runners can use it, so a fork's runs stay on GitHub's runners. `checks` takes it
-before `PLUXY_LINUX_RUNNER`, and the shards can run there because Namespace's runners have
+`checks`, `native-build`, the native test shards and the `app` result job in `next-app.yml`,
+and `next` in `next-ci.yml`. It holds a runner label as JSON, like the first two; the intended
+value is `"nscloud-ubuntu-24.04-amd64-4x8"` (4 vCPU, 8 GB). Only the events named above for the
+maintainers' runners can use it, so a fork's runs stay on GitHub's runners. `checks` and `app` take
+it before `PLUXY_LINUX_RUNNER`, and the shards can run there because Namespace's runners have
 `/dev/fuse`. When it is not set, these jobs run where they did before.
 
 Namespace's runners report themselves self-hosted. In `next-app.yml` they use no Go or Bun cache
@@ -200,10 +200,10 @@ cache key includes the image's own Rust, which differs), so their Rust builds st
 restores and saves its Go and Bun caches there as on GitHub's runners.
 
 Namespace's trial runs 32 vCPU at once: 8 of these jobs. A merge group that runs both workflows
-asks for 8 (`checks`, `native-build`, five shards and `next`), at most 7 at once, since the shards
-wait for `native-build`. Past 8, jobs queue on Namespace and start as runners free up (within
-about 30 seconds of one freeing, in a test with 10 at once; none failed), so a second group in
-flight waits for some of its jobs.
+asks for 9 (`checks`, `native-build`, five shards, `app` and `next`), at most 7 at once, since the
+shards wait for `native-build` and `app` runs last. Past 8, jobs queue on Namespace and start as
+runners free up (within about 30 seconds of one freeing, in a test with 10 at once; none failed),
+so a second group in flight waits for some of its jobs.
 
 ## How changes flow
 
