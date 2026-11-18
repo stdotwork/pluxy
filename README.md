@@ -15,7 +15,8 @@ from your API keys and subscription sign-ins. It has three parts, all in `next/`
 | `next/app/` | The desktop app ([README](next/app/README.md)) |
 | `extensions/app/` | The old desktop app. It stays until the new app runs on Windows and macOS. |
 
-See [AGENTS.md](AGENTS.md) for how to build and test each folder and how changes are made.
+See [AGENTS.md](AGENTS.md) for how to build and test each folder and how changes are made, and
+[docs/design.md](docs/design.md) for why the new core is built the way it is.
 
 ## Credits and license
 
@@ -24,6 +25,7 @@ pluxy started as Soul4723's forks of router-for-me's
 [EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) desktop app and
 [Cli-Proxy-API-Management-Center](https://github.com/router-for-me/Cli-Proxy-API-Management-Center)
 web panel. The new core and panel in `next/` replaced the core and panel forks, which have been
-removed; their MIT notices, and what `next/` keeps from the old core, are in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The old desktop app keeps its MIT `LICENSE` in
-`extensions/app/`. The root license is not decided yet.
+removed. The MIT notices of all three, and of the Pi adapter in `next/app-tools/pi-setup/adapter/`,
+with the files `next/` keeps or adapts from each, are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The old desktop app also keeps its MIT `LICENSE`
+in `extensions/app/`. The root license is not decided yet.
