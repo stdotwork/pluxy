@@ -34,6 +34,9 @@ pub(super) fn enter(app: &AppHandle, id: &str, select: &str, text: String) -> Re
         }
     })
     .ok_or("the main thread did not answer")?;
+    // Return straight after the paste left the device session's chooser open with the whole
+    // path in its entry (CI screenshot), so the pause the typed version made stays.
+    std::thread::sleep(std::time::Duration::from_millis(300));
     x(&["key", "--clearmodifiers", "Return"])?;
     Ok(())
 }
