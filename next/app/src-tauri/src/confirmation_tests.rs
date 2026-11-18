@@ -1331,8 +1331,6 @@ fn every_folder_of_an_opened_file_must_be_writable_by_no_one_else() {
 #[test]
 fn a_confirmed_open_is_refused_once_a_folder_between_turns_writable() {
     let (dir, mut c, a, within, between, file) = nested_open();
-    #[cfg(windows)]
-    icacls_probe(&between, &file);
     #[cfg(not(windows))]
     let _ = &file;
     let (id, t) = approve(&mut c, a.clone(), false);
@@ -1380,32 +1378,6 @@ fn file_state(file: &Path) -> (String, i64, i64) {
         .collect();
     let i = windows_files::info(&windows_files::open_any(file).unwrap()).unwrap();
     (acl.join("; "), i.ctime, i.mtime)
-}
-
-/// Windows: records in the test log (`icacls-probe:`, written past the test harness's capture)
-/// what `icacls` granting folder an Everyone write entry, with no inheritance, does to file
-/// inside it: whether its access list and its change time change. `icacls` sets an access list
-/// with `SetNamedSecurityInfo`, which also goes through what is inside the folder.
-#[cfg(windows)]
-fn icacls_probe(folder: &Path, file: &Path) {
-    use std::io::Write;
-    let before = file_state(file);
-    assert!(crate::private_windows::tests::icacls(
-        folder,
-        &["/grant", "*S-1-1-0:(W)"]
-    ));
-    let granted = file_state(file);
-    assert!(crate::private_windows::tests::icacls(
-        folder,
-        &["/remove:g", "*S-1-1-0"]
-    ));
-    let _ = writeln!(
-        std::io::stderr(),
-        "icacls-probe: file access list changed: {}; change time changed: {}; last-write time changed: {}; before: {before:?}; granted: {granted:?}",
-        before.0 != granted.0,
-        before.1 != granted.1,
-        before.2 != granted.2,
-    );
 }
 
 /// Windows: adds to folder's access list an entry letting Everyone write it (`FILE_WRITE_DATA`,
