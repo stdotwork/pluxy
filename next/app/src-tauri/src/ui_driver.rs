@@ -56,6 +56,14 @@ static WAYS: [(&str, AtomicUsize); 6] = [
     ("performClick", AtomicUsize::new(0)),
 ];
 
+/// How many access-key presses found their control disabled and waited for it (`until_enabled`).
+static WAITED: AtomicUsize = AtomicUsize::new(0);
+
+/// How many access-key presses so far waited for their control to be enabled.
+pub(crate) fn waited() -> usize {
+    WAITED.load(Ordering::SeqCst)
+}
+
 fn went(way: &str) {
     if let Some((_, n)) = WAYS.iter().find(|(w, _)| *w == way) {
         n.fetch_add(1, Ordering::SeqCst);
@@ -68,6 +76,7 @@ pub(crate) fn input_counts() -> Value {
     for (way, n) in &WAYS {
         m.insert((*way).into(), n.load(Ordering::SeqCst).into());
     }
+    m.insert("waited_for_enabled".into(), waited().into());
     m.insert("platform".into(), std::env::consts::OS.into());
     Value::Object(m)
 }
