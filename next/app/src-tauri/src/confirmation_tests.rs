@@ -1640,14 +1640,16 @@ fn the_within_folder_is_refused_when_the_home_folder_cannot_be_resolved() {
     let w = fs::canonicalize(&dir).unwrap();
     let home = w.parent().unwrap();
     assert!(open_os::root_or_home(&w, Some(home)).is_ok());
-    for (within, says) in [
-        (home, "a folder above it"),
-        (home.parent().unwrap(), "a folder above it"),
-        (w.ancestors().last().unwrap(), "cannot be a root"),
-    ] {
+    for within in [home, home.parent().unwrap()] {
         let e = open_os::root_or_home(within, Some(home)).unwrap_err();
-        assert!(e.contains(says), "{}: {e}", within.display());
+        assert!(e.contains("a folder above it"), "{}: {e}", within.display());
     }
+    // A root, against a stand-in home on no root at all, so that only the root rule can refuse
+    // it (every real home is below a root, which the home rule refuses too).
+    let root = w.ancestors().last().unwrap();
+    assert!(open_os::root_or_home(&w, Some(Path::new("stand-in-home"))).is_ok());
+    let e = open_os::root_or_home(root, Some(Path::new("stand-in-home"))).unwrap_err();
+    assert!(e.contains("cannot be a root"), "{}: {e}", root.display());
     let e = open_os::root_or_home(&w, None).unwrap_err();
     assert!(e.contains("home folder could not be resolved"), "{e}");
     remove(&dir);
