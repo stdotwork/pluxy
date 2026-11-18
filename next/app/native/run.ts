@@ -303,9 +303,10 @@ const commands = [
   ...readFileSync(join(tauri, "src", "command_names.rs"), "utf8").matchAll(/^\s+"(\w+)",$/gm),
 ].map((m) => m[1] as string);
 /** Every command of the plugins the build registers, from the ACL manifests Tauri's build
- * writes (as lib.rs plugin_commands reads them); read once the app is built. */
+ * writes (as lib.rs plugin_commands reads them), or a prebuilt folder's copy of them; read once
+ * the app is built. */
 function pluginCommands(): string[] {
-  const manifests = JSON.parse(readFileSync(join(tauri, "gen", "schemas", "acl-manifests.json"), "utf8"));
+  const manifests = JSON.parse(readFileSync(join(prebuilt ?? tauri, ACL_MANIFESTS), "utf8"));
   const all = new Set<string>();
   for (const [plugin, manifest] of Object.entries<{
     permissions?: Record<string, { commands?: { allow?: string[]; deny?: string[] } }>;
@@ -318,6 +319,8 @@ function pluginCommands(): string[] {
   }
   return [...all];
 }
+/** Where Tauri's build writes the ACL manifests, in src-tauri (not in the target folder). */
+const ACL_MANIFESTS = join("gen", "schemas", "acl-manifests.json");
 const PAGE = "ext/test/probe/probe";
 /** Tauri's command check refusing a call (debug builds say where; release builds "by ACL"). */
 const REFUSED = /not allowed( on window|\. Permissions associated| by ACL)/;
@@ -2354,7 +2357,7 @@ function runsSession(name: string): boolean {
 
 const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
 /** With PLUXY_APP_NATIVE_BUILD=<dir>, a run makes the builds below, copies what the sessions run
- * into dir (BUILT lists it) and stops; with PLUXY_APP_NATIVE_PREBUILT=<dir>, it builds none of
+ * into dir (keepBuilds says what) and stops; with PLUXY_APP_NATIVE_PREBUILT=<dir>, it builds none of
  * them and runs its sessions on what such a run left in dir, from the same commit. CI builds once
  * that way and runs the shards on the result. The release gate's own builds still run. */
 const buildTo = process.env.PLUXY_APP_NATIVE_BUILD
@@ -2467,8 +2470,11 @@ const BUILT = [
 ];
 
 /** Copies what the sessions run into out/target (the test package and the dev build are already
- * in out), and names the commit and the test package's folder in out/prebuilt.json. */
+ * in out) and the ACL manifests into out/gen, and names the commit and the test package's folder
+ * in out/prebuilt.json. */
 function keepBuilds(out: string, packageDir: string) {
+  mkdirSync(join(out, ACL_MANIFESTS, ".."), { recursive: true });
+  copyFileSync(join(tauri, ACL_MANIFESTS), join(out, ACL_MANIFESTS));
   const keep = (path: string) => {
     mkdirSync(join(out, "target", path, ".."), { recursive: true });
     copyFileSync(join(targetDir, path), join(out, "target", path));
