@@ -1552,6 +1552,7 @@ pub(super) mod tests {
         let (folder, dir, p) = staged(&tmp, "update");
         let m = p.moves.clone().unwrap();
         let open = || super::super::open_record(&dir, &folder);
+        // The record `staged` wrote: this install's, nothing aside.
         open().unwrap();
         let elsewhere = Pending {
             installed: tmp.join("elsewhere"),

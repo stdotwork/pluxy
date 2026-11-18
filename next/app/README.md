@@ -561,10 +561,11 @@ In this order:
    Windows inside the program's folder, taking that folder's access list, and holding at its top
    exactly the program (by this program's own name), `pluxy.exe` and the folder `bundled`, every
    name one Windows holds as it is (no device name such as `CON`, no `:` stream, no trailing dot or
-   space, no backslash) and no two that differ only in case, with a 64-bit Windows program (not a
-   library) for this processor; on macOS next to the bundle, whose `Info.plist` names this app's
-   identifier and program and the announced version (`CFBundleShortVersionString`), with a program
-   for this Mac.
+   space, no backslash, none in the form of a short (8.3) name such as `PACKAG~1`, which may be
+   another entry's second name) and no two that differ only in case, with a 64-bit Windows
+   program (not a library) for this processor; on macOS next to the bundle, whose `Info.plist`
+   names this app's identifier and program and the announced version
+   (`CFBundleShortVersionString`), with a program for this Mac.
 6. The running version's copy is kept in the app's data folder (`updates/kept/`, the last three
    versions; on Windows the local data folder, on a fixed local drive, so it stays on this
    computer when the profile roams), pinned in `updates/history.json` by its SHA-256 (on macOS, a
