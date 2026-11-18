@@ -1,7 +1,8 @@
 // The app's two package commands. Run from next/app (the front end built first, bun run build):
 //
 //   bun package.ts test <out-dir>        the test package: a disposable Linux AppImage, Windows
-//                                        folder bundle or macOS app bundle, for checks only
+//                                        folder bundle and per-user setup program, or macOS app
+//                                        bundle, for checks only
 //   bun package.ts release [artifact...] the release gate: builds the release app and checks it
 //                                        and each artifact given (an AppImage, a Windows folder
 //                                        bundle or a macOS app bundle); it uploads nothing
@@ -18,10 +19,17 @@
 // {"appimage": <path>, "updater_pubkey": <key>, "binary": <path>,
 //  "update": {"appimage": <path>, "version": <version>, "signature": <signature>}}.
 //
-// On Windows and macOS test makes no installer and no disk image: the same two debug builds with
-// the same overlay, but no Tauri bundle on Windows (whose only bundles are installers) and the
-// `app` bundle on macOS. Windows: each build's program goes into a folder of its own,
-// <out-dir>/pluxy Test/ and <out-dir>/update/pluxy Test/, a plain folder bundle holding the program
+// On Windows and macOS test makes the same two debug builds with the same overlay: on macOS the
+// `app` bundle and no disk image; on Windows the first build is also bundled as the per-user NSIS
+// setup program (`nsis`, installMode currentUser, with the hooks in src-tauri/nsis/hooks.nsh, no
+// code signing), copied to <out-dir>/pluxy-test_<version>_x64-setup.exe, and the second build is
+// not bundled. The setup installs the same program set, its stubs through Tauri's externalBin
+// (pluxy.exe) and resources (bundled\); the bundler's NSIS tools are put in its local tools
+// folder (<target>/.tauri/NSIS) first, from pinned copies (NSIS_TOOLS, each checked against its
+// SHA-256), so it downloads nothing; and the copies of the stubs Tauri's build script leaves
+// beside the program in <target>/debug are removed again. Windows: each build's program goes into
+// a folder of its own, <out-dir>/pluxy Test/ and <out-dir>/update/pluxy Test/, a plain folder
+// bundle holding the program
 // set the app's updater replaces (src-tauri/src/updater/set.rs): pluxy-app-test.exe, and until the
 // bundled core exists a stub pluxy.exe and bundled\ (text files saying the version, which nothing
 // runs); the update is the second folder's set as a .tar.gz made here (its parts at the top),
@@ -33,9 +41,10 @@
 // it>, "binary": <a copy of it outside the bundle on macOS, the program on Windows>,
 // "updater_pubkey": <key>, "update": {"bundle": <path>, "payload": <path>, "target": <the feed's
 // target name: windows-x86_64-set, darwin-aarch64-app>, "version": <version>, "signature":
-// <signature>}}. Nothing needs downloading
-// there, so the builds run in the caller's environment, Cargo offline after `cargo fetch` and
-// every proxy variable pointing at a closed port.
+// <signature>}}, and on Windows "setup": <the setup program>. The builds need nothing from the
+// network there (this command fetches the pinned NSIS tools itself), so they run in the caller's
+// environment, Cargo offline after `cargo fetch` and every proxy variable pointing at a closed
+// port.
 //
 // Tauri's AppImage bundler runs tools it downloads when they are missing from its tools folder.
 // test puts pinned copies there first (BUNDLER_TOOLS, each checked against its SHA-256), gives the
@@ -63,6 +72,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -122,6 +132,47 @@ const BUNDLER_TOOLS: (Pin & { file: string })[] = [
 ];
 /** What the bundler writes into its tools folder from its own embedded copies. */
 const BUNDLER_SCRIPTS = ["linuxdeploy-plugin-gtk.sh", "linuxdeploy-plugin-gstreamer.sh"];
+
+/** The NSIS tools tauri-bundler 2.10.4's NSIS bundler (src/bundle/windows/nsis/mod.rs,
+ * bundle_project) downloads unless its tools folder holds them: NSIS 3.13, unpacked as the
+ * folder NSIS, and the nsis_tauri_utils 0.5.3 plugin in it. The bundler pins both by SHA-1 and
+ * checks the folder's NSIS.exe and the plugin against theirs (NSIS_SHA1, NSIS_EXE_SHA1,
+ * NSIS_TAURI_UTILS_SHA1 there); the files here have those SHA-1s, and GitHub's own digest for each
+ * asset (releases API) equals the SHA-256 here. To move one, check it the same way against the
+ * bundler's pins and change its URL and digest together. */
+const NSIS_TOOLS: { zip: Pin; plugin: Pin } = {
+  zip: {
+    cache: "tauri-nsis-3.13.zip",
+    url: "https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip",
+    sha256: "ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8",
+  },
+  plugin: {
+    cache: "nsis_tauri_utils-v0.5.3.dll",
+    url: "https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll",
+    sha256: "5ba143b5db4a87d32d6e7802e033330aae56cbceabe0d1e3ba41948385ad4709",
+  },
+};
+
+/** Windows' own tar (bsdtar, which reads zip files): the one first on a runner's PATH (Git's GNU
+ * tar) takes `D:` for a remote host. */
+const windowsTar = () => join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+
+/** Puts the pinned NSIS tools in the bundler's local tools folder (`bundle.useLocalToolsDir`:
+ * <target>/.tauri), replacing what is there, so the bundler finds them and downloads nothing. */
+async function placeNsisTools(work: string) {
+  const tools = join(targetDir, ".tauri");
+  const nsis = join(tools, "NSIS");
+  rmSync(nsis, { recursive: true, force: true });
+  rmSync(join(tools, "nsis-3.13"), { recursive: true, force: true });
+  mkdirSync(tools, { recursive: true });
+  const zip = join(work, "nsis-3.13.zip");
+  writeFileSync(zip, await pinnedBytes(NSIS_TOOLS.zip));
+  run(windowsTar(), ["-xf", zip, "-C", tools], app);
+  renameSync(join(tools, "nsis-3.13"), nsis);
+  const plugins = join(nsis, "Plugins", "x86-unicode", "additional");
+  mkdirSync(plugins, { recursive: true });
+  writeFileSync(join(plugins, "nsis_tauri_utils.dll"), await pinnedBytes(NSIS_TOOLS.plugin));
+}
 
 /** The build's environment: nothing of the caller's but the toolchain's paths. Its Cargo home is a
  * temporary folder holding only links to the caller's dependency caches (registry and git, when
@@ -298,10 +349,23 @@ async function bundleTestPackage(outDir: string) {
     const key = updaterKey();
     const name = "pluxy Test";
     const exe = windows ? "pluxy-app-test.exe" : "pluxy-app-test";
+    // Stand-ins for the core and its packages until the bundled core exists: text files saying
+    // the version, which nothing runs. Made per version in the work folder; the folder bundle and
+    // the setup program get the same.
+    const stubs = (v: string) => {
+      const dir = join(work, `core-${v}`);
+      mkdirSync(join(dir, "bundled"), { recursive: true });
+      // Tauri's name for an external program built for this target: <name>-<target triple>.exe.
+      writeFileSync(join(dir, "pluxy-x86_64-pc-windows-msvc.exe"), `stub core ${v}\n`);
+      writeFileSync(join(dir, "bundled", "stub.txt"), `stub core packages ${v}\n`);
+      return { core: join(dir, "pluxy-x86_64-pc-windows-msvc.exe"), packages: join(dir, "bundled") };
+    };
+    if (windows) await placeNsisTools(work);
     // One build at each version, its bundle copied into folder; the second rebuilds only the
-    // app's own crate.
-    const build = (v: string, folder: string): string => {
+    // app's own crate. With setup (Windows), the build is also bundled as the setup program.
+    const build = (v: string, folder: string, setup = false): string => {
       const overlay = join(work, `tauri.test.${v}.conf.json`);
+      const stub = windows ? stubs(v) : undefined;
       writeFileSync(
         overlay,
         JSON.stringify({
@@ -309,7 +373,20 @@ async function bundleTestPackage(outDir: string) {
           identifier: "dev.pluxy.desktop.test",
           productName: name,
           mainBinaryName: "pluxy-app-test",
-          bundle: windows ? { active: false } : { active: true, targets: ["app"] },
+          bundle: !windows
+            ? { active: true, targets: ["app"] }
+            : setup && stub
+              ? {
+                  active: true,
+                  targets: ["nsis"],
+                  useLocalToolsDir: true,
+                  externalBin: [stub.core.replace(/-x86_64-pc-windows-msvc\.exe$/, "")],
+                  resources: { [join(stub.packages, "stub.txt")]: "bundled/stub.txt" },
+                  windows: {
+                    nsis: { installMode: "currentUser", installerHooks: join(tauriDir, "nsis", "hooks.nsh") },
+                  },
+                }
+              : { active: false },
           plugins: { updater: { pubkey: key.pubkey } },
         }),
       );
@@ -324,19 +401,25 @@ async function bundleTestPackage(outDir: string) {
           "native-test,artifact-test-trust",
           "--config",
           overlay,
-          ...(windows ? ["--no-bundle"] : []),
+          ...(windows && !setup ? ["--no-bundle"] : []),
         ],
         app,
         env,
       );
       mkdirSync(folder, { recursive: true });
-      if (windows) {
+      if (windows && stub) {
+        // Tauri's build script copied the setup's external program and resources beside the
+        // program in target/debug, where the dev app is built later: removed again.
+        if (setup) {
+          rmSync(join(targetDir, "debug", "pluxy.exe"), { force: true });
+          rmSync(join(targetDir, "debug", "bundled"), { recursive: true, force: true });
+        }
+        // The program as built: the bundler restores it after patching the setup's copy.
         const bundle = join(folder, name);
         mkdirSync(join(bundle, "bundled"), { recursive: true });
         copyFileSync(join(targetDir, "debug", exe), join(bundle, exe));
-        // Stand-ins for the core and its packages until the bundled core exists.
-        writeFileSync(join(bundle, "pluxy.exe"), `stub core ${v}\n`);
-        writeFileSync(join(bundle, "bundled", "stub.txt"), `stub core packages ${v}\n`);
+        copyFileSync(stub.core, join(bundle, "pluxy.exe"));
+        copyFileSync(join(stub.packages, "stub.txt"), join(bundle, "bundled", "stub.txt"));
         return bundle;
       }
       const bundle = join(folder, `${name}.app`);
@@ -355,7 +438,13 @@ async function bundleTestPackage(outDir: string) {
       );
       return bundle;
     };
-    const bundle = build(version, outDir);
+    const bundle = build(version, outDir, windows);
+    let setup: string | undefined;
+    if (windows) {
+      const built = join(targetDir, "debug", "bundle", "nsis", `${name}_${version}_x64-setup.exe`);
+      setup = join(outDir, `pluxy-test_${version}_x64-setup.exe`);
+      copyFileSync(built, setup);
+    }
     const updateBundle = build(UPDATE_VERSION, join(outDir, "update"));
     const program = windows ? join(bundle, exe) : join(bundle, "Contents", "MacOS", exe);
     const binary = windows ? program : join(outDir, exe);
@@ -380,11 +469,14 @@ async function bundleTestPackage(outDir: string) {
         binary,
         updater_pubkey: key.pubkey,
         update: { bundle: updateBundle, payload, target, version: UPDATE_VERSION, signature },
+        ...(setup ? { setup } : {}),
       }),
     );
+    const pinned = Object.values(NSIS_TOOLS).map((t) => `${t.cache} ${t.sha256.slice(0, 12)}`);
     console.log(
       `test package: ${bundle} (${windows ? "folder bundle" : "app bundle"}); update ${payload} for ${target}`,
     );
+    if (setup) console.log(`test package: setup ${setup}; NSIS tools pinned: ${pinned.join(", ")}`);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
