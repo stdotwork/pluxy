@@ -1061,9 +1061,6 @@ pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), St
 pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), String> {
     l.opened.recheck()?;
     let r = resolve(l, package, values)?;
-    // shortcut: no test runs this line: GitHub's hosted runners refuse a detached launch before it
-    // runs (`NO_BREAKAWAY`), and the Unix one is tested instead; test it once CI runs on a Windows
-    // runner whose job lets a launch leave.
     let env = launch_env(l, &r.env, system_root().as_deref());
     let mut cmd = command(l, env, r.holds())?;
     // Checked again now its executable and cwd are pinned (`command`): nothing can change them

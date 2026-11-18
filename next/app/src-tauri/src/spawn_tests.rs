@@ -1499,9 +1499,9 @@ fn a_launch_through_wsl_exe_passes_on_the_variables_it_sets_and_nothing_else() {
 
 /// A managed and a detached launch named as Windows' own `wsl.exe`, with Windows' folder given
 /// (`TEST_SYSTEM_ROOT`; the program run is still this test's agent), each start with `WSLENV`
-/// naming what they set: both launch paths take their environment from `launch_env`. Windows'
-/// own detached launch is not run here (CI's runners refuse it).
-#[cfg(unix)]
+/// naming what they set: both launch paths take their environment from `launch_env`. On Windows
+/// the detached one runs only outside the runner's job (`let_go`), as CI's step "Detached launch
+/// outside the runner's job" runs this test; inside it, it is refused before it runs.
 #[test]
 fn managed_and_detached_launches_of_wsl_exe_start_with_wslenv() {
     *TEST_SYSTEM_ROOT.lock().unwrap() = Some(PathBuf::from(r"C:\Windows"));
@@ -1513,22 +1513,23 @@ fn managed_and_detached_launches_of_wsl_exe_start_with_wslenv() {
         l
     };
     let (rd, rm) = (dir.join("detached"), dir.join("managed"));
-    detached(&as_wsl(&rd, Lifetime::Detached), "p", &By(none)).unwrap();
+    let ran = let_go(&as_wsl(&rd, Lifetime::Detached), "p", &By(none));
     let rt = Runtimes::open(None, Box::new(By(none)));
     let m = rt.start("p", as_wsl(&rm, Lifetime::Managed)).unwrap();
-    let (d, mr) = (record(&rd, 0), record(&rm, 0));
+    let mr = record(&rm, 0);
+    let d = ran.then(|| record(&rd, 0));
     *TEST_SYSTEM_ROOT.lock().unwrap() = None;
     let _ = rt.stop("p", m["runtime"].as_str().unwrap());
-    clean(
-        &[
-            pid(&d, "pid"),
-            pid(&d, "child"),
-            pid(&mr, "pid"),
-            pid(&mr, "child"),
-        ],
-        &dir,
-    );
-    for r in [&d, &mr] {
+    let mut all = vec![pid(&mr, "pid"), pid(&mr, "child")];
+    if let Some(d) = &d {
+        all.extend([pid(d, "pid"), pid(d, "child")]);
+    } else {
+        // Refused before it ran (Windows, in a job it may not leave): nothing started.
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!rd.exists(), "a refused detached launch started");
+    }
+    clean(&all, &dir);
+    for r in d.iter().chain([&mr]) {
         assert_eq!(r["env"]["WSLENV"], "FIXTURE_SET/u", "{r}");
         assert_eq!(r["env"]["FIXTURE_SET"], "set", "{r}");
     }
