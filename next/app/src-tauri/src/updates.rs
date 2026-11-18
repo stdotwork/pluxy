@@ -4,17 +4,13 @@
 
 use crate::notes::{Doc, Style};
 use crate::release::{self, Channel, Product, View};
-#[cfg(target_os = "linux")]
-use crate::MAIN;
-use crate::{trusted, App, Rect};
-#[cfg(target_os = "linux")]
+use crate::{trusted, App, Rect, MAIN};
 use std::time::{Duration, Instant};
 use tauri::webview::NewWindowResponse;
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder, WebviewUrl,
     Window,
 };
-#[cfg(target_os = "linux")]
 use tauri::{Emitter, EventTarget};
 
 /// The certificates a feed's https is checked against: the public roots. A native-test build
@@ -102,12 +98,6 @@ pub async fn release_channel_set(webview: Webview, channel: Channel) -> Result<V
 #[tauri::command]
 pub fn release_source_set(webview: Webview, source: Option<String>) -> Result<(), String> {
     trusted(&webview)?;
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = source;
-        Err("changing the release feed needs a native confirmation, on Linux only for now".into())
-    }
-    #[cfg(target_os = "linux")]
     {
         use crate::confirmation::{self, Action, Package};
         let app = webview.app_handle().clone();
@@ -158,7 +148,6 @@ pub fn release_source_set(webview: Webview, source: Option<String>) -> Result<()
 }
 
 /// Waits for the confirmation's native result; only a confirmed, consumed token applies the change.
-#[cfg(target_os = "linux")]
 fn settle_source(app: &AppHandle, id: &str) {
     let st = app.state::<App>();
     // The dialog cancels itself after its lifetime; window close invalidates it sooner.

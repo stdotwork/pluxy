@@ -1034,7 +1034,6 @@ impl Confirmations {
     /// direct call of a launch. Never page data, and never a call with a tool hop
     /// (`prepare_import`). Those actions have no launch, except the router's, which may use a
     /// remembered approval after a native gesture.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Main)
     }

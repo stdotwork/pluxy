@@ -271,6 +271,95 @@ pub(crate) fn secure(path: &std::path::Path, writers: Writers) -> Result<(), Str
     Ok(())
 }
 
+/// The app's next run, started by an update or a rollback (`updater/`): a process the app starts
+/// and holds, unreaped in a process group of its own, until it accepts itself; then the app lets
+/// it go and it outlives the app. Until then the app may end it, with its whole group.
+pub(crate) struct Successor {
+    child: Child,
+    /// Reaped (`try_wait` saw its exit): its process ID and group number may be another's now.
+    reaped: bool,
+}
+
+impl Successor {
+    /// Starts program with args in a process group of its own, handing it the profile lock (the
+    /// descriptor lock stays open across exec, and `instance` adopts it, named by lock_env). With
+    /// after set, program starts once process after has ended: a shell started now waits for it
+    /// (signal 0 only asks whether it still exists), then becomes program.
+    pub(crate) fn start(
+        program: &std::path::Path,
+        args: &[std::ffi::OsString],
+        lock: Option<(std::os::fd::RawFd, &str)>,
+        after: Option<i32>,
+    ) -> io::Result<Successor> {
+        use std::os::unix::process::CommandExt;
+        let mut c = match after {
+            Some(pid) => {
+                let mut c = std::process::Command::new("/bin/sh");
+                c.arg("-c")
+                    .arg(r#"p=$1; a=$2; shift 2; while kill -0 "$p" 2>/dev/null; do sleep 0.2; done; exec "$a" "$@""#)
+                    .arg("sh")
+                    .arg(pid.to_string())
+                    .arg(program)
+                    .args(args);
+                c
+            }
+            None => {
+                let mut c = std::process::Command::new(program);
+                c.args(args);
+                c
+            }
+        };
+        c.process_group(0);
+        match lock {
+            Some((fd, env)) => {
+                c.env(env, fd.to_string());
+                // SAFETY: fcntl is async-signal-safe; it only clears close-on-exec on the lock.
+                unsafe {
+                    c.pre_exec(move || {
+                        let flags = libc::fcntl(fd, libc::F_GETFD);
+                        if flags < 0
+                            || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                        {
+                            return Err(io::Error::last_os_error());
+                        }
+                        Ok(())
+                    });
+                }
+            }
+            None => {
+                c.env_remove(crate::instance::LOCK_FD_ENV);
+            }
+        }
+        Ok(Successor {
+            child: c.spawn()?,
+            reaped: false,
+        })
+    }
+
+    /// Its exit, once it has exited (reaping it: after that only `release` or `end` remain, and
+    /// `end` no longer signals anything).
+    pub(crate) fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+        let r = self.child.try_wait();
+        if matches!(r, Ok(Some(_))) {
+            self.reaped = true;
+        }
+        r
+    }
+
+    /// Ends it and its whole process group, while it is held and not reaped, and waits for it.
+    pub(crate) fn end(mut self) {
+        if !self.reaped {
+            kill_group(&mut self.child);
+            let _ = self.child.wait();
+        }
+    }
+
+    /// Lets it go: it runs on, outliving the app, and is never signalled from here again.
+    pub(crate) fn release(self) {
+        drop(self.child);
+    }
+}
+
 /// Why `secure` refuses path for an entry of its access list (a file's, or with folder a
 /// folder's) that lets a user other than root and me change it, or None. Only an allow entry
 /// can: one that holds any right outside `READ_ONLY`, a bit no one knows of yet too, for anyone

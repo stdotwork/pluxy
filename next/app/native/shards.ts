@@ -45,6 +45,10 @@ export const PLATFORM_SHARDS: Record<string, readonly string[]> = {
   // The test package and the release gate on these systems: a job of its own, since it builds the
   // test package twice and the release app.
   package: ["bundle", "bundle release gate"],
+  // The application update (update-cases.ts): a job of its own, since it builds the test package,
+  // runs a test core, and its route restarts the app four times. Its session is not "update",
+  // which names the Linux one in the app shard: a session is named once across all shards.
+  update: ["app update"],
 };
 
 /** Every session, each named once across the shards. */

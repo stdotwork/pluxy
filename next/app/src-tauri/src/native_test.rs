@@ -737,7 +737,6 @@ fn run(app: &AppHandle) -> Result<(), String> {
         eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
     })?;
     // The signed application update (update_native.rs), in a session of its own.
-    #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_UPDATE") {
         return crate::update_native::run(app, &main, dir.into());
     }

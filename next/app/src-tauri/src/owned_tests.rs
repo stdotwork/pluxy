@@ -102,20 +102,6 @@ const ALLOWED: &[(&str, Part, &str, usize, &str)] = &[
         2,
         "test: signal 0 to see whether a process runs, and the cleanup of processes /proc shows run as this test's",
     ),
-    (
-        "updater.rs",
-        Part::Code,
-        "kill -",
-        1,
-        "`kill -0` in the shell that waits for the old version to end: signal 0 only asks whether it exists",
-    ),
-    (
-        "updater.rs",
-        Part::Code,
-        "libc::kill",
-        1,
-        "ends the process group of the new version it started and holds unreaped, when that does not accept the update in time",
-    ),
 ];
 
 /// How often word appears in line as a whole word.

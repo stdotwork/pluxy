@@ -257,7 +257,7 @@ async function testPackage(outDir: string) {
   }
 }
 
-/** The feed's target name for the update on Windows and macOS (the app's updater, updater.rs). */
+/** The feed's target name for the update on Windows and macOS (the app's updater, src-tauri/src/updater/). */
 function bundleTarget(): string {
   if (process.platform === "win32" && arch() === "x64") return "windows-x86_64-exe";
   if (process.platform === "darwin" && arch() === "arm64") return "darwin-aarch64-app";
