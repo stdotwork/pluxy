@@ -960,14 +960,14 @@ async function bundleReleaseGate() {
     if (made) {
       const renamed = join(dir, windows ? "candidate" : "candidate.app");
       if (windows) {
-        mkdirSync(renamed);
-        for (const f of readdirSync(made.bundle)) copyFileSync(join(made.bundle, f), join(renamed, f));
+        // The whole folder bundle: the program, and the core it comes with (bundled\).
+        cpSync(made.bundle, renamed, { recursive: true });
       } else {
         const copied = run("ditto", [made.bundle, renamed]);
         if (copied.status !== 0) throw new Error(`ditto: ${copied.out}`);
       }
       // Refused for what is in it, not its name: the test program's name (Windows), or the test
-      // identity in its Info.plist, which the gate reads first (macOS).
+      // identity in its Info.plist (macOS), each of which the gate reads first.
       gate(
         "the test package, renamed",
         [renamed],

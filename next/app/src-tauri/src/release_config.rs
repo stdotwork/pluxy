@@ -562,6 +562,21 @@ fn scan_bundle(path: &Path, name: &str, what: &str) -> Result<bool, String> {
         check_info_plist(path, name, what)?;
         (Path::new("Contents/MacOS").join(name), Exec::MachO)
     } else {
+        // The names at the folder's top first, as an app bundle's Info.plist is read first: a
+        // test program there refuses it for its name, whatever its folders hold and in whatever
+        // order the system lists them.
+        let mut top: Vec<String> = fs::read_dir(path)
+            .map_err(|e| format!("{what}: {e}"))?
+            .map(|e| e.map(|e| e.file_name().to_string_lossy().into_owned()))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("{what}: {e}"))?;
+        top.sort();
+        for n in top {
+            let lower = n.to_ascii_lowercase();
+            if lower.contains("pluxy") && lower.contains("test") {
+                return Err(format!("{what}!{n}: test file name in package"));
+            }
+        }
         (PathBuf::from(format!("{name}.exe")), Exec::Pe)
     };
     let mut budget = Budget::default();
