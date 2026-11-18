@@ -2039,7 +2039,29 @@ refused attempt and the retry on another account show as two pairs. Each body ke
 KiB and its last 96 KiB, less what beside the cut could be part of a secret, as for the reply, a
 streamed reply recorded as the extension reads it, without holding it back; when a request made
 more than two upstream requests, the first and the last are kept, with a line saying how many
-were left out between them. A Responses WebSocket turn that opens the upstream socket holds its
+were left out between them. A body that was not read to its end (the extension read only the
+first MiB of an error or stopped at a stream's last event, a read failed, or the transport stopped
+sending a request body) ends with the line `[... the body was not read past here ...]`, and what
+before it could be the start of a secret cut off there is left out: 4 bytes or more that start a
+form of the account's credential, and, for a secret the log removes, what it leaves out on the
+start's side of a cut (above), with the window reaching back no further than the last line break.
+No spelling of a secret the log decodes holds a raw line break, and each line of a secret that
+spans lines is removed on its own, so a stream keeps every whole event; such a secret whose first
+line is only 1 or 2 bytes can keep that line where the read stopped after it. A body with no line
+break near its end, such as JSON on one line or server-sent events with bare carriage returns,
+loses the whole window, all of a short one: that is accepted for a body whose read really
+stopped. A streamed reply ends with the line too when the extension stops at the last event of
+the upstream's format, as the Claude, Codex, Kimi, xAI, Meta and OpenAI-compatible providers do
+(Chat's `data: [DONE]`, Responses' `response.completed`, Messages' `message_stop`): then the reply
+was not cut, and what was left unread is only what the upstream sent after that event, usually
+nothing but the end of the transfer. Devin's reply is binary frames with no line breaks, so the
+Devin provider reads on past its end frame to the body's end, for at most 64 KiB and 1 second;
+past that its reply is complete but its body is marked, and its end within the window is left
+out. The Gemini and Antigravity providers read their streams to the end. A response with neither a
+length nor chunked encoding whose connection closes early reads, in Go, as a body that ended
+there, also over TLS closed without its closing alert between two records (a close inside a
+record is marked), so it gets no line and nothing is left out: marking such bodies would cut
+complete ones too. That needs protocol 0.17; with an older extension a body ends as the read stopped. A Responses WebSocket turn that opens the upstream socket holds its
 handshake; the messages on that socket are not written. This needs an
 extension that implements [protocol](protocol/README.md#upstream-capture) 0.13; it is captured
 only while `logs.request_log` is on, so error logs written with it off have no upstream sections,

@@ -332,6 +332,32 @@ func (r *relay) endReasoning() error {
 	return r.send(ev)
 }
 
+// Bounds on what is read of a reply after its end frame (readToEnd): more than Connect's end of
+// the transfer, which comes at once, and short enough not to hold the reply's end back for long.
+const (
+	afterEndBytes = 64 << 10
+	afterEndWait  = time.Second
+)
+
+// readToEnd reads what comes after a reply's end frame, which Connect says is nothing but the
+// end of the transfer, so that the body is read to its end: its capture for the request log is
+// then not taken for a body whose read stopped, whose end the log would leave out. It gives up
+// after afterEndBytes, or after afterEndWait while the server holds the stream open, leaving the
+// body as not read to its end; what is still reading then ends when the caller closes the body.
+func readToEnd(ctx context.Context, body io.Reader) {
+	ctx, cancel := context.WithTimeout(ctx, afterEndWait)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.Copy(io.Discard, io.LimitReader(body, afterEndBytes))
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
+
 func (r *relay) run(ctx context.Context, body io.Reader) error {
 	for {
 		end, payload, err := readFrame(body)
@@ -346,6 +372,7 @@ func (r *relay) run(ctx context.Context, body io.Reader) error {
 			return &llm.Error{Code: llm.CodeUpstream, Message: msg, Scope: llm.ScopeEndpoint, Usage: r.usage.llm()}
 		}
 		if end {
+			readToEnd(ctx, body)
 			if e := trailerError(payload, r.secrets); e != nil {
 				// Once Devin sent a data frame, the model ran: trying again is not safe.
 				e.Retryable = e.Retryable && !r.ran

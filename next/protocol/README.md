@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.16
+# pluxy extension protocol, version 0.17
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -24,9 +24,10 @@ Version 0.13 adds [upstream capture](#upstream-capture): what the extension sent
 back, for core's request logs. Version 0.14 adds [payload rules](#payload-rules): fields of the
 upstream JSON body that the config sets, fills in or removes. Version 0.15 has a session turn carry
 them too. Version 0.16 adds an error's `dropped`: what a refusal under the `reject` drop policy
-could not carry. It is deliberately small; later versions add capabilities and more operations
+could not carry. Version 0.17 adds a captured body's `body_stopped`: the extension did not read it
+to its end. It is deliberately small; later versions add capabilities and more operations
 without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.16 (see
+core that speaks 0.17 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -1271,6 +1272,7 @@ terminal event (`finish` or `error`):
 | `body` | The body as text (bytes that are not UTF-8 arrive as U+FFFD): all of it, or, when it is longer than 128 KiB, its first 32 KiB. |
 | `body_end` | When the body is longer than 128 KiB: its last 96 KiB. Absent otherwise. |
 | `body_size` | The body's full length in bytes. For a response: how much of it the extension had read when it sent the frame. |
+| `body_stopped` | Since 0.17: true when the body was not read to its end: the extension stopped reading it (such as after the first MiB of an error, or at a stream's last event), a read failed, or the frame was sent first. Absent: read to its end, or sent by an extension older than 0.17. |
 
 Rules:
 
@@ -1286,7 +1288,14 @@ Rules:
 - Record a request body as it is sent and a response body as the extension reads it, keeping only
   its start and its end: never hold a whole stream, delay the request to read its body first, or
   delay a piece of a reply to record it. What the extension had not read when it sent the frame is
-  not in it.
+  not in it. Set `body_stopped` on a body whose reader did not see its end, however the read
+  stopped, unless every byte of a body of known length was read: a transport can send a request
+  body's last byte, and the upstream answer, before its last read sees the end. A body known to
+  have nothing to read is read to its end; the Go SDK treats only a body the transport gives as
+  `http.NoBody` that way. A response with neither a length nor chunked encoding whose connection
+  closes early cannot be told from one that ended there (Go reads it as the end, also over TLS
+  closed without its closing alert between two records): don't mark it, which would mark
+  complete ones too.
 - Leave out credential traffic the call makes for itself whose secrets core does not know, such
   as trading a key for an access token: core removes only the account's own secrets, so the token
   and what was sent for it would reach the request log.
@@ -1305,9 +1314,15 @@ start and end, and at most 16 KiB of header lines are logged, with a line counti
 a body is cut, it also drops the bytes beside the cut that could be the start or the end of a
 credential cut in two. A `body` and `body_end` with nothing left out between them are one text:
 core redacts them as it does an [endpoint](#endpoint) body's pieces, so a credential in one of the
-forms it removes that is cut between them is removed, and logs them joined. From the body of a
-reply whose status is 400 or more, core also removes the pieces of the account's secrets (see
-[Accounts](#accounts)).
+forms it removes that is cut between them is removed, and logs them joined. Where a body has
+`body_stopped`, its last bytes may be the start of a secret cut off where the read stopped: core
+drops a run of 4 bytes or more at its end that starts a form of the credential, and the log leaves
+out what could be the start of a secret of its config as on the start's side of a cut, with its
+window reaching back no further than the last line break, and ends the body with a line saying it
+was not read past there. An extension older
+than 0.17 never sets `body_stopped`, so its bodies are logged as before: one whose read stopped
+can keep the start of a secret at its end. From the body of a reply whose status is 400 or more,
+core also removes the pieces of the account's secrets (see [Accounts](#accounts)).
 
 In Go, `sdk.Upstream` does all of this for each client it wraps, for requests made with the
 handler's context; a request made with `sdk.Uncaptured(ctx)` is sent the same way but not
@@ -1318,7 +1333,7 @@ recorded.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.16. An extension reports the minor version it
+raise the minor version: this document is version 0.17. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1342,8 +1357,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.14 | [Payload rules](#payload-rules): the call's optional `payload`. |
 | 0.15 | The `payload` of a [session turn](#turns). |
 | 0.16 | An error's `dropped`. |
+| 0.17 | A captured body's `body_stopped` ([upstream capture](#upstream-capture)). |
 
-## What version 0.16 leaves out
+## What version 0.17 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,
