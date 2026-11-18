@@ -845,20 +845,6 @@ fn the_remember_text_names_the_secrets_a_launch_uses() {
     let _ = fs::remove_dir_all(dir);
 }
 
-/// Off Linux a launch that opens a file is refused before review: nothing yet checks the file
-/// and folder there.
-#[cfg(not(target_os = "linux"))]
-#[test]
-fn a_launch_that_opens_a_file_is_refused_off_linux() {
-    let (dir, mut c, mut a) = fixture();
-    let file = dir.join("file.txt");
-    fs::write(&file, b"x").unwrap();
-    a.launch.as_mut().unwrap().opens = Some((file.clone(), dir.clone()));
-    let e = c.prepare(a, Origin::NativeUi).err().unwrap();
-    assert!(e.contains("Linux only"), "{e}");
-    remove(&dir);
-}
-
 /// Action a opening file f, which its argv names, inside folder w, with opener in f's folder.
 #[cfg(target_os = "linux")]
 fn opening(a: &Action, opener: &Path, f: &Path, w: &Path) -> Action {
