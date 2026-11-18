@@ -1049,7 +1049,7 @@ async function main() {
     ["window and tray", windowAndTray],
     ["bundle", bundle],
     ["bundle release gate", bundleReleaseGate],
-    ["bundled core", bundledCore],
+    ["bundle core", bundledCore],
   ];
   for (const [name, body] of sessions) {
     if (!runsSession(name)) continue;

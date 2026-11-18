@@ -55,7 +55,7 @@ export const PLATFORM_SHARDS: Record<string, readonly string[]> = {
   platform: ["single instance", "login item", "window and tray"],
   // The test package, its bundled core and the release gate on these systems: a job of its own,
   // since it builds the test package twice and the release app.
-  package: ["bundle", "bundle release gate", "bundled core"],
+  package: ["bundle", "bundle release gate", "bundle core"],
 };
 
 /** Every session, each named once across the shards. */
