@@ -2,8 +2,8 @@
 
 A new core for pluxy, built from scratch to replace the old core, the Go proxy that was in `core/`.
 (In this README and in the corpus, "today's core" and "the old core" mean that core, and `core/...`
-paths are files in it as they are at commit `0b84f013f18e1bbf528533b1c6f2c2dbdb19fc67`, the last commit
-that changed `core/`. The folder has since been removed from the repository.) Core receives client
+paths are files in it. The folder has been removed from the repository, so those paths name files
+you cannot open here.) Core receives client
 requests and hands them to **provider extensions**: separate programs, one per kind of upstream, that core
 starts and talks to over a local socket. Today it serves OpenAI Chat Completions, OpenAI
 Responses, Anthropic Messages and Gemini GenerateContent (streamed and not, over HTTP) through the
@@ -47,7 +47,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `app/` | The desktop app: the kit's second build in a Tauri window, with a tray icon and three ways to reach core ([README](app/README.md)). Linux only for now; its agent clients and the record of the old desktop app's features are in [PARITY.md](app/PARITY.md). |
 | `app-tools/` | The desktop app's optional native tools: agent client setup, the launcher, the usage hub and its parsers, the Codex session reader, and the libraries they share ([README](app-tools/README.md)). |
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
-| `corpus/` | Differential test corpus: cases replayed against this core and today's core, with listed exceptions ([README](corpus/README.md)). |
+| `corpus/` | Differential test corpus: cases replayed against this core and compared with today's core's recorded replies, with listed exceptions ([README](corpus/README.md)). |
 
 Go extensions build each upstream client's transport with `sdk.Upstream(base)`, where `base` is
 their configured `*http.Transport`. This includes login, token refresh and WebSocket handshake

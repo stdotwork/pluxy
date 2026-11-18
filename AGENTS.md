@@ -28,7 +28,8 @@ protocol only together with its README (`next/protocol/README.md`). The old desk
 `AGENTS.md` either; follow nearby code there too.
 
 If `.private/AGENTS.md` exists, read it too: it holds the owner's private instructions and notes.
-Confirmed plans, decisions and major tradeoffs are written up in `docs/`.
+Confirmed plans, decisions and major tradeoffs are written up in `docs/`: the new core's design
+in `docs/design.md`, and how the corpus holds it to the old core in `docs/corpus.md`.
 
 ## Build and test
 
@@ -79,10 +80,9 @@ The native test builds the ones it packs.
 cd app-tools && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 ```
 
-`corpus/` is the differential test corpus (see `next/corpus/README.md`). By default it compares
-the new core with the old core's recorded replies. The old core is no longer in this repository:
-to run it live as well, or to re-record after changing a case, build it from the commit
-`next/corpus/README.md` names and follow that README's "Re-recording against the old core".
+`corpus/` is the differential test corpus (see `next/corpus/README.md`). It compares the new core
+with the old core's replies recorded in the case files. The old core is no longer in this
+repository and the corpus cannot run or re-record it: the recorded replies are the reference.
 
 ### `extensions/app/` (the old desktop app)
 
@@ -163,6 +163,13 @@ Each variable holds a runner label as JSON, for example `"self-hosted"` or
 named before. Jobs on the maintainers' runners restore caches but don't save them (the uplink
 is slow).
 
+`PLUXY_GATE_RUNNER` names the runner for `ci.yml`'s own `changes` and `gate` jobs in merge-queue
+groups, as a JSON runs-on value, for example `"nscloud-ubuntu-24.04-amd64-2x4"` (Namespace's
+smallest Linux runner). Both take seconds, but every group waits on them, and a GitHub runner can
+take many minutes to start when pull requests fill GitHub's limit of 20 jobs at once. Pull
+requests, forks included, keep `ubuntu-latest`. A job can't fall back to another runner by
+itself: if that provider stops starting runners, delete the variable.
+
 Only these events can use the maintainers' runners: pushes, manual runs, merge-queue groups, and
 pull requests from branches of this repository, except Dependabot's. Every other event, including
 pull requests from a fork, runs on GitHub's runners. That check lives in the workflow files, which a fork can edit,
@@ -171,17 +178,25 @@ runner host cancels any run from a fork that asks for its runners. Before approv
 check whether it changes `.github/workflows/`.
 
 A third variable, `PLUXY_MACOS_CLOUD_RUNNER`, sends some macOS jobs to another provider's
-runners, such as Blacksmith's. It holds a plain runner label, for example
-`blacksmith-6vcpu-macos-26`. When it is not set, those jobs run on `macos-latest`.
+runners, Namespace's. It holds a bare runner profile label, for example
+`namespace-profile-macos-26` (no `;key=value` settings: the runner check refuses them). When it is not set, those jobs run on `macos-latest`.
 
 It applies to these jobs:
 - the `app` job in `next-app-platforms.yml`;
+- the macOS legs of the `native` and `dialogs` jobs in `next-app-platforms.yml`. Their tests write
+  the account's own folders, so they also check the runner (`next/app/native/runner.ts`): the job
+  passes the label in `PLUXY_EPHEMERAL_CI_RUNNER`, and the check accepts only a Namespace profile
+  label, a runner Namespace named and Namespace's own variable. Another provider needs a change to
+  that check;
 - the `tools` job in `next-app-tools-platforms.yml`;
 - the `build` jobs in `next-app-tools-pack.yml`.
 
 Some macOS jobs and every Windows job stay on GitHub's runners:
-- The `native` and `dialogs` jobs, and the app's Windows registry tests, run only on a runner that
-  reports itself GitHub-hosted. Another provider's runner reports itself self-hosted.
+- The app's Windows registry tests run only on a runner that reports itself GitHub-hosted.
+  Another provider's runner reports itself self-hosted.
+- The Windows `native` and `dialogs` jobs need a signed-in desktop session, which Blacksmith's
+  Windows runner lacked (it runs in the services session, where the app's window never shows), and
+  the workflow names no cloud runner for Windows: Namespace's trial plan has none.
 - The Windows app-tool tests fail on Blacksmith's Windows runner.
 - The WSL jobs need GitHub's Windows runners.
 - The workflows a tag starts always use GitHub's runners.
@@ -194,6 +209,7 @@ Some macOS jobs and every Windows job stay on GitHub's runners:
   workflows, for example `fix(next): ...` or `ci: ...`. Repo-wide docs use `docs: ...`. The scope
   `app` is for the old desktop app in `extensions/app/` only; work on `next/app/` uses `next`.
 - Open PRs ready for review, not as drafts. The owner reviews and merges.
-- Licensing: the upstream MIT notices of the removed old core and old web panel are in
-  `THIRD_PARTY_NOTICES.md`; the old desktop app keeps its own in `extensions/app/LICENSE`. The
-  root license is not decided yet; do not add one.
+- Licensing: the upstream MIT notices of the removed old core and old web panel, of the old
+  desktop app and of the Pi adapter in `next/app-tools/pi-setup/adapter/`, with the files `next/`
+  keeps or adapts from them, are in `THIRD_PARTY_NOTICES.md`; the old desktop app also keeps its own
+  in `extensions/app/LICENSE`. The root license is not decided yet; do not add one.
