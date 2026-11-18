@@ -3096,6 +3096,7 @@ pub fn run() {
             if let Some(w) = &access_store.warning {
                 eprintln!("pluxy-app: {w}");
             }
+            #[cfg(not(windows))]
             let data = app.path().app_data_dir()?;
             // The files that hold secrets: connection.json (a kept management key) and the app's
             // own core's folder (its config holds the core's management key, and the core keeps
@@ -3110,6 +3111,13 @@ pub fn run() {
             let core = secrets.join("core");
             #[cfg(not(windows))]
             let core = data.join("core");
+            // The app's own core versions: on Windows in the local application data too, so the
+            // programs (a core and its packages per version) stay on this machine and are not
+            // copied to the roaming profile's server; `cores.rs` refuses a store off a fixed
+            // local drive.
+            #[cfg(windows)]
+            let cores = secrets.join("cores");
+            #[cfg(not(windows))]
             let cores = data.join("cores");
             // When the app's core exits, the tray and the window show it. Off this thread: the
             // exit may come while a connection change holds the connection.

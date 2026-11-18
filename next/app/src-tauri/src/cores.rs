@@ -4,15 +4,20 @@
 //!
 //! A release comes from the core source the person set: an index file listing releases and, for
 //! each, its signed artifacts (see the README's "The app's own core"). An artifact is a gzip tar
-//! file of the core's folder (`pluxy` and anything beside it, such as `bundled/`), described by a
-//! descriptor signed with a trusted publisher key; `artifact.rs` checks the signature, size and
-//! SHA-256 before anything is unpacked. Each installed file's digest is kept and checked again
-//! before the core starts. Nothing in this module needs Tauri.
+//! file of the core's folder (`pluxy`, on Windows `pluxy.exe`, and anything beside it, such as
+//! `bundled/`), described by a descriptor signed with a trusted publisher key; `artifact.rs`
+//! checks the signature, size and SHA-256 before anything is unpacked. Each installed file's
+//! digest is kept and checked again before the core starts. Nothing in this module needs Tauri.
 //!
-//! Installing and starting a version work from open folder and file descriptors, which exist on
-//! Unix systems only. Elsewhere the store refuses to open (`Store::open`), and what only an open
-//! store reaches is left out of the build.
-#![cfg_attr(not(unix), allow(dead_code, unused_imports))]
+//! Installing and starting a version open each folder and file without following a link
+//! (`Dir`). The folder unpacked into (a staging folder) and a version's folder are opened by
+//! their paths, refusing a link or other reparse point at the last part; below them every folder
+//! and file is opened from the folder held open before it, on Unix by descriptor (`openat`), on
+//! Windows by handle (`NtCreateFile` relative to the folder, `vault::at`), refusing a link or other
+//! reparse point at each part. Moving a version into place, removing it, and making its files
+//! read-only go by path. On Windows the store is in the local application data, on a fixed local
+//! drive, and its folders are private by their access lists (this user and SYSTEM,
+//! `private_windows.rs`).
 
 use crate::artifact::{self, PublisherKeys, Tier, VerifiedArchive};
 use crate::managed::{random_key, write_private};
@@ -34,8 +39,9 @@ use std::rc::Rc;
 
 /// The publisher and ID of core releases.
 pub const CORE_ID: &str = "pluxy/core";
-/// The core's program in a version's folder.
-pub const PROGRAM: &str = "pluxy";
+/// The core's program in a version's folder: on Windows, which runs programs named `.exe` or
+/// `.com`, `pluxy.exe`, as Go names it there.
+pub const PROGRAM: &str = if cfg!(windows) { "pluxy.exe" } else { "pluxy" };
 const FORMAT: u32 = 1;
 const MAX_INDEX: u64 = 1024 * 1024;
 const MAX_ARCHIVE: u64 = 512 * 1024 * 1024;
@@ -206,16 +212,13 @@ pub struct State {
     pub failed: Option<Failed>,
 }
 
-/// Why the store never opens off Unix.
-#[cfg(not(unix))]
-const UNSUPPORTED: &str = "the app's own core versions are supported on Linux only";
-
 /// The app's core versions, `<data>/cores`.
 #[derive(Clone, Debug)]
 pub struct Store {
     dir: PathBuf,
 }
 
+/// Makes the folder at path, and any missing above it, this user's alone.
 #[cfg(unix)]
 fn private_dir(path: &Path) -> io::Result<()> {
     fs::create_dir_all(path)?;
@@ -233,10 +236,83 @@ fn no_entries(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn private_dir(path: &Path) -> io::Result<()> {
+    crate::private_windows::create_private_dir_all(path)
+}
+
 /// Makes a new private folder at path, failing if anything is already there.
 #[cfg(unix)]
 fn exclusive_dir(path: &Path) -> io::Result<()> {
     fs::DirBuilder::new().mode(0o700).create(path)
+}
+
+#[cfg(windows)]
+fn exclusive_dir(path: &Path) -> io::Result<()> {
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
+    else {
+        return Err(io::ErrorKind::InvalidInput.into());
+    };
+    Dir::open(parent)?.make_new(name)
+}
+
+/// Refused unless path is on a fixed local drive of this computer: the drive of the folder's real
+/// path, every link and junction resolved (of its nearest folder that exists, as the store may not
+/// yet), as `GetVolumePathNameW` and `GetDriveTypeW` find it. A network share, a drive letter
+/// mapped to one, a link to one, and a removable drive are refused; a `subst` drive or a mounted
+/// virtual disk on this computer counts as the local drive it is. A share path (`\\server\share`)
+/// is refused without being opened.
+#[cfg(windows)]
+fn local_fixed(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::path::Prefix;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetDriveTypeW, GetVolumePathNameW, FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE,
+    };
+    /// `GetDriveTypeW`'s answer for a fixed local drive.
+    const DRIVE_FIXED: u32 = 3;
+    let refused = || {
+        format!(
+            "{} is not on a local drive of this computer; the app keeps its core versions only there",
+            path.display()
+        )
+    };
+    match path.components().next() {
+        Some(Component::Prefix(p))
+            if matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) => {}
+        _ => return Err(refused()),
+    }
+    let mut at = path;
+    let f = loop {
+        match OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(win::SHARE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(at)
+        {
+            Ok(f) => break f,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                at = at.parent().ok_or_else(refused)?
+            }
+            Err(e) => return Err(format!("{}: {e}", at.display())),
+        }
+    };
+    let real = crate::owned::windows::final_path(&f)?;
+    let wide: Vec<u16> = real.as_os_str().encode_wide().chain([0]).collect();
+    // The volume's root can be one character longer than the path it holds (a trailing
+    // backslash, as for `C:` itself); wide's NUL and the `+ 1` leave room for it.
+    let mut root = vec![0u16; wide.len() + 1];
+    // SAFETY: wide is NUL-terminated; root holds the length given.
+    if unsafe { GetVolumePathNameW(wide.as_ptr(), root.as_mut_ptr(), root.len() as u32) } == 0 {
+        return Err(refused());
+    }
+    // SAFETY: GetVolumePathNameW wrote a NUL-terminated path into root.
+    if unsafe { GetDriveTypeW(root.as_ptr()) } != DRIVE_FIXED {
+        return Err(refused());
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -253,50 +329,210 @@ fn owned(fd: libc::c_int) -> io::Result<OwnedFd> {
     }
 }
 
-/// Opens the folder at path; a link there is refused.
+/// A folder of the store, held open, opened without following a link (see the module's notes):
+/// on Unix its descriptor; on Windows its handle, held without `FILE_SHARE_DELETE`, so no one can
+/// rename or remove the folder while it is held.
 #[cfg(unix)]
-fn open_dir(path: &Path) -> io::Result<OwnedFd> {
-    let c = c_string(path.as_os_str().as_bytes())?;
-    owned(unsafe {
-        libc::open(
-            c.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+struct Dir(OwnedFd);
+
+#[cfg(windows)]
+struct Dir(File);
+
+#[cfg(unix)]
+impl Dir {
+    /// The folder at path; a link there is refused.
+    fn open(path: &Path) -> io::Result<Dir> {
+        let c = c_string(path.as_os_str().as_bytes())?;
+        owned(unsafe {
+            libc::open(
+                c.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        })
+        .map(Dir)
+    }
+
+    fn try_clone(&self) -> io::Result<Dir> {
+        self.0.try_clone().map(Dir)
+    }
+
+    /// Opens name in this folder, following no link.
+    fn at(&self, name: &str, flags: libc::c_int, mode: u32) -> io::Result<OwnedFd> {
+        let c = c_string(name.as_bytes())?;
+        owned(unsafe {
+            libc::openat(
+                self.0.as_raw_fd(),
+                c.as_ptr(),
+                flags | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                mode as libc::c_uint,
+            )
+        })
+    }
+
+    /// The folder name in this one.
+    fn sub(&self, name: &str) -> io::Result<Dir> {
+        self.at(name, libc::O_RDONLY | libc::O_DIRECTORY, 0)
+            .map(Dir)
+    }
+
+    /// Makes the private folder name in this one, unless it is there already.
+    fn make(&self, name: &str) -> io::Result<()> {
+        let c = c_string(name.as_bytes())?;
+        if unsafe { libc::mkdirat(self.0.as_raw_fd(), c.as_ptr(), 0o700) } != 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() != io::ErrorKind::AlreadyExists {
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Creates the new file name in this one, private, for writing.
+    fn create(&self, name: &str, executable: bool) -> io::Result<File> {
+        self.at(
+            name,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            if executable { 0o700 } else { 0o600 },
         )
-    })
+        .map(File::from)
+    }
+
+    /// Opens the file name in this one for reading, without blocking (on a FIFO).
+    fn read(&self, name: &str) -> io::Result<File> {
+        self.at(name, libc::O_RDONLY | libc::O_NONBLOCK, 0)
+            .map(File::from)
+    }
 }
 
-/// Opens name in the folder dir, following no link.
-#[cfg(unix)]
-fn open_at(dir: &OwnedFd, name: &str, flags: libc::c_int, mode: u32) -> io::Result<OwnedFd> {
-    let c = c_string(name.as_bytes())?;
-    owned(unsafe {
-        libc::openat(
-            dir.as_raw_fd(),
-            c.as_ptr(),
-            flags | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            mode as libc::c_uint,
+#[cfg(windows)]
+mod win {
+    pub use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
+        FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, FILE_TRAVERSE,
+    };
+    /// What a held folder is used for: list it, and open and make names in it.
+    pub const FOLDER: u32 = FILE_LIST_DIRECTORY
+        | FILE_TRAVERSE
+        | FILE_ADD_FILE
+        | FILE_ADD_SUBDIRECTORY
+        | FILE_READ_ATTRIBUTES;
+    /// Others may read a held folder or file, and add to a held folder, but not rename or remove
+    /// it.
+    pub const SHARE: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE;
+}
+
+#[cfg(windows)]
+impl Dir {
+    /// The folder at path; a link or other reparse point there is refused.
+    fn open(path: &Path) -> io::Result<Dir> {
+        use std::os::windows::fs::OpenOptionsExt;
+        OpenOptions::new()
+            .access_mode(win::FOLDER)
+            .share_mode(win::SHARE)
+            .custom_flags(win::FILE_FLAG_BACKUP_SEMANTICS | win::FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .and_then(Dir::checked)
+    }
+
+    /// f, a folder opened without following a link, unless it is a link or not a folder.
+    fn checked(f: File) -> io::Result<Dir> {
+        let m = f.metadata()?;
+        if is_link(&m) || !m.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a folder: a link or other reparse point",
+            ));
+        }
+        Ok(Dir(f))
+    }
+
+    fn try_clone(&self) -> io::Result<Dir> {
+        self.0.try_clone().map(Dir)
+    }
+
+    /// The folder name in this one.
+    fn sub(&self, name: &str) -> io::Result<Dir> {
+        crate::vault::at(&self.0, name, win::FOLDER, win::SHARE, true, None).and_then(Dir::checked)
+    }
+
+    /// Makes the new private folder name in this one; anything already there is an error.
+    fn make_new(&self, name: &str) -> io::Result<()> {
+        let private = crate::private_windows::Private::new(true)?;
+        crate::vault::at(
+            &self.0,
+            name,
+            win::FILE_READ_ATTRIBUTES,
+            win::SHARE,
+            true,
+            Some(&private),
         )
-    })
+        .map(drop)
+    }
+
+    /// Makes the private folder name in this one, unless something is there already (`sub` then
+    /// checks it is a folder).
+    fn make(&self, name: &str) -> io::Result<()> {
+        match self.make_new(name) {
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+            r => r,
+        }
+    }
+
+    /// Creates the new file name in this one, private, for writing: an existing name, a link
+    /// too, is an error. Windows has no execute bit.
+    fn create(&self, name: &str, _executable: bool) -> io::Result<File> {
+        let private = crate::private_windows::Private::new(false)?;
+        crate::vault::at(
+            &self.0,
+            name,
+            win::FILE_GENERIC_WRITE,
+            0,
+            false,
+            Some(&private),
+        )
+    }
+
+    /// Opens the file name in this one for reading, refusing a link or other reparse point. No one
+    /// may write to it, or delete or rename it, while it is open.
+    fn read(&self, name: &str) -> io::Result<File> {
+        let f = crate::vault::at(
+            &self.0,
+            name,
+            win::FILE_GENERIC_READ,
+            win::FILE_SHARE_READ,
+            false,
+            None,
+        )?;
+        if is_link(&f.metadata()?) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a link or other reparse point",
+            ));
+        }
+        Ok(f)
+    }
+}
+
+/// Whether m is of a link or another reparse point.
+#[cfg(windows)]
+fn is_link(m: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    m.file_attributes() & win::FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 /// The folder holding rel's last part, beneath root, and that part's name: each folder on the
 /// way is opened from the one before it, following no link; with create, missing ones are made.
-#[cfg(unix)]
-fn parent_beneath(root: &OwnedFd, rel: &str, create: bool) -> io::Result<(OwnedFd, String)> {
+fn parent_beneath(root: &Dir, rel: &str, create: bool) -> io::Result<(Dir, String)> {
     let parts: Vec<&str> = rel.split('/').collect();
     let (last, folders) = parts.split_last().expect("split gives one part");
     let mut cur = root.try_clone()?;
     for f in folders {
         if create {
-            let c = c_string(f.as_bytes())?;
-            if unsafe { libc::mkdirat(cur.as_raw_fd(), c.as_ptr(), 0o700) } != 0 {
-                let e = io::Error::last_os_error();
-                if e.kind() != io::ErrorKind::AlreadyExists {
-                    return Err(e);
-                }
-            }
+            cur.make(f)?;
         }
-        cur = open_at(&cur, f, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+        cur = cur.sub(f)?;
     }
     Ok((cur, last.to_string()))
 }
@@ -319,8 +555,38 @@ fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b".+_-".contains(&b))
 }
 
+#[cfg(unix)]
 fn remove_tree(path: &Path) {
     let _ = fs::remove_dir_all(path);
+}
+
+/// Windows: should removing fail (a read-only file, `lock`, whose access list allows no delete,
+/// where its folder's rights do not make up for it), every file under path is made private again,
+/// as its owner may, and the removal tried once more.
+#[cfg(windows)]
+fn remove_tree(path: &Path) {
+    if fs::remove_dir_all(path).is_ok() {
+        return;
+    }
+    unlock(path);
+    let _ = fs::remove_dir_all(path);
+}
+
+/// Makes every file under path private again (writable by this user), following no link.
+#[cfg(windows)]
+fn unlock(path: &Path) {
+    let Ok(m) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if m.is_dir() {
+        for e in fs::read_dir(path).into_iter().flatten().flatten() {
+            unlock(&e.path());
+        }
+    } else if m.is_file() {
+        if let Ok(f) = crate::private_windows::open_for_access_list(path, false) {
+            let _ = crate::private_windows::make_private(&f, false);
+        }
+    }
 }
 
 /// Makes the files under path read-only: this user may read them, and run the executable ones.
@@ -344,6 +610,43 @@ fn lock(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Windows: each file's access list lets only this user and SYSTEM read and run it
+/// (`private_windows::make_read_only`); folders stay private, as on Unix. A link is refused.
+#[cfg(windows)]
+fn lock(path: &Path) -> io::Result<()> {
+    let m = fs::symlink_metadata(path)?;
+    if m.is_dir() {
+        for e in fs::read_dir(path)? {
+            lock(&e?.path())?;
+        }
+        Ok(())
+    } else {
+        let f = crate::private_windows::open_for_access_list(path, false)?;
+        crate::private_windows::make_read_only(&f, false)
+    }
+}
+
+/// Whether an installed file, open as f with metadata m, is still as `lock` left it: on Unix
+/// writable by no one, with the execute bit it was installed with; on macOS also with no
+/// extended access list entry, which could let another user change it whatever the mode
+/// (`private_macos.rs`; a list that cannot be read counts as one).
+#[cfg(unix)]
+fn locked(f: &File, m: &fs::Metadata, executable: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    if crate::private_macos::has_entries(f).unwrap_or(true) {
+        return false;
+    }
+    let _ = f;
+    let mode = m.permissions().mode();
+    (mode & 0o100 != 0) == executable && mode & 0o222 == 0
+}
+
+/// Windows: its access list still lets no one write to it (it has no execute bit).
+#[cfg(windows)]
+fn locked(f: &File, _m: &fs::Metadata, _executable: bool) -> bool {
+    crate::private_windows::is_read_only(f).unwrap_or(false)
+}
+
 fn sha256_of(mut r: impl Read) -> io::Result<(String, u64)> {
     let mut h = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
@@ -361,21 +664,25 @@ fn sha256_of(mut r: impl Read) -> io::Result<(String, u64)> {
 
 impl Store {
     /// The store in dir, made if missing.
-    #[cfg(unix)]
     pub fn open(dir: &Path) -> Result<Store, String> {
+        #[cfg(windows)]
+        local_fixed(dir)?;
         let s = Store { dir: dir.into() };
         private_dir(&s.versions()).map_err(|e| format!("{}: {e}", dir.display()))?;
         private_dir(&s.records()).map_err(|e| format!("{}: {e}", dir.display()))?;
         private_dir(&s.staging()).map_err(|e| format!("{}: {e}", dir.display()))?;
+        #[cfg(unix)]
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
             .and_then(|_| no_entries(dir))
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+        #[cfg(windows)]
+        crate::private_windows::make_private_dir(dir)
             .map_err(|e| format!("{}: {e}", dir.display()))?;
         Ok(s)
     }
 
     /// Removes what an interrupted install left. Only when no change can be waiting: at the
     /// app's start.
-    #[cfg(unix)]
     pub fn clear_staging(&self) {
         remove_tree(&self.staging());
         let _ = private_dir(&self.staging());
@@ -485,7 +792,6 @@ impl Store {
 
     /// Checks every file of version id against the digests kept when it was installed, and opens
     /// its program: the core is started from this open file, not from its path again.
-    #[cfg(unix)]
     pub fn program(&self, id: &str) -> Result<File, String> {
         let r = self.record(id)?;
         let again = match r.kind {
@@ -493,7 +799,7 @@ impl Store {
             Kind::Adopted => "adopt it again",
         };
         let folder = self.folder(id);
-        let root = open_dir(&folder).map_err(|e| format!("core {id}: {e}"))?;
+        let root = Dir::open(&folder).map_err(|e| format!("core {id}: {e}"))?;
         let mut seen = 0usize;
         let mut program = None;
         for f in &r.files {
@@ -504,24 +810,10 @@ impl Store {
                 )
             };
             let (dir, name) = parent_beneath(&root, &f.path, false).map_err(|_| changed())?;
-            let file = File::from(
-                open_at(&dir, &name, libc::O_RDONLY | libc::O_NONBLOCK, 0)
-                    .map_err(|_| changed())?,
-            );
+            let file = dir.read(&name).map_err(|_| changed())?;
             // Type and size first: never read a device or a FIFO, nor more than was installed.
             let m = file.metadata().map_err(|e| e.to_string())?;
-            // macOS: an extended access list entry could let another user change it whatever
-            // the mode (`private_macos.rs`).
-            #[cfg(target_os = "macos")]
-            let listed = crate::private_macos::has_entries(&file).map_err(|e| e.to_string())?;
-            #[cfg(not(target_os = "macos"))]
-            let listed = false;
-            if listed
-                || !m.is_file()
-                || m.len() != f.size
-                || (m.permissions().mode() & 0o100 != 0) != f.executable
-                || m.permissions().mode() & 0o222 != 0
-            {
+            if !m.is_file() || m.len() != f.size || !locked(&file, &m, f.executable) {
                 return Err(changed());
             }
             let (sha, size) =
@@ -566,7 +858,6 @@ impl Store {
 
     /// Finds version in source's index, copies its archive into the store and checks it against
     /// its signed descriptor, with a key keys trusts for that source. Nothing is unpacked yet.
-    #[cfg(unix)]
     pub fn stage(
         &self,
         keys: &impl PublisherKeys,
@@ -619,6 +910,7 @@ impl Store {
         let staged = self.staging().join(format!("{}.tar.gz", random_key()));
         let copied = (|| -> Result<File, String> {
             let src = File::open(&from).map_err(|e| format!("{}: {e}", from.display()))?;
+            #[cfg(unix)]
             let mut dst = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -626,11 +918,26 @@ impl Store {
                 .mode(0o600)
                 .open(&staged)
                 .map_err(|e| e.to_string())?;
+            #[cfg(windows)]
+            let mut dst =
+                crate::private_windows::create_new_private(&staged).map_err(|e| e.to_string())?;
             let n = io::copy(&mut src.take(d.size + 1), &mut dst).map_err(|e| e.to_string())?;
             if n != d.size {
                 return Err("archive size differs from signed descriptor".into());
             }
             dst.sync_all().map_err(|e| e.to_string())?;
+            // Windows: the private file is made for writing only; it is read from here on, and
+            // no one may write to it while the store holds it.
+            #[cfg(windows)]
+            let dst = {
+                use std::os::windows::fs::OpenOptionsExt;
+                drop(dst);
+                OpenOptions::new()
+                    .read(true)
+                    .share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ)
+                    .open(&staged)
+                    .map_err(|e| e.to_string())?
+            };
             Ok(dst)
         })();
         let file = match copied {
@@ -663,7 +970,6 @@ impl Store {
     }
 
     /// Unpacks a checked archive into a new version's folder, named after its version.
-    #[cfg(unix)]
     pub fn install(&self, mut staged: Staged) -> Result<String, String> {
         let verified = staged.verified.take().ok_or("already installed")?;
         let d = verified.descriptor().clone();
@@ -682,7 +988,9 @@ impl Store {
                 .iter()
                 .find(|f| f.path == PROGRAM)
                 .ok_or_else(|| format!("the core archive has no {PROGRAM} program at its top"))?;
-            if !program.executable {
+            // Windows has no execute bit: there the program is checked to be one as it starts
+            // (`owned::windows::pin_file`).
+            if cfg!(unix) && !program.executable {
                 return Err(format!("{PROGRAM} in the core archive is not executable"));
             }
             self.finish(
@@ -711,7 +1019,6 @@ impl Store {
     /// last, so a version without a record is never used. A version installed again replaces
     /// its folder; until the new record is written, the old one no longer matches and the
     /// version does not start.
-    #[cfg(unix)]
     fn finish(&self, tmp: &Path, r: Record) -> Result<(), String> {
         let fail = |e: String| format!("installing core {}: {e}", r.id);
         lock(tmp).map_err(|e| fail(e.to_string()))?;
@@ -750,7 +1057,6 @@ impl Store {
     }
 
     /// The core program at path, to adopt: its SHA-256 and size, for the person to confirm.
-    #[cfg(unix)]
     pub fn inspect(path: &Path) -> Result<(String, u64), String> {
         if !path.is_absolute() {
             return Err("the core program must be given as a full path".into());
@@ -773,7 +1079,6 @@ impl Store {
     /// is the regular file of the size and SHA-256 the person confirmed. An adopted version that
     /// is still intact is kept; a damaged one is copied in again. Returns the version, and
     /// whether the program was copied in (false: the intact version was kept).
-    #[cfg(unix)]
     pub fn adopt(&self, path: &Path, sha256: &str, size: u64) -> Result<(String, bool), String> {
         artifact::decode_hex::<32>(sha256).map_err(|_| "not a SHA-256")?;
         let id = Self::adopted_id(sha256);
@@ -801,11 +1106,8 @@ impl Store {
                 return Err(changed());
             }
             let mut src = src.take(size + 1);
-            let mut dst = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o700)
-                .open(tmp.join(PROGRAM))
+            let mut dst = Dir::open(&tmp)
+                .and_then(|d| d.create(PROGRAM, true))
                 .map_err(|e| e.to_string())?;
             let mut h = HashingWriter {
                 inner: &mut dst,
@@ -849,37 +1151,6 @@ impl Store {
     }
 }
 
-/// What an open store does is Unix only (see the module's notes); off Unix none can be opened,
-/// so these only give the build their names.
-#[cfg(not(unix))]
-impl Store {
-    pub fn open(_: &Path) -> Result<Store, String> {
-        Err(UNSUPPORTED.into())
-    }
-
-    pub fn clear_staging(&self) {}
-
-    pub fn program(&self, _: &str) -> Result<File, String> {
-        Err(UNSUPPORTED.into())
-    }
-
-    pub fn stage(&self, _: &impl PublisherKeys, _: &str, _: &str) -> Result<Staged, String> {
-        Err(UNSUPPORTED.into())
-    }
-
-    pub fn install(&self, _: Staged) -> Result<String, String> {
-        Err(UNSUPPORTED.into())
-    }
-
-    pub fn inspect(_: &Path) -> Result<(String, u64), String> {
-        Err(UNSUPPORTED.into())
-    }
-
-    pub fn adopt(&self, _: &Path, _: &str, _: u64) -> Result<(String, bool), String> {
-        Err(UNSUPPORTED.into())
-    }
-}
-
 /// Opens the program at path (the person's choice, so a link there is followed) without
 /// blocking, and checks it is a regular, executable file of at most 512 MiB.
 #[cfg(unix)]
@@ -900,6 +1171,39 @@ fn open_program(path: &Path) -> Result<File, String> {
         return Err(format!("{} is larger than 512 MiB", path.display()));
     }
     Ok(f)
+}
+
+/// Windows: a regular file of at most 512 MiB that is a program image, named `.exe` or `.com` and
+/// starting `MZ` (`owned::windows::image`), the only kind the app starts there.
+#[cfg(windows)]
+fn open_program(path: &Path) -> Result<File, String> {
+    let f = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let m = f.metadata().map_err(|e| e.to_string())?;
+    if !m.is_file() {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
+    crate::owned::windows::image(&f, path)?;
+    if m.len() > MAX_ARCHIVE {
+        return Err(format!("{} is larger than 512 MiB", path.display()));
+    }
+    // Reading its first bytes moved the file's position (Windows' positional reads do).
+    (&f).seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    Ok(f)
+}
+
+/// The spelling Windows compares a name by: each character uppercased where that gives one
+/// character, as the file system's table maps them one to one (so `ς` and `σ` match, while `ß`
+/// stays apart from `ss`).
+fn windows_name_key(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            let mut upper = c.to_uppercase();
+            match (upper.next(), upper.next()) {
+                (Some(u), None) => u,
+                _ => c,
+            }
+        })
+        .collect()
 }
 
 struct HashingWriter<'a, W> {
@@ -964,6 +1268,8 @@ impl Staged {
 
 impl Drop for Staged {
     fn drop(&mut self) {
+        // Closed first: Windows removes no file the store still holds open.
+        drop(self.verified.take());
         let _ = fs::remove_file(&self.path);
     }
 }
@@ -976,6 +1282,14 @@ fn entry_path(raw: &Path) -> Result<Option<String>, String> {
             Component::CurDir => {}
             Component::Normal(p) => {
                 let p = p.to_str().ok_or("an archive entry's name is not UTF-8")?;
+                // A name Windows cannot hold as it is (a device name, a stream, a trailing dot).
+                #[cfg(windows)]
+                if crate::vault::windows_refuses(p) {
+                    return Err(format!(
+                        "archive entry {} has a name Windows cannot hold",
+                        raw.display()
+                    ));
+                }
                 parts.push(p.to_string());
             }
             _ => return Err(format!("archive entry {} leaves its folder", raw.display())),
@@ -1008,7 +1322,6 @@ impl<R: Read> Read for Bounded<R> {
 /// no links, devices or names that leave the folder, at most 10,000 entries, and at most limit
 /// bytes decompressed in all (headers and skipped data too), as provider releases are. Every
 /// file is made from the folder before it, following no links.
-#[cfg(unix)]
 fn unpack(archive: impl Read, dir: &Path, limit: u64) -> Result<Vec<FileRecord>, String> {
     let over = Rc::new(Cell::new(false));
     let bounded = Bounded {
@@ -1025,9 +1338,11 @@ fn unpack(archive: impl Read, dir: &Path, limit: u64) -> Result<Vec<FileRecord>,
             format!("reading the core archive: {e}")
         }
     };
-    let root = open_dir(dir).map_err(|e| e.to_string())?;
+    let root = Dir::open(dir).map_err(|e| e.to_string())?;
     let mut tar = tar::Archive::new(bounded);
     let mut files = Vec::new();
+    // Windows: each path unpacked so far and each folder on its way, by `windows_name_key`.
+    let mut spelled: std::collections::HashMap<String, String> = Default::default();
     let entries = tar.entries().map_err(read_err)?;
     for (n, entry) in entries.enumerate() {
         if n >= MAX_ENTRIES {
@@ -1038,18 +1353,29 @@ fn unpack(archive: impl Read, dir: &Path, limit: u64) -> Result<Vec<FileRecord>,
         let Some(path) = entry_path(&raw)? else {
             continue;
         };
+        // On Windows names that differ only in case are one name: a second spelling would
+        // merge with the first, so it is refused.
+        let mut end = 0;
+        for part in path.split('/').filter(|_| cfg!(windows)) {
+            end += part.len();
+            let prefix = &path[..end];
+            let first = spelled
+                .entry(windows_name_key(prefix))
+                .or_insert_with(|| prefix.to_string());
+            if first != prefix {
+                return Err(format!(
+                    "archive entry {path} differs only in case from {first}, the same name on Windows"
+                ));
+            }
+            end += 1;
+        }
         let kind = entry.header().entry_type();
         if kind.is_dir() {
             let (parent, name) =
                 parent_beneath(&root, &path, true).map_err(|e| format!("unpacking {path}: {e}"))?;
-            let c = c_string(name.as_bytes()).map_err(|e| e.to_string())?;
-            if unsafe { libc::mkdirat(parent.as_raw_fd(), c.as_ptr(), 0o700) } != 0 {
-                let e = io::Error::last_os_error();
-                if e.kind() != io::ErrorKind::AlreadyExists {
-                    return Err(format!("unpacking {path}: {e}"));
-                }
-            }
-            open_at(&parent, &name, libc::O_RDONLY | libc::O_DIRECTORY, 0)
+            parent
+                .make(&name)
+                .and_then(|()| parent.sub(&name))
                 .map_err(|e| format!("unpacking {path}: {e}"))?;
             continue;
         }
@@ -1062,15 +1388,9 @@ fn unpack(archive: impl Read, dir: &Path, limit: u64) -> Result<Vec<FileRecord>,
         let executable = mode & 0o111 != 0;
         let (parent, name) =
             parent_beneath(&root, &path, true).map_err(|e| format!("unpacking {path}: {e}"))?;
-        let mut out = File::from(
-            open_at(
-                &parent,
-                &name,
-                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
-                if executable { 0o700 } else { 0o600 },
-            )
-            .map_err(|e| format!("unpacking {path}: {e}"))?,
-        );
+        let mut out = parent
+            .create(&name, executable)
+            .map_err(|e| format!("unpacking {path}: {e}"))?;
         let mut h = HashingWriter {
             inner: &mut out,
             hash: Sha256::new(),
@@ -1206,8 +1526,7 @@ impl ConfigSnapshot {
     }
 }
 
-// The tests install and start versions through descriptors, which only Unix systems have.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1331,5 +1650,335 @@ mod tests {
         let files = unpack(&archive[..], &dir, limit).unwrap();
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(files.len(), 1);
+    }
+
+    fn temp(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("pluxy-cores-{name}-{}", random_key()))
+    }
+
+    /// The layout of a core version: its program, and its bundled packages beside it.
+    fn layout() -> Vec<(&'static str, tar::EntryType, Vec<u8>)> {
+        vec![
+            (PROGRAM, tar::EntryType::Regular, b"MZ program".to_vec()),
+            ("bundled", tar::EntryType::Directory, Vec::new()),
+            (
+                "bundled/index.json",
+                tar::EntryType::Regular,
+                b"{}".to_vec(),
+            ),
+        ]
+    }
+
+    /// Installs version id from an archive of entries as a confirmed install does once the
+    /// release's signature is checked: unpacked into the staging folder, then moved into place.
+    fn install(store: &Store, id: &str, entries: &[(&str, tar::EntryType, Vec<u8>)]) {
+        let tmp = store.staging().join(random_key());
+        exclusive_dir(&tmp).unwrap();
+        let files = unpack(&gz_tar(entries)[..], &tmp, MAX_UNPACKED).unwrap();
+        store
+            .finish(
+                &tmp,
+                Record {
+                    format: FORMAT,
+                    id: id.into(),
+                    kind: Kind::Signed,
+                    version: Some(id.into()),
+                    source: None,
+                    key_id: None,
+                    descriptor: None,
+                    signature: None,
+                    adopted_from: None,
+                    files,
+                },
+            )
+            .unwrap();
+    }
+
+    /// Makes an installed file writable again, as its owner may (its execute bit as it was).
+    fn writable(path: &Path) {
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(path).unwrap().permissions().mode();
+            fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o200)).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            let f = crate::private_windows::open_for_access_list(path, false).unwrap();
+            crate::private_windows::make_private(&f, false).unwrap();
+        }
+    }
+
+    /// Puts a link at link to the folder target.
+    fn link_folder(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+        #[cfg(windows)]
+        crate::private_windows::tests::junction(target, link);
+    }
+
+    /// A version starts only as it was installed: its program is checked and opened, and one
+    /// whose file was left writable, changed, added to, or swapped for a link is refused before
+    /// it starts. Removing a version removes its read-only files.
+    #[test]
+    fn an_installed_version_starts_only_as_installed() {
+        let dir = temp("check");
+        let store = Store::open(&dir).unwrap();
+        for v in ["1.0.0", "2.0.0", "3.0.0", "4.0.0"] {
+            install(&store, v, &layout());
+        }
+        // The positive control: an unchanged version opens its program, at its start.
+        let mut program = store.program("1.0.0").unwrap();
+        let mut bytes = Vec::new();
+        program.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"MZ program");
+        drop(program);
+        let index = |v: &str| store.folder(v).join("bundled").join("index.json");
+        assert!(
+            OpenOptions::new()
+                .append(true)
+                .open(index("1.0.0"))
+                .is_err(),
+            "an installed file can be written to"
+        );
+        let changed = |v: &str| {
+            let e = store.program(v).unwrap_err();
+            assert!(e.contains("changed since it was installed"), "{v}: {e}");
+        };
+
+        // Made writable, its bytes the same.
+        writable(&index("1.0.0"));
+        changed("1.0.0");
+        // Changed, and made read-only again.
+        writable(&index("2.0.0"));
+        fs::write(index("2.0.0"), b"{ }").unwrap();
+        lock(&index("2.0.0")).unwrap();
+        changed("2.0.0");
+        // A file added.
+        fs::write(store.folder("3.0.0").join("extra"), b"x").unwrap();
+        changed("3.0.0");
+        // Its folder swapped for a link to a copy with the same files, locked as installed ones
+        // are (the test archive's files are 0755), so only the link can make it fail.
+        let copy = dir.join("copy");
+        fs::create_dir(&copy).unwrap();
+        fs::write(copy.join("index.json"), b"{}").unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(copy.join("index.json"), fs::Permissions::from_mode(0o755)).unwrap();
+        lock(&copy).unwrap();
+        let bundled = store.folder("4.0.0").join("bundled");
+        fs::rename(&bundled, dir.join("aside")).unwrap();
+        link_folder(&copy, &bundled);
+        changed("4.0.0");
+
+        for v in ["1.0.0", "2.0.0", "3.0.0", "4.0.0"] {
+            store.remove(v);
+            assert!(!store.folder(v).exists(), "{v} was not removed");
+        }
+        remove_tree(&dir);
+    }
+
+    /// An adopted program is copied into a version of its own, which then starts; the program
+    /// itself never runs from where it is.
+    #[test]
+    fn an_adopted_program_is_copied_in_and_checked() {
+        let dir = temp("adopt");
+        let store = Store::open(&dir.join("cores")).unwrap();
+        let program = dir.join(if cfg!(windows) {
+            "custom.exe"
+        } else {
+            "custom"
+        });
+        fs::write(&program, b"MZ custom program").unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let (sha, size) = Store::inspect(&program).unwrap();
+        assert_eq!(size, 17);
+        let (id, copied) = store.adopt(&program, &sha, size).unwrap();
+        assert!(copied);
+        assert_eq!(id, Store::adopted_id(&sha));
+        let mut bytes = Vec::new();
+        store.program(&id).unwrap().read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"MZ custom program");
+        // Changed after the person confirmed it: not copied in.
+        fs::write(&program, b"MZ other program!").unwrap();
+        store.remove(&id);
+        assert!(store
+            .adopt(&program, &sha, size)
+            .unwrap_err()
+            .contains("changed after you confirmed it"));
+        // A file that is no program (on Unix not executable, on Windows no program image) is
+        // refused before anything is copied.
+        let text = dir.join(if cfg!(windows) { "text.exe" } else { "text" });
+        fs::write(&text, b"just some text").unwrap();
+        assert!(Store::inspect(&text).is_err());
+        remove_tree(&dir);
+    }
+
+    /// Windows: the store and each version's folders are private by their access lists, and an
+    /// installed file is read-only by its own.
+    #[cfg(windows)]
+    #[test]
+    fn the_store_is_private_and_its_files_read_only_on_windows() {
+        use crate::private_windows::{is_private, is_read_only, open_for_access_list};
+        // The store's folder made beforehand, as any folder in the temporary folder is: not
+        // private (the control that the check below can fail), until the store opens it.
+        let dir = temp("private");
+        fs::create_dir_all(&dir).unwrap();
+        let f = open_for_access_list(&dir, true).unwrap();
+        assert!(
+            !is_private(&f).unwrap(),
+            "a new temporary folder is private already"
+        );
+        drop(f);
+        let store = Store::open(&dir).unwrap();
+        install(&store, "1.0.0", &layout());
+        let version = store.folder("1.0.0");
+        for d in [
+            dir.clone(),
+            store.versions(),
+            store.records(),
+            store.staging(),
+            version.clone(),
+            version.join("bundled"),
+        ] {
+            let f = open_for_access_list(&d, true).unwrap();
+            assert!(is_private(&f).unwrap(), "{} is not private", d.display());
+        }
+        for file in [
+            version.join(PROGRAM),
+            version.join("bundled").join("index.json"),
+        ] {
+            let f = open_for_access_list(&file, false).unwrap();
+            assert!(
+                is_read_only(&f).unwrap(),
+                "{} is not read-only",
+                file.display()
+            );
+        }
+        // The positive control: a private file that can be written is not read-only.
+        let record = store.record_path("1.0.0");
+        let f = open_for_access_list(&record, false).unwrap();
+        assert!(is_private(&f).unwrap() && !is_read_only(&f).unwrap());
+        drop(f);
+        remove_tree(&dir);
+    }
+
+    /// Windows: an archive entry whose name Windows cannot hold plainly (a stream, a device, a
+    /// trailing dot) is refused, not unpacked as another name.
+    #[cfg(windows)]
+    #[test]
+    fn names_windows_cannot_hold_are_refused() {
+        // Not `a:stream`: a one-letter name before `:` is a drive on Windows, refused as leaving
+        // the folder before this rule is reached.
+        for name in [
+            "ab:stream",
+            "CON",
+            "nul.txt",
+            "NUL .txt",
+            "COM\u{b9}",
+            "dot.",
+            "space ",
+        ] {
+            let dir = temp("names");
+            fs::create_dir_all(&dir).unwrap();
+            let archive = gz_tar(&[
+                (PROGRAM, tar::EntryType::Regular, b"MZ".to_vec()),
+                (name, tar::EntryType::Regular, b"x".to_vec()),
+            ]);
+            let e = unpack(&archive[..], &dir, MAX_UNPACKED).unwrap_err();
+            assert!(e.contains("Windows cannot hold"), "{name}: {e}");
+            remove_tree(&dir);
+        }
+    }
+
+    /// Two names that differ only in case, of files or of folders on the way to them, are one
+    /// name on Windows: there the second spelling is refused, never merged with the first.
+    /// Elsewhere the store does not check them, as before. Names that differ otherwise unpack.
+    #[test]
+    fn names_differing_only_in_case_are_refused() {
+        let twins: [&[(&str, tar::EntryType, Vec<u8>)]; 3] = [
+            &[
+                ("a.txt", tar::EntryType::Regular, b"one".to_vec()),
+                ("A.txt", tar::EntryType::Regular, b"two".to_vec()),
+            ],
+            &[
+                ("bundled/a", tar::EntryType::Regular, b"one".to_vec()),
+                ("Bundled/b", tar::EntryType::Regular, b"two".to_vec()),
+            ],
+            &[
+                ("\u{3c3}.txt", tar::EntryType::Regular, b"one".to_vec()),
+                ("\u{3c2}.txt", tar::EntryType::Regular, b"two".to_vec()),
+            ],
+        ];
+        for entries in twins {
+            let dir = temp("case");
+            fs::create_dir_all(&dir).unwrap();
+            let r = unpack(&gz_tar(entries)[..], &dir, MAX_UNPACKED);
+            if cfg!(windows) {
+                let e = r.unwrap_err();
+                assert!(e.contains("differs only in case"), "{e}");
+            } else if cfg!(target_os = "linux") {
+                // Two names there, as before.
+                assert_eq!(r.unwrap().len(), 2);
+            } else if let Err(e) = r {
+                // macOS: its file system decides, as before (by default one name, so the second
+                // file's exclusive create fails); the case check itself does not run.
+                assert!(!e.contains("differs only in case"), "{e}");
+            }
+            remove_tree(&dir);
+        }
+        // The key Windows compares by, on every system: final and medial sigma, long s, dotless i
+        // and the micro sign match their twins; `ß` is not `ss`.
+        for (a, b) in [
+            ("\u{3c3}", "\u{3c2}"),
+            ("s", "\u{17f}"),
+            ("i", "\u{131}"),
+            ("\u{3bc}", "\u{b5}"),
+        ] {
+            assert_eq!(windows_name_key(a), windows_name_key(b), "{a} {b}");
+        }
+        assert_ne!(windows_name_key("\u{df}"), windows_name_key("ss"));
+        // The control: other names, also in the same folder, unpack.
+        let dir = temp("case");
+        fs::create_dir_all(&dir).unwrap();
+        let entries = [
+            ("bundled/a", tar::EntryType::Regular, b"one".to_vec()),
+            ("bundled/b", tar::EntryType::Regular, b"two".to_vec()),
+        ];
+        assert_eq!(
+            unpack(&gz_tar(&entries)[..], &dir, MAX_UNPACKED)
+                .unwrap()
+                .len(),
+            2
+        );
+        remove_tree(&dir);
+    }
+
+    /// Windows: a store that is not on a fixed local drive (here a network share) is refused
+    /// before anything is made there.
+    #[cfg(windows)]
+    #[test]
+    fn a_store_off_a_fixed_local_drive_is_refused() {
+        let e = Store::open(Path::new(r"\\pluxy-test-host\share\cores")).unwrap_err();
+        assert!(e.contains("not on a local drive"), "{e}");
+        // The control: the test's own temporary folder is on one.
+        let dir = temp("fixed");
+        Store::open(&dir).unwrap();
+        // A link on that drive to the same folder through a share of this computer (the
+        // runner's administrative share `\\localhost\<drive>$`): its path starts with a fixed
+        // drive's letter, but its real path is the share.
+        let text = dir.to_string_lossy().into_owned();
+        let (drive, rest) = text.split_once(":\\").expect("a drive path");
+        let share = PathBuf::from(format!(r"\\localhost\{drive}$\{rest}"));
+        assert!(
+            fs::metadata(&share).is_ok(),
+            "{} is not reachable",
+            share.display()
+        );
+        let link = temp("fixed-link");
+        std::os::windows::fs::symlink_dir(&share, &link).unwrap();
+        let e = Store::open(&link.join("cores")).unwrap_err();
+        assert!(e.contains("not on a local drive"), "{e}");
+        fs::remove_dir(&link).unwrap();
+        remove_tree(&dir);
     }
 }
