@@ -123,6 +123,7 @@ func proxyTo(t *testing.T, target string, hang *atomic.Bool) *httptest.Server {
 // `retryable`: a refused connection is retryable; a 503 and a connection closed after the request
 // was read are not.
 func TestRenewalErrorRetryableOnlyWhenNotSent(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name      string
 		fail      func(srv *oauthtest.Server, proxy *httptest.Server, hang *atomic.Bool)
@@ -134,6 +135,7 @@ func TestRenewalErrorRetryableOnlyWhenNotSent(t *testing.T) {
 		{"closed after the request", func(_ *oauthtest.Server, _ *httptest.Server, hang *atomic.Bool) { hang.Store(true) }, 0, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			srv := oauthtest.New(t)
 			if c.fail == nil {
 				// Only renewals fail; the login below still works.

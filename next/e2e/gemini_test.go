@@ -183,9 +183,11 @@ func TestGeminiUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 // opens or replaces it later. This is the reviewer's case: 65 calls with 1 MiB signatures came
 // back as a 200 of 68,162,298 bytes.
 func TestGeminiNonStreamingReplyCountsThoughtSignatures(t *testing.T) {
+	t.Parallel()
 	sig := strings.Repeat("A", 1<<20)
 	for _, late := range []bool{false, true} {
 		t.Run(fmt.Sprintf("late=%t", late), func(t *testing.T) {
+			t.Parallel()
 			u := newUpstream(t)
 			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -247,6 +249,7 @@ func TestGeminiNonStreamingReplyCountsThoughtSignatures(t *testing.T) {
 // This is the reviewer's case: 65 block types of 1 MiB each were kept, 68,162,435 bytes, while
 // the reply's size stayed 0.
 func TestGeminiNonStreamingReplyCountsLosses(t *testing.T) {
+	t.Parallel()
 	u := newUpstream(t)
 	u.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/messages" {
@@ -287,6 +290,7 @@ func TestGeminiNonStreamingReplyCountsLosses(t *testing.T) {
 // are not a JSON object; each loss names its call, which doubled what the reply held, after the
 // last size check.
 func TestGeminiNonStreamingReplyCountsLossesWhileRendering(t *testing.T) {
+	t.Parallel()
 	u := newUpstream(t)
 	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 		w.Header().Set("Content-Type", "text/event-stream")

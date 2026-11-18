@@ -16,6 +16,7 @@ import (
 // not to those added with an API key, as today's oauth-model-alias and oauth-excluded-models
 // skip API keys; the model list shows each account's names.
 func TestLoginDefaultsSkipAPIKeys(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	base := runCore(t, map[string]any{
 		"listen":          "127.0.0.1:0",

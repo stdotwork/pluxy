@@ -448,6 +448,7 @@ func loginSettings(t *testing.T, base string) map[string]any {
 
 // Case 5: a login account's settings and headers, by PATCH /accounts/{id}.
 func TestConfigPlacementLoginAccount(t *testing.T) {
+	t.Parallel()
 	type patchCase struct {
 		name   string
 		body   func(m placeMarks, set map[string]any) map[string]any
@@ -518,6 +519,7 @@ func TestConfigPlacementLoginAccount(t *testing.T) {
 // Case 6, controls: edits that keep each placeholder in its own secret's place are taken, and
 // each account goes on sending its own key, and only its own, to its own upstream.
 func TestConfigPlacementControls(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name  string
 		edit  func(t *testing.T, cfg map[string]any)

@@ -270,6 +270,7 @@ func TestSettingsSecretIsRedacted(t *testing.T) {
 // TestLoginAccountCheck shows core checking an account a login adds, with the token the login
 // got and without generating; renewing the token or reloading does not check it again.
 func TestLoginAccountCheck(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	base, _ := startOAuthCore(t)
 	deviceLogin(t, base, srv, "work")

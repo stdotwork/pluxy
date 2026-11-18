@@ -133,6 +133,7 @@ func packCore(t *testing.T, index string) string {
 // The pack tool writes an archive for every extension and platform it is asked for, and a
 // bundled index that pins each archive; a fresh core installs and enables every one.
 func TestPackToolBundlesEveryExtension(t *testing.T) {
+	t.Parallel()
 	manifests := extensionManifests(t)
 	bin := buildPackTool(t)
 	out := t.TempDir()
@@ -209,6 +210,7 @@ func TestPackToolBundlesEveryExtension(t *testing.T) {
 
 // Packing the same extensions twice gives byte-identical archives and index.
 func TestPackToolIsReproducible(t *testing.T) {
+	t.Parallel()
 	bin := buildPackTool(t)
 	first, second := t.TempDir(), t.TempDir()
 	runPack(t, bin, first)
@@ -352,6 +354,7 @@ func archiveFiles(t *testing.T, b []byte) map[string]packedFile {
 // an index of the app's registry form pins each archive. A platform a manifest does not name is
 // left out, a missing program fails, and packing twice gives the same bytes.
 func TestPackToolPacksAppTools(t *testing.T) {
+	t.Parallel()
 	manifests := appToolManifests(t)
 	platforms := []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"}
 	programs := t.TempDir()

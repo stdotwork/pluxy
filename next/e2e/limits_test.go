@@ -65,6 +65,7 @@ func TestUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 // lose the account's key too, escaped or not: a Chat reply's system_fingerprint, written back to
 // Chat clients, and a Gemini chunk, written back whole to Gemini clients.
 func TestPassedThroughFieldsDoNotLeakCredential(t *testing.T) {
+	t.Parallel()
 	u := newUpstream(t)
 	u.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -157,6 +158,7 @@ func holdsKey(s string) bool {
 // of it ("<" becomes six bytes with HTML escaping), and it reaches it unchanged. This is the
 // reviewer's case: a 6,291,511-byte body of "<" overflowed the 64 MiB extension frame.
 func TestLargeRequestFitsTheFrame(t *testing.T) {
+	t.Parallel()
 	u := newUpstream(t)
 	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 		w.Header().Set("Content-Type", "application/json")
@@ -181,6 +183,7 @@ func TestLargeRequestFitsTheFrame(t *testing.T) {
 // client's to fix: 413, not a server failure. U+2028 is three bytes in the body and six once
 // escaped in the request's parsed copy.
 func TestRequestTooLargeForTheFrameIsAClientError(t *testing.T) {
+	t.Parallel()
 	u := newUpstream(t)
 	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 		t.Error("the upstream was called")

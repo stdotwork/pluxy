@@ -63,6 +63,7 @@ func accessLinesSettled(t *testing.T, l *coreLog, n int) []accessEntry {
 }
 
 func TestAccessLog(t *testing.T) {
+	t.Parallel()
 	u := answeringUpstream(t)
 	base, logs := startCoreLogged(t, u, func(cfg map[string]any) { cfg["management_key"] = managementKey })
 	const secret = "SECRET-query-key-e2e"

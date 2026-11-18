@@ -23,6 +23,7 @@ const buildInfoVar = "github.com/stdotwork/pluxy/next/internal/buildinfo."
 // then checks that -version prints them without reading a config, that core logs them at start,
 // and that management status carries them.
 func TestBuildInfoFromLinker(t *testing.T) {
+	t.Parallel()
 	const (
 		version = "1.2.3-e2e"
 		commit  = "0123456789abcdef0123456789abcdef01234567"
