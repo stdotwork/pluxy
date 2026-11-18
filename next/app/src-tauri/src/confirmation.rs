@@ -574,6 +574,11 @@ fn open_within(file: &Path, within: &Path) -> Result<(OpenTarget, OpenTarget, St
 fn open_rules(f: &OpenTarget, w: &OpenTarget, x: &ExactOpen) -> Result<(), String> {
     f.check()?;
     w.check()?;
+    // The change time is part of it. On Windows, setting a folder's access list through
+    // `SetNamedSecurityInfo`, as `icacls` does, also goes through what is inside the folder, and
+    // moves a file's change time there though its permissions stay the same (a GitHub-hosted
+    // runner showed it): a permissions change on a folder above the file between confirming and
+    // launching refuses the open too, and the person confirms it again. Kept so: it fails closed.
     if Metadata::read(&f.file)? != x.metadata {
         return Err("the file to open changed since it was confirmed; review again".into());
     }

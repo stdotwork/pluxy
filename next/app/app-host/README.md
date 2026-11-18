@@ -645,7 +645,11 @@ program's name) and `cwd`, and may name:
   `com.apple.ResourceFork`, `com.apple.LaunchServices.OpenWith`), and the launch runs
   `/usr/bin/open` with argv exactly the file. The dialog's first line says "Opens the file <file>
   (<type>, inside <folder>) with the app Windows (or macOS) opens .<ext> files with, through
-  <opener>.";
+  <opener>." The spawn checks the file's identity and metadata again as on Linux. On Windows a
+  permissions change on a folder above the file between confirming and launching can also
+  refuse the open: setting a folder's access list as `icacls` does also goes through what is
+  inside it and changes the file's change time, though not its permissions, and the person then
+  confirms the open again;
 - `stdin`: one of the launch's secret fields, whose secret the host writes to the launch's
   standard input and then closes: the private channel to a credential bridge, never argv, its
   environment or a file. The confirmation names it; it is part of the environment revision;
