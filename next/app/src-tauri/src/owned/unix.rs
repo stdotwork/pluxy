@@ -125,7 +125,7 @@ pub(crate) unsafe fn close_on_exec_from_3() -> io::Result<()> {
 /// Who, besides root and the app's user, may be able to change the program the app runs or a
 /// folder above it. It matters on macOS only, which runs the program by its path (`exec_target`);
 /// Linux runs the opened file itself, and lets a terminal run a launch's program by its path only
-/// where root and this user alone can change it (`path_target`).
+/// where root and this user alone (and this user's private group) can change it (`path_target`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Writers {
     /// No one: the app's own core and its native tools, which it installs in its own data folder.
@@ -161,16 +161,33 @@ pub(crate) fn exec_target(f: &File, _: Writers) -> Result<PathBuf, String> {
 /// one can change f or where path leads: the program a terminal runs on Linux, which the terminal
 /// finds by path as it starts, after this check. Each folder the path's resolution passes
 /// through, each link on the way and the file must be root's or this user's and writable by
-/// neither group nor others, except a sticky folder (`/tmp`, `/nix/store`), where only the owner
-/// of an entry (root or this user, as checked) can rename or remove it. Links are followed as
-/// the kernel follows them, from the folder that holds each. Linux makes no group's folders a
-/// place for programs, so no group gets the exception macOS gives `admin` (`Writers::Admins`).
+/// others only in a sticky folder (`/tmp`, `/nix/store`), where only the owner of an entry (root
+/// or this user, as checked) can rename or remove it, and by its group only when that group is
+/// this user's own private group (`private_group`): Homebrew on Linux makes its folders the
+/// user's, in the user's group, group-writable, and a umask of 002 (Debian's and Ubuntu's for a
+/// user with a private group) makes `~/.local/bin` and what npm or pipx install there 0775. Any
+/// other group is refused: Linux has no group like macOS' `admin` whose folders hold programs.
+/// Links are followed as the kernel follows them, from the folder that holds each; a path through
+/// the process file system (`/proc`, and `/dev/fd` and `/dev/std*`, which lead there) is refused,
+/// since `/proc/self` and its links lead elsewhere for the terminal than for the app.
 #[cfg(target_os = "linux")]
 pub(crate) fn path_target(f: &File, path: &std::path::Path) -> Result<(), String> {
+    path_target_by(f, path, &private_group)
+}
+
+/// `path_target`, with private saying whether a group is this user's private group.
+#[cfg(target_os = "linux")]
+pub(crate) fn path_target_by(
+    f: &File,
+    path: &std::path::Path,
+    private: &dyn Fn(u32) -> bool,
+) -> Result<(), String> {
     use std::ffi::OsString;
     use std::os::unix::fs::MetadataExt;
     use std::path::{Component, Path};
     const MAX_LINKS: usize = 40;
+    // The process file system's `f_type`.
+    const PROC_SUPER_MAGIC: libc::c_long = 0x9fa0;
     let me = unsafe { libc::geteuid() };
     let read = |p: &Path| std::fs::symlink_metadata(p).map_err(|e| format!("{}: {e}", p.display()));
     let refuse = |p: &Path, why: &str| {
@@ -178,6 +195,28 @@ pub(crate) fn path_target(f: &File, path: &std::path::Path) -> Result<(), String
             "{} {why}: a terminal runs a launch's program by its path, so no other user may be able to change it",
             p.display()
         ))
+    };
+    // A refusal for write permission, with the command that takes it away.
+    let writable = |p: &Path, why: &str| {
+        let quoted = p.to_string_lossy().replace('\'', r"'\''");
+        Err(format!(
+            "{} {why}: a terminal runs a launch's program by its path, so no other user may be able to change it (`chmod g-w,o-w '{quoted}'` makes it yours alone)",
+            p.display()
+        ))
+    };
+    // Whether a user but root and this one may write what m describes.
+    let others_write = |m: &std::fs::Metadata| {
+        m.mode() & 0o002 != 0 || (m.mode() & 0o020 != 0 && !private(m.gid()))
+    };
+    let in_proc = |p: &Path| {
+        let Ok(c) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) else {
+            return true;
+        };
+        let mut s: libc::statfs = unsafe { std::mem::zeroed() };
+        // SAFETY: c is NUL-terminated; s is a statfs to fill.
+        unsafe {
+            libc::statfs(c.as_ptr(), &mut s) != 0 || s.f_type as libc::c_long == PROC_SUPER_MAGIC
+        }
     };
     if !path.is_absolute() {
         return refuse(path, "is not a full path");
@@ -205,8 +244,8 @@ pub(crate) fn path_target(f: &File, path: &std::path::Path) -> Result<(), String
             if !m.file_type().is_file() {
                 return refuse(&at, "is not a file");
             }
-            if m.mode() & 0o022 != 0 {
-                return refuse(&at, "may be written by other users");
+            if others_write(&m) {
+                return writable(&at, "may be written by other users");
             }
             let opened = f.metadata().map_err(|e| e.to_string())?;
             if !same(&m, &opened) {
@@ -220,6 +259,12 @@ pub(crate) fn path_target(f: &File, path: &std::path::Path) -> Result<(), String
         if !m.is_dir() {
             return refuse(&at, "is not a folder");
         }
+        if in_proc(&at) {
+            return refuse(
+                &at,
+                "is in the process file system, where a path leads elsewhere for the terminal",
+            );
+        }
         if name == ".." {
             // A folder above one reached was checked on the way down.
             at.pop();
@@ -227,8 +272,8 @@ pub(crate) fn path_target(f: &File, path: &std::path::Path) -> Result<(), String
         }
         // Its entries are changed only by root and this user, or, in a sticky folder, each by
         // its owner, whose entry this check reads next.
-        if m.mode() & 0o022 != 0 && m.mode() & 0o1000 == 0 {
-            return refuse(&at, "may be changed by other users");
+        if others_write(&m) && m.mode() & 0o1000 == 0 {
+            return writable(&at, "may be changed by other users");
         }
         let next = at.join(&name);
         let n = read(&next)?;
@@ -249,6 +294,53 @@ pub(crate) fn path_target(f: &File, path: &std::path::Path) -> Result<(), String
             continue;
         }
         at = next;
+    }
+}
+
+/// Whether group gid is this user's private group, as `USERGROUPS_ENAB` makes one: the user's
+/// primary group, named as the user, with no other member. A lookup that fails says no.
+#[cfg(target_os = "linux")]
+pub(crate) fn private_group(gid: u32) -> bool {
+    use std::ffi::CStr;
+    let me = unsafe { libc::geteuid() };
+    let mut size = 16 << 10;
+    loop {
+        let mut pw: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut gr: libc::group = unsafe { std::mem::zeroed() };
+        let mut pbuf = vec![0 as libc::c_char; size];
+        let mut gbuf = vec![0 as libc::c_char; size];
+        let mut pfound: *mut libc::passwd = std::ptr::null_mut();
+        let mut gfound: *mut libc::group = std::ptr::null_mut();
+        // SAFETY: each buffer has its length's bytes; the results point into them.
+        let (rp, rg) = unsafe {
+            (
+                libc::getpwuid_r(me, &mut pw, pbuf.as_mut_ptr(), pbuf.len(), &mut pfound),
+                libc::getgrgid_r(gid, &mut gr, gbuf.as_mut_ptr(), gbuf.len(), &mut gfound),
+            )
+        };
+        if (rp == libc::ERANGE || rg == libc::ERANGE) && size < 1 << 20 {
+            size *= 2;
+            continue;
+        }
+        if rp != 0 || rg != 0 || pfound.is_null() || gfound.is_null() || pw.pw_gid != gid {
+            return false;
+        }
+        // SAFETY: both records were filled, their strings NUL-terminated in the buffers, and the
+        // member list ends with a null pointer.
+        unsafe {
+            let user = CStr::from_ptr(pw.pw_name);
+            if CStr::from_ptr(gr.gr_name) != user {
+                return false;
+            }
+            let mut m = gr.gr_mem;
+            while !m.is_null() && !(*m).is_null() {
+                if CStr::from_ptr(*m) != user {
+                    return false;
+                }
+                m = m.add(1);
+            }
+        }
+        return true;
     }
 }
 

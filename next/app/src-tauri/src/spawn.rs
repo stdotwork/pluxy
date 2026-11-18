@@ -6,7 +6,8 @@
 //! A launch runs the executable the confirmation opened (the opened file, never its path again)
 //! in the cwd it opened, with exactly the confirmed argv, the executable's name as named as its
 //! `argv[0]`, /dev/null on stdin, stdout and stderr, and no other descriptor of the app's (no
-//! tool pipe, vault file or socket). Its environment is the launch environment (`environment`):
+//! tool pipe, vault file or socket) but, for a terminal launch on macOS, the confirmed program
+//! the terminal runs, as 3 (`command`). Its environment is the launch environment (`environment`):
 //! selected values of the app's own environment as it started (`Snapshot`), the variables the
 //! confirmed launch set, inherited by name or removed, and the secrets the host resolved for it,
 //! each resolved at the moment it is given (the spawn, a runtime's start or restart) by the

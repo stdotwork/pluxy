@@ -590,14 +590,20 @@ program's name) and `cwd`, and may name:
   hashes it as it does the executable, so a remembered approval does not stand for a replaced
   program (a self-update) either, and the spawn refuses one changed since it was confirmed. The
   terminal starts it after the spawn, so the spawn also checks who could change it by then:
-  - on Linux the terminal finds it by the path `argv` names. The spawn refuses the launch unless
-    that path still leads to the file confirmed and only root and the person can change the
-    file or where the path leads: each folder on the way, each link and the file must be
-    root's or the person's and writable by neither group nor others, except a sticky folder
-    (`/tmp`) whose entry is root's or the person's. A program below a folder a group may write is
-    refused, as is one reached through a link another user could change;
-  - on macOS the terminal is the execution program, which the app gives the confirmed file as
-    descriptor 3. It hands that descriptor to the execution program it starts in Terminal's
+  - on Linux the terminal finds it by the path `argv` names, the argument right after the
+    terminal's flag, which `program` must be (refused otherwise). The spawn refuses the launch
+    unless that path still leads to the file confirmed and only root and the person can change
+    the file or where the path leads: each folder on the way, each link and the file must be
+    root's or the person's, writable by others only in a sticky folder (`/tmp`) whose entry is
+    root's or the person's, and by their group only when it is the person's own private group
+    (their primary group, named as they are, with no other member: Homebrew on Linux, and a
+    umask of 002, make folders and programs writable by it). A program below a folder any other
+    group may write is refused, as is one reached through a link another user could change, or a
+    path through `/proc` (and `/dev/fd`, `/dev/std*`), which leads elsewhere for the terminal. The
+    refusal names the path and a `chmod g-w,o-w` that fixes it. It does not stop the person's
+    own processes from swapping the program;
+  - on macOS the terminal is the execution program, and `program` must be the argument right
+    after `--`. The app gives it the confirmed file as descriptor 3. It hands that descriptor to the execution program it starts in Terminal's
     window, which runs that file by the path it has then, under the rule for a direct launch's
     program ([What runs](#windows-and-macos), `admin` folders included): a file put at the
     program's path since the confirmation never runs. The spawn applies the same rule first, so
@@ -691,7 +697,8 @@ started does not end with it.
   interpreter gets the opened file's `/proc/self/fd` path. It starts in the cwd the confirmation
   opened.
 - /dev/null on stdin, stdout and stderr, and no other descriptor of the app's: no tool pipe, vault
-  file or socket.
+  file or socket. A terminal launch on macOS also gets the confirmed program its terminal runs, as
+  descriptor 3 (`program` in [Launches and managed runtimes](#launches-and-managed-runtimes)).
 - The launch environment, and nothing else of the app's: the app's own environment as it started
   holds `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, `LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TERM`,
   `COLORTERM`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, the XDG

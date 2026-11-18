@@ -1064,9 +1064,13 @@ running the program after `-e` unless noted. A terminal launch runs `<terminal> 
 <args>`; a direct one `<program> <args>`. The program must be an executable file, the working folder
 an existing absolute folder. The terminal finds the program by that path as it starts, after the
 app's checks, so the app refuses a terminal launch whose program another user could change or
-redirect by then: one below a folder a group or others may write (a sticky folder such as `/tmp`
-aside), reached through a link such a user could change, or that a group may write
-(`../app/app-host/README.md`, "Launches and managed runtimes").
+redirect by then: one below a folder others or a group may write (a sticky folder such as `/tmp`
+aside, and the person's own private group, as Homebrew on Linux and a umask of 002 make them),
+reached through a link such a user could change, through `/proc`, or that such a group may write
+(`../app/app-host/README.md`, "Launches and managed runtimes"). `launch` refuses, before the host
+is asked, a launch of a terminal of the list above that does not name as its `program` the
+argument right after the terminal's flag, and on Linux and macOS a launch that names a `program`
+but is no terminal's: the app checks `program` as the file the terminal runs.
 
 A launch's `lifetime` is `detached` or `managed`, and **`managed` applies to direct launches only**.
 The host keeps and stops a managed runtime through the process it started, and for a terminal
@@ -1146,6 +1150,10 @@ environment over the socket to the first connection from this user; the file onl
 `<execution> attach <socket>`, so nothing of the launch is written to a file or read by a shell.
 The program itself goes over the socket too, as the file the app confirmed and checked: the app
 gives it to the execution program as descriptor 3, and a terminal launch without it is refused.
+That refusal is silent today: the app does not read the terminal mode's exit code or error
+output, so an app that gives no descriptor (one older than this execution program) sees its
+terminal launches start and no window open. A terminal launch must name as its `program` the
+argument right after `--`.
 In the window, that file runs, by the path it has then, once no other user but a member of
 `admin` can change it or a folder above it and that path still names it (the rule the app holds
 a direct launch's program to); otherwise the window says which path another user could change,

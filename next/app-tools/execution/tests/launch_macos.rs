@@ -237,3 +237,81 @@ fn a_program_below_a_folder_the_admin_group_may_write_runs_in_the_window() {
     std::fs::remove_dir_all(&d).unwrap();
     assert_eq!(ran.as_deref(), Some("ran\n"));
 }
+
+/// Offers a hand-over on a new socket in d, as the terminal mode does: spec's bytes, with
+/// program's descriptor attached (`SCM_RIGHTS`).
+fn offer(d: &Path, spec: &serde_json::Value, program: File) -> std::thread::JoinHandle<()> {
+    use std::io::Write;
+    let listener = std::os::unix::net::UnixListener::bind(d.join("s")).unwrap();
+    let bytes = serde_json::to_vec(spec).unwrap();
+    std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let mut control = [0u64; 8];
+        let mut iov = libc::iovec {
+            iov_base: bytes.as_ptr() as *mut libc::c_void,
+            iov_len: bytes.len(),
+        };
+        // SAFETY: an all-zero msghdr is a valid empty one; control has room for one descriptor.
+        let sent = unsafe {
+            let mut msg: libc::msghdr = std::mem::zeroed();
+            msg.msg_iov = &mut iov;
+            msg.msg_iovlen = 1;
+            msg.msg_control = control.as_mut_ptr().cast();
+            msg.msg_controllen = libc::CMSG_SPACE(4) as _;
+            let c = libc::CMSG_FIRSTHDR(&msg);
+            (*c).cmsg_level = libc::SOL_SOCKET;
+            (*c).cmsg_type = libc::SCM_RIGHTS;
+            (*c).cmsg_len = libc::CMSG_LEN(4) as _;
+            std::ptr::write_unaligned(libc::CMSG_DATA(c).cast::<i32>(), program.as_raw_fd());
+            libc::sendmsg(s.as_raw_fd(), &msg, 0)
+        };
+        assert!(sent > 0, "{}", std::io::Error::last_os_error());
+        s.write_all(&bytes[sent as usize..]).unwrap();
+        let _ = s.shutdown(std::net::Shutdown::Write);
+    })
+}
+
+/// What the window runs (`attach`) for program, handed over as the terminal mode would: its exit
+/// code, its error output, and what program wrote to out.
+fn attach(d: &Path, program: &Path) -> (Option<i32>, String, Option<String>) {
+    let out = d.join("out");
+    let spec = serde_json::json!({"argv": [program, out], "cwd": d,
+        "env": [["PATH", "/usr/bin:/bin"]]});
+    let offered = offer(d, &spec, File::open(program).unwrap());
+    let r = helper().arg("attach").arg(d.join("s")).output().unwrap();
+    offered.join().unwrap();
+    (
+        r.status.code(),
+        String::from_utf8_lossy(&r.stderr).into_owned(),
+        std::fs::read_to_string(&out).ok(),
+    )
+}
+
+/// The window refuses a program below a folder another user could change, saying which, and runs
+/// nothing; the same program from a folder only its user can change runs. No window opens: the
+/// test runs `attach` itself, as Terminal's window would.
+#[test]
+fn the_window_refuses_a_program_another_user_could_change() {
+    let d = folder("attach");
+    let own = d.join("own");
+    std::fs::create_dir(&own).unwrap();
+    std::fs::set_permissions(&own, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script(&own.join("agent"), r#"echo ran > "$1""#);
+    let ran = attach(&own, &own.join("agent"));
+    let open = d.join("open");
+    std::fs::create_dir(&open).unwrap();
+    std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+    script(&open.join("agent"), r#"echo ran > "$1""#);
+    let refused = attach(&open, &open.join("agent"));
+    std::fs::remove_dir_all(&d).unwrap();
+    assert_eq!(ran, (Some(0), String::new(), Some("ran\n".into())));
+    assert_eq!(refused.0, Some(1), "{}", refused.1);
+    assert!(
+        refused
+            .1
+            .contains(&format!("{} may be changed by other users", open.display())),
+        "{}",
+        refused.1
+    );
+    assert_eq!(refused.2, None, "the program ran");
+}
