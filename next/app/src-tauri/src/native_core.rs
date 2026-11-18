@@ -281,8 +281,10 @@ fn act(
     ui::wait_shown(app, DIALOG)?;
     let text = ui::texts(app, DIALOG)?.join("\n");
     for want in shows {
+        // The dialog shows the action as JSON too, where a Windows path's `\` is doubled.
+        let quoted = json!(want).to_string();
         require(
-            text.contains(want.as_str()),
+            text.contains(want.as_str()) || text.contains(quoted.trim_matches('"')),
             format!("the {cmd} dialog does not show {want}: {text}"),
         )?;
     }
