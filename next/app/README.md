@@ -506,10 +506,11 @@ installing, and puts the new version in place itself (`src-tauri/src/updater/`).
 is the installed copy:
 
 - Linux: the AppImage (`updater/appimage.rs`);
-- Windows: the program set of a folder bundle, in a folder of yours: the app's program (one
-  self-contained `.exe`), the core beside it (`pluxy.exe`) and the core's packages (`bundled\`)
-  (`updater/exe.rs`, `updater/set.rs`). Anything else in the folder, such as an installer's
-  `uninstall.exe`, is not part of it;
+- Windows: the program set of a folder bundle, or of a copy the per-user setup program installed
+  ([Packages](#packages)), in a folder of yours: the app's program (one self-contained `.exe`),
+  the core beside it (`pluxy.exe`) and the core's packages (`bundled\`) (`updater/exe.rs`,
+  `updater/set.rs`). Anything else in the folder, such as the setup's `uninstall.exe`, is not
+  part of it;
 - macOS: the `.app` bundle (`updater/app.rs`).
 
 In this order:
@@ -525,8 +526,9 @@ In this order:
      A .deb or .rpm install is refused with how to update through the package manager, and
      anything else as an unknown format. The stock plugin would itself run `pkexec dpkg -i` or
      `rpm -U` for those.
-   - Windows: the program carries no bundle type (an MSI or NSIS setup patches one in: such a copy
-     is refused with how to update through its installer), is on a fixed local drive (not a
+   - Windows: the program carries no bundle type, or the one the per-user setup program patches
+     into the copy it installs (an .msi patches in its own: such a copy is refused with how to
+     update through the .msi; an unknown type is refused too), is on a fixed local drive (not a
      network share or a mapped drive), and it and its folder are plain (no link or junction),
      yours, and writable by no one else (SYSTEM and Administrators aside). The stock plugin would
      run the installer for those, and nothing here does: no installer, `msiexec`, elevation,
@@ -634,6 +636,14 @@ In this order:
    starts next finishes it, each part checked against the kept copy, and a version that is not
    the kept one then installs nothing until the app is restarted. If the kept copy cannot be put back, nothing is
    started, and the page says which copy in `updates/kept/` to put in place of the installed one.
+
+   On Windows, a version that accepts itself after an update or a rollback then writes its own
+   version as `DisplayVersion` into the per-user setup program's uninstall entry
+   (`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Uninstall\<product name>`), so
+   Settings > Apps and the setup show the version installed. It writes only when that entry
+   exists and its `InstallLocation` names the program's own folder (its quotes and a `\\?\`
+   prefix aside, compared without case), and never makes one: a folder bundle, or another install
+   of the same product, is left alone. The setup program itself is never run.
 
 **Roll back to <version>…** lists versions that ran here and were kept. It restores only such a
 copy, only while it still has its pinned digest, and only after the native confirmation (with
@@ -1581,7 +1591,8 @@ after `bun run build`; both use the Tauri CLI pinned in `package.json`:
 
 ```bash
 bun run package:test <out-dir>          # the test package, for checks: an AppImage (Linux), a
-                                        # folder bundle (Windows) or an app bundle (macOS)
+                                        # folder bundle and a per-user setup program (Windows) or
+                                        # an app bundle (macOS)
 bun run package:release [artifact...]   # the release gate: builds and checks; uploads nothing
 ```
 
@@ -1606,22 +1617,46 @@ Cargo offline after `cargo fetch --locked`, and every proxy variable pointing at
 the build. Afterwards the tools folder must hold only the pinned tools and the bundler's own two
 plugin scripts. The AppImage's type is still checked on the output.
 
-On Windows and macOS `package:test` makes no installer and no disk image. It builds the same two
-debug apps with the same overlay, with no Tauri bundle on Windows (whose bundles are all
-installers) and the `app` bundle on macOS. On Windows each build's program goes into a plain
+On Windows and macOS `package:test` builds the same two debug apps with the same overlay, with
+the `app` bundle on macOS (no disk image). On Windows each build's program goes into a plain
 folder bundle of its own, `<out-dir>/pluxy Test/` and `<out-dir>/update/pluxy Test/`, each holding the program set the
 updater replaces: `pluxy-app-test.exe` and, until the app bundles its core, a stub `pluxy.exe` and
 `bundled\stub.txt` (text files that say the version; nothing runs them). The update is the second
 folder's set as a `.tar.gz` the command makes (`native/set-archive.ts`: its parts at the top,
-folders and regular files only, no owner or time), signed. On
+folders and regular files only, no owner or time), signed. The first Windows build is also
+bundled as the per-user setup program, `<out-dir>/pluxy-test_<version>_x64-setup.exe` (Tauri's
+NSIS bundle, `installMode` `currentUser`, with no code signing, as the test package has no
+identity to sign with). It installs the same program set, its stubs through Tauri's `externalBin`
+(`pluxy.exe`) and `resources` (`bundled\`), without administrator rights: its manifest asks to run
+as the user who starts it, and it writes only to that user's folders and registry. It installs
+into `%LOCALAPPDATA%\pluxy Test`, with an uninstall entry under `HKEY_CURRENT_USER`, a Start menu
+shortcut and, when run silently (`/S`), a desktop shortcut. Its hooks
+(`src-tauri/nsis/hooks.nsh`) change two things in Tauri's setup:
+
+- The setup and its uninstaller refuse while the app runs from the install folder, saying to quit
+  it first (on the console when run silently), where Tauri's would close it by force. They refuse
+  too when Windows' Restart Manager, which they ask, cannot tell.
+- The uninstaller first removes what the app itself leaves in the folder, which it would not know
+  (it stays the one the first version installed): an update's `.pluxy-*` staging folder and
+  asides, `bundled\` and `pluxy.exe`, a link or junction among them as a link, never followed. It
+  removes the app's login item (its `Run` value and Task Manager's value beside it) when that
+  item runs this install's program. The app's data stays.
+
+The app updates such a copy itself and never runs the setup for it
+([Application update](#application-update)). Tauri's NSIS bundler would download NSIS 3.13 and
+its `nsis_tauri_utils` plugin; the command puts pinned copies, each checked against its SHA-256
+(`NSIS_TOOLS` in `package.ts`), in the bundler's tools folder in the target folder first
+(`bundle.useLocalToolsDir`), and removes the copies of the stubs Tauri's build leaves next to the
+program in the target folder. On
 macOS each build's bundle is copied to `<out-dir>/pluxy Test.app` and
 `<out-dir>/update/pluxy Test.app` (with `ditto`, keeping modes and the program's signature, no
 extended attributes or quarantine), and the update is the second bundle as a `.app.tar.gz` made
 by the command (one top folder, no macOS metadata), signed; no signing identity or notarization
-is used. `test-package.json` names the bundle, the program in it, the public key and the update
+is used. `test-package.json` names the bundle, the program in it, the public key, the update
 (its bundle, payload, feed target `windows-x86_64-set` or `darwin-aarch64-app`, version and
-signature). Nothing is downloaded there, so the builds run in the caller's environment, Cargo
-offline after `cargo fetch --locked` and every proxy variable pointing at a closed port.
+signature) and on Windows the setup program. The builds download nothing there, so they run in
+the caller's environment, Cargo offline after `cargo fetch --locked` and every proxy variable
+pointing at a closed port.
 
 `package:release` turns on no bundle format: release formats are not chosen yet. It builds the
 release app with no features and no overlay (`tauri build --no-bundle`), finds that build's
@@ -1656,7 +1691,7 @@ app supported there:
 - The management key's native entry and rotation, and the native confirmations, have Win32
   dialogs on Windows and AppKit dialogs on macOS ([How the app reaches core](#how-the-app-reaches-core),
   [Native confirmations](#native-confirmations)).
-- Four parts of the native test run there:
+- Five parts of the native test run there:
   - the platform session (`native/platform.ts`, `PLATFORM_SHARDS` in `native/shards.ts`): one app
     per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
     Windows, a LaunchAgent on macOS), the tray and the close preference;
@@ -1666,6 +1701,13 @@ app supported there:
     installs are refused; on Windows an update is also ended between two parts of the set, and
     the earlier version, started again on the half-replaced folder, undoes it
     ([Application update](#application-update));
+  - the install session, on Windows (with the update session, in the job that builds the test
+    package): the per-user setup program, run silently, installs into the user's local application
+    data folder with nothing machine-wide and no elevation asked; the installed app updates itself
+    in place and rolls back, the uninstall entry's version following; the setup and the
+    uninstaller refuse while the app runs; uninstalling removes the folder (with what the app left
+    in it), the login item and the uninstall entry, keeps the app's data, and does not follow a
+    junction in `bundled\` ([Packages](#packages));
   - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
     test core, with the window's and page's command probes, the native confirmations, key entry and
     key rotation. [Limits](#limits) says how its input is made.
@@ -1725,9 +1767,10 @@ an app bundle on macOS ([Application update](#application-update)).
   mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test runs on Linux, except its platform, package, update and dialogs sessions, which
-  CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
-  refuses there).
+- The native test runs on Linux, except its platform, package, update, install and dialogs
+  sessions, which CI runs on Windows and macOS (the install session on Windows only;
+  [Platforms](#platforms) says what they check and what still refuses there). The setup's refusal
+  when Restart Manager cannot start a session is not run: the test cannot make it fail.
 - The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
   account's known folders, which no environment variable redirects, so it refuses to start when
   they exist and removes only the ones it made. Its input does not come from a keyboard: on
@@ -1736,9 +1779,10 @@ an app bundle on macOS ([Application update](#application-update)).
   AppKit. Both go through the app's real message handling and the dialogs' controls, but miss
   what only a person at the machine would hit, such as another app taking the keyboard. The
   session's summary counts which way each input went.
-- No installer or bundled core yet: the only packages are the test AppImage, the test folder
-  bundle (Windows; its `pluxy.exe` and `bundled\` are stubs) and the test app bundle (macOS),
-  which are not for release.
+- No release installer or bundled core yet: the only packages are the test AppImage, the test
+  folder bundle and per-user setup program (Windows; their `pluxy.exe` and `bundled\` are stubs,
+  and nothing is code-signed) and the test app bundle (macOS), which are not for release. How
+  Windows SmartScreen treats the unsigned setup program is not tested.
   The app updates only itself: as an AppImage on Linux x86_64, as a folder bundle's program set
   on Windows x86_64 and as an app bundle on macOS, and only with test updater trust until release
   keys exist. The native test updates it on Linux, on Windows and on Apple silicon Macs; Intel
