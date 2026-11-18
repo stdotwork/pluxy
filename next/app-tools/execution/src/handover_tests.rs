@@ -17,6 +17,20 @@ fn folder() -> PathBuf {
     d
 }
 
+/// A program file in d, as the app would have opened it.
+fn program(d: &Path) -> File {
+    let p = d.join("agent");
+    std::fs::write(&p, "#!/bin/sh\n").unwrap();
+    File::open(p).unwrap()
+}
+
+/// Whether a and b are the same file.
+fn same_file(a: &File, b: &File) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let (a, b) = (a.metadata().unwrap(), b.metadata().unwrap());
+    (a.dev(), a.ino()) == (b.dev(), b.ino())
+}
+
 fn spec() -> Spec {
     Spec {
         argv: vec![
@@ -37,14 +51,26 @@ fn the_launch_reaches_the_window_as_it_was_given() {
     let d = folder();
     let socket = d.join("s");
     let listener = UnixListener::bind(&socket).unwrap();
+    let checked = program(&d);
+    let given = checked.try_clone().unwrap();
     let served = std::thread::spawn(move || {
         serve(
             &listener,
             &spec().encode().unwrap(),
+            &given,
             Duration::from_secs(10),
         )
     });
-    assert_eq!(receive(&socket).unwrap(), spec());
+    let (taken, file) = receive(&socket).unwrap();
+    assert_eq!(taken, spec());
+    assert!(same_file(&file, &checked), "another file came");
+    // SAFETY: file's descriptor is open while it lives.
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) };
+    assert_eq!(
+        flags & libc::FD_CLOEXEC,
+        libc::FD_CLOEXEC,
+        "it stays open across exec"
+    );
     assert_eq!(served.join().unwrap(), Ok(()));
     std::fs::remove_dir_all(d).unwrap();
 }
@@ -57,6 +83,7 @@ fn a_launch_no_one_takes_expires() {
     let e = serve(
         &listener,
         &spec().encode().unwrap(),
+        &program(&d),
         Duration::from_millis(300),
     )
     .unwrap_err();
@@ -83,8 +110,10 @@ fn a_launch_over_what_a_hand_over_carries_is_refused_before_it_is_offered() {
     let socket = d.join("s");
     let listener = UnixListener::bind(&socket).unwrap();
     let bytes = near.encode().unwrap();
-    let served = std::thread::spawn(move || serve(&listener, &bytes, Duration::from_secs(10)));
-    assert_eq!(receive(&socket).unwrap(), near);
+    let given = program(&d);
+    let served =
+        std::thread::spawn(move || serve(&listener, &bytes, &given, Duration::from_secs(10)));
+    assert_eq!(receive(&socket).unwrap().0, near);
     assert_eq!(served.join().unwrap(), Ok(()));
     std::fs::remove_dir_all(d).unwrap();
 }
@@ -116,6 +145,8 @@ fn only_a_launch_pluxy_makes_is_taken() {
             "not one pluxy makes",
         ),
         (vec![b' '; MAX as usize + 1], "too large"),
+        // A launch with no program attached: the window runs only the file the app checked.
+        (spec().encode().unwrap(), "came with 0 programs"),
     ] {
         let d = folder();
         let offered = offer(&d, bytes);

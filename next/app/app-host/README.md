@@ -360,8 +360,8 @@ checks the sources for any other call that could end a process.
 
 | | Windows | macOS |
 | --- | --- | --- |
-| What runs | The file the host opened and checked: its path now (with `\\?\` removed), opened again with only reading shared, so it cannot be renamed, replaced or written until the process runs; only `.exe` and `.com` files that start with `MZ` | The file the host opened and checked, by the path it has now (`F_GETPATH`), once no other user can change that file or any folder above it and the path still names the same file (device, inode, size, mode and times). For the program of a detached launch or a managed runtime, a folder above it may also be writable by the `admin` group, as macOS makes `/Applications` and Homebrew makes its folders. Another admin account can then replace the program between the check and the exec (and, for a program inside an app, whatever it later loads or starts from its app: frameworks, plug-ins, helper apps), and, with or without that rule, can replace at any time what any program loads from such folders (Homebrew's libraries, a script's interpreter and modules) |
-| Handles and descriptors it gets | Only its three standard handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), made inheritable only while it starts | Every descriptor above 2 closes as it executes |
+| What runs | The file the host opened and checked: its path now (with `\\?\` removed), opened again with only reading shared, so it cannot be renamed, replaced or written until the process runs; only `.exe` and `.com` files that start with `MZ` | The file the host opened and checked, by the path it has now (`F_GETPATH`), once no other user can change that file or any folder above it and the path still names the same file (device, inode, size, mode and times). For the program of a detached launch or a managed runtime, and the program a terminal launch runs, a folder above it may also be writable by the `admin` group, as macOS makes `/Applications` and Homebrew makes its folders. Another admin account can then replace the program between the check and the exec (and, for a program inside an app, whatever it later loads or starts from its app: frameworks, plug-ins, helper apps), and, with or without that rule, can replace at any time what any program loads from such folders (Homebrew's libraries, a script's interpreter and modules) |
+| Handles and descriptors it gets | Only its three standard handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), made inheritable only while it starts | Every descriptor above 2 closes as it executes, but for a terminal launch the program it runs, as 3 (see `program` in [Launches and managed runtimes](#launches-and-managed-runtimes)) |
 | Tool, managed runtime, the app's core | A job object of its own, which ends the process and everything it started when stopped and when the app exits or crashes (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) | A process group of its own (a tool's, a runtime's); the app's core stays in the app's group |
 | Asked to stop | `CTRL_BREAK` to its process group on its own hidden console, then the job ends after the grace. An app that has a console of its own (a debug build run from a terminal) cannot send it, and ends the job at once | SIGTERM, then SIGKILL to the group after the grace, as on Linux |
 | Detached launch | Started outside every job of the app's, held by nothing once it runs. Refused, and nothing starts, when the job the app runs in does not let a process leave it (a terminal, an editor or a service that started the app may hold it in one) | A session and process group of its own, as on Linux, without the systemd scope |
@@ -588,7 +588,20 @@ program's name) and `cwd`, and may name:
 
 - `program`: the program a terminal runs, which must be one of `argv`. The confirmation opens and
   hashes it as it does the executable, so a remembered approval does not stand for a replaced
-  program (a self-update) either, and the spawn refuses one changed since it was confirmed;
+  program (a self-update) either, and the spawn refuses one changed since it was confirmed. The
+  terminal starts it after the spawn, so the spawn also checks who could change it by then:
+  - on Linux the terminal finds it by the path `argv` names. The spawn refuses the launch unless
+    that path still leads to the file confirmed and only root and the person can change the
+    file or where the path leads: each folder on the way, each link and the file must be
+    root's or the person's and writable by neither group nor others, except a sticky folder
+    (`/tmp`) whose entry is root's or the person's. A program below a folder a group may write is
+    refused, as is one reached through a link another user could change;
+  - on macOS the terminal is the execution program, which the app gives the confirmed file as
+    descriptor 3. It hands that descriptor to the execution program it starts in Terminal's
+    window, which runs that file by the path it has then, under the rule for a direct launch's
+    program ([What runs](#windows-and-macos), `admin` folders included): a file put at the
+    program's path since the confirmation never runs. The spawn applies the same rule first, so
+    the app refuses a program in a folder another user may change;
 - `file` and `within`: the file the launch opens, which must be one of `argv`, and the folder it
   must be inside, named together, each by its resolved path. The confirmation resolves both and
   refuses, before any dialog:

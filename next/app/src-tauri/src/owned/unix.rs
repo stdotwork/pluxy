@@ -124,14 +124,16 @@ pub(crate) unsafe fn close_on_exec_from_3() -> io::Result<()> {
 
 /// Who, besides root and the app's user, may be able to change the program the app runs or a
 /// folder above it. It matters on macOS only, which runs the program by its path (`exec_target`);
-/// Linux runs the opened file itself.
+/// Linux runs the opened file itself, and lets a terminal run a launch's program by its path only
+/// where root and this user alone can change it (`path_target`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Writers {
     /// No one: the app's own core and its native tools, which it installs in its own data folder.
     Nobody,
     /// Also the members of the `admin` group, through a folder that group may write (never the
-    /// file itself): the program of a detached launch or of a managed runtime (`spawn.rs`), which
-    /// the person confirmed wherever it is installed. macOS makes `/Applications` root:admin 0775,
+    /// file itself): the program of a detached launch or of a managed runtime, and the program a
+    /// terminal launch runs (`spawn.rs`, and the execution program in Terminal's window), which the
+    /// person confirmed wherever it is installed. macOS makes `/Applications` root:admin 0775,
     /// and Homebrew makes the folders of its prefix the installing user's, group admin, 0775 when
     /// that user is an admin; refusing them would refuse a direct launch of any program installed
     /// with Homebrew or inside an app in `/Applications`.
@@ -153,6 +155,101 @@ pub(crate) enum Writers {
 #[cfg(target_os = "linux")]
 pub(crate) fn exec_target(f: &File, _: Writers) -> Result<PathBuf, String> {
     Ok(PathBuf::from(format!("/proc/self/fd/{}", f.as_raw_fd())))
+}
+
+/// Refused unless path still leads to the opened file f (`same`) and no user but root and this
+/// one can change f or where path leads: the program a terminal runs on Linux, which the terminal
+/// finds by path as it starts, after this check. Each folder the path's resolution passes
+/// through, each link on the way and the file must be root's or this user's and writable by
+/// neither group nor others, except a sticky folder (`/tmp`, `/nix/store`), where only the owner
+/// of an entry (root or this user, as checked) can rename or remove it. Links are followed as
+/// the kernel follows them, from the folder that holds each. Linux makes no group's folders a
+/// place for programs, so no group gets the exception macOS gives `admin` (`Writers::Admins`).
+#[cfg(target_os = "linux")]
+pub(crate) fn path_target(f: &File, path: &std::path::Path) -> Result<(), String> {
+    use std::ffi::OsString;
+    use std::os::unix::fs::MetadataExt;
+    use std::path::{Component, Path};
+    const MAX_LINKS: usize = 40;
+    let me = unsafe { libc::geteuid() };
+    let read = |p: &Path| std::fs::symlink_metadata(p).map_err(|e| format!("{}: {e}", p.display()));
+    let refuse = |p: &Path, why: &str| {
+        Err(format!(
+            "{} {why}: a terminal runs a launch's program by its path, so no other user may be able to change it",
+            p.display()
+        ))
+    };
+    if !path.is_absolute() {
+        return refuse(path, "is not a full path");
+    }
+    // The names still to resolve, the next one last, and the folder reached so far.
+    let names = |p: &Path| -> Vec<OsString> {
+        p.components()
+            .rev()
+            .filter_map(|c| match c {
+                Component::Normal(n) => Some(n.to_os_string()),
+                Component::ParentDir => Some("..".into()),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut todo = names(path);
+    let mut at = PathBuf::from("/");
+    let mut links = 0;
+    loop {
+        let m = read(&at)?;
+        if m.uid() != 0 && m.uid() != me {
+            return refuse(&at, "belongs to another user");
+        }
+        let Some(name) = todo.pop() else {
+            if !m.file_type().is_file() {
+                return refuse(&at, "is not a file");
+            }
+            if m.mode() & 0o022 != 0 {
+                return refuse(&at, "may be written by other users");
+            }
+            let opened = f.metadata().map_err(|e| e.to_string())?;
+            if !same(&m, &opened) {
+                return Err(format!(
+                    "{} is no longer the file that was confirmed",
+                    path.display()
+                ));
+            }
+            return Ok(());
+        };
+        if !m.is_dir() {
+            return refuse(&at, "is not a folder");
+        }
+        if name == ".." {
+            // A folder above one reached was checked on the way down.
+            at.pop();
+            continue;
+        }
+        // Its entries are changed only by root and this user, or, in a sticky folder, each by
+        // its owner, whose entry this check reads next.
+        if m.mode() & 0o022 != 0 && m.mode() & 0o1000 == 0 {
+            return refuse(&at, "may be changed by other users");
+        }
+        let next = at.join(&name);
+        let n = read(&next)?;
+        if n.file_type().is_symlink() {
+            if n.uid() != 0 && n.uid() != me {
+                return refuse(&next, "belongs to another user");
+            }
+            links += 1;
+            if links > MAX_LINKS {
+                return refuse(path, "goes through too many links");
+            }
+            let target =
+                std::fs::read_link(&next).map_err(|e| format!("{}: {e}", next.display()))?;
+            if target.is_absolute() {
+                at = PathBuf::from("/");
+            }
+            todo.extend(names(&target));
+            continue;
+        }
+        at = next;
+    }
 }
 
 /// What runs the opened file f: macOS cannot execute a descriptor, so the path f has now
@@ -185,7 +282,7 @@ pub(crate) fn exec_target(f: &File, writers: Writers) -> Result<PathBuf, String>
     Ok(path)
 }
 
-#[cfg(target_os = "macos")]
+/// Whether a and b are the same file, unchanged: device, inode, size, mode and times.
 fn same(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     a.dev() == b.dev()

@@ -12,6 +12,8 @@
 //! run by the app with arguments (as a confirmed launch, never as a tool, which gets none), it
 //! runs a launch mode (`launch_windows.rs`, `launch_macos.rs`) instead of serving operations.
 
+#[cfg(target_os = "macos")]
+mod checked;
 #[cfg(all(unix, any(target_os = "macos", test)))]
 mod handover;
 #[cfg(target_os = "macos")]
