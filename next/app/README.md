@@ -172,8 +172,9 @@ whole time the core holds its loopback address, which Windows allows another acc
 receives the connections as soon as the core's socket closes. So before the app sends anything
 on a new connection to its core, it reads the system's TCP table: the other end of that very
 connection (its own addresses and ports) must belong to the core's own process. If it does not,
-or the table does not show it for at least a second, the app sends nothing on it, the call
-fails, and the app's log says which process answered. Each client of the core holds its own
+or the table does not show it for at least a second, the app sends nothing on it, and the call
+fails with the reason (addresses and process IDs only): which process accepted the connection, or
+that the connection is not in this computer's table. Each client of the core holds its own
 handle on the core's process for as long as it lives, so the core's process ID cannot pass to
 another process meanwhile, even after the core has ended. On Linux and macOS the app keeps its
 own copy of the core's listening socket for as long as anything in the app could still send

@@ -128,6 +128,23 @@ pub fn certificates(pem: &[u8]) -> Result<Vec<Certificate<'static>>, String> {
     Ok(certs)
 }
 
+/// What a failed call's reply says: the reason when the app refused a connection the core's
+/// process did not accept (addresses and process IDs only), otherwise a fixed text, since a
+/// library error may include request data.
+fn transport_message(error: &ureq::Error) -> String {
+    #[cfg(windows)]
+    if let ureq::Error::Io(e) = error {
+        if let Some(why) = e
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<core_tcp::NotTheCore>())
+        {
+            return format!("nothing sent to the app's core: {why}");
+        }
+    }
+    let _ = error;
+    "core transport failed".into()
+}
+
 // Classify transport failures without formatting library errors: those may include request data.
 fn transport_kind(error: &ureq::Error) -> &'static str {
     match error {
@@ -173,6 +190,19 @@ mod core_tcp {
     fn refused(why: String) -> ureq::Error {
         ureq::Error::Io(io::Error::new(io::ErrorKind::PermissionDenied, why))
     }
+
+    /// Why a connection was refused because the core's process did not accept it: addresses and
+    /// process IDs only, so the reply may carry it (`refusal`).
+    #[derive(Debug)]
+    pub(super) struct NotTheCore(pub(super) String);
+
+    impl std::fmt::Display for NotTheCore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+
+    impl std::error::Error for NotTheCore {}
 
     fn timed_out(e: io::Error, reason: ureq::Timeout) -> ureq::Error {
         match e.kind() {
@@ -224,7 +254,10 @@ mod core_tcp {
             if let Err(why) = crate::managed::accepted_by(self.0.id(), local, peer) {
                 // Addresses and process IDs only.
                 eprintln!("pluxy-app: nothing sent to the app's core: {why}");
-                return Err(refused(why));
+                return Err(ureq::Error::Io(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    NotTheCore(why),
+                )));
             }
             let stream = Arc::new(stream);
             (details.register_shutdown)(Arc::downgrade(&stream) as Weak<dyn ShutdownHandle>)?;
@@ -482,7 +515,7 @@ impl Client {
         };
         let mut resp = match result {
             Ok(r) => r,
-            Err(e) => return Reply::failed(0, transport_kind(&e), "core transport failed"),
+            Err(e) => return Reply::failed(0, transport_kind(&e), transport_message(&e)),
         };
         let status = resp.status().as_u16();
         let bytes = match resp.body_mut().with_config().limit(MAX_REPLY).read_to_vec() {
@@ -618,7 +651,20 @@ mod tests {
             let taken = Client::with_pin(&base, this).call("k", "GET", "/status", None);
             let got = server.join().unwrap();
             assert_eq!(refused.status, 0, "{bind}: {refused:?}");
-            assert_eq!(refused.error.unwrap().code, "io", "{bind}");
+            let error = refused.error.unwrap();
+            assert_eq!(error.code, "io", "{bind}");
+            // The reply says which process accepted it instead (a release build has no stderr).
+            assert!(
+                error
+                    .message
+                    .starts_with("nothing sent to the app's core: ")
+                    && error.message.contains(&format!(
+                        "was accepted by process {}, not the core (4)",
+                        std::process::id()
+                    )),
+                "{bind}: {}",
+                error.message
+            );
             assert_eq!(
                 got[0], 0,
                 "{bind}: the request went to a listener not the core's"

@@ -1299,6 +1299,14 @@ mod tests {
             r.status, 200,
             "with the wildcard listening beside the core: {r:?}"
         );
+        // A new client, so a new connection: the running core still takes it.
+        let fresh = crate::client::Client::for_core(&base, &core).unwrap();
+        let r = fresh.call(&key, "GET", "/status", None);
+        assert_eq!(
+            r.status, 200,
+            "a new connection with the wildcard listening beside the core: {r:?}"
+        );
+        drop(fresh);
         core.stop();
         assert!(core.exited().is_some(), "the core stopped");
         // The client's own handle on the core's process keeps its process ID from now on.
@@ -1331,6 +1339,12 @@ mod tests {
             "what the other program read, the call answered {r:?}"
         );
         assert_eq!(r.status, 0, "{r:?}");
+        let why = r.error.unwrap().message;
+        assert!(
+            why.starts_with("nothing sent to the app's core: ")
+                && why.contains(&format!("was accepted by process {}", std::process::id())),
+            "{why}"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
