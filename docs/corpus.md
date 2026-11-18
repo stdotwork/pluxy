@@ -3,8 +3,8 @@
 The core in `next/` replaces the old core, the Go proxy that was in `core/` until it was removed
 from the repository. Users of the old core should be able to move without their clients noticing,
 so the new core is checked against what the old one did on the same requests. The check is the
-differential test corpus in `next/corpus`. This page explains the bar it sets and how the old core
-it compares with is fixed. How to run it, write cases and re-record is in
+differential test corpus in `next/corpus`. This page explains the bar it sets and what it compares
+the new core with. How to run it and add cases is in
 [`next/corpus/README.md`](../next/corpus/README.md).
 
 ## The bar
@@ -31,17 +31,15 @@ The bar covers behaviour the new core keeps. An old feature or setting is left o
 written reason: config settings in
 [What each setting does here](../next/README.md#what-each-setting-does-here), and panel features in [What each page leaves out, and why](../next/ui/README.md#what-each-page-leaves-out-and-why).
 
-## Recorded replies and the pinned old core
+## The recorded replies
 
-Each case file holds the old core's observations, recorded from a live run of it
-(`recorded_old_core`). The corpus compares the new core with those recordings and does not build
-or run the old core, so it is fast enough for every CI run; Next CI runs it with the rest of the
-tests. The old core is no longer in the repository and nothing in CI runs it live, so the
-recordings are the lasting regression check.
+Each case file holds the old core's observations, recorded from live runs of it before it was
+removed (`recorded_old_core`). The corpus compares the new core with those recordings only: it
+does not build or run the old core, so it is fast enough for every CI run, and Next CI runs it
+with the rest of the tests. The old core is no longer in the repository and nothing builds or runs
+it, so the recordings are never re-recorded or edited, and they are the lasting regression check.
 
-"The old core" in the corpus means the code that was in `core/` at one pinned commit, the last
-commit that changed it; [`next/corpus/README.md`](../next/corpus/README.md) names that commit.
-Re-recording a case, or comparing with the old core live, builds the old core from a worktree of
-that commit and points the corpus at the binary, so cases can still be added and re-recorded.
-The steps are in
-[Re-recording against the old core](../next/corpus/README.md#re-recording-against-the-old-core).
+No case can be recorded from the old core any more. A new case reuses the recording of an existing
+case whose request and scripted upstream replies are the same, and a behaviour the old core never
+had is pinned in a Go test beside the code instead. The steps are in
+[Adding cases](../next/corpus/README.md#adding-cases).
