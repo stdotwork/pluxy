@@ -1,0 +1,2331 @@
+{
+ "recorded_at": 1794973131,
+ "runs": {
+  "in_progress": {
+   "total_count": 1,
+   "workflow_runs": [
+    {
+     "id": 44227503058,
+     "name": "Next app",
+     "event": "workflow_dispatch",
+     "status": "in_progress",
+     "created_at": "2026-11-18T03:01:59Z"
+    }
+   ]
+  },
+  "queued": {
+   "total_count": 13,
+   "workflow_runs": [
+    {
+     "id": 44229993140,
+     "name": "CI",
+     "event": "pull_request",
+     "status": "queued",
+     "created_at": "2026-11-18T03:22:43Z"
+    },
+    {
+     "id": 44229512559,
+     "name": "CI",
+     "event": "merge_group",
+     "status": "queued",
+     "created_at": "2026-11-18T03:18:42Z"
+    },
+    {
+     "id": 44229510359,
+     "name": "Next app",
+     "event": "push",
+     "status": "queued",
+     "created_at": "2026-11-18T03:18:41Z"
+    },
+    {
+     "id": 44229264548,
+     "name": "CI",
+     "event": "pull_request",
+     "status": "queued",
+     "created_at": "2026-11-18T03:16:38Z"
+    },
+    {
+     "id": 44229134834,
+     "name": "CI",
+     "event": "merge_group",
+     "status": "queued",
+     "created_at": "2026-11-18T03:15:34Z"
+    },
+    {
+     "id": 44225844116,
+     "name": "CI",
+     "event": "pull_request",
+     "status": "queued",
+     "created_at": "2026-11-18T02:47:48Z"
+    },
+    {
+     "id": 44225715067,
+     "name": "Next app",
+     "event": "workflow_dispatch",
+     "status": "queued",
+     "created_at": "2026-11-18T02:46:41Z"
+    },
+    {
+     "id": 44225630800,
+     "name": "Next app platforms",
+     "event": "workflow_dispatch",
+     "status": "queued",
+     "created_at": "2026-11-18T02:45:58Z"
+    },
+    {
+     "id": 44224828405,
+     "name": "CI",
+     "event": "pull_request",
+     "status": "queued",
+     "created_at": "2026-11-18T02:39:11Z"
+    },
+    {
+     "id": 44224792681,
+     "name": "CI",
+     "event": "pull_request",
+     "status": "queued",
+     "created_at": "2026-11-18T02:38:52Z"
+    },
+    {
+     "id": 44224093666,
+     "name": "CI",
+     "event": "pull_request",
+     "status": "queued",
+     "created_at": "2026-11-18T02:33:07Z"
+    },
+    {
+     "id": 44223391381,
+     "name": "CI",
+     "event": "pull_request",
+     "status": "queued",
+     "created_at": "2026-11-18T02:27:30Z"
+    },
+    {
+     "id": 44220019529,
+     "name": "CI",
+     "event": "pull_request",
+     "status": "queued",
+     "created_at": "2026-11-18T02:00:19Z"
+    }
+   ]
+  }
+ },
+ "jobs": {
+  "44227503058": {
+   "total_count": 5,
+   "jobs": [
+    {
+     "id": 134544173684,
+     "name": "native (app)",
+     "status": "completed",
+     "labels": [
+      "self-hosted",
+      "pluxy-linux"
+     ],
+     "created_at": "2026-11-18T03:02:00Z",
+     "started_at": "2026-11-18T03:02:03Z"
+    },
+    {
+     "id": 134544173912,
+     "name": "native (tools)",
+     "status": "completed",
+     "labels": [
+      "self-hosted",
+      "pluxy-linux"
+     ],
+     "created_at": "2026-11-18T03:02:00Z",
+     "started_at": "2026-11-18T03:02:03Z"
+    },
+    {
+     "id": 134544174059,
+     "name": "checks",
+     "status": "completed",
+     "labels": [
+      "self-hosted",
+      "pluxy-linux"
+     ],
+     "created_at": "2026-11-18T03:02:00Z",
+     "started_at": "2026-11-18T03:25:06Z"
+    },
+    {
+     "id": 134544174122,
+     "name": "native (release)",
+     "status": "in_progress",
+     "labels": [
+      "self-hosted",
+      "pluxy-linux"
+     ],
+     "created_at": "2026-11-18T03:02:00Z",
+     "started_at": "2026-11-18T03:35:43Z"
+    },
+    {
+     "id": 134544174170,
+     "name": "native (usage)",
+     "status": "in_progress",
+     "labels": [
+      "self-hosted",
+      "pluxy-linux"
+     ],
+     "created_at": "2026-11-18T03:02:00Z",
+     "started_at": "2026-11-18T03:38:01Z"
+    }
+   ]
+  },
+  "44229993140": {
+   "total_count": 8,
+   "jobs": [
+    {
+     "id": 134552389295,
+     "name": "changes",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T03:22:44Z",
+     "started_at": "2026-11-18T03:22:44Z"
+    },
+    {
+     "id": 134552394070,
+     "name": "gate",
+     "status": "queued",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T03:22:44Z",
+     "started_at": "2026-11-18T03:22:44Z"
+    },
+    {
+     "id": 134552395355,
+     "name": "App CI",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T03:22:44Z",
+     "started_at": "2026-11-18T03:22:44Z"
+    },
+    {
+     "id": 134552395613,
+     "name": "Next app tools pack",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T03:22:44Z",
+     "started_at": "2026-11-18T03:22:44Z"
+    },
+    {
+     "id": 134552395690,
+     "name": "Next app",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T03:22:45Z",
+     "started_at": "2026-11-18T03:22:45Z"
+    },
+    {
+     "id": 134552395904,
+     "name": "Next CI",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T03:22:45Z",
+     "started_at": "2026-11-18T03:22:45Z"
+    },
+    {
+     "id": 134552396120,
+     "name": "Next app platforms",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T03:22:45Z",
+     "started_at": "2026-11-18T03:22:45Z"
+    },
+    {
+     "id": 134552396463,
+     "name": "Next app tools platforms",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T03:22:45Z",
+     "started_at": "2026-11-18T03:22:45Z"
+    }
+   ]
+  },
+  "44229512559": {
+   "total_count": 1,
+   "jobs": [
+    {
+     "id": 134550812849,
+     "name": "changes",
+     "status": "queued",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T03:18:43Z",
+     "started_at": "2026-11-18T03:18:43Z"
+    }
+   ]
+  },
+  "44229510359": {
+   "total_count": 5,
+   "jobs": [
+    {
+     "id": 134550809577,
+     "name": "native (app)",
+     "status": "in_progress",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:18:42Z",
+     "started_at": "2026-11-18T03:33:00Z"
+    },
+    {
+     "id": 134550809820,
+     "name": "checks",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:18:42Z",
+     "started_at": "2026-11-18T03:18:42Z"
+    },
+    {
+     "id": 134550809878,
+     "name": "native (tools)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:18:42Z",
+     "started_at": "2026-11-18T03:18:42Z"
+    },
+    {
+     "id": 134550810006,
+     "name": "native (usage)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:18:42Z",
+     "started_at": "2026-11-18T03:18:42Z"
+    },
+    {
+     "id": 134550810038,
+     "name": "native (release)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:18:42Z",
+     "started_at": "2026-11-18T03:18:42Z"
+    }
+   ]
+  },
+  "44229264548": {
+   "total_count": 20,
+   "jobs": [
+    {
+     "id": 134550659466,
+     "name": "changes",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T03:18:19Z",
+     "started_at": "2026-11-18T03:28:35Z"
+    },
+    {
+     "id": 134554708637,
+     "name": "Next app / checks",
+     "status": "in_progress",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:33:13Z"
+    },
+    {
+     "id": 134554708643,
+     "name": "Next app platforms / app (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "namespace-profile-macos-26"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:29:07Z"
+    },
+    {
+     "id": 134554708646,
+     "name": "Next app platforms / app (windows-latest)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:28:46Z"
+    },
+    {
+     "id": 134554708652,
+     "name": "Next app tools platforms / app tools (windows-latest)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:28:46Z"
+    },
+    {
+     "id": 134554708665,
+     "name": "Next app platforms / dialogs (windows-latest)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:28:46Z"
+    },
+    {
+     "id": 134554708682,
+     "name": "Next app platforms / dialogs (macos-latest)",
+     "status": "queued",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:28:46Z"
+    },
+    {
+     "id": 134554708684,
+     "name": "Next app / native (app)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:28:46Z"
+    },
+    {
+     "id": 134554708688,
+     "name": "Next app / native (tools)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:28:46Z"
+    },
+    {
+     "id": 134554708689,
+     "name": "Next CI / next",
+     "status": "queued",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:28:46Z"
+    },
+    {
+     "id": 134554708698,
+     "name": "Next app platforms / native (macos-latest, package)",
+     "status": "in_progress",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:30:09Z"
+    },
+    {
+     "id": 134554708721,
+     "name": "Next app / native (release)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:28:46Z"
+    },
+    {
+     "id": 134554708746,
+     "name": "Next app / native (usage)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:28:46Z"
+    },
+    {
+     "id": 134554708749,
+     "name": "Next app platforms / native (macos-latest, platform)",
+     "status": "queued",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:28:46Z"
+    },
+    {
+     "id": 134554708768,
+     "name": "Next app platforms / native (windows-latest, platform)",
+     "status": "in_progress",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:35:12Z"
+    },
+    {
+     "id": 134554708769,
+     "name": "Next app platforms / native (windows-latest, package)",
+     "status": "in_progress",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:33:34Z"
+    },
+    {
+     "id": 134554708822,
+     "name": "Next app tools platforms / app tools (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "namespace-profile-macos-26"
+     ],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:32:09Z"
+    },
+    {
+     "id": 134554710088,
+     "name": "Next app tools pack",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T03:28:46Z",
+     "started_at": "2026-11-18T03:28:46Z"
+    },
+    {
+     "id": 134554710213,
+     "name": "App CI",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T03:28:47Z",
+     "started_at": "2026-11-18T03:28:47Z"
+    },
+    {
+     "id": 134554710704,
+     "name": "Next app tools platforms / WSL ${{ matrix.wsl }}",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:28:47Z",
+     "started_at": "2026-11-18T03:28:47Z"
+    }
+   ]
+  },
+  "44229134834": {
+   "total_count": 11,
+   "jobs": [
+    {
+     "id": 134549572530,
+     "name": "changes",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T03:15:35Z",
+     "started_at": "2026-11-18T03:16:56Z"
+    },
+    {
+     "id": 134550206848,
+     "name": "Next app / checks",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:17:11Z",
+     "started_at": "2026-11-18T03:17:11Z"
+    },
+    {
+     "id": 134550206869,
+     "name": "Next app / native (usage)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:17:11Z",
+     "started_at": "2026-11-18T03:17:11Z"
+    },
+    {
+     "id": 134550206873,
+     "name": "Next app / native (tools)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:17:11Z",
+     "started_at": "2026-11-18T03:17:11Z"
+    },
+    {
+     "id": 134550206928,
+     "name": "Next app / native (release)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:17:11Z",
+     "started_at": "2026-11-18T03:17:11Z"
+    },
+    {
+     "id": 134550207023,
+     "name": "Next app / native (app)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:17:11Z",
+     "started_at": "2026-11-18T03:17:11Z"
+    },
+    {
+     "id": 134550207025,
+     "name": "Next CI / next",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T03:17:11Z",
+     "started_at": "2026-11-18T03:17:29Z"
+    },
+    {
+     "id": 134550207875,
+     "name": "Next app platforms",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T03:17:11Z",
+     "started_at": "2026-11-18T03:17:11Z"
+    },
+    {
+     "id": 134550208184,
+     "name": "App CI",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T03:17:11Z",
+     "started_at": "2026-11-18T03:17:11Z"
+    },
+    {
+     "id": 134550208975,
+     "name": "Next app tools platforms",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T03:17:12Z",
+     "started_at": "2026-11-18T03:17:12Z"
+    },
+    {
+     "id": 134550208996,
+     "name": "Next app tools pack",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T03:17:12Z",
+     "started_at": "2026-11-18T03:17:12Z"
+    }
+   ]
+  },
+  "44225844116": {
+   "total_count": 27,
+   "jobs": [
+    {
+     "id": 134538688811,
+     "name": "changes",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:47:49Z",
+     "started_at": "2026-11-18T03:13:06Z"
+    },
+    {
+     "id": 134548656550,
+     "name": "Next app / checks",
+     "status": "in_progress",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:18:25Z"
+    },
+    {
+     "id": 134548656609,
+     "name": "Next app platforms / dialogs (macos-latest)",
+     "status": "queued",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548656615,
+     "name": "Next CI / next",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:15:05Z"
+    },
+    {
+     "id": 134548656688,
+     "name": "Next app / native (tools)",
+     "status": "in_progress",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:20:28Z"
+    },
+    {
+     "id": 134548656711,
+     "name": "Next app platforms / dialogs (windows-latest)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548656717,
+     "name": "Next app / native (release)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548656720,
+     "name": "Next app platforms / app (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "namespace-profile-macos-26"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:19:40Z"
+    },
+    {
+     "id": 134548656725,
+     "name": "Next app tools pack / build (windows/amd64)",
+     "status": "in_progress",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:38:23Z"
+    },
+    {
+     "id": 134548656746,
+     "name": "Next app / native (app)",
+     "status": "in_progress",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:31:38Z"
+    },
+    {
+     "id": 134548656748,
+     "name": "Next app platforms / native (windows-latest, package)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548656767,
+     "name": "Next app tools pack / build (darwin/arm64,darwin/amd64)",
+     "status": "completed",
+     "labels": [
+      "namespace-profile-macos-26"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:22:40Z"
+    },
+    {
+     "id": 134548656810,
+     "name": "Next app platforms / native (windows-latest, open)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548656812,
+     "name": "Next app tools pack / build (linux/arm64)",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04-arm"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:14:17Z"
+    },
+    {
+     "id": 134548656833,
+     "name": "Next app platforms / native (macos-latest, platform)",
+     "status": "queued",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548656835,
+     "name": "Next app tools platforms / app tools (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "namespace-profile-macos-26"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:26:40Z"
+    },
+    {
+     "id": 134548656872,
+     "name": "Next app platforms / native (windows-latest, platform)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548656895,
+     "name": "Next app platforms / app (windows-latest)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548656906,
+     "name": "Next app platforms / native (macos-latest, open)",
+     "status": "queued",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548656908,
+     "name": "Next app tools platforms / app tools (windows-latest)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548656916,
+     "name": "Next app platforms / native (macos-latest, package)",
+     "status": "queued",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548656921,
+     "name": "Next app tools pack / build (linux/amd64)",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:18:24Z"
+    },
+    {
+     "id": 134548656939,
+     "name": "Next app platforms / native (windows-latest, tools)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548656942,
+     "name": "Next app / native (usage)",
+     "status": "in_progress",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:27:22Z"
+    },
+    {
+     "id": 134548656985,
+     "name": "Next app platforms / native (macos-latest, tools)",
+     "status": "queued",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548658245,
+     "name": "App CI",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T03:13:18Z",
+     "started_at": "2026-11-18T03:13:18Z"
+    },
+    {
+     "id": 134548658987,
+     "name": "Next app tools platforms / WSL ${{ matrix.wsl }}",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T03:13:19Z",
+     "started_at": "2026-11-18T03:13:19Z"
+    }
+   ]
+  },
+  "44225715067": {
+   "total_count": 7,
+   "jobs": [
+    {
+     "id": 134538265140,
+     "name": "native-build",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:46:42Z",
+     "started_at": "2026-11-18T02:47:15Z"
+    },
+    {
+     "id": 134538265612,
+     "name": "checks",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:46:42Z",
+     "started_at": "2026-11-18T02:49:01Z"
+    },
+    {
+     "id": 134550317003,
+     "name": "native (agents)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:17:28Z",
+     "started_at": "2026-11-18T03:17:28Z"
+    },
+    {
+     "id": 134550317020,
+     "name": "native (release)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:17:28Z",
+     "started_at": "2026-11-18T03:17:28Z"
+    },
+    {
+     "id": 134550317036,
+     "name": "native (usage)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:17:28Z",
+     "started_at": "2026-11-18T03:17:28Z"
+    },
+    {
+     "id": 134550317038,
+     "name": "native (app)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:17:28Z",
+     "started_at": "2026-11-18T03:17:28Z"
+    },
+    {
+     "id": 134550317047,
+     "name": "native (tools)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T03:17:28Z",
+     "started_at": "2026-11-18T03:17:28Z"
+    }
+   ]
+  },
+  "44225630800": {
+   "total_count": 10,
+   "jobs": [
+    {
+     "id": 134537992112,
+     "name": "native (windows-latest, update)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:45:59Z",
+     "started_at": "2026-11-18T03:17:06Z"
+    },
+    {
+     "id": 134537992290,
+     "name": "native (windows-latest, update)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:45:59Z",
+     "started_at": "2026-11-18T02:45:59Z"
+    },
+    {
+     "id": 134537992295,
+     "name": "native (windows-latest, update)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:45:59Z",
+     "started_at": "2026-11-18T02:45:59Z"
+    },
+    {
+     "id": 134537992308,
+     "name": "native (windows-latest, update)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:45:59Z",
+     "started_at": "2026-11-18T02:45:59Z"
+    },
+    {
+     "id": 134537992336,
+     "name": "native (windows-latest, update)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:45:59Z",
+     "started_at": "2026-11-18T02:45:59Z"
+    },
+    {
+     "id": 134537992384,
+     "name": "native (windows-latest, update)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:45:59Z",
+     "started_at": "2026-11-18T02:45:59Z"
+    },
+    {
+     "id": 134537992399,
+     "name": "native (windows-latest, update)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:45:59Z",
+     "started_at": "2026-11-18T02:45:59Z"
+    },
+    {
+     "id": 134537992430,
+     "name": "native (windows-latest, update)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:45:59Z",
+     "started_at": "2026-11-18T02:45:59Z"
+    },
+    {
+     "id": 134537993522,
+     "name": "dialogs (${{ matrix.os }})",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:46:00Z",
+     "started_at": "2026-11-18T02:46:00Z"
+    },
+    {
+     "id": 134537993710,
+     "name": "app (${{ matrix.os }})",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:46:00Z",
+     "started_at": "2026-11-18T02:46:00Z"
+    }
+   ]
+  },
+  "44224828405": {
+   "total_count": 18,
+   "jobs": [
+    {
+     "id": 134535327786,
+     "name": "changes",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:39:11Z",
+     "started_at": "2026-11-18T02:41:10Z"
+    },
+    {
+     "id": 134536145893,
+     "name": "Next app platforms / app (windows-latest)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T02:55:51Z"
+    },
+    {
+     "id": 134536145896,
+     "name": "Next app platforms / app (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "namespace-profile-macos-26"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T02:47:40Z"
+    },
+    {
+     "id": 134536145932,
+     "name": "Next app platforms / dialogs (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T02:55:24Z"
+    },
+    {
+     "id": 134536145981,
+     "name": "Next app / checks",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T03:01:10Z"
+    },
+    {
+     "id": 134536146032,
+     "name": "Next app platforms / native (macos-latest, package)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T02:45:54Z"
+    },
+    {
+     "id": 134536146036,
+     "name": "Next app platforms / dialogs (windows-latest)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T03:01:08Z"
+    },
+    {
+     "id": 134536146043,
+     "name": "Next app platforms / native (windows-latest, package)",
+     "status": "in_progress",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T03:33:52Z"
+    },
+    {
+     "id": 134536146082,
+     "name": "Next app platforms / native (macos-latest, platform)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T03:28:27Z"
+    },
+    {
+     "id": 134536146094,
+     "name": "Next app / native (tools)",
+     "status": "in_progress",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T03:08:40Z"
+    },
+    {
+     "id": 134536146123,
+     "name": "Next app / native (app)",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T03:15:25Z"
+    },
+    {
+     "id": 134536146157,
+     "name": "Next app / native (release)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T02:41:15Z"
+    },
+    {
+     "id": 134536146204,
+     "name": "Next app / native (usage)",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T03:11:04Z"
+    },
+    {
+     "id": 134536146264,
+     "name": "Next CI / next",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T03:02:48Z"
+    },
+    {
+     "id": 134536146447,
+     "name": "Next app platforms / native (windows-latest, platform)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T02:41:15Z"
+    },
+    {
+     "id": 134536146865,
+     "name": "App CI",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T02:41:15Z"
+    },
+    {
+     "id": 134536147077,
+     "name": "Next app tools pack",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:41:15Z",
+     "started_at": "2026-11-18T02:41:15Z"
+    },
+    {
+     "id": 134536147959,
+     "name": "Next app tools platforms",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:41:16Z",
+     "started_at": "2026-11-18T02:41:16Z"
+    }
+   ]
+  },
+  "44224792681": {
+   "total_count": 20,
+   "jobs": [
+    {
+     "id": 134535205537,
+     "name": "changes",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:38:53Z",
+     "started_at": "2026-11-18T02:55:49Z"
+    },
+    {
+     "id": 134541806417,
+     "name": "Next CI / next",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T02:56:20Z"
+    },
+    {
+     "id": 134541806462,
+     "name": "Next app platforms / app (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "namespace-profile-macos-26"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T02:56:13Z"
+    },
+    {
+     "id": 134541806503,
+     "name": "Next app platforms / app (windows-latest)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T02:55:56Z"
+    },
+    {
+     "id": 134541806514,
+     "name": "Next app platforms / dialogs (windows-latest)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T02:55:56Z"
+    },
+    {
+     "id": 134541806518,
+     "name": "Next app platforms / native (macos-latest, package)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T03:08:56Z"
+    },
+    {
+     "id": 134541806526,
+     "name": "Next app platforms / native (windows-latest, package)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T03:02:49Z"
+    },
+    {
+     "id": 134541806530,
+     "name": "Next app platforms / dialogs (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T03:14:24Z"
+    },
+    {
+     "id": 134541806543,
+     "name": "Next app / native (app)",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T03:05:31Z"
+    },
+    {
+     "id": 134541806554,
+     "name": "Next app platforms / native (windows-latest, platform)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T03:15:50Z"
+    },
+    {
+     "id": 134541806572,
+     "name": "Next app / native (release)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T02:55:56Z"
+    },
+    {
+     "id": 134541806613,
+     "name": "Next app platforms / native (macos-latest, platform)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T03:20:41Z"
+    },
+    {
+     "id": 134541806664,
+     "name": "Next app / native (usage)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T02:55:56Z"
+    },
+    {
+     "id": 134541806681,
+     "name": "Next app / checks",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T02:55:56Z"
+    },
+    {
+     "id": 134541806682,
+     "name": "Next app / native (tools)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T02:55:56Z"
+    },
+    {
+     "id": 134541806685,
+     "name": "Next corpus / corpus",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T03:15:56Z"
+    },
+    {
+     "id": 134541807526,
+     "name": "Next app tools platforms",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T02:55:56Z"
+    },
+    {
+     "id": 134541807845,
+     "name": "Core CI",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T02:55:56Z"
+    },
+    {
+     "id": 134541807985,
+     "name": "App CI",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T02:55:56Z"
+    },
+    {
+     "id": 134541808431,
+     "name": "Next app tools pack",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:55:56Z",
+     "started_at": "2026-11-18T02:55:56Z"
+    }
+   ]
+  },
+  "44224093666": {
+   "total_count": 26,
+   "jobs": [
+    {
+     "id": 134532879523,
+     "name": "changes",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:33:07Z",
+     "started_at": "2026-11-18T02:41:02Z"
+    },
+    {
+     "id": 134536105052,
+     "name": "Next CI / next",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T02:46:30Z"
+    },
+    {
+     "id": 134536105064,
+     "name": "Next app / checks",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T02:45:00Z"
+    },
+    {
+     "id": 134536105104,
+     "name": "Next app platforms / app (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "namespace-profile-macos-26"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T02:50:39Z"
+    },
+    {
+     "id": 134536105154,
+     "name": "Next app platforms / app (windows-latest)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T02:42:22Z"
+    },
+    {
+     "id": 134536105166,
+     "name": "App CI / Rust",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T03:04:03Z"
+    },
+    {
+     "id": 134536105169,
+     "name": "Next app platforms / dialogs (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T02:56:05Z"
+    },
+    {
+     "id": 134536105219,
+     "name": "Next app platforms / native (windows-latest, package)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T02:41:44Z"
+    },
+    {
+     "id": 134536105224,
+     "name": "Next app platforms / native (macos-latest, package)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T03:22:34Z"
+    },
+    {
+     "id": 134536105239,
+     "name": "Next app / native (tools)",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T02:46:45Z"
+    },
+    {
+     "id": 134536105243,
+     "name": "Next app / native (usage)",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T03:17:08Z"
+    },
+    {
+     "id": 134536105257,
+     "name": "Next app / native (release)",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T03:01:13Z"
+    },
+    {
+     "id": 134536105264,
+     "name": "Next app platforms / native (windows-latest, platform)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T02:41:09Z"
+    },
+    {
+     "id": 134536105266,
+     "name": "App CI / Frontend",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T03:13:23Z"
+    },
+    {
+     "id": 134536105291,
+     "name": "Next app tools platforms / WSL 1",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T03:00:59Z"
+    },
+    {
+     "id": 134536105323,
+     "name": "Next app tools pack / build (windows/amd64)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T02:53:45Z"
+    },
+    {
+     "id": 134536105346,
+     "name": "Next app platforms / native (macos-latest, platform)",
+     "status": "queued",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T02:41:09Z"
+    },
+    {
+     "id": 134536105356,
+     "name": "Next app platforms / dialogs (windows-latest)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T02:41:09Z"
+    },
+    {
+     "id": 134536105357,
+     "name": "Next app tools platforms / app tools (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "namespace-profile-macos-26"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T02:53:38Z"
+    },
+    {
+     "id": 134536105360,
+     "name": "Next app tools platforms / app tools (windows-latest)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T03:23:46Z"
+    },
+    {
+     "id": 134536105409,
+     "name": "Next app tools platforms / WSL 2",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T03:23:49Z"
+    },
+    {
+     "id": 134536105410,
+     "name": "Next app / native (app)",
+     "status": "in_progress",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T03:17:13Z"
+    },
+    {
+     "id": 134536105437,
+     "name": "Next app tools pack / build (darwin/arm64,darwin/amd64)",
+     "status": "completed",
+     "labels": [
+      "namespace-profile-macos-26"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T03:09:57Z"
+    },
+    {
+     "id": 134536105443,
+     "name": "Next app tools pack / build (linux/amd64)",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T03:02:29Z"
+    },
+    {
+     "id": 134536105540,
+     "name": "Next app tools pack / build (linux/arm64)",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04-arm"
+     ],
+     "created_at": "2026-11-18T02:41:09Z",
+     "started_at": "2026-11-18T02:46:08Z"
+    },
+    {
+     "id": 134550998264,
+     "name": "Next app tools pack / pack",
+     "status": "queued",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T03:19:12Z",
+     "started_at": "2026-11-18T03:19:12Z"
+    }
+   ]
+  },
+  "44223391381": {
+   "total_count": 18,
+   "jobs": [
+    {
+     "id": 134532379830,
+     "name": "changes",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:31:55Z",
+     "started_at": "2026-11-18T02:35:23Z"
+    },
+    {
+     "id": 134533831816,
+     "name": "Next app platforms / app (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "namespace-profile-macos-26"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T03:04:57Z"
+    },
+    {
+     "id": 134533831846,
+     "name": "Next app platforms / app (windows-latest)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T03:05:40Z"
+    },
+    {
+     "id": 134533831861,
+     "name": "Next CI / next",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T02:44:16Z"
+    },
+    {
+     "id": 134533831899,
+     "name": "Next app platforms / native (windows-latest, platform)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T02:38:04Z"
+    },
+    {
+     "id": 134533831903,
+     "name": "Next app platforms / dialogs (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T03:07:52Z"
+    },
+    {
+     "id": 134533831945,
+     "name": "Next app platforms / dialogs (windows-latest)",
+     "status": "in_progress",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T03:35:56Z"
+    },
+    {
+     "id": 134533831955,
+     "name": "Next app / checks",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T02:57:12Z"
+    },
+    {
+     "id": 134533831958,
+     "name": "Next app platforms / native (windows-latest, package)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T02:38:21Z"
+    },
+    {
+     "id": 134533832009,
+     "name": "Next app platforms / native (macos-latest, package)",
+     "status": "in_progress",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T03:25:08Z"
+    },
+    {
+     "id": 134533832021,
+     "name": "Next app / native (tools)",
+     "status": "in_progress",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T03:08:06Z"
+    },
+    {
+     "id": 134533832047,
+     "name": "Next app platforms / native (macos-latest, platform)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T03:20:19Z"
+    },
+    {
+     "id": 134533832112,
+     "name": "Next app / native (release)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T02:35:28Z"
+    },
+    {
+     "id": 134533832123,
+     "name": "Next app / native (app)",
+     "status": "in_progress",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T03:30:42Z"
+    },
+    {
+     "id": 134533832158,
+     "name": "Next app / native (usage)",
+     "status": "in_progress",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T03:10:08Z"
+    },
+    {
+     "id": 134533832513,
+     "name": "App CI",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T02:35:28Z"
+    },
+    {
+     "id": 134533832573,
+     "name": "Next app tools pack",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T02:35:28Z"
+    },
+    {
+     "id": 134533832678,
+     "name": "Next app tools platforms",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:35:28Z",
+     "started_at": "2026-11-18T02:35:28Z"
+    }
+   ]
+  },
+  "44220019529": {
+   "total_count": 22,
+   "jobs": [
+    {
+     "id": 134519277783,
+     "name": "changes",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:00:20Z",
+     "started_at": "2026-11-18T02:25:14Z"
+    },
+    {
+     "id": 134529640463,
+     "name": "Next app / checks",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T02:30:33Z"
+    },
+    {
+     "id": 134529640545,
+     "name": "Next app platforms / app (windows-latest)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T02:31:56Z"
+    },
+    {
+     "id": 134529640549,
+     "name": "Next app / native (app)",
+     "status": "completed",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T02:32:59Z"
+    },
+    {
+     "id": 134529640551,
+     "name": "Next app / native (tools)",
+     "status": "in_progress",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T03:26:32Z"
+    },
+    {
+     "id": 134529640557,
+     "name": "Next CI / next",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T02:55:50Z"
+    },
+    {
+     "id": 134529640558,
+     "name": "Next app / native (release)",
+     "status": "in_progress",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T03:35:31Z"
+    },
+    {
+     "id": 134529640561,
+     "name": "Next app platforms / dialogs (windows-latest)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T02:58:35Z"
+    },
+    {
+     "id": 134529640571,
+     "name": "Next app platforms / dialogs (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T02:41:17Z"
+    },
+    {
+     "id": 134529640574,
+     "name": "Next app / native (usage)",
+     "status": "queued",
+     "labels": [
+      "ubuntu-24.04"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T02:25:19Z"
+    },
+    {
+     "id": 134529640634,
+     "name": "Next app platforms / app (macos-latest)",
+     "status": "completed",
+     "labels": [
+      "namespace-profile-macos-26"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T02:37:52Z"
+    },
+    {
+     "id": 134529640664,
+     "name": "Next app platforms / native (macos-latest, package)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T03:00:13Z"
+    },
+    {
+     "id": 134529640670,
+     "name": "Next app platforms / native (macos-latest, update)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T03:07:33Z"
+    },
+    {
+     "id": 134529640711,
+     "name": "Next app platforms / native (windows-latest, platform)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T02:25:19Z"
+    },
+    {
+     "id": 134529640712,
+     "name": "Next app platforms / native (windows-latest, package)",
+     "status": "queued",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T02:25:19Z"
+    },
+    {
+     "id": 134529640713,
+     "name": "Next app platforms / native (macos-latest, platform)",
+     "status": "completed",
+     "labels": [
+      "macos-latest"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T03:28:50Z"
+    },
+    {
+     "id": 134529640729,
+     "name": "Next app platforms / native (windows-latest, update)",
+     "status": "completed",
+     "labels": [
+      "windows-latest"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T03:24:04Z"
+    },
+    {
+     "id": 134529640745,
+     "name": "Next corpus / corpus",
+     "status": "completed",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T02:26:54Z"
+    },
+    {
+     "id": 134529641425,
+     "name": "Next app tools platforms",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T02:25:19Z"
+    },
+    {
+     "id": 134529641604,
+     "name": "Core CI",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:25:19Z",
+     "started_at": "2026-11-18T02:25:19Z"
+    },
+    {
+     "id": 134529642159,
+     "name": "Next app tools pack",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:25:20Z",
+     "started_at": "2026-11-18T02:25:20Z"
+    },
+    {
+     "id": 134529642187,
+     "name": "App CI",
+     "status": "completed",
+     "labels": [],
+     "created_at": "2026-11-18T02:25:20Z",
+     "started_at": "2026-11-18T02:25:20Z"
+    }
+   ]
+  }
+ },
+ "completed_run_44219176679": {
+  "total_count": 20,
+  "jobs": [
+   {
+    "id": 134516483196,
+    "name": "changes",
+    "status": "completed",
+    "labels": [
+     "ubuntu-latest"
+    ],
+    "created_at": "2026-11-18T01:53:12Z",
+    "started_at": "2026-11-18T02:07:04Z",
+    "completed_at": "2026-11-18T02:07:17Z"
+   },
+   {
+    "id": 134522181281,
+    "name": "Next app / checks",
+    "status": "completed",
+    "labels": [
+     "ubuntu-24.04"
+    ],
+    "created_at": "2026-11-18T02:07:17Z",
+    "started_at": "2026-11-18T02:41:32Z",
+    "completed_at": "2026-11-18T03:08:54Z"
+   },
+   {
+    "id": 134522181283,
+    "name": "Next CI / next",
+    "status": "completed",
+    "labels": [
+     "ubuntu-latest"
+    ],
+    "created_at": "2026-11-18T02:07:17Z",
+    "started_at": "2026-11-18T02:36:55Z",
+    "completed_at": "2026-11-18T02:46:43Z"
+   },
+   {
+    "id": 134522181300,
+    "name": "Next app / native (release)",
+    "status": "completed",
+    "labels": [
+     "ubuntu-24.04"
+    ],
+    "created_at": "2026-11-18T02:07:17Z",
+    "started_at": "2026-11-18T02:34:09Z",
+    "completed_at": "2026-11-18T03:15:54Z"
+   },
+   {
+    "id": 134522181301,
+    "name": "Next app / native (tools)",
+    "status": "completed",
+    "labels": [
+     "ubuntu-24.04"
+    ],
+    "created_at": "2026-11-18T02:07:17Z",
+    "started_at": "2026-11-18T02:25:28Z",
+    "completed_at": "2026-11-18T03:01:11Z"
+   },
+   {
+    "id": 134522181304,
+    "name": "Next app platforms / native (windows-latest, platform)",
+    "status": "completed",
+    "labels": [
+     "windows-latest"
+    ],
+    "created_at": "2026-11-18T02:07:17Z",
+    "started_at": "2026-11-18T02:22:08Z",
+    "completed_at": "2026-11-18T02:27:43Z"
+   },
+   {
+    "id": 134522181336,
+    "name": "Next app platforms / dialogs (windows-latest)",
+    "status": "completed",
+    "labels": [
+     "windows-latest"
+    ],
+    "created_at": "2026-11-18T02:07:17Z",
+    "started_at": "2026-11-18T02:17:36Z",
+    "completed_at": "2026-11-18T02:25:13Z"
+   },
+   {
+    "id": 134522181339,
+    "name": "Next app platforms / dialogs (macos-latest)",
+    "status": "completed",
+    "labels": [
+     "macos-latest"
+    ],
+    "created_at": "2026-11-18T02:07:17Z",
+    "started_at": "2026-11-18T02:09:27Z",
+    "completed_at": "2026-11-18T02:16:11Z"
+   },
+   {
+    "id": 134522181343,
+    "name": "Next app / native (app)",
+    "status": "completed",
+    "labels": [
+     "ubuntu-24.04"
+    ],
+    "created_at": "2026-11-18T02:07:17Z",
+    "started_at": "2026-11-18T02:40:55Z",
+    "completed_at": "2026-11-18T02:58:28Z"
+   },
+   {
+    "id": 134522181354,
+    "name": "Next app / native (usage)",
+    "status": "completed",
+    "labels": [
+     "ubuntu-24.04"
+    ],
+    "created_at": "2026-11-18T02:07:17Z",
+    "started_at": "2026-11-18T02:19:06Z",
+    "completed_at": "2026-11-18T02:42:44Z"
+   },
+   {
+    "id": 134522181365,
+    "name": "Next app platforms / native (macos-latest, package)",
+    "status": "completed",
+    "labels": [
+     "macos-latest"
+    ],
+    "created_at": "2026-11-18T02:07:17Z",
+    "started_at": "2026-11-18T02:11:08Z",
+    "completed_at": "2026-11-18T02:30:25Z"
+   },
+   {
+    "id": 134522181368,
+    "name": "Next app platforms / app (windows-latest)",
+    "status": "completed",
+    "labels": [
+     "windows-latest"
+    ],
+    "created_at": "2026-11-18T02:07:17Z",
+    "started_at": "2026-11-18T02:09:06Z",
+    "completed_at": "2026-11-18T02:18:11Z"
+   },
+   {
+    "id": 134522181413,
+    "name": "Next app platforms / app (macos-latest)",
+    "status": "completed",
+    "labels": [
+     "namespace-profile-macos-26"
+    ],
+    "created_at": "2026-11-18T02:07:18Z",
+    "started_at": "2026-11-18T02:14:43Z",
+    "completed_at": "2026-11-18T02:24:17Z"
+   },
+   {
+    "id": 134522181581,
+    "name": "Next app platforms / native (windows-latest, package)",
+    "status": "completed",
+    "labels": [
+     "windows-latest"
+    ],
+    "created_at": "2026-11-18T02:07:18Z",
+    "started_at": "2026-11-18T02:27:51Z",
+    "completed_at": "2026-11-18T02:53:43Z"
+   },
+   {
+    "id": 134522181716,
+    "name": "Next app platforms / native (macos-latest, platform)",
+    "status": "completed",
+    "labels": [
+     "macos-latest"
+    ],
+    "created_at": "2026-11-18T02:07:18Z",
+    "started_at": "2026-11-18T02:31:14Z",
+    "completed_at": "2026-11-18T02:35:22Z"
+   },
+   {
+    "id": 134522182359,
+    "name": "Next app tools platforms",
+    "status": "completed",
+    "labels": [],
+    "created_at": "2026-11-18T02:07:18Z",
+    "started_at": "2026-11-18T02:07:18Z",
+    "completed_at": "2026-11-18T02:07:17Z"
+   },
+   {
+    "id": 134522182501,
+    "name": "App CI",
+    "status": "completed",
+    "labels": [],
+    "created_at": "2026-11-18T02:07:18Z",
+    "started_at": "2026-11-18T02:07:18Z",
+    "completed_at": "2026-11-18T02:07:17Z"
+   },
+   {
+    "id": 134522182668,
+    "name": "Next app tools pack",
+    "status": "completed",
+    "labels": [],
+    "created_at": "2026-11-18T02:07:18Z",
+    "started_at": "2026-11-18T02:07:18Z",
+    "completed_at": "2026-11-18T02:07:17Z"
+   },
+   {
+    "id": 134549702410,
+    "name": "Next app / app",
+    "status": "completed",
+    "labels": [
+     "ubuntu-24.04"
+    ],
+    "created_at": "2026-11-18T03:15:54Z",
+    "started_at": "2026-11-18T03:17:01Z",
+    "completed_at": "2026-11-18T03:17:06Z"
+   },
+   {
+    "id": 134550171372,
+    "name": "gate",
+    "status": "completed",
+    "labels": [
+     "ubuntu-latest"
+    ],
+    "created_at": "2026-11-18T03:17:06Z",
+    "started_at": "2026-11-18T03:18:20Z",
+    "completed_at": "2026-11-18T03:18:23Z"
+   }
+  ]
+ }
+}

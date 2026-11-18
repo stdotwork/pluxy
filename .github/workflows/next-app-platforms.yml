@@ -16,6 +16,10 @@ on:
       skip-native:
         type: boolean
         default: false
+      runners:
+        description: The runner ci.yml's plan job picked for each job, as JSON (AGENTS.md, "Where jobs run").
+        type: string
+        default: ''
   workflow_dispatch:
   # Not on every push to main: the merge queue already ran this for the last change it merges that
   # touched what this builds, and the hosted macOS pool is short enough that re-runs on main starved
@@ -44,7 +48,7 @@ jobs:
     # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
     # to use instead of GitHub's (AGENTS.md, "Where jobs run"). Windows stays on GitHub's runner:
     # the registry tests run only on a runner that reports itself GitHub-hosted.
-    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    runs-on: ${{ fromJSON(inputs.runners || '{}')[format('next-app-platforms.yml/app/{0}', matrix.os)] || matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -267,9 +271,12 @@ jobs:
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
     if: inputs.skip-native != true
-    # Always GitHub's runners: the test runs only on a runner that reports itself GitHub-hosted
-    # (RUNNER_ENVIRONMENT=github-hosted), since it writes the account's own folders and settings.
-    runs-on: ${{ matrix.os }}
+    # It writes the account's own folders and settings, so it runs only on a disposable runner
+    # (next/app/native/runner.ts): GitHub's, or on macOS the Namespace runner ci.yml's plan picks,
+    # which the job names to the test in PLUXY_EPHEMERAL_CI_RUNNER (empty on any other runner).
+    runs-on: ${{ fromJSON(inputs.runners || '{}')[format('next-app-platforms.yml/native/{0}/{1}', matrix.os, matrix.shard)] || matrix.os }}
+    env:
+      PLUXY_EPHEMERAL_CI_RUNNER: ${{ startsWith(fromJSON(inputs.runners || '{}')[format('next-app-platforms.yml/native/{0}/{1}', matrix.os, matrix.shard)] || matrix.os, 'namespace-profile-') && (fromJSON(inputs.runners || '{}')[format('next-app-platforms.yml/native/{0}/{1}', matrix.os, matrix.shard)] || matrix.os) || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -320,9 +327,12 @@ jobs:
   # the account's own.
   dialogs:
     name: dialogs (${{ matrix.os }})
-    # Always GitHub's runners: the test runs only on a runner that reports itself GitHub-hosted
-    # (RUNNER_ENVIRONMENT=github-hosted), since it writes the account's own folders and settings.
-    runs-on: ${{ matrix.os }}
+    # It writes the account's own folders and settings, so it runs only on a disposable runner
+    # (next/app/native/runner.ts): GitHub's, or on macOS the Namespace runner ci.yml's plan picks,
+    # which the job names to the test in PLUXY_EPHEMERAL_CI_RUNNER (empty on any other runner).
+    runs-on: ${{ fromJSON(inputs.runners || '{}')[format('next-app-platforms.yml/dialogs/{0}', matrix.os)] || matrix.os }}
+    env:
+      PLUXY_EPHEMERAL_CI_RUNNER: ${{ startsWith(fromJSON(inputs.runners || '{}')[format('next-app-platforms.yml/dialogs/{0}', matrix.os)] || matrix.os, 'namespace-profile-') && (fromJSON(inputs.runners || '{}')[format('next-app-platforms.yml/dialogs/{0}', matrix.os)] || matrix.os) || '' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false

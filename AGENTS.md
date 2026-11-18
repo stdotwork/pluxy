@@ -151,7 +151,7 @@ the maintainers' own machines instead:
 - `PLUXY_LINUX_RUNNER` takes the Linux jobs of `app-ci.yml` and `next-app.yml`, except
   `next-app.yml`'s native test shards: the
   document portal they start needs `/dev/fuse`, which the runner containers don't get.
-  `next-ci.yml` stays on GitHub's runners.
+  `next-ci.yml` stays on GitHub's runners unless the plan job (below) picks another.
 - `PLUXY_WINDOWS_RUNNER` takes the Windows leg of the `tools` job in
   `next-app-tools-platforms.yml`. The `app` job in `next-app-platforms.yml` (its registry tests
   only run on GitHub's runners), macOS jobs, the `native` job in `next-app-platforms.yml` and the
@@ -184,6 +184,28 @@ Some macOS jobs and every Windows job stay on GitHub's runners:
 - The Windows app-tool tests fail on Blacksmith's Windows runner.
 - The WSL jobs need GitHub's Windows runners.
 - The workflows a tag starts always use GitHub's runners.
+
+In pull requests and merge-queue groups, the `plan` job in `ci.yml` picks the runner of each heavy
+job: the pool that would finish it first. It adds the job's median run time on each pool
+(`.github/ci-pools.json`) to that pool's wait, worked out from the queued and running jobs it reads
+through the Actions API (`.github/scripts/plan.py`; its job summary shows each pick and the times
+behind it). If it fails or times out it picks nothing, and each job runs where the variables above
+send it. The pools, and how to turn each off:
+
+- Namespace's Linux runners: `PLUXY_LINUX_CLOUD_RUNNER`, a runner label as JSON, for example
+  `"nscloud-ubuntu-24.04-amd64-4x8"`. The plan may send `next-app.yml`'s checks and native shards
+  and `next-ci.yml` there. Off: `gh variable delete PLUXY_LINUX_CLOUD_RUNNER`.
+- Namespace's macOS runner: `PLUXY_MACOS_CLOUD_RUNNER`. Off: `gh variable delete
+  PLUXY_MACOS_CLOUD_RUNNER`.
+- The maintainers' runners: the idle runners in `PLUXY_POOL_STATUS`, which their supervisor writes;
+  a status older than 3 minutes counts as none. The plan sends them the jobs `PLUXY_LINUX_RUNNER`
+  and `PLUXY_WINDOWS_RUNNER` take, or, when the status lists jobs, only those, and only for the
+  events above. Off: stop the supervisor, then `gh variable delete PLUXY_POOL_STATUS`.
+- GitHub's runners are always on.
+
+To refresh `.github/ci-pools.json`, measure each job's run time (`completed_at` less `started_at`
+in `gh api repos/{owner}/{repo}/actions/runs/<run id>/jobs`) over recent successful runs on each
+pool, and put the medians in the file.
 
 ## How changes flow
 

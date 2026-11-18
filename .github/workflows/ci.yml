@@ -6,6 +6,13 @@ name: CI
 # always runs: it works out which folders the change touches, runs those folders' workflows as
 # reusable workflows, and `gate` passes only when every one it ran passed. Each of those
 # workflows also runs by itself on pushes to `main` and by hand.
+#
+# The `plan` job picks the runner of each heavy job those workflows run: the pool that would finish
+# it first, from its median run times there (.github/ci-pools.json) and the queued and running jobs
+# it reads through the Actions API (.github/scripts/plan.py; AGENTS.md, "Where jobs run"). The
+# workflows get the picks as the input `runners`, and a job the picks leave out uses its
+# workflow's own runner. A plan that fails or times out picks nothing: the workflows wait for it
+# but run whatever its result, and `gate` does not read it.
 
 on:
   pull_request:
@@ -43,6 +50,8 @@ jobs:
   # skips them (next-app-platforms-native).
   # next-app-tools-wsl is not a workflow: it says whether next-app-tools-platforms.yml runs its WSL
   # jobs.
+  # The plan job's tests run here, so that a failing test fails the gate; they run for a change to
+  # the script, its table or a workflow it routes.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -94,9 +103,16 @@ jobs:
           declare -A run=()
           for w in app next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-wsl next-app-tools-pack; do run[$w]=false; done
           native=false
+          plan_tests=false
           while IFS= read -r -d '' path; do
             case $path in
               .github/workflows/ci.yml) for w in "${!run[@]}"; do run[$w]=true; done ;;
+            esac
+            case $path in
+              .github/scripts/* | .github/ci-pools.json | .github/workflows/ci.yml | .github/workflows/next-app.yml | \
+                .github/workflows/next-ci.yml | .github/workflows/next-app-platforms.yml | \
+                .github/workflows/next-app-tools-platforms.yml | .github/workflows/next-app-tools-pack.yml)
+                plan_tests=true ;;
             esac
             case $path in
               next/app/* | next/ui/* | next/go.mod | next/go.sum | .github/workflows/next-app-platforms.yml | \
@@ -146,6 +162,7 @@ jobs:
             echo "$w=${run[$w]}" | tee -a "$GITHUB_OUTPUT"
           done
           echo "next-app-platforms-native=$native" | tee -a "$GITHUB_OUTPUT"
+          echo "plan-tests=$plan_tests" | tee -a "$GITHUB_OUTPUT"
       # The checkout above has only .github; go list needs next/ as tested.
       - name: Check out next/
         if: steps.paths.outputs.next-app-platforms == ''
@@ -191,6 +208,42 @@ jobs:
             done < "$RUNNER_TEMP/prefixes"
           done < "$RUNNER_TEMP/next-other"
           echo "next-app-platforms=$hit" | tee -a "$GITHUB_OUTPUT"
+      - name: Test the runner plan
+        if: steps.paths.outputs.plan-tests == 'true'
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+
+  # Picks the runners (see the top of this file). Never blocks the run: continue-on-error, a short
+  # timeout, and plan.py writes `runners={}` on any error it cannot work around.
+  plan:
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      runners: ${{ steps.plan.outputs.runners }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+          persist-credentials: false
+      - name: Pick the runners
+        id: plan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CHANGES: ${{ toJSON(needs.changes.outputs) }}
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          ACTOR: ${{ github.actor }}
+          PLUXY_LINUX_CLOUD_RUNNER: ${{ vars.PLUXY_LINUX_CLOUD_RUNNER }}
+          PLUXY_MACOS_CLOUD_RUNNER: ${{ vars.PLUXY_MACOS_CLOUD_RUNNER }}
+          PLUXY_POOL_STATUS: ${{ vars.PLUXY_POOL_STATUS }}
+          PLUXY_LINUX_RUNNER: ${{ vars.PLUXY_LINUX_RUNNER }}
+          PLUXY_WINDOWS_RUNNER: ${{ vars.PLUXY_WINDOWS_RUNNER }}
+        run: python3 .github/scripts/plan.py
 
   app:
     name: App CI
@@ -200,46 +253,54 @@ jobs:
 
   next-ci:
     name: Next CI
-    needs: changes
-    if: needs.changes.outputs.next-ci == 'true'
+    needs: [changes, plan]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.next-ci == 'true' }}
     uses: ./.github/workflows/next-ci.yml
+    with:
+      runners: ${{ needs.plan.outputs.runners }}
 
   next-app:
     name: Next app
-    needs: changes
-    if: needs.changes.outputs.next-app == 'true'
+    needs: [changes, plan]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.next-app == 'true' }}
     uses: ./.github/workflows/next-app.yml
     with:
       skip-native: ${{ needs.changes.outputs.next-app-native != 'true' }}
+      runners: ${{ needs.plan.outputs.runners }}
 
   next-app-platforms:
     name: Next app platforms
-    needs: changes
-    if: needs.changes.outputs.next-app-platforms == 'true'
+    needs: [changes, plan]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.next-app-platforms == 'true' }}
     uses: ./.github/workflows/next-app-platforms.yml
     with:
       skip-native: ${{ needs.changes.outputs.next-app-platforms-native != 'true' }}
+      runners: ${{ needs.plan.outputs.runners }}
 
   next-app-tools-platforms:
     name: Next app tools platforms
-    needs: changes
-    if: needs.changes.outputs.next-app-tools-platforms == 'true'
+    needs: [changes, plan]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.next-app-tools-platforms == 'true' }}
     uses: ./.github/workflows/next-app-tools-platforms.yml
     with:
       wsl: ${{ needs.changes.outputs.next-app-tools-wsl == 'true' }}
+      runners: ${{ needs.plan.outputs.runners }}
 
   next-app-tools-pack:
     name: Next app tools pack
-    needs: changes
-    if: needs.changes.outputs.next-app-tools-pack == 'true'
+    needs: [changes, plan]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.next-app-tools-pack == 'true' }}
     uses: ./.github/workflows/next-app-tools-pack.yml
+    with:
+      runners: ${{ needs.plan.outputs.runners }}
 
   # The required check. It runs even when the run is cancelled (always()), so a cancelled run
   # fails it instead of leaving it skipped, which would count as passing. It passes only when
   # the changes job passed and every workflow it chose passed; a workflow it did not choose
   # must have been skipped. A job a chosen workflow skips itself (next-app-tools-platforms' WSL
   # jobs when next-app-tools-wsl is false) is not one of these: the workflow's result is still
-  # its own, and only success passes.
+  # its own, and only success passes. plan is not among its needs: its result must not decide the
+  # gate, and the jq below would take it for a workflow.
   gate:
     if: always()
     needs:

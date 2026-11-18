@@ -1,0 +1,36 @@
+{
+  "_about": [
+    "Read by .github/scripts/plan.py, ci.yml's plan job. Times are in minutes.",
+    "medians: each job's median run time per pool (github, namespace, self-hosted), measured",
+    "from completed jobs (completed_at - started_at). A key is a job key or a family: a prefix of",
+    "job keys that ends before a '/'. A pool a key leaves out uses github's time; a job with no",
+    "entry uses default. Namespace's next-app.yml/checks and next-ci.yml/next were measured at",
+    "8 vCPU, the native shards at 4.",
+    "pools: github has slots jobs at once, macos_slots of them macOS; namespace-linux runs",
+    "vcpu / vcpu_per_job jobs at once; namespace-macos has slots. startup is the gap between a",
+    "job being picked up and its first step; busy is how long a job already queued on the pool is",
+    "assumed to take (one already running: busy less the time it has run, at least 1), by",
+    "operating system where it is an object: about the mean of the medians for that pool."
+  ],
+  "default": 10,
+  "medians": {
+    "next-app.yml/checks": { "github": 8.1, "namespace": 5.6 },
+    "next-ci.yml/next": { "github": 11.1, "namespace": 6.8 },
+    "next-app.yml/native/usage": { "github": 17.0, "namespace": 12.1 },
+    "next-app.yml/native/release": { "github": 18.1, "namespace": 13.8 },
+    "next-app.yml/native/tools": { "github": 24.6, "namespace": 23.1 },
+    "next-app.yml/native/app": { "github": 17.5, "namespace": 18.0 },
+    "next-app-platforms.yml/app/macos-latest": { "github": 4.6, "namespace": 2.4 },
+    "next-app-platforms.yml/native/macos-latest/platform": { "github": 1.9, "namespace": 1.1 },
+    "next-app-platforms.yml/native/macos-latest/package": { "github": 18.7, "namespace": 7.0 },
+    "next-app-platforms.yml/dialogs/macos-latest": { "github": 2.9, "namespace": 2.0 },
+    "next-app-tools-platforms.yml/tools/macos-latest": { "github": 1.6, "namespace": 0.6 },
+    "next-app-tools-pack.yml/build/darwin/arm64,darwin/amd64": { "github": 2.6, "namespace": 0.8 }
+  },
+  "pools": {
+    "github": { "slots": 20, "macos_slots": 5, "startup": 0, "busy": { "linux": 16, "macos": 5, "windows": 10 } },
+    "namespace-linux": { "vcpu": 32, "vcpu_per_job": 4, "startup": 0.3, "busy": 13 },
+    "namespace-macos": { "slots": 1, "startup": 1.5, "busy": 2.3 },
+    "self-hosted": { "startup": 0, "busy": { "linux": 16, "windows": 10 } }
+  }
+}
