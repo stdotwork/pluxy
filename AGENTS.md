@@ -164,8 +164,8 @@ runner host cancels any run from a fork that asks for its runners. Before approv
 check whether it changes `.github/workflows/`.
 
 A third variable, `PLUXY_MACOS_CLOUD_RUNNER`, sends some macOS jobs to another provider's
-runners, Namespace's. It holds a plain runner label, for example
-`namespace-profile-macos-26`. When it is not set, those jobs run on `macos-latest`.
+runners, Namespace's. It holds a bare runner profile label, for example
+`namespace-profile-macos-26` (no `;key=value` settings: the runner check refuses them). When it is not set, those jobs run on `macos-latest`.
 
 It applies to these jobs:
 - the `app` job in `next-app-platforms.yml`;
@@ -182,7 +182,7 @@ Some macOS jobs and every Windows job stay on GitHub's runners:
   Another provider's runner reports itself self-hosted.
 - The Windows `native` and `dialogs` jobs need a signed-in desktop session, which Blacksmith's
   Windows runner lacked (it runs in the services session, where the app's window never shows), and
-  the runner check accepts no cloud runner for Windows yet.
+  the workflow names no cloud runner for Windows: Namespace's trial plan has none.
 - The Windows app-tool tests fail on Blacksmith's Windows runner.
 - The WSL jobs need GitHub's Windows runners.
 - The workflows a tag starts always use GitHub's runners.

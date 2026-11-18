@@ -41,7 +41,7 @@ test("a self-hosted runner without the workflow's opt-in is refused", () => {
   expect(onDisposableRunner({ ...cloud, PLUXY_EPHEMERAL_CI_RUNNER: "" })).toBe(false);
 });
 
-test("a maintainer's runner is refused even with the opt-in set", () => {
+test("a maintainer's runner with its own name or without Namespace's variable is refused", () => {
   // Its own name and no Namespace variable.
   const own = { ...cloud, RUNNER_NAME: "pluxy-runner-1", NAMESPACE_GITHUB_RUNTIME: undefined };
   expect(onDisposableRunner(own)).toBe(false);

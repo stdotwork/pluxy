@@ -272,7 +272,8 @@ jobs:
     # (next/app/native/runner.ts): GitHub's, or on macOS the one PLUXY_MACOS_CLOUD_RUNNER names when
     # set (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
     # it to the test in PLUXY_EPHEMERAL_CI_RUNNER, which is empty on every other runner. Windows
-    # stays on GitHub's: the check accepts no cloud runner for Windows yet.
+    # stays on GitHub's: this names no cloud runner there (Namespace's trial plan has no Windows),
+    # and the tests need a signed-in desktop.
     runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     env:
       PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
@@ -330,7 +331,8 @@ jobs:
     # (next/app/native/runner.ts): GitHub's, or on macOS the one PLUXY_MACOS_CLOUD_RUNNER names when
     # set (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
     # it to the test in PLUXY_EPHEMERAL_CI_RUNNER, which is empty on every other runner. Windows
-    # stays on GitHub's: the check accepts no cloud runner for Windows yet.
+    # stays on GitHub's: this names no cloud runner there (Namespace's trial plan has no Windows),
+    # and the tests need a signed-in desktop.
     runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     env:
       PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
