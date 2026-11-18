@@ -612,9 +612,13 @@ The account's secrets for this rule are the credential's `api_key`, `access_toke
 `refresh_token`, the value of each header named like a secret, the proxy's user name and
 password, and in `settings` every string below a key named like a secret and the user name,
 password and secret query values of every URL; a secret made of parts counts by its parts, and
-one other than the credential's under 8 bytes adds nothing. The rule also replaces a word of the
-error that shares 4 characters with one of them, so core never applies it to a reply that
-succeeded. In Go, `protocol.AccountSecrets(account)` returns the secrets and
+one other than the credential's under 8 bytes adds nothing. A secret's public vendor prefix,
+such as `sk-`, `sk-proj-`, `sk-ant-api03-`, `sk-kimi-` or `xai-`, gives no piece: a piece counts
+only when it holds a byte after the prefix. The prefix is groups of lowercase letters and digits,
+each ending in `-` or `_`, the first starting with a letter, at most 16 bytes, and it counts only
+when 16 bytes or more of the secret follow it, so a short secret keeps every piece. The rule
+still replaces any other word of the error that shares 4 characters with a secret, so core never
+applies it to a reply that succeeded. In Go, `protocol.AccountSecrets(account)` returns the secrets and
 `protocol.RemovePieces(s, secrets...)` applies the rule; `sdk.UpstreamText` applies it with the
 other cleaning an extension's error text needs.
 

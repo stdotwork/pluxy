@@ -168,13 +168,18 @@ var escapedRun = regexp.MustCompile(`(?:[A-Za-z0-9_\-.+/=~]|\\u[0-9A-Fa-f]{4}|\\
 // characters is replaced. An upstream that refuses a credential often echoes a piece of it, such
 // as its first 24 characters and "...", which a NewRedactor's whole forms and parts miss.
 //
+// A secret's public prefix (publicKeyPrefix), such as "sk-proj-", gives no piece of its own: a
+// piece counts only when it holds at least one byte after the prefix, so words such as "project"
+// stay.
+//
 // Text with words in it, such as a model's reply, would lose every word that shares minPiece
 // characters with a secret, so this is for error text: core applies it to an upstream's error
 // with the account's secrets (AccountSecrets).
 func RemovePieces(s string, secrets ...string) string {
 	pieces := map[string]bool{}
 	for _, secret := range secrets {
-		for i := 0; i+minPiece <= len(secret); i++ {
+		// A piece starting at i holds a byte after the prefix when i+minPiece > prefix.
+		for i := max(0, publicKeyPrefix(secret)-minPiece+1); i+minPiece <= len(secret); i++ {
 			pieces[secret[i:i+minPiece]] = true
 		}
 	}
@@ -189,6 +194,46 @@ func RemovePieces(s string, secrets ...string) string {
 		}
 		return false
 	})
+}
+
+// maxKeyPrefix is the longest public prefix publicKeyPrefix takes off a secret, and the shortest
+// rest of the secret it leaves.
+const maxKeyPrefix = 16
+
+// publicKeyPrefix returns the length of the public vendor prefix secret starts with, such as
+// "sk-", "sk-proj-", "sk-svcacct-", "sk-ant-api03-", "sk-kimi-" or "xai-": groups of lowercase
+// letters and digits, each ending in "-" or "_", the first starting with a letter, at most
+// maxKeyPrefix bytes in all (the longest run of whole groups that fits). It is 0 when the
+// secret has no such prefix, or when less than maxKeyPrefix bytes follow it: a short secret
+// keeps every piece.
+func publicKeyPrefix(secret string) int {
+	if secret == "" || secret[0] < 'a' || secret[0] > 'z' {
+		return 0
+	}
+	n := 0
+	for i := 0; i < len(secret) && i < maxKeyPrefix; i++ {
+		c := secret[i]
+		switch {
+		case c == '-' || c == '_':
+			if i == n { // an empty group
+				return checkRest(secret, n)
+			}
+			n = i + 1
+		case c >= 'a' && c <= 'z' || c >= '0' && c <= '9':
+		default:
+			return checkRest(secret, n)
+		}
+	}
+	return checkRest(secret, n)
+}
+
+// checkRest returns n, a prefix length of secret, when at least maxKeyPrefix bytes follow it,
+// and 0 otherwise.
+func checkRest(secret string, n int) int {
+	if len(secret)-n < maxKeyPrefix {
+		return 0
+	}
+	return n
 }
 
 // ReplaceRuns returns s with every run of token characters and escapes for which match reports

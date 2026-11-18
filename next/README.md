@@ -1255,7 +1255,9 @@ whole (under 1 MiB, and not broken off), and cleaned. The cleaned text is one li
 1000 characters with an ellipsis. Replaced by `[redacted]` are: every run of token characters
 (letters, digits and `_-.+/=~`) holding 4 or more consecutive characters of one of the account's
 secrets: its session token after the public `devin-session-token$` prefix, the values of its
-secret headers, its proxy's user name and password and the secrets in its settings; `Bearer` and
+secret headers, its proxy's user name and password and the secrets in its settings (4
+characters all within a secret's public vendor prefix, such as `sk-proj-`, do not count; see
+[Account checks](#account-checks)); `Bearer` and
 `Basic` values; the values of fields named like `access_token`, `token` or `api_key`; and any
 other run of 24 or more token characters. A run is also read with its escapes decoded (JSON's
 `\/` and `\uXXXX`, `%XX`), so a piece written with escapes between its characters is replaced
@@ -1524,8 +1526,11 @@ secrets: an upstream that refuses a key often echoes its start (`invalid x-api-k
 sk-ant-api03-AbCdEf...`), which whole-secret redaction misses. The secrets are the credential's
 key and tokens, secret header values, the proxy's user name and password and the secrets in the
 settings, by their parts (the extension protocol's [Accounts](protocol/README.md#accounts)
-says which). The rule also takes a word of the error that shares 4 characters with a secret,
-such as `token` for a header `Bearer gw-token-…`; a reply that succeeded is never changed by it.
+says which). A key's public vendor prefix (`sk-proj-`, `sk-kimi-`, `xai-` and the like) gives
+no piece, so `project` or `kimi` stays in an error for such a key; a secret of under 16 bytes
+after its prefix keeps every piece. Any other word of the error that shares 4 characters with a
+secret goes too, such as `token` for a header `Bearer gw-token-12345`; a reply that succeeded is
+never changed by the rule.
 Each
 extension checks with its upstream's model list, and only accounts with an API key:
 

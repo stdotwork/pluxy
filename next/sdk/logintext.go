@@ -48,7 +48,8 @@ const MaxUpstreamText = 1000
 // of 24 or more token characters are replaced. That misses a shorter piece of a token anywhere
 // else, so a caller passes the secrets it knows, AccountSecrets of the call's account and any it
 // holds itself: first, every run of token characters that holds 4 or more consecutive characters
-// of one is replaced. A run is read with its escapes decoded too (JSON's \/, \\ and \uXXXX and
+// of one, not all of them in its public vendor prefix such as "sk-proj-" (protocol.RemovePieces),
+// is replaced. A run is read with its escapes decoded too (JSON's \/, \\ and \uXXXX and
 // percent-encoding's %XX, nested up to 8 times), so a piece written with escapes between its
 // characters is replaced, and so is a run whose decoded text holds 24 or more token characters
 // in a row.
