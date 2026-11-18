@@ -2806,17 +2806,10 @@ mod tests {
             crate::managed::random_key()
         ));
         fs::create_dir_all(&dir).unwrap();
-        // A program the store reads: on Unix, executable.
-        let write = |path: &Path, bytes: &[u8]| {
-            fs::write(path, bytes).unwrap();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-            }
-        };
+        // Programs the store reads on every system (on Windows a PE file): the real core, and
+        // the same with a byte added after it (a program runs with data after its image).
         let program = dir.join(cores::PROGRAM);
-        write(&program, b"the bundled core");
+        fs::copy(crate::managed::real_core(), &program).unwrap();
         let (sha256, size) = Store::inspect(&program).unwrap();
         let bundled = Bundled {
             manifest: Manifest {
@@ -2847,8 +2840,18 @@ mod tests {
             "{e}"
         );
         // Another program beside the app: adopted as before.
-        let other = dir.join("other");
-        write(&other, b"the bundled corf");
+        let other = dir.join("other").join(cores::PROGRAM);
+        fs::create_dir_all(other.parent().unwrap()).unwrap();
+        fs::copy(&program, &other).unwrap();
+        {
+            use std::io::Write;
+            fs::OpenOptions::new()
+                .append(true)
+                .open(&other)
+                .unwrap()
+                .write_all(b"\0")
+                .unwrap();
+        }
         c.refuse_bundled(&other).unwrap();
         // The person named the program: adopted, even when it is the bundled core's.
         c.settings.core_path = Some(program.display().to_string());
