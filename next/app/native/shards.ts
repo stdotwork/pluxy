@@ -5,8 +5,9 @@
 // run.ts refuses to start when the matrix it was given differs. A new session gets a name here, in
 // the shard it fits best, and run.ts asks want(name) before it runs it. The times are each
 // session's on GitHub's Ubuntu runners (the median of four runs on main and in the merge queue on
-// 2026-11-17, from each session's last line to the next's), so that each shard's sessions take
-// about as long as the release gate's, which is one session and cannot be split.
+// 2026-11-17, from each session's last line to the next's). The grouping made each shard about as
+// long as the release gate was then, when each of its calls rebuilt the release app; the gate is
+// one session and cannot be split.
 export const SHARDS: Record<string, readonly string[]> = {
   // About 7.7 minutes: usage 4.4, program 2.3, core steps 0.5, transactions 0.5.
   usage: ["usage", "program", "transactions", "core steps"],
