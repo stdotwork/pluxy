@@ -133,8 +133,8 @@ jobs:
   # keeps the programs executable, which upload-artifact does not.
   native-build:
     if: inputs.skip-native != true
-    # The same runner as the shards, which run what it builds. Pinned: the package names below are
-    # Ubuntu 24.04's.
+    # The same runner as the shards, which run what it builds, so never PLUXY_LINUX_RUNNER either.
+    # Pinned: the package names below are Ubuntu 24.04's.
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -171,9 +171,10 @@ jobs:
           workspaces: |
             next/app/src-tauri -> target
             next/app-tools -> target
-          # The key the single job before the split used, which the checks job reads.
+          # The key the single job before the split used, which the checks job reads. Saved from
+          # main only: a cache saved on another ref serves only that ref and evicts main's.
           shared-key: app
-          save-if: ${{ runner.environment == 'github-hosted' }}
+          save-if: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' }}
       # The app builds the UI kit from next/ui, with its copy of preact.
       - name: UI kit install
         working-directory: next/ui
@@ -204,6 +205,7 @@ jobs:
           path: ${{ runner.temp }}/native-build.tar.zst
           # Already compressed.
           compression-level: 0
+          # One day: re-running only a failed shard needs it, so after a day re-run all jobs.
           retention-days: 1
           if-no-files-found: error
 
@@ -272,9 +274,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: next/app/src-tauri -> target
-          # A cache of its own: native-build saves the debug builds' under app.
+          # A cache of its own: native-build saves the debug builds' under app. Saved from main
+          # only, like that one.
           shared-key: app-release
-          save-if: ${{ runner.environment == 'github-hosted' }}
+          save-if: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' }}
       # The app builds the UI kit from next/ui, with its copy of preact.
       - name: UI kit install
         working-directory: next/ui
