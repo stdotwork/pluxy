@@ -1430,7 +1430,9 @@ function shortcuts(): { user: string[]; machine: string[]; expected: string[] } 
 }
 
 /** What Windows will rename or delete at the next restart under folder (NSIS's /REBOOTOK
- * fallback, MoveFileEx with MOVEFILE_DELAY_UNTIL_REBOOT, writes these machine-wide), or "". */
+ * fallback, MoveFileEx with MOVEFILE_DELAY_UNTIL_REBOOT, writes these machine-wide), or "".
+ * Throws when the value cannot be read for any reason other than its absence: the session cannot
+ * tell then. */
 function restartDeletes(folder: string): string {
   const q = run("reg", [
     "query",
@@ -1438,7 +1440,10 @@ function restartDeletes(folder: string): string {
     "/v",
     "PendingFileRenameOperations",
   ]);
-  if (q.status !== 0) return "";
+  if (q.status !== 0) {
+    if (/unable to find the specified registry key or value/i.test(q.out)) return "";
+    throw new Error(`could not read PendingFileRenameOperations (reg exit ${q.status}): ${q.out}`);
+  }
   return q.out
     .split(/\\0|\r?\n/)
     .filter((l) => l.toLowerCase().includes(folder.toLowerCase()))
@@ -1794,7 +1799,8 @@ async function install() {
     check(!regKeyExists(UNINSTALL_KEY), "the uninstaller left the uninstall entry");
     // The hook emptied bundled\ (with its later file) before Tauri's RMDir /REBOOTOK of it, so
     // nothing was left for Windows to delete at the next restart.
-    check(!restartDeletes(folder), `the uninstall queued a delete at restart: ${restartDeletes(folder)}`);
+    const pending = restartDeletes(folder);
+    check(!pending, `the uninstall queued a delete at restart: ${pending}`);
     const after = shortcuts();
     check(
       after.user.length === 0 && after.machine.length === 0,
@@ -1829,7 +1835,8 @@ async function install() {
     );
     check(removed8.status === 0, `the uninstaller exited with ${removed8.status}: ${removed8.out}`);
     check(existsSync(kept), `the uninstaller followed a junction and removed ${kept}`);
-    check(!restartDeletes(folder), `the uninstall queued a delete at restart: ${restartDeletes(folder)}`);
+    const pending8 = restartDeletes(folder);
+    check(!pending8, `the uninstall queued a delete at restart: ${pending8}`);
     check(
       !existsSync(folder),
       `the install folder is still there, holding ${existsSync(folder) ? readdirSync(folder).join(", ") : ""}`,
