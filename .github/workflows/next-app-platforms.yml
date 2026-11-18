@@ -350,14 +350,14 @@ jobs:
       # Windows 30 seconds for each of the four folders it removes (FREE_MS; five in the launcher
       # session): 17 minutes 3 seconds, 85 minutes 15 seconds for five. The launcher session also
       # waits up to 105 s on Windows for its app to start and for it and its agents to end, and up
-      # to 55 s on macOS for its agents and Terminal: about 87 minutes 30 seconds on Windows. 90
-      # minutes lets every session report and clean up even when each app hangs, with about 2
-      # minutes 30 seconds for the short commands it runs besides (PowerShell, icacls), which have
-      # no limit of their own. The open shard runs one such session (its app started outside the runner's job
+      # to 55 s on macOS for its agents and Terminal: about 87 minutes 30 seconds on Windows. 95
+      # minutes lets every session report and clean up even when each app hangs, with over 7
+      # minutes for the short commands it runs besides (PowerShell, icacls), which have no limit of
+      # their own. The open shard runs one such session (its app started outside the runner's job
       # on Windows, as the launcher session's is) and, on macOS, at most four certificate trust
       # commands of at most a minute each: about 22 minutes at worst.
       - name: Native test
-        timeout-minutes: ${{ matrix.shard == 'tools' && 90 || 40 }}
+        timeout-minutes: ${{ matrix.shard == 'tools' && 95 || 40 }}
         env:
           PLUXY_APP_NATIVE_SHARD: ${{ matrix.shard }}
           PLUXY_APP_TEST_PACKAGE: ${{ runner.temp }}/test-package
