@@ -190,7 +190,7 @@ export function buildAccessFixtures(root: string): object {
   mkdirSync(join(data, "stow"), { recursive: true });
   mkdirSync(join(data, "tree", "inner"), { recursive: true });
   // A second folder in tree, its name starting with another letter than inner's: a folder
-  // chooser's entry then has no single completion to add to a typed `tree/`.
+  // chooser's entry then has no single completion to add to an entered `tree/`.
   mkdirSync(join(data, "tree", "notes"));
   writeFileSync(join(data, "stow", "config"), contents.config);
   // A config manager's link (stow, chezmoi): the person chooses the link, the target is read.
