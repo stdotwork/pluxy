@@ -27,12 +27,13 @@
 //! One line on stderr: `native-test: access <JSON>`.
 
 use super::device::{call, listed, ok, refused, require, settle, start, x};
-use super::{eval, log, wait_for};
+use super::{eval, log, on_main, wait_for};
 use crate::MAIN;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
@@ -60,27 +61,73 @@ fn chooser_title(id: &str, resource: &str, folder: bool) -> String {
     )
 }
 
-/// Types path into the chooser titled title and accepts it. The session has no recent files
-/// (run.ts), so a folder chooser opens in a folder, where the typed location is what it
-/// chooses. A folder is typed as `<folder>/`: text ending in a separator names that folder
+/// Enters path in the chooser titled title and accepts it. The session has no recent files
+/// (run.ts), so a folder chooser opens in a folder, where the entered location is what it
+/// chooses. A folder is entered as `<folder>/`: text ending in a separator names that folder
 /// itself (gtkfilechooserentry.c `gtk_file_chooser_get_directory_for_text`), and with two
 /// subfolders starting with different letters (native/access.ts) the entry has no single
 /// completion to add to it.
-fn choose(title: &str, path: &Path, folder: bool) -> Result<(), String> {
+///
+/// The path is pasted, in one insert, not typed. Typed a key at a time, the location entry
+/// completes each folder it reaches inline, the rest of the name selected for the next key to
+/// replace; if the entry loses focus at that moment, GTK keeps the completion and moves the
+/// cursor after it (gtkentrycompletion.c `accept_completion_callback`), and the keys still to
+/// come repeat it (`/tmp/p` became `/tmp/pluxy-app-native-luxy-app-native-…`), so the chooser
+/// never answers. The app owns the clipboard, and Return goes only once the chooser has asked
+/// it for the path, so the path is in the entry before Return arrives.
+fn choose(main: &Webview, title: &str, path: &Path, folder: bool) -> Result<(), String> {
     let id = wait_for(title, || window(title))?;
-    x(&["windowfocus", "--sync", &id])?;
-    x(&["key", "--clearmodifiers", "ctrl+l"])?;
-    std::thread::sleep(Duration::from_millis(300));
     let path = path.to_str().ok_or("fixture path is not UTF-8")?;
-    let typed = if folder {
+    let entered = if folder {
         format!("{path}/")
     } else {
         path.to_string()
     };
-    x(&["type", "--clearmodifiers", "--delay", "20", &typed])?;
+    let asked = offer(main.app_handle(), entered)?;
+    x(&["windowfocus", "--sync", &id])?;
+    x(&["key", "--clearmodifiers", "ctrl+l"])?;
     std::thread::sleep(Duration::from_millis(300));
+    x(&["key", "--clearmodifiers", "ctrl+v"])?;
+    wait_for("the chooser to ask for the pasted path", || {
+        asked.try_recv().ok()
+    })?;
+    // The answer goes to the X server from the main thread: a round trip there sends it before
+    // Return, so the chooser reads it first.
+    on_main(main.app_handle(), || {
+        if let Some(d) = gtk::gdk::Display::default() {
+            d.sync();
+        }
+    })
+    .ok_or("the main thread did not answer")?;
     x(&["key", "--clearmodifiers", "Return"])?;
     Ok(())
+}
+
+/// Puts text on the clipboard, owned by this app. The receiver gets a message each time a
+/// program asks for it.
+fn offer(app: &AppHandle, text: String) -> Result<mpsc::Receiver<()>, String> {
+    let (tx, rx) = mpsc::channel();
+    let set = on_main(app, move || {
+        let targets: Vec<gtk::TargetEntry> = [
+            "UTF8_STRING",
+            "text/plain;charset=utf-8",
+            "STRING",
+            "TEXT",
+            "text/plain",
+        ]
+        .iter()
+        .map(|t| gtk::TargetEntry::new(t, gtk::TargetFlags::empty(), 0))
+        .collect();
+        gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD).set_with_data(
+            &targets,
+            move |_, data, _| {
+                data.set_text(&text);
+                let _ = tx.send(());
+            },
+        )
+    });
+    require(set == Some(true), "the clipboard was not set")?;
+    Ok(rx)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -109,7 +156,7 @@ fn grant(
     if answer == Answer::CancelChooser {
         key(&title, "Escape")?;
     } else {
-        choose(&title, path, folder)?;
+        choose(main, &title, path, folder)?;
         key(
             CONFIRMATION,
             if answer == Answer::Confirm {
@@ -146,7 +193,7 @@ fn grant_refused(
         "access_grant",
         json!({"id": id, "resource": resource}),
     )?;
-    choose(&chooser_title(id, resource, folder), path, folder)?;
+    choose(main, &chooser_title(id, resource, folder), path, folder)?;
     let r = settle(main, &slot)?;
     require(
         r["ok"] == false && window(CONFIRMATION).is_none(),
