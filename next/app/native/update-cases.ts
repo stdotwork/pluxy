@@ -16,7 +16,7 @@
 // - every step the system's cases print is there (expectedSteps), and stand-ins for what installs
 //   with privileges never ran.
 
-import { spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -76,9 +76,53 @@ export function treeDigest(bundle: string): string {
   return h.digest("hex");
 }
 
-/** The digest an installed copy is pinned by: an app bundle's tree digest, a file's SHA-256. */
+/** The test package's program on Windows, a part of its program set. */
+export const SET_EXE = "pluxy-app-test.exe";
+/** A Windows program set's parts (updater/set.rs), sorted as the app lists a folder. */
+export const SET_PARTS = ["bundled", SET_EXE, "pluxy.exe"].sort();
+
+/** A Windows program set's digest, `pluxy-set-v1` as the updater computes it (updater/set.rs):
+ * SHA-256 of `pluxy-set-v1\n` and one line per entry of the set's parts only (`bundled`, a
+ * folder; `pluxy.exe` and the program, files), sorted by path from the folder as bytes: `d <path>`
+ * for a folder, `f <size> <sha256> <path>` for a file. Anything else (a link) has no digest. */
+export function setDigest(folder: string, exe = SET_EXE): string {
+  const lines: [Buffer, string][] = [];
+  const walk = (rel: string) => {
+    const st = lstatSync(join(folder, rel));
+    if (st.isDirectory()) {
+      lines.push([Buffer.from(rel), `d ${rel}\n`]);
+      for (const name of readdirSync(join(folder, rel))) walk(`${rel}/${name}`);
+    } else if (st.isFile()) {
+      lines.push([Buffer.from(rel), `f ${st.size} ${sha256(readFileSync(join(folder, rel)))} ${rel}\n`]);
+    } else {
+      throw new Error(`${join(folder, rel)} is neither a folder nor a regular file`);
+    }
+  };
+  for (const part of ["bundled", "pluxy.exe", exe]) {
+    if (lstatSync(join(folder, part)).isDirectory() !== (part === "bundled"))
+      throw new Error(`${join(folder, part)} is not a part of a program set`);
+    walk(part);
+  }
+  lines.sort((a, b) => Buffer.compare(a[0], b[0]));
+  const h = createHash("sha256").update("pluxy-set-v1\n");
+  for (const [, line] of lines) h.update(line);
+  return h.digest("hex");
+}
+
+/** The digest an installed copy is pinned by: a Windows program set's digest, an app bundle's
+ * tree digest, a file's SHA-256. */
 export const pinOf = (path: string): string =>
-  lstatSync(path).isDirectory() ? treeDigest(path) : sha256(readFileSync(path));
+  lstatSync(path).isDirectory()
+    ? process.platform === "win32"
+      ? setDigest(path)
+      : treeDigest(path)
+    : sha256(readFileSync(path));
+
+/** What the folder an install leaves things in holds once nothing it made is left: the
+ * installed copy's name (its folder's other entries are not the app's), or on Windows the program
+ * set's parts (the installed copy is that folder). */
+export const ownNames = (installed: string): string[] =>
+  process.platform === "win32" ? SET_PARTS : [installed.split(/[\\/]/).pop() as string];
 
 /** The crafted installs each system's updater refuses before any download, with how to update
  * instead (the reason the page and both commands give). `case` is PLUXY_APP_TEST_UPDATE_CASE; the
@@ -119,6 +163,7 @@ export function expectedSteps(system: System): string[] {
     stepOf(NO_ROOTS),
     ...REFUSALS[system].map(stepOf),
     ...(system === "darwin" ? ["update_open"] : []),
+    ...(system === "win32" ? ["update_between_parts", "update_parts_undone"] : []),
     "update_stage",
     "update_refusals",
     "update_refused",
@@ -353,7 +398,8 @@ export async function launchChain(o: {
   ms: number;
   check: Check;
   say: Say;
-  onStep?: (name: string, value: Step) => Promise<void> | void;
+  /** child is the launch's own process, which the session started and holds. */
+  onStep?: (name: string, value: Step, child: ChildProcess) => Promise<void> | void;
 }): Promise<Chain> {
   const child = spawn(o.program, o.args ?? [], { env: o.env, stdio: ["ignore", "pipe", "pipe"] });
   const steps: [string, Step][] = [];
@@ -377,7 +423,7 @@ export async function launchChain(o: {
         if (o.onStep) {
           pending.push(
             Promise.resolve()
-              .then(() => o.onStep?.(name, value))
+              .then(() => o.onStep?.(name, value, child))
               .catch((e) =>
                 o.check(false, `${o.label}: handling ${name}: ${e instanceof Error ? e.stack : e}`),
               ),
@@ -526,6 +572,8 @@ export interface Route {
 /** The update route (see the top of this file), and its checks. Returns the steps it saw. */
 export async function updateRoute(o: Route): Promise<Set<string>> {
   const { check, say } = o;
+  // Downloads before the route (Windows: the update ended between parts downloaded it once).
+  const fetched = { artifact: o.feed.count(ARTIFACT), slow: o.feed.count(SLOW_ARTIFACT) };
   // The installed copy's pin, read here when each stage reported.
   const pins: Record<string, string> = {};
   const pids: Record<string, number> = {};
@@ -584,12 +632,13 @@ export async function updateRoute(o: Route): Promise<Set<string>> {
       `${name}: the app says the installed copy is ${at(name).installed_sha}, not ${which}`,
     );
     check(pins[name] === sha, `${name}: the installed copy read here is ${pins[name]}, not ${which}`);
-    // What an install leaves next to the installed copy is gone once the earlier version ended.
+    // What an install leaves next to the installed copy (on Windows, in the set's folder) is
+    // gone once the earlier version ended.
     const beside = at(name).beside as string[] | undefined;
-    const own = o.installed.split(/[\\/]/).pop();
+    const own = ownNames(o.installed);
     check(
-      JSON.stringify(beside) === JSON.stringify([own]),
-      `${name}: next to the installed copy: ${JSON.stringify(beside)}, not only ${own}`,
+      JSON.stringify(beside) === JSON.stringify(own),
+      `${name}: next to the installed copy: ${JSON.stringify(beside)}, not only ${own.join(", ")}`,
     );
   }
   const allPids = stages.map((s) => s.pid);
@@ -683,11 +732,10 @@ export async function updateRoute(o: Route): Promise<Set<string>> {
   check(pinOf(o.installed) === o.v1, "the copy installed at the end is not v1");
   // Downloads: one each for the bad signature, the signed version, the refused and the real
   // update; the slow one, cancelled.
-  check(o.feed.count(ARTIFACT) === 4, `v2 was downloaded ${o.feed.count(ARTIFACT)} times, not 4`);
-  check(
-    o.feed.count(SLOW_ARTIFACT) === 1,
-    `the slow download was requested ${o.feed.count(SLOW_ARTIFACT)} times`,
-  );
+  const artifact = o.feed.count(ARTIFACT) - fetched.artifact;
+  const slow = o.feed.count(SLOW_ARTIFACT) - fetched.slow;
+  check(artifact === 4, `v2 was downloaded ${artifact} times on the route, not 4`);
+  check(slow === 1, `the slow download was requested ${slow} times on the route`);
   return r.names;
 }
 

@@ -20,7 +20,8 @@
 // - window and tray: the app has a tray icon; closing the window leaves the app in the tray, or
 //   quits it, as the preference says; the window's size and place are kept across a restart.
 // - bundle: the test package (package.ts test, made before this run and named by
-//   PLUXY_APP_TEST_PACKAGE: a folder bundle on Windows, an app bundle on macOS) has the test
+//   PLUXY_APP_TEST_PACKAGE: a folder bundle holding the program set on Windows, an app bundle on
+//   macOS) has the test
 //   identity in its own files, starts from its bundle and passes its updater gate with its test
 //   trust profile, and quits leaving no process; the same bundle without the profile, and the dev
 //   app (normal identifier, no test trust) with it, are refused at the gate;
@@ -35,7 +36,9 @@
 //   program, a folder Everyone may change; macOS: the program outside its bundle, a bundle its
 //   group may change, the installed bundle started through a link on its path); macOS: the
 //   update route starts the bundle by its real path, and a launch through LaunchServices (`/usr/bin/open`) is offered the
-//   update; the update route with its third launch in the acceptance gap and its rollback; stand-ins
+//   update; Windows: an update ended (by the session, which started it) between two parts of the
+//   program set, and the earlier version, started again on the mixed folder, undoes it and keeps
+//   its own set as kept; the update route with its third launch in the acceptance gap and its rollback; stand-ins
 //   for installers and elevation first on PATH never ran; macOS: no quarantine on the installed
 //   bundle.
 //
@@ -52,6 +55,7 @@ import {
   appendFileSync,
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -71,17 +75,21 @@ import { SESSIONS, selectShard } from "./shards";
 import {
   checkSteps,
   LAUNCH_MS,
+  launchChain,
   NO_ROOTS,
+  ownNames,
   pinOf,
   privateFolder,
   REFUSALS,
   type Refusal,
   refusedLaunch,
-  sha256,
+  SET_PARTS,
+  setDigest,
   standIns,
   startUpdateFeed,
   treeDigest,
   updateRoute,
+  V1,
   withPathFirst,
 } from "./update-cases";
 
@@ -812,16 +820,21 @@ async function bundle() {
   const exe = windows ? "pluxy-app-test.exe" : "pluxy-app-test";
   // What the bundle is, read with the system's own tools.
   if (windows) {
-    const files = readdirSync(made.bundle);
+    const files = readdirSync(made.bundle).sort();
     check(
-      JSON.stringify(files) === JSON.stringify([exe]),
-      `the folder bundle holds ${files.join(", ")}, not only ${exe}`,
+      JSON.stringify(files) === JSON.stringify(SET_PARTS),
+      `the folder bundle holds ${files.join(", ")}, not only the program set ${SET_PARTS.join(", ")}`,
     );
     check(made.program === join(made.bundle, exe), `the program ${made.program} is not the bundle's ${exe}`);
+    // The update is the second build's set as a .tar.gz, its parts at the top.
+    const listed = run("tar", ["-tzf", made.update.payload]).out.split(/\r?\n/).filter(Boolean);
+    const tops = [...new Set(listed.map((e) => e.replace(/\/.*$/, "")))].sort();
     check(
-      readFileSync(made.update.payload).subarray(0, 2).toString() === "MZ",
-      "the update payload is not an exe",
+      JSON.stringify(tops) === JSON.stringify(SET_PARTS),
+      `the update archive's top entries are ${tops.join(", ")}, not the program set's`,
     );
+    check(made.update.target === "windows-x86_64-set", `the update's target is ${made.update.target}`);
+    say(`update archive: ${listed.length} entries`);
   } else {
     const plist = join(made.bundle, "Contents", "Info.plist");
     const key = (k: string) => run("plutil", ["-extract", k, "raw", "-o", "-", plist]).out;
@@ -978,8 +991,7 @@ async function bundleReleaseGate() {
     if (made) {
       const renamed = join(dir, windows ? "candidate" : "candidate.app");
       if (windows) {
-        mkdirSync(renamed);
-        for (const f of readdirSync(made.bundle)) copyFileSync(join(made.bundle, f), join(renamed, f));
+        cpSync(made.bundle, renamed, { recursive: true });
       } else {
         const copied = run("ditto", [made.bundle, renamed]);
         if (copied.status !== 0) throw new Error(`ditto: ${copied.out}`);
@@ -1057,11 +1069,10 @@ async function update() {
     // system's temporary folder is under /var, a link to /private/var): the "linked" refusal.
     let linkedProgram = "";
     if (windows) {
-      const folder = join(ownFolder(join(root, "install")), basename(made.bundle));
-      mkdirSync(folder);
-      installed = join(folder, exe);
-      copyFileSync(made.program, installed);
-      program = installed;
+      // The folder bundle's program set: the folder is the installed copy.
+      installed = join(ownFolder(join(root, "install")), basename(made.bundle));
+      cpSync(made.bundle, installed, { recursive: true });
+      program = join(installed, exe);
     } else {
       const put = join(privateFolder(join(home, "Applications")), basename(made.bundle));
       const copied = run("ditto", ["--norsrc", "--noextattr", "--noqtn", made.bundle, put]);
@@ -1077,8 +1088,8 @@ async function update() {
     const v1 = pinOf(installed);
     writeFileSync(join(work, "v1.sha256"), v1);
     const payload = readFileSync(made.update.payload);
-    // The new version's pin: the program itself, or the tree of the bundle the archive holds.
-    const v2 = windows ? sha256(payload) : treeDigest(made.update.bundle);
+    // The new version's pin: the program set or the tree of the bundle the archive holds.
+    const v2 = windows ? setDigest(made.update.bundle) : treeDigest(made.update.bundle);
     say(`installed ${installed}: v1 ${v1}, v2 ${v2}`);
 
     say("starting the test core");
@@ -1191,6 +1202,77 @@ async function update() {
     }
     check(stand.ran() === "", `an installer or elevation ran: ${stand.ran()}`);
 
+    // Windows: the update ended between two parts of the program set, then the earlier version
+    // started again on the mixed folder.
+    if (windows) {
+      const updates = join(local, "updates");
+      let between: Record<string, unknown> | undefined;
+      let mixed = "";
+      let asides: string[] = [];
+      const parts = await launchChain({
+        label: "parts",
+        program,
+        env: { ...trusted, PLUXY_APP_TEST_UPDATE_CASE: "parts" },
+        ms: LAUNCH_MS,
+        check,
+        say,
+        onStep: (name, v, child) => {
+          if (name !== "update_between_parts") return;
+          between = v;
+          // What the folder holds as the update waits there, read before it is ended.
+          try {
+            mixed = pinOf(installed);
+          } catch (e) {
+            mixed = `unreadable: ${(e as Error).message}`;
+          }
+          asides = readdirSync(installed).filter((n) => n.startsWith(".pluxy-old-"));
+          check(
+            v.pid === child.pid,
+            `the process waiting between parts is ${v.pid}, not the launch ${child.pid}`,
+          );
+          child.kill("SIGKILL");
+        },
+      });
+      for (const n of parts.names) seen.add(n);
+      say(`between parts: ${JSON.stringify(between)}; asides ${asides.join(", ")}; ended ${parts.ended}`);
+      check(
+        between?.part === "bundled",
+        `the update did not wait after its first part: ${JSON.stringify(between)}`,
+      );
+      check(
+        mixed !== v1 && mixed !== v2,
+        `the folder was not half replaced when the update was ended: ${mixed}`,
+      );
+      check(
+        asides.length === 1 && asides[0]?.endsWith("-bundled"),
+        `asides when the update was ended: ${asides.join(", ")}`,
+      );
+      check(existsSync(join(updates, "pending.json")), "the ended update left no pending.json");
+      const undone = await launchChain({
+        label: "parts undone",
+        program,
+        env: { ...trusted, PLUXY_APP_TEST_UPDATE_CASE: "parts-undone" },
+        ms: LAUNCH_MS,
+        check,
+        say,
+      });
+      for (const n of undone.names) seen.add(n);
+      const u = undone.step("update_parts_undone")[0];
+      say(`the start after: ${JSON.stringify(u)}`);
+      check(u?.version === V1, `the earlier version did not start on the mixed folder: ${JSON.stringify(u)}`);
+      check(
+        u?.installed_sha === v1 && pinOf(installed) === v1,
+        `the start after did not undo it: ${JSON.stringify(u)}`,
+      );
+      check(u?.pending === false, "pending.json is still there after the undo");
+      check(u?.kept_sha === v1, `the earlier set is not kept as ${V1}: ${JSON.stringify(u)}`);
+      check(
+        JSON.stringify(u?.beside) === JSON.stringify(SET_PARTS) &&
+          JSON.stringify(readdirSync(installed).sort()) === JSON.stringify(SET_PARTS),
+        `in the program's folder after the undo: ${readdirSync(installed).join(", ")}`,
+      );
+    }
+
     // The update route.
     add(
       await updateRoute({
@@ -1210,10 +1292,11 @@ async function update() {
     );
     checkSteps(check, system, seen);
     check(stand.ran() === "", `an installer or elevation ran: ${stand.ran()}`);
-    // Nothing an install made is left next to the installed copy.
-    const left = readdirSync(dirname(installed));
+    // Nothing an install made is left next to the installed copy (on Windows, in the set's
+    // folder).
+    const left = readdirSync(windows ? installed : dirname(installed)).sort();
     check(
-      JSON.stringify(left) === JSON.stringify([basename(installed)]),
+      JSON.stringify(left) === JSON.stringify(ownNames(installed)),
       `next to the installed copy at the end: ${left.join(", ")}`,
     );
     if (mac)

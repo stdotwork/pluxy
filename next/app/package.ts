@@ -21,15 +21,19 @@
 // On Windows and macOS test makes no installer and no disk image: the same two debug builds with
 // the same overlay, but no Tauri bundle on Windows (whose only bundles are installers) and the
 // `app` bundle on macOS. Windows: each build's program goes into a folder of its own,
-// <out-dir>/pluxy Test/pluxy-app-test.exe and <out-dir>/update/pluxy Test/pluxy-app-test.exe, a
-// plain folder bundle; the update is that exe, signed. macOS: each build's app bundle is copied
+// <out-dir>/pluxy Test/ and <out-dir>/update/pluxy Test/, a plain folder bundle holding the program
+// set the app's updater replaces (src-tauri/src/updater/set.rs): pluxy-app-test.exe, and until the
+// bundled core exists a stub pluxy.exe and bundled\ (text files saying the version, which nothing
+// runs); the update is the second folder's set as a .tar.gz made here (its parts at the top),
+// signed. macOS: each build's app bundle is copied
 // to <out-dir>/pluxy Test.app and <out-dir>/update/pluxy Test.app; the update is the second
 // bundle as a .app.tar.gz the test makes itself (one top folder, no macOS metadata), signed; the
 // first bundle's program is also copied out of it to <out-dir>/pluxy-app-test. Both write
 // <out-dir>/test-package.json: {"bundle": <folder or .app>, "program": <the app executable in
 // it>, "binary": <a copy of it outside the bundle on macOS, the program on Windows>,
 // "updater_pubkey": <key>, "update": {"bundle": <path>, "payload": <path>, "target": <the feed's
-// target name>, "version": <version>, "signature": <signature>}}. Nothing needs downloading
+// target name: windows-x86_64-set, darwin-aarch64-app>, "version": <version>, "signature":
+// <signature>}}. Nothing needs downloading
 // there, so the builds run in the caller's environment, Cargo offline after `cargo fetch` and
 // every proxy variable pointing at a closed port.
 //
@@ -67,6 +71,7 @@ import { arch, homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { appImageHeader, type Pin, pinnedBytes, runtimeBytes } from "./native/appimage";
 import { signUpdate, updaterKey } from "./native/minisign";
+import { setArchive } from "./native/set-archive";
 
 const app = import.meta.dir;
 const tauriDir = join(app, "src-tauri");
@@ -259,7 +264,7 @@ async function testPackage(outDir: string) {
 
 /** The feed's target name for the update on Windows and macOS (the app's updater, src-tauri/src/updater/). */
 function bundleTarget(): string {
-  if (process.platform === "win32" && arch() === "x64") return "windows-x86_64-exe";
+  if (process.platform === "win32" && arch() === "x64") return "windows-x86_64-set";
   if (process.platform === "darwin" && arch() === "arm64") return "darwin-aarch64-app";
   if (process.platform === "darwin" && arch() === "x64") return "darwin-x86_64-app";
   throw new Error(`no test package for ${process.platform} ${arch()}`);
@@ -327,8 +332,11 @@ async function bundleTestPackage(outDir: string) {
       mkdirSync(folder, { recursive: true });
       if (windows) {
         const bundle = join(folder, name);
-        mkdirSync(bundle);
+        mkdirSync(join(bundle, "bundled"), { recursive: true });
         copyFileSync(join(targetDir, "debug", exe), join(bundle, exe));
+        // Stand-ins for the core and its packages until the bundled core exists.
+        writeFileSync(join(bundle, "pluxy.exe"), `stub core ${v}\n`);
+        writeFileSync(join(bundle, "bundled", "stub.txt"), `stub core packages ${v}\n`);
         return bundle;
       }
       const bundle = join(folder, `${name}.app`);
@@ -354,7 +362,8 @@ async function bundleTestPackage(outDir: string) {
     if (!windows) copyFileSync(program, binary);
     let payload: string;
     if (windows) {
-      payload = join(updateBundle, exe);
+      payload = join(outDir, `pluxy-test_${UPDATE_VERSION}_x64.set.tar.gz`);
+      writeFileSync(payload, setArchive(updateBundle, exe));
     } else {
       payload = join(outDir, `pluxy-test_${UPDATE_VERSION}_${arch()}.app.tar.gz`);
       run("tar", ["--no-mac-metadata", "-czf", payload, "-C", join(outDir, "update"), `${name}.app`], app, {
