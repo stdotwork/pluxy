@@ -1727,7 +1727,10 @@ cargo run --locked --example validate-release-config -- \
 `build.rs` writes the config using tauri-utils' base/platform merge followed by `TAURI_CONFIG`,
 plus the trust and feature snapshots, in Cargo's `OUT_DIR`. A digest of all three is embedded in
 the app. The validator compares its own compiled inputs and requires the matching receipt in an
-artifact. Supply the actual app executable along with every package. The validator streams each
+artifact. It also merges the config files in `src-tauri` again as `build.rs` does (with
+`TAURI_CONFIG` from its own environment) and refuses a config snapshot that differs: Cargo reruns
+`build.rs` only when a config file it read changes, so a build from before a new platform file
+keeps the old snapshot. Supply the actual app executable along with every package. The validator streams each
 regular file for test markers, test identifiers and Tauri updater keys or signatures. Each
 artifact must be a well-formed executable, ELF (type, machine and program headers inside the
 file), PE (an executable image for x86, x86-64 or arm64, its optional header inside the file) or
