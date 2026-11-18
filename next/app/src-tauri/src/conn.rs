@@ -459,8 +459,8 @@ impl Caller {
         // flag still unset), still goes out. On Linux and macOS it goes only to the core or into
         // the app's own copy of its listening socket (_hold): no other program can listen there
         // while this caller holds it. On Windows the app holds no copy (_hold is None), so in
-        // the time before the app sees a crashed core's exit (up to 100 ms) such a call can
-        // reach another program that started listening there, key and all (README, Limits).
+        // the time before the app sees a crashed core's exit (up to 100 ms) any call can reach
+        // another program that started listening there, key and all (README, Limits).
         // Once the core has exited, the app refuses such waiting calls.
         if self
             .gone

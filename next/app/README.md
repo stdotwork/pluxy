@@ -166,8 +166,8 @@ selected version; a copy it cannot read is an error, and the config is left as i
 moment the app begins to stop its core, or sees it exit, it sends nothing more to that address.
 On Windows the core binds the address itself and the app keeps no copy of the socket: between
 a crash of the core and the moment the app sees it exit (up to a tenth of a second: it checks
-every 100 ms), a call already under way can still go to that address with the management key,
-where another user's program could have started listening ([Limits](#limits)). On Linux and macOS the app keeps its
+every 100 ms), any call the app makes still goes to that address with the management key, where
+another user's program could have started listening ([Limits](#limits)). On Linux and macOS the app keeps its
 own copy of the core's listening socket for as long as anything in the app could still send
 there, so no other program can listen on that address in between: not while a crashed
 core's exit is being noticed, and not while the core drains after a stop, the app's or a SIGTERM
@@ -1672,8 +1672,8 @@ in the browser. The app updates itself only as a Linux AppImage.
   managed-core client-key check runs on Linux only. The store's Windows rules are checked by its
   unit tests on the Windows CI runner.
 - On Windows the app holds no copy of its core's listening socket, so in the moment between a
-  crash of the core and the app seeing it exit (up to a tenth of a second), a call already under
-  way can send the management key to that address, where another user's program could have
+  crash of the core and the app seeing it exit (up to a tenth of a second), any call the app
+  makes sends the management key to that address, where another user's program could have
   started listening. Linux and macOS hold the socket and have no such gap.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
