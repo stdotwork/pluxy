@@ -1237,3 +1237,22 @@ func TestBodyRedactorOnePieceMemoryIsBounded(t *testing.T) {
 		t.Logf("Write took %d KiB besides the body and what it returns", extra>>10)
 	}
 }
+
+// Write reads a piece larger than maxChunk in parts, and each part ends where a character starts:
+// after text String replaces whole with [redacted], a character the cut would split must not leave
+// its continuation bytes as the next part's start, which is no UTF-8 a native event can carry.
+func TestBodyRedactorLargePieceCutsAtACharacter(t *testing.T) {
+	r := bodyRedactor()
+	for _, prefix := range []string{collapsing, "plain "} {
+		for off := 1; off <= 3; off++ {
+			for _, ch := range []string{"é", "€", "😀"} {
+				piece := prefix + strings.Repeat("x", maxChunk-len(prefix)-off) + ch + " tail"
+				b := r.Body()
+				got := b.Write(piece) + b.Flush()
+				if !utf8.ValidString(got) {
+					t.Errorf("%.6q, %q %d bytes before the cut: the body ends %q, not UTF-8", prefix, ch, off, got[max(0, len(got)-24):])
+				}
+			}
+		}
+	}
+}

@@ -107,8 +107,49 @@ fn settle(app: &AppHandle, sent: bool) {
     let _ = on_main(app, || ());
 }
 
+/// The access key of a Win32 control's text: the character after its single `&`.
+fn mnemonic(text: &str) -> Option<char> {
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '&' {
+            match chars.next() {
+                Some('&') => {}
+                other => return other,
+            }
+        }
+    }
+    None
+}
+
+/// Whether the control of dialog d with access key c is enabled; None when no control has that
+/// key.
+fn access_enabled(app: &AppHandle, d: Raw, c: char) -> Result<Option<bool>, String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindow, GetWindowTextW, GW_CHILD, GW_HWNDNEXT,
+    };
+    on_main(app, move || {
+        let mut child = unsafe { GetWindow(hwnd(d), GW_CHILD) }.ok();
+        while let Some(w) = child {
+            let mut b = [0u16; 256];
+            let n = unsafe { GetWindowTextW(w, &mut b) }.max(0) as usize;
+            if mnemonic(&String::from_utf16_lossy(&b[..n]))
+                .is_some_and(|k| k.eq_ignore_ascii_case(&c))
+            {
+                return Some(unsafe { IsWindowEnabled(w) }.as_bool());
+            }
+            child = unsafe { GetWindow(w, GW_HWNDNEXT) }.ok();
+        }
+        None
+    })
+    .ok_or_else(|| "the main thread did not answer".into())
+}
+
 pub(crate) fn press(app: &AppHandle, title: &str, key: Key) -> Result<(), String> {
     let d = one(app, title)?;
+    if let Key::Access(c) = key {
+        super::until_enabled(title, c, || access_enabled(app, d, c))?;
+    }
     let way = on_main(app, move || -> Result<&'static str, String> {
         let d = hwnd(d);
         if foreground(d) {

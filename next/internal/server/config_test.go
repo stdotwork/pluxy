@@ -9,6 +9,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
 // An extension timing too large for a time.Duration is refused, not wrapped into a negative
@@ -200,6 +201,91 @@ payload:
 	}
 	if p := c.Payload.Filter[0].Params; !reflect.DeepEqual(p, []string{"0", "true"}) {
 		t.Errorf("filter params %q", p)
+	}
+}
+
+// A config.yaml's payload rules change a request as they did in today's core. The want of each
+// case is the body today's core sent upstream for the same file (its loader, then its payload
+// code): a key in another letter case was never read, so it changes nothing; a -raw param that
+// is a date is sent as the JSON string of its date; a -raw param that is .inf, .nan or null is
+// skipped, with the rule's other params applied.
+func TestConfigYAMLPayloadLikeOldCore(t *testing.T) {
+	for _, c := range []struct{ name, rules, want, notice string }{
+		{"exact keys", "override:\n    - models: [{name: m}]\n      params: {p: 1}\n", `{"p":1}`, ""},
+		{"list in another case", "Override:\n    - models: [{name: m}]\n      params: {p: 1}\n", `{}`, "payload.Override"},
+		{"model name in another case", "override:\n    - models: [{Name: m}]\n      params: {p: 1}\n", `{}`, "payload.override[0].models[0].Name"},
+		{"model name as a number in another case", "override:\n    - models: [{Name: 0123}]\n      params: {p: 1}\n", `{}`, "payload.override[0].models[0].Name"},
+		{"params in another case", "override:\n    - models: [{name: m}]\n      Params: {p: 1}\n", `{}`, "payload.override[0].Params"},
+		{"raw date", "override-raw:\n    - models: [{name: m}]\n      params: {p: 2024-01-15}\n", `{"p":"2024-01-15T00:00:00Z"}`, ""},
+		{"default-raw date and time", "default-raw:\n    - models: [{name: m}]\n      params: {p: 2024-01-15T10:30:00Z}\n", `{"p":"2024-01-15T10:30:00Z"}`, ""},
+		{"raw .inf", "override-raw:\n    - models: [{name: m}]\n      params: {p: .inf, q: 1}\n", `{"q":1}`, `payload.override-raw[0].params["p"]`},
+		{"raw .nan", "default-raw:\n    - models: [{name: m}]\n      params: {p: .nan, q: 1}\n", `{"q":1}`, `payload.default-raw[0].params["p"]`},
+		{"raw null", "override-raw:\n    - models: [{name: m}]\n      params: {p: ~, q: 1}\n", `{"q":1}`, `payload.override-raw[0].params["p"]`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := ParseConfig([]byte("api-keys: [k]\nauth-dir: auths\npayload:\n  "+c.rules), "/srv/pluxy/config.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := payload.Apply(cfg.Payload, []byte(`{}`), payload.Input{Model: "m"})
+			if string(body) != c.want {
+				t.Errorf("the body sent is %s, want %s", body, c.want)
+			}
+			notice := strings.Join(cfg.Notices, "\n")
+			if c.notice == "" && strings.Contains(notice, "payload") || !strings.Contains(notice, c.notice) {
+				t.Errorf("notices do not name %q:\n%s", c.notice, notice)
+			}
+		})
+	}
+}
+
+// A -raw rule with a string param that is not JSON, and a .inf or .nan outside a -raw rule, load
+// and change a request as they did in today's core. The want of each case is the body today's
+// core sent upstream for the same file (its loader, then ApplyPayloadConfigWithRequest), except
+// the two marked: there today's core wrote the invalid JSON text +Inf or -Inf into the body, which
+// no upstream accepts, and this core leaves the field out.
+func TestConfigYAMLPayloadNonJSONLikeOldCore(t *testing.T) {
+	const m = "- models: [{name: m}]\n      params: "
+	model := func(list, one string) string {
+		return list + ":\n    - models: [" + one + "]\n      params: {p: 1}\n"
+	}
+	for _, c := range []struct{ name, rules, body, want, notice string }{
+		{"a -raw string that is not JSON drops its rule", "override-raw:\n    " + m + "{p: foo, q: 1}\n", `{}`, `{}`, "requests.payload.override-raw[0]"},
+		{"a -raw date in quotes drops its rule", "override-raw:\n    " + m + "{p: '2024-01-15'}\n", `{}`, `{}`, "requests.payload.override-raw[0]"},
+		{"an empty -raw string drops its rule", "default-raw:\n    " + m + "{p: ''}\n", `{}`, `{}`, "requests.payload.default-raw[0]"},
+		{"the other rules of the list stay", "override-raw:\n    " + m + "{p: foo}\n    " + m + "{q: 1}\n", `{}`, `{"q":1}`, "requests.payload.override-raw[0]"},
+		{"the other lists stay", "default-raw:\n    " + m + "{p: foo}\n  override-raw:\n    " + m + "{q: 1}\n", `{}`, `{"q":1}`, "requests.payload.default-raw[0]"},
+		{"override .inf is skipped", "override:\n    " + m + "{p: .inf, q: 1}\n", `{}`, `{"q":1}`, `requests.payload.override[0].params["p"]`},
+		{"override .nan is skipped", "override:\n    " + m + "{p: .nan, q: 1}\n", `{}`, `{"q":1}`, `requests.payload.override[0].params["p"]`},
+		{"override .inf in a list is skipped", "override:\n    " + m + "{p: [.inf, 1], q: 1}\n", `{}`, `{"q":1}`, `requests.payload.override[0].params["p"]`},
+		{"override .inf in a mapping is skipped", "override:\n    " + m + "{p: {a: .inf}, q: 1}\n", `{}`, `{"q":1}`, `requests.payload.override[0].params["p"]`},
+		{"default .inf in a list is skipped", "default:\n    " + m + "{p: [.inf], q: 1}\n", `{}`, `{"q":1}`, `requests.payload.default[0].params["p"]`},
+		// Today's core wrote {"p":-Inf,"q":1} and {"p":+Inf,"q":1}.
+		{"override -.inf", "override:\n    " + m + "{p: -.inf, q: 1}\n", `{}`, `{"q":1}`, `requests.payload.override[0].params["p"]`},
+		{"default .inf", "default:\n    " + m + "{p: .inf, q: 1}\n", `{}`, `{"q":1}`, `requests.payload.default[0].params["p"]`},
+		{"a match with .inf never matches", model("override", "{name: m, match: [{a: .inf}]}"), `{"a":1}`, `{"a":1}`, `requests.payload.override[0].models[0]`},
+		{"a match with .nan never matches", model("override", "{name: m, match: [{a: .nan}]}"), `{"a":1}`, `{"a":1}`, `requests.payload.override[0].models[0]`},
+		{"a match with .inf beside a value never matches", model("override", "{name: m, match: [{a: .inf, b: 1}]}"), `{"a":1,"b":1}`, `{"a":1,"b":1}`, `requests.payload.override[0].models[0]`},
+		{"the other models of the rule still match", model("override", "{name: m, match: [{a: .inf}]}, {name: m}"), `{"a":1}`, `{"a":1,"p":1}`, `requests.payload.override[0].models[0]`},
+		{"a not-match with .inf excludes nothing", model("override", "{name: m, not-match: [{a: .inf}]}"), `{"a":1}`, `{"a":1,"p":1}`, `requests.payload.override[0].models[0]`},
+		{"a not-match with .inf keeps its other paths", model("override", "{name: m, not-match: [{a: .inf, b: 1}]}"), `{"b":1}`, `{"b":1}`, `not-match[0]["a"]`},
+		{"a not-match with .inf, its other path free", model("override", "{name: m, not-match: [{a: .inf, b: 1}]}"), `{"b":2}`, `{"b":2,"p":1}`, `not-match[0]["a"]`},
+		{"a filter match with .inf never matches", "filter:\n    - models: [{name: m, match: [{a: .inf}]}]\n      params: [a]\n", `{"a":1}`, `{"a":1}`, `requests.payload.filter[0].models[0]`},
+		{"a filter not-match with .inf excludes nothing", "filter:\n    - models: [{name: m, not-match: [{a: .inf}]}]\n      params: [a]\n", `{"a":1}`, `{}`, `requests.payload.filter[0].models[0]`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := ParseConfig([]byte("api-keys: [k]\nauth-dir: auths\npayload:\n  "+c.rules), "/srv/pluxy/config.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := payload.Apply(cfg.Payload, []byte(c.body), payload.Input{Model: "m"})
+			if string(body) != c.want {
+				t.Errorf("the body sent for %s is %s, want %s", c.body, body, c.want)
+			}
+			if notice := strings.Join(cfg.Notices, "\n"); !strings.Contains(notice, c.notice) {
+				t.Errorf("notices do not name %q:\n%s", c.notice, notice)
+			}
+		})
 	}
 }
 

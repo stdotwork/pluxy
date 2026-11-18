@@ -743,6 +743,7 @@ func (c *mcore) settings(t *testing.T) settingsReply {
 }
 
 func TestManageSettings(t *testing.T) {
+	t.Parallel()
 	const patch = `{"routing": {"strategy": "fill-first", "session-affinity": true, "session-affinity-ttl": "2h", "force-model-prefix": true, "retry": {"request-retry": 2, "max-retry-credentials": 2, "max-retry-interval": 5}, "cooldown": {"disable-cooling": true, "transient-error-cooldown-seconds": 20, "quota-response-mode": "Usage-Limit"}}, "token_count_estimate": false}`
 	for _, f := range formats() {
 		t.Run(f.name, func(t *testing.T) {

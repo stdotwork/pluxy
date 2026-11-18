@@ -193,8 +193,13 @@ func writeUpstreamHeaders(b *bytes.Buffer, h map[string][]string, leftOut int) {
 // writeBody writes a captured body as the client side's capture does: all of it, or its start and
 // its end with a line saying how many bytes were left out between them. A secret of redact's cut
 // in two at the gap would not be recognised by the redaction, so what could be part of one on
-// each side of the gap is left out too (trimGap).
+// each side of the gap is left out too (trimGap). A body not read to its end (BodyStopped) ends
+// with a line saying so, and what before it could be the start of a secret is left out
+// (trimStop).
 func writeBody(b *bytes.Buffer, c protocol.CapturedBody, redact *protocol.Redactor) {
+	if c.BodyStopped {
+		defer b.WriteString("\n[... the body was not read past here ...]")
+	}
 	head, end := c.Body, c.BodyEnd
 	if end == "" && len(head) > protocol.CapturedHead+protocol.CapturedEnd {
 		head, end = head[:protocol.CapturedHead], head[len(head)-protocol.CapturedEnd:]
@@ -207,15 +212,50 @@ func writeBody(b *bytes.Buffer, c protocol.CapturedBody, redact *protocol.Redact
 	kept := int64(len(head) + len(end))
 	skipped := max(c.BodySize, int64(len(c.Body)+len(c.BodyEnd))) - kept
 	if skipped <= 0 {
-		b.WriteString(head)
-		b.WriteString(end)
+		text := head + end
+		if c.BodyStopped {
+			text = trimStop(redact, text)
+		}
+		b.WriteString(text)
 		return
+	}
+	if c.BodyStopped && end != "" {
+		end = trimStop(redact, end)
 	}
 	h, e := trimGap(redact, head, end)
 	skipped += int64(len(head) - len(h) + len(end) - len(e))
 	b.WriteString(h)
 	fmt.Fprintf(b, "\n[... %d bytes not logged ...]\n", skipped)
 	b.WriteString(e)
+}
+
+// trimStop returns s, the end of a body whose read stopped, without what at its end could be the
+// start of a secret of r's cut off there, left out as trimGap leaves out the start's side of a
+// gap (the window, the part of a form, the run of key characters, then keepWhole), except that
+// the window reaches back no further than the last line break: no spelling of a secret the log
+// decodes holds a raw line break, and each line of a secret that spans lines is a secret of its
+// own. So a stream stopped after its last event, or inside one, keeps every whole event. A body
+// with no line break near its end (JSON on one line, Devin's binary frames) loses the whole
+// window, all of a short one, which is accepted for a body whose read really stopped; the Devin
+// extension reads its reply on past the end frame to the body's end, within a bound, so that a
+// complete one is not marked.
+//
+// shortcut: a secret that spans lines can keep its first line where the read stopped after that
+// line's break, when the line is 1 or 2 bytes: too short to be a secret of its own (8 bytes) and,
+// with its line break, to be the part of a form TrimCut removes (4). Upgrade if a config takes
+// such a secret.
+func trimStop(r *protocol.Redactor, s string) string {
+	n := gapWindow(r)
+	q := len(s) - min(n, len(s))
+	if i := strings.LastIndexByte(s, '\n'); i >= q {
+		q = i + 1
+	}
+	h, _ := r.TrimCut(s[:q], "")
+	q = len(strings.TrimRightFunc(h, secretChar))
+	if n > 0 {
+		q = keepWhole(r, s, q, n, true)
+	}
+	return s[:q]
 }
 
 // gapBytesPerFormByte is how many bytes beside a cut trimGap leaves out for each byte of the

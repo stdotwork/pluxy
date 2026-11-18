@@ -1030,6 +1030,36 @@ fn a_launch_opens_only_a_plain_file_inside_its_folder() {
     let _ = fs::remove_dir_all(dir);
 }
 
+/// The home-folder rule takes the resolved home folder, so these tests need no `HOME` change (the
+/// real lookup falls back to the passwd entry, which a test cannot remove).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_within_folder_is_refused_when_the_home_folder_cannot_be_found() {
+    for within in ["/home", "/home/someone/work", "/"] {
+        let e = within_home_rule(Path::new(within), None).unwrap_err();
+        assert!(
+            e.contains("home folder could not be found"),
+            "{within}: {e}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_within_folder_is_checked_against_the_home_folder_when_it_is_found() {
+    let home = Path::new("/home/someone");
+    for within in ["/", "/home", "/home/someone"] {
+        let e = within_home_rule(Path::new(within), Some(home)).unwrap_err();
+        assert!(e.contains("a folder above it"), "{within}: {e}");
+    }
+    for within in ["/home/someone/work", "/home/other", "/srv/data"] {
+        assert!(
+            within_home_rule(Path::new(within), Some(home)).is_ok(),
+            "{within}"
+        );
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn a_launch_that_opens_a_file_has_the_openers_shape() {
