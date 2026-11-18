@@ -74,6 +74,9 @@ jobs:
         with:
           workspaces: next/app/src-tauri -> target
           key: ${{ matrix.os }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The Rust build embeds the built window (dist/).
       - name: UI kit install
         working-directory: next/ui
@@ -293,6 +296,9 @@ jobs:
         with:
           workspaces: next/app/src-tauri -> target
           key: ${{ matrix.os }}-native-${{ matrix.shard }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: UI kit install
         working-directory: next/ui
         run: bun install --frozen-lockfile
@@ -350,6 +356,9 @@ jobs:
         with:
           workspaces: next/app/src-tauri -> target
           key: ${{ matrix.os }}-dialogs
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: UI kit install
         working-directory: next/ui
         run: bun install --frozen-lockfile
