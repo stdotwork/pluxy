@@ -1014,18 +1014,6 @@ func BuildNewCore(moduleRoot, dir string) error {
 	return nil
 }
 
-// BuildOldCore builds today's core from coreDir (the repository's core/ folder) to out. The
-// old core's plugin host needs cgo.
-func BuildOldCore(coreDir, out string) error {
-	cmd := exec.Command("go", "build", "-o", out, "./cmd/server")
-	cmd.Dir = coreDir
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=1")
-	if b, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("building the old core: %v\n%s", err, b)
-	}
-	return nil
-}
-
 // StartNewCore starts the new core from binDir with the case's provider pointed at upstreamURL,
 // one account per key, the settings in extra added to its config, and the case's override (over)
 // merged in. With a managementKey the management API is on, and the extensions honour the login

@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.15
+# pluxy extension protocol, version 0.16
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -23,9 +23,10 @@ Version 0.12 adds the account's [`headers`](#headers): extra HTTP headers on tha
 Version 0.13 adds [upstream capture](#upstream-capture): what the extension sent upstream and got
 back, for core's request logs. Version 0.14 adds [payload rules](#payload-rules): fields of the
 upstream JSON body that the config sets, fills in or removes. Version 0.15 has a session turn carry
-them too. It is deliberately small; later versions add capabilities and more operations without
-changing what is described here. An extension written for version 0 works unchanged with a core
-that speaks 0.15 (see
+them too. Version 0.16 adds an error's `dropped`: what a refusal under the `reject` drop policy
+could not carry. It is deliberately small; later versions add capabilities and more operations
+without changing what is described here. An extension written for version 0 works unchanged with a
+core that speaks 0.16 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -298,10 +299,12 @@ such endpoint, or not for this request's format) answers with code `unsupported`
 to an extension whose describe reports `protocol_minor` 2 or more and lists it in `operations`;
 for any other, core treats the account as one that cannot count. Core routes a count like a
 request: the same accounts, blocks and retries. An extension does not estimate: when the count
-gets no answer and an account tried answered `unsupported`, core answers the client with its own
-estimate (unless the config turns `token_count_estimate` off, then with the last error). When no
-account tried answered `unsupported`, any other error, such as an upstream's 400 or 429, reaches
-the client as it is.
+gets no answer and an account tried answered `unsupported` with a scope other than `request` and
+without `dropped` (one that cannot count, or a drop refusal from an extension before 0.16, which
+sends no `dropped`), core answers the client with its own estimate (unless the config turns
+`token_count_estimate` off, then with the last error). Otherwise the last error reaches the client
+as it is: an upstream's 400 or 429, a refusal under `drop_policy` `reject` (an `unsupported` error
+with `dropped`), or an `unsupported` error with scope `request`.
 
 ### `models`
 
@@ -482,22 +485,44 @@ number, core also holds back a colon, bracket or comma at the end of a piece, wi
 it and the number that follows, if any (a run of digits, `-`, `+`, `.`, `e` and `E` that starts
 with a digit or `-`), when they take 64 bytes or fewer, so that a number holding the secret
 becomes `0` as a whole; where they start inside one of those forms, it holds back that form too.
-Other text is not held back for this, such as the `e` that ends `there`. Where holding back would
-change what core finds in the text whole (for example a secret spelled with other escapes, or text
-so heavily escaped that core replaces all of it with
-`[redacted]`), core sends at once all it has, redacted whole, but for the end of what it would have
-held that this left as it was, which it goes on holding back. It then replaces with `[redacted]`
-the rest of a secret in one of those forms that began in what it would have held and that later
-pieces complete; what it sent of that start stays sent. It sends what it still holds once the body
-ends with `finish`, and drops it when the body breaks off with an error or is cancelled: the body
-is broken there anyway, and what it held could be part of a secret. Three limits remain. A secret
-spelled with escapes outside those forms (`\u0073` for `s`, `%73`) that a cut splits is not found,
-as when each piece is redacted alone. A number that, with what stands before it, takes more than 64
-bytes and is cut between pieces may become `[redacted]`, or `0` followed by the rest of its digits,
-rather than `0`, which leaves the JSON invalid. And core reads as JSON each text that is JSON on its
-own, so where a cut makes a piece JSON on its own that the whole body is not (such as a JSON
-string), or the other way round, a number holding a secret may become `0` rather than `[redacted]`,
-or the other way round. In the last two the secret is still removed.
+Other text is not held back for this, such as the `e` that ends `there`. Core also reads the
+pieces as one text for a secret spelled with other escapes that it decodes (`\u0073` for `s`, `%73`,
+`\\u0073` in JSON quoted twice): it holds back an escape at the end of a piece that the next piece
+could complete (a backslash, `\u` with fewer than four hex digits, the first half of a surrogate pair,
+`%` with fewer than two hex digits), and the end of a piece that decodes to the start of a secret,
+and it never cuts a piece inside an escape. For that it holds back at most 12 bytes for each byte of
+the longest of those forms, and at least 768 bytes, which covers escapes of up to 11 bytes for each
+byte of a secret (`\u005cu0073`), and runs of escapes nested by escaping the backslash again
+(`\\\\`, `\u005c\u005c`), which come through as they are. For one piece more it can hold back more,
+where the rest of a secret that began in what it had already sent goes on past the start of
+another (below). A start of a secret written with longer escapes (escapes of escapes, such as each
+character of `\u0073` escaped again, 36 bytes for each byte) is replaced with `[redacted]` whether it
+completes or not, together with what goes on with it in the decoded text up to the end of the
+secret it began; what follows that cannot go on with it comes through. Where an escape is nested so
+deep that core cannot follow what goes on with it within that limit, or where what follows it is so
+heavily escaped that core cannot tell what secrets it holds, core replaces instead what follows that
+could still be part of a secret or an escape: bytes of those kinds, up to the first other byte (such
+as a space or a comma), and no more than 48 bytes past the length of the longest of those forms in a
+row without a backslash or `%`. Where it stops at that limit, a secret that began in what it
+replaced is replaced whole. When a secret holds U+FFFD, core first reads each
+byte of invalid UTF-8 in the body as U+FFFD, as a JSON decoder does. Where holding back would change
+what core finds in the text whole (for example text so heavily escaped that core replaces all of it
+with `[redacted]`), core sends at once all it has, redacted whole, but for the end of what it would
+have held that this left as it was, which it goes on holding back. It then replaces with
+`[redacted]` the rest of a secret that began in what it would have held and that later pieces
+complete; what it sent of that start stays sent. It replaces too the rest of an escape that began
+there and that later pieces complete, up to where no escape or secret in the decoded text goes on:
+what the client got for that end may be `[redacted]`, after which the client reads the rest of
+such an escape on its own. Where the text after that is so heavily escaped
+that core cannot tell what secrets it holds, core replaces the rest of the run of bytes that can be
+part of a secret or an escape instead. It sends what it still holds once the body ends with
+`finish`, and drops it when the body breaks off with an error or is cancelled: the body is broken
+there anyway, and what it held could be part of a secret. Two limits remain. A number that, with
+what stands before it, takes more than 64 bytes and is cut between pieces may become `[redacted]`,
+or `0` followed by the rest of its digits, rather than `0`, which leaves the JSON invalid. And core
+reads as JSON each text that is JSON on its own, so where a cut makes a piece JSON on its own that
+the whole body is not (such as a JSON string), or the other way round, a number holding a secret may
+become `0` rather than `[redacted]`, or the other way round. In both the secret is still removed.
 
 Except for the direct `codex.models` call above, an `error` before `response.start` is
 routed as for `generate`: core tries another account when it is retryable, and otherwise answers
@@ -654,7 +679,7 @@ version 0.
 | `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it), `thinking_suffix` (version 0.2; see below). |
 | `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`, and the headers the client names itself with: `user-agent`, `x-app`, `anthropic-dangerous-direct-browser-access`, `x-claude-code-session-id`, `x-client-request-id`, the `x-stainless-*` headers of Anthropic's SDKs, `x-client-app` and `x-anthropic-additional-protection`; and Claude Code's subagent, request and remote-session headers (`x-claude-code-agent-id`, `x-claude-code-parent-agent-id`, `x-claude-code-agent-type`, `x-claude-code-request-class`, `x-claude-code-prev-tool-durations`, `x-claude-code-compaction`, `x-claude-code-context-compacted`, `x-claude-remote-container-id`, `x-claude-remote-session-id`), which an extension should send upstream only for a request that names itself as Claude Code (`anthropicmessages.IsClaudeCode`: `x-app: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta); for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version`, `originator` and `user-agent`). |
 | `origin` | The request's top-level fields that have no place in the model (see Origin below). |
-| `drop_policy` | What to do when building the upstream request would drop part of this one: `report` (default: send it and report the losses) or `reject` (refuse with `unsupported`, naming what could not be carried). |
+| `drop_policy` | What to do when building the upstream request would drop part of this one: `report` (default: send it and report the losses) or `reject` (refuse with `unsupported`; since 0.16 the error's `dropped` names what could not be carried, which the message may name too). |
 | `caller` | Version 0.8. A value that stands for the client key the request came with: the same for every request with that key to this extension, different for another key or another extension, and not derivable from the key (core derives it with a secret it makes each time it starts, so it changes when core restarts). Absent when the client sent no key. Core sends it with `generate`, `count_tokens` and `endpoint` calls, to every extension. An extension that keeps state from replies across requests, such as reasoning to put back into a later turn, keys that state by `caller`, so one client never gets another's. |
 
 Item types:
@@ -802,7 +827,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | Field | Meaning |
 | --- | --- |
 | `code` | One of the codes below. |
-| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
+| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, `dropped`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
 | `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. For `login` and `refresh` calls, see [Errors in login and refresh calls](#errors-in-login-and-refresh-calls). |
@@ -811,6 +836,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | `raw` | The upstream's error body, unchanged. |
 | `usage` | Usage the upstream reported before the failure, in the same form as `finish.usage`; absent when it reported none. A reply that fails partway may still have cost tokens. |
 | `quota_window_minutes` | Version 0.6. For code `quota`: the length, in minutes, of the usage window that is used up, when the upstream said (such as 300 for a five-hour window). Core passes it on in its [usage-limit reply](../README.md#accounts-and-routing). |
+| `dropped` | Version 0.16. Only on a refusal under the request's `drop_policy` `reject`: the paths of the request's parts the upstream's format cannot carry, as the translation's losses name them. Core tells such a refusal from an account that cannot serve the call by it (see [`count_tokens`](#count_tokens)). |
 
 Codes an extension sends:
 
@@ -1250,7 +1276,7 @@ handler's context.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.15. An extension reports the minor version it
+raise the minor version: this document is version 0.16. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1273,8 +1299,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.13 | [Upstream capture](#upstream-capture): the call's optional `capture` and the `diagnostic` frame. |
 | 0.14 | [Payload rules](#payload-rules): the call's optional `payload`. |
 | 0.15 | The `payload` of a [session turn](#turns). |
+| 0.16 | An error's `dropped`. |
 
-## What version 0.15 leaves out
+## What version 0.16 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

@@ -218,7 +218,18 @@ pub struct Store {
 #[cfg(unix)]
 fn private_dir(path: &Path) -> io::Result<()> {
     fs::create_dir_all(path)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    no_entries(path)
+}
+
+/// macOS: the folder at path has no extended access list entry, the 0700 mode's twin, so what
+/// is made in it inherits none (`private_macos.rs`). Nothing elsewhere.
+#[cfg(unix)]
+fn no_entries(path: &Path) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    crate::private_macos::clear_entries(&fs::File::open(path)?)?;
+    let _ = path;
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -612,9 +623,16 @@ fn lock(path: &Path) -> io::Result<()> {
 }
 
 /// Whether an installed file, open as f with metadata m, is still as `lock` left it: on Unix
-/// writable by no one, with the execute bit it was installed with.
+/// writable by no one, with the execute bit it was installed with; on macOS also with no
+/// extended access list entry, which could let another user change it whatever the mode
+/// (`private_macos.rs`; a list that cannot be read counts as one).
 #[cfg(unix)]
-fn locked(_f: &File, m: &fs::Metadata, executable: bool) -> bool {
+fn locked(f: &File, m: &fs::Metadata, executable: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    if crate::private_macos::has_entries(f).unwrap_or(true) {
+        return false;
+    }
+    let _ = f;
     let mode = m.permissions().mode();
     (mode & 0o100 != 0) == executable && mode & 0o222 == 0
 }
@@ -651,6 +669,7 @@ impl Store {
         private_dir(&s.staging()).map_err(|e| format!("{}: {e}", dir.display()))?;
         #[cfg(unix)]
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+            .and_then(|_| no_entries(dir))
             .map_err(|e| format!("{}: {e}", dir.display()))?;
         #[cfg(windows)]
         crate::private_windows::make_private_dir(dir)
@@ -1506,6 +1525,59 @@ impl ConfigSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// macOS: the store's folders keep no extended access list entry, as they keep no group or
+    /// other mode bits, so nothing made in them inherits one.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_store_passes_no_access_list_on() {
+        let dir = std::env::temp_dir().join(format!("pluxy-cores-acl-{}", random_key()));
+        let cores = dir.join("cores");
+        fs::create_dir_all(cores.join("versions")).unwrap();
+        for d in [&cores, &cores.join("versions")] {
+            crate::private_macos::add_entry(
+                d,
+                "everyone allow list,file_inherit,directory_inherit",
+            );
+        }
+        let store = Store::open(&cores).unwrap();
+        let has =
+            |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+        for d in [
+            &cores,
+            &store.versions(),
+            &store.records(),
+            &store.staging(),
+        ] {
+            assert!(!has(d), "{}", d.display());
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// macOS: a version whose program an extended access list entry lets others change is not
+    /// run, as one with a write mode bit is not.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_program_with_an_access_list_entry_is_not_run() {
+        let dir = std::env::temp_dir().join(format!("pluxy-cores-acl-{}", random_key()));
+        fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("pluxy");
+        fs::write(&src, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o755)).unwrap();
+        let (sha, size) = sha256_of(File::open(&src).unwrap()).unwrap();
+        let store = Store::open(&dir.join("cores")).unwrap();
+        let (id, _) = store.adopt(&src, &sha, size).unwrap();
+        // The positive control: the version as installed is run.
+        store.program(&id).unwrap();
+        crate::private_macos::add_entry(&store.folder(&id).join(PROGRAM), "everyone allow write");
+        let e = store.program(&id).unwrap_err();
+        assert!(e.contains("changed since it was installed"), "{e}");
+        let _ = std::process::Command::new("/bin/chmod")
+            .args(["-R", "u+w"])
+            .arg(&dir)
+            .status();
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     /// N5: a config that did not exist is recorded by the absent mark, and that is what a
     /// failed restore names.

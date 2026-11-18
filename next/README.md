@@ -1,10 +1,10 @@
 # next: the new pluxy core
 
-A new core for pluxy, built from scratch beside today's core, the Go proxy in `core/`. (In this
-README and in the corpus, "today's core" and "the old core" mean that core, and `core/...` paths
-are files in it. Once `core/` is removed from the repository, they mean `core/` at the last commit
-that still has it; the commit will be named here when that happens.) Core receives client requests and
-hands them to **provider extensions**: separate programs, one per kind of upstream, that core
+A new core for pluxy, built from scratch to replace the old core, the Go proxy that was in `core/`.
+(In this README and in the corpus, "today's core" and "the old core" mean that core, and `core/...`
+paths are files in it as they are at commit `0b84f013f18e1bbf528533b1c6f2c2dbdb19fc67`, the last commit
+that changed `core/`. The folder has since been removed from the repository.) Core receives client
+requests and hands them to **provider extensions**: separate programs, one per kind of upstream, that core
 starts and talks to over a local socket. Today it serves OpenAI Chat Completions, OpenAI
 Responses, Anthropic Messages and Gemini GenerateContent (streamed and not, over HTTP) through the
 OpenAI-compatible API-key provider, which talks to an upstream that speaks any of them. A request
@@ -167,7 +167,8 @@ counts the system text, each message's role and text, reasoning, tool calls and 
 tools' names, descriptions and parameters, and the tool choice; images and files add nothing.
 `token_count_estimate` (top level, default `true`) turns the estimate off: core then answers an
 error saying the account cannot count. When every account tried can count, an error from an
-upstream that counts (a 400, 401 or 429) stays an error.
+upstream that counts (a 400, 401 or 429) stays an error, and so does a refusal under
+`drop_policy` `"reject"`.
 
 A model name may end in a thinking setting in brackets, as today's core reads it: a level
 (`gpt-5(high)`; `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), `none`, `auto`, or a token
@@ -593,9 +594,9 @@ The model name is read in lower case, without a Bedrock prefix (`anthropic.`, or
 `apac.` or `global.` before it), a context window in brackets (`[1m]`) or a Vertex AI version
 after `@`; the same reading decides the thinking settings above, so Claude Mythos models get
 thinking from a reasoning effort too. Each one left out is reported as dropped, so
-`drop_policy` `"reject"` refuses a generation request that would lose one. A Messages client's own
-sampling settings go upstream as it wrote them. Today's core leaves both out
-of every translated request, on every model.
+`drop_policy` `"reject"` refuses a generation request, or a token count sent to Anthropic's own
+API, that would lose one. A Messages client's own sampling settings go upstream as it wrote them.
+Today's core leaves both out of every translated request, on every model.
 
 Every request, a Messages client's or a translated one, also gets the betas its body needs, after
 the client's own and without repeats, as today's core adds them: `advisor-tool-2026-03-01` for a
@@ -1234,8 +1235,7 @@ signature) is not retry-safe, and a reply that ends without its end frame is an 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
 through as given); a session's turn count (each request is a new session, as today's core sends
-for a client that names none); the account's plan and quota status (`GetUserStatus`) and a used-up
-quota's reset time; the remote model catalog refresh; Devin's names for older models
+for a client that names none); a used-up quota's reset time; the remote model catalog refresh; Devin's names for older models
 (`claude-haiku-4-5`, `gpt-4-1`, Sonnet 4.5, Claude 4.5 Opus) and the `-fast` variants built from a
 `<effort>-fast` request; the usage fallback from response dimensions; images in tool results;
 signature types other than `sealed`; namespace tools and custom (freeform) tools such as
