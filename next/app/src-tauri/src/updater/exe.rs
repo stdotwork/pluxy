@@ -705,12 +705,8 @@ pub(super) mod tests {
     /// install does before it moves anything.
     fn ready(folder: &Path, dir: &Path, v: &str) -> (Staged, Pending) {
         let staged = stage(folder, payload(&program_bytes(v)), v, dir).unwrap();
-        let from = Pinned {
-            version: "0.1.0".into(),
-            sha256: digest(folder).unwrap(),
-        };
-        let kept = super::super::kept_path(dir, &from);
-        copy_new(folder, &kept).unwrap();
+        // Kept as an install keeps it: a kept set already there with this digest is used again.
+        let from = super::super::keep(dir, folder, "0.1.0", &digest(folder).unwrap()).unwrap();
         let to = Pinned {
             version: "0.2.0".into(),
             sha256: staged.digest().into(),

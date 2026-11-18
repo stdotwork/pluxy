@@ -826,8 +826,12 @@ async function bundle() {
       `the folder bundle holds ${files.join(", ")}, not only the program set ${SET_PARTS.join(", ")}`,
     );
     check(made.program === join(made.bundle, exe), `the program ${made.program} is not the bundle's ${exe}`);
-    // The update is the second build's set as a .tar.gz, its parts at the top.
-    const listed = run("tar", ["-tzf", made.update.payload]).out.split(/\r?\n/).filter(Boolean);
+    // The update is the second build's set as a .tar.gz, its parts at the top. Read with Windows'
+    // own tar: the one first on the runner's PATH (Git's GNU tar) takes `D:` for a remote host.
+    const tar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+    const read = run(tar, ["-tzf", made.update.payload]);
+    check(read.status === 0, `${tar} could not list the update archive: ${read.out}`);
+    const listed = read.out.split(/\r?\n/).filter(Boolean);
     const tops = [...new Set(listed.map((e) => e.replace(/\/.*$/, "")))].sort();
     check(
       JSON.stringify(tops) === JSON.stringify(SET_PARTS),
