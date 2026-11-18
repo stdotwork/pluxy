@@ -60,6 +60,11 @@ func NewRedactor(cs ...*Credential) *Redactor {
 			}
 		}
 	}
+	// A secret made of parts is secret part by part too: an upstream may echo only the token
+	// behind a public prefix or an authorization scheme, or one cookie of a list.
+	for _, s := range secrets {
+		secrets = append(secrets, SecretParts(s)...)
+	}
 	var variants []string
 	for _, s := range secrets {
 		variants = append(variants, encodings(s)...)
@@ -87,6 +92,116 @@ func NewRedactor(cs ...*Credential) *Redactor {
 	}
 	red.r, red.find = strings.NewReplacer(pairs...), strings.NewReplacer(gone...)
 	return red
+}
+
+// SecretParts returns the parts of the secret s that are secret on their own, each at least 8
+// bytes long (shorter ones would match unrelated text), in the order found. NewRedactor removes
+// each of them, besides s. These structures are split, and each part split again, up to 4 times:
+//
+//   - an authorization value, "Bearer <token>" or "Basic <base64>" (the scheme in any letter case):
+//     the token, or the base64 text, what it decodes to ("user:password") and the password;
+//   - a token behind a public prefix, "<prefix>$<token>" or "<prefix>:<token>" (such as Devin's
+//     "devin-session-token$<jwt>", Meta's "dca:<token>" or a header line "Name: value"), where
+//     the prefix is a letter and up to 31 more letters, digits, "-", "_" or ".", and the token
+//     (spaces after ":" aside) does not start with "/", so a URL's "scheme://" is not one: the
+//     token;
+//   - a cookie list, "name=value; name=value" (or one pair): each value, its double quotes
+//     aside, where the name is an HTTP token and the value holds only cookie characters.
+//
+// A prefix, a scheme or a cookie name is never a part.
+func SecretParts(s string) []string {
+	var out []string
+	seen := map[string]bool{s: true}
+	var split func(string, int)
+	split = func(s string, depth int) {
+		if depth == maxPartDepth {
+			return
+		}
+		for _, p := range directParts(s) {
+			if len(p) >= minFragment && !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+				split(p, depth+1)
+			}
+		}
+	}
+	split(s, 0)
+	return out
+}
+
+// maxPartDepth bounds how many times SecretParts splits a part again.
+const maxPartDepth = 4
+
+// maxPrefix is the longest public prefix SecretParts takes off a token.
+const maxPrefix = 32
+
+// directParts returns the parts of s by the structures SecretParts lists, without splitting them
+// again; some may be short.
+func directParts(s string) []string {
+	s = strings.TrimSpace(s)
+	var out []string
+	if i := strings.IndexAny(s, " \t"); i > 0 {
+		scheme, rest := s[:i], strings.TrimLeft(s[i:], " \t")
+		switch {
+		case rest == "":
+		case strings.EqualFold(scheme, "Bearer"):
+			out = append(out, rest)
+		case strings.EqualFold(scheme, "Basic"):
+			out = append(out, rest)
+			b, err := base64.StdEncoding.DecodeString(rest)
+			if err != nil {
+				b, err = base64.RawStdEncoding.DecodeString(rest)
+			}
+			if err == nil && utf8.Valid(b) {
+				out = append(out, string(b))
+				if _, pass, ok := strings.Cut(string(b), ":"); ok {
+					out = append(out, pass)
+				}
+			}
+		}
+	}
+	if i := strings.IndexAny(s, "$:"); i > 0 && i <= maxPrefix && publicPrefix(s[:i]) {
+		if rest := strings.TrimLeft(s[i+1:], " \t"); !strings.HasPrefix(rest, "/") {
+			out = append(out, rest)
+		}
+	}
+	if strings.IndexByte(s, '=') > 0 {
+		for _, c := range strings.Split(s, ";") {
+			name, value, ok := strings.Cut(strings.TrimSpace(c), "=")
+			if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+				value = value[1 : len(value)-1]
+			}
+			if ok && name != "" && strings.IndexFunc(name, func(r rune) bool { return !tokenChar(r) }) < 0 &&
+				strings.IndexFunc(value, func(r rune) bool { return !cookieChar(r) }) < 0 {
+				out = append(out, value)
+			}
+		}
+	}
+	return out
+}
+
+// publicPrefix reports whether p has the shape of a public prefix before a token: a letter, then
+// letters, digits, "-", "_" or ".".
+func publicPrefix(p string) bool {
+	for i, r := range p {
+		letter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+		if !letter && (i == 0 || !(r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.')) {
+			return false
+		}
+	}
+	return p != ""
+}
+
+// tokenChar reports whether r may be part of an HTTP token (RFC 9110 section 5.6.2), as a
+// cookie's name is.
+func tokenChar(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("!#$%&'*+-.^_`|~", r)
+}
+
+// cookieChar reports whether r may be part of a cookie's value (RFC 6265 section 4.1.1): printable
+// ASCII but space, double quote, comma, semicolon and backslash.
+func cookieChar(r rune) bool {
+	return r > ' ' && r < 0x7f && r != '"' && r != ',' && r != ';' && r != '\\'
 }
 
 // minCutFragment is the shortest part of a secret, at the cut of a body kept in two pieces,

@@ -1,0 +1,129 @@
+package sdk
+
+import (
+	"encoding/json"
+	"net/url"
+	"slices"
+	"strings"
+
+	"github.com/stdotwork/pluxy/next/protocol"
+)
+
+// minSideSecret is the shortest secret AccountSecrets takes from an account's headers, proxy and
+// settings, as core removes a shorter one only next to its name, or not at all: it would match
+// unrelated text.
+const minSideSecret = 8
+
+// AccountSecrets returns the secrets of account a for UpstreamText, so that a piece of any of them
+// an upstream echoes is removed. They are the ones sdk.Upstream sends or core holds as secret:
+//
+//   - the credential's api_key, access_token and refresh_token;
+//   - the value of each header whose name is secret (protocol.SecretName);
+//   - the user name and password of proxy_url;
+//   - in settings, every string below a key whose name is secret (protocol.SecretName), and the
+//     user name, password and secret query values (by the same names) of every URL.
+//
+// A secret made of parts (protocol.SecretParts) counts by its parts only, not whole: the words of a
+// public prefix, scheme or cookie name ("devin-session-token$", "Bearer", "sid=") are not pieces.
+// A secret other than the credential's that is shorter than 8 bytes is left out, as core leaves it
+// in text. The credential's data is left out too: it mixes secrets with plain values (a base URL,
+// a project ID, an OAuth scope) whose words would count as pieces, so an extension passes a secret
+// it keeps there itself.
+func AccountSecrets(a protocol.Account) []string {
+	var out []string
+	add := func(s string, short bool) {
+		if s == "" || !short && len(s) < minSideSecret {
+			return
+		}
+		parts := protocol.SecretParts(s)
+		if len(parts) == 0 {
+			parts = []string{s}
+		}
+		for _, p := range parts {
+			// A part that holds another is a wrapper of it, with public words around it.
+			if slices.ContainsFunc(parts, func(q string) bool { return q != p && strings.Contains(p, q) }) {
+				continue
+			}
+			if !slices.Contains(out, p) {
+				out = append(out, p)
+			}
+		}
+	}
+	if c := a.Credential; c != nil {
+		add(c.APIKey, true)
+		add(c.AccessToken, true)
+		add(c.RefreshToken, true)
+	}
+	for name, v := range a.Headers {
+		if protocol.SecretName(name) {
+			add(v, false)
+		}
+	}
+	for _, s := range urlSecrets(a.ProxyURL, true) {
+		add(s, false)
+	}
+	if len(a.Settings) > 0 {
+		var v any
+		if json.Unmarshal(a.Settings, &v) == nil {
+			settingsSecrets(v, false, func(s string) { add(s, false) })
+		}
+	}
+	return out
+}
+
+// settingsSecrets calls add with each secret in the settings value v: each string below a key
+// whose name is secret (secret says v is), and the secrets of each URL (urlSecrets).
+func settingsSecrets(v any, secret bool, add func(string)) {
+	switch v := v.(type) {
+	case string:
+		if secret {
+			add(v)
+		}
+		for _, s := range urlSecrets(v, false) {
+			add(s)
+		}
+	case map[string]any:
+		for k, x := range v {
+			settingsSecrets(x, secret || protocol.SecretName(k), add)
+		}
+	case []any:
+		for _, x := range v {
+			settingsSecrets(x, secret, add)
+		}
+	}
+}
+
+// urlSecrets returns the user name and password of the URL s, and the values of its query
+// parameters whose names are secret (protocol.SecretName) unless proxy is set, as written and
+// decoded; nothing for a string that is not an absolute URL.
+func urlSecrets(s string, proxy bool) []string {
+	s = strings.TrimSpace(s)
+	if !strings.Contains(s, "://") {
+		return nil
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	if u.User != nil {
+		out = append(out, u.User.Username())
+		if p, ok := u.User.Password(); ok {
+			out = append(out, p)
+		}
+	}
+	if proxy {
+		return out
+	}
+	for _, kv := range strings.Split(u.RawQuery, "&") {
+		k, v, _ := strings.Cut(kv, "=")
+		if name, err := url.QueryUnescape(k); err != nil || !protocol.SecretName(name) {
+			continue
+		}
+		out = append(out, v)
+		if d, err := url.QueryUnescape(v); err == nil && d != v {
+			out = append(out, d)
+		}
+	}
+	return out
+}

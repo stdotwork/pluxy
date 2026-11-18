@@ -77,6 +77,10 @@ func fakeExtension(mode string) {
 		mintCredential()
 		return
 	}
+	if mode == "echo-parts" {
+		echoParts()
+		return
+	}
 	if mode != "sleep-child" { // the child shares its parent's folder
 		_ = os.WriteFile("pid", []byte(strconv.Itoa(os.Getpid())), 0o644)
 		_ = os.WriteFile("env", []byte(strings.Join(os.Environ(), "\n")), 0o644)

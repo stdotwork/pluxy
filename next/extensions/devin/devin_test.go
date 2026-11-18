@@ -179,7 +179,7 @@ func (r *recorder) types() string {
 
 func relayFrames(frames ...[]byte) (*recorder, error) {
 	rec := &recorder{}
-	r := newRelay(rec, "swe-2", nil)
+	r := newRelay(rec, "swe-2", nil, nil)
 	return rec, r.run(context.Background(), bytes.NewReader(bytes.Join(frames, nil)))
 }
 
@@ -264,7 +264,7 @@ func TestStatusErrors(t *testing.T) {
 	if e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeModel {
 		t.Errorf("quota with no period: %+v", e)
 	}
-	if e := trailerError([]byte(`{"error":{"code":"canceled","message":"x"}}`)); e.Status != 499 {
+	if e := trailerError([]byte(`{"error":{"code":"canceled","message":"x"}}`), nil); e.Status != 499 {
 		t.Errorf("cancelled: status %d, want 499", e.Status)
 	}
 }

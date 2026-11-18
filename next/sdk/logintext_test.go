@@ -96,3 +96,42 @@ func TestLoginCode(t *testing.T) {
 		}
 	}
 }
+
+// A piece of a secret written with escapes between its characters (JSON's \/ and \uXXXX,
+// percent-encoding, nested) is replaced as written plain is; so is a run whose decoded text holds
+// 24 or more token characters. Other escaped text stays. Expected values are worked out by hand.
+func TestUpstreamTextEscapedPieces(t *testing.T) {
+	const secret = "tok/ab/cd/ef/0123456789"
+	for in, want := range map[string]string{
+		`bad key tok\/ab\/cd\/ef given`:             "bad key [redacted] given",
+		"bad key tok%2Fab%2Fcd%2Fef given":          "bad key [redacted] given",
+		"bad key tok%252Fab%252Fcd given":           "bad key [redacted] given",
+		`bad key \u0074\u006f\u006b\u002f given`:    "bad key [redacted] given",
+		`bad key 0\\\/12\\\/3 given`:                `bad key 0\\\/12\\\/3 given`, // decodes to 0/12/3: no 4 characters of it
+		"path%20with%20spaces and a \\/ slash":      "path%20with%20spaces and a \\/ slash",
+		"refused abcdefgh%2Fijklmnop%2Fqrstuvwx%2F": "refused [redacted]",
+	} {
+		if got := UpstreamText(in, secret); got != want {
+			t.Errorf("UpstreamText(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Without a secret, the long run is still found behind its escapes.
+	if got := UpstreamText(`token a1b2c3d4\/e5f6g7h8\/i9j0k1l2\/m3`); got != "token [redacted]" {
+		t.Errorf("an escaped 30-character run became %q", got)
+	}
+}
+
+// The values of fields named token and session_token are replaced, as other secret fields' are;
+// a word that only holds "token" stays.
+func TestUpstreamTextTokenFields(t *testing.T) {
+	for in, want := range map[string]string{
+		"bad session_token=zzz-short-1 given": "bad session_token=[redacted] given",
+		`{"token": "abc123"} refused`:         `{"token": "[redacted]"} refused`,
+		"max_token=5 and tokens: 5 left":      "max_token=5 and tokens: 5 left",
+		"invalid token, try again":            "invalid token, try again",
+	} {
+		if got := UpstreamText(in); got != want {
+			t.Errorf("UpstreamText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

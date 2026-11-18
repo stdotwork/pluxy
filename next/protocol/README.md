@@ -582,6 +582,22 @@ unrelated text; the management API still shows it as a placeholder. When the set
 core keeps removing the secrets of every earlier settings from the extension's stderr and stdout
 until the program exits, for calls that still run with them.
 
+A secret made of parts (in the credential, the settings, the proxy or the headers) counts part by
+part too, since an upstream may echo only one part: core also removes each part of 8 bytes or
+more, in the same forms, but never the public prefix, scheme or name around it. It splits these
+structures, and each part again, up to 4 times:
+
+- an authorization value, `Bearer <token>` or `Basic <base64>` (the scheme in any letter case):
+  the token, or the base64 text, what it decodes to (`user:password`) and the password;
+- a token behind a public prefix, `<prefix>$<token>` or `<prefix>:<token>`, such as Devin's
+  `devin-session-token$<jwt>`, Meta's `dca:<token>` or `Name: value`, where the prefix is a letter
+  and up to 31 more letters, digits, `-`, `_` or `.`, and the token (spaces after `:` aside) does
+  not start with `/`, so a URL's `scheme://` is not one: the token;
+- a cookie list, `name=value; name=value` (or one pair): each value, its double quotes aside,
+  where the name is an HTTP token and the value holds only cookie characters.
+
+In Go, `protocol.SecretParts` returns a secret's parts.
+
 ### Proxy
 
 From version 0.11 an account may carry `proxy_url`, an `http://`, `https://`, `socks5://` or
@@ -630,8 +646,9 @@ secret: an extension never logs or shows it, and core removes it from everything
 back, as it does a credential's strings; a value shorter than 8 bytes is removed only next to
 its name, as text shows a header (`Name: value`, `Name:value`, `Name=value`, JSON's
 `"Name":"value"`, with the name as configured, in canonical form, in lower case or in upper case),
-so it does not scrub unrelated text; in another spelling a value that short stays.
-Other values are not removed.
+so it does not scrub unrelated text; in another spelling a value that short stays. A value made
+of parts, such as `Bearer <token>` or a list of cookies, has each part removed on its own too
+(see [Accounts](#accounts)). Other values are not removed.
 
 Core sends a call that has headers only to an extension whose describe reports
 `protocol_minor` 12 or more; for any other it fails the call itself with `unsupported` (scope
@@ -1251,6 +1268,9 @@ Rules:
   its start and its end: never hold a whole stream, delay the request to read its body first, or
   delay a piece of a reply to record it. What the extension had not read when it sent the frame is
   not in it.
+- Leave out credential traffic the call makes for itself whose secrets core does not know, such
+  as trading a key for an access token: core removes only the account's own secrets, so the token
+  and what was sent for it would reach the request log.
 - A WebSocket handshake is an exchange: the `GET` request and the `101` response's status and
   headers, with no body. The messages on the socket are not captured. A turn that uses a socket an
   earlier turn opened makes no exchange, and a socket opened by the `session` call itself, before
@@ -1269,7 +1289,8 @@ core redacts them as it does an [endpoint](#endpoint) body's pieces, so a creden
 forms it removes that is cut between them is removed, and logs them joined.
 
 In Go, `sdk.Upstream` does all of this for each client it wraps, for requests made with the
-handler's context.
+handler's context; a request made with `sdk.Uncaptured(ctx)` is sent the same way but not
+recorded.
 
 ## Versioning
 
