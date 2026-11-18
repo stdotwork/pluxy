@@ -177,17 +177,25 @@ runner host cancels any run from a fork that asks for its runners. Before approv
 check whether it changes `.github/workflows/`.
 
 A third variable, `PLUXY_MACOS_CLOUD_RUNNER`, sends some macOS jobs to another provider's
-runners, such as Blacksmith's. It holds a plain runner label, for example
-`blacksmith-6vcpu-macos-26`. When it is not set, those jobs run on `macos-latest`.
+runners, Namespace's. It holds a bare runner profile label, for example
+`namespace-profile-macos-26` (no `;key=value` settings: the runner check refuses them). When it is not set, those jobs run on `macos-latest`.
 
 It applies to these jobs:
 - the `app` job in `next-app-platforms.yml`;
+- the macOS legs of the `native` and `dialogs` jobs in `next-app-platforms.yml`. Their tests write
+  the account's own folders, so they also check the runner (`next/app/native/runner.ts`): the job
+  passes the label in `PLUXY_EPHEMERAL_CI_RUNNER`, and the check accepts only a Namespace profile
+  label, a runner Namespace named and Namespace's own variable. Another provider needs a change to
+  that check;
 - the `tools` job in `next-app-tools-platforms.yml`;
 - the `build` jobs in `next-app-tools-pack.yml`.
 
 Some macOS jobs and every Windows job stay on GitHub's runners:
-- The `native` and `dialogs` jobs, and the app's Windows registry tests, run only on a runner that
-  reports itself GitHub-hosted. Another provider's runner reports itself self-hosted.
+- The app's Windows registry tests run only on a runner that reports itself GitHub-hosted.
+  Another provider's runner reports itself self-hosted.
+- The Windows `native` and `dialogs` jobs need a signed-in desktop session, which Blacksmith's
+  Windows runner lacked (it runs in the services session, where the app's window never shows), and
+  the workflow names no cloud runner for Windows: Namespace's trial plan has none.
 - The Windows app-tool tests fail on Blacksmith's Windows runner.
 - The WSL jobs need GitHub's Windows runners.
 - The workflows a tag starts always use GitHub's runners.
