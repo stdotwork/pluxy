@@ -194,7 +194,14 @@ fn merged_tauri_config_matches_build_order() {
         br#"{"plugins":{"updater":{"pubkey":"platform"}}}"#,
     )
     .unwrap();
-    let config = build_config::merged(&f.dir, "x86_64-unknown-linux-gnu", None).unwrap();
+    let (config, files) = build_config::merged(&f.dir, "x86_64-unknown-linux-gnu", None).unwrap();
+    assert_eq!(
+        files,
+        [
+            f.dir.join("tauri.conf.json"),
+            f.dir.join("tauri.linux.conf.json")
+        ]
+    );
     assert_eq!(
         config.pointer("/plugins/updater/pubkey").unwrap(),
         "platform"
@@ -204,7 +211,8 @@ fn merged_tauri_config_matches_build_order() {
         "x86_64-unknown-linux-gnu",
         Some(r#"{"plugins":{"updater":{"pubkey":"environment"}}}"#),
     )
-    .unwrap();
+    .unwrap()
+    .0;
     assert_eq!(
         config.pointer("/plugins/updater/pubkey").unwrap(),
         "environment"

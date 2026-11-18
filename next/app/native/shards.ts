@@ -32,7 +32,7 @@ export const SHARDS: Record<string, readonly string[]> = {
     "remote",
     "packaged",
   ],
-  // About 9 to 11 minutes: five release builds.
+  // One release build: the gate's later calls find it up to date.
   release: ["release gate"],
 };
 
