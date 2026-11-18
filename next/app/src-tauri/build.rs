@@ -52,7 +52,11 @@ fn main() {
     .expect("merged Tauri config");
     // Only the files the config was read from, as tauri-build does: Cargo counts a watched path
     // that does not exist as changed on every build, which reran this script and rebuilt the app
-    // on every build, even with nothing changed.
+    // on every build, even with nothing changed. The empty tauri.linux.conf.json,
+    // tauri.macos.conf.json and tauri.windows.conf.json exist so that each platform's file is read
+    // and watched from the start: Cargo cannot watch for a file being added, so a platform file
+    // added later would not rerun this script, and the app could embed a config its snapshot and
+    // receipt do not describe. Keep them, empty or not (tests/release_config.rs checks).
     for file in files {
         println!("cargo:rerun-if-changed={}", file.display());
     }

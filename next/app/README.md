@@ -1730,7 +1730,11 @@ the app. The validator compares its own compiled inputs and requires the matchin
 artifact. It also merges the config files in `src-tauri` again as `build.rs` does (with
 `TAURI_CONFIG` from its own environment) and refuses a config snapshot that differs: Cargo reruns
 `build.rs` only when a config file it read changes, so a build from before a new platform file
-keeps the old snapshot. Supply the actual app executable along with every package. The validator streams each
+keeps the old snapshot. For the same reason `src-tauri` keeps a platform config file for each
+desktop system, `tauri.linux.conf.json`, `tauri.macos.conf.json` and `tauri.windows.conf.json`,
+even when it is empty (`{}`): `build.rs` watches the files it read, and Cargo cannot watch for a
+file being added, so a platform file added later would not rerun `build.rs`. Keep them.
+Supply the actual app executable along with every package. The validator streams each
 regular file for test markers, test identifiers and Tauri updater keys or signatures. Each
 artifact must be a well-formed executable, ELF (type, machine and program headers inside the
 file), PE (an executable image for x86, x86-64 or arm64, its optional header inside the file) or

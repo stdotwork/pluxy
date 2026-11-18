@@ -240,6 +240,25 @@ fn merged_lists_only_config_files_that_exist() {
 }
 
 #[test]
+fn the_app_keeps_a_platform_config_file_for_each_desktop_system() {
+    // build.rs watches only the files the config was read from, and Cargo cannot watch for a file
+    // being added: each platform's file must exist so that a change to it reruns build.rs.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (target, file) in [
+        ("x86_64-unknown-linux-gnu", "tauri.linux.conf.json"),
+        ("aarch64-apple-darwin", "tauri.macos.conf.json"),
+        ("x86_64-pc-windows-msvc", "tauri.windows.conf.json"),
+    ] {
+        let (_, files) = build_config::merged(root, target, None).unwrap();
+        assert_eq!(
+            files,
+            [root.join("tauri.conf.json"), root.join(file)],
+            "{target}"
+        );
+    }
+}
+
+#[test]
 fn source_config_that_differs_from_the_snapshot_is_refused() {
     // This build's own snapshot matches the app's config files.
     let snapshot: Value = serde_json::from_str(include_str!(concat!(
