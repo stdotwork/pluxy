@@ -5,7 +5,9 @@ package host
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -356,5 +358,130 @@ func TestPiecesAdd(t *testing.T) {
 	got := pieces{"a1", "b2"}.add(pieces{"b2", "c3"})
 	if !slices.Equal(got, pieces{"a1", "b2", "c3"}) {
 		t.Errorf("add = %q", got)
+	}
+}
+
+// A call that sends many captures before it ends holds two, the first and the others joined into
+// one, and the request log's count of exchanges stays right.
+func TestHeldCaptureKeepsFirstAndLast(t *testing.T) {
+	var h heldCapture
+	for i := range 5 {
+		h.hold(protocol.Diagnostic{Upstream: []protocol.UpstreamExchange{{Request: protocol.UpstreamRequest{URL: fmt.Sprint("u", i)}}}})
+	}
+	ds, failed := h.take()
+	if !failed || len(ds) != 2 {
+		t.Fatalf("take = %d captures, failed %v; want 2, true", len(ds), failed)
+	}
+	urls := func(d protocol.Diagnostic) []string {
+		var out []string
+		for _, x := range d.Upstream {
+			out = append(out, x.Request.URL)
+		}
+		return out
+	}
+	if got := urls(ds[0]); !slices.Equal(got, []string{"u0"}) {
+		t.Errorf("first capture %q, want [u0]", got)
+	}
+	if got := urls(ds[1]); !slices.Equal(got, []string{"u3", "u4"}) || ds[1].UpstreamLeftOut != 2 {
+		t.Errorf("last capture %q, %d left out; want [u3 u4], 2", got, ds[1].UpstreamLeftOut)
+	}
+	if again, _ := h.take(); again != nil {
+		t.Errorf("a second take returned %d captures", len(again))
+	}
+}
+
+// pipeStream returns a Stream that reads the frames written to the returned end, capturing into
+// got, for a call on an account whose secrets are p.
+func pipeStream(t *testing.T, p pieces, got *[]protocol.Diagnostic, mu *sync.Mutex) (*Stream, net.Conn) {
+	t.Helper()
+	ours, theirs := net.Pipe()
+	t.Cleanup(func() { ours.Close(); theirs.Close() })
+	s := &Stream{conn: ours, ext: &Extension{manifest: &Manifest{ID: "hosttest/pipe"}}, redact: protocol.NewRedactor(), pieces: p, account: "a",
+		capture: func(_ string, d protocol.Diagnostic) { mu.Lock(); defer mu.Unlock(); *got = append(*got, d) }}
+	return s, theirs
+}
+
+// An extension that sends several diagnostic frames and then an error has at most two captures
+// logged, each 200 reply in them without the pieces of the account's secrets.
+func TestManyCapturesCleanedOnError(t *testing.T) {
+	var mu sync.Mutex
+	var got []protocol.Diagnostic
+	s, ext := pipeStream(t, pieces{pieceKey}, &got, &mu)
+	go func() {
+		for i := range 4 {
+			d := protocol.Diagnostic{Upstream: []protocol.UpstreamExchange{{
+				Request:  protocol.UpstreamRequest{URL: fmt.Sprint("https://up.example/", i)},
+				Response: &protocol.UpstreamResponse{Status: 200, CapturedBody: protocol.CapturedBody{Body: "echo " + pieceEcho, BodySize: int64(len("echo " + pieceEcho))}},
+			}}}
+			_ = protocol.WriteFrame(ext, protocol.Reply{Event: llm.Event{Type: protocol.TypeDiagnostic}, Diagnostic: &d})
+		}
+		_ = protocol.WriteFrame(ext, protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeAuth, Message: "refused"}}})
+	}()
+	if ev := s.Next(); ev.Type != llm.EventError {
+		t.Fatalf("event %+v, want the error", ev)
+	}
+	s.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) == 0 || len(got) > 2 {
+		t.Fatalf("captured %d diagnostics, want 1 or 2", len(got))
+	}
+	exchanges := 0
+	for _, d := range got {
+		exchanges += len(d.Upstream) + d.UpstreamLeftOut
+		for _, x := range d.Upstream {
+			if b := x.Response.CapturedBody.Body; b != "echo [redacted]" {
+				t.Errorf("captured body %q, want the piece removed", b)
+			}
+		}
+	}
+	if exchanges != 4 {
+		t.Errorf("the captures count %d exchanges, want 4", exchanges)
+	}
+}
+
+// Close on another goroutine just after Next has read the call's terminal event reads nothing
+// Next writes unguarded (go test -race).
+func TestStreamCloseWhileNextEnds(t *testing.T) {
+	var mu sync.Mutex
+	var got []protocol.Diagnostic
+	s, ext := pipeStream(t, pieces{pieceKey}, &got, &mu)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.Next()
+	}()
+	d := protocol.Diagnostic{Upstream: []protocol.UpstreamExchange{{Request: protocol.UpstreamRequest{URL: "https://up.example/"}}}}
+	_ = protocol.WriteFrame(ext, protocol.Reply{Event: llm.Event{Type: protocol.TypeDiagnostic}, Diagnostic: &d})
+	_ = protocol.WriteFrame(ext, protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeAuth, Message: "refused"}}})
+	s.Close() // as a client that goes away would, while Next ends the call
+	<-done
+}
+
+// As TestStreamCloseWhileNextEnds, for a session's turn: Close reads whether the turn ended while
+// Next ends it, and the turn's capture is taken once.
+func TestSessionTurnCloseWhileNextEnds(t *testing.T) {
+	ours, theirs := net.Pipe()
+	defer theirs.Close()
+	var mu sync.Mutex
+	var got []protocol.Diagnostic
+	sess := &Session{ext: &Extension{manifest: &Manifest{ID: "hosttest/pipe"}}, conn: ours, running: true,
+		frames: make(chan sessionFrame), done: make(chan struct{}), closing: make(chan struct{})}
+	turn := &SessionStream{s: sess, redact: protocol.NewRedactor(), pieces: pieces{pieceKey}, account: "a",
+		capture: func(_ string, d protocol.Diagnostic) { mu.Lock(); defer mu.Unlock(); got = append(got, d) }}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		turn.Next()
+	}()
+	d := protocol.Diagnostic{Upstream: []protocol.UpstreamExchange{{Request: protocol.UpstreamRequest{URL: "https://up.example/"}}}}
+	sess.frames <- sessionFrame{reply: protocol.Reply{Event: llm.Event{Type: protocol.TypeDiagnostic}, Diagnostic: &d}}
+	sess.frames <- sessionFrame{reply: protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeAuth, Message: "refused"}}}}
+	turn.Close()
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 {
+		t.Errorf("captured %d diagnostics, want 1", len(got))
 	}
 }

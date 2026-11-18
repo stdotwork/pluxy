@@ -137,23 +137,55 @@ func (p pieces) diagnostic(d protocol.Diagnostic, failed bool) protocol.Diagnost
 // heldCapture holds a call's captures, already redacted, until the call ends. An extension sends
 // its diagnostic frame before the call's terminal event, and only that event says whether the
 // call failed, so whether the replies in the capture lose the pieces of the account's secrets.
+// It holds at most two captures, the first and the last, as the request log keeps a request's
+// first and last exchange and counts the others (see joinCaptures): an extension that sends more
+// diagnostic frames than the protocol allows costs no more memory, and is not refused.
+//
+// Its mutex also guards whether the call succeeded, which Next records and Close reads, perhaps
+// on another goroutine.
 type heldCapture struct {
-	mu sync.Mutex
-	ds []protocol.Diagnostic
+	mu        sync.Mutex
+	ds        []protocol.Diagnostic
+	succeeded bool
 }
 
-// hold keeps d.
+// hold keeps d, joined to the last capture held when there are two already.
 func (h *heldCapture) hold(d protocol.Diagnostic) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.ds = append(h.ds, d)
+	if len(h.ds) < 2 {
+		h.ds = append(h.ds, d)
+		return
+	}
+	h.ds[1] = joinCaptures(h.ds[1], d)
 }
 
-// take returns the captures held, once.
-func (h *heldCapture) take() []protocol.Diagnostic {
+// succeed records that the call ended with a finish event.
+func (h *heldCapture) succeed() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.succeeded = true
+}
+
+// take returns the captures held, once, and whether the call failed: it ended in an error, or
+// was closed before its terminal event.
+func (h *heldCapture) take() ([]protocol.Diagnostic, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	ds := h.ds
 	h.ds = nil
-	return ds
+	return ds, !h.succeeded
+}
+
+// joinCaptures returns the exchanges of a and then b as one capture for the request log, which
+// logs only a request's first exchange and its last and counts the ones between: b's last
+// exchange stays last, the one before it stands in for the others, and UpstreamLeftOut counts
+// the rest, so the log's count stays right. It holds at most two exchanges.
+func joinCaptures(a, b protocol.Diagnostic) protocol.Diagnostic {
+	n := len(a.Upstream) + a.UpstreamLeftOut + len(b.Upstream) + b.UpstreamLeftOut
+	all := append(slices.Clip(a.Upstream), b.Upstream...)
+	if len(all) > 2 {
+		all = all[len(all)-2:]
+	}
+	return protocol.Diagnostic{Upstream: slices.Clone(all), UpstreamLeftOut: n - len(all)}
 }

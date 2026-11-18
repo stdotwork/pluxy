@@ -733,6 +733,9 @@ func (s *Stream) Next() llm.Event {
 	}
 	ev := s.pieces.event(s.redact.Event(reply.Event))
 	if ev.Terminal() {
+		if ev.Type == llm.EventFinish {
+			s.held.succeed()
+		}
 		s.final = &ev
 		s.Close()
 		return s.last()
@@ -780,8 +783,9 @@ func (s *Stream) Close() {
 	if s.onClose != nil {
 		defer s.onClose()
 	}
-	for _, d := range s.held.take() {
-		s.capture(s.account, s.pieces.diagnostic(d, s.final == nil || s.final.Type == llm.EventError))
+	ds, failed := s.held.take()
+	for _, d := range ds {
+		s.capture(s.account, s.pieces.diagnostic(d, failed))
 	}
 	if s.stop != nil {
 		s.stop()

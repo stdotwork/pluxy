@@ -49,10 +49,12 @@ func AccountSecrets(a Account) []string {
 }
 
 // AccountSecretsWith is AccountSecrets with settings in place of the secrets AccountSecrets
-// finds in a's settings: core passes the ones its own rules for settings find, and a login's
-// secret inputs. A value that is an absolute URL counts by its user name, password and secret
-// query values only (its other words, such as "https", are no secret), and like every secret
-// but the credential's, one under 8 bytes adds nothing.
+// finds in a's settings. Core passes the values its own rules for settings
+// (configdoc.SettingsSecrets) find in an account's settings, or in a login's input that is a JSON
+// key file, which it passes as settings; and, with an empty account, a login input that is a URL
+// (a pasted redirect URL), alone. A value that is an absolute URL counts by its user name,
+// password and secret query values only (its other words, such as "https", are no secret), and
+// like every secret but the credential's, one under 8 bytes adds nothing.
 func AccountSecretsWith(a Account, settings []string) []string {
 	var out []string
 	for _, s := range settings {
@@ -194,27 +196,21 @@ func urlSecrets(s string, proxy bool) []string {
 }
 
 // secretQueryName reports whether a URL's query parameter is named like a secret, as core's
-// rule for settings (configdoc's secretParam) has it, as far as this package can: by SecretName,
-// as a signature (sig, sas), a password (pwd, pass, passwd, passcode), a signed token or
-// assertion (jwt, client_assertion, credential), an OAuth code or its verifier, or by a name that
-// ends in a secret's word (token, secret, password, apikey, privatekey, ...). Unlike configdoc it
-// does not fold letters as encoding/json does, nor drop a trailing word that says how the value
-// is written (api_key_value).
+// rule for settings (configdoc's secretParam) has it: by SecretName (any name holding key, token,
+// secret, password, auth and the like, which covers every name configdoc's key rule takes, such
+// as api_key_value or client_secret), or as a signature (sig, sas), a password (pwd, pass,
+// passwd, passcode), a signed token or assertion (jwt, client_assertion, credential), an OAuth
+// code or its verifier. What it misses is a name written with a letter encoding/json folds to
+// another that SecretName's lower-casing does not, such as "ſ" for "s" ("paſſword"), which
+// configdoc folds.
 func secretQueryName(name string) bool {
 	if SecretName(name) {
 		return true
 	}
-	joined := strings.ToLower(strings.NewReplacer("_", "", "-", "", ".", "", " ", "").Replace(name))
-	switch joined {
+	switch strings.ToLower(strings.NewReplacer("_", "", "-", "", ".", "", " ", "").Replace(name)) {
 	case "sig", "sas", "code", "codeverifier", "pwd", "pass", "passwd", "passcode", "jwt", "clientassertion",
 		"credential", "credentials":
 		return true
-	}
-	for _, suffix := range []string{"token", "secret", "secrets", "password", "passwords", "apikey", "secretkey",
-		"privatekey", "secretaccesskey", "passphrase"} {
-		if strings.HasSuffix(joined, suffix) {
-			return true
-		}
 	}
 	return false
 }

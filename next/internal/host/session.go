@@ -310,7 +310,10 @@ type SessionStream struct {
 	seq    llm.Sequence
 	stop   func() bool
 	final  *llm.Event
-	ended  bool
+	// ended says the turn is over on the session (end). Close may read it on another goroutine
+	// while Next ends the turn, so mu guards it.
+	mu    sync.Mutex
+	ended bool
 	// capture receives the turn's diagnostic frames; nil when the turn is not captured.
 	capture CaptureFunc
 	account string
@@ -323,12 +326,16 @@ func (t *SessionStream) fail(e *llm.Error) {
 
 // end marks the turn over on the session, which can then take the next one.
 func (t *SessionStream) end() {
+	t.mu.Lock()
 	if t.ended {
+		t.mu.Unlock()
 		return
 	}
 	t.ended = true
-	for _, d := range t.held.take() {
-		t.capture(t.account, t.pieces.diagnostic(d, t.final == nil || t.final.Type == llm.EventError))
+	t.mu.Unlock()
+	ds, failed := t.held.take()
+	for _, d := range ds {
+		t.capture(t.account, t.pieces.diagnostic(d, failed))
 	}
 	if t.stop != nil {
 		t.stop()
@@ -375,6 +382,9 @@ func (t *SessionStream) Next() llm.Event {
 	}
 	ev := t.pieces.event(t.redact.Event(f.reply.Event))
 	if ev.Terminal() {
+		if ev.Type == llm.EventFinish {
+			t.held.succeed()
+		}
 		t.final = &ev
 		t.end()
 	}
@@ -383,7 +393,10 @@ func (t *SessionStream) Next() llm.Event {
 
 // Close ends the turn; if it had not finished, that cancels it and ends the session.
 func (t *SessionStream) Close() {
-	if !t.ended {
+	t.mu.Lock()
+	ended := t.ended
+	t.mu.Unlock()
+	if !ended {
 		t.s.Close()
 		t.end()
 	}
