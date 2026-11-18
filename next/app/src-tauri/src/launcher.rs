@@ -700,10 +700,11 @@ fn launch_in_wsl(
             )
             .map(|(prepared, _)| prepared)
         },
-        // shortcut: the tests check that `wsl_launch_input` returns the line, not that it is passed
-        // on here: it needs the running app's `AppHandle`, which no test can make; test it once
-        // the app has a test harness for its Tauri state, or once this code takes that state
-        // instead of the handle.
+        // shortcut: the tests check that `run_in_wsl` hands this closure the environment's line
+        // (`a_launch_in_wsl_is_confirmed_with_the_environments_line`), not that the closure passes
+        // it on to `call_of`: that needs the running app's `AppHandle`, which no test can make;
+        // test it once the app has a test harness for its Tauri state, or once this code takes
+        // that state instead of the handle.
         |input, line| call_of(app, PACKAGE, "launch", input, None, Some(line)),
     )?;
     let client = client_in(client, environment);
