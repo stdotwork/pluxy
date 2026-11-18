@@ -56,7 +56,7 @@
         "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
         "headers": {
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "User-Agent": "pluxy-corpus/0"
         },
@@ -67,7 +67,7 @@
         "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
         "headers": {
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "User-Agent": "pluxy-corpus/0"
         },
