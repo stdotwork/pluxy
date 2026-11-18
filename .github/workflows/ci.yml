@@ -44,7 +44,9 @@ jobs:
   # next-app-tools-wsl is not a workflow: it says whether next-app-tools-platforms.yml runs its WSL
   # jobs.
   changes:
-    runs-on: ubuntu-latest
+    # In a merge group, the runner PLUXY_GATE_RUNNER names when it is set (AGENTS.md, "Where jobs
+    # run"): this job and gate take seconds but every group waits on both.
+    runs-on: ${{ github.event_name == 'merge_group' && vars.PLUXY_GATE_RUNNER && fromJSON(vars.PLUXY_GATE_RUNNER) || 'ubuntu-latest' }}
     outputs:
       app: ${{ steps.paths.outputs.app }}
       next-ci: ${{ steps.paths.outputs.next-ci }}
@@ -75,7 +77,7 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           GROUP_BASE: ${{ github.event.merge_group.base_sha }}
           GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
-          # The heavy jobs, next-app.yml's four Linux native shards and all of next-app-platforms.yml
+          # The heavy jobs, next-app.yml's Linux native build and shards and all of next-app-platforms.yml
           # (Windows and macOS), are half of the hosted runner minutes. A merge group always runs
           # them; a pull request only with the full-ci label (adding it reruns this workflow), so
           # the queue gets those minutes. Nothing merges unchecked: every group runs them.
@@ -250,7 +252,8 @@ jobs:
       - next-app-platforms
       - next-app-tools-platforms
       - next-app-tools-pack
-    runs-on: ubuntu-latest
+    # As changes: PLUXY_GATE_RUNNER in a merge group.
+    runs-on: ${{ github.event_name == 'merge_group' && vars.PLUXY_GATE_RUNNER && fromJSON(vars.PLUXY_GATE_RUNNER) || 'ubuntu-latest' }}
     steps:
       - name: Every chosen workflow passed
         env:

@@ -39,7 +39,9 @@ func bundledRegistry(t *testing.T, programs map[string]string) string {
 			"programs": map[string]string{platform: "bin/program"},
 		})
 		var buf bytes.Buffer
-		gz := gzip.NewWriter(&buf)
+		// Stored, not compressed: compressing a built extension in this race-instrumented test
+		// process took about 2.5 s per archive, and core reads either.
+		gz, _ := gzip.NewWriterLevel(&buf, gzip.NoCompression)
 		tw := tar.NewWriter(gz)
 		for _, f := range []struct {
 			name string

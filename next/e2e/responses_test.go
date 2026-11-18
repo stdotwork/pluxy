@@ -113,6 +113,7 @@ func TestResponsesUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 // every event before it. This is the reviewer's case: 60 MiB of text and then an 8 MiB final
 // Response object, which a Responses client gets as the reply, came back as a 200.
 func TestNonStreamingReplyCountsTheFinalEvent(t *testing.T) {
+	t.Parallel()
 	u := newUpstream(t)
 	u.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -143,6 +144,7 @@ func TestNonStreamingReplyCountsTheFinalEvent(t *testing.T) {
 // reviewer's case: a 1 MiB response id and 65 items of each kind came back as a 200 of
 // 69,213,758 bytes.
 func TestNonStreamingResponsesCountsItemIDs(t *testing.T) {
+	t.Parallel()
 	u := newUpstream(t)
 	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 		w.Header().Set("Content-Type", "text/event-stream")
