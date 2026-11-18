@@ -1325,21 +1325,192 @@ fn every_folder_of_an_opened_file_must_be_writable_by_no_one_else() {
 }
 
 /// Windows and macOS: a confirmed open is refused at its use once a folder between its file and
-/// the folder it must be inside turned writable by others after the confirmation.
+/// the folder it must be inside turned writable by others after the confirmation: by the folder
+/// rule, which names that folder, the file itself untouched.
 #[cfg(not(target_os = "linux"))]
 #[test]
 fn a_confirmed_open_is_refused_once_a_folder_between_turns_writable() {
-    let (dir, mut c, a, within, between, _) = nested_open();
+    let (dir, mut c, a, within, between, file) = nested_open();
+    #[cfg(windows)]
+    icacls_probe(&between, &file);
+    #[cfg(not(windows))]
+    let _ = &file;
     let (id, t) = approve(&mut c, a.clone(), false);
     assert!(c.consume(&id, &t).is_ok());
     let (id, t) = approve(&mut c, a, false);
-    let says = others_write(&between, "between", true);
+    #[cfg(windows)]
+    let (before, undo) = (file_state(&file), everyone_writes_only(&between));
+    #[cfg(target_os = "macos")]
+    others_write(&between, "between", true);
+    #[cfg(windows)]
+    let after = file_state(&file);
     let r = c.consume(&id, &t);
+    #[cfg(windows)]
+    undo();
+    #[cfg(target_os = "macos")]
     others_write(&between, "between", false);
+    #[cfg(windows)]
+    assert_eq!(before, after, "the folder's change touched the file");
     let e = r.err().expect("refused");
-    assert!(e.contains(says), "{e}");
+    let folder = open_os::plain(&fs::canonicalize(&between).unwrap()).unwrap();
+    assert!(
+        e.contains(&format!(
+            "the folder {folder} of the file a launch opens must be your own, writable by no one else"
+        )),
+        "{e}"
+    );
     remove(&within);
     remove(&dir);
+}
+
+/// Windows: file's access list (`icacls`, without its path) and its change and last-write times,
+/// as `Metadata` compares them.
+#[cfg(windows)]
+fn file_state(file: &Path) -> (String, i64, i64) {
+    let out = std::process::Command::new("icacls")
+        .arg(file)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let shown = file.display().to_string();
+    let acl: Vec<&str> = text
+        .lines()
+        .map(|l| l.strip_prefix(&shown).unwrap_or(l).trim())
+        .filter(|l| !l.is_empty() && !l.starts_with("Successfully processed"))
+        .collect();
+    let i = windows_files::info(&windows_files::open_any(file).unwrap()).unwrap();
+    (acl.join("; "), i.ctime, i.mtime)
+}
+
+/// Windows: records in the test log (`icacls-probe:`, written past the test harness's capture)
+/// what `icacls` granting folder an Everyone write entry, with no inheritance, does to file
+/// inside it: whether its access list and its change time change. `icacls` sets an access list
+/// with `SetNamedSecurityInfo`, which also goes through what is inside the folder.
+#[cfg(windows)]
+fn icacls_probe(folder: &Path, file: &Path) {
+    use std::io::Write;
+    let before = file_state(file);
+    assert!(crate::private_windows::tests::icacls(
+        folder,
+        &["/grant", "*S-1-1-0:(W)"]
+    ));
+    let granted = file_state(file);
+    assert!(crate::private_windows::tests::icacls(
+        folder,
+        &["/remove:g", "*S-1-1-0"]
+    ));
+    let _ = writeln!(
+        std::io::stderr(),
+        "icacls-probe: file access list changed: {}; change time changed: {}; last-write time changed: {}; before: {before:?}; granted: {granted:?}",
+        before.0 != granted.0,
+        before.1 != granted.1,
+        before.2 != granted.2,
+    );
+}
+
+/// Windows: adds to folder's access list an entry letting Everyone write it (`FILE_WRITE_DATA`,
+/// adding files), inherited by nothing, with `SetFileSecurityW`, which sets only the folder's own
+/// list (unlike `SetNamedSecurityInfo`, it does not go through what is inside). Returns what puts
+/// the folder's list back.
+#[cfg(windows)]
+fn everyone_writes_only(folder: &Path) -> impl FnOnce() {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Security::Authorization::{
+        SetEntriesInAclW, EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, TRUSTEE_IS_SID,
+        TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::{
+        CreateWellKnownSid, GetFileSecurityW, GetSecurityDescriptorDacl,
+        InitializeSecurityDescriptor, SetFileSecurityW, SetSecurityDescriptorDacl, WinWorldSid,
+        ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE, SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE,
+    };
+    let name: Vec<u16> = folder.as_os_str().encode_wide().chain([0]).collect();
+    // The folder's descriptor (its list only) as it is, to put back.
+    let mut n = 0u32;
+    // SAFETY: asks for the size only.
+    unsafe {
+        GetFileSecurityW(
+            name.as_ptr(),
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            0,
+            &mut n,
+        )
+    };
+    let mut old = vec![0u64; (n as usize).div_ceil(8)];
+    // SAFETY: old holds n bytes, aligned for a descriptor.
+    let got = unsafe {
+        GetFileSecurityW(
+            name.as_ptr(),
+            DACL_SECURITY_INFORMATION,
+            old.as_mut_ptr().cast(),
+            n,
+            &mut n,
+        )
+    };
+    assert_ne!(got, 0, "{}", std::io::Error::last_os_error());
+    let (mut present, mut defaulted, mut list) = (0, 0, std::ptr::null_mut::<ACL>());
+    // SAFETY: old is a self-relative descriptor; list points into it.
+    let got = unsafe {
+        GetSecurityDescriptorDacl(
+            old.as_mut_ptr().cast(),
+            &mut present,
+            &mut list,
+            &mut defaulted,
+        )
+    };
+    assert!(got != 0 && present != 0, "the folder has no access list");
+    let mut sid = [0u8; SECURITY_MAX_SID_SIZE as usize];
+    let mut size = sid.len() as u32;
+    // SAFETY: sid holds size bytes.
+    let got = unsafe {
+        CreateWellKnownSid(
+            WinWorldSid,
+            std::ptr::null_mut(),
+            sid.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    assert_ne!(got, 0, "{}", std::io::Error::last_os_error());
+    let entry = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: 0x0002, // FILE_WRITE_DATA, FILE_ADD_FILE
+        grfAccessMode: GRANT_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
+            ptstrName: sid.as_mut_ptr().cast(),
+        },
+    };
+    let mut new: *mut ACL = std::ptr::null_mut();
+    // SAFETY: one valid entry and the folder's list; the new list is LocalAlloc'd into new.
+    let r = unsafe { SetEntriesInAclW(1, &entry, list, &mut new) };
+    assert_eq!(r, 0, "SetEntriesInAclW: {r}");
+    let mut sd = SECURITY_DESCRIPTOR::default();
+    let psd: *mut core::ffi::c_void = (&mut sd as *mut SECURITY_DESCRIPTOR).cast();
+    // SAFETY: psd points at sd, which lives past the call that uses it; new too.
+    let got = unsafe {
+        InitializeSecurityDescriptor(psd, 1) != 0
+            && SetSecurityDescriptorDacl(psd, 1, new, 0) != 0
+            && SetFileSecurityW(name.as_ptr(), DACL_SECURITY_INFORMATION, psd) != 0
+    };
+    let e = std::io::Error::last_os_error();
+    // SAFETY: new came from SetEntriesInAclW and is not used after this.
+    unsafe { windows_sys::Win32::Foundation::LocalFree(new.cast()) };
+    assert!(got, "setting the folder's access list: {e}");
+    move || {
+        // SAFETY: old is the folder's descriptor as it was, self-relative.
+        let got = unsafe {
+            SetFileSecurityW(
+                name.as_ptr(),
+                DACL_SECURITY_INFORMATION,
+                old.as_mut_ptr().cast(),
+            )
+        };
+        assert_ne!(got, 0, "{}", std::io::Error::last_os_error());
+    }
 }
 
 /// Windows: the file a launch opens is on a local drive, named by its plain path (`C:\…`, which
