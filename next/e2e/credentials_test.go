@@ -156,6 +156,7 @@ func (a *arrivals) waitFor(t *testing.T, want int) {
 // refresh call (the fake provider rotates refresh tokens and revokes the grant on any reuse),
 // and all of them are served with the renewed token.
 func TestLoginAndConcurrentRefresh(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	// The first token expires in a second, inside core's renewal lead; renewed ones last.
 	srv.AccessTTL = func(n int) time.Duration {
@@ -240,6 +241,7 @@ func TestLoginAndConcurrentRefresh(t *testing.T) {
 // A refresh whose account is removed while the refresh is running is refused: the result is
 // not written, and the removed account does not come back.
 func TestRefreshOfRemovedAccountIsRefused(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	base, credDir := startOAuthCore(t)
 	deviceLogin(t, base, srv, "work")
@@ -275,6 +277,7 @@ func TestRefreshOfRemovedAccountIsRefused(t *testing.T) {
 // When the upstream refuses an access token that has not expired (revoked early), core renews
 // the credential once and serves the request on the same account with the new token.
 func TestRefusedTokenIsRenewedAndRetried(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	base, _ := startOAuthCore(t)
 	deviceLogin(t, base, srv, "work")
@@ -295,6 +298,7 @@ func TestRefusedTokenIsRenewedAndRetried(t *testing.T) {
 // reload they still serve requests, and a refused token is still renewed through the
 // extension.
 func TestLoginAccountsSurviveReload(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	base, _ := startOAuthCore(t)
 	deviceLogin(t, base, srv, "work")

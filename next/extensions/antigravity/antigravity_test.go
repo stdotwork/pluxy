@@ -159,6 +159,169 @@ func TestCleanTools(t *testing.T) {
 	}
 }
 
+// Cloud Code's schema has no allOf (Google's published Schema lists anyOf and no allOf), so each
+// allOf merges into the schema that holds it, as today's core merges it: the branches' required
+// names join the schema's, and every other key a branch has fills the same key where the schema
+// lacks it, recursively, the schema's own value winning. The merge comes after the description
+// hints and before unions and type lists are flattened, and deepest first, so the result is the
+// same as today's core's. Each expected value is today's core's output for the schema: its
+// executor's tool cleaning (sanitizeAntigravityToolSchemaDocumentForModel) for
+// other models, Gemini 3 Pro and Claude, and CleanJSONSchemaForAntigravityResponse for a response
+// schema.
+func TestAllOfMerged(t *testing.T) {
+	for _, c := range []struct {
+		name, schema                   string
+		other, group, claude, response string
+	}{
+		{"two branches", `{"type":"object","allOf":[{"properties":{"a":{"type":"string"}},"required":["a"]},{"properties":{"b":{"type":"integer"}}}]}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"integer"}},"required":["a"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"integer"}},"required":["a"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"integer"}},"required":["a"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"integer"}},"required":["a"],"type":"object"}`},
+		{"parent plus branch", `{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"allOf":[{"properties":{"b":{"type":"string"}},"required":["b"]}]}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a","b"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a","b"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a","b"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a","b"],"type":"object"}`},
+		{"ref wrapper", `{"type":"object","properties":{"m":{"allOf":[{"$ref":"#/$defs/M"}],"description":"the m"}},"required":["m"],"$defs":{"M":{"type":"object","properties":{"x":{"type":"string","minLength":1}},"required":["x"]}}}`,
+			`{"properties":{"m":{"description":"the m","properties":{"x":{"description":"minLength: 1","type":"string"}},"required":["x"],"type":"object"}},"required":["m"],"type":"object"}`,
+			`{"properties":{"m":{"description":"the m","properties":{"x":{"description":"minLength: 1","type":"string"}},"required":["x"],"type":"object"}},"required":["m"],"type":"object"}`,
+			`{"properties":{"m":{"description":"the m","properties":{"x":{"description":"minLength: 1","type":"string"}},"required":["x"],"type":"object"}},"required":["m"],"type":"object"}`,
+			`{"properties":{"m":{"description":"the m","properties":{"x":{"description":"minLength: 1","type":"string"}},"required":["x"],"type":"object"}},"required":["m"],"type":"object"}`},
+		{"nested", `{"allOf":[{"allOf":[{"properties":{"a":{"type":"string"}},"required":["a"]}]},{"type":"object"}]}`,
+			`{"properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`},
+		{"same property", `{"type":"object","properties":{"a":{"type":"string"}},"allOf":[{"properties":{"a":{"description":"from branch","enum":["x","y"]}},"required":["a"]}]}`,
+			`{"properties":{"a":{"description":"from branch (Allowed: x, y)","type":"string"}},"required":["a"],"type":"object"}`,
+			`{"properties":{"a":{"description":"from branch (Allowed: x, y)","type":"string"}},"required":["a"],"type":"object"}`,
+			`{"properties":{"a":{"description":"from branch (Allowed: x, y)","type":"string"}},"required":["a"],"type":"object"}`,
+			`{"properties":{"a":{"description":"from branch (Allowed: x, y)","enum":["x","y"],"type":"string"}},"required":["a"],"type":"object"}`},
+		{"constraint parent desc", `{"type":"object","properties":{"s":{"description":"P","allOf":[{"type":"string","minLength":3}]}},"required":["s"]}`,
+			`{"properties":{"s":{"description":"P","type":"string"}},"required":["s"],"type":"object"}`,
+			`{"properties":{"s":{"description":"P","type":"string"}},"required":["s"],"type":"object"}`,
+			`{"properties":{"s":{"description":"P","type":"string"}},"required":["s"],"type":"object"}`,
+			`{"properties":{"s":{"description":"P","type":"string"}},"required":["s"],"type":"object"}`},
+		{"items", `{"type":"object","properties":{"rows":{"type":"array","items":{"allOf":[{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]}]}}},"required":["rows"]}`,
+			`{"properties":{"rows":{"items":{"properties":{"id":{"type":"integer"}},"required":["id"],"type":"object"},"type":"array"}},"required":["rows"],"type":"object"}`,
+			`{"properties":{"rows":{"items":{"properties":{"id":{"type":"integer"}},"required":["id"],"type":"object"},"type":"array"}},"required":["rows"],"type":"object"}`,
+			`{"properties":{"rows":{"items":{"properties":{"id":{"type":"integer"}},"required":["id"],"type":"object"},"type":"array"}},"required":["rows"],"type":"object"}`,
+			`{"properties":{"rows":{"items":{"properties":{"id":{"type":"integer"}},"required":["id"],"type":"object"},"type":"array"}},"required":["rows"],"type":"object"}`},
+		{"union in branch", `{"type":"object","properties":{"v":{"allOf":[{"anyOf":[{"type":"string"},{"type":"integer"}]}],"description":"V"}},"required":["v"]}`,
+			`{"properties":{"v":{"anyOf":[{"type":"string"},{"type":"integer"}],"description":"V"}},"required":["v"],"type":"object"}`,
+			`{"properties":{"v":{"anyOf":[{"type":"string"},{"type":"integer"}],"description":"V"}},"required":["v"],"type":"object"}`,
+			`{"properties":{"v":{"description":"V (Accepts: string | integer)","type":"string"}},"required":["v"],"type":"object"}`,
+			`{"properties":{"v":{"anyOf":[{"type":"string"},{"type":"integer"}],"description":"V"}},"required":["v"],"type":"object"}`},
+		{"union objects in branch", `{"type":"object","properties":{"v":{"allOf":[{"anyOf":[{"type":"object","properties":{"p":{"type":"string"}},"required":["p"]},{"type":"string"}]}]}},"required":["v"]}`,
+			`{"properties":{"v":{"anyOf":[{"properties":{"p":{"type":"string"}},"required":["p"],"type":"object"},{"type":"string"}]}},"required":["v"],"type":"object"}`,
+			`{"properties":{"v":{"anyOf":[{"properties":{"p":{"type":"string"}},"required":["p"],"type":"object"},{"type":"string"}]}},"required":["v"],"type":"object"}`,
+			`{"properties":{"v":{"description":"Accepts: object | string","properties":{"p":{"type":"string"}},"required":["p"],"type":"object"}},"required":["v"],"type":"object"}`,
+			`{"properties":{"v":{"anyOf":[{"properties":{"p":{"type":"string"}},"required":["p"],"type":"object"},{"type":"string"}]}},"required":["v"],"type":"object"}`},
+		{"type list in branch", `{"type":"object","properties":{"n":{"description":"N","allOf":[{"type":["string","null"]}]}},"required":["n"]}`,
+			`{"properties":{"n":{"description":"N ((nullable))","nullable":true,"type":"string"}},"required":["n"],"type":"object"}`,
+			`{"properties":{"n":{"description":"N ((nullable))","nullable":true,"type":"string"}},"required":["n"],"type":"object"}`,
+			`{"properties":{"n":{"description":"N ((nullable))","nullable":true,"type":"string"}},"required":["n"],"type":"object"}`,
+			`{"properties":{"n":{"description":"N ((nullable))","nullable":true,"type":"string"}},"required":["n"],"type":"object"}`},
+		{"if then", `{"type":"object","properties":{"k":{"type":"string"}},"required":["k"],"allOf":[{"if":{"properties":{"k":{"const":"a"}}},"then":{"required":["k"]}}]}`,
+			`{"properties":{"k":{"type":"string"}},"required":["k"],"type":"object"}`,
+			`{"properties":{"k":{"type":"string"}},"required":["k"],"type":"object"}`,
+			`{"properties":{"k":{"type":"string"}},"required":["k"],"type":"object"}`,
+			`{"properties":{"k":{"type":"string"}},"required":["k"],"type":"object"}`},
+		{"nothing required", `{"type":"object","allOf":[{"properties":{"a":{"type":"string"}}},{"properties":{"b":{"type":"string"}}}]}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"type":"object"}`,
+			`{"properties":{"_":{"type":"boolean"},"a":{"type":"string"},"b":{"type":"string"}},"required":["_"],"type":"object"}`,
+			`{"properties":{"_":{"type":"boolean"},"a":{"type":"string"},"b":{"type":"string"}},"required":["_"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"type":"object"}`},
+		{"untyped", `{"allOf":[{"type":"object","properties":{"a":{"type":"string"}}}]}`,
+			`{"properties":{"a":{"type":"string"}},"type":"object"}`,
+			`{"properties":{"_":{"type":"boolean"},"a":{"type":"string"}},"required":["_"],"type":"object"}`,
+			`{"properties":{"_":{"type":"boolean"},"a":{"type":"string"}},"required":["_"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"}},"type":"object"}`},
+		{"branch underscore", `{"type":"object","allOf":[{"properties":{"_":{"type":"string"}}}]}`,
+			`{"properties":{"_":{"type":"string"}},"type":"object"}`,
+			`{"properties":{"_":{"type":"string"}},"required":["_"],"type":"object"}`,
+			`{"properties":{"_":{"type":"string"}},"required":["_"],"type":"object"}`,
+			`{"properties":{"_":{"type":"string"}},"type":"object"}`},
+		{"required dup", `{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"allOf":[{"required":["a","b"],"properties":{"b":{"type":"string"}}}]}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a","b"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a","b"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a","b"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a","b"],"type":"object"}`},
+		{"title ap", `{"type":"object","allOf":[{"title":"T","additionalProperties":false,"properties":{"a":{"type":"string"}},"required":["a"]}]}`,
+			`{"description":"No extra properties allowed","properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`,
+			`{"description":"No extra properties allowed","properties":{"a":{"type":"string"}},"required":["a"],"title":"T","type":"object"}`,
+			`{"description":"No extra properties allowed","properties":{"a":{"type":"string"}},"required":["a"],"title":"T","type":"object"}`,
+			""}, // the response schema is not compared: the extension drops a response schema's title, allOf or not, where today's core keeps it
+		{"descs", `{"type":"object","description":"P","allOf":[{"description":"B","properties":{"a":{"type":"string"}},"required":["a"]}]}`,
+			`{"description":"P","properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`,
+			`{"description":"P","properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`,
+			`{"description":"P","properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`,
+			`{"description":"P","properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`},
+		{"property named allOf", `{"type":"object","properties":{"allOf":{"type":"string"}},"required":["allOf"]}`,
+			`{"properties":{"allOf":{"type":"string"}},"required":["allOf"],"type":"object"}`,
+			`{"properties":{"allOf":{"type":"string"}},"required":["allOf"],"type":"object"}`,
+			`{"properties":{"allOf":{"type":"string"}},"required":["allOf"],"type":"object"}`,
+			`{"properties":{"allOf":{"type":"string"}},"required":["allOf"],"type":"object"}`},
+		{"enum in branch", `{"type":"object","properties":{"c":{"allOf":[{"type":"string","enum":["r","g"]}]}},"required":["c"]}`,
+			`{"properties":{"c":{"description":"Allowed: r, g","type":"string"}},"required":["c"],"type":"object"}`,
+			`{"properties":{"c":{"description":"Allowed: r, g","type":"string"}},"required":["c"],"type":"object"}`,
+			`{"properties":{"c":{"description":"Allowed: r, g","type":"string"}},"required":["c"],"type":"object"}`,
+			`{"properties":{"c":{"description":"Allowed: r, g","enum":["r","g"],"type":"string"}},"required":["c"],"type":"object"}`},
+		{"non object item", `{"type":"object","allOf":[true,{"properties":{"a":{"type":"string"}},"required":["a"]}]}`,
+			`{"properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"}},"required":["a"],"type":"object"}`},
+		{"required only branch", `{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"allOf":[{"required":["b"]}]}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["b"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["b"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["b"],"type":"object"}`,
+			`{"properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["b"],"type":"object"}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			for _, m := range []struct {
+				name          string
+				claude, group bool
+				want          string
+			}{{"other models", false, false, c.other}, {"Gemini 3 Pro", false, true, c.group}, {"Claude", true, true, c.claude}} {
+				out, _ := cleanTools(json.RawMessage(declaration(c.schema)), m.claude, m.group)
+				var tools []struct {
+					Decls []struct {
+						Parameters json.RawMessage `json:"parameters"`
+					} `json:"functionDeclarations"`
+				}
+				if err := json.Unmarshal(out, &tools); err != nil || len(tools) != 1 || len(tools[0].Decls) != 1 {
+					t.Fatalf("%s: cleaned tools %s (%v)", m.name, out, err)
+				}
+				if got := string(tools[0].Decls[0].Parameters); !sameJSON(t, got, m.want) {
+					t.Errorf("%s: parameters\n %s\nwant\n %s", m.name, got, m.want)
+				}
+			}
+			if c.response == "" {
+				return
+			}
+			gen := map[string]json.RawMessage{"responseSchema": json.RawMessage(c.schema)}
+			cleanResponseSchema(gen)
+			if got := string(gen["responseSchema"]); !sameJSON(t, got, c.response) {
+				t.Errorf("response schema\n %s\nwant\n %s", got, c.response)
+			}
+		})
+	}
+}
+
+// An allOf that is not a list is no JSON Schema, and Cloud Code takes no allOf: it is removed.
+// Today's core keeps it as a property named allOf instead.
+func TestAllOfNotAList(t *testing.T) {
+	schema := `{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"allOf":{"properties":{"b":{"type":"string"}}}}`
+	want := `{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}`
+	gen := map[string]json.RawMessage{"responseSchema": json.RawMessage(schema)}
+	cleanResponseSchema(gen)
+	if got := string(gen["responseSchema"]); !sameJSON(t, got, want) {
+		t.Errorf("schema\n %s\nwant\n %s", got, want)
+	}
+}
+
 // A Google error that echoes a token or the client secret issued or used after the token
 // exchange does not carry it out: core does not know the new credential yet, so it cannot redact
 // it. Covers the login's user-info and project calls and renewal's project discovery.

@@ -2,8 +2,8 @@
 
 A new core for pluxy, built from scratch to replace the old core, the Go proxy that was in `core/`.
 (In this README and in the corpus, "today's core" and "the old core" mean that core, and `core/...`
-paths are files in it as they are at commit `0b84f013f18e1bbf528533b1c6f2c2dbdb19fc67`, the last commit
-that changed `core/`. The folder has since been removed from the repository.) Core receives client
+paths are files in it. The folder has been removed from the repository, so those paths name files
+you cannot open here.) Core receives client
 requests and hands them to **provider extensions**: separate programs, one per kind of upstream, that core
 starts and talks to over a local socket. Today it serves OpenAI Chat Completions, OpenAI
 Responses, Anthropic Messages and Gemini GenerateContent (streamed and not, over HTTP) through the
@@ -47,7 +47,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `app/` | The desktop app: the kit's second build in a Tauri window, with a tray icon and three ways to reach core ([README](app/README.md)). Linux only for now; its agent clients and the record of the old desktop app's features are in [PARITY.md](app/PARITY.md). |
 | `app-tools/` | The desktop app's optional native tools: agent client setup, the launcher, the usage hub and its parsers, the Codex session reader, and the libraries they share ([README](app-tools/README.md)). |
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
-| `corpus/` | Differential test corpus: cases replayed against this core and today's core, with listed exceptions ([README](corpus/README.md)). |
+| `corpus/` | Differential test corpus: cases replayed against this core and compared with today's core's recorded replies, with listed exceptions ([README](corpus/README.md)). |
 
 Go extensions build each upstream client's transport with `sdk.Upstream(base)`, where `base` is
 their configured `*http.Transport`. This includes login, token refresh and WebSocket handshake
@@ -1130,16 +1130,15 @@ translated system instructions go as a user turn. Each function declaration's sc
 `parameters`, and a response schema as `responseSchema`, in the subset Cloud Code takes, as today's
 core cleans them: local `$ref`s inlined, `const` as an enum, constraints and short enums moved into
 the description as hints (`minLength: 1`, `Allowed: a, b`), a type list such as
-`["string","null"]` as one nullable type, and other JSON Schema keywords removed; for a Claude
-model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
+`["string","null"]` as one nullable type, each `allOf` merged into the schema that holds it
+(Cloud Code's schema has no `allOf`: the branches' required names join the schema's, and their
+other keys fill the ones it lacks, its own winning), and other JSON Schema keywords removed; for a
+Claude model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
 object in a function's parameters that requires nothing gets a required placeholder property:
 `reason` (a string) where it has no properties, `_` (a boolean) where it has some and none is
-required. An object is a schema of type `object`, or one with no type whose properties come only
-from its `allOf` branches (it then gets that type); a union object (with `anyOf` or `oneOf`) gets
-none; an `allOf` branch counts with the object it merges into, so that object's properties and
-required names are the branches' too. Every schema with `properties` and no type gets type
-`object`, whatever the model, as in today's core; an `allOf` branch keeps its own type or none. A
-function's response schema gets no placeholder: today's core adds one there, but the schema
+required. An object is a schema of type `object`; a union object (with `anyOf` or `oneOf`) gets
+none. Every schema with `properties` and no type gets type `object`, whatever the model, as in
+today's core. A function's response schema gets no placeholder: today's core adds one there, but the schema
 describes what the client returns, and nothing would remove the placeholder. The extension removes
 the placeholders from the model's calls before any client format sees them; today's core does that
 only for Messages clients. It leaves a placeholder in a call where a client schema at the same path
@@ -1153,6 +1152,21 @@ taken out of the envelope's `response` field. A 429 is a used-up quota when Goog
 wait from Google's retry details or message. It holds back only that model on the account, as
 today's core cools only the model that answered, except a used-up credit balance
 (`INSUFFICIENT_G1_CREDITS_BALANCE`), which holds back the account.
+
+A `functionCall` part of a Cloud Code reply is one whole call, as Gemini sends calls, and a part
+with no name is a call with no name. Today's core treats such a part three ways. A Messages client
+gets a nameless part that comes while a call is open as more input for that call
+(`core/internal/translator/antigravity/claude/antigravity_claude_response.go`). A Chat client gets
+it as a second call with an empty name. A Responses client does not get it. The Messages
+behaviour is not kept, because nothing shows that Cloud Code sends such parts in reply to the
+requests the extension makes. Google's Vertex AI documentation shows nameless parts only for
+streamed function call arguments (`streamFunctionCallArguments`, Gemini 3 and later), which a
+request has to ask for, and whose parts carry `partialArgs`, not `args`. Neither core nor the
+extension asks for it. Today's core added the behaviour to its Gemini Messages translator in
+December 2025 with no recorded stream, and to its Antigravity one in October 2026, eleven months
+after that translator was written. Its tests use made-up chunks. It also appends each part's
+whole `args` object to the call's input, so a second part with arguments gives the client
+`{"a":"1"}{"b":"2"}`, which is not JSON.
 
 Not built, from today's core: the paid Google AI credits fallback, its own cache of Antigravity's
 reasoning (thought signatures travel in band, as for Gemini), the per-account model probe
@@ -1231,6 +1245,19 @@ account, unless Devin says the account's daily or weekly quota is exhausted, whi
 account. A monthly or unnamed quota holds back only the model. Devin's `canceled` is a cancelled
 request (499), as in today's core. An error after Devin sent any frame (output, usage or a
 signature) is not retry-safe, and a reply that ends without its end frame is an error.
+
+A refusal with an HTTP error status takes its message from a Connect error body's `message`,
+and keeps that body as the error's raw body. Unlike today's core, which passes any other body on
+as it is, the extension passes such a body on only as the message, only when it read the body
+whole (under 1 MiB, and not broken off), and cleaned. The cleaned text is one line, cut after
+1000 characters with an ellipsis. Replaced by `[redacted]` are: every run of token characters
+(letters, digits and `_-.+/=~`) holding 4 or more consecutive characters of the account's session
+token after its public `devin-session-token$` prefix; `Bearer` and `Basic` values; the values of
+fields named like `access_token` or `api_key`; and any other run of 24 or more token characters.
+Core removes only whole copies of an account's credential, and such a body can hold part of one
+the upstream echoed, split across lines or cut short. Otherwise the message names only the status
+(`Devin answered 500 Internal Server Error`), or, for a quota read whose reply broke off, says
+that it broke off.
 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass

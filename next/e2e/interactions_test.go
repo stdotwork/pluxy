@@ -347,6 +347,7 @@ func TestInteractionsAgent(t *testing.T) {
 // account, and fails the request when there is none, with today's no-usable-auth reply (503
 // auth_not_found).
 func TestInteractionsAccountWithoutTheSettingIsRefused(t *testing.T) {
+	t.Parallel()
 	const reply = `{"id":"v1_ok","status":"completed"}`
 	bodies := []struct{ name, body string }{
 		{"model", `{"model":"gemini-2.5-flash","input":"hi"}`},
@@ -450,6 +451,7 @@ func TestInteractionsStreamBreaksMidway(t *testing.T) {
 // A body that names both a model and an agent, or neither, is refused with 400 before any upstream
 // call; a client may send its key as x-goog-api-key, as Google's clients do.
 func TestInteractionsValidation(t *testing.T) {
+	t.Parallel()
 	const want = "request requires exactly one of model or agent"
 	for _, c := range []struct{ name, body string }{
 		{"model and agent", `{"model":"gemini-2.5-flash","agent":"deep-research-pro-preview-12-2025","input":"x"}`},

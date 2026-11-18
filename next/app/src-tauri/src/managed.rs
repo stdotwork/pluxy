@@ -91,19 +91,9 @@ fn write_private_with_nonce(
         name.push(format!(".{}.tmp", nonce()));
         let tmp = parent.join(name);
         #[cfg(unix)]
-        let made = {
-            use std::os::unix::fs::OpenOptionsExt;
-            fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(&tmp)
-        };
-        // Windows: with a protected access list allowing only this user and SYSTEM, given as it
-        // is made (`private_windows.rs`).
+        let made = create_temp(&folder, &tmp);
         #[cfg(windows)]
-        let made = crate::private_windows::create_new_private(&tmp);
+        let made = create_temp(&tmp);
         match made {
             Ok(f) => break (tmp, f),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -132,11 +122,41 @@ fn write_private_with_nonce(
     result
 }
 
+/// Makes tmp, in the folder open as folder, new and for writing, readable only by this user
+/// (`write_private`'s temporary file), never through a link. macOS: where the volume keeps access
+/// lists, with an empty one that takes nothing from the folder's, so no entry is on it at any
+/// moment (`private_macos.rs`).
+#[cfg(target_os = "macos")]
+fn create_temp(folder: &fs::File, tmp: &Path) -> io::Result<fs::File> {
+    crate::private_macos::create_new_in(folder, tmp, 0o600)
+}
+#[cfg(all(unix, not(target_os = "macos")))]
+fn create_temp(_folder: &fs::File, tmp: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(tmp)
+}
+/// Windows: with a protected access list allowing only this user and SYSTEM, given as it is made
+/// (`private_windows.rs`).
+#[cfg(windows)]
+fn create_temp(tmp: &Path) -> io::Result<fs::File> {
+    crate::private_windows::create_new_private(tmp)
+}
+
 /// The core config the app keeps, `<dir>/config.json`. The app writes it once, the first time,
 /// with a free loopback port that then stays the core's, fresh keys and folders under dir; after
 /// that it is the person's to edit (core reloads it), and the app only reads the management key.
+/// On macOS dir is first emptied of extended access list entries (`clear_core_folder`).
 pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
     let path = dir.join("config.json");
+    #[cfg(target_os = "macos")]
+    fs::create_dir_all(dir)
+        .and_then(|_| clear_core_folder(dir))
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
     if path.exists() {
         return Ok(path);
     }
@@ -155,6 +175,36 @@ pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
     let text = serde_json::to_vec_pretty(&cfg).expect("a JSON value");
     write_private(&path, &text).map_err(|e| format!("writing {}: {e}", path.display()))?;
     Ok(path)
+}
+
+/// macOS: the app's core folder holds the core's keys (config.json) and its credentials, so it
+/// keeps no extended access list entry, the rule of the app's other private folders
+/// (`private_macos.rs`): the folder, its config and the credentials and packages folders the
+/// config names by default are given an empty list, and so is each credential file with an
+/// entry (cleared, not refused: the core owns them, and refusing would stop it). The folder is
+/// opened by its path and `credentials` is listed by its path; what is inside the folder is
+/// opened beneath it, never through a link, so a linked credential file is skipped. The core
+/// writes into folders that pass nothing on.
+#[cfg(target_os = "macos")]
+fn clear_core_folder(dir: &Path) -> io::Result<()> {
+    use crate::private_macos::{clear_entries, open_beneath};
+    let root = fs::File::open(dir)?;
+    clear_entries(&root)?;
+    if let Some(f) = open_beneath(&root, "config.json", false)? {
+        clear_entries(&f)?;
+    }
+    if let Some(d) = open_beneath(&root, "packages", true)? {
+        clear_entries(&d)?;
+    }
+    if let Some(d) = open_beneath(&root, "credentials", true)? {
+        clear_entries(&d)?;
+        for e in fs::read_dir(dir.join("credentials"))? {
+            if let Some(f) = open_beneath(&d, e?.file_name(), false)? {
+                clear_entries(&f)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The address core is to listen on, from `listen` in the core config at path: an IP address and
@@ -276,7 +326,10 @@ impl ManagedCore {
         #[cfg(not(unix))]
         let hold: Option<Hold> = None;
         #[cfg(unix)]
-        let mut cmd = Command::new(crate::owned::exec_target(&program)?);
+        let mut cmd = Command::new(crate::owned::exec_target(
+            &program,
+            crate::owned::Writers::Nobody,
+        )?);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -857,6 +910,72 @@ mod tests {
 
     use super::*;
 
+    /// macOS: a file written privately takes nothing from its folder's inheritable access list
+    /// entries, also while it is being written, so it is as private as its 0600 mode says.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn private_write_has_no_access_list_on_macos() {
+        let dir = temp("acl");
+        crate::private_macos::add_entry(&dir, "everyone allow list,file_inherit");
+        let has =
+            |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+        // The control: a file made the plain way inherits the entry.
+        let plain = dir.join("plain.json");
+        fs::write(&plain, b"{}").unwrap();
+        assert!(has(&plain));
+        // The temporary file write_private makes, checked on the descriptor it is made with,
+        // before anything else is done to it.
+        let folder = fs::File::open(&dir).unwrap();
+        let made = create_temp(&folder, &dir.join("connection.json.tmp")).unwrap();
+        assert!(!crate::private_macos::has_entries(&made).unwrap());
+        let path = dir.join("connection.json");
+        write_private(&path, b"{}").unwrap();
+        assert!(!has(&path));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// macOS: the core folder from an install whose folders others may use is emptied of
+    /// extended access list entries before the core starts: the folder, its config, the
+    /// credentials and packages folders and each credential file. The folder is opened by its
+    /// path; a link inside it is not followed.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_core_folder_keeps_no_access_list() {
+        use crate::private_macos::add_entry;
+        let base = temp("core-acl");
+        let dir = base.join("core");
+        ensure_config(&dir).unwrap();
+        let creds = dir.join("credentials");
+        let packages = dir.join("packages");
+        fs::create_dir_all(&creds).unwrap();
+        fs::create_dir_all(&packages).unwrap();
+        let cred = creds.join("account.json");
+        fs::write(&cred, b"{}").unwrap();
+        // A link to a file outside, whose entry is not the app's to change.
+        let outside = base.join("outside.json");
+        fs::write(&outside, b"{}").unwrap();
+        add_entry(&outside, "everyone allow read");
+        std::os::unix::fs::symlink(&outside, creds.join("link.json")).unwrap();
+        let inherit = "everyone allow list,file_inherit,directory_inherit";
+        add_entry(&dir, inherit);
+        add_entry(&dir.join("config.json"), "everyone allow write");
+        add_entry(&creds, inherit);
+        add_entry(&packages, inherit);
+        add_entry(&cred, "everyone allow read");
+        let has =
+            |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+        let all = [&dir, &dir.join("config.json"), &creds, &packages, &cred];
+        for p in all {
+            assert!(has(p), "{}", p.display());
+        }
+        ensure_config(&dir).unwrap();
+        for p in all {
+            assert!(!has(p), "{}", p.display());
+        }
+        assert!(has(&outside));
+        fs::remove_dir_all(base).unwrap();
+    }
+
     fn temp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("pluxy-app-{name}-{}", random_key()));
         fs::create_dir_all(&d).unwrap();
@@ -1071,6 +1190,41 @@ mod tests {
             .unwrap();
         assert!(err.contains("listen is required"), "{err}");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// On macOS the app's own core never runs below a folder the `admin` group may write
+    /// (`owned::Writers::Nobody`): refused before it starts. The core here would otherwise run
+    /// and exit saying why.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn on_macos_a_core_below_a_folder_the_admin_group_may_write_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp("admin");
+        let bin = dir.join("bin");
+        fs::create_dir(&bin).unwrap();
+        let out = std::process::Command::new("/usr/bin/chgrp")
+            .arg("admin")
+            .arg(&bin)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "chgrp admin (the test's user must be in admin): {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o775)).unwrap();
+        let script = bin.join("core.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\necho 'pluxy: config: listen is required' >&2\nexit 3\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let err = ManagedCore::start(File::open(&script).unwrap(), &script, &dir, None)
+            .err()
+            .unwrap();
+        fs::remove_dir_all(dir).unwrap();
+        assert!(err.contains("may be changed by other users"), "{err}");
     }
 
     #[cfg(unix)]

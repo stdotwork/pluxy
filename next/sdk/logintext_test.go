@@ -33,6 +33,55 @@ func TestLoginText(t *testing.T) {
 	}
 }
 
+// Upstream error text is cleaned as login text is, and may run longer.
+func TestUpstreamText(t *testing.T) {
+	for in, want := range map[string]string{
+		"service overloaded, try again later":                   "service overloaded, try again later",
+		"bad token\nabcdefghijklmnopqrstuvwxyz0123456789 given": "bad token [redacted] given",
+		"Authorization: Basic short-start":                      "Authorization: Basic [redacted]",
+		"invalid session token abcdefghijklmnopqrstuv... (cut)": "invalid session token [redacted] (cut)",
+	} {
+		if got := UpstreamText(in); got != want {
+			t.Errorf("UpstreamText(%q) = %q, want %q", in, got, want)
+		}
+	}
+	text := strings.Repeat("word ", 150) // 749 characters, more than login text keeps
+	if got := UpstreamText(text); got != strings.TrimSpace(text) {
+		t.Errorf("a 749-character text was changed: %d characters", len([]rune(got)))
+	}
+	// 2099 characters are cut to the first 1000 and an ellipsis; so are 2099 characters of 2800
+	// bytes, which a cap counted in bytes would cut at 750 characters.
+	if got, want := UpstreamText(strings.Repeat("ab ", 700)), strings.Repeat("ab ", 333)+"a…"; got != want {
+		t.Errorf("a 2099-character text became %d characters ending %q, want %d", len([]rune(got)), got[max(0, len(got)-8):], len([]rune(want)))
+	}
+	if got, want := UpstreamText(strings.Repeat("éa ", 700)), strings.Repeat("éa ", 333)+"é…"; got != want {
+		t.Errorf("a 2099-character text of 2800 bytes became %d characters, want %d", len([]rune(got)), len([]rune(want)))
+	}
+}
+
+// A secret the caller passes is removed in pieces: every run of token characters that holds 4 or
+// more consecutive characters of it, however short, and only those.
+func TestUpstreamTextSecretPieces(t *testing.T) {
+	const secret = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2lnbmF0dXJl"
+	for in, want := range map[string]string{
+		"token was eyJhbGciOiJIUzI":              "token was [redacted]",
+		"bad credential c2ln given":              "bad credential [redacted] given",
+		"joined XJl-devin-ses":                   "joined XJl-devin-ses", // 3 characters of it: not a piece
+		"joined dXJl-devin-ses":                  "joined [redacted]",    // 4 characters of it
+		"invalid session token, try again later": "invalid session token, try again later",
+	} {
+		if got := UpstreamText(in, secret); got != want {
+			t.Errorf("UpstreamText(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := UpstreamText("token was eyJhbGciOiJIUzI"); got != "token was eyJhbGciOiJIUzI" {
+		t.Errorf("without the secret, a 15-character piece was changed: %q", got)
+	}
+	if got := LoginText("token was eyJhbGciOiJIUzI"); got != "token was eyJhbGciOiJIUzI" {
+		t.Errorf("LoginText changed a 15-character run: %q", got)
+	}
+}
+
 func TestLoginCode(t *testing.T) {
 	for in, want := range map[string]string{
 		"invalid_grant":                         "invalid_grant",
