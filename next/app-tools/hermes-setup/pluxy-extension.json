@@ -9,13 +9,16 @@
       0
     ],
     "programs": {
+      "darwin/amd64": "bin/hermes-setup",
+      "darwin/arm64": "bin/hermes-setup",
       "linux/amd64": "bin/hermes-setup",
-      "linux/arm64": "bin/hermes-setup"
+      "linux/arm64": "bin/hermes-setup",
+      "windows/amd64": "bin/hermes-setup.exe"
     },
     "operations": [
       {
         "id": "preview",
-        "description": "Pin Hermes Agent's config file (by default config.yaml in ~/.hermes, or in the profile ~/.hermes/active_profile names; or config.yaml in a selected Hermes home folder; or a selected file) and read its values back, never the key",
+        "description": "Pin Hermes Agent's config file (by default config.yaml in Hermes' home, ~/.hermes, or hermes in the local application data folder on Windows, or in the profile its active_profile names; or config.yaml in a selected Hermes home folder; or a selected file) and read its values back, never the key",
         "effect": "read",
         "input_schema": {
           "type": "object",

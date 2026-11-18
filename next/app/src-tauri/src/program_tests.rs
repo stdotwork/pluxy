@@ -659,6 +659,33 @@ fn a_tool_that_ignores_the_end_of_its_input_is_killed_after_the_grace() {
     until("the reap", 5, || h.status(ID).state == "stopped");
 }
 
+/// On macOS a native tool never runs below a folder the `admin` group may write
+/// (`owned::Writers::Nobody`). The program is a copy of this test program (a link would resolve
+/// to it outside the folder), which would otherwise start and answer.
+#[cfg(target_os = "macos")]
+#[test]
+fn on_macos_a_tool_below_a_folder_the_admin_group_may_write_does_not_start() {
+    use std::os::unix::fs::PermissionsExt;
+    let spec = package(Value::Null);
+    let bin = spec.dir.join("bin");
+    std::fs::remove_file(&spec.program).unwrap();
+    std::fs::copy(std::env::current_exe().unwrap(), &spec.program).unwrap();
+    let out = std::process::Command::new("/usr/bin/chgrp")
+        .arg("admin")
+        .arg(&bin)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "chgrp admin (the test's user must be in admin): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o775)).unwrap();
+    let h = host_for(spec, fast());
+    let e = summary(&h, &["a"]).unwrap_err();
+    assert!(e.message.contains("may be changed by other users"), "{e}");
+}
+
 #[test]
 fn stopping_a_tool_that_does_not_run_leaves_it_as_it_was() {
     let h = host_for(package(Value::Null), fast());

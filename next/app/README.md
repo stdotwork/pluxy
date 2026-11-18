@@ -1564,7 +1564,7 @@ Linux is the only platform the app supports now: what this README describes is L
 passage names another system (as the management key's dialogs, [Native
 confirmations](#native-confirmations) and [Packages](#packages) do), and so is every check in
 [Build and check](#build-and-check). Windows, macOS and WSL are later work, and the Linux checks
-say nothing about them. Some groundwork for them is merged, and CI runs it on GitHub-hosted
+say nothing about them. Some groundwork for them is merged, and CI runs it on disposable
 Windows and macOS runners (`.github/workflows/next-app-platforms.yml`), but it does not make the
 app supported there:
 
@@ -1622,6 +1622,13 @@ in the browser. The app updates itself only as a Linux AppImage.
   when the tool serving that call asks ([Launches and managed runtimes](app-host/README.md#launches-and-managed-runtimes));
   installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
+- On macOS a launch you confirm may run a program from a folder that every administrator of the
+  Mac can change, such as `/Applications` or Homebrew's folders. Another administrator account can
+  swap that program in the moment between the app's check and its start, or, for a program
+  inside an app, what it later starts from that app. For any program that uses those folders,
+  wherever it is, that account can also change at any time what it loads from them (Homebrew's
+  libraries, a script's interpreter). The app's
+  own core and native tools never run from such a folder: the app refuses them there.
 - Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
   entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the
   local data folder, private by its access list. Secrets are kept in a file only the user may read
@@ -1647,14 +1654,14 @@ in the browser. The app updates itself only as a Linux AppImage.
 - The native test runs on Linux, except its platform, package and dialogs sessions, which CI
   runs on Windows and macOS ([Platforms](#platforms) says what they check and what still refuses
   there).
-- The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
-  account's known folders, which no environment variable redirects, so it refuses to start when
-  they exist and removes only the ones it made. Its input does not come from a keyboard: on
-  Windows it is `SendInput` when the dialog has the foreground, otherwise the same key messages
-  posted to the focused control; on macOS key and mouse events made in the app and given to
-  AppKit. Both go through the app's real message handling and the dialogs' controls, but miss
-  what only a person at the machine would hit, such as another app taking the keyboard. The
-  session's summary counts which way each input went.
+- The dialogs session runs only on disposable CI runners (`native/runner.ts`): on Windows the app's
+  folders are the account's known folders, which no environment variable redirects, so it refuses to
+  start when they exist and removes only the ones it made. Its input does not come from a keyboard:
+  on Windows it is `SendInput` when the dialog has the foreground, otherwise the same key messages
+  posted to the focused control; on macOS key and mouse events made in the app and given to AppKit.
+  Both go through the app's real message handling and the dialogs' controls, but miss what only a
+  person at the machine would hit, such as another app taking the keyboard. The session's summary
+  counts which way each input went.
 - No installer or bundled core yet: the only packages are the test AppImage, the test folder
   bundle (Windows) and the test app bundle (macOS), which are not for release.
   The app updates only itself, only as an AppImage, on Linux x86_64, and only with test updater

@@ -1,10 +1,8 @@
 name: Next app tools platforms
 
 # Builds, lints and unit-tests the app tools (next/app-tools, the native programs the desktop app
-# runs on demand) on Windows and macOS. Linux runs them in next-app.yml. The claude-desktop,
-# opencode, omp-setup, grok-setup, hermes-setup and pi-setup writer tools are not ported yet and
-# are left out here. The wsl job runs pluxy/wsl and the Linux side of a WSL instance against real
-# WSL distributions.
+# runs on demand) on Windows and macOS: the whole workspace. Linux runs them in next-app.yml. The
+# wsl job runs pluxy/wsl and the Linux side of a WSL instance against real WSL distributions.
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
@@ -37,10 +35,6 @@ defaults:
     shell: bash
     working-directory: next/app-tools
 
-env:
-  # The writer tools not ported to Windows and macOS yet, Linux only for now.
-  NOT_PORTED: --exclude claude-desktop --exclude opencode --exclude omp-setup --exclude grok-setup --exclude hermes-setup --exclude pi-setup
-
 jobs:
   tools:
     name: app tools (${{ matrix.os }})
@@ -69,9 +63,11 @@ jobs:
         with:
           workspaces: next/app-tools -> target
           key: ${{ matrix.os }}
-          save-if: ${{ runner.environment == 'github-hosted' }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' }}
       - name: Clippy
-        run: cargo clippy --locked --workspace $NOT_PORTED --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # Unit tests with an empty temporary home, so no test can reach the runner's own.
       - name: Tests
         run: |
@@ -87,7 +83,7 @@ jobs:
           fi
           status=0
           # --show-output prints what passing tests said, so a test's own skip line is seen.
-          cargo test --locked --no-fail-fast --workspace $NOT_PORTED -- --show-output 2>&1 | tee "$RUNNER_TEMP/cargo-test.log" || status=$?
+          cargo test --locked --no-fail-fast --workspace -- --show-output 2>&1 | tee "$RUNNER_TEMP/cargo-test.log" || status=$?
           # Record the counts, with the tests that skipped a part this account may not do (such as
           # making a symbolic link), and refuse a run that ran nothing.
           awk '/^test result:/ { p += $4; f += $6; i += $8 } /^skipped: / { s++ } END {
@@ -141,6 +137,9 @@ jobs:
         with:
           workspaces: next/app-tools -> target
           key: wsl
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the Windows tests and the Linux programs
         run: |
           cargo test --locked -p wsl --test real_wsl --no-run

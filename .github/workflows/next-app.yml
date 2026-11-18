@@ -4,6 +4,13 @@ on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
   # its paths below are touched.
   workflow_call:
+    inputs:
+      # ci.yml sets this for a pull request without the full-ci label: the native shards then run
+      # in the merge queue only (AGENTS.md, "CI"). A push or a manual run has no inputs: null is not
+      # true, so it runs them.
+      skip-native:
+        type: boolean
+        default: false
   workflow_dispatch:
   push:
     branches:
@@ -126,6 +133,7 @@ jobs:
   # shard takes about 7 minutes of builds and up to 9 of sessions, so the step allows about three
   # times that for the sessions still being added.
   native:
+    if: inputs.skip-native != true
     # Pinned: the package names below are Ubuntu 24.04's, and so are the file paths the native
     # test starts services from (next/app/native/services.ts). Always on GitHub's runners, never
     # PLUXY_LINUX_RUNNER: the document portal needs /dev/fuse, which the maintainers' runner
@@ -184,9 +192,9 @@ jobs:
             next/app-tools -> target
           # One cache for every shard, under the key the single job before the split used. The
           # release shard builds everything the others do and the release app too, so it alone
-          # saves it.
           shared-key: app
-          save-if: ${{ runner.environment == 'github-hosted' && matrix.shard == 'release' }}
+          # saves it, from main only (see app-ci.yml's cache step).
+          save-if: ${{ runner.environment == 'github-hosted' && matrix.shard == 'release' && github.ref == 'refs/heads/main' }}
       # The app builds the UI kit from next/ui, with its copy of preact.
       - name: UI kit install
         working-directory: next/ui
@@ -222,7 +230,8 @@ jobs:
           if-no-files-found: ignore
 
   # The workflow's one result, under the name of the single job before the split: it fails when
-  # the checks or any native shard did not pass.
+  # the checks or any native shard did not pass. The shards may be skipped only when ci.yml said
+  # so (skip-native).
   app:
     if: ${{ !cancelled() }}
     needs: [checks, native]
@@ -233,6 +242,7 @@ jobs:
         env:
           CHECKS: ${{ needs.checks.result }}
           NATIVE: ${{ needs.native.result }}
+          SKIP_NATIVE: ${{ inputs.skip-native == true }}
         run: |
-          echo "checks: $CHECKS; native shards: $NATIVE"
-          [ "$CHECKS" = success ] && [ "$NATIVE" = success ]
+          echo "checks: $CHECKS; native shards: $NATIVE (skip-native: $SKIP_NATIVE)"
+          [ "$CHECKS" = success ] && { [ "$NATIVE" = success ] || { [ "$SKIP_NATIVE" = true ] && [ "$NATIVE" = skipped ]; }; }

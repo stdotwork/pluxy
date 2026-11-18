@@ -547,9 +547,9 @@ mod unix {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::Temp;
-    use crate::owned::{exec_target, secure};
+    use crate::owned::{exec_target, secure, Writers};
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::{Path, PathBuf};
 
     /// t's folder by its real path (the system's temporary folder is under the link `/var`).
@@ -563,8 +563,8 @@ mod macos {
     }
 
     /// A refusal that names part.
-    fn refused(path: &Path, part: &Path) {
-        let e = secure(path).expect_err(&path.display().to_string());
+    fn refused(path: &Path, part: &Path, writers: Writers) {
+        let e = secure(path, writers).expect_err(&path.display().to_string());
         assert!(
             e.starts_with(&format!("{} ", part.display())),
             "{} refused for {e}, not for {}",
@@ -579,7 +579,7 @@ mod macos {
         let dir = real(&t);
         let p = dir.join("prog");
         file(&p, 0o700);
-        assert_eq!(secure(&p), Ok(()));
+        assert_eq!(secure(&p, Writers::Nobody), Ok(()));
 
         // In a folder anyone can write to with the sticky bit set (as /tmp), only the owner of
         // an entry can rename or remove it.
@@ -588,7 +588,7 @@ mod macos {
         fs::set_permissions(&sticky, fs::Permissions::from_mode(0o1777)).unwrap();
         let q = sticky.join("prog");
         file(&q, 0o700);
-        assert_eq!(secure(&q), Ok(()));
+        assert_eq!(secure(&q, Writers::Nobody), Ok(()));
     }
 
     #[test]
@@ -598,35 +598,117 @@ mod macos {
 
         let others = dir.join("others");
         file(&others, 0o702);
-        refused(&others, &others);
+        refused(&others, &others, Writers::Nobody);
 
-        // A group writable file, in a group other than wheel (0) and admin (80).
+        // A group writable file, in any group: the user's own, and admin's.
         let group = dir.join("group");
         file(&group, 0o720);
-        let gid = unsafe { libc::getegid() };
-        assert!(gid != 0 && gid != 80, "the test runs with group {gid}");
-        let c = std::ffi::CString::new(group.as_os_str().as_encoded_bytes()).unwrap();
-        assert_eq!(unsafe { libc::chown(c.as_ptr(), u32::MAX, gid) }, 0);
-        refused(&group, &group);
+        set_group(&group, unsafe { libc::getegid() });
+        refused(&group, &group, Writers::Nobody);
+        let admins = dir.join("admins");
+        file(&admins, 0o720);
+        set_group(&admins, admin_gid());
+        refused(&admins, &admins, Writers::Nobody);
 
         let open = dir.join("open");
         fs::create_dir(&open).unwrap();
         fs::set_permissions(&open, fs::Permissions::from_mode(0o777)).unwrap();
         let inside = open.join("prog");
         file(&inside, 0o700);
-        refused(&inside, &open);
+        refused(&inside, &open, Writers::Nobody);
 
         let real_dir = dir.join("real");
         fs::create_dir(&real_dir).unwrap();
         file(&real_dir.join("prog"), 0o700);
         let link = dir.join("link");
         std::os::unix::fs::symlink(&real_dir, &link).unwrap();
-        refused(&link.join("prog"), &link);
+        refused(&link.join("prog"), &link, Writers::Nobody);
         let file_link = dir.join("file-link");
         std::os::unix::fs::symlink(real_dir.join("prog"), &file_link).unwrap();
-        refused(&file_link, &file_link);
+        refused(&file_link, &file_link, Writers::Nobody);
 
-        refused(Path::new("prog"), Path::new("prog"));
+        refused(Path::new("prog"), Path::new("prog"), Writers::Nobody);
+    }
+
+    /// The `admin` group's number, as Directory Services gives it.
+    fn admin_gid() -> u32 {
+        let out = std::process::Command::new("/usr/bin/dscl")
+            .args([".", "-read", "/Groups/admin", "PrimaryGroupID"])
+            .output()
+            .unwrap();
+        let text = String::from_utf8(out.stdout).unwrap();
+        text.split_whitespace().last().unwrap().parse().unwrap()
+    }
+
+    /// Gives p the group gid, which its owner may do only as a member of that group.
+    fn set_group(p: &Path, gid: u32) {
+        let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(
+            unsafe { libc::chown(c.as_ptr(), u32::MAX, gid) },
+            0,
+            "giving {} the group {gid}: {} (the test's user must be in that group)",
+            p.display(),
+            std::io::Error::last_os_error()
+        );
+    }
+
+    fn folder(p: &Path, mode: u32) {
+        fs::create_dir(p).unwrap();
+        fs::set_permissions(p, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn secure_lets_the_admin_group_write_a_folder_above_a_launch_only() {
+        let t = Temp::new("admin");
+        let dir = real(&t);
+        let admin = admin_gid();
+
+        // As /Applications (root:admin 0775) or a Homebrew folder (the user's, admin, 0775).
+        let shared = dir.join("shared");
+        folder(&shared, 0o775);
+        set_group(&shared, admin);
+        let p = shared.join("prog");
+        file(&p, 0o700);
+        // The app's own core and native tools: refused, as for any other group.
+        refused(&p, &shared, Writers::Nobody);
+        // A launch's program.
+        assert_eq!(secure(&p, Writers::Admins), Ok(()));
+
+        // Never the file itself.
+        let own = dir.join("admin-file");
+        file(&own, 0o770);
+        set_group(&own, admin);
+        refused(&own, &own, Writers::Admins);
+
+        // Nor a folder that another group may write, or everyone.
+        let staff = dir.join("staff");
+        folder(&staff, 0o775);
+        let gid = unsafe { libc::getegid() };
+        assert!(gid != admin, "the test runs with group {gid}, admin's");
+        set_group(&staff, gid);
+        file(&staff.join("prog"), 0o700);
+        refused(&staff.join("prog"), &staff, Writers::Admins);
+        let open = dir.join("open");
+        folder(&open, 0o777);
+        set_group(&open, admin);
+        file(&open.join("prog"), 0o700);
+        refused(&open.join("prog"), &open, Writers::Admins);
+    }
+
+    #[test]
+    fn secure_refuses_a_folder_the_wheel_group_may_write() {
+        // A folder made in /private/tmp (root:wheel) gets its group: wheel (0).
+        let t = Temp(PathBuf::from(format!(
+            "/private/tmp/pluxy-owned-wheel-{}",
+            std::process::id()
+        )));
+        let _ = fs::remove_dir_all(&t.0);
+        folder(&t.0, 0o770);
+        assert_eq!(fs::metadata(&t.0).unwrap().gid(), 0, "{}", t.0.display());
+        let p = t.0.join("prog");
+        file(&p, 0o700);
+        refused(&p, &t.0, Writers::Nobody);
+        refused(&p, &t.0, Writers::Admins);
     }
 
     #[test]
@@ -637,23 +719,34 @@ mod macos {
         let p = dir.join("prog");
         file(&p, 0o700);
         let f = fs::File::open(&p).unwrap();
-        assert_eq!(exec_target(&f).unwrap(), p);
+        assert_eq!(exec_target(&f, Writers::Nobody).unwrap(), p);
         // Written in place it is still the file that was opened, as on Linux, where the kernel
         // runs what it holds then: what it holds is checked by the callers (`recheck`).
         fs::write(&p, b"#!/bin/sh\necho changed\n").unwrap();
-        assert_eq!(exec_target(&f).unwrap(), p);
+        assert_eq!(exec_target(&f, Writers::Nobody).unwrap(), p);
 
         let q = dir.join("swapped");
         file(&q, 0o700);
         let g = fs::File::open(&q).unwrap();
-        assert_eq!(exec_target(&g).unwrap(), q);
+        assert_eq!(exec_target(&g, Writers::Nobody).unwrap(), q);
         let other = dir.join("other");
         file(&other, 0o700);
         fs::rename(&other, &q).unwrap();
         assert!(
-            exec_target(&g).is_err(),
+            exec_target(&g, Writers::Nobody).is_err(),
             "a file replaced after it was opened"
         );
+
+        // Below a folder the admin group may write, it runs only under the rule that allows it.
+        let shared = dir.join("shared");
+        folder(&shared, 0o775);
+        set_group(&shared, admin_gid());
+        let r = shared.join("prog");
+        file(&r, 0o700);
+        let h = fs::File::open(&r).unwrap();
+        assert_eq!(exec_target(&h, Writers::Admins).unwrap(), r);
+        let e = exec_target(&h, Writers::Nobody).unwrap_err();
+        assert!(e.contains("may be changed by other users"), "{e}");
     }
 }
 

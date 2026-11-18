@@ -275,6 +275,7 @@ payload:
 // gets max_tokens 128000 over the client's; Gemini gets the thinking budget and the schema
 // removed (its filter runs after its default-raw). No notice calls payload unsupported.
 func TestPayloadExampleConfigYAML(t *testing.T) {
+	t.Parallel()
 	up := newPayloadUpstream(t, false)
 	cfg := func(port int) []byte {
 		return []byte(`
