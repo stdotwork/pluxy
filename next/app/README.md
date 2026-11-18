@@ -555,8 +555,10 @@ In this order:
    identifier and program and the announced version (`CFBundleShortVersionString`), with a
    program for this Mac. The staging folder is `updates/staging/<hex>` in the app's data folder
    when that is on the bundle's volume, and only if every folder from your home folder down to it
-   is yours and writable by no one else (otherwise nothing is unpacked, and the page says which
-   folder to fix); only on another volume is it `.pluxy-update-<hex>` next to the bundle.
+   is yours, not a link, and writable by no one else (checked for the folders that exist before
+   anything is made in them, and again once the staging folder is made; otherwise nothing is
+   unpacked, and the page says which folder to fix); only on another volume is it
+   `.pluxy-update-<hex>` next to the bundle.
 6. The running version's copy is kept in the app's data folder (`updates/kept/`, the last three
    versions), pinned in `updates/history.json` by its SHA-256 (on macOS, a digest of the bundle's
    whole tree: every folder, file, size, content digest and execute bit), and
@@ -575,8 +577,10 @@ In this order:
      ended.
    - macOS: the unpacked bundle and the installed one swap places in one step (`renameatx_np`
      with `RENAME_SWAP`, by name in the staging folder and the bundle's folder, each opened
-     without following a link; the bundle's folder, read through that open folder, must still be
-     yours and writable by no one else): the bundle is the old one or the new one. With private
+     without following a link, the staging folder next to the bundle through the bundle's open
+     folder; read through those open folders, the bundle's folder must still be yours and writable
+     by no one else, and the staging folder still the one made, yours and 0700): the bundle is the
+     old one or the new one. With private
      staging, nothing else in the bundle's folder is made, changed or removed. The old bundle, now
      in the staging folder, is removed once the new version runs and the old one has ended.
 

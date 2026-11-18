@@ -139,6 +139,11 @@ impl Folder {
         &self.made.path
     }
 
+    /// What the folder made is: its device and inode, as recorded.
+    pub(super) fn id(&self) -> &str {
+        &self.made.id
+    }
+
     /// Leaves the folder when dropped: it stays recorded for a later start's cleanup.
     pub(super) fn keep(&mut self) {
         self.kept = true;

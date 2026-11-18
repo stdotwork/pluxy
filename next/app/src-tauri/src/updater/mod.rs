@@ -1149,6 +1149,9 @@ pub(super) mod tests {
     #[test]
     fn restore_puts_back_only_a_copy_with_its_pinned_digest() {
         let tmp = temp("restore");
+        // The staging folder's home folder (`app.rs`'s private staging).
+        #[cfg(target_os = "macos")]
+        format::tests::home_at(&tmp);
         let dir = tmp.join("updates");
         let image = installed(&tmp, "old");
         let old = format::digest(&image).unwrap();

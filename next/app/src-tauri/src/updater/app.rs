@@ -194,13 +194,18 @@ impl Staged {
 /// A new staging folder of this user's, recorded in the updates folder dir (`leftovers::Folder`):
 /// `<dir>/staging/<hex>` when that is on the installed bundle's volume and every folder from the
 /// home folder down to it is this user's alone (`private_path`, refused otherwise); on another
-/// volume, `.pluxy-update-<hex>` next to the bundle.
+/// volume, `.pluxy-update-<hex>` next to the bundle. The folders from the home folder down to
+/// `<dir>/staging` that exist already are checked before anything is made in them.
 fn staging(installed: &Path, dir: &Path) -> Result<leftovers::Folder, String> {
     let folder = installed.parent().ok_or("The app bundle has no folder.")?;
     let mut nonce = [0u8; 8];
     getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
     let hex = crate::artifact::hex(&nonce);
+    // SAFETY: geteuid has no preconditions.
+    let me = unsafe { libc::geteuid() };
+    let home = home()?;
     let private = dir.join("staging");
+    private_path(&home, &private, me, look, Missing::Made)?;
     super::private_dir(&private)?;
     if !same_volume(folder, &private)? {
         let path = folder.join(format!(".pluxy-update-{hex}"));
@@ -212,26 +217,26 @@ fn staging(installed: &Path, dir: &Path) -> Result<leftovers::Folder, String> {
     #[cfg(test)]
     tests::seen("make", &path);
     let made = leftovers::Folder::new(dir, &path)?;
-    // SAFETY: geteuid has no preconditions.
-    let me = unsafe { libc::geteuid() };
     // Refused, the folder just made goes with made.
-    private_path(&home()?, made.path(), me, look)?;
+    private_path(&home, made.path(), me, look, Missing::Refused)?;
     Ok(made)
 }
 
 /// Whether the folders a and b are on one volume (one device): only then can one swap reach both.
+/// A link at either is refused, not followed.
 fn same_volume(a: &Path, b: &Path) -> Result<bool, String> {
     use std::os::unix::fs::MetadataExt;
+    let dev = |p: &Path| match fs::symlink_metadata(p) {
+        Ok(m) if m.is_dir() => Ok(m.dev()),
+        Ok(_) => Err(format!("{} is not a folder", p.display())),
+        Err(e) => Err(format!("{}: {e}", p.display())),
+    };
+    let (a, b) = (dev(a)?, dev(b)?);
     #[cfg(test)]
     if tests::another_volume() {
         return Ok(false);
     }
-    let dev = |p: &Path| {
-        fs::metadata(p)
-            .map(|m| m.dev())
-            .map_err(|e| format!("{}: {e}", p.display()))
-    };
-    Ok(dev(a)? == dev(b)?)
+    Ok(a == b)
 }
 
 /// The home folder the app's data folder is in: `HOME`, which Tauri's data folder is made from
@@ -246,10 +251,10 @@ fn home() -> Result<PathBuf, String> {
         })
 }
 
-/// In tests, the folder a test set (`tests::Home`), else the system's temporary folder.
+/// In tests, the folder the test set (`tests::HOME`).
 #[cfg(test)]
 fn home() -> Result<PathBuf, String> {
-    Ok(tests::home())
+    tests::home().ok_or_else(|| "the test set no home folder (app::tests::HOME)".into())
 }
 
 /// What `private_path` reads of a path without following a link: whether it is a folder, its
@@ -271,15 +276,28 @@ fn look(path: &Path) -> io::Result<Look> {
     })
 }
 
+/// What `private_path` makes of a folder on the path that does not exist.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Missing {
+    /// The rest is about to be made (private, by this user): the folders above it are all there is
+    /// to check.
+    Made,
+    /// Refused, as any other failed look.
+    Refused,
+}
+
 /// Refused unless path is in the home folder home and every folder from home down to path,
 /// both included, is a folder (not a link) owned by me that no one else can write to (no group or
 /// other write). No other account can then rename or replace any of them, so what the updater
-/// unpacks and checks there stays what it checked. look reads each.
+/// unpacks and checks there stays what it checked. look reads each, by a path built from home's
+/// and path's parts alone: no trailing `/` that would make a look follow a link, and no `.` or
+/// `..`. With `Missing::Made`, the walk ends at the first folder that does not exist.
 fn private_path(
     home: &Path,
     path: &Path,
     me: u32,
     look: impl Fn(&Path) -> io::Result<Look>,
+    missing: Missing,
 ) -> Result<(), String> {
     let elsewhere = || {
         format!(
@@ -288,18 +306,37 @@ fn private_path(
             home.display()
         )
     };
-    let rest = path.strip_prefix(home).map_err(|_| elsewhere())?;
-    let mut at = home.to_path_buf();
-    let mut folders = vec![at.clone()];
-    for c in rest.components() {
-        let Component::Normal(name) = c else {
-            return Err(elsewhere());
-        };
+    // Each path rebuilt from its parts: only the root and plain names.
+    let plain = |p: &Path| -> Option<Vec<std::ffi::OsString>> {
+        let mut c = p.components();
+        if c.next() != Some(Component::RootDir) {
+            return None;
+        }
+        c.map(|c| match c {
+            Component::Normal(n) => Some(n.to_os_string()),
+            _ => None,
+        })
+        .collect()
+    };
+    let (Some(home_parts), Some(parts)) = (plain(home), plain(path)) else {
+        return Err(elsewhere());
+    };
+    if parts.len() < home_parts.len() || parts[..home_parts.len()] != home_parts[..] {
+        return Err(elsewhere());
+    }
+    let mut at = PathBuf::from("/");
+    let mut folders = vec![];
+    for (i, name) in parts.iter().enumerate() {
         at.push(name);
-        folders.push(at.clone());
+        if i + 1 >= home_parts.len() {
+            folders.push(at.clone());
+        }
     }
     for f in folders {
-        let l = look(&f).map_err(|e| format!("{}: {e}", f.display()))?;
+        let l = match look(&f) {
+            Err(e) if missing == Missing::Made && e.kind() == io::ErrorKind::NotFound => break,
+            l => l.map_err(|e| format!("{}: {e}", f.display()))?,
+        };
         if !l.folder || l.uid != me || l.mode & 0o022 != 0 {
             return Err(format!(
                 "{} is not a folder of yours that only you can change, so another account could \
@@ -312,7 +349,7 @@ fn private_path(
     Ok(())
 }
 
-/// Unpacks the update's verified archive next to the installed bundle and checks it: the same
+/// Unpacks the update's verified archive into a staging folder (`staging`) and checks it: the same
 /// identifier and program as the installed bundle, the announced version, a program for this Mac.
 pub(super) fn stage(
     installed: &Path,
@@ -365,28 +402,56 @@ pub(super) fn stage_kept(
 }
 
 /// Swaps staged with the installed bundle in one step, by name in each one's folder, both opened
-/// without following a link. The bundle's folder must still be a folder this user owns that no
-/// one else can write to, read through the descriptor the swap goes through.
+/// without following a link. Each is checked through the descriptor the swap goes through: the
+/// bundle's folder must still be a folder this user owns that no one else can write to, and the
+/// staging folder still the one made (`leftovers::Folder`), this user's and 0700.
 pub(super) fn swap_in(installed: &Path, mut staged: Staged, _updates: &Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let shown = |p: &Path, e: io::Error| format!("{}: {e}", p.display());
     let (folder, name) = named(installed)?;
-    let (from, from_name) = named(&staged.bundle)?;
-    let open = |p: &Path| open_folder(p).map_err(|e| shown(p, e));
-    let to = open(folder)?;
-    let m = to.metadata().map_err(|e| shown(folder, e))?;
+    let (staging, from_name) = named(&staged.bundle)?;
+    if staging != staged.staging.path() {
+        return Err(format!(
+            "{} is not in its staging folder",
+            staged.bundle.display()
+        ));
+    }
     // SAFETY: geteuid has no preconditions.
-    if !m.is_dir() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o022 != 0 {
+    let me = unsafe { libc::geteuid() };
+    let to = open_folder(folder).map_err(|e| shown(folder, e))?;
+    let m = to.metadata().map_err(|e| shown(folder, e))?;
+    if !m.is_dir() || m.uid() != me || m.mode() & 0o022 != 0 {
         return Err(format!(
             "{} is not a folder of yours that only you can change; the app is not updated there.",
             folder.display()
         ));
     }
-    let from = open(from)?;
+    // The staging folder: next to the bundle, opened through the bundle's folder just checked;
+    // in private staging, by its path, whose folders `staging` checked. Either way it must still
+    // be the folder made: the same device and inode, this user's, 0700.
+    let (staging_folder, staging_name) = named(staging)?;
+    let from = if staging_folder == folder {
+        open_in(&to, &staging_name)
+    } else {
+        open_folder(staging)
+    }
+    .map_err(|e| shown(staging, e))?;
+    let m = from.metadata().map_err(|e| shown(staging, e))?;
+    if !m.is_dir()
+        || m.uid() != me
+        || m.mode() & 0o7777 != 0o700
+        || format!("{}:{}", m.dev(), m.ino()) != staged.staging.id()
+    {
+        return Err(format!(
+            "{} is no longer the staging folder this update made; nothing was swapped.",
+            staging.display()
+        ));
+    }
     #[cfg(test)]
     {
         tests::seen("swap", &staged.bundle);
         tests::seen("swap", installed);
+        tests::before_swap(installed);
     }
     swap_at(&from, &from_name, &to, &name).map_err(|e| shown(installed, e))?;
     // The old bundle is in the staging folder now: it stays until the old version has ended.
@@ -406,6 +471,26 @@ fn named(p: &Path) -> Result<(&Path, CString), String> {
         folder,
         CString::new(name.as_bytes()).map_err(|e| e.to_string())?,
     ))
+}
+
+/// The folder name in the folder open as dir, opened to act relative to it, without following a
+/// link.
+fn open_in(dir: &fs::File, name: &CString) -> io::Result<fs::File> {
+    use std::os::unix::io::{AsRawFd, FromRawFd};
+    // SAFETY: dir is an open folder and name NUL-terminated; a descriptor given back is owned
+    // below.
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fd was just opened and nothing else owns it.
+    Ok(unsafe { fs::File::from_raw_fd(fd) })
 }
 
 /// The folder at path, opened to act relative to it, without following a link.
@@ -509,15 +594,31 @@ pub(super) mod tests {
         static HOME: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
         /// Set: on this thread the bundle's folder is on another volume than the updates folder.
         static ANOTHER: Cell<bool> = const { Cell::new(false) };
+        /// Run by `swap_in` on this thread after its checks, just before the swap, with the
+        /// installed bundle's path.
+        static BEFORE_SWAP: Cell<Option<fn(&Path)>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn before_swap(installed: &Path) {
+        if let Some(f) = BEFORE_SWAP.with(Cell::get) {
+            f(installed);
+        }
     }
 
     pub(super) fn seen(op: &'static str, path: &Path) {
         SEEN.with(|s| s.borrow_mut().push((op, path.to_path_buf())));
     }
 
-    pub(super) fn home() -> PathBuf {
+    pub(super) fn home() -> Option<PathBuf> {
         HOME.with(|h| h.borrow().clone())
-            .unwrap_or_else(std::env::temp_dir)
+    }
+
+    /// Makes tmp, a test's own folder, this user's alone and the home folder on this thread, for
+    /// the updater's tests that stage a bundle (`mod.rs`).
+    pub(crate) fn home_at(tmp: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(tmp, fs::Permissions::from_mode(0o700)).unwrap();
+        HOME.with(|h| *h.borrow_mut() = Some(tmp.to_path_buf()));
     }
 
     pub(super) fn another_volume() -> bool {
@@ -526,12 +627,11 @@ pub(super) mod tests {
 
     /// A folder of this user's alone for a test, which is also its home folder on this thread.
     fn temp(name: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
         let tmp = super::super::tests::temp(name);
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o700)).unwrap();
-        HOME.with(|h| *h.borrow_mut() = Some(tmp.clone()));
+        home_at(&tmp);
         SEEN.with(|s| s.borrow_mut().clear());
         ANOTHER.with(|a| a.set(false));
+        BEFORE_SWAP.with(|b| b.set(None));
         tmp
     }
 
@@ -731,9 +831,15 @@ pub(super) mod tests {
         let dir = tmp.join("updates");
         let folder = tmp.join("Applications");
         let installed = fixture(&folder, "old");
+        // A folder of the staging pattern this updater never recorded, as another administrator
+        // could rename one of the user's to: it stays as it is.
+        let decoy = folder.join(".pluxy-update-0123456789abcdef");
+        fs::create_dir(&decoy).unwrap();
+        fs::write(decoy.join("theirs"), b"x").unwrap();
         let name = |l: &[(String, String)]| l.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
         let before = listing(&folder);
-        assert_eq!(name(&before), ["pluxy Test.app"]);
+        let names = [".pluxy-update-0123456789abcdef", "pluxy Test.app"];
+        assert_eq!(name(&before), names);
         let old = digest(&installed).unwrap();
         let bytes = archive(&tmp, "0.2.0", "new");
         SEEN.with(|s| s.borrow_mut().clear());
@@ -759,7 +865,7 @@ pub(super) mod tests {
         swap_in(&installed, staged, &dir).unwrap();
         assert_eq!(digest(&installed).unwrap(), new);
         let updated = listing(&folder);
-        assert_eq!(name(&updated), ["pluxy Test.app"]);
+        assert_eq!(name(&updated), names);
         assert_ne!(updated, before, "the bundle's entry is the new bundle");
         // 0.2.0 started: its cleanup removes the old bundle from private staging.
         leftovers::forget_mine(&tmp);
@@ -774,7 +880,10 @@ pub(super) mod tests {
         leftovers::forget_mine(&tmp);
         cleanup(&dir);
         assert!(private(&dir).is_empty());
-        assert_eq!(name(&listing(&folder)), ["pluxy Test.app"]);
+        let after = listing(&folder);
+        assert_eq!(name(&after), names);
+        assert_eq!(after[0], before[0], "the decoy is the same folder");
+        assert_eq!(fs::read(decoy.join("theirs")).unwrap(), b"x");
 
         let seen = SEEN.with(|s| std::mem::take(&mut *s.borrow_mut()));
         let in_folder: Vec<_> = seen
@@ -858,6 +967,152 @@ pub(super) mod tests {
         fs::remove_dir_all(&tmp).unwrap();
     }
 
+    // The swap goes through the two folders it checked, not their paths: the bundle's folder
+    // moved away after the checks, and another put at its path, the swap still happens in the
+    // folder checked, and the folder now at that path is untouched.
+    #[test]
+    fn the_swap_goes_through_the_folders_it_checked_not_their_paths() {
+        let tmp = temp("app-swap-handles");
+        let dir = tmp.join("updates");
+        let folder = tmp.join("Applications");
+        let installed = fixture(&folder, "old");
+        let old = digest(&installed).unwrap();
+        let kept = tmp.join("kept.app");
+        copy_new(&installed, &kept).unwrap();
+        let pin = Pinned {
+            version: "0.1.0".into(),
+            sha256: old.clone(),
+        };
+        fixture(&folder, "new");
+        let s = stage_kept(&installed, &kept, &pin, &dir).unwrap();
+        fn replace(installed: &Path) {
+            let folder = installed.parent().unwrap();
+            fs::rename(folder, folder.with_file_name("Moved")).unwrap();
+            fixture(folder, "theirs");
+        }
+        BEFORE_SWAP.with(|b| b.set(Some(replace)));
+        swap_in(&installed, s, &dir).unwrap();
+        let theirs = digest(&installed).unwrap();
+        let moved = tmp.join("Moved/pluxy Test.app");
+        assert_eq!(
+            digest(&moved).unwrap(),
+            old,
+            "swapped in the folder checked"
+        );
+        assert_ne!(theirs, old, "the folder put at its path was not swapped");
+        assert_eq!(
+            fs::read(installed.join("Contents/MacOS/pluxy-app-test")).unwrap()[32..],
+            *b"theirs"
+        );
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // A staging folder that is no longer the one made (another folder put at its path, private
+    // or next to the bundle) is not swapped in, even when it holds a bundle.
+    #[test]
+    fn a_staging_folder_put_in_place_of_the_one_made_is_not_swapped_in() {
+        use std::os::unix::fs::PermissionsExt;
+        for another in [false, true] {
+            let tmp = temp(if another {
+                "app-staging-replaced-beside"
+            } else {
+                "app-staging-replaced"
+            });
+            ANOTHER.with(|a| a.set(another));
+            let dir = tmp.join("updates");
+            let installed = fixture(&tmp, "old");
+            let old = digest(&installed).unwrap();
+            let kept = tmp.join("kept.app");
+            copy_new(&installed, &kept).unwrap();
+            let pin = Pinned {
+                version: "0.1.0".into(),
+                sha256: old.clone(),
+            };
+            let s = stage_kept(&installed, &kept, &pin, &dir).unwrap();
+            let staging = s.staging.path().to_path_buf();
+            fs::rename(&staging, tmp.join("aside")).unwrap();
+            fs::create_dir(&staging).unwrap();
+            fs::set_permissions(&staging, fs::Permissions::from_mode(0o700)).unwrap();
+            fixture(&staging, "theirs");
+            let e = swap_in(&installed, s, &dir).unwrap_err();
+            assert!(e.contains("no longer the staging folder"), "{another}: {e}");
+            assert_eq!(
+                digest(&installed).unwrap(),
+                old,
+                "{another}: nothing swapped"
+            );
+            fs::remove_dir_all(&tmp).unwrap();
+        }
+    }
+
+    // Nothing is made where a link stands on the staging path: a home folder given with a
+    // trailing `/` over a link, a link at the updates folder or at its staging folder, or a link
+    // as the bundle's folder are refused before anything is made or recorded through them.
+    #[test]
+    fn staging_makes_nothing_through_a_link() {
+        let tmp = temp("app-links");
+        let installed = fixture(&tmp.join("Applications"), "old");
+        let kept = tmp.join("kept.app");
+        copy_new(&installed, &kept).unwrap();
+        let pin = Pinned {
+            version: "0.1.0".into(),
+            sha256: digest(&installed).unwrap(),
+        };
+        let elsewhere = tmp.join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        let link = |at: &Path| std::os::unix::fs::symlink(&elsewhere, at).unwrap();
+        let empty = |p: &Path| fs::read_dir(p).unwrap().next().is_none();
+
+        // HOME=<link>/ where the link leads to a private folder.
+        let home = tmp.join("home");
+        link(&home);
+        HOME.with(|h| *h.borrow_mut() = Some(PathBuf::from(format!("{}/", home.display()))));
+        let e = stage_kept(&installed, &kept, &pin, &home.join("updates"))
+            .err()
+            .unwrap();
+        assert!(
+            e.contains(&format!("{} is not a folder", home.display())),
+            "{e}"
+        );
+        assert!(empty(&elsewhere), "made through the home link");
+        fs::remove_file(&home).unwrap();
+        home_at(&tmp);
+
+        // A link at the updates folder, then at its staging folder.
+        let dir = tmp.join("updates");
+        link(&dir);
+        let e = stage_kept(&installed, &kept, &pin, &dir).err().unwrap();
+        assert!(
+            e.contains(&format!("{} is not a folder", dir.display())),
+            "{e}"
+        );
+        assert!(empty(&elsewhere), "made through the updates link");
+        fs::remove_file(&dir).unwrap();
+        fs::create_dir(&dir).unwrap();
+        link(&dir.join("staging"));
+        let e = stage_kept(&installed, &kept, &pin, &dir).err().unwrap();
+        assert!(e.contains("staging is not a folder"), "{e}");
+        assert!(empty(&elsewhere), "made through the staging link");
+        assert!(
+            !dir.join("leftovers.json").exists(),
+            "recorded through the staging link"
+        );
+        fs::remove_file(dir.join("staging")).unwrap();
+
+        // The bundle reached through a link as its folder.
+        let linked = tmp.join("Linked");
+        std::os::unix::fs::symlink(tmp.join("Applications"), &linked).unwrap();
+        let e = stage_kept(&linked.join("pluxy Test.app"), &kept, &pin, &dir)
+            .err()
+            .unwrap();
+        assert!(
+            e.contains(&format!("{} is not a folder", linked.display())),
+            "{e}"
+        );
+        assert!(private(&dir).is_empty());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
     // The staging path check, with the values it reads given: every folder from the home folder
     // down to the staging folder must be a folder, this user's, with no group or other write;
     // the staging folder must be in the home folder.
@@ -871,21 +1126,33 @@ pub(super) mod tests {
             mode: 0o40700,
         };
         let check = |bad: Option<(&Path, Option<Look>)>| {
-            private_path(home, path, 501, |p| match bad {
-                Some((at, l)) if at == p => {
-                    l.ok_or_else(|| io::Error::from(io::ErrorKind::PermissionDenied))
-                }
-                _ => Ok(ok),
-            })
+            private_path(
+                home,
+                path,
+                501,
+                |p| match bad {
+                    Some((at, l)) if at == p => {
+                        l.ok_or_else(|| io::Error::from(io::ErrorKind::PermissionDenied))
+                    }
+                    _ => Ok(ok),
+                },
+                Missing::Refused,
+            )
         };
         check(None).unwrap();
         // Group read and other execute, as the home folder has: fine.
-        private_path(home, path, 501, |_| {
-            Ok(Look {
-                mode: 0o40751,
-                ..ok
-            })
-        })
+        private_path(
+            home,
+            path,
+            501,
+            |_| {
+                Ok(Look {
+                    mode: 0o40751,
+                    ..ok
+                })
+            },
+            Missing::Refused,
+        )
         .unwrap();
         let folders: Vec<&Path> = path
             .ancestors()
@@ -925,8 +1192,54 @@ pub(super) mod tests {
             "/Users/meow/x",
             "/tmp/x",
         ] {
-            let e = private_path(home, Path::new(outside), 501, |_| Ok(ok)).unwrap_err();
+            let e = private_path(home, Path::new(outside), 501, |_| Ok(ok), Missing::Refused)
+                .unwrap_err();
             assert!(e.contains("not in your home folder"), "{outside}: {e}");
         }
+        // Each folder is looked at by a path of plain names: a home given with a trailing `/`
+        // (which would make a look follow a link there) or with `.` in it is looked at without.
+        for given in ["/Users/me/", "/Users/./me", "/Users/me/."] {
+            let looked = RefCell::new(vec![]);
+            private_path(
+                Path::new(given),
+                path,
+                501,
+                |p| {
+                    looked.borrow_mut().push(p.as_os_str().to_owned());
+                    Ok(ok)
+                },
+                Missing::Refused,
+            )
+            .unwrap();
+            let looked = looked.into_inner();
+            assert_eq!(looked.len(), 7, "{given}");
+            assert_eq!(looked[0], "/Users/me", "{given}");
+        }
+        // With the rest about to be made, the walk ends at the first folder that is not there;
+        // the folders above it still count. Otherwise a missing folder is refused.
+        let missing = |at: &'static str, above: Look| {
+            move |p: &Path| {
+                if p.starts_with(at) {
+                    Err(io::Error::from(io::ErrorKind::NotFound))
+                } else if p == Path::new("/Users/me/Library") {
+                    Ok(above)
+                } else {
+                    Ok(ok)
+                }
+            }
+        };
+        let at = "/Users/me/Library/Application Support/id";
+        private_path(home, path, 501, missing(at, ok), Missing::Made).unwrap();
+        let e = private_path(home, path, 501, missing(at, ok), Missing::Refused).unwrap_err();
+        assert!(e.contains(at), "{e}");
+        let open = Look {
+            mode: 0o40770,
+            ..ok
+        };
+        let e = private_path(home, path, 501, missing(at, open), Missing::Made).unwrap_err();
+        assert!(
+            e.contains("/Users/me/Library is not a folder of yours"),
+            "{e}"
+        );
     }
 }
