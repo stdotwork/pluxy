@@ -24,7 +24,8 @@ name: Next app platforms
 #
 # Pull requests and merge-queue groups run it through ci.yml, when a changed path is one of
 # next/app/, next/ui/, next/protocol/testdata/app-manifests/, next/go.mod, next/go.sum, this file
-# or ci.yml. A changed file elsewhere in next/ also runs it if it is not a test file and is under
+# or ci.yml; for a pull request, only when it has the full-ci label (merge-queue groups always run
+# it). A changed file elsewhere in next/ also runs it if it is not a test file and is under
 # a folder of a Go package that `go list -deps` finds for ./e2e/panelcore, ./e2e/testext or
 # ./cmd/pluxy, the packages the Rust tests build and run with `go run`, checked for every
 # combination of linux, windows and darwin, amd64 and arm64, and cgo on and off. Of its jobs,
@@ -41,7 +42,7 @@ name: Next app platforms
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when what it
-  # builds changed (see the changes job there).
+  # builds changed (see the changes job there), and for a pull request only with the full-ci label.
   workflow_call:
     inputs:
       # ci.yml sets this when the change reaches none of what the native jobs build: the app, the

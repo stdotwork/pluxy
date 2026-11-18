@@ -1,26 +1,31 @@
 # AGENTS.md
 
-pluxy is a monorepo with three parts of one product: a proxy that serves OpenAI-, Gemini-,
-Claude- and Codex-compatible APIs, a desktop app that manages it, and a web panel for it. A new
-core with provider extensions is being built from scratch in `next/`.
+pluxy is one product in three parts: a proxy (the core) that serves OpenAI-, Gemini-, Claude-
+and Codex-compatible APIs through provider extensions, a desktop app that manages it, and a web
+panel for it. All three are in `next/`, and all new work goes there. The old desktop app in
+`extensions/app/` stays until the new app in `next/app/` runs on Windows and macOS.
 
 ## Layout
 
-| Folder | What it is | Came from |
-| --- | --- | --- |
-| `extensions/app/` | Tauri 2 desktop app (React front end, Rust back end) | router-for-me/EasyCLIProxyAPI |
-| `next/` | New Go core, its extension protocol and provider extensions | written for pluxy |
+| Folder | What it is |
+| --- | --- |
+| `next/` | The product. Its Go code (the core, the SDK, the extensions and their tests) is one module, `github.com/stdotwork/pluxy/next` |
+| `next/app/` | The desktop app: the UI kit's second build, in a Tauri 2 window |
+| `next/app-tools/` | Native programs the desktop app runs on demand, and the libraries they share: a cargo workspace of its own |
+| `next/ui/` | The UI kit, and the web panel, its browser build, which core embeds |
+| `next/extensions/` | Provider extensions: separate programs, one per kind of upstream, that core starts |
+| `next/corpus/` | The differential test corpus: the new core against the old core's recorded replies |
+| `next/protocol/` | The extension protocol between core and extensions |
+| `extensions/app/` | The old desktop app, a fork of router-for-me/EasyCLIProxyAPI: Tauri 2, with a React front end and a Rust back end |
 
-`extensions/app/` still receives pulls from its upstream project. Keep changes inside it
-contained: no sweeping renames, reformatting or file moves, so later upstream merges stay easy.
-`next/` has no upstream; its module path is `github.com/stdotwork/pluxy/next`.
+`next/README.md` describes the rest of `next/`.
 
 ## Which rules apply
 
-The app has no `AGENTS.md`; follow nearby code.
-`next/` has no `AGENTS.md` either: follow nearby code, prefer the standard library (its only
-other dependencies are `github.com/coder/websocket` and `gopkg.in/yaml.v3`), and change the
-extension protocol only together with its README (`next/protocol/README.md`).
+`next/` has no `AGENTS.md`: follow nearby code, prefer the standard library (its only other
+dependencies are `github.com/coder/websocket` and `gopkg.in/yaml.v3`), and change the extension
+protocol only together with its README (`next/protocol/README.md`). The old desktop app has no
+`AGENTS.md` either; follow nearby code there too.
 
 If `.private/AGENTS.md` exists, read it too: it holds the owner's private instructions and notes.
 Confirmed plans, decisions and major tradeoffs are written up in `docs/`.
@@ -79,7 +84,7 @@ the new core with the old core's recorded replies. The old core is no longer in 
 to run it live as well, or to re-record after changing a case, build it from the commit
 `next/corpus/README.md` names and follow that README's "Re-recording against the old core".
 
-### `extensions/app/`
+### `extensions/app/` (the old desktop app)
 
 Bun `1.3.14` (`packageManager` in `package.json`) and a stable Rust toolchain (none is pinned in
 the tree; CI uses 1.97.0). Building the Rust side on Linux needs the WebKitGTK 4.1 development
@@ -116,6 +121,12 @@ Pull requests and merge-queue groups run them through `ci.yml`, whose `gate` job
 required check; otherwise each workflow's own triggers start it (pushes to `main`,
 manual runs or tags, as its file says; the two Windows and macOS platform workflows run on
 `main` once a day instead of on every push).
+
+A pull request's run leaves out the heavy jobs: `next-app.yml`'s Linux native shards and all of
+`next-app-platforms.yml`. Merge-queue groups always run them. Label a PR `full-ci` to run them on
+the PR too; adding the label reruns its checks. A manual run of either workflow on the branch also
+works. Label a PR whose change is mainly native or platform code, so failures show before it is
+queued; docs, core-only and CI PRs go without it.
 
 | Workflow | Covers |
 | --- | --- |
@@ -179,9 +190,10 @@ Some macOS jobs and every Windows job stay on GitHub's runners:
 
 - `main` is the only long-lived branch. Work on a task branch and open a PR against `main`.
 - One concern per PR. A change in behaviour goes in its own PR, and the PR title says so.
-- Commit messages and PR titles use Conventional Commits, scoped by folder: `app`, `next`, or
-  `ci` for workflows, for example `fix(next): ...` or `ci: ...`. Repo-wide docs use `docs: ...`.
+- Commit messages and PR titles use Conventional Commits, scoped by folder: `next`, or `ci` for
+  workflows, for example `fix(next): ...` or `ci: ...`. Repo-wide docs use `docs: ...`. The scope
+  `app` is for the old desktop app in `extensions/app/` only; work on `next/app/` uses `next`.
 - Open PRs ready for review, not as drafts. The owner reviews and merges.
-- Licensing: `extensions/app/` keeps its upstream MIT `LICENSE`. The notices of the removed old
-  core and old web panel are in `THIRD_PARTY_NOTICES.md`. The root license is not decided yet; do
-  not add one.
+- Licensing: the upstream MIT notices of the removed old core and old web panel are in
+  `THIRD_PARTY_NOTICES.md`; the old desktop app keeps its own in `extensions/app/LICENSE`. The
+  root license is not decided yet; do not add one.

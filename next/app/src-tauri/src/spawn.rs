@@ -740,7 +740,8 @@ fn is_script(f: &File) -> bool {
 /// hold, for a detached launch on Linux: the pipes that hold its wrapper before it forks the
 /// launch, until the app has moved it into a scope of its own (`Hold`).
 /// On Linux it runs the opened file itself (`/proc/self/fd`); on macOS the path that file has now,
-/// once no other user can change it (`owned::exec_target`).
+/// once no other user but a member of `admin` can change it (`owned::exec_target`,
+/// `owned::Writers::Admins`).
 #[cfg(unix)]
 fn command(
     l: &Launch,
@@ -766,7 +767,10 @@ fn command(
     } else {
         snapshot().core
     };
-    let mut cmd = Command::new(crate::owned::exec_target(exe)?);
+    let mut cmd = Command::new(crate::owned::exec_target(
+        exe,
+        crate::owned::Writers::Admins,
+    )?);
     cmd.arg0(&l.named)
         .args(&l.argv)
         .env_clear()

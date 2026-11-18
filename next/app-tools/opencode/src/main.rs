@@ -15,7 +15,6 @@ use config::{Checked, Settings};
 use pluxy_program::{run, Call, Error, Handler};
 use pluxy_transactions::{backup_call, data_dir, sha256_of, Pin, Selection, Target, Transactions};
 use serde_json::{json, Value};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// The one set this tool applies: OpenCode's config file.
@@ -106,17 +105,53 @@ fn selection(input: &Value) -> Result<Selection, Error> {
     }
 }
 
-/// The CLI the launcher runs: the install script's `~/.opencode/bin/opencode` when it is an
-/// executable file there (a desktop session's PATH often lacks that folder), else `opencode`
-/// found on the PATH.
-fn cli(home: &Path) -> String {
-    let installed = home.join(".opencode").join("bin").join("opencode");
-    let runnable = std::fs::metadata(&installed)
-        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
-    if runnable {
+/// The CLI the launcher runs: the install script's copy in `~/.opencode/bin` when it is a
+/// program there (`opencode`, `opencode.exe` on Windows, where the script runs under Git Bash; a
+/// desktop session's PATH often lacks that folder), else `opencode` found on the PATH.
+fn cli(os: &str, home: &Path) -> String {
+    let name = if os == "windows" {
+        "opencode.exe"
+    } else {
+        "opencode"
+    };
+    let installed = home.join(".opencode").join("bin").join(name);
+    if pluxy_files::executable(&installed) {
         installed.to_string_lossy().into_owned()
     } else {
         "opencode".into()
+    }
+}
+
+/// The desktop app's program on os, where OpenCode's installers put it (its
+/// `electron-builder.config.ts` and Windows `installer.nsh`): on Linux in `/opt/OpenCode`
+/// (`desktop_in`); on macOS the bundle `OpenCode.app` in the system's applications folder (apps,
+/// here a parameter for the tests) or else the home folder's; on Windows the per-user install,
+/// `Programs\ai.opencode.desktop\OpenCode.exe` in `%LOCALAPPDATA%`. A missing one is named all the
+/// same: the launcher then says it is missing.
+fn app(os: &str, home: &Path, apps: &Path, local: Option<PathBuf>) -> Result<PathBuf, Error> {
+    match os {
+        "windows" => local
+            .filter(|l| l.is_absolute())
+            .map(|l| {
+                l.join("Programs")
+                    .join("ai.opencode.desktop")
+                    .join("OpenCode.exe")
+            })
+            .ok_or_else(|| {
+                Error::unavailable("the app gave no local application data folder (LOCALAPPDATA)")
+            }),
+        "macos" => {
+            let bundles = [
+                apps.join("OpenCode.app"),
+                home.join("Applications").join("OpenCode.app"),
+            ];
+            Ok(bundles
+                .iter()
+                .find(|b| b.is_dir())
+                .unwrap_or(&bundles[0])
+                .clone())
+        }
+        _ => Ok(desktop_in(Path::new(DESKTOP_DIR))),
     }
 }
 
@@ -180,13 +215,20 @@ impl Handler for OpenCode {
                 "cli" => Ok(json!({
                     "client": "OpenCode",
                     "kind": "terminal",
-                    "program": cli(&home()?),
+                    "program": cli(std::env::consts::OS, &home()?),
                     "args": [],
                 })),
                 "app" => Ok(json!({
                     "client": "OpenCode Desktop",
                     "kind": "direct",
-                    "program": desktop_in(Path::new(DESKTOP_DIR)),
+                    "program": app(
+                        std::env::consts::OS,
+                        &home()?,
+                        Path::new("/Applications"),
+                        std::env::var_os("LOCALAPPDATA")
+                            .filter(|v| !v.is_empty())
+                            .map(PathBuf::from),
+                    )?,
                     "args": [],
                     "cwd": home()?,
                 })),

@@ -10,10 +10,13 @@ name: Next app
 #     also builds and runs the test AppImage and checks the release gate. One job for each shard
 #     of native/shards.ts (usage, tools, app, release); each builds everything the test builds,
 #     then runs its own sessions; the test step stops after 45 minutes.
-#   app: the workflow's one result. It fails unless `checks` and every native shard passed.
+#   app: the workflow's one result. It fails unless `checks` and every native shard passed, or,
+#     when the shards were skipped by the `skip-native` input, unless `checks` passed.
 #
 # Pull requests and merge-queue groups run it through ci.yml, when a changed path is under next/
-# or is this file. It also runs on pushes to `main` that touch those paths, and by hand.
+# or is this file. ci.yml sets `skip-native` for a pull request without the full-ci label, so the
+# native shards run in the merge queue only. It also runs on pushes to `main` that touch those
+# paths, and by hand, with every job.
 #
 # `checks` and `app` run on ubuntu-24.04, or on the maintainers' runner when PLUXY_LINUX_RUNNER is
 # set (AGENTS.md, "Where jobs run"). `native` always runs on GitHub's ubuntu-24.04: the document
@@ -25,6 +28,13 @@ on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
   # its paths below are touched.
   workflow_call:
+    inputs:
+      # ci.yml sets this for a pull request without the full-ci label: the native shards then run
+      # in the merge queue only (AGENTS.md, "CI"). A push or a manual run has no inputs: null is not
+      # true, so it runs them.
+      skip-native:
+        type: boolean
+        default: false
   workflow_dispatch:
   push:
     branches:
@@ -147,6 +157,7 @@ jobs:
   # shard takes about 7 minutes of builds and up to 9 of sessions, so the step allows about three
   # times that for the sessions still being added.
   native:
+    if: inputs.skip-native != true
     # Pinned: the package names below are Ubuntu 24.04's, and so are the file paths the native
     # test starts services from (next/app/native/services.ts). Always on GitHub's runners, never
     # PLUXY_LINUX_RUNNER: the document portal needs /dev/fuse, which the maintainers' runner
@@ -243,7 +254,8 @@ jobs:
           if-no-files-found: ignore
 
   # The workflow's one result, under the name of the single job before the split: it fails when
-  # the checks or any native shard did not pass.
+  # the checks or any native shard did not pass. The shards may be skipped only when ci.yml said
+  # so (skip-native).
   app:
     if: ${{ !cancelled() }}
     needs: [checks, native]
@@ -254,6 +266,7 @@ jobs:
         env:
           CHECKS: ${{ needs.checks.result }}
           NATIVE: ${{ needs.native.result }}
+          SKIP_NATIVE: ${{ inputs.skip-native == true }}
         run: |
-          echo "checks: $CHECKS; native shards: $NATIVE"
-          [ "$CHECKS" = success ] && [ "$NATIVE" = success ]
+          echo "checks: $CHECKS; native shards: $NATIVE (skip-native: $SKIP_NATIVE)"
+          [ "$CHECKS" = success ] && { [ "$NATIVE" = success ] || { [ "$SKIP_NATIVE" = true ] && [ "$NATIVE" = skipped ]; }; }

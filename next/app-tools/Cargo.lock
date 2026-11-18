@@ -105,6 +105,7 @@ dependencies = [
 name = "claude-desktop"
 version = "0.1.0"
 dependencies = [
+ "pluxy-files",
  "pluxy-program",
  "pluxy-transactions",
  "serde_json",
@@ -273,6 +274,7 @@ dependencies = [
 name = "grok-setup"
 version = "0.1.0"
 dependencies = [
+ "pluxy-files",
  "pluxy-program",
  "pluxy-transactions",
  "serde_json",
@@ -306,6 +308,7 @@ dependencies = [
 name = "hermes-setup"
 version = "0.1.0"
 dependencies = [
+ "pluxy-files",
  "pluxy-program",
  "pluxy-transactions",
  "serde_json",
@@ -418,6 +421,7 @@ dependencies = [
 name = "omp-setup"
 version = "0.1.0"
 dependencies = [
+ "pluxy-files",
  "pluxy-program",
  "pluxy-transactions",
  "serde_json",
@@ -434,6 +438,7 @@ name = "opencode"
 version = "0.1.0"
 dependencies = [
  "jsonc-parser",
+ "pluxy-files",
  "pluxy-program",
  "pluxy-transactions",
  "serde_json",
@@ -452,6 +457,7 @@ dependencies = [
 name = "pi-setup"
 version = "0.1.0"
 dependencies = [
+ "pluxy-files",
  "pluxy-program",
  "pluxy-transactions",
  "serde_json",

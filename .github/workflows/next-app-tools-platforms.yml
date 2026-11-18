@@ -1,15 +1,13 @@
 name: Next app tools platforms
 
 # Builds, lints and unit-tests the app tools (next/app-tools, the native programs the desktop app
-# runs on demand) on Windows and macOS. Linux runs them in next-app.yml. The claude-desktop,
-# opencode, omp-setup, grok-setup, hermes-setup and pi-setup writer tools are not ported yet and
-# are left out here (NOT_PORTED below; next/app-tools/README.md names them).
+# runs on demand) on Windows and macOS: the whole workspace. Linux runs them in next-app.yml.
 #
 # Two jobs:
 #   tools: on windows-latest and macos-latest, `cargo clippy --locked --workspace --all-targets
-#     -- -D warnings` and `cargo test --locked --no-fail-fast --workspace`, both without the tools
-#     not ported. The tests run with an empty temporary home. The counts (passed, failed, ignored
-#     and skipped parts) go to the job summary, and a run that ran nothing fails.
+#     -- -D warnings` and `cargo test --locked --no-fail-fast --workspace`. The tests run with
+#     an empty temporary home. The counts (passed, failed, ignored and skipped parts) go to the
+#     job summary, and a run that ran nothing fails.
 #   wsl: "WSL 2" and "WSL 1", on windows-latest. It runs pluxy/wsl and the Linux side of a WSL
 #     instance against real WSL distributions: it installs Ubuntu and a second distribution,
 #     runs the Linux-built tests of pluxy-program and pluxy-transactions inside Ubuntu as a user
@@ -62,10 +60,6 @@ defaults:
     shell: bash
     working-directory: next/app-tools
 
-env:
-  # The writer tools not ported to Windows and macOS yet, Linux only for now.
-  NOT_PORTED: --exclude claude-desktop --exclude opencode --exclude omp-setup --exclude grok-setup --exclude hermes-setup --exclude pi-setup
-
 jobs:
   tools:
     name: app tools (${{ matrix.os }})
@@ -96,7 +90,7 @@ jobs:
           key: ${{ matrix.os }}
           save-if: ${{ runner.environment == 'github-hosted' }}
       - name: Clippy
-        run: cargo clippy --locked --workspace $NOT_PORTED --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # Unit tests with an empty temporary home, so no test can reach the runner's own.
       - name: Tests
         run: |
@@ -112,7 +106,7 @@ jobs:
           fi
           status=0
           # --show-output prints what passing tests said, so a test's own skip line is seen.
-          cargo test --locked --no-fail-fast --workspace $NOT_PORTED -- --show-output 2>&1 | tee "$RUNNER_TEMP/cargo-test.log" || status=$?
+          cargo test --locked --no-fail-fast --workspace -- --show-output 2>&1 | tee "$RUNNER_TEMP/cargo-test.log" || status=$?
           # Record the counts, with the tests that skipped a part this account may not do (such as
           # making a symbolic link), and refuse a run that ran nothing.
           awk '/^test result:/ { p += $4; f += $6; i += $8 } /^skipped: / { s++ } END {
