@@ -120,9 +120,12 @@ export const pinOf = (path: string): string =>
 
 /** What the folder an install leaves things in holds once nothing it made is left: the
  * installed copy's name (its folder's other entries are not the app's), or on Windows the program
- * set's parts (the installed copy is that folder). */
-export const ownNames = (installed: string): string[] =>
-  process.platform === "win32" ? SET_PARTS : [installed.split(/[\\/]/).pop() as string];
+ * set's parts (the installed copy is that folder) and others, the files in it that are not the
+ * app's (the per-user setup's uninstall.exe). */
+export const ownNames = (installed: string, others: string[] = []): string[] =>
+  process.platform === "win32"
+    ? [...SET_PARTS, ...others].sort()
+    : [installed.split(/[\\/]/).pop() as string];
 
 /** The crafted installs each system's updater refuses before any download, with how to update
  * instead (the reason the page and both commands give). `case` is PLUXY_APP_TEST_UPDATE_CASE; the
@@ -140,11 +143,10 @@ export const REFUSALS: Record<System, Refusal[]> = {
     { label: "rpm", case: "rpm", reason: /\.rpm package.*package manager/s },
     { label: "unknown", case: "unknown", reason: /not an AppImage|unknown/ },
   ],
-  // The program with the bundle type an .msi and the setup program give it, and a folder bundle
-  // in a folder Everyone may change.
+  // The program with the bundle type an .msi gives it, and a folder bundle in a folder Everyone
+  // may change. (A copy the per-user setup program installed is updated: the install session.)
   win32: [
     { label: "msi", case: "msi", reason: /\.msi package/ },
-    { label: "nsis", case: "nsis", reason: /setup program/ },
     { label: "shared folder", case: "shared", reason: /only you can change/ },
   ],
   // The program copied out of its app bundle, an app bundle its group may change, and the
@@ -567,6 +569,11 @@ export interface Route {
   feed: UpdateFeed;
   check: Check;
   say: Say;
+  /** Files in the installed copy's folder that are not the app's (Windows: the per-user setup's
+   * uninstall.exe), expected there at each stage. */
+  others?: string[];
+  /** Called as each stage reports, with its step, before the route goes on. */
+  onStage?: (stage: string, v: Step) => void;
 }
 
 /** The update route (see the top of this file), and its checks. Returns the steps it saw. */
@@ -588,6 +595,7 @@ export async function updateRoute(o: Route): Promise<Set<string>> {
         pins[stage] = `unreadable: ${(e as Error).message}`;
       }
       pids[stage] = Number(v.pid);
+      o.onStage?.(stage, v);
       // The version that installed the update ends once the new one has accepted itself.
       if (stage === "updated" && pids.refused) {
         const until = Date.now() + 30_000;
@@ -635,7 +643,7 @@ export async function updateRoute(o: Route): Promise<Set<string>> {
     // What an install leaves next to the installed copy (on Windows, in the set's folder) is
     // gone once the earlier version ended.
     const beside = at(name).beside as string[] | undefined;
-    const own = ownNames(o.installed);
+    const own = ownNames(o.installed, o.others);
     check(
       JSON.stringify(beside) === JSON.stringify(own),
       `${name}: next to the installed copy: ${JSON.stringify(beside)}, not only ${own.join(", ")}`,

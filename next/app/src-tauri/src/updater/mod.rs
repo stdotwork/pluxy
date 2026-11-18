@@ -5,16 +5,17 @@
 //!
 //! Before any updater plugin call the updater gate (`trust::updater_gate`) passes; the plugin is
 //! registered at all only when it passed at startup (`lib.rs`). Before any download the
-//! installation's provenance is checked: a copy a package manager or an installer keeps, or one in
-//! an unknown format, is refused, with how to update instead, even when the feed has a signed
+//! installation's provenance is checked: a copy a package manager or an .msi keeps, or one in an
+//! unknown format, is refused, with how to update instead, even when the feed has a signed
 //! update. The artifact is downloaded here, read as the feed is, then the plugin checks its
 //! signature (bound to the announced version); the plugin never installs anything. This module
 //! checks the artifact's format and puts it in place itself, one installer per format:
 //!
 //! - Linux (`appimage.rs`): the AppImage, one file, replaced in one rename;
-//! - Windows (`exe.rs`): the program set of a folder bundle (the app's program, the core beside it
-//!   and its packages, `set.rs`), part by part, each part renamed aside (a running program can be
-//!   renamed, not replaced) and the new one renamed into its place;
+//! - Windows (`exe.rs`): the program set of a folder bundle or of a copy the per-user setup
+//!   program installed (the app's program, the core beside it and its packages, `set.rs`), part by
+//!   part, each part renamed aside (a running program can be renamed, not replaced) and the new
+//!   one renamed into its place;
 //! - macOS (`app.rs`): the `.app` bundle, unpacked from its `.app.tar.gz` next to it and swapped
 //!   with it in one step.
 //!
@@ -47,6 +48,8 @@ mod exe;
 #[cfg(any(not(target_os = "linux"), test))]
 mod leftovers;
 mod set;
+#[cfg(any(windows, test))]
+mod uninstall_entry;
 #[cfg(target_os = "macos")]
 use app as format;
 #[cfg(target_os = "linux")]
@@ -950,7 +953,16 @@ pub fn accept(app: &AppHandle) {
         eprintln!("native-test: update_not_accepting {{}}");
         std::process::exit(3);
     }
+    #[cfg(windows)]
+    let product = app.package_info().name.clone();
     let finish = move || {
+        // Windows: Settings > Apps and the setup program read the installed version from the
+        // uninstall entry the setup wrote, if it wrote one for this folder; this version is the
+        // installed one now. Written before the outcome, which the waiting version reads.
+        #[cfg(windows)]
+        if let Err(e) = uninstall_entry::record(&product, &p.installed, &running) {
+            eprintln!("pluxy-app: the uninstall entry's version was not updated: {e}");
+        }
         let (result, detail) = if p.kind == "rollback" {
             (
                 "rolled-back",

@@ -1,8 +1,12 @@
-//! Windows: the program set of a folder bundle this user keeps (`set.rs`): the app's program (one
-//! self-contained `.exe`: its WebView2 loader is linked in and its pages are embedded), the core
-//! beside it (`pluxy.exe`) and the core's packages (`bundled\`), pinned by the set's digest. A copy
-//! an installer keeps (an MSI or NSIS setup patches its bundle type) is refused, with how to update
-//! instead, and so is a copy on a network drive or one anyone else could change.
+//! Windows: the program set of a folder bundle this user keeps, or of a copy the per-user setup
+//! program installed (`set.rs`): the app's program (one self-contained `.exe`: its WebView2
+//! loader is linked in and its pages are embedded), the core beside it (`pluxy.exe`) and the
+//! core's packages (`bundled\`), pinned by the set's digest. The setup's `uninstall.exe` beside
+//! them is not part of the set. A copy an MSI keeps (an .msi patches its bundle type in) is
+//! refused, with how to update instead, and so is a copy of an unknown format, on a network drive
+//! or one anyone else could change. The setup program is never run: once a version accepts itself
+//! after an update or a rollback, it writes its version into the setup's uninstall entry
+//! (`uninstall_entry.rs`).
 //!
 //! The update is a `.tar.gz` of the set, unpacked into a new folder of this user's beside the
 //! program (`.pluxy-update-<hex>`, inheriting the program folder's access list) and checked. Then,
@@ -71,12 +75,15 @@ const DEEPEST: usize = 64;
 const SHARE_ALL: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
 
 /// How this copy of the app was installed, as far as updating it goes: the program set of a
-/// folder bundle this user keeps on a local drive (its folder), or why it cannot be updated from
-/// here.
+/// folder bundle, or of a copy the setup program installed, that this user keeps on a local drive
+/// (its folder), or why it cannot be updated from here.
 pub(super) fn provenance(app: &AppHandle) -> Result<PathBuf, String> {
     use tauri::utils::config::BundleType;
     match tauri::utils::platform::bundle_type() {
-        None => {}
+        // A folder bundle, or a copy the setup program installed. The update's program is the
+        // one built, with no bundle type, so a copy the setup installed reads as a folder bundle
+        // once updated; nothing here treats the two differently.
+        None | Some(BundleType::Nsis) => {}
         Some(BundleType::Msi) => {
             return Err(
                 "This copy of pluxy was installed from an .msi package. Install the new \
@@ -84,18 +91,11 @@ pub(super) fn provenance(app: &AppHandle) -> Result<PathBuf, String> {
                     .into(),
             )
         }
-        Some(BundleType::Nsis) => {
-            return Err(
-                "This copy of pluxy was installed by its setup program. Install the new \
-                 version with its setup program, not from here."
-                    .into(),
-            )
-        }
         Some(_) => {
             return Err(
-                "This copy of pluxy is not a folder bundle, the only kind this updater \
-                 can replace on Windows (its install format is unknown). Install the new version \
-                 the way you installed this one."
+                "This copy of pluxy is not a folder bundle or one its setup program installed, \
+                 the only kinds this updater can replace on Windows (its install format is \
+                 unknown). Install the new version the way you installed this one."
                     .into(),
             )
         }

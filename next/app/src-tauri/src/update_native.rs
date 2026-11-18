@@ -10,9 +10,9 @@
 //!   first launch sets the feed, confirmed natively, for the later ones on the same profile);
 //! - a crafted install the updater must refuse before any download, with how to update instead:
 //!   `deb`, `rpm`, `unknown` (Linux: the program with the bundle type a .deb, an .rpm or no
-//!   package gives it), `msi`, `nsis`, `shared` (Windows: an .msi- or setup-program-patched
-//!   program, a folder others can change), `bare`, `group-writable` (macOS: the program outside
-//!   its app bundle, a bundle others can change);
+//!   package gives it), `msi`, `shared` (Windows: an .msi-patched program, a folder others can
+//!   change), `bare`, `group-writable` (macOS: the program outside its app bundle, a bundle
+//!   others can change);
 //! - `open` (macOS): the test package started by LaunchServices (`/usr/bin/open`): an update is
 //!   offered, so its provenance holds for such a launch; then it quits;
 //! - `parts` and `parts-undone` (Windows): the test package starts an update that waits between
@@ -265,6 +265,9 @@ fn report(app: &AppHandle, main: &Webview, dir: &Path, stage: &str) -> Result<Va
         "shown": attr(main, APP_CARD, "installed"),
         "installed": installed(app),
         "installed_sha": installed_sha(app),
+        // The bundle type Tauri's bundler patched into this program, if any (the setup program's
+        // copy reads Nsis until its first update).
+        "bundle_type": tauri::utils::platform::bundle_type().map(|t| format!("{t:?}")),
         "beside": beside(app),
         "core_pid": core,
         "last": eval(main, "(e => e ? {result: e.dataset.result, detail: e.dataset.detail} : null)(document.querySelector('[data-part=app-update-last]'))"),
@@ -275,7 +278,8 @@ fn report(app: &AppHandle, main: &Webview, dir: &Path, stage: &str) -> Result<Va
 }
 
 /// What is in the leftovers folder once nothing an install made is left: the installed copy's
-/// name, or on Windows the program set's parts.
+/// name, or on Windows the program set's parts, and the per-user setup's `uninstall.exe` when the
+/// setup installed this copy (it is the setup's, not the set's).
 fn own(app: &AppHandle) -> Vec<String> {
     if cfg!(windows) {
         let exe = std::env::current_exe()
@@ -283,6 +287,9 @@ fn own(app: &AppHandle) -> Vec<String> {
             .and_then(|e| e.file_name().map(|n| n.to_string_lossy().into_owned()))
             .unwrap_or_default();
         let mut v = vec!["bundled".to_string(), "pluxy.exe".into(), exe];
+        if leftovers_folder(app).is_some_and(|f| f.join("uninstall.exe").is_file()) {
+            v.push("uninstall.exe".into());
+        }
         v.sort();
         return v;
     }
@@ -498,8 +505,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, dir: PathBuf) -> Result<(), S
             set_source(app, main, &feed()?)?;
             refused(app, main, &dir, &case)?
         }
-        "deb" | "rpm" | "unknown" | "msi" | "nsis" | "shared" | "bare" | "group-writable"
-        | "linked" => refused(app, main, &dir, &case)?,
+        "deb" | "rpm" | "unknown" | "msi" | "shared" | "bare" | "group-writable" | "linked" => {
+            refused(app, main, &dir, &case)?
+        }
         "open" => {
             check(main, &dir, "good", "0.2.0")?;
             let available = wait_for("the updater's view", || {
