@@ -551,9 +551,12 @@ In this order:
    system's: a type-2 AppImage; a 64-bit Windows program (not a library) for this processor; or,
    on macOS, a `.app.tar.gz` holding one `<name>.app` folder of folders and regular files only (no
    links, devices, `..`, absolute paths, or setuid, setgid or sticky bits; at most 4096 entries
-   and 1 GiB), unpacked into a new folder of yours next to the bundle (`.pluxy-update-<hex>`),
-   whose `Info.plist` names this app's identifier and program and the announced version
-   (`CFBundleShortVersionString`), with a program for this Mac.
+   and 1 GiB), unpacked into a new staging folder of yours, whose `Info.plist` names this app's
+   identifier and program and the announced version (`CFBundleShortVersionString`), with a
+   program for this Mac. The staging folder is `updates/staging/<hex>` in the app's data folder
+   when that is on the bundle's volume, and only if every folder from your home folder down to it
+   is yours and writable by no one else (otherwise nothing is unpacked, and the page says which
+   folder to fix); only on another volume is it `.pluxy-update-<hex>` next to the bundle.
 6. The running version's copy is kept in the app's data folder (`updates/kept/`, the last three
    versions), pinned in `updates/history.json` by its SHA-256 (on macOS, a digest of the bundle's
    whole tree: every folder, file, size, content digest and execute bit), and
@@ -570,15 +573,19 @@ In this order:
      then, rename the `.pluxy-old-<hex>.exe` beside it back (or copy the kept copy from
      `updates/kept/`). What is left aside is removed once the new version runs and the old one has
      ended.
-   - macOS: the unpacked bundle and the installed one swap places in one step (`renamex_np` with
-     `RENAME_SWAP`): the bundle is the old one or the new one. The old one, now in the
-     `.pluxy-update-<hex>` folder, is removed once the new version runs and the old one has ended.
+   - macOS: the unpacked bundle and the installed one swap places in one step (`renameatx_np`
+     with `RENAME_SWAP`, by name in the staging folder and the bundle's folder, each opened
+     without following a link; the bundle's folder, read through that open folder, must still be
+     yours and writable by no one else): the bundle is the old one or the new one. With private
+     staging, nothing else in the bundle's folder is made, changed or removed. The old bundle, now
+     in the staging folder, is removed once the new version runs and the old one has ended.
 
-   What an install leaves beside the installed copy is recorded in `updates/leftovers.json` before
-   the install goes on, with what identifies it beyond its name: on Windows the new program right
-   after it is created and the aside copy just before the rename (each by its volume serial number
-   and file ID), on macOS the `.pluxy-update-<hex>` folder right after it is created (by its device
-   and inode, read through the open folder, which must be empty and yours alone). When the record
+   What an install leaves (on Windows beside the installed copy, on macOS its staging folder) is
+   recorded in `updates/leftovers.json` before the install goes on, with what identifies it beyond
+   its name: on Windows the new program right after it is created and the aside copy just before
+   the rename (each by its volume serial number and file ID), on macOS the staging folder right
+   after it is created (by its device and inode, read through the open folder, which must be empty
+   and yours alone). When the record
    cannot be written, the install deletes what it just made and stops. Should the app stop in the
    moment between making one and recording it, that empty folder or file stays unrecorded, and no
    later start removes it. Removal at a later start goes through the record only. An entry that is
@@ -590,8 +597,9 @@ In this order:
    name is gone or now holds something else (on Windows a folder too) is dropped from the record
    and nothing at that name is deleted; one still in use, or with a file system mounted in it,
    stays recorded for the next start. A failed or cancelled install removes what it made the same
-   way, only while it is still what it made. The folder the installed copy is in is never listed,
-   so whatever someone else put there, even under one of these names, stays.
+   way, only while it is still what it made. Neither the folder the installed copy is in nor the
+   private staging folder is ever listed, so whatever someone else put there, even under one of
+   these names, stays.
 7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
    that order; detached launches run on) and hides its window, but keeps its profile and starts the
    new version as its successor, handing the profile over so no other launch takes it meanwhile

@@ -14,8 +14,8 @@
 //! - Linux (`appimage.rs`): the AppImage, one file, replaced in one rename;
 //! - Windows (`exe.rs`): the program of a folder bundle, one self-contained `.exe`, renamed aside
 //!   (a running program can be renamed, not replaced) and the new one renamed into its place;
-//! - macOS (`app.rs`): the `.app` bundle, unpacked from its `.app.tar.gz` next to it and swapped
-//!   with it in one step.
+//! - macOS (`app.rs`): the `.app` bundle, unpacked from its `.app.tar.gz` into a staging folder
+//!   (private to the app where the bundle's volume allows) and swapped with it in one step.
 //!
 //! Before that, the running version's copy is kept, pinned by its digest: rolling back restores
 //! only such a copy, after a native confirmation. Installing ends with the app stopping as Quit
@@ -514,7 +514,7 @@ fn install(
     }
     let dir = dir(app)?;
     // The verified bytes, checked as this format's and made ready to put in place (on macOS,
-    // unpacked next to the bundle, in a folder recorded in dir).
+    // unpacked into a staging folder recorded in dir).
     let staged = format::stage(installed, bytes, &release.version, &dir)?;
     if st.updater.cancel.load(Ordering::SeqCst) {
         return Err("cancelled".into());
@@ -800,8 +800,9 @@ fn supervise(app: &AppHandle, r: &Restart) {
 
 /// At startup, after the profile lock: the version an install started accepts itself once the
 /// installed copy is the one it pinned, which the waiting earlier version reads. What an earlier
-/// install recorded that it left beside the installed copy (`leftovers.rs`) is removed once the
-/// earlier version has ended; nothing else there is looked at.
+/// install recorded that it left (`leftovers.rs`: on macOS its staging folders, on Windows what it
+/// left beside the installed copy) is removed once the earlier version has ended; nothing else is
+/// looked at.
 pub fn accept(app: &AppHandle) {
     // An AppImage's replace leaves nothing beside it.
     #[cfg(not(target_os = "linux"))]

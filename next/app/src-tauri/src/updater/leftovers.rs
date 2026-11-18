@@ -1,8 +1,9 @@
-//! What the updater makes beside the installed copy, recorded so that only it is removed later:
-//! on macOS the staging folder a new bundle is unpacked into (where the old bundle ends after the
-//! swap), on Windows the new program written next to the installed one and the old one renamed
-//! aside. The folder beside the installed copy is not the app's (another administrator can rename
-//! a folder of this user's there), so nothing lists it: each thing is recorded in the app's own
+//! What the updater makes for an install, recorded so that only it is removed later: on macOS the
+//! staging folder a new bundle is unpacked into (where the old bundle ends after the swap), in the
+//! app's own data folder or, on another volume, beside the installed bundle; on Windows the new
+//! program written next to the installed one and the old one renamed aside. The folder beside the
+//! installed copy is not the app's (another administrator can rename a folder of this user's
+//! there), so nothing lists it, nor the staging folders: each thing is recorded in the app's own
 //! data (`updates/leftovers.json`) with what identifies it beyond its name, when it is made (or,
 //! for a rename, just before), and the cleanup at startup removes only a recorded entry that is
 //! still that thing, never through a link. An entry whose path is gone or holds something else is
@@ -53,8 +54,8 @@ pub(super) fn forget_mine(root: &Path) {
     MINE.lock().unwrap().retain(|m| !m.path.starts_with(root));
 }
 
-/// Records that path, identified by id, was made (or is about to be renamed to) beside the
-/// installed copy. Fails, and the caller makes nothing more, if the record cannot be written.
+/// Records that path, identified by id, was made (or is about to be renamed to) for an install.
+/// Fails, and the caller makes nothing more, if the record cannot be written.
 pub(super) fn record(dir: &Path, path: &Path, id: String) -> Result<(), String> {
     let _held = LOCK.lock().unwrap();
     let made = Made {
@@ -98,7 +99,7 @@ pub(super) fn clean(dir: &Path, remove: impl Fn(&Made) -> Outcome) {
     }
 }
 
-/// A folder made beside the installed copy and recorded (`Folder::new`). Dropped, as a failed or
+/// A folder made for an install and recorded (`Folder::new`). Dropped, as a failed or
 /// cancelled install drops it, it is removed as a recorded entry is (`remove_folder`): only while
 /// it is still the folder made, never by its name alone. One kept (`keep`) stays.
 #[cfg(unix)]

@@ -88,9 +88,9 @@ pub(super) fn provenance(app: &AppHandle) -> Result<PathBuf, String> {
         ));
     }
     let folder = bundle.parent().ok_or("The app bundle has no folder.")?;
-    // shortcut: as on Linux, only the bundle and its folder are checked, and the swap goes by
-    // path; a folder further up that others could change could be swapped. Upgrade by checking
-    // the ancestors, if updating on shared machines is wanted.
+    // shortcut: as on Linux, only the bundle and its folder are checked, and the swap opens that
+    // folder by its path; a folder further up that others could change could be swapped. Upgrade
+    // by checking the ancestors, if updating on shared machines is wanted.
     check_owned(&bundle, true)?;
     check_owned(folder, true)?;
     swaps(folder)?;
@@ -826,6 +826,35 @@ pub(super) mod tests {
             );
             assert!(private(&dir).is_empty(), "the folder made for it went");
         }
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // The swap goes through the bundle's folder only while that is still a folder of this user's
+    // that no one else can write to, as read through the descriptor the swap uses: otherwise
+    // nothing is swapped.
+    #[test]
+    fn the_swap_is_refused_once_the_bundles_folder_is_not_yours_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = temp("app-swap-folder");
+        let dir = tmp.join("updates");
+        let folder = tmp.join("Applications");
+        let installed = fixture(&folder, "old");
+        let old = digest(&installed).unwrap();
+        let kept = tmp.join("kept.app");
+        copy_new(&installed, &kept).unwrap();
+        let pin = Pinned {
+            version: "0.1.0".into(),
+            sha256: old.clone(),
+        };
+        fixture(&folder, "new");
+        let new = digest(&installed).unwrap();
+        let s = stage_kept(&installed, &kept, &pin, &dir).unwrap();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o770)).unwrap();
+        let e = swap_in(&installed, s, &dir).unwrap_err();
+        assert!(e.contains("is not a folder of yours"), "{e}");
+        assert_eq!(digest(&installed).unwrap(), new, "nothing was swapped");
+        assert!(private(&dir).is_empty(), "the staging folder went");
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
         fs::remove_dir_all(&tmp).unwrap();
     }
 
