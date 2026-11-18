@@ -2028,9 +2028,11 @@ before it could be the start of a secret cut off there is left out: 4 bytes or m
 form of the account's credential, and, for a secret the log removes, what it leaves out on the
 start's side of a cut (above), with the window reaching back no further than the last line break.
 No spelling of a secret the log decodes holds a raw line break, and each line of a secret that
-spans lines is removed on its own, so a stream keeps every whole event; such a secret whose first
-line is only 1 or 2 bytes can keep that line where the read stopped after it. A body with no line
-break near its end, such as JSON on one line or server-sent events with bare carriage returns,
+spans lines is removed on its own, so a stream keeps every whole event; but such a secret with a
+line of fewer than 8 bytes can keep that line where the read stopped after it: always when it is 1
+or 2 bytes, and when it is 3 to 7 bytes if the body spells it with JSON or percent escapes or ends
+it with a carriage return and a line feed. Upgrade if a config takes such a secret. A body with no
+line break near its end, such as JSON on one line or server-sent events with bare carriage returns,
 loses the whole window, all of a short one: that is accepted for a body whose read really
 stopped. A streamed reply ends with the line too when the extension stops at the last event of
 the upstream's format, as the Claude, Codex, Kimi, xAI, Meta and OpenAI-compatible providers do
