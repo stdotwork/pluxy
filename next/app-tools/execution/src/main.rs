@@ -222,6 +222,25 @@ mod platform_tests;
 #[path = "fits_tests.rs"]
 mod fits_tests;
 
+/// A name for a test's own folder that no other folder of this test run has: the process, the
+/// time and a count. The time alone is not enough: on macOS it moves in whole microseconds, so two
+/// tests that start at once read the same time and, named by it, share a folder, which the first
+/// to finish removes under the other.
+#[cfg(test)]
+pub(crate) fn test_folder_name(prefix: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{prefix}-{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        COUNT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 fn main() -> std::io::Result<()> {
     // A launch mode: the app runs this program as a confirmed launch with arguments; as a tool it
     // gets none.

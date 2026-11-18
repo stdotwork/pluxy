@@ -4,14 +4,7 @@ use std::path::PathBuf;
 
 /// A new private folder for one test.
 fn folder() -> PathBuf {
-    let d = std::env::temp_dir().join(format!(
-        "pluxy-handover-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let d = std::env::temp_dir().join(crate::test_folder_name("pluxy-handover"));
     std::fs::create_dir_all(&d).unwrap();
     std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
     d

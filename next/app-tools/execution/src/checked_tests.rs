@@ -31,27 +31,31 @@ fn folder(p: &Path, mode: u32) {
     fs::set_permissions(p, fs::Permissions::from_mode(mode)).unwrap();
 }
 
-/// The `admin` group's number, as Directory Services gives it: read once for every test, and
-/// asked again a few times when an answer is not a number (one CI run got such an answer while
-/// two tests asked at once).
+/// The `admin` group's number, looked up by its name with `getgrnam_r`. Not through the product's
+/// own `admin_gid`, so these tests do not check the product against itself, and not by running
+/// `dscl`, whose output a few CI runs could not parse.
 fn admin() -> u32 {
-    static GID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *GID.get_or_init(|| {
-        let mut answers = Vec::new();
-        for _ in 0..5 {
-            let out = std::process::Command::new("/usr/bin/dscl")
-                .args([".", "-read", "/Groups/admin", "PrimaryGroupID"])
-                .output()
-                .unwrap();
-            let text = String::from_utf8_lossy(&out.stdout).into_owned();
-            if let Some(gid) = text.split_whitespace().last().and_then(|g| g.parse().ok()) {
-                return gid;
-            }
-            answers.push((text, String::from_utf8_lossy(&out.stderr).into_owned()));
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
-        panic!("dscl gave no admin group number: {answers:?}");
-    })
+    // SAFETY: an all-zero group is a valid empty one, filled by getgrnam_r.
+    let mut g: libc::group = unsafe { std::mem::zeroed() };
+    let mut buf = vec![0 as libc::c_char; 1 << 20];
+    let mut found: *mut libc::group = std::ptr::null_mut();
+    // SAFETY: the name is NUL-terminated; g, buf and found outlive the call.
+    let r = unsafe {
+        libc::getgrnam_r(
+            c"admin".as_ptr(),
+            &mut g,
+            buf.as_mut_ptr(),
+            buf.len(),
+            &mut found,
+        )
+    };
+    assert!(
+        r == 0 && !found.is_null(),
+        "looking up the group admin: getgrnam_r returned {r} ({}), found {}",
+        io::Error::from_raw_os_error(r),
+        !found.is_null()
+    );
+    g.gr_gid
 }
 
 /// Gives p the group gid, which its owner may do only as a member of that group.
