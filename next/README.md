@@ -2059,7 +2059,10 @@ Secrets are left out of every request log: values of headers and query parameter
 hold `authorization`, `api-key`, `apikey`, `api_key`, `token`, `secret`, `cookie` or `password`,
 and `key` (an authorization header keeps its scheme, as in `Bearer [redacted]`), and, anywhere in
 the file, every client key, the management key, every config account's credential and the
-secrets in its settings (as `GET /config` finds them, those of 8 bytes or more), in the forms the
+secrets in its settings (as `GET /config` finds them, those of 8 bytes or more), and the user
+info of the global `proxy_url` and of each account's (the forms the extension removes from its
+replies: the user info as written and decoded, its base64 `Proxy-Authorization` login, and the
+user name and password alone when each is 8 bytes or more), in the forms the
 credential redaction finds (JSON escapes, percent-encoding and the rest). Replies and upstream
 sections come from the extension with the account's own credential, the secrets in its settings,
 its proxy's password and its secret header values already removed; in the upstream sections the
