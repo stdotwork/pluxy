@@ -82,17 +82,37 @@ fn the_apply_schema_matches_what_the_tool_accepts() {
 #[test]
 fn the_recipe_starts_the_installed_grok_or_the_one_on_path() {
     let want = |program: &str| json!({"client": "Grok Build", "kind": "terminal", "program": program, "args": []});
-    assert_eq!(crate::recipe(None), want("grok"));
+    for os in ["linux", "macos", "windows"] {
+        assert_eq!(crate::recipe(os, None), want("grok"), "{os}");
+    }
     let home = std::env::temp_dir().join(format!("grok-setup-recipe-{}", std::process::id()));
     let bin = home.join(".grok").join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    assert_eq!(crate::recipe(Some(&home)), want("grok"));
-    let grok = bin.join("grok");
+    assert_eq!(crate::recipe("linux", Some(&home)), want("grok"));
+    // install.sh's grok, and install.ps1's grok.exe on Windows.
+    let (grok, exe) = (bin.join("grok"), bin.join("grok.exe"));
     std::fs::write(&grok, "#!/bin/sh\n").unwrap();
-    // Not executable: not a program to start.
-    assert_eq!(crate::recipe(Some(&home)), want("grok"));
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&grok, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(crate::recipe(Some(&home)), want(grok.to_str().unwrap()));
+    std::fs::write(&exe, "MZ").unwrap();
+    #[cfg(unix)]
+    {
+        // Not executable: not a program to start.
+        assert_eq!(crate::recipe("linux", Some(&home)), want("grok"));
+        use std::os::unix::fs::PermissionsExt;
+        for p in [&grok, &exe] {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    // A file without an extension is no program on Windows.
+    let unix = if cfg!(unix) {
+        grok.to_str().unwrap()
+    } else {
+        "grok"
+    };
+    assert_eq!(crate::recipe("linux", Some(&home)), want(unix));
+    assert_eq!(crate::recipe("macos", Some(&home)), want(unix));
+    assert_eq!(
+        crate::recipe("windows", Some(&home)),
+        want(exe.to_str().unwrap())
+    );
     std::fs::remove_dir_all(&home).unwrap();
 }
