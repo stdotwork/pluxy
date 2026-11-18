@@ -1,10 +1,10 @@
 // The native test's sessions (run.ts), each in one of the shards CI runs as parallel jobs. Each
-// shard builds everything run.ts builds, then runs only its own sessions; without a shard, run.ts
-// runs every session, as before. CI (.github/workflows/next-app.yml, the native job's matrix) lists
-// these shards in this order, and run.ts refuses to start when the matrix it was given differs. A
-// new session gets a name here, in the shard it fits best, and run.ts asks want(name) before it
-// runs it. The times are from a main run, with the setup builds before them taking about 7
-// minutes in every shard.
+// shard runs only its own sessions, on what one build job built for them all
+// (PLUXY_APP_NATIVE_PREBUILT); without a shard, run.ts runs every session, as before. CI
+// (.github/workflows/next-app.yml, the native job's matrix) lists these shards in this order, and
+// run.ts refuses to start when the matrix it was given differs. A new session gets a name here, in
+// the shard it fits best, and run.ts asks want(name) before it runs it. The times are from a main
+// run, when every shard still made the setup builds itself first (about 7 minutes).
 export const SHARDS: Record<string, readonly string[]> = {
   // About 7 minutes.
   usage: ["usage", "program", "transactions"],
