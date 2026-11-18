@@ -218,7 +218,7 @@ async function testPackage(outDir: string) {
   if (process.platform === "win32" || process.platform === "darwin") return bundleTestPackage(outDir);
   if (process.platform !== "linux" || process.arch !== "x64") {
     throw new Error(
-      `the test package is an x86_64 Linux AppImage, a Windows folder bundle or a macOS app bundle; this is ${process.platform} ${process.arch}`,
+      `the test package is an x86_64 Linux AppImage, a Windows folder bundle and setup program or a macOS app bundle; this is ${process.platform} ${process.arch}`,
     );
   }
   mkdirSync(outDir, { recursive: true });
@@ -321,7 +321,8 @@ function bundleTarget(): string {
   throw new Error(`no test package for ${process.platform} ${arch()}`);
 }
 
-/** The Windows folder bundle or macOS app bundle test package (see the top of this file). */
+/** The Windows folder bundle and setup program, or macOS app bundle, test package (see the top of
+ * this file). */
 async function bundleTestPackage(outDir: string) {
   const windows = process.platform === "win32";
   const target = bundleTarget();

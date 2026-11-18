@@ -1633,14 +1633,17 @@ into `%LOCALAPPDATA%\pluxy Test`, with an uninstall entry under `HKEY_CURRENT_US
 shortcut and, when run silently (`/S`), a desktop shortcut. Its hooks
 (`src-tauri/nsis/hooks.nsh`) change two things in Tauri's setup:
 
-- The setup and its uninstaller refuse while the app runs from the install folder, saying to quit
-  it first (on the console when run silently), where Tauri's would close it by force. They refuse
-  too when Windows' Restart Manager, which they ask, cannot tell.
-- The uninstaller first removes what the app itself leaves in the folder, which it would not know
-  (it stays the one the first version installed): an update's `.pluxy-*` staging folder and
-  asides, `bundled\` and `pluxy.exe`, a link or junction among them as a link, never followed. It
-  removes the app's login item (its `Run` value and Task Manager's value beside it) when that
-  item runs this install's program. The app's data stays.
+- The setup and its uninstaller refuse while a program of the app's runs from the install folder
+  (the app, `pluxy.exe`, or a program an interrupted update set aside), saying to quit it first
+  (on the console when run silently or passively), where Tauri's would close it by force. They
+  refuse too when Windows' Restart Manager, which they ask, cannot tell.
+- Once Tauri's uninstaller has removed the files it knows, it removes what the app itself leaves
+  in the folder, which it would not know (it stays the one the first version installed): an
+  update's `.pluxy-*` staging folder and asides, `bundled\` and `pluxy.exe`, then the folder. It
+  reads each entry before removing it, at any depth, and removes a link or junction itself,
+  never what it points to (NSIS's own recursive delete would follow a junction). It removes the
+  app's login item (its `Run` value and Task Manager's value beside it) when that item runs this
+  install's program. The app's data stays.
 
 The app updates such a copy itself and never runs the setup for it
 ([Application update](#application-update)). Tauri's NSIS bundler would download NSIS 3.13 and
@@ -1742,8 +1745,9 @@ store opens, but installing, adopting and rolling back a version need the native
 which core changes have on Linux only, so no version is installed and none starts), installing a
 package from a file, a launch that opens a file and opening an address in the browser. Changing
 the release feed works there through the native confirmation. The app updates itself, with test
-updater trust only, as an AppImage on Linux, as a folder bundle's program set on Windows and as
-an app bundle on macOS ([Application update](#application-update)).
+updater trust only, as an AppImage on Linux, on Windows as the program set of a folder bundle or
+of a copy the per-user setup program installed, and as an app bundle on macOS
+([Application update](#application-update)).
 
 ## Limits
 
@@ -1771,6 +1775,13 @@ an app bundle on macOS ([Application update](#application-update)).
   sessions, which CI runs on Windows and macOS (the install session on Windows only;
   [Platforms](#platforms) says what they check and what still refuses there). The setup's refusal
   when Restart Manager cannot start a session is not run: the test cannot make it fail.
+- The setup program and its uninstaller check that the app is not running, and then Tauri's
+  setup checks again and closes it by force if it is (silently and passively, without asking):
+  nothing keeps the app from starting in the moment between the two checks.
+- When the uninstaller runs after an update has left files in `bundled\` that the first version
+  did not have, Tauri's uninstaller cannot remove the folder and asks Windows to remove it at the
+  next restart (which writes a machine-wide pending rename, and only works for an administrator);
+  the hook removes it right after, so nothing is left either way.
 - The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
   account's known folders, which no environment variable redirects, so it refuses to start when
   they exist and removes only the ones it made. Its input does not come from a keyboard: on
@@ -1783,8 +1794,9 @@ an app bundle on macOS ([Application update](#application-update)).
   folder bundle and per-user setup program (Windows; their `pluxy.exe` and `bundled\` are stubs,
   and nothing is code-signed) and the test app bundle (macOS), which are not for release. How
   Windows SmartScreen treats the unsigned setup program is not tested.
-  The app updates only itself: as an AppImage on Linux x86_64, as a folder bundle's program set
-  on Windows x86_64 and as an app bundle on macOS, and only with test updater trust until release
+  The app updates only itself: as an AppImage on Linux x86_64, on Windows x86_64 as the program
+  set of a folder bundle or of a copy the per-user setup program installed, and as an app bundle
+  on macOS, and only with test updater trust until release
   keys exist. The native test updates it on Linux, on Windows and on Apple silicon Macs; Intel
   Macs and Windows on ARM are built for but not run, and how a stock Mac's Gatekeeper and privacy
   prompts or Windows SmartScreen treat an updated copy is not tested (the app's own download
