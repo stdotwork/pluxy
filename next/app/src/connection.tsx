@@ -1,6 +1,7 @@
 // The app's Connection page: how the app reaches core. Three modes:
 // - managed: the app runs a core of its own, one of the versions it installed from the core
-//   source or adopted, with a config it keeps in its data folder, and stops it when the app quits;
+//   source, adopted or copied in from the core that came with the app, with a config it keeps in
+//   its data folder, and stops it when the app quits;
 // - local: a core already running on this computer, such as a system service; the app only
 //   connects, and leaves it running;
 // - remote: a core on another computer, over https; shown with its address while connected.
@@ -132,6 +133,7 @@ function CoreVersions(props: { connection: Connection }) {
           </div>
         </>
       )}
+      {v.bundled?.problem && <Notice tone="danger">{v.bundled.problem}</Notice>}
       {v.failed && (
         <Notice tone="danger">
           Core {v.failed.version} did not start: {v.failed.reason}
@@ -144,7 +146,11 @@ function CoreVersions(props: { connection: Connection }) {
           rows={v.installed.map((i) => [
             i.id,
             <span key={i.id}>
-              {i.kind === "adopted" ? `adopted from ${i.adopted_from}` : "signed release"}{" "}
+              {i.kind === "adopted"
+                ? `adopted from ${i.adopted_from}`
+                : i.kind === "bundled"
+                  ? "came with the app"
+                  : "signed release"}{" "}
               {i.id === running && <Badge tone="ok">running</Badge>}
               {i.id === v.previous && <Badge tone="muted">previous</Badge>}{" "}
               {i.id !== running && (

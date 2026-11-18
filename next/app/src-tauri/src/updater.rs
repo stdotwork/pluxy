@@ -868,8 +868,9 @@ fn supervise(r: &Restart, lock: Option<std::os::fd::RawFd>) {
     let _ = spawn_holding(lock, &p.appimage, &args, Some(after));
 }
 
-/// At startup, after the profile lock: the version an install started accepts itself once the
-/// installed AppImage is the one it pinned, which the waiting earlier version reads.
+/// At startup, after the profile lock and before the managed core starts or anything reads the
+/// core that came with the app: the version an install started accepts itself once the installed
+/// AppImage is the one it pinned, which the waiting earlier version reads.
 pub fn accept(app: &AppHandle) {
     let Ok(dir) = dir(app) else { return };
     let Some(p) = read_json::<Pending>(&dir.join("pending.json")) else {
