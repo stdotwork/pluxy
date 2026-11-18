@@ -77,7 +77,7 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           GROUP_BASE: ${{ github.event.merge_group.base_sha }}
           GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
-          # The heavy jobs, next-app.yml's four Linux native shards and all of next-app-platforms.yml
+          # The heavy jobs, next-app.yml's Linux native build and shards and all of next-app-platforms.yml
           # (Windows and macOS), are half of the hosted runner minutes. A merge group always runs
           # them; a pull request only with the full-ci label (adding it reruns this workflow), so
           # the queue gets those minutes. Nothing merges unchecked: every group runs them.

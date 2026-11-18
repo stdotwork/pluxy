@@ -697,7 +697,10 @@ frame loads from the `pluxy-app:` scheme. That scheme serves a page webview only
 release folder it was opened for, only while that release is active and enabled, and only while
 each file still has the SHA-256 recorded at install. Each file is served sandboxed, as core's
 pages site does: scripts, styles, images and fonts from the scheme only, no requests from script,
-no frames or forms. The webview may not navigate its frame out of that folder. Installing,
+no frames or forms. On Windows WebView2 serves the scheme as `http://pluxy-app.localhost`, so the
+policy names that origin, which also lets the page ask for `https://pluxy-app.localhost`; the
+app serves nothing there, so a page webview answers every `https://pluxy-app.` request with 403
+itself, before it leaves the app. The webview may not navigate its frame out of that folder. Installing,
 rolling back, disabling or removing a package closes its open page webviews at once; the window
 then opens the new release's page, if the page is still listed.
 

@@ -30,8 +30,9 @@ const Version = 0
 // minor 10 adds the subscription's end time to quota; minor 11 adds the account's proxy_url;
 // minor 12 adds the account's headers; minor 13 adds upstream capture (Call.Capture and the
 // diagnostic frame); minor 14 adds payload rules (Call.Payload); minor 15 has a session turn
-// carry them too; minor 16 adds an error's dropped (llm.Error.Dropped).
-const Minor = 16
+// carry them too; minor 16 adds an error's dropped (llm.Error.Dropped); minor 17 adds a
+// captured body's BodyStopped.
+const Minor = 17
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -483,6 +484,10 @@ type CapturedBody struct {
 	BodyEnd string `json:"body_end,omitempty"`
 	// BodySize is the body's full length in bytes; for a response, as much as had been read.
 	BodySize int64 `json:"body_size,omitempty"`
+	// BodyStopped is true when the body was not read to its end (minor version 17): the reader
+	// stopped, a read failed, or the frame was sent first. Its last bytes may then be the start
+	// of a secret cut off there.
+	BodyStopped bool `json:"body_stopped,omitempty"`
 }
 
 // Reply is a frame an extension sends: an event, the result of describe, models, check or quota,

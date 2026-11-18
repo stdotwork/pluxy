@@ -886,7 +886,9 @@ const escapeSyntax = `\%"/bfnrtu0123456789abcdefABCDEF`
 func (b *BodyRedactor) spells(c byte) bool { return b.spelled[c] }
 
 // maxChunk is the most of a piece Write reads at once: a larger piece is read in parts, so that
-// what decoding it takes stays bounded however large the piece.
+// what decoding it takes stays bounded however large the piece. Each part ends where a character
+// starts, as every other cut does: text replaced whole with [redacted] at a part's end takes the
+// whole character with it, not the start of one whose rest the next part would send.
 const maxChunk = 16 << 10
 
 // Write returns the redacted text of the body so far that more text cannot change.
@@ -904,6 +906,12 @@ func (b *BodyRedactor) Write(piece string) string {
 	out.Grow(len(piece))
 	for len(piece) > 0 {
 		n := min(len(piece), maxChunk)
+		for k := n; n < len(piece) && k > n-utf8.UTFMax && k > 0; k-- {
+			if utf8.RuneStart(piece[k]) {
+				n = k
+				break
+			}
+		}
 		out.WriteString(b.write(piece[:n]))
 		piece = piece[n:]
 	}

@@ -133,7 +133,7 @@ queued; docs, core-only and CI PRs go without it.
 | `ci.yml` | Every PR and every merge-queue group | Works out which folders the change touches (for a PR, the diff against its base; for a group, what it adds to the group ahead of it in the queue, or to `main` for the first group; sound only while the queue's ruleset keeps "Only merge non-failing pull requests" (ALLGREEN)), runs the workflows below whose paths it touches as reusable workflows, and runs `gate`, which passes only when every workflow it chose passed. A change to `ci.yml` runs them all. `next-release.yml` is not among them |
 | `app-ci.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `extensions/app/` | The old desktop app. Front end: `bun run check`, `bun test`, `bun run build`; Rust: `cargo check --locked`, `cargo test --locked` |
 | `next-ci.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/` | UI type check, lint and unit tests; builds the panel; `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test -race ./...`; the panel's browser test in headless Chromium, and the extension pages test in Chromium, Firefox and WebKit; uploads the browser tests' screenshots and traces as an artifact for 7 days |
-| `next-app.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/` | The desktop app in `next/app`: type check, lint, unit tests and build of the window; `cargo fmt --check`, `cargo clippy`, `cargo test --locked` (unit tests and each connection mode against a real core); format, clippy and tests of `next/app-tools`. In parallel, the native test on Xvfb, which also builds and runs the test AppImage and checks the release gate, split into shard jobs that each build everything and run their own sessions (`next/app/native/shards.ts`) and upload each session's last screenshot as an artifact for 7 days. The `app` job passes only when every other job did |
+| `next-app.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/` | The desktop app in `next/app`: type check, lint, unit tests and build of the window; `cargo fmt --check`, `cargo clippy`, `cargo test --locked` (unit tests and each connection mode against a real core); format, clippy and tests of `next/app-tools`. In parallel, the native test on Xvfb, which also builds and runs the test AppImage and checks the release gate: a `native-build` job builds what the sessions run once, and shard jobs each run their own sessions on it (`next/app/native/shards.ts`) and upload each session's last screenshot as an artifact for 7 days. The `app` job passes only when every other job did |
 | `next-app-platforms.yml` | PRs and merge-queue groups (through `ci.yml`) changing what it builds: `next/app/`, `next/ui/`, `next/protocol/testdata/app-manifests/`, `next/go.mod` or `next/go.sum`, the workflow, or a file other than a test in a Go package the app's tests build (`e2e/panelcore`, `e2e/testext` and `cmd/pluxy` and what they import, as `go list` finds them), and its `native` jobs for the same changes except the app-manifest cases, since their sessions start a test core with `go run ./e2e/panelcore`; once a day on `main` (03:17 UTC); `workflow_dispatch` | The desktop app on `windows-latest` and `macos-latest`: the Rust crate's format, clippy and tests, and the native test's sessions that run there; the rest of the native test stays on Linux in `next-app.yml`. The workflow file says which jobs run and what each checks; `next/app/README.md` ("Limits") says which sessions run off Linux |
 | `next-app-tools-platforms.yml` | PRs and merge-queue groups (through `ci.yml`) touching `next/app-tools/` or the workflow, or the desktop app's files that exist for WSL (`next/app/src-tauri/src/environments*.rs` and its wsl-named files); once a day on `main` (03:47 UTC); `workflow_dispatch` | The app tools on `windows-latest` and `macos-latest` (clippy and tests, with the counts in the job summary), and the `WSL 2` and `WSL 1` jobs, which run the real-WSL tests on GitHub-hosted `windows-latest` (for PRs and merge-queue groups only when what they build or run changes, as `ci.yml` decides; always on the daily and manual runs). The workflow file says what each job checks |
 | `next-release.yml` | `next-v*` tags; PRs touching `next/Dockerfile`, `next/.dockerignore`, `next/compose.example.yaml`, `next/cmd/pluxy-pack/` or the workflow | PRs: builds the container image (amd64, and arm64 without running it), starts it with a temporary config, polls `/healthz`, checks the panel and the bundled packages, and packs every extension for the release platforms. Tags: also uploads the archives and `registry.json` to the GitHub release and pushes the image to `ghcr.io` once the checks pass |
@@ -149,9 +149,10 @@ By default every job runs on GitHub's own runners. Two repository variables send
 the maintainers' own machines instead:
 
 - `PLUXY_LINUX_RUNNER` takes the Linux jobs of `app-ci.yml` and `next-app.yml`, except
-  `next-app.yml`'s native test shards: the
-  document portal they start needs `/dev/fuse`, which the runner containers don't get.
-  `next-ci.yml` stays on GitHub's runners.
+  `next-app.yml`'s native test shards and `native-build`: the
+  document portal the shards start needs `/dev/fuse`, which the runner containers don't get, and
+  `native-build` builds what the shards run on the same runner as theirs (GitHub's, or
+  `PLUXY_LINUX_CLOUD_RUNNER`'s below). `next-ci.yml` never uses it.
 - `PLUXY_WINDOWS_RUNNER` takes the Windows leg of the `tools` job in
   `next-app-tools-platforms.yml`. The `app` job in `next-app-platforms.yml` (its registry tests
   only run on GitHub's runners), macOS jobs, the `native` job in `next-app-platforms.yml` and the
@@ -199,6 +200,25 @@ Some macOS jobs and every Windows job stay on GitHub's runners:
 - The Windows app-tool tests fail on Blacksmith's Windows runner.
 - The WSL jobs need GitHub's Windows runners.
 - The workflows a tag starts always use GitHub's runners.
+
+A fourth variable, `PLUXY_LINUX_CLOUD_RUNNER`, sends the heavy Linux jobs to Namespace's runners:
+`checks`, `native-build`, the native test shards and the `app` result job in `next-app.yml`,
+and `next` in `next-ci.yml`. It holds a runner label as JSON, like the first two; the intended
+value is `"nscloud-ubuntu-24.04-amd64-4x8"` (4 vCPU, 8 GB). Only the events named above for the
+maintainers' runners can use it, so a fork's runs stay on GitHub's runners. `checks` and `app` take
+it before `PLUXY_LINUX_RUNNER`, and the shards can run there because Namespace's runners have
+`/dev/fuse`. When it is not set, these jobs run where they did before.
+
+Namespace's runners report themselves self-hosted. In `next-app.yml` they use no Go or Bun cache
+and save no Rust cache, and the Rust caches GitHub's runners save don't restore there either (the
+cache key includes the image's own Rust, which differs), so their Rust builds start cold. `next`
+restores and saves its Go and Bun caches there as on GitHub's runners.
+
+Namespace's trial runs 32 vCPU at once: 8 of these jobs. A merge group that runs both workflows
+asks for 9 (`checks`, `native-build`, five shards, `app` and `next`), at most 7 at once, since the
+shards wait for `native-build` and `app` runs last. Past 8, jobs queue on Namespace and start as
+runners free up (within about 30 seconds of one freeing, in a test with 10 at once; none failed),
+so a second group in flight waits for some of its jobs.
 
 ## How changes flow
 
