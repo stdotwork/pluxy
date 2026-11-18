@@ -48,6 +48,9 @@ const (
 	defaultAPIBaseURL = "https://api.devin.ai"
 	chatPath          = "/exa.api_server_pb.ApiServerService/GetChatMessage"
 
+	// maxBody is how much of a refusal's body, or of a quota reply, is read. A longer body is cut.
+	maxBody = 1 << 20
+
 	// opaqueFormat names Devin's reasoning signatures in a reply's reasoning items.
 	opaqueFormat = llm.OpaqueDevin
 )
@@ -168,13 +171,8 @@ func chat(ctx context.Context, call sdk.Call, out sender) error {
 		tr.From = req.Origin.Format
 	}
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
-		var paths []string
-		for _, l := range chat.losses {
-			if l.Kind == llm.LossDropped {
-				paths = append(paths, l.Path)
-			}
-		}
-		return &llm.Error{Code: llm.CodeUnsupported, Message: "Devin has no place for " + strings.Join(paths, ", "), Scope: llm.ScopeRequest}
+		paths := tr.DroppedPaths()
+		return &llm.Error{Code: llm.CodeUnsupported, Message: "Devin has no place for " + strings.Join(paths, ", "), Scope: llm.ScopeRequest, Dropped: paths}
 	}
 	body := frame(chat.encode(token, deviceFingerprint(s.DeviceSeed)))
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.BaseURL+chatPath, bytes.NewReader(body))
@@ -197,8 +195,17 @@ func chat(ctx context.Context, call sdk.Call, out sender) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return statusError(resp.StatusCode, connectMessage(raw), raw, resp.Header.Get("Retry-After"))
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// The body broke off, perhaps inside a credential the upstream echoed: as with a cut
+			// body, the error says only the status.
+			return statusError(resp.StatusCode, "", nil, resp.Header.Get("Retry-After"))
+		}
+		msg, keep := connectMessage(raw, token)
+		return statusError(resp.StatusCode, msg, keep, resp.Header.Get("Retry-After"))
 	}
 	return newRelay(out, req.Model, tr).run(ctx, resp.Body)
 }
@@ -322,6 +329,32 @@ func (r *relay) endReasoning() error {
 	return r.send(ev)
 }
 
+// Bounds on what is read of a reply after its end frame (readToEnd): more than Connect's end of
+// the transfer, which comes at once, and short enough not to hold the reply's end back for long.
+const (
+	afterEndBytes = 64 << 10
+	afterEndWait  = time.Second
+)
+
+// readToEnd reads what comes after a reply's end frame, which Connect says is nothing but the
+// end of the transfer, so that the body is read to its end: its capture for the request log is
+// then not taken for a body whose read stopped, whose end the log would leave out. It gives up
+// after afterEndBytes, or after afterEndWait while the server holds the stream open, leaving the
+// body as not read to its end; what is still reading then ends when the caller closes the body.
+func readToEnd(ctx context.Context, body io.Reader) {
+	ctx, cancel := context.WithTimeout(ctx, afterEndWait)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.Copy(io.Discard, io.LimitReader(body, afterEndBytes))
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
+
 func (r *relay) run(ctx context.Context, body io.Reader) error {
 	for {
 		end, payload, err := readFrame(body)
@@ -336,6 +369,7 @@ func (r *relay) run(ctx context.Context, body io.Reader) error {
 			return &llm.Error{Code: llm.CodeUpstream, Message: msg, Scope: llm.ScopeEndpoint, Usage: r.usage.llm()}
 		}
 		if end {
+			readToEnd(ctx, body)
 			if e := trailerError(payload); e != nil {
 				// Once Devin sent a data frame, the model ran: trying again is not safe.
 				e.Retryable = e.Retryable && !r.ran
@@ -645,15 +679,24 @@ func connectStatus(code, msg string) int {
 	return http.StatusBadGateway
 }
 
-// connectMessage returns the message of a Connect error body ({"code", "message"}), or the body.
-func connectMessage(raw []byte) string {
+// connectMessage returns the message of a Connect error body ({"code", "message"}) and the body,
+// to keep as the error's Raw. Any other body gives its text as the message, cleaned by
+// sdk.UpstreamText with the pieces of token's secret part (the session token without its public
+// prefix), and no Raw: core removes only whole copies of a credential, and the body can hold part
+// of one the upstream echoed, split across lines, cut short by the upstream, or cut by the read.
+// The caller passes only a body whose read ended without an error; one that fills maxBody may
+// still have been cut there, so it gives no message.
+func connectMessage(raw []byte, token string) (string, []byte) {
 	var e struct {
 		Message string `json:"message"`
 	}
 	if json.Unmarshal(raw, &e) == nil && e.Message != "" {
-		return e.Message
+		return e.Message, raw
 	}
-	return strings.TrimSpace(string(raw))
+	if len(raw) >= maxBody {
+		return "", nil
+	}
+	return sdk.UpstreamText(string(raw), strings.TrimPrefix(token, tokenPrefix)), nil
 }
 
 // statusError classifies a refusal by its HTTP status. A 429 holds back only the model, as

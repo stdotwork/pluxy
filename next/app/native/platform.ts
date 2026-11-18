@@ -1,5 +1,5 @@
-// The native test on Windows and macOS, on the GitHub-hosted runners of those systems
-// (.github/workflows/next-app-platforms.yml). Run from next/app, after the app is built with the
+// The native test on Windows and macOS, on disposable CI runners of those systems
+// (.github/workflows/next-app-platforms.yml, native/runner.ts). Run from next/app, after the app is built with the
 // native-test feature (`cargo build --locked --features native-test` in src-tauri; for the tools
 // shard with `--features native-test,artifact-test-trust --bin pluxy-app --example
 // program_fixture`, and the execution program built into target/app-tools, see platform-tools.ts):
@@ -33,8 +33,8 @@
 //   in the app built with artifact-test-trust against a test core (native/platform-tools.ts).
 //
 // These write what a real run writes: the user's registry or LaunchAgents folder, and on Windows
-// the app's own folder in the user's profile. So it runs only on a GitHub-hosted runner, whose user
-// is thrown away, and removes what it made.
+// the app's own folder in the user's profile. So it runs only on a disposable CI runner
+// (native/runner.ts), whose user is thrown away, and removes what it made.
 //
 // Output: `platform: ...` lines, `platform-problem: ...` for each failed check, and a summary with
 // the counts. A run that checked nothing fails.
@@ -60,6 +60,7 @@ import { dirname, join } from "node:path";
 import { MARKER_FILE, PROFILE_FILE } from "./admission";
 import { Launch, type Step } from "./launch";
 import { TOOL_SESSIONS, toolSession } from "./platform-tools";
+import { DISPOSABLE_RUNNER, onDisposableRunner } from "./runner";
 import { SESSIONS, selectShard } from "./shards";
 
 const windows = process.platform === "win32";
@@ -68,9 +69,9 @@ if (!windows && !mac) {
   console.error("native test setup failed: this is the Windows and macOS test (the Linux one is run.ts)");
   process.exit(1);
 }
-if (process.env.GITHUB_ACTIONS !== "true" || process.env.RUNNER_ENVIRONMENT !== "github-hosted") {
+if (!onDisposableRunner()) {
   console.error(
-    "native test setup failed: it writes the user's registry or LaunchAgents folder and app folder, so it runs only on a GitHub-hosted runner (GITHUB_ACTIONS=true, RUNNER_ENVIRONMENT=github-hosted)",
+    `native test setup failed: it writes the user's registry or LaunchAgents folder and app folder, so it runs only on ${DISPOSABLE_RUNNER}`,
   );
   process.exit(1);
 }

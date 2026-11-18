@@ -73,6 +73,10 @@ func fakeExtension(mode string) {
 		captureSettings()
 		return
 	}
+	if mode == "capture-stop" {
+		captureStop()
+		return
+	}
 	if mode == "mint-credential" {
 		mintCredential()
 		return

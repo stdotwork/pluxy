@@ -56,11 +56,29 @@ func TestCountTokensOnAnotherBaseURL(t *testing.T) {
 	srv := claudetest.New(t)
 	err := countTokens(context.Background(), countCall(srv.Settings("")), nil)
 	e := llmError(t, err)
-	if e.Code != llm.CodeUnsupported || e.Scope != llm.ScopeCredential || !e.Retryable {
-		t.Errorf("error = %+v, want unsupported, scope credential, retryable", e)
+	if e.Code != llm.CodeUnsupported || e.Scope != llm.ScopeCredential || !e.Retryable || e.Dropped != nil {
+		t.Errorf("error = %+v, want unsupported, scope credential, retryable, nothing dropped", e)
 	}
 	if n := len(srv.Requests()); n != 0 {
 		t.Errorf("the upstream got %d requests, want none", n)
+	}
+}
+
+// On Anthropic's own origin, a count the reject drop policy refuses names what was dropped in the
+// error's Dropped, so core does not take it for an account that cannot count, and sends nothing.
+func TestCountTokensDropRefusalNamesDropped(t *testing.T) {
+	old := client.Transport
+	client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Errorf("the count was sent: %s", r.URL)
+		return nil, http.ErrHandlerTimeout
+	})
+	t.Cleanup(func() { client.Transport = old })
+	call := countCall(nil)
+	call.Request.Options.ResponseFormat = &llm.ResponseFormat{Type: llm.ResponseFormatJSONObject}
+	call.Request.DropPolicy = llm.DropReject
+	e := llmError(t, countTokens(context.Background(), call, nil))
+	if e.Code != llm.CodeUnsupported || len(e.Dropped) != 1 || e.Dropped[0] != "response_format" {
+		t.Errorf("error = %+v, want unsupported with dropped [response_format]", e)
 	}
 }
 

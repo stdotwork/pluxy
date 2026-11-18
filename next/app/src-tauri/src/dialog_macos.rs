@@ -831,6 +831,24 @@ pub(crate) mod inspect {
         Some("performClick")
     }
 
+    /// Whether the control of dialog d with access key c (GTK form) is enabled; None when no
+    /// control has that key.
+    pub(crate) fn access_enabled(serial: u64, c: char) -> Option<bool> {
+        let (_, id) = access_keys(serial)
+            .into_iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(&c))?;
+        let st = get(serial)?;
+        let s = st.borrow();
+        match id {
+            Some(id) => s
+                .buttons
+                .iter()
+                .find(|b| b.0 == id)
+                .map(|b| b.1.isEnabled()),
+            None => s.check.as_ref().map(|c| c.isEnabled()),
+        }
+    }
+
     /// The access keys (GTK form) of dialog d's buttons and check box: (key, button id or None
     /// for the check box).
     pub(crate) fn access_keys(serial: u64) -> Vec<(char, Option<Id>)> {

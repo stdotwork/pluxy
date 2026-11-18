@@ -360,7 +360,7 @@ checks the sources for any other call that could end a process.
 
 | | Windows | macOS |
 | --- | --- | --- |
-| What runs | The file the host opened and checked: its path now (with `\\?\` removed), opened again with only reading shared, so it cannot be renamed, replaced or written until the process runs; only `.exe` and `.com` files that start with `MZ` | The file the host opened and checked, by the path it has now (`F_GETPATH`), once no other user can change that file or any folder above it and the path still names the same file (device, inode, size, mode and times) |
+| What runs | The file the host opened and checked: its path now (with `\\?\` removed), opened again with only reading shared, so it cannot be renamed, replaced or written until the process runs; only `.exe` and `.com` files that start with `MZ` | The file the host opened and checked, by the path it has now (`F_GETPATH`), once no other user can change that file or any folder above it and the path still names the same file (device, inode, size, mode and times). That reads each part's mode and extended access list together, from `/` down to the file, inherited entries too: an allow entry for another user or group that holds any right but the read-only ones (`read`, `execute`, `readattr`, `readextattr`, `readsecurity`, `synchronize`, and the kernel's generic read and execute) is refused, so `write`, `add_file`, `delete` and the like, the kernel's `generic_write` and `generic_all`, and any right not known today. The refusal gives the entry's number, who it is for, its rights and how to remove it (`chmod -a#`, or `chmod -N` for every entry, with the path quoted for the shell). Deny entries pass, as home folders carry `group:everyone deny delete`. For the program of a detached launch or a managed runtime, a folder above it may also be writable by the `admin` group, by its mode or an access list entry, as macOS makes `/Applications` and Homebrew makes its folders. Another admin account can then replace the program between the check and the exec (and, for a program inside an app, whatever it later loads or starts from its app: frameworks, plug-ins, helper apps), and, with or without that rule, can replace at any time what any program loads from such folders (Homebrew's libraries, a script's interpreter and modules) |
 | Handles and descriptors it gets | Only its three standard handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), made inheritable only while it starts | Every descriptor above 2 closes as it executes |
 | Tool, managed runtime, the app's core | A job object of its own, which ends the process and everything it started when stopped and when the app exits or crashes (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) | A process group of its own (a tool's, a runtime's); the app's core stays in the app's group |
 | Asked to stop | `CTRL_BREAK` to its process group on its own hidden console, then the job ends after the grace. An app that has a console of its own (a debug build run from a terminal) cannot send it, and ends the job at once | SIGTERM, then SIGKILL to the group after the grace, as on Linux |
@@ -602,7 +602,9 @@ program's name) and `cwd`, and may name:
     resolved path and without following links, so a folder made writable or turned into a
     link since the confirmation is refused. Folders above the one it must be inside are not
     checked;
-  - a folder that is `/`, the home folder or a folder above it;
+  - a folder that is `/`, the home folder or a folder above it, or any folder when the home
+    folder cannot be found (`HOME`, else the user's passwd entry, is missing or does not
+    resolve), since it cannot be checked against it;
   - a file whose content type is not plain text (`text/plain`, `application/json`,
     `application/x-ndjson`, `application/jsonl`, `text/markdown` or `text/x-log`). The type is
     the one GIO guesses from the file's name and first bytes, with the shared-mime-info rules

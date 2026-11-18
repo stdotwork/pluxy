@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.15
+# pluxy extension protocol, version 0.17
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -23,9 +23,11 @@ Version 0.12 adds the account's [`headers`](#headers): extra HTTP headers on tha
 Version 0.13 adds [upstream capture](#upstream-capture): what the extension sent upstream and got
 back, for core's request logs. Version 0.14 adds [payload rules](#payload-rules): fields of the
 upstream JSON body that the config sets, fills in or removes. Version 0.15 has a session turn carry
-them too. It is deliberately small; later versions add capabilities and more operations without
-changing what is described here. An extension written for version 0 works unchanged with a core
-that speaks 0.15 (see
+them too. Version 0.16 adds an error's `dropped`: what a refusal under the `reject` drop policy
+could not carry. Version 0.17 adds a captured body's `body_stopped`: the extension did not read it
+to its end. It is deliberately small; later versions add capabilities and more operations
+without changing what is described here. An extension written for version 0 works unchanged with a
+core that speaks 0.17 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -298,10 +300,12 @@ such endpoint, or not for this request's format) answers with code `unsupported`
 to an extension whose describe reports `protocol_minor` 2 or more and lists it in `operations`;
 for any other, core treats the account as one that cannot count. Core routes a count like a
 request: the same accounts, blocks and retries. An extension does not estimate: when the count
-gets no answer and an account tried answered `unsupported`, core answers the client with its own
-estimate (unless the config turns `token_count_estimate` off, then with the last error). When no
-account tried answered `unsupported`, any other error, such as an upstream's 400 or 429, reaches
-the client as it is.
+gets no answer and an account tried answered `unsupported` with a scope other than `request` and
+without `dropped` (one that cannot count, or a drop refusal from an extension before 0.16, which
+sends no `dropped`), core answers the client with its own estimate (unless the config turns
+`token_count_estimate` off, then with the last error). Otherwise the last error reaches the client
+as it is: an upstream's 400 or 429, a refusal under `drop_policy` `reject` (an `unsupported` error
+with `dropped`), or an `unsupported` error with scope `request`.
 
 ### `models`
 
@@ -676,7 +680,7 @@ version 0.
 | `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it), `thinking_suffix` (version 0.2; see below). |
 | `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`, and the headers the client names itself with: `user-agent`, `x-app`, `anthropic-dangerous-direct-browser-access`, `x-claude-code-session-id`, `x-client-request-id`, the `x-stainless-*` headers of Anthropic's SDKs, `x-client-app` and `x-anthropic-additional-protection`; and Claude Code's subagent, request and remote-session headers (`x-claude-code-agent-id`, `x-claude-code-parent-agent-id`, `x-claude-code-agent-type`, `x-claude-code-request-class`, `x-claude-code-prev-tool-durations`, `x-claude-code-compaction`, `x-claude-code-context-compacted`, `x-claude-remote-container-id`, `x-claude-remote-session-id`), which an extension should send upstream only for a request that names itself as Claude Code (`anthropicmessages.IsClaudeCode`: `x-app: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta); for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version`, `originator` and `user-agent`). |
 | `origin` | The request's top-level fields that have no place in the model (see Origin below). |
-| `drop_policy` | What to do when building the upstream request would drop part of this one: `report` (default: send it and report the losses) or `reject` (refuse with `unsupported`, naming what could not be carried). |
+| `drop_policy` | What to do when building the upstream request would drop part of this one: `report` (default: send it and report the losses) or `reject` (refuse with `unsupported`; since 0.16 the error's `dropped` names what could not be carried, which the message may name too). |
 | `caller` | Version 0.8. A value that stands for the client key the request came with: the same for every request with that key to this extension, different for another key or another extension, and not derivable from the key (core derives it with a secret it makes each time it starts, so it changes when core restarts). Absent when the client sent no key. Core sends it with `generate`, `count_tokens` and `endpoint` calls, to every extension. An extension that keeps state from replies across requests, such as reasoning to put back into a later turn, keys that state by `caller`, so one client never gets another's. |
 
 Item types:
@@ -824,7 +828,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | Field | Meaning |
 | --- | --- |
 | `code` | One of the codes below. |
-| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
+| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, `dropped`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
 | `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. For `login` and `refresh` calls, see [Errors in login and refresh calls](#errors-in-login-and-refresh-calls). |
@@ -833,6 +837,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | `raw` | The upstream's error body, unchanged. |
 | `usage` | Usage the upstream reported before the failure, in the same form as `finish.usage`; absent when it reported none. A reply that fails partway may still have cost tokens. |
 | `quota_window_minutes` | Version 0.6. For code `quota`: the length, in minutes, of the usage window that is used up, when the upstream said (such as 300 for a five-hour window). Core passes it on in its [usage-limit reply](../README.md#accounts-and-routing). |
+| `dropped` | Version 0.16. Only on a refusal under the request's `drop_policy` `reject`: the paths of the request's parts the upstream's format cannot carry, as the translation's losses name them. Core tells such a refusal from an account that cannot serve the call by it (see [`count_tokens`](#count_tokens)). |
 
 Codes an extension sends:
 
@@ -1231,6 +1236,7 @@ terminal event (`finish` or `error`):
 | `body` | The body as text (bytes that are not UTF-8 arrive as U+FFFD): all of it, or, when it is longer than 128 KiB, its first 32 KiB. |
 | `body_end` | When the body is longer than 128 KiB: its last 96 KiB. Absent otherwise. |
 | `body_size` | The body's full length in bytes. For a response: how much of it the extension had read when it sent the frame. |
+| `body_stopped` | Since 0.17: true when the body was not read to its end: the extension stopped reading it (such as after the first MiB of an error, or at a stream's last event), a read failed, or the frame was sent first. Absent: read to its end, or sent by an extension older than 0.17. |
 
 Rules:
 
@@ -1246,7 +1252,14 @@ Rules:
 - Record a request body as it is sent and a response body as the extension reads it, keeping only
   its start and its end: never hold a whole stream, delay the request to read its body first, or
   delay a piece of a reply to record it. What the extension had not read when it sent the frame is
-  not in it.
+  not in it. Set `body_stopped` on a body whose reader did not see its end, however the read
+  stopped, unless every byte of a body of known length was read: a transport can send a request
+  body's last byte, and the upstream answer, before its last read sees the end. A body known to
+  have nothing to read is read to its end; the Go SDK treats only a body the transport gives as
+  `http.NoBody` that way. A response with neither a length nor chunked encoding whose connection
+  closes early cannot be told from one that ended there (Go reads it as the end, also over TLS
+  closed without its closing alert between two records): don't mark it, which would mark
+  complete ones too.
 - A WebSocket handshake is an exchange: the `GET` request and the `101` response's status and
   headers, with no body. The messages on the socket are not captured. A turn that uses a socket an
   earlier turn opened makes no exchange, and a socket opened by the `session` call itself, before
@@ -1262,7 +1275,14 @@ start and end, and at most 16 KiB of header lines are logged, with a line counti
 a body is cut, it also drops the bytes beside the cut that could be the start or the end of a
 credential cut in two. A `body` and `body_end` with nothing left out between them are one text:
 core redacts them as it does an [endpoint](#endpoint) body's pieces, so a credential in one of the
-forms it removes that is cut between them is removed, and logs them joined.
+forms it removes that is cut between them is removed, and logs them joined. Where a body has
+`body_stopped`, its last bytes may be the start of a secret cut off where the read stopped: core
+drops a run of 4 bytes or more at its end that starts a form of the credential, and the log leaves
+out what could be the start of a secret of its config as on the start's side of a cut, with its
+window reaching back no further than the last line break, and ends the body with a line saying it
+was not read past there. An extension older
+than 0.17 never sets `body_stopped`, so its bodies are logged as before: one whose read stopped
+can keep the start of a secret at its end.
 
 In Go, `sdk.Upstream` does all of this for each client it wraps, for requests made with the
 handler's context.
@@ -1272,7 +1292,7 @@ handler's context.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.15. An extension reports the minor version it
+raise the minor version: this document is version 0.17. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1295,8 +1315,10 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.13 | [Upstream capture](#upstream-capture): the call's optional `capture` and the `diagnostic` frame. |
 | 0.14 | [Payload rules](#payload-rules): the call's optional `payload`. |
 | 0.15 | The `payload` of a [session turn](#turns). |
+| 0.16 | An error's `dropped`. |
+| 0.17 | A captured body's `body_stopped` ([upstream capture](#upstream-capture)). |
 
-## What version 0.15 leaves out
+## What version 0.17 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

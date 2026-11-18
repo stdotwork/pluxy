@@ -1343,6 +1343,11 @@ pub fn start(app: AppHandle) {
                     json!({"label": l, "shown": eval(&w, "({href: location.href, html: document.documentElement.outerHTML.slice(0, 1000)})")})
                 })
                 .collect();
+            // No answer at all: the window's webview runs no script (a hung webview), which a
+            // null here would hide.
+            let shown = shown.unwrap_or_else(
+                || json!({"no_answer": "the window's webview answered no script within 5 s"}),
+            );
             log(
                 "failed",
                 json!({"error": e, "window": shown, "pages": pages}),

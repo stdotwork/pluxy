@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"strings"
 	"testing"
@@ -267,6 +269,42 @@ func TestStatusErrors(t *testing.T) {
 	}
 }
 
+// A refusal keeps its body as the error's Raw only when the message is the Connect body's own. Any
+// other body's message is its cleaned text, and the body itself, which the client and the
+// account's last error would get as it is, is not kept: it may hold part of the token.
+func TestRefusalRaw(t *testing.T) {
+	const tok = "devin-raw-secret-0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+	for _, tc := range []struct {
+		name, body, msg string
+		raw             bool
+	}{
+		{"Connect error", `{"code":"internal","message":"something broke"}`, "something broke", true},
+		{"other JSON", `{"error":{"message":"bad token ` + tok[:20] + `"}}`, `{"error":{"message":"bad token [redacted]"}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			settings, _ := json.Marshal(map[string]string{"base_url": srv.URL})
+			err := chat(context.Background(), sdk.Call{Account: protocol.Account{Settings: settings, Credential: tokenCredential(tok)},
+				Request: llm.Request{Model: "swe-2", Items: []llm.Item{{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "Hi"}}}}}}, &recorder{})
+			var e *llm.Error
+			if !errors.As(err, &e) {
+				t.Fatalf("err = %v, want an *llm.Error", err)
+			}
+			if e.Message != tc.msg {
+				t.Errorf("message %q, want %q", e.Message, tc.msg)
+			}
+			if got := e.Raw != nil; got != tc.raw {
+				t.Errorf("Raw %s kept: %v, want %v", e.Raw, got, tc.raw)
+			}
+		})
+	}
+}
+
 // What a user pastes in the browser login is read as today's core reads it.
 func TestReadPaste(t *testing.T) {
 	for _, c := range []struct{ in, token, code string }{
@@ -331,5 +369,27 @@ func TestForwardInputsStops(t *testing.T) {
 			t.Fatal("the input forwarder still runs after the login was cancelled")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A server that holds the stream open after the reply's end frame does not hold the reply back:
+// the extension reads on past the end frame for a moment only.
+func TestReplyNotHeldAfterEndFrame(t *testing.T) {
+	srv := devintest.New(t)
+	srv.Chat = func(w http.ResponseWriter, r *http.Request, _ devintest.Request) {
+		devintest.Stream(w, r, 30*time.Second, devintest.Text("Hi"), devintest.Usage(11, 7), devintest.End(""))
+	}
+	out := &recorder{}
+	start := time.Now()
+	err := chat(context.Background(), sdk.Call{Account: protocol.Account{Settings: srv.Settings(), Credential: tokenCredential(srv.Token())},
+		Request: llm.Request{Model: "swe-2", Items: []llm.Item{{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "Hi"}}}}}}, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("the reply took %v with the stream held open after its end frame", d)
+	}
+	if got := out.types(); !strings.HasSuffix(got, "finish") {
+		t.Errorf("events %s, want the reply to finish", got)
 	}
 }

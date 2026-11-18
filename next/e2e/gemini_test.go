@@ -67,6 +67,32 @@ func TestGeminiDropPolicy(t *testing.T) {
 	})
 }
 
+// A Gemini countTokens that the reject drop policy refuses gets the refusal, not core's estimate
+// (token_count_estimate is on by default): a Messages account has no place for JSON output, and
+// the extension's refusal names it in its dropped paths, so core does not take it for an account
+// that cannot count. Nothing reaches the upstream.
+func TestGeminiCountTokensDropPolicy(t *testing.T) {
+	u := newUpstream(t)
+	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) { t.Errorf("the upstream got %s", r.URL) }
+	base := startCore(t, u, func(cfg map[string]any) {
+		cfg["drop_policy"] = "reject"
+		ext := cfg["extension"].(map[string]any)
+		acct := ext["accounts"].([]any)[0].(map[string]any)
+		acct["settings"].(map[string]any)["wire_api"] = "messages"
+	})
+	resp := postPath(t, context.Background(), base, "/v1beta/models/gpt-test:countTokens", clientKey,
+		`{"contents":[{"role":"user","parts":[{"text":"Hi"}]}],"generationConfig":{"responseMimeType":"application/json"}}`)
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(raw), `"status":"INVALID_ARGUMENT"`) ||
+		!strings.Contains(string(raw), "response_format") || strings.Contains(string(raw), "totalTokens") {
+		t.Errorf("status %d: %s; want 400 with a Google error naming response_format", resp.StatusCode, raw)
+	}
+	if bodies, _ := u.received(); len(bodies) != 0 {
+		t.Errorf("upstream got %d requests, want none", len(bodies))
+	}
+}
+
 // An upstream that redirects to another host does not get the account's key sent there: Go drops
 // Authorization on such a redirect but not x-goog-api-key or x-api-key. The client gets a 502.
 func TestUpstreamRedirectToAnotherHostIsNotFollowed(t *testing.T) {
@@ -157,9 +183,11 @@ func TestGeminiUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 // opens or replaces it later. This is the reviewer's case: 65 calls with 1 MiB signatures came
 // back as a 200 of 68,162,298 bytes.
 func TestGeminiNonStreamingReplyCountsThoughtSignatures(t *testing.T) {
+	t.Parallel()
 	sig := strings.Repeat("A", 1<<20)
 	for _, late := range []bool{false, true} {
 		t.Run(fmt.Sprintf("late=%t", late), func(t *testing.T) {
+			t.Parallel()
 			u := newUpstream(t)
 			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -221,6 +249,7 @@ func TestGeminiNonStreamingReplyCountsThoughtSignatures(t *testing.T) {
 // This is the reviewer's case: 65 block types of 1 MiB each were kept, 68,162,435 bytes, while
 // the reply's size stayed 0.
 func TestGeminiNonStreamingReplyCountsLosses(t *testing.T) {
+	t.Parallel()
 	u := newUpstream(t)
 	u.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/messages" {
@@ -261,6 +290,7 @@ func TestGeminiNonStreamingReplyCountsLosses(t *testing.T) {
 // are not a JSON object; each loss names its call, which doubled what the reply held, after the
 // last size check.
 func TestGeminiNonStreamingReplyCountsLossesWhileRendering(t *testing.T) {
+	t.Parallel()
 	u := newUpstream(t)
 	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 		w.Header().Set("Content-Type", "text/event-stream")
