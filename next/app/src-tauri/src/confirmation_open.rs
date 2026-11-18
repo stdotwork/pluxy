@@ -182,13 +182,11 @@ pub(super) fn file_rules(f: &OpenTarget, w: &OpenTarget) -> Result<String, Strin
         return Err("the file a launch opens must be inside its within folder".into());
     }
     let t = type_of(file).ok_or_else(|| {
+        let names: Vec<String> = TYPES.iter().map(|(x, _)| format!(".{x}")).collect();
+        let (last, rest) = names.split_last().expect("TYPES names at least one type");
         format!(
-            "the file a launch opens must be {}",
-            TYPES
-                .iter()
-                .map(|(x, _)| format!(".{x}"))
-                .collect::<Vec<_>>()
-                .join(", ")
+            "the file a launch opens must be {} or {last}",
+            rest.join(", ")
         )
     })?;
     #[cfg(windows)]
