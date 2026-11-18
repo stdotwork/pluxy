@@ -8,7 +8,7 @@ name: Next app platforms
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when what it
-  # builds changed (see the changes job there).
+  # builds changed (see the changes job there), and for a pull request only with the full-ci label.
   workflow_call:
     inputs:
       # ci.yml sets this when the change reaches none of what the native jobs build: the app, the

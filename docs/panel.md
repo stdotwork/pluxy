@@ -8,15 +8,15 @@ build the panel, add a page and use the kit is in [`next/ui/README.md`](../next/
 ## What parity with the old panel means
 
 The new panel replaced the old one (the React/Vite panel formerly in `extensions/panel`, now
-removed). Parity means that it looks and feels
-like the old panel: where a feature is kept, it keeps the old page, section, setting and button
-names, in a similar place, so someone who knows the old panel finds each thing where they expect
-it. A label changes only where it named something this core does differently, such as a file, a
-relay or a mislabelled setting, or where [docs/terms.md](terms.md), the repo's list of words for
-the UI, gives another word: the Quota Management card's "Renewal time" reads "Subscription ends".
+removed). Parity meant that it looked and felt like
+the old panel: where a feature was kept, it kept the old page, section, setting and button names,
+in a similar place, so someone who knew the old panel found each thing where they expected it. A
+label changed only where it named something this core does differently, such as a file, a relay
+or a mislabelled setting, or where [docs/terms.md](terms.md), the repo's list of words for the UI,
+gives another word: the Quota Management card's "Renewal time" reads "Subscription ends".
 
-Parity does not mean the same logic. The new core does things its own way, and the panel shows
-what it does. Old features are carried over only where they are worth keeping. Each one left out
+Parity did not mean the same logic. The new core does things its own way, and the panel shows
+what it does. Old features were carried over only where they were worth keeping. Each one left out
 has a reason, listed page by page in
 [What each page leaves out, and why](../next/ui/README.md#what-each-page-leaves-out-and-why).
 
@@ -40,9 +40,9 @@ label says that it spends one request.
 | --- | --- |
 | Dashboard | The landing page, as in the old panel. Its ID stays `status`, from the earlier Status page, so the address `#/status` and theme rules for `data-page="status"` keep working. |
 | Accounts | The old Auth Files and AI Providers pages in one. This core has one kind of account, whether it comes from the config or from a sign-in. The old names stay as the source filter's options, "Auth files" and "AI providers". |
-| Add Account | Replaces OAuth Login. It adds API keys as well as sign-ins, from the login methods each running extension offers, so "OAuth" no longer describes it. |
-| System | Replaces Management Center Info. "Management Center" was the upstream panel's product name. |
-| Routing, Quota Management, Config Panel, Logs Viewer | The old names: these pages do the same job. |
+| Add Account | Replaced OAuth Login. It adds API keys as well as sign-ins, from the login methods each running extension offers, so "OAuth" no longer describes it. |
+| System | Replaced Management Center Info. "Management Center" was the upstream panel's product name. |
+| Routing, Quota Management, Config Panel, Logs Viewer | The old panel's names: these pages do the same job as the old ones did. |
 | Usage | A new page; see [The Usage page](#the-usage-page). |
 
 The navigation keeps the old panel's groups: Operate, Gateway, Observe, Control, and the
