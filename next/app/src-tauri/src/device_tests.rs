@@ -4042,3 +4042,25 @@ fn a_linux_build_is_checked_again_each_time_it_is_admitted() {
     }
     done(root);
 }
+
+/// macOS: the store's folders keep no extended access list entry, as they keep no group or other
+/// mode bits, so a release put in the store inherits none.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_store_passes_no_access_list_on() {
+    let root = temp();
+    let d = dirs(&root);
+    fs::create_dir_all(d.store()).unwrap();
+    let has = |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+    for p in [&d.root, &d.store()] {
+        crate::private_macos::add_entry(p, "everyone allow list,file_inherit,directory_inherit");
+        assert!(has(p), "{}", p.display());
+    }
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    for p in [&d.root, &d.store(), &d.store().join(digest(&v1))] {
+        assert!(!has(p), "{}", p.display());
+    }
+    done(root);
+}

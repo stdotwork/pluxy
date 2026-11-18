@@ -9,13 +9,16 @@
       0
     ],
     "programs": {
+      "darwin/amd64": "bin/claude-desktop",
+      "darwin/arm64": "bin/claude-desktop",
       "linux/amd64": "bin/claude-desktop",
-      "linux/arm64": "bin/claude-desktop"
+      "linux/arm64": "bin/claude-desktop",
+      "windows/amd64": "bin/claude-desktop.exe"
     },
     "operations": [
       {
         "id": "preview",
-        "description": "Pin Claude Desktop's third-party files (claude_desktop_config.json, pluxy's gateway profile in configLibrary and configLibrary/_meta.json) (by default in ~/.config/Claude-3p, or selected files or files in a selected folder) and read their values back, never the key",
+        "description": "Pin Claude Desktop's third-party files (claude_desktop_config.json, pluxy's gateway profile in configLibrary and configLibrary/_meta.json) (by default in Claude Desktop's third-party folder: ~/.config/Claude-3p on Linux, ~/Library/Application Support/Claude-3p on macOS, Claude-3p in the local application data folder on Windows; or selected files or files in a selected folder) and read their values back, never the key",
         "effect": "read",
         "input_schema": {
           "type": "object",
@@ -66,7 +69,7 @@
       },
       {
         "id": "folders",
-        "description": "Create Claude Desktop's configuration library folder, ~/.config/Claude-3p/configLibrary in the app's home folder (and the folders above it that are missing), with mode 0700, when it does not exist yet; Claude Desktop makes it only once a configuration is saved in its own window",
+        "description": "Create Claude Desktop's configuration library folder (~/.config/Claude-3p/configLibrary on Linux, configLibrary in ~/Library/Application Support/Claude-3p on macOS, configLibrary in Claude-3p in the local application data folder on Windows), private to this user, and the folders above it that are missing, when it does not exist yet; Claude Desktop makes it only once a configuration is saved in its own window",
         "effect": "write",
         "input_schema": {
           "type": "object",
@@ -744,7 +747,7 @@
       },
       {
         "id": "recipe",
-        "description": "How the launcher starts Claude Desktop: claude-desktop, directly, with no arguments, in the home folder",
+        "description": "How the launcher starts Claude Desktop, directly, with no arguments, in the home folder: claude-desktop on Linux, Claude.app in /Applications (or ~/Applications) on macOS; on Windows unsupported, as no program to start is documented",
         "effect": "read",
         "input_schema": {
           "type": "object",

@@ -1291,6 +1291,54 @@ fn a_bus_that_never_answers_holds_a_launch_no_longer_than_the_wait() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// On macOS a launch's program may sit below a folder the `admin` group may write, as in
+/// `/Applications` or Homebrew's folders (`owned::Writers::Admins`): such a launch starts.
+#[cfg(target_os = "macos")]
+#[test]
+fn on_macos_a_launch_from_a_folder_the_admin_group_may_write_starts() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = folder("admin");
+    let bin = dir.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let out = std::process::Command::new("/usr/bin/chgrp")
+        .arg("admin")
+        .arg(&bin)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "chgrp admin (the test's user must be in admin): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o775)).unwrap();
+    let program = bin.join("agent");
+    std::fs::write(&program, "#!/bin/sh\necho started > \"$1\"\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let started = dir.join("started");
+    let l = Launch {
+        opened: Box::new(Plain {
+            executable: File::open(&program).unwrap(),
+            cwd: open_dir(&dir),
+        }),
+        named: program.clone(),
+        // Its arguments after its name (`named`, given as argv[0]).
+        argv: vec![started.to_string_lossy().into_owned()],
+        lifetime: Lifetime::Detached,
+        request: Request::default(),
+        secrets: vec![],
+        stdin: None,
+    };
+    let r = detached(&l, "p", &By(none));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while r.is_ok() && !started.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let ran = started.exists();
+    let _ = std::fs::remove_dir_all(&dir);
+    r.unwrap();
+    assert!(ran, "the launch did not run");
+}
+
 #[test]
 fn an_open_launch_gets_only_the_absolute_path_entries() {
     // Windows separates PATH's entries with `;`, and an absolute one names its drive.
