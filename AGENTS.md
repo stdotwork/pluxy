@@ -162,6 +162,13 @@ Each variable holds a runner label as JSON, for example `"self-hosted"` or
 named before. Jobs on the maintainers' runners restore caches but don't save them (the uplink
 is slow).
 
+`PLUXY_GATE_RUNNER` names the runner for `ci.yml`'s own `changes` and `gate` jobs in merge-queue
+groups, as a JSON runs-on value, for example `"nscloud-ubuntu-24.04-amd64-2x4"` (Namespace's
+smallest Linux runner). Both take seconds, but every group waits on them, and a GitHub runner can
+take many minutes to start when pull requests fill GitHub's limit of 20 jobs at once. Pull
+requests, forks included, keep `ubuntu-latest`. A job can't fall back to another runner by
+itself: if that provider stops starting runners, delete the variable.
+
 Only these events can use the maintainers' runners: pushes, manual runs, merge-queue groups, and
 pull requests from branches of this repository, except Dependabot's. Every other event, including
 pull requests from a fork, runs on GitHub's runners. That check lives in the workflow files, which a fork can edit,
