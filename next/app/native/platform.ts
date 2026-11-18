@@ -1399,8 +1399,10 @@ function executionLevel(program: string): { level?: string; higher: boolean } {
 }
 
 /** The shortcuts named for the test product: on the user's desktop and in the user's Start menu,
- * and the machine-wide ones (the Public desktop, the all-users Start menu). */
-function shortcuts(): { user: string[]; machine: string[] } {
+ * and the machine-wide ones (the Public desktop, the all-users Start menu); and the two places a
+ * silent install puts the user's (Tauri's template: `$DESKTOP` and `$SMPROGRAMS`, no Start menu
+ * folder set). */
+function shortcuts(): { user: string[]; machine: string[]; expected: string[] } {
   const r = powershell(
     "$d = [Environment]::GetFolderPath('Desktop'); $s = [Environment]::GetFolderPath('Programs'); " +
       "$cd = [Environment]::GetFolderPath('CommonDesktopDirectory'); $cs = [Environment]::GetFolderPath('CommonPrograms'); " +
@@ -1420,7 +1422,11 @@ function shortcuts(): { user: string[]; machine: string[] } {
     for (const d of folders) walk(d, 0);
     return out;
   };
-  return { user: found(dirs.user), machine: found(dirs.machine) };
+  return {
+    user: found(dirs.user),
+    machine: found(dirs.machine),
+    expected: dirs.user.map((d) => join(d, `${TEST_PRODUCT}.lnk`)),
+  };
 }
 
 /** Folders a machine-wide install would have made. */
@@ -1458,6 +1464,7 @@ async function install() {
   let feed: ReturnType<typeof startUpdateFeed> | undefined;
   let home: string | undefined;
   let running: Launch | undefined;
+  let outside: string | undefined;
   const runCommand = `"${program}" --autostart`;
   try {
     // 1. Install, silently, as this user.
@@ -1511,6 +1518,11 @@ async function install() {
     say(`shortcuts: ${JSON.stringify(placed)}`);
     const profile = (process.env.USERPROFILE as string).toLowerCase();
     check(placed.machine.length === 0, `machine-wide shortcuts: ${placed.machine.join(", ")}`);
+    const lower = (l: string[]) => l.map((x) => x.toLowerCase()).sort();
+    check(
+      JSON.stringify(lower(placed.user)) === JSON.stringify(lower(placed.expected)),
+      `the user's shortcuts are ${JSON.stringify(placed.user)}, not ${JSON.stringify(placed.expected)}`,
+    );
     check(
       placed.user.every((s) => s.toLowerCase().startsWith(`${profile}\\`)),
       `shortcuts outside the user's profile: ${placed.user.join(", ")}`,
@@ -1699,6 +1711,34 @@ async function install() {
     const quit = await running.exitWithin(60_000);
     check(quit === 0, `quit exited with ${quit}: ${running.dump()}`);
     running = undefined;
+    // The setup also refuses while another program of the app's in the folder runs: pluxy.exe, or
+    // a program an interrupted update set aside. Each is a copy of Windows' ping, which runs until
+    // it is ended, under that name.
+    const ping = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "PING.EXE");
+    const core0 = readFileSync(join(folder, "pluxy.exe"));
+    for (const name of ["pluxy.exe", ".pluxy-old-0123456789abcdef-pluxy-app-test.exe"]) {
+      const holder = join(folder, name);
+      copyFileSync(ping, holder);
+      const proc = spawn(holder, ["-n", "600", "127.0.0.1"], { stdio: "ignore" });
+      try {
+        await Bun.sleep(1000);
+        check(proc.exitCode === null, `${name}: the stand-in did not keep running`);
+        const r = runSetup(setup);
+        say(`setup /S while ${name} runs: exit ${r.status}: ${r.out}`);
+        check(r.status === 2, `the setup run while ${name} runs exited with ${r.status}, not 2 (aborted)`);
+        check(
+          /is running from/.test(r.out),
+          `the setup did not say ${name} is running: ${JSON.stringify(r.out)}`,
+        );
+        check(proc.exitCode === null && alive(proc.pid as number), `the setup ended ${name}`);
+      } finally {
+        proc.kill();
+        if (proc.exitCode === null) await new Promise((r) => proc.once("exit", r));
+      }
+      if (name === "pluxy.exe") writeFileSync(holder, core0);
+      else rmSync(holder, { force: true });
+    }
+    check(pinOf(folder) === pinned, "the program set changed after the stand-ins");
     const leftovers = [
       join(folder, ".pluxy-update-0123456789abcdef", "bundled", "stub.txt"),
       join(folder, ".pluxy-old-0123456789abcdef-bundled", "stub.txt"),
@@ -1736,6 +1776,17 @@ async function install() {
       "the uninstaller left Task Manager's StartupApproved value",
     );
     check(!regKeyExists(UNINSTALL_KEY), "the uninstaller left the uninstall entry");
+    // Tauri's uninstaller ran its RMDir /REBOOTOK of bundled\ while the later file was still in it
+    // (the hook removes it after): Windows may have a restart-time rename for it, machine-wide.
+    const pending = run("reg", [
+      "query",
+      "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager",
+      "/v",
+      "PendingFileRenameOperations",
+    ]);
+    say(
+      `restart-time renames naming the install folder: ${pending.out.toLowerCase().includes(folder.toLowerCase()) ? "yes" : "none"}`,
+    );
     const after = shortcuts();
     check(
       after.user.length === 0 && after.machine.length === 0,
@@ -1746,27 +1797,34 @@ async function install() {
       `the app's data was removed: ${p.dir} ${existsSync(p.dir)}, ${local} ${existsSync(local)}`,
     );
 
-    // 8. A junction inside bundled\ to a folder outside: uninstalling removes the junction, not
-    // what it points to.
+    // 8. Junctions to a folder outside, inside bundled\ and inside an update's leftover folder:
+    // uninstalling removes the junctions, not what they point to.
     const reinstalled = runSetup(setup);
     check(reinstalled.status === 0, `the second setup exited with ${reinstalled.status}: ${reinstalled.out}`);
-    const outside = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-outside-"));
+    outside = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-outside-"));
     const kept = join(outside, "keep.txt");
     writeFileSync(kept, "not the app's\n");
-    const junction = join(folder, "bundled", "link");
-    const made8 = run("cmd.exe", ["/d", "/c", "mklink", "/J", junction, outside]);
-    check(made8.status === 0 && existsSync(join(junction, "keep.txt")), `making the junction: ${made8.out}`);
+    mkdirSync(join(folder, ".pluxy-update-0123456789abcdef"), { recursive: true });
+    for (const junction of [
+      join(folder, "bundled", "link"),
+      join(folder, ".pluxy-update-0123456789abcdef", "link"),
+    ]) {
+      const made8 = run("cmd.exe", ["/d", "/c", "mklink", "/J", junction, outside]);
+      check(
+        made8.status === 0 && existsSync(join(junction, "keep.txt")),
+        `making the junction ${junction}: ${made8.out}`,
+      );
+    }
     const removed8 = runUninstaller(folder);
     say(
-      `uninstall /S with a junction in bundled\\: exit ${removed8.status}${removed8.out ? `: ${removed8.out}` : ""}`,
+      `uninstall /S with junctions in bundled\\ and .pluxy-update-*: exit ${removed8.status}${removed8.out ? `: ${removed8.out}` : ""}; ${kept} ${existsSync(kept) ? "kept" : "removed"}`,
     );
     check(removed8.status === 0, `the uninstaller exited with ${removed8.status}: ${removed8.out}`);
-    check(existsSync(kept), `the uninstaller followed the junction in bundled\\ and removed ${kept}`);
+    check(existsSync(kept), `the uninstaller followed a junction and removed ${kept}`);
     check(
       !existsSync(folder),
       `the install folder is still there, holding ${existsSync(folder) ? readdirSync(folder).join(", ") : ""}`,
     );
-    rmSync(outside, { recursive: true, force: true });
   } finally {
     running?.kill();
     for (const l of launches) l.kill("SIGKILL");
@@ -1791,6 +1849,7 @@ async function install() {
     if (left.status === 0 && left.out.split(/\r?\n/).filter(Boolean).length <= 1)
       run("reg", ["delete", maker, "/f"]);
     for (const s of [...shortcuts().user]) rmSync(s, { force: true });
+    if (outside) rmSync(outside, { recursive: true, force: true });
     removeWhenFree(root, local);
     if (home) removeWhenFree(home, local);
     p.remove();
