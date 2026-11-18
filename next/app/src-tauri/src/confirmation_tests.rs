@@ -1147,7 +1147,13 @@ fn only_program_images_are_programs() {
 #[cfg(not(target_os = "linux"))]
 fn opening(action: &mut Action, file: &Path, within: &Path) {
     let shown = |p: &Path| PathBuf::from(open_os::plain(&fs::canonicalize(p).unwrap()).unwrap());
-    let (f, w) = (shown(file), shown(within));
+    opening_named(action, &shown(file), &shown(within));
+}
+
+/// `opening`, with file and within named exactly as given, not as a person reads them resolved.
+#[cfg(not(target_os = "linux"))]
+fn opening_named(action: &mut Action, file: &Path, within: &Path) {
+    let (f, w) = (file.to_path_buf(), within.to_path_buf());
     let l = action.launch.as_mut().unwrap();
     #[cfg(windows)]
     {
@@ -1221,6 +1227,232 @@ fn opens_a_file_by_its_extension() {
     b.launch.as_mut().unwrap().opens.as_mut().unwrap().1 = root;
     let e = c.prepare(b, Origin::NativeUi).err().expect("refused");
     assert!(e.contains("cannot be a root"), "{e}");
+    remove(&within);
+    remove(&dir);
+}
+
+/// The open launch of a file `rollout.jsonl` in a folder `2026` inside the within folder
+/// `sessions` of a fixture: the fixture, its confirmations, the launch, the within folder, the
+/// folder between and the file.
+#[cfg(not(target_os = "linux"))]
+fn nested_open() -> (PathBuf, Confirmations, Action, PathBuf, PathBuf, PathBuf) {
+    let (dir, c, mut a) = fixture();
+    let within = dir.join("sessions");
+    let between = within.join("2026");
+    fs::create_dir_all(&between).unwrap();
+    let file = between.join("rollout.jsonl");
+    fs::write(&file, "{}\n").unwrap();
+    opening(&mut a, &file, &within);
+    (dir, c, a, within, between, file)
+}
+
+/// Lets others write path (on: a folder, file or the within folder), or takes that back: on
+/// Windows an Everyone write entry; on macOS group write on a folder between, otherwise an access
+/// list entry. What the refusal then says.
+#[cfg(not(target_os = "linux"))]
+fn others_write(path: &Path, kind: &str, on: bool) -> &'static str {
+    #[cfg(windows)]
+    {
+        let _ = kind;
+        let args: &[&str] = if on {
+            &["/grant", "*S-1-1-0:(W)"]
+        } else {
+            &["/remove:g", "*S-1-1-0"]
+        };
+        assert!(crate::private_windows::tests::icacls(path, args));
+        "must be your own, writable by no one else"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let chmod = |args: &[&str]| {
+            let ok = std::process::Command::new("/bin/chmod")
+                .args(args)
+                .arg(path)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "chmod {args:?} {}", path.display());
+        };
+        match (kind, on) {
+            ("between", true) => chmod(&["775"]),
+            ("between", false) => chmod(&["755"]),
+            ("file", true) => chmod(&["+a", "group:everyone allow write"]),
+            (_, true) => chmod(&["+a", "group:everyone allow add_file"]),
+            (_, false) => chmod(&["-N"]),
+        }
+        if kind == "between" {
+            "must be your own, writable by no one else"
+        } else {
+            "has an access list, which may let others write it"
+        }
+    }
+}
+
+/// Windows and macOS: the file a launch opens, the folder it must be inside and every folder
+/// between them must be the person's own and writable by no one else.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn every_folder_of_an_opened_file_must_be_writable_by_no_one_else() {
+    let (dir, mut c, a, within, between, file) = nested_open();
+    assert!(c.prepare(a.clone(), Origin::NativeUi).is_ok());
+    let shown = |p: &Path| open_os::plain(&fs::canonicalize(p).unwrap()).unwrap();
+    for (path, kind, what) in [
+        (
+            &between,
+            "between",
+            format!("the folder {}", shown(&between)),
+        ),
+        (&within, "within", "a launch's within folder".to_string()),
+        (&file, "file", "the file a launch opens".to_string()),
+    ] {
+        let says = others_write(path, kind, true);
+        let r = c.prepare(a.clone(), Origin::NativeUi);
+        others_write(path, kind, false);
+        let e = r
+            .err()
+            .unwrap_or_else(|| panic!("{kind} others may write was accepted"));
+        assert!(e.contains(&what) && e.contains(says), "{kind}: {e}");
+        assert!(
+            c.prepare(a.clone(), Origin::NativeUi).is_ok(),
+            "{kind} put back"
+        );
+    }
+    remove(&within);
+    remove(&dir);
+}
+
+/// Windows and macOS: a confirmed open is refused at its use once a folder between its file and
+/// the folder it must be inside turned writable by others after the confirmation.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn a_confirmed_open_is_refused_once_a_folder_between_turns_writable() {
+    let (dir, mut c, a, within, between, _) = nested_open();
+    let (id, t) = approve(&mut c, a.clone(), false);
+    assert!(c.consume(&id, &t).is_ok());
+    let (id, t) = approve(&mut c, a, false);
+    let says = others_write(&between, "between", true);
+    let r = c.consume(&id, &t);
+    others_write(&between, "between", false);
+    let e = r.err().expect("refused");
+    assert!(e.contains(says), "{e}");
+    remove(&within);
+    remove(&dir);
+}
+
+/// Windows: the file a launch opens is on a local drive, named by its plain path (`C:\…`, which
+/// Windows reads as the same file), names no alternate data stream and has a path shorter than
+/// 260 characters.
+#[cfg(windows)]
+#[test]
+fn an_opened_file_is_named_by_a_plain_short_local_path() {
+    let (dir, mut c, action) = fixture();
+    let within = dir.join("sessions");
+    fs::create_dir(&within).unwrap();
+    let file = within.join("notes.txt");
+    fs::write(&file, "x").unwrap();
+    let mut a = action.clone();
+    opening(&mut a, &file, &within);
+    assert!(c.prepare(a, Origin::NativeUi).is_ok());
+    let resolved = fs::canonicalize(&within).unwrap();
+    let plain = PathBuf::from(open_os::plain(&resolved).unwrap());
+    // A stream of notes.txt named as a .txt file.
+    let stream = PathBuf::from(format!("{}:x.txt", plain.join("notes.txt").display()));
+    fs::write(&stream, "y").unwrap();
+    let mut long = plain.clone();
+    while long.as_os_str().len() < 260 {
+        long = long.join("a".repeat(60));
+    }
+    fs::create_dir_all(&long).unwrap();
+    fs::write(long.join("notes.txt"), "z").unwrap();
+    // A folder name ending in a dot, which only `\\?\` names: without it, Windows drops the dot.
+    let dotted = resolved.join("odd.");
+    fs::create_dir(&dotted).unwrap();
+    fs::write(dotted.join("notes.txt"), "w").unwrap();
+    for (f, says) in [
+        (stream, "must not name an alternate data stream"),
+        (long.join("notes.txt"), "shorter than 260 characters"),
+        (fs::canonicalize(&file).unwrap(), "by their resolved paths"),
+        (dotted.join("notes.txt"), "Windows reads the same without"),
+    ] {
+        let mut b = action.clone();
+        opening_named(&mut b, &f, &plain);
+        let e = c
+            .prepare(b, Origin::NativeUi)
+            .err()
+            .unwrap_or_else(|| panic!("{} was accepted", f.display()));
+        assert!(e.contains(says), "{}: {e}", f.display());
+    }
+    fs::remove_file(dotted.join("notes.txt")).unwrap();
+    fs::remove_dir(&dotted).unwrap();
+    fs::remove_dir_all(&within).unwrap();
+    remove(&dir);
+}
+
+/// macOS: the file a launch opens has no execute bit and none of the attributes that can choose
+/// another app for it; another attribute is no matter.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_opened_file_has_no_execute_bit_or_app_choosing_attribute() {
+    use std::os::unix::ffi::OsStrExt;
+    let (dir, mut c, a, within, _, file) = nested_open();
+    assert!(c.prepare(a.clone(), Origin::NativeUi).is_ok());
+    let path = std::ffi::CString::new(file.as_os_str().as_bytes()).unwrap();
+    let set = |name: &str, value: &[u8]| {
+        let n = std::ffi::CString::new(name).unwrap();
+        // SAFETY: path and n are NUL-terminated; value holds value.len() bytes.
+        let r = unsafe {
+            libc::setxattr(
+                path.as_ptr(),
+                n.as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        };
+        assert_eq!(r, 0, "setxattr {name}: {}", std::io::Error::last_os_error());
+    };
+    let unset = |name: &str| {
+        let n = std::ffi::CString::new(name).unwrap();
+        // SAFETY: path and n are NUL-terminated.
+        let r = unsafe { libc::removexattr(path.as_ptr(), n.as_ptr(), 0) };
+        assert_eq!(
+            r,
+            0,
+            "removexattr {name}: {}",
+            std::io::Error::last_os_error()
+        );
+    };
+    // Finder's information is 32 bytes, and all zeros reads as none: a type and a creator.
+    let mut finder = [0u8; 32];
+    finder[..8].copy_from_slice(b"TEXTttxt");
+    for (name, value) in [
+        ("com.apple.FinderInfo", &finder[..]),
+        ("com.apple.ResourceFork", b"fork".as_slice()),
+        ("com.apple.LaunchServices.OpenWith", b"bplist00".as_slice()),
+    ] {
+        set(name, value);
+        let r = c.prepare(a.clone(), Origin::NativeUi);
+        unset(name);
+        let e = r.err().unwrap_or_else(|| panic!("{name} was accepted"));
+        assert!(e.contains(&format!("carries {name}")), "{name}: {e}");
+        assert!(
+            c.prepare(a.clone(), Origin::NativeUi).is_ok(),
+            "{name} removed"
+        );
+    }
+    set("com.example.note", b"x");
+    assert!(
+        c.prepare(a.clone(), Origin::NativeUi).is_ok(),
+        "another attribute"
+    );
+    unset("com.example.note");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o744)).unwrap();
+    let r = c.prepare(a.clone(), Origin::NativeUi);
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+    let e = r.err().expect("an execute bit refused");
+    assert!(e.contains("must not be executable"), "{e}");
+    assert!(c.prepare(a, Origin::NativeUi).is_ok());
     remove(&within);
     remove(&dir);
 }
