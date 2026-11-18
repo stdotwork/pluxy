@@ -126,6 +126,8 @@ impl Folder {
             id,
         };
         if let Err(e) = record(dir, path, made.id.clone()) {
+            #[cfg(test)]
+            tests::swap_point(path, "unrecorded");
             remove_folder(&made);
             return Err(e);
         }
@@ -165,7 +167,7 @@ pub(super) fn folder_id(path: &Path) -> Result<String, String> {
         .open(path)
         .map_err(shown)?;
     #[cfg(test)]
-    tests::swap_point(path);
+    tests::swap_point(path, "opened");
     let m = f.metadata().map_err(shown)?;
     // SAFETY: geteuid has no preconditions.
     if !m.is_dir() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o7777 != 0o700 {
@@ -203,7 +205,7 @@ pub(super) fn remove_folder(m: &Made) -> Outcome {
         _ => return Outcome::NotThere,
     }
     #[cfg(test)]
-    tests::swap_point(&m.path);
+    tests::swap_point(&m.path, "checked");
     if empty(f.as_raw_fd(), 0).is_err() {
         return Outcome::Kept;
     }
@@ -326,16 +328,18 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// Run by `remove_folder` between its identity check and emptying the folder, and by
-    /// `folder_id` right after its open, for the path set here only (tests run in parallel).
+    /// Run at the point named, for the path set here only (tests run in parallel): "checked" in
+    /// `remove_folder` between its identity check and emptying the folder, "opened" in
+    /// `folder_id` right after its open, and "unrecorded" in `Folder::new` just before it removes
+    /// a folder whose record failed.
     static SWAP: Mutex<Option<Swap>> = Mutex::new(None);
 
-    /// The path a swap is for, and the swap.
-    type Swap = (PathBuf, fn(&Path));
+    /// The path a swap is for, the point it runs at, and the swap.
+    type Swap = (PathBuf, &'static str, fn(&Path));
 
-    pub(super) fn swap_point(path: &Path) {
+    pub(super) fn swap_point(path: &Path, at: &str) {
         let hook = match &*SWAP.lock().unwrap() {
-            Some((p, f)) if p == path => Some(*f),
+            Some((p, point, f)) if p == path && *point == at => Some(*f),
             _ => None,
         };
         if let Some(f) = hook {
@@ -656,7 +660,7 @@ mod tests {
             fs::create_dir(p).unwrap();
             fs::write(p.join("theirs"), b"z").unwrap();
         }
-        *SWAP.lock().unwrap() = Some((path.clone(), swap));
+        *SWAP.lock().unwrap() = Some((path.clone(), "checked", swap));
         let r = remove_folder(&m);
         *SWAP.lock().unwrap() = None;
         assert_eq!(r, Outcome::NotThere);
@@ -682,7 +686,7 @@ mod tests {
             fs::create_dir(p).unwrap();
             fs::set_permissions(p, fs::Permissions::from_mode(0o700)).unwrap();
         }
-        *SWAP.lock().unwrap() = Some((path.clone(), swap));
+        *SWAP.lock().unwrap() = Some((path.clone(), "opened", swap));
         let id = folder_id(&path);
         *SWAP.lock().unwrap() = None;
         assert_eq!(id.unwrap(), id_of(&path.with_extension("moved")));
@@ -707,7 +711,8 @@ mod tests {
         assert_eq!(remove_folder(&m), Outcome::NotThere);
     }
 
-    // A folder made whose record cannot be written is removed again, and the install told.
+    // A folder made whose record cannot be written is removed again, and the install told; it
+    // goes only while it is still the folder made: a folder put at its name first stays.
     #[test]
     fn a_folder_that_cannot_be_recorded_is_not_left() {
         let tmp = super::super::tests::temp("leftovers-norecord");
@@ -716,6 +721,16 @@ mod tests {
         let path = tmp.join(".pluxy-update-aaaaaaaaaaaaaaaa");
         assert!(Folder::new(&dir, &path).is_err());
         assert!(!path.exists());
+        fn swap(p: &Path) {
+            fs::rename(p, p.with_extension("moved")).unwrap();
+            fs::create_dir(p).unwrap();
+            fs::write(p.join("theirs"), b"z").unwrap();
+        }
+        *SWAP.lock().unwrap() = Some((path.clone(), "unrecorded", swap));
+        let r = Folder::new(&dir, &path);
+        *SWAP.lock().unwrap() = None;
+        assert!(r.is_err());
+        assert!(path.join("theirs").exists(), "not the folder made");
         fs::remove_dir_all(&tmp).unwrap();
     }
 
