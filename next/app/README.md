@@ -1451,6 +1451,13 @@ polls are counted while the window shows, while it is unmapped (as a window mana
 GDK then reports it minimized) and once it is mapped again. Without a tray watcher, closing quits
 without asking, with Minimize to Tray or Ask saved.
 
+One more session in managed mode (`native/privacy.ts`) runs the privacy mode checks
+(`src-tauri/src/native_privacy.rs`) and then the themes checks (`src-tauri/src/native_themes.rs`):
+the T3 Code theme file `ui/tests/fixtures/t3-docs-nightfall.json`, pasted on the Themes page and
+added, paints the window in its canvas colour with the root's `dark` class, the picker lists it,
+`GET /themes` through the app's host has it as `current`, and the next launch paints in it. The
+session ends on the Themes page in that theme.
+
 Then, in a session of its own (`native/instances-session.ts`), with the core program adopted in
 each profile, it launches the app again and again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
 app and core processes), and has the first show its window, also after the window was hidden and

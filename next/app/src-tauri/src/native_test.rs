@@ -46,8 +46,9 @@
 //!
 //! With `PLUXY_APP_TEST_UPDATE` it runs only the signed application update check
 //! (`update_native.rs`).
-//! With `PLUXY_APP_TEST_WINDOW` or `PLUXY_APP_TEST_PRIVACY` it runs that stage of the window or
-//! privacy mode checks instead (`native_window.rs`, `native_privacy.rs`).
+//! With `PLUXY_APP_TEST_WINDOW`, `PLUXY_APP_TEST_PRIVACY` or `PLUXY_APP_TEST_THEMES` it runs that
+//! stage of the window, privacy mode or themes checks instead (`native_window.rs`,
+//! `native_privacy.rs`, `native_themes.rs`).
 //! Before these, as the app starts, it reports its updater gate (`updater_gate`).
 //!
 //! With `PLUXY_APP_TEST_EARLY_EXIT` set it does none of that: the app's setup waits for its
@@ -155,6 +156,8 @@ pub use ingress::{
 };
 #[path = "native_privacy.rs"]
 pub mod privacy;
+#[path = "native_themes.rs"]
+mod themes;
 #[cfg(target_os = "linux")]
 #[path = "native_window.rs"]
 pub mod window;
@@ -711,6 +714,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_PRIVACY") {
         return privacy::run(app, &stage);
+    }
+    if let Ok(stage) = std::env::var("PLUXY_APP_TEST_THEMES") {
+        return themes::run(app, &stage);
     }
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_STARTUP") {
         return startup(app, &stage);
