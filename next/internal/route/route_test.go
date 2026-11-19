@@ -672,6 +672,82 @@ func TestSessionAffinity(t *testing.T) {
 	h.wantAttempts("a", "b", "b")
 }
 
+// affinityConfig reads a routing section as a JSON config holds it.
+func affinityConfig(t *testing.T, routing string) Config {
+	t.Helper()
+	var cfg Config
+	if err := json.Unmarshal([]byte(routing), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// A JSON config that says nothing about session affinity has it on; "enabled": false turns it
+// off, and a ttl_ms alone leaves it on. One session sends three requests in a row.
+func TestSessionAffinityDefault(t *testing.T) {
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	for name, c := range map[string]struct {
+		routing string
+		want    []string
+	}{
+		"no section":    {`{}`, []string{"a", "a", "a"}},
+		"empty section": {`{"session_affinity": {}}`, []string{"a", "a", "a"}},
+		"ttl only":      {`{"session_affinity": {"ttl_ms": 60000}}`, []string{"a", "a", "a"}},
+		"enabled":       {`{"session_affinity": {"enabled": true}}`, []string{"a", "a", "a"}},
+		"disabled":      {`{"session_affinity": {"enabled": false}}`, []string{"a", "b", "a"}},
+		"disabled, ttl": {`{"session_affinity": {"enabled": false, "ttl_ms": 60000}}`, []string{"a", "b", "a"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, affinityConfig(t, c.routing), accts("a", "b")...)
+			h.run(s1)
+			h.run(s1)
+			h.run(s1)
+			h.wantAttempts(c.want...)
+		})
+	}
+}
+
+func TestSessionAffinityDefaultSticks(t *testing.T) {
+	h := newHarness(t, Config{}, accts("a", "b")...)
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	s2 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s2"}
+	h.run(s1) // a, bound
+	h.run(s2) // b, bound
+	h.run(s1)
+	h.run(s1)
+	h.run(s2)
+	h.wantAttempts("a", "b", "a", "a", "b")
+
+	// A request with no session still takes turns.
+	h.attempts = nil
+	none := Request{LLM: llm.Request{Model: "m"}, Tenant: "t"}
+	h.run(none)
+	h.run(none)
+	if len(h.attempts) != 2 || h.attempts[0] == h.attempts[1] {
+		t.Errorf("sessionless attempts = %v, want two different accounts", h.attempts)
+	}
+
+	// An hour after its last request the default lets a session go.
+	h.attempts = nil
+	h.now = h.now.Add(time.Hour + time.Minute)
+	h.run(s1)
+	h.run(s1)
+	if len(h.attempts) != 2 || h.attempts[0] != h.attempts[1] {
+		t.Errorf("after the hour: attempts = %v, want one account", h.attempts)
+	}
+}
+
+func TestSessionAffinityTTLKept(t *testing.T) {
+	h := newHarness(t, affinityConfig(t, `{"session_affinity": {"ttl_ms": 60000}}`), accts("a", "b")...)
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	h.run(s1) // a, bound for a minute
+	h.now = h.now.Add(30 * time.Second)
+	h.run(s1) // a, the binding lasts a minute from the last request
+	h.now = h.now.Add(2 * time.Minute)
+	h.run(s1) // the binding is gone: round robin goes on to b
+	h.wantAttempts("a", "a", "b")
+}
+
 // heldStream is a reply that has started and stays open until closed.
 type heldStream struct {
 	n       int

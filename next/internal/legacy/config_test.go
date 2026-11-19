@@ -1522,3 +1522,20 @@ func TestPayloadNonJSONValues(t *testing.T) {
 		t.Errorf("a match that is .inf: err = %v", err)
 	}
 }
+
+// A config.yaml keeps today's default for session affinity, off: the translated config says so,
+// since a JSON config without the section has it on. With the key on it is as today's core has it.
+func TestSessionAffinityStaysOffWithoutItsKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"{}":                                   `{"enabled": false}`,
+		"routing: {strategy: fill-first}":      `{"enabled": false}`,
+		"routing: {session-affinity: false}":   `{"enabled": false}`,
+		"routing: {session-affinity-ttl: 10m}": `{"enabled": false}`,
+		"routing: {session-affinity: true}":    `{"ttl_ms": 3600000}`,
+		"routing: {session-affinity: true, session-affinity-ttl: 10m}": `{"ttl_ms": 600000}`,
+	} {
+		r := translate(t, in)
+		routing, _ := asJSON(t, r.Config["routing"]).(map[string]any)
+		equalJSON(t, routing["session_affinity"], want)
+	}
+}
