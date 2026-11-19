@@ -65,23 +65,25 @@ runs:
           sudo timeout 600 "${apt[@]}" install -y --download-only $PACKAGES
         }
         if ! fetch; then
-          # The Ubuntu archive's URIs in the sources (http or https, any *.ubuntu.com host, the
-          # /ubuntu path only: not ports' /ubuntu-ports or ESM's /apps/ubuntu).
-          pattern='https?://([a-z0-9-]+\.)*ubuntu\.com/ubuntu(/|[[:space:]]|$)'
-          mapfile -t sources < <(sudo grep -lE "$pattern" /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null)
+          # Set aside the sources of the Ubuntu archive: those naming an *.ubuntu.com host's /ubuntu
+          # path (not ports' /ubuntu-ports or ESM's /apps/ubuntu), and those reading a mirror list
+          # (GitHub's image, which Namespace's runners also use, names
+          # mirror+file:/etc/apt/apt-mirrors.txt). Other sources (Microsoft's, Google's) stay.
+          pattern='https?://([a-z0-9-]+\.)*ubuntu\.com/ubuntu([/[:space:]]|$)|mirror\+file:'
+          mapfile -t sources < <(sudo grep -lE "$pattern" /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null)
           if [ "${#sources[@]}" -eq 0 ]; then
-            echo "::error::apt could not fetch the packages, and no Ubuntu archive source was found to point elsewhere"
+            echo "::error::apt could not fetch the packages, and no Ubuntu archive source was found to replace"
             exit 1
           fi
-          originals="$(mktemp -d)"
-          for f in "${sources[@]}"; do sudo cp -a "$f" "$originals/$(basename "$f")"; done
+          aside="$(mktemp -d)"
+          for f in "${sources[@]}"; do echo "setting aside $f"; sudo mv "$f" "$aside/"; done
+          . /etc/os-release
           fetched=false
           for mirror in $FALLBACK_MIRRORS; do
             echo "::warning::apt could not fetch the packages from the runner's Ubuntu mirrors; trying $mirror"
-            for f in "${sources[@]}"; do
-              sudo cp "$originals/$(basename "$f")" "$f"
-              sudo sed -E -i "s#$pattern#$mirror\\2#g" "$f"
-            done
+            printf 'Types: deb\nURIs: %s\nSuites: %s %s-updates %s-backports %s-security\nComponents: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' \
+              "$mirror" "$VERSION_CODENAME" "$VERSION_CODENAME" "$VERSION_CODENAME" "$VERSION_CODENAME" |
+              sudo tee /etc/apt/sources.list.d/pluxy-fallback.sources
             if fetch; then fetched=true; break; fi
           done
           if [ "$fetched" != true ]; then
