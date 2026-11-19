@@ -90,9 +90,10 @@ func (r *recorder) count(typ string) int {
 	return n
 }
 
-// malformedReply writes a reply that ends with MALFORMED_FUNCTION_CALL, after a thought (which a
-// stream sends first) and, with text, some answer text.
-func malformedReply(w http.ResponseWriter, stream bool, text string) {
+// malformedReply writes a reply that ends with MALFORMED_FUNCTION_CALL. A non-stream reply always
+// carries a thought; a stream sends one first only with thought, and then, with text, some answer
+// text.
+func malformedReply(w http.ResponseWriter, stream, thoughtFirst bool, text string) {
 	thought := `{"text":"I should call get_weather.","thought":true,"thoughtSignature":"CiQbadAttempt"}`
 	finish := `{"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"MALFORMED_FUNCTION_CALL",` +
 		`"finishMessage":"Malformed function call: print(default_api.get_weather(city=))","index":0}],` +
@@ -103,7 +104,9 @@ func malformedReply(w http.ResponseWriter, stream bool, text string) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
-	io.WriteString(w, `data: {"candidates":[{"content":{"role":"model","parts":[`+thought+`]},"index":0}],"responseId":"bad"}`+"\n\n")
+	if thoughtFirst {
+		io.WriteString(w, `data: {"candidates":[{"content":{"role":"model","parts":[`+thought+`]},"index":0}],"responseId":"bad"}`+"\n\n")
+	}
 	if text != "" {
 		t, _ := json.Marshal(text)
 		io.WriteString(w, `data: {"candidates":[{"content":{"role":"model","parts":[{"text":`+string(t)+`}]},"index":0}],"responseId":"bad"}`+"\n\n")
@@ -114,7 +117,7 @@ func malformedReply(w http.ResponseWriter, stream bool, text string) {
 // A reply that ends with MALFORMED_FUNCTION_CALL is asked for again once, through the
 // extension's real request path against the fake Google. The client sees only the retry's reply;
 // if the retry fails the same way, it gets an error that says so. A stream that has already sent
-// answer text is not retried (the client has it), and ends with the error.
+// content, a thought or answer text, is not retried (the client has it), and ends with the error.
 func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 	native := &llm.Native{Format: llm.FormatGeminiGenerate, Body: json.RawMessage(`{"contents":[{"role":"user","parts":[{"text":"Weather in Oslo?"}]}]}`)}
 	items := []llm.Item{{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "Weather in Oslo?"}}}}
@@ -123,14 +126,16 @@ func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 		"messages": {Native: &llm.Native{Format: llm.FormatAnthropicMessages, Body: json.RawMessage(`{}`)}, Items: items},
 	}
 	for _, c := range []struct {
-		name      string
-		stream    bool
-		from      string // a client format other than Gemini's: "chat" or "messages"
-		malformed int    // how many replies end malformed before a good one
-		text      string // answer text the malformed stream sends first
-		requests  int
-		wantText  string
-		wantError bool
+		name         string
+		stream       bool
+		from         string // a client format other than Gemini's: "chat" or "messages"
+		malformed    int    // how many replies end malformed before a good one
+		thought      bool   // the malformed stream sends a thought first
+		text         string // answer text the malformed stream sends first
+		requests     int
+		wantText     string
+		wantThoughts int // reasoning deltas the client should get
+		wantError    bool
 	}{
 		{name: "non-stream, retry succeeds", malformed: 1, requests: 2, wantText: "Hello"},
 		{name: "stream, retry succeeds", stream: true, malformed: 1, requests: 2, wantText: "Hello"},
@@ -141,6 +146,8 @@ func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 		{name: "chat stream, retry fails", stream: true, from: "chat", malformed: 2, requests: 2, wantError: true},
 		{name: "messages, retry fails", from: "messages", malformed: 2, requests: 2, wantError: true},
 		{name: "stream after answer text", stream: true, malformed: 1, text: "Let me check. ", requests: 1, wantText: "Let me check. ", wantError: true},
+		{name: "stream after a thought", stream: true, malformed: 1, thought: true, requests: 1, wantThoughts: 1, wantError: true},
+		{name: "chat stream after a thought", stream: true, from: "chat", malformed: 1, thought: true, requests: 1, wantThoughts: 1, wantError: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			srv := geminitest.New(t)
@@ -148,7 +155,7 @@ func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 			srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
 				n++
 				if n <= c.malformed {
-					malformedReply(w, req.Stream, c.text)
+					malformedReply(w, req.Stream, c.thought, c.text)
 					return
 				}
 				if req.Stream {
@@ -178,8 +185,8 @@ func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 			if n := rec.count(llm.EventResponseStart); n > 1 {
 				t.Errorf("%d response starts, want at most 1", n)
 			}
-			if n := rec.count(llm.EventReasoningDelta); c.wantText == "Hello" && n != 0 {
-				t.Errorf("the client got %d reasoning deltas of the reply that was asked for again", n)
+			if n := rec.count(llm.EventReasoningDelta); n != c.wantThoughts {
+				t.Errorf("the client got %d reasoning deltas, want %d", n, c.wantThoughts)
 			}
 			for _, ev := range rec.events {
 				// The dropped reply's thought signature must not reach the client, which would

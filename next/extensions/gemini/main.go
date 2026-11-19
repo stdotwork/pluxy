@@ -19,8 +19,9 @@
 //
 // A Gemini GenerateContent request is sent as the client wrote it, thought signatures included,
 // apart from the repairs Google needs (tool schemas in schema.go; turns and the order of function
-// responses in turns.go). A reply that ends with MALFORMED_FUNCTION_CALL before the client has seen
-// any of it is asked for once more (relayReply). Requests in
+// responses in turns.go). A reply that ends with MALFORMED_FUNCTION_CALL before the client has been
+// sent any content (a thought, answer text or a call) is asked for once more (relayReply); a
+// stream is never held back past its first content, so reasoning streams live. Requests in
 // other formats (Chat Completions, Responses, Messages) are translated to GenerateContent, with
 // the client's reasoning effort turned into Gemini's thinking settings (thinking.go).
 package main
@@ -223,10 +224,10 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 }
 
 // relayReply sends one upstream reply to send and closes its body. With mayRetry, a reply that
-// ends with MALFORMED_FUNCTION_CALL before send has been given any of it is not sent: again
-// reports that it should be asked for once more. A stream is held back from send until it shows
-// answer text or a function call (holding), so a reply that fails before that can still be asked
-// for again.
+// ends with MALFORMED_FUNCTION_CALL before send has been given any content is not sent: again
+// reports that it should be asked for once more. A stream is held back from send only until its
+// first content event (holding), so a reply that fails before that can still be asked for again,
+// while one that fails after content went out reaches the client as the error.
 func relayReply(ctx context.Context, resp *http.Response, send sender, mayRetry bool) (again bool, err error) {
 	defer resp.Body.Close()
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
@@ -264,18 +265,13 @@ func relayReply(ctx context.Context, resp *http.Response, send sender, mayRetry 
 	return false, nil
 }
 
-// maxHeld bounds the bytes of a stream holding keeps back; past it the stream goes to the client
-// and is no longer asked for again.
-const maxHeld = 1 << 20
-
-// holding keeps a stream's events back from out until the reply shows answer text or a function
-// call, ends, or holds maxHeld bytes; then it sends what it held and every event after it. Until
-// then the reply can be dropped and asked for again without the client seeing any of it. Thoughts
-// are held too, so a client sees a reply's reasoning only once its answer starts.
+// holding keeps back from out the events that carry no content (the response start and native
+// chunks that decode to nothing) until the first content event of any kind (a thought, answer
+// text or a call) or the end of the reply; then it sends what it held and every event after it.
+// Until then the reply can be dropped and asked for again without the client seeing any of it.
 type holding struct {
 	out  sender
 	held []llm.Event
-	size int
 	open bool // the held events have been sent
 }
 
@@ -284,12 +280,10 @@ func (h *holding) Send(ev llm.Event) error {
 		return h.out.Send(ev)
 	}
 	h.held = append(h.held, ev)
-	h.size += len(ev.Raw) + len(ev.Delta)
-	answer := ev.Type == llm.EventTextDelta || (ev.Type == llm.EventItemStart && ev.Item != nil && ev.Item.Kind == llm.ItemToolCall)
-	if answer || ev.Terminal() || h.size > maxHeld {
-		return h.flush()
+	if ev.Type == llm.EventResponseStart || ev.Type == llm.EventNative {
+		return nil
 	}
-	return nil
+	return h.flush()
 }
 
 // flush sends the held events and lets every later one through.
