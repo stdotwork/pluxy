@@ -9,8 +9,11 @@
       0
     ],
     "programs": {
+      "darwin/amd64": "bin/claude-code",
+      "darwin/arm64": "bin/claude-code",
       "linux/amd64": "bin/claude-code",
-      "linux/arm64": "bin/claude-code"
+      "linux/arm64": "bin/claude-code",
+      "windows/amd64": "bin/claude-code.exe"
     },
     "operations": [
       {

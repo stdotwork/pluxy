@@ -1,0 +1,268 @@
+name: CI
+
+# The checks every pull request and every merge-queue group must pass. The `gate` job is the one
+# check `main` requires. A required check from a path-filtered workflow would stay pending forever
+# on a change outside its paths, and `merge_group` events take no path filter. So this workflow
+# always runs: it works out which folders the change touches, runs those folders' workflows as
+# reusable workflows, and `gate` passes only when every one it ran passed. Each of those
+# workflows also runs by itself on pushes to `main` and by hand.
+
+on:
+  pull_request:
+    # labeled: adding the full-ci label runs the heavy jobs (see the changes job).
+    types: [opened, synchronize, reopened, labeled]
+  merge_group:
+    types: [checks_requested]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Lists the files the change touches: for a pull request, the same three-dot diff its path
+  # filters used (base...head); for a merge group, what it adds to its parent commit (base_sha):
+  # the group ahead of it in the queue, or the base branch for the first group. The PRs ahead were
+  # checked by their own groups, and the queue merges a group only when every group ahead of it
+  # passed too. That holds only while the ruleset's merge queue requires all groups to pass
+  # (grouping strategy ALLGREEN, "Only merge non-failing pull requests"); with HEADGREEN a PR
+  # ahead could merge on this group's run, which skipped what that PR changed.
+  # Each output says whether a workflow's paths were touched, using the paths that workflow's
+  # own pull_request trigger had. A change to this file runs them all.
+  # next-app-platforms (the Windows and macOS jobs) is the exception: it runs only for a change to
+  # what those jobs build or read. That is next/app, next/ui (the kit the window is built from),
+  # the protocol's app-manifest cases the app's Rust tests read, go.mod and go.sum, and the Go
+  # packages the app's tests build and run: e2e/panelcore, e2e/testext and cmd/pluxy, with
+  # everything they import on Linux, Windows and macOS. `go list` works the packages out from the
+  # code being tested, so a new import counts at once. Its native jobs build the app and the kit,
+  # and some of their sessions start a test core with `go run ./e2e/panelcore`, which builds those
+  # same Go packages. So the native jobs run for next/app, next/ui, the workflows, go.mod and
+  # go.sum, and a change to those Go packages; a change that reaches only the app-manifest cases
+  # skips them (next-app-platforms-native).
+  # next-app-tools-wsl is not a workflow: it says whether next-app-tools-platforms.yml runs its WSL
+  # jobs.
+  changes:
+    # In a merge group, the runner PLUXY_GATE_RUNNER names when it is set (AGENTS.md, "Where jobs
+    # run"): this job and gate take seconds but every group waits on both.
+    runs-on: ${{ github.event_name == 'merge_group' && vars.PLUXY_GATE_RUNNER && fromJSON(vars.PLUXY_GATE_RUNNER) || 'ubuntu-latest' }}
+    outputs:
+      app: ${{ steps.paths.outputs.app }}
+      next-ci: ${{ steps.paths.outputs.next-ci }}
+      next-app: ${{ steps.paths.outputs.next-app }}
+      # Set by the paths step, or else by the go-packages step, which runs only when the paths
+      # step left it open.
+      next-app-platforms: ${{ steps.paths.outputs.next-app-platforms || steps.go-packages.outputs.next-app-platforms }}
+      next-app-platforms-native: ${{ (steps.paths.outputs.next-app-platforms-native == 'true' || steps.go-packages.outputs.next-app-platforms == 'true') && 'true' || 'false' }}
+      next-app-tools-platforms: ${{ steps.paths.outputs.next-app-tools-platforms }}
+      next-app-tools-wsl: ${{ steps.paths.outputs.next-app-tools-wsl }}
+      next-app-tools-pack: ${{ steps.paths.outputs.next-app-tools-pack }}
+      # Whether next-app.yml runs its native shards: see FULL below.
+      next-app-native: ${{ steps.paths.outputs.full }}
+    steps:
+      # Full history for the merge base, without file contents: the diff needs only trees.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: .github
+          persist-credentials: false
+      - name: Work out which workflows to run
+        id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
+          # The heavy jobs, next-app.yml's Linux native build and shards and all of next-app-platforms.yml
+          # (Windows and macOS), are half of the hosted runner minutes. A merge group always runs
+          # them; a pull request only with the full-ci label (adding it reruns this workflow), so
+          # the queue gets those minutes. Nothing merges unchecked: every group runs them.
+          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = merge_group ]; then
+            range=("$GROUP_BASE...$GROUP_HEAD")
+          else
+            range=("$PR_BASE...$PR_HEAD")
+          fi
+          # --no-renames lists a renamed file under its old and its new path, as path filters see it;
+          # -z keeps git from quoting unusual paths.
+          git diff --no-renames --name-only -z "${range[@]}" > "$RUNNER_TEMP/changed"
+          echo "$(tr -cd '\0' < "$RUNNER_TEMP/changed" | wc -c) changed files"
+          declare -A run=()
+          for w in app next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-wsl next-app-tools-pack; do run[$w]=false; done
+          native=false
+          while IFS= read -r -d '' path; do
+            case $path in
+              .github/workflows/ci.yml) for w in "${!run[@]}"; do run[$w]=true; done ;;
+            esac
+            case $path in
+              next/app/* | next/ui/* | next/go.mod | next/go.sum | .github/workflows/next-app-platforms.yml | \
+                .github/workflows/ci.yml)
+                native=true ;;
+            esac
+            case $path in extensions/app/* | .github/workflows/app-ci.yml) run[app]=true ;; esac
+            case $path in next/* | .github/workflows/next-ci.yml) run[next-ci]=true ;; esac
+            case $path in next/* | .github/workflows/next-app.yml) run[next-app]=true ;; esac
+            case $path in
+              next/app/* | next/ui/* | next/protocol/testdata/app-manifests/* | next/go.mod | next/go.sum | \
+                .github/workflows/next-app-platforms.yml)
+                run[next-app-platforms]=true ;;
+              # Any other file in next/ may be in one of those Go packages: the go-packages step
+              # decides.
+              next/*) printf '%s\0' "$path" >> "$RUNNER_TEMP/next-other" ;;
+            esac
+            # The desktop app's files that exist for WSL run this workflow too, for its WSL jobs.
+            case $path in next/app-tools/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
+            # What the WSL jobs build and run: pluxy/wsl, pluxy-program, pluxy-transactions (with its
+            # fixture writer) and pluxy-files, which it depends on, the workspace's manifest and lock,
+            # pluxy/claude-code, and the desktop app's files that exist for WSL (its environments
+            # module and its wsl-named files). The app's general host files (program, vault, spawn,
+            # launcher, route) are left out: they change often, and their Linux and unit tests guard them.
+            case $path in
+              next/app-tools/wsl/* | next/app-tools/lib/program/* | next/app-tools/lib/transactions/* | next/app-tools/lib/files/* | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock | next/app-tools/claude-code/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | .github/workflows/next-app-tools-platforms.yml)
+                run[next-app-tools-wsl]=true ;;
+            esac
+            # A tool's manifest, and the workspace's and every member's Cargo.toml (`*` matches `/`
+            # too, so lib/<name>/Cargo.toml is one), where a program's [[bin]] is named.
+            case $path in
+              next/app-tools/*/pluxy-extension.json | next/app-tools/Cargo.toml | next/app-tools/*/Cargo.toml | next/app-tools/Cargo.lock | next/cmd/pluxy-pack/* | .github/workflows/next-app-tools-pack.yml)
+                run[next-app-tools-pack]=true ;;
+            esac
+          done < "$RUNNER_TEMP/changed"
+          if [ "$FULL" != true ]; then
+            run[next-app-platforms]=false
+            native=false
+            echo "heavy jobs left to the merge queue (no full-ci label)"
+          fi
+          echo "full=$FULL" | tee -a "$GITHUB_OUTPUT"
+          if [ "$FULL" = true ] && [ "${run[next-app-platforms]}" = false ] && [ -s "$RUNNER_TEMP/next-other" ]; then
+            unset 'run[next-app-platforms]'
+            echo "next-app-platforms: left to the go-packages step"
+          fi
+          for w in "${!run[@]}"; do
+            echo "$w=${run[$w]}" | tee -a "$GITHUB_OUTPUT"
+          done
+          echo "next-app-platforms-native=$native" | tee -a "$GITHUB_OUTPUT"
+      # The checkout above has only .github; go list needs next/ as tested.
+      - name: Check out next/
+        if: steps.paths.outputs.next-app-platforms == ''
+        run: git sparse-checkout add next
+      - name: Set up Go
+        if: steps.paths.outputs.next-app-platforms == ''
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: false
+      # Fails, and so fails the gate, when go list cannot load those packages.
+      - name: Work out whether the platform jobs build a changed file
+        id: go-packages
+        if: steps.paths.outputs.next-app-platforms == ''
+        working-directory: next
+        run: |
+          set -euo pipefail
+          # Every system and architecture the platform jobs and this check run on, with and without
+          # cgo, so a file kept to one of them by a build constraint counts too.
+          for os in linux windows darwin; do
+            for arch in amd64 arm64; do
+              for cgo in 0 1; do
+                GOOS=$os GOARCH=$arch CGO_ENABLED=$cgo go list -deps \
+                  -f '{{if and .Module .Module.Main}}{{.Dir}}{{end}}' \
+                  ./e2e/panelcore ./e2e/testext ./cmd/pluxy
+              done
+            done
+          done | sort -u > "$RUNNER_TEMP/dirs"
+          # Repository paths of the package folders; a file anywhere under one counts (embedded files).
+          while IFS= read -r dir; do
+            case $dir in
+              "$PWD") echo next ;;
+              "$PWD"/*) echo "next/${dir#"$PWD"/}" ;;
+            esac
+          done < "$RUNNER_TEMP/dirs" > "$RUNNER_TEMP/prefixes"
+          echo "$(wc -l < "$RUNNER_TEMP/prefixes") package folders"
+          hit=false
+          while IFS= read -r -d '' path; do
+            # go build and go run leave out test files.
+            case $path in *_test.go) continue ;; esac
+            while IFS= read -r dir; do
+              case $path in "$dir"/*) hit=true; echo "$path is in $dir"; break 2 ;; esac
+            done < "$RUNNER_TEMP/prefixes"
+          done < "$RUNNER_TEMP/next-other"
+          echo "next-app-platforms=$hit" | tee -a "$GITHUB_OUTPUT"
+
+  app:
+    name: App CI
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    uses: ./.github/workflows/app-ci.yml
+
+  next-ci:
+    name: Next CI
+    needs: changes
+    if: needs.changes.outputs.next-ci == 'true'
+    uses: ./.github/workflows/next-ci.yml
+
+  next-app:
+    name: Next app
+    needs: changes
+    if: needs.changes.outputs.next-app == 'true'
+    uses: ./.github/workflows/next-app.yml
+    with:
+      skip-native: ${{ needs.changes.outputs.next-app-native != 'true' }}
+
+  next-app-platforms:
+    name: Next app platforms
+    needs: changes
+    if: needs.changes.outputs.next-app-platforms == 'true'
+    uses: ./.github/workflows/next-app-platforms.yml
+    with:
+      skip-native: ${{ needs.changes.outputs.next-app-platforms-native != 'true' }}
+
+  next-app-tools-platforms:
+    name: Next app tools platforms
+    needs: changes
+    if: needs.changes.outputs.next-app-tools-platforms == 'true'
+    uses: ./.github/workflows/next-app-tools-platforms.yml
+    with:
+      wsl: ${{ needs.changes.outputs.next-app-tools-wsl == 'true' }}
+
+  next-app-tools-pack:
+    name: Next app tools pack
+    needs: changes
+    if: needs.changes.outputs.next-app-tools-pack == 'true'
+    uses: ./.github/workflows/next-app-tools-pack.yml
+
+  # The required check. It runs even when the run is cancelled (always()), so a cancelled run
+  # fails it instead of leaving it skipped, which would count as passing. It passes only when
+  # the changes job passed and every workflow it chose passed; a workflow it did not choose
+  # must have been skipped. A job a chosen workflow skips itself (next-app-tools-platforms' WSL
+  # jobs when next-app-tools-wsl is false) is not one of these: the workflow's result is still
+  # its own, and only success passes.
+  gate:
+    if: always()
+    needs:
+      - changes
+      - app
+      - next-ci
+      - next-app
+      - next-app-platforms
+      - next-app-tools-platforms
+      - next-app-tools-pack
+    # As changes: PLUXY_GATE_RUNNER in a merge group.
+    runs-on: ${{ github.event_name == 'merge_group' && vars.PLUXY_GATE_RUNNER && fromJSON(vars.PLUXY_GATE_RUNNER) || 'ubuntu-latest' }}
+    steps:
+      - name: Every chosen workflow passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
+          jq -e '.changes.result == "success" and (.changes.outputs as $run |
+            del(.changes) | to_entries | length > 0 and all(.[];
+              if $run[.key] == "true" then .value.result == "success"
+              elif $run[.key] == "false" then .value.result == "skipped"
+              else false end))' <<<"$NEEDS" > /dev/null

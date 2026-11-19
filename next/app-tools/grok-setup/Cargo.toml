@@ -1,0 +1,13 @@
+[package]
+name = "grok-setup"
+version = "0.1.0"
+description = "Sets up and starts Grok Build for pluxy's desktop app"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pluxy-files = { path = "../lib/files" }
+pluxy-program = { path = "../lib/program" }
+pluxy-transactions = { path = "../lib/transactions", features = ["toml"] }
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }

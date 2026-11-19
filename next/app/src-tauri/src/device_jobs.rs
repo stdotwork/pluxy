@@ -244,7 +244,7 @@ pub(super) fn decls(id: &str, app: &App) -> Result<(Vec<ProduceDecl>, Vec<Consum
 }
 
 /// The kinds, for a native confirmation: empty when there are none.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(native_stack), allow(dead_code))]
 pub(super) fn listing(produces: &[ProduceDecl], consumes: &[ConsumeDecl]) -> String {
     let mut out = String::new();
     if !produces.is_empty() {

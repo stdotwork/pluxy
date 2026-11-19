@@ -764,6 +764,12 @@ impl Store {
             fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
                 .map_err(|e| e.to_string())?;
         }
+        // macOS: no extended access list entry on the folder either, so the new file inherits
+        // none (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        fs::File::open(dir)
+            .and_then(|d| crate::private_macos::clear_entries(&d))
+            .map_err(|e| e.to_string())?;
         let tmp = dir.join(format!(".{FILE}.{}", random_id()?));
         let result = (|| {
             let mut f = fs::OpenOptions::new()

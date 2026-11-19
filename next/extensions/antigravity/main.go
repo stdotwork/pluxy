@@ -147,6 +147,11 @@ func streamOnly(model string) bool {
 }
 
 func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+	return generateTo(ctx, call, out)
+}
+
+// generateTo is generate writing to any sender of events, which a test can stand in for.
+func generateTo(ctx context.Context, call sdk.Call, out interface{ Send(llm.Event) error }) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
 		return err
@@ -159,7 +164,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if data.ProjectID == "" {
 		return &llm.Error{Code: llm.CodeAuth, Message: "the account's login names no Google Cloud project; log in again", Scope: llm.ScopeCredential}
 	}
-	inner, tr, err := buildBody(call.Request)
+	inner, tr, added, err := buildBody(call.Request)
 	if err != nil {
 		return err
 	}
@@ -196,9 +201,9 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return upstreamError(resp, call.Request.Model)
 	}
-	send := &reporting{Stream: out, tr: tr}
+	send := &reporting{out: out, tr: tr}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return relayStream(ctx, resp.Body, send)
+		return relayStream(ctx, resp.Body, send, added)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
 	if err != nil {
@@ -207,7 +212,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
-	events, err := geminigenerate.DecodeResponse(unwrap(raw))
+	events, err := geminigenerate.DecodeResponse(added.strip(unwrap(raw)))
 	if err != nil {
 		return err
 	}
@@ -233,8 +238,8 @@ func unwrap(raw []byte) []byte {
 
 // reporting adds the translation report to the reply's response.start event.
 type reporting struct {
-	*sdk.Stream
-	tr *llm.Translation
+	out interface{ Send(llm.Event) error }
+	tr  *llm.Translation
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -243,13 +248,14 @@ func (r *reporting) Send(ev llm.Event) error {
 		info.Translation = r.tr
 		ev.Response = &info
 	}
-	return r.Stream.Send(ev)
+	return r.out.Send(ev)
 }
 
 // relayStream decodes the upstream stream and sends each event as soon as it is decoded. A
 // blocked send blocks the next upstream read. An error event after the first sent event is not
-// retry-safe, as the model already ran.
-func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }) error {
+// retry-safe, as the model already ran. The placeholders added to the request's functions are
+// removed from the calls first, so no client sees one.
+func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }, added placeholders) error {
 	r := sse.NewReader(body)
 	dec := geminigenerate.NewStreamDecoder()
 	sent := false
@@ -276,7 +282,7 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 				ge.Retryable = ge.Retryable && !sent
 				return ge
 			}
-			events, err = dec.Decode(unwrap([]byte(e.Data)))
+			events, err = dec.Decode(added.strip(unwrap([]byte(e.Data))))
 			if err != nil {
 				return err
 			}

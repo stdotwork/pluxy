@@ -805,14 +805,19 @@ fn run_bounded(
             })
     };
     let file = |p: &Path| fs::File::create(p).map_err(|e| format!("{}: {e}", p.display()));
-    let mut child = command
+    command
         .stdin(std::process::Stdio::null())
         .stdout(file(out)?)
-        .stderr(file(errors)?)
-        .spawn()
-        .map_err(|e| {
-            format!("{what}: unsquashfs (package squashfs-tools) checks AppImages: {e}")
-        })?;
+        .stderr(file(errors)?);
+    // On Windows std passes on every inheritable handle: not while one the host is starting a
+    // process with is (`owned::windows`).
+    #[cfg(windows)]
+    let spawned = crate::owned::windows::std_spawn(command);
+    #[cfg(not(windows))]
+    let spawned = command.spawn();
+    let mut child = spawned.map_err(|e| {
+        format!("{what}: unsquashfs (package squashfs-tools) checks AppImages: {e}")
+    })?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(UNPACK_SECONDS);
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|e| format!("{what}: {e}"))? {

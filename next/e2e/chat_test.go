@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -161,6 +162,33 @@ func startCore(t *testing.T, u *upstream, options ...func(cfg map[string]any)) s
 	return base
 }
 
+// lineWriter is an io.Writer that passes each complete line written to it to fn, without its line
+// ending. exec calls Write from one goroutine, and flush is called after Wait returns.
+type lineWriter struct {
+	buf []byte
+	fn  func(line string)
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		w.fn(strings.TrimSuffix(string(w.buf[:i]), "\r"))
+		w.buf = w.buf[i+1:]
+	}
+}
+
+// flush passes on a last line that has no line ending.
+func (w *lineWriter) flush() {
+	if len(w.buf) > 0 {
+		w.fn(string(w.buf))
+		w.buf = nil
+	}
+}
+
 // coreLog collects the lines core writes to stderr.
 type coreLog struct {
 	mu    sync.Mutex
@@ -278,36 +306,39 @@ func startCoreBin(t *testing.T, bin, path string, args ...string) (string, *core
 	cmd := exec.CommandContext(ctx, bin, append([]string{"-config", path}, args...)...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 10 * time.Second
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
+	addr := make(chan string, 1)
+	// Core's stderr goes through a writer, so os/exec copies it on a goroutine of its own and
+	// Wait does not return before it has copied every line. Each line is logged before the
+	// test's cleanup is done, never after the test has ended.
+	w := &lineWriter{fn: func(line string) {
+		t.Logf("core: %.4096s", line)
+		logs.add(line)
+		if rest, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
+			select {
+			case addr <- rest:
+			default:
+			}
+		}
+	}}
+	cmd.Stderr = w
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		cancel()
-		_ = cmd.Wait()
-	})
-	addr := make(chan string, 1)
+	exited := make(chan struct{})
 	go func() {
-		defer close(addr) // core exited
-		sc := bufio.NewScanner(stderr)
-		// A line can hold a whole reply's translation report; a scanner that stopped at a long
-		// line would leave core blocked writing its log.
-		sc.Buffer(nil, 256<<20)
-		for sc.Scan() {
-			line := sc.Text()
-			t.Logf("core: %.4096s", line)
-			logs.add(line)
-			if rest, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
-				select {
-				case addr <- rest:
-				default:
-				}
-			}
-		}
+		_ = cmd.Wait()
+		w.flush()
+		close(addr) // core exited
+		close(exited)
 	}()
+	t.Cleanup(func() {
+		// A connection the client dialled but never sent a request on counts as busy to
+		// core's http.Server.Shutdown until it is 5 s old; closing the idle ones lets core
+		// stop at once.
+		http.DefaultClient.CloseIdleConnections()
+		cancel()
+		<-exited
+	})
 	select {
 	case a, ok := <-addr:
 		if !ok {
@@ -658,12 +689,14 @@ func TestClientDisconnectCancelsUpstream(t *testing.T) {
 // object with fields the model has no place for. The reviewer's case: an 8 MiB fingerprint and
 // 60 MiB of text came back as a 200 of 71,303,351 bytes.
 func TestNonStreamingChatCountsKeptFields(t *testing.T) {
+	t.Parallel()
 	big := strings.Repeat("f", 8<<20)
 	for _, c := range []struct{ name, first, usage string }{
 		{"fingerprint", fmt.Sprintf(`,"system_fingerprint":%q`, big), ""},
 		{"usage", "", fmt.Sprintf(`{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"extra":%q}`, big)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			u := newUpstream(t)
 			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -695,12 +728,14 @@ func TestNonStreamingChatCountsKeptFields(t *testing.T) {
 // The upstream's response id and model, which Messages and Gemini replies carry, count toward
 // core's 64 MiB limit on a non-streamed reply.
 func TestNonStreamingReplyCountsIDAndModel(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ path, body string }{
 		{"/v1/messages", `{"model":"gpt-test","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`},
 		{"/v1beta/models/gpt-test:generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`},
 	} {
 		path, body := c.path, c.body
 		t.Run(path, func(t *testing.T) {
+			t.Parallel()
 			u := newUpstream(t)
 			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -729,6 +764,7 @@ func TestNonStreamingReplyCountsIDAndModel(t *testing.T) {
 // The upstream's usage object, which Responses, Messages and Gemini aggregators keep with fields
 // they have no place for, counts toward core's 64 MiB limit on a non-streamed reply.
 func TestNonStreamingReplyCountsUsage(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ path, body string }{
 		{"/v1/responses", `{"model":"gpt-test","input":"hi"}`},
 		{"/v1/messages", `{"model":"gpt-test","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`},
@@ -736,6 +772,7 @@ func TestNonStreamingReplyCountsUsage(t *testing.T) {
 	} {
 		path, body := c.path, c.body
 		t.Run(path, func(t *testing.T) {
+			t.Parallel()
 			u := newUpstream(t)
 			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -765,6 +802,7 @@ func TestNonStreamingReplyCountsUsage(t *testing.T) {
 // Responses, Messages and Gemini clients collect the reply in different aggregators; all are
 // bounded.
 func TestNonStreamingReplyIsBounded(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ path, body string }{
 		{"/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`},
 		{"/v1/responses", `{"model":"gpt-test","input":"hi"}`},
@@ -773,6 +811,7 @@ func TestNonStreamingReplyIsBounded(t *testing.T) {
 	} {
 		path, body := c.path, c.body
 		t.Run(path, func(t *testing.T) {
+			t.Parallel()
 			const total = 128 << 20 // twice core's 64 MiB limit
 			u := newUpstream(t)
 			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {

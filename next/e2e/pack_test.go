@@ -1,14 +1,20 @@
 package e2e
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
+	"maps"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -127,6 +133,7 @@ func packCore(t *testing.T, index string) string {
 // The pack tool writes an archive for every extension and platform it is asked for, and a
 // bundled index that pins each archive; a fresh core installs and enables every one.
 func TestPackToolBundlesEveryExtension(t *testing.T) {
+	t.Parallel()
 	manifests := extensionManifests(t)
 	bin := buildPackTool(t)
 	out := t.TempDir()
@@ -203,6 +210,7 @@ func TestPackToolBundlesEveryExtension(t *testing.T) {
 
 // Packing the same extensions twice gives byte-identical archives and index.
 func TestPackToolIsReproducible(t *testing.T) {
+	t.Parallel()
 	bin := buildPackTool(t)
 	first, second := t.TempDir(), t.TempDir()
 	runPack(t, bin, first)
@@ -252,4 +260,281 @@ func packTree(t *testing.T, dir string) map[string][]byte {
 		t.Fatal(err)
 	}
 	return files
+}
+
+// appToolManifest is the part of an app tool's manifest the pack test reads. An app tool's pages
+// are under app.ui, as the app reads them.
+type appToolManifest struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
+	App     struct {
+		Programs map[string]string `json:"programs"`
+		UI       *struct {
+			Dir string `json:"dir"`
+		} `json:"ui"`
+	} `json:"app"`
+}
+
+// appToolManifests returns the manifests of every app-tools folder but the test fixture, by
+// package ID.
+func appToolManifests(t *testing.T) map[string]appToolManifest {
+	t.Helper()
+	dir := filepath.Join("..", "app-tools")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifests := map[string]appToolManifest{}
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == "usage-fixture" {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name(), "pluxy-extension.json"))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m appToolManifest
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatalf("%s: %v", e.Name(), err)
+		}
+		manifests[m.ID] = m
+	}
+	if len(manifests) < 10 {
+		t.Fatalf("only %d app tool manifests under ../app-tools", len(manifests))
+	}
+	withUI := 0
+	for _, m := range manifests {
+		if m.App.UI != nil {
+			withUI++
+		}
+	}
+	if withUI == 0 {
+		t.Fatal("no app tool manifest has app.ui: the pages check would check nothing")
+	}
+	return manifests
+}
+
+// packedFile is one file of a release archive: its mode and bytes.
+type packedFile struct {
+	mode int64
+	body []byte
+}
+
+// archiveFiles reads a release archive: each regular file's mode and bytes, by name.
+func archiveFiles(t *testing.T, b []byte) map[string]packedFile {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(gz)
+	files := map[string]packedFile{}
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return files
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[h.Name] = packedFile{h.Mode, body}
+	}
+}
+
+// The pack tool packs every app tool (but the test fixture) for each platform its manifest
+// names among those asked, from the programs built beforehand: each archive holds the manifest's
+// own bytes, the program at the path the manifest names and the files of its app.ui folder, and
+// an index of the app's registry form pins each archive. A platform a manifest does not name is
+// left out, a missing program fails, and packing twice gives the same bytes.
+func TestPackToolPacksAppTools(t *testing.T) {
+	t.Parallel()
+	manifests := appToolManifests(t)
+	platforms := []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"}
+	programs := t.TempDir()
+	want := 0
+	for id, m := range manifests {
+		for _, p := range platforms {
+			program, ok := m.App.Programs[p]
+			if !ok {
+				continue
+			}
+			want++
+			dir := filepath.Join(programs, strings.ReplaceAll(p, "/", "-"))
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			body := []byte(id + " for " + p)
+			if err := os.WriteFile(filepath.Join(dir, path.Base(program)), body, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	bin := buildPackTool(t)
+	out := t.TempDir()
+	runPack(t, bin, out, "-app-tools", programs, "-platforms", strings.Join(platforms, ","))
+	again := t.TempDir()
+	runPack(t, bin, again, "-app-tools", programs, "-platforms", strings.Join(platforms, ","))
+	if a, b := packTree(t, filepath.Join(out, "app-tools")), packTree(t, filepath.Join(again, "app-tools")); !maps.EqualFunc(a, b, bytes.Equal) {
+		t.Error("two packs of the app tools differ")
+	}
+
+	dest := filepath.Join(out, "app-tools")
+	b, err := os.ReadFile(filepath.Join(dest, "index.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ix packIndex
+	if err := json.Unmarshal(b, &ix); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, []byte(`"protocol"`)) {
+		t.Errorf("the app tools' index names a protocol: %s", b)
+	}
+	if _, ok := ix.Packages["pluxy/usage-fixture"]; ok {
+		t.Error("the index lists the test fixture pluxy/usage-fixture")
+	}
+	archives, _ := filepath.Glob(filepath.Join(dest, "*.tar.gz"))
+	if len(archives) != want {
+		t.Errorf("%d archives, want %d (each tool's named platforms)", len(archives), want)
+	}
+	for id, m := range manifests {
+		p, ok := ix.Packages[id]
+		if !ok || len(p.Releases) != 1 {
+			t.Errorf("index lists %s as %+v, want one release", id, p)
+			continue
+		}
+		rel := p.Releases[0]
+		if rel.Version != m.Version {
+			t.Errorf("%s: release version %q, want %q", id, rel.Version, m.Version)
+		}
+		raw, err := os.ReadFile(filepath.Join("..", "app-tools", filepath.Base(manifestFolder(t, id)), "pluxy-extension.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, platform := range platforms {
+			program, named := m.App.Programs[platform]
+			art, packed := rel.Artifacts[platform]
+			if named != packed {
+				t.Errorf("%s: %s named %v, packed %v", id, platform, named, packed)
+				continue
+			}
+			if !packed {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(dest, art.URL))
+			if err != nil {
+				t.Errorf("%s: %v", id, err)
+				continue
+			}
+			sum := sha256.Sum256(b)
+			if art.SHA256 != hex.EncodeToString(sum[:]) || art.Size != int64(len(b)) {
+				t.Errorf("%s %s: the index pins %s/%d, the archive is %x/%d", id, platform, art.SHA256, art.Size, sum, len(b))
+			}
+			files := archiveFiles(t, b)
+			if f := files[program]; f.mode != 0o755 || string(f.body) != id+" for "+platform {
+				t.Errorf("%s %s: %s holds %q mode %o", id, platform, program, f.body, f.mode)
+			}
+			if !bytes.Equal(files["pluxy-extension.json"].body, raw) {
+				t.Errorf("%s %s: the archive's manifest is not the tool's", id, platform)
+			}
+			// Beside the manifest and the program, the archive holds exactly the files of the
+			// tool's app.ui folder, each with its bytes and its mode (0755 when any execute bit is
+			// set, else 0644).
+			want := map[string]packedFile{"pluxy-extension.json": {0o644, raw}, program: {0o755, files[program].body}}
+			if m.App.UI != nil {
+				maps.Copy(want, uiTree(t, filepath.Join("..", "app-tools", manifestFolder(t, id)), m.App.UI.Dir))
+			}
+			for name, w := range want {
+				g, ok := files[name]
+				switch {
+				case !ok:
+					t.Errorf("%s %s: the archive does not hold %s", id, platform, name)
+				case g.mode != w.mode || !bytes.Equal(g.body, w.body):
+					t.Errorf("%s %s: the archive holds %s with mode %o and %d bytes, want mode %o and the tool's %d bytes", id, platform, name, g.mode, len(g.body), w.mode, len(w.body))
+				}
+			}
+			for name := range files {
+				if _, ok := want[name]; !ok {
+					t.Errorf("%s %s: the archive holds %s, which is not the tool's", id, platform, name)
+				}
+			}
+		}
+	}
+
+	// A program missing for a platform a manifest names: the pack fails and says which.
+	if err := os.Remove(filepath.Join(programs, "windows-amd64", "claude-code.exe")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "-out", t.TempDir(), "-app-tools", programs, "-platforms", "windows/amd64")
+	cmd.Dir = ".."
+	got, err := cmd.CombinedOutput()
+	if err == nil || !bytes.Contains(got, []byte("pluxy/claude-code: its program for windows/amd64")) {
+		t.Errorf("packing without claude-code.exe: %v: %s", err, got)
+	}
+}
+
+// uiTree returns every file under dir/ui as the pack tool must pack it: by its slash-separated
+// path inside the package (ui/...), with 0755 when any execute bit is set, else 0644.
+func uiTree(t *testing.T, dir, ui string) map[string]packedFile {
+	t.Helper()
+	files := map[string]packedFile{}
+	root := filepath.Join(dir, filepath.FromSlash(ui))
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		body, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		mode := int64(0o644)
+		if info.Mode().Perm()&0o111 != 0 {
+			mode = 0o755
+		}
+		files[path.Join(ui, filepath.ToSlash(rel))] = packedFile{mode, body}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("%s holds no files", root)
+	}
+	return files
+}
+
+// manifestFolder returns the app-tools folder whose manifest has package ID id.
+func manifestFolder(t *testing.T, id string) string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join("..", "app-tools"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join("..", "app-tools", e.Name(), "pluxy-extension.json"))
+		if err != nil {
+			continue
+		}
+		var m appToolManifest
+		if json.Unmarshal(b, &m) == nil && m.ID == id {
+			return e.Name()
+		}
+	}
+	t.Fatalf("no app-tools folder has %s", id)
+	return ""
 }

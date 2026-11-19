@@ -1,15 +1,18 @@
-//! Native management-key rotation through the real window, the GTK confirmation and the native
-//! key window. Each new key comes independently from core's config file; keys are compared
-//! natively, and each one is recorded for the runner's log audit, never sent to a webview.
-use super::key_entry_test::{clean_webview, enter, watch, xdotool};
+//! Native management-key rotation through the real window, the native confirmation and the
+//! native key window, worked through the UI driver (`ui_driver.rs`). Each new key comes
+//! independently from core's config file; keys are compared natively, and each one is recorded
+//! for the runner's log audit, never sent to a webview.
+use super::key_entry_test::{access, clean_webview, enter, watch};
+use super::ui::{self, Key};
 use super::*;
 use crate::client::{certificates, Client};
 use crate::conn::{Mode, Settings};
+use crate::key_entry::text;
 use std::path::{Path, PathBuf};
 
-const CONFIRM: &str = "pluxy native confirmation";
-const REVEAL: &str = "pluxy new management key";
-const LAUNCH_NOTICE: &str = "pluxy launch notice";
+const CONFIRM: &str = crate::confirmation::text::CONFIRM_TITLE;
+const REVEAL: &str = text::REVEAL_TITLE;
+const LAUNCH_NOTICE: &str = crate::confirmation::text::NOTICE_TITLE;
 
 /// How each rotation's confirmation must end, by how the key is kept.
 const SAYS_CORE: &str = "The app's core saves the new key in its config file. The app shows the new key once in a window of its own.";
@@ -24,74 +27,25 @@ fn require(ok: bool, what: &str) -> Result<(), String> {
     }
 }
 
-fn visible(title: &str) -> Option<String> {
-    xdotool(&["search", "--onlyvisible", "--name", &format!("^{title}$")])
-        .ok()
-        .and_then(|s| s.lines().last().map(String::from))
+/// Presses key in the window titled title once exactly one is shown, so that a key never answers
+/// another window with the same title.
+fn press(app: &AppHandle, title: &str, key: Key) -> Result<(), String> {
+    wait_for(title, || (ui::count(app, title) == 1).then_some(()))?;
+    ui::press(app, title, key)
 }
 
-/// The one visible window titled title, once there is exactly one.
-fn only(title: &str) -> Option<String> {
-    let found = xdotool(&["search", "--onlyvisible", "--name", &format!("^{title}$")]).ok()?;
-    let ids: Vec<&str> = found.lines().filter(|l| !l.is_empty()).collect();
-    (ids.len() == 1).then(|| ids[0].to_string())
+/// The texts of the one shown native window titled title (empty when none is).
+fn labels(app: &AppHandle, title: &str) -> Result<String, String> {
+    Ok(ui::texts(app, title)?.join("\n"))
 }
 
-fn press(title: &str, keys: &str) -> Result<(), String> {
-    let id = wait_for(title, || only(title))?;
-    xdotool(&["windowfocus", "--sync", &id])?;
-    xdotool(&["key", "--clearmodifiers", keys])?;
-    Ok(())
+/// The confirmation's Cancel and Confirm keys.
+fn cancel_key() -> Key {
+    access(crate::confirmation::text::CANCEL)
 }
 
-/// The text of every label in the visible native window titled title, read on the GTK thread.
-fn labels(app: &AppHandle, title: &'static str) -> Result<String, String> {
-    Ok(windows(app, title)?.join("\n"))
-}
-
-/// For each visible native window titled title, the text of its labels, read on the GTK thread
-/// after every earlier request to it.
-fn windows(app: &AppHandle, title: &'static str) -> Result<Vec<String>, String> {
-    let (tx, rx) = mpsc::channel();
-    app.run_on_main_thread(move || {
-        use gtk::prelude::*;
-        fn inspect(widget: &gtk::Widget, out: &mut Vec<String>) {
-            if let Some(label) = widget.downcast_ref::<gtk::Label>() {
-                out.push(label.text().to_string());
-            }
-            if let Some(container) = widget.downcast_ref::<gtk::Container>() {
-                for child in container.children() {
-                    inspect(&child, out);
-                }
-            }
-        }
-        let mut shown = Vec::new();
-        for widget in gtk::Window::list_toplevels() {
-            if let Ok(window) = widget.downcast::<gtk::Window>() {
-                if window.title().as_deref() == Some(title) && window.is_visible() {
-                    let mut out = Vec::new();
-                    inspect(window.upcast_ref(), &mut out);
-                    shown.push(out.join("\n"));
-                }
-            }
-        }
-        let _ = tx.send(shown);
-    })
-    .map_err(|_| "could not inspect a native window")?;
-    rx.recv_timeout(Duration::from_secs(5))
-        .map_err(|_| "no native window audit".into())
-}
-
-fn clipboard(app: &AppHandle) -> Option<String> {
-    let (tx, rx) = mpsc::channel();
-    app.run_on_main_thread(move || {
-        let text = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD)
-            .wait_for_text()
-            .map(|s| s.to_string());
-        let _ = tx.send(text);
-    })
-    .ok()?;
-    rx.recv_timeout(Duration::from_secs(5)).ok().flatten()
+fn confirm_key() -> Key {
+    access(crate::confirmation::text::CONFIRM)
 }
 
 /// The connected core, reached directly with a given key, and its config file.
@@ -111,9 +65,12 @@ impl Core {
             None => None,
         };
         let config = if view.mode == Some(Mode::Managed) {
-            app.path()
-                .app_data_dir()
-                .map_err(|e| e.to_string())?
+            // Where lib.rs puts the app's own core's folder.
+            #[cfg(windows)]
+            let data = app.path().app_local_data_dir();
+            #[cfg(not(windows))]
+            let data = app.path().app_data_dir();
+            data.map_err(|e| e.to_string())?
                 .join("core")
                 .join("config.json")
         } else {
@@ -141,12 +98,15 @@ impl Core {
 /// Keeps a key for the runner, which checks that no log line holds it.
 fn record(key: &str) -> Result<(), String> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     let path = std::env::var("PLUXY_APP_TEST_ROTATED_FILE").map_err(|_| "no rotated-key file")?;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options
         .open(path)
         .map_err(|_| "could not open the rotated-key file")?;
     writeln!(f, "{key}").map_err(|_| "could not record a rotated key".into())
@@ -174,8 +134,8 @@ fn rotation_outcome(main: &Webview) -> Result<Value, String> {
 
 /// Answers the native confirmation with keys, after checking it names the rotation and core,
 /// ends with says, and shows no launch fields.
-fn answer(app: &AppHandle, target: &str, says: &str, keys: &str) -> Result<(), String> {
-    wait_for(CONFIRM, || visible(CONFIRM))?;
+fn answer(app: &AppHandle, target: &str, says: &str, key: Key) -> Result<(), String> {
+    ui::wait_shown(app, CONFIRM)?;
     let text = labels(app, CONFIRM)?;
     require(
         text.contains(&format!("Rotate the management key of {target}")),
@@ -191,7 +151,7 @@ fn answer(app: &AppHandle, target: &str, says: &str, keys: &str) -> Result<(), S
             .any(|f| text.contains(f)),
         "the native confirmation showed launch fields",
     )?;
-    press(CONFIRM, keys)
+    press(app, CONFIRM, key)
 }
 
 /// No launch notice tells of a rotation: one is the app's own action, not a launch.
@@ -213,7 +173,7 @@ fn new_key_window(
     let key = wait_for("core's new key", || core.key().ok().filter(|k| k != before))?;
     record(&key)?;
     let shown = wait_for("the key window with core's new key", || {
-        windows(app, REVEAL)
+        ui::texts(app, REVEAL)
             .ok()
             .filter(|w| w.iter().any(|t| t.lines().any(|l| l == key)))
     })?;
@@ -228,12 +188,18 @@ fn new_key_window(
     Ok(key)
 }
 
-/// Copies the key with the key window's Copy button.
+/// Copies the key with the key window's Copy button. Where the platform has a marker for a
+/// concealed copy (Windows, macOS), the copy carries it.
 fn copy(app: &AppHandle, key: &str) -> Result<(), String> {
-    press(REVEAL, "alt+p")?;
-    wait_for("the copied key", || {
-        clipboard(app).filter(|t| t == key).map(|_| ())
-    })
+    press(app, REVEAL, access(text::COPY))?;
+    let concealed = wait_for("the copied key", || {
+        let (text, concealed) = ui::clipboard(app);
+        text.filter(|t| t == key).map(|_| concealed)
+    })?;
+    require(
+        concealed != Some(false),
+        "the copied key is not marked concealed",
+    )
 }
 
 /// The key the native key window shows for the rotation that replaced before, checked against
@@ -241,9 +207,9 @@ fn copy(app: &AppHandle, key: &str) -> Result<(), String> {
 fn revealed(app: &AppHandle, core: &Core, before: &str, says: &str) -> Result<String, String> {
     let key = new_key_window(app, core, before, says)?;
     copy(app, &key)?;
-    press(REVEAL, "alt+c")?;
+    press(app, REVEAL, access(text::CLOSE))?;
     wait_for("the key window to close", || {
-        visible(REVEAL).is_none().then_some(())
+        (!ui::shown(app, REVEAL)).then_some(())
     })?;
     Ok(key)
 }
@@ -264,12 +230,35 @@ fn sign_in(app: &AppHandle, main: &Webview, key: &str, keep: bool) -> Result<(),
     require(
         r["status"] == "signed_in" && view.signed_in && view.remembered == keep,
         "native sign-in with the rotated key failed",
-    )
+    )?;
+    // The window learns of a sign-in from its own key-entry call, which this one bypasses, and
+    // may have shown the signed-out state meanwhile: tell it the connection changed, as the app
+    // does, and wait for its signed-in shell. The window takes the change by making its shell
+    // anew (`main.tsx`, `key={generation}`), closing the pages the old one had open, so the wait
+    // is for a new shell: the old one may still be signed in (`sign_out` above is the window's
+    // own call, which does not change what it shows), and a page opened in it is closed again.
+    let old_shell = eval(
+        main,
+        "(window.__rotationNav = document.querySelector('[data-part=nav]')) !== null",
+    );
+    use tauri::Emitter;
+    app.emit_to(tauri::EventTarget::webview(MAIN), "pluxy-connection", ())
+        .map_err(|e| e.to_string())?;
+    wait_for("the window's new signed-in shell", || {
+        eval(
+            main,
+            "(() => { const n = document.querySelector('[data-part=nav]'); return n !== null && n !== window.__rotationNav; })()",
+        )
+        .filter(|v| v == true)
+    })?;
+    log("rotation_sign_in", json!({"old_shell": old_shell}));
+    Ok(())
 }
 
 /// Makes the folder of connection.json read-only until dropped, so saving the settings fails.
 struct ReadOnly(PathBuf);
 
+#[cfg(unix)]
 impl ReadOnly {
     fn new(dir: &Path) -> Result<ReadOnly, String> {
         use std::os::unix::fs::PermissionsExt;
@@ -279,10 +268,45 @@ impl ReadOnly {
     }
 }
 
+#[cfg(unix)]
 impl Drop for ReadOnly {
     fn drop(&mut self) {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+    }
+}
+
+/// On Windows a folder's read-only attribute does not stop new files: an entry denying this user
+/// the adding of files and the writing of data (`icacls`, Windows' own tool) does, until dropped.
+#[cfg(windows)]
+impl ReadOnly {
+    fn icacls(dir: &Path, args: &[&str]) -> Result<(), String> {
+        let user = std::env::var("USERNAME").map_err(|_| "no USERNAME")?;
+        let args: Vec<String> = args.iter().map(|a| a.replace("{user}", &user)).collect();
+        let out = std::process::Command::new("icacls")
+            .arg(dir)
+            .args(&args)
+            .output()
+            .map_err(|e| format!("could not run icacls: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "icacls {args:?}: {}",
+                String::from_utf8_lossy(&out.stdout)
+            ));
+        }
+        Ok(())
+    }
+
+    fn new(dir: &Path) -> Result<ReadOnly, String> {
+        Self::icacls(dir, &["/deny", "{user}:(AD,WD)"])?;
+        Ok(ReadOnly(dir.to_path_buf()))
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ReadOnly {
+    fn drop(&mut self) {
+        let _ = Self::icacls(&self.0, &["/remove:d", "{user}"]);
     }
 }
 
@@ -382,7 +406,7 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<Webview, String> 
     let says = if managed { SAYS_CORE } else { SAYS_DEVICE };
     let disk = std::fs::read(&settings).ok();
     start_rotation(main)?;
-    answer(app, &target, says, "alt+c")?;
+    answer(app, &target, says, cancel_key())?;
     let cancelled = rotation_outcome(main)?;
     require(
         cancelled["status"] == 204 && cancelled.get("body").is_none(),
@@ -400,7 +424,7 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<Webview, String> 
 
     // Rotate from the Config page's Rotate button, keeping the key as the old one was kept.
     press_rotate(main)?;
-    answer(app, &target, says, "alt+o")?;
+    answer(app, &target, says, confirm_key())?;
     let first = revealed(
         app,
         &core,
@@ -457,14 +481,26 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<Webview, String> 
                 .first()
                 .cloned()
         })?;
-        let page_view = wait_for("the extension page", || app.get_webview(&label))?;
+        // Which pages are bound, and which webviews there are: to tell, on a failure here, the
+        // page waited for from the one the window shows.
+        let pages_now = || {
+            let mut bound = app.state::<App>().pages.lock().unwrap().labels();
+            bound.sort();
+            let mut webviews: Vec<String> = app.webviews().into_keys().collect();
+            webviews.sort();
+            json!({"label": label, "bound": bound, "webviews": webviews})
+        };
+        let page_view = wait_for("the extension page", || app.get_webview(&label))
+            .map_err(|e| format!("{e}: {}", pages_now()))?;
         wait_for("the extension page's frame", || {
             eval(&page_view, "document.querySelector('iframe')?.src ?? null")
                 .filter(|v| v.is_string())
-        })?;
+        })
+        .map_err(|e| format!("{e}: {}", pages_now()))?;
+        log("rotation_page", pages_now());
         watch(&page_view)?;
         start_rotation(&main)?;
-        answer(app, &target, SAYS_SESSION, "alt+o")?;
+        answer(app, &target, SAYS_SESSION, confirm_key())?;
         let second = new_key_window(app, &core, &first, "not kept on this device")?;
         let outcome = rotation_outcome(&main)?;
         require(
@@ -493,7 +529,7 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<Webview, String> 
         wait_for("the window to close to the tray", || {
             app.get_window(WINDOW).is_none().then_some(())
         })?;
-        let shown = windows(app, REVEAL)?;
+        let shown = ui::texts(app, REVEAL)?;
         require(
             shown.len() == 1 && shown[0].lines().any(|l| l == second),
             "the key window closed with the main window",
@@ -514,7 +550,7 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<Webview, String> 
         let third = {
             let _locked = ReadOnly::new(dir)?;
             press_rotate(&main)?;
-            answer(app, &target, SAYS_DEVICE, "alt+o")?;
+            answer(app, &target, SAYS_DEVICE, confirm_key())?;
             revealed(app, &core, &second, "could not be kept on this device")?
         };
         // The reply the Config page got, from the audit's record of the window's callbacks.

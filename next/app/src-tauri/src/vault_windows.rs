@@ -72,8 +72,9 @@ fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
 
 /// Opens or makes name relative to the folder dir with `NtCreateFile`, never following a link:
 /// a folder when folder is set, else a file. create makes it (and fails when it exists), with
-/// private's descriptor; otherwise it must exist.
-fn at(
+/// private's descriptor; otherwise it must exist. Also the device store's opens beneath a
+/// folder (`device.rs`'s `open_beneath`).
+pub(crate) fn at(
     dir: &File,
     name: &str,
     access: u32,

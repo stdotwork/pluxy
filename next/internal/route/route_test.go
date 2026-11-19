@@ -1390,6 +1390,30 @@ func TestAccountRequestRetryMustNotBeNegative(t *testing.T) {
 	}
 }
 
+// An account's check refuses two models served under one name, naming the alias and the
+// account. Naming the same model twice loses nothing and passes, as does one name per model.
+func TestAccountCheckRefusesRepeatedModelName(t *testing.T) {
+	a := Account{ID: "pool", Models: []ModelEntry{{Name: "up-a", Alias: "pub"}, {Name: "up-b", Alias: "pub"}}}
+	err := a.Check()
+	if err == nil || !strings.Contains(err.Error(), `"pub"`) || !strings.Contains(err.Error(), `"pool"`) {
+		t.Errorf("Check = %v, want a refusal naming the alias \"pub\" and the account \"pool\"", err)
+	}
+	// A name with no alias is the name clients use, and an alias can take another entry's name.
+	a.Models = []ModelEntry{{Name: "m"}, {Name: "up-b", Alias: "m"}}
+	if err := a.Check(); err == nil {
+		t.Error("an alias equal to another entry's name passed the check")
+	}
+	for _, models := range [][]ModelEntry{
+		{{Name: "up-a", Alias: "pub"}, {Name: "up-a", Alias: "pub"}},
+		{{Name: "up-a", Alias: "pub-a"}, {Name: "up-b", Alias: "pub-b"}, {Name: "up-c"}},
+	} {
+		a.Models = models
+		if err := a.Check(); err != nil {
+			t.Errorf("models %v: Check = %v, want none", models, err)
+		}
+	}
+}
+
 // A request of an endpoint that takes no model and names none goes to every account, whatever
 // models each lists, and its attempts name no upstream model. One that names a model is routed
 // by it as any other, and without the flag an empty model serves nobody.
@@ -1434,4 +1458,125 @@ func TestAnyModelServesRequestWithoutModel(t *testing.T) {
 	if last.Type != llm.EventError || last.Error.Code != llm.CodeNotFound {
 		t.Errorf("an unknown model: got %+v, want model not found", last)
 	}
+}
+
+// When every account is cooling, the reply says how long is left in whole seconds rounded up, and
+// the same wait goes in retry_after_ms: 0.2s left reads as 1s, not "0s"; 1.2s left reads as 2s.
+func TestCoolingErrorWaitRoundsUp(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		block time.Duration // the account's block
+		spent time.Duration // how much of it has passed
+		want  string
+		ms    int64
+	}{
+		{"a fifth of a second left", time.Second, 800 * time.Millisecond, "1s", 200},
+		{"a whole second left", time.Second, 0, "1s", 1000},
+		{"a second and a fifth left", 1200 * time.Millisecond, 0, "2s", 1200},
+		{"just under a minute left", time.Minute, 100 * time.Millisecond, "1m0s", 59900},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, Config{RequestRetry: rounds(0), MaxWaitMS: 120000}, accts("a")...)
+			h.on("a", rateLimited(c.block), ok())
+			h.run(h.req("m")) // the 429 that starts the block
+			h.now = h.now.Add(c.spent)
+			e := h.run(h.req("m"))[0].Error
+			if e == nil || e.ProviderCode != "model_cooldown" {
+				t.Fatalf("got %+v, want model_cooldown", e)
+			}
+			if want := fmt.Sprintf("every account for model %q is cooling down; try again in %s", "m", c.want); e.Message != want || e.RetryAfterMS != c.ms {
+				t.Errorf("message %q, retry_after_ms %d; want %q and %d", e.Message, e.RetryAfterMS, want, c.ms)
+			}
+		})
+	}
+}
+
+// A block that ends at the very moment of the request is over: the account serves it, and no
+// cooling error is built. One millisecond earlier it is still running, and the error says 1s, not
+// "0s". With no wait at all, coolingError itself still says 1s and sends a retry_after_ms and so a
+// Retry-After.
+func TestCoolingErrorNeverSaysZero(t *testing.T) {
+	h := newHarness(t, Config{RequestRetry: rounds(0), MaxWaitMS: 120000}, accts("a")...)
+	h.on("a", rateLimited(time.Second), ok())
+	h.run(h.req("m")) // the 429 that starts a 1s block
+	h.now = h.now.Add(time.Second - time.Millisecond)
+	e := h.run(h.req("m"))[0].Error
+	if e == nil || e.ProviderCode != "model_cooldown" || !strings.HasSuffix(e.Message, "try again in 1s") || e.RetryAfterMS != 1 {
+		t.Errorf("1ms before the block ends: %+v, want model_cooldown, try again in 1s, retry_after_ms 1", e)
+	}
+	h.now = h.now.Add(time.Millisecond)
+	h.runOK("m") // the block ends at now: the account serves it
+
+	for _, wait := range []time.Duration{0, -time.Second} {
+		e := coolingError("m", wait, nil)
+		if !strings.HasSuffix(e.Message, "try again in 1s") || e.RetryAfterMS != 1000 {
+			t.Errorf("wait %v: %q, retry_after_ms %d; want try again in 1s and 1000", wait, e.Message, e.RetryAfterMS)
+		}
+	}
+}
+
+// A model whose every account is blocked is cooling down, not unknown: the request ends with the
+// 429 model_cooldown reply, whole seconds until the first block ends, and never with the 404
+// model_not_found that a model no account serves gets. Each account lists the model itself, so
+// whether it serves the model never depends on its blocks.
+func TestCooledDownModelIsNotUnknown(t *testing.T) {
+	serves := []ModelEntry{{Name: "m"}}
+	h := newHarness(t, Config{}, Account{ID: "a", Models: serves}, Account{ID: "b", Models: serves})
+	h.r.state.failure(h.r.accounts[0], "m", 0, &llm.Error{Code: llm.CodeRateLimit, Scope: llm.ScopeModel, RetryAfterMS: (90 * time.Second).Milliseconds()}, h.now, 0)
+	h.r.state.failure(h.r.accounts[1], "m", 0, &llm.Error{Code: llm.CodeRateLimit, Scope: llm.ScopeModel, RetryAfterMS: (45 * time.Second).Milliseconds()}, h.now, 0)
+
+	evs := h.run(h.req("m"))
+	e := evs[0].Error
+	if e == nil {
+		t.Fatalf("got %+v, want the model_cooldown error", evs[0])
+	}
+	if e.ProviderCode == "model_not_found" || e.Code == llm.CodeNotFound || e.Status == http.StatusNotFound {
+		t.Fatalf("a cooled-down model was answered as unknown: %+v", e)
+	}
+	if e.ProviderCode != "model_cooldown" || e.Status != http.StatusTooManyRequests || e.Code != llm.CodeRateLimit {
+		t.Errorf("got %+v, want 429 rate_limit with provider code model_cooldown", e)
+	}
+	if e.RetryAfterMS != 45_000 {
+		t.Errorf("retry_after_ms = %d, want 45000: the earliest block's end, in whole seconds", e.RetryAfterMS)
+	}
+	if want := `every account for model "m" is cooling down; try again in 45s`; e.Message != want {
+		t.Errorf("message = %q, want %q", e.Message, want)
+	}
+	h.wantAttempts() // no account was tried
+
+	// A model no account lists is unknown, however the accounts are blocked.
+	evs = h.run(h.req("other"))
+	if e := evs[0].Error; e == nil || e.ProviderCode != "model_not_found" || e.Code != llm.CodeNotFound {
+		t.Errorf("unlisted model: got %+v, want model_not_found", evs[0])
+	}
+
+	// The cooldown ends with the first block: the model is served again.
+	h.now = h.now.Add(45 * time.Second)
+	h.runOK("m")
+	h.wantAttempts("b")
+}
+
+// An account whose model list cannot be read serves any model, so a long block on it must not be
+// the retry time of a model other accounts serve and one of them unblocks sooner.
+func TestCooldownWaitComesFromTheAccountThatServesTheModel(t *testing.T) {
+	h := newHarness(t, Config{},
+		Account{ID: "codex", Extension: "pluxy/codex"}, Account{ID: "b", Models: []ModelEntry{{Name: "m"}}})
+	h.r.UseCatalog(func(context.Context, Account, *protocol.Credential) (*protocol.ModelList, *llm.Error) {
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "list unreadable"}
+	})
+	h.r.state.failure(h.r.accounts[0], "m", 0, &llm.Error{Code: llm.CodeQuota, Scope: llm.ScopeCredential, RetryAfterMS: (72 * time.Hour).Milliseconds()}, h.now, 0)
+	h.r.state.failure(h.r.accounts[1], "m", 0, &llm.Error{Code: llm.CodeRateLimit, Scope: llm.ScopeModel, RetryAfterMS: (2 * time.Minute).Milliseconds()}, h.now, 0)
+
+	evs := h.run(h.req("m"))
+	e := evs[0].Error
+	if e == nil || e.ProviderCode != "model_cooldown" || e.Status != http.StatusTooManyRequests {
+		t.Fatalf("got %+v, want 429 model_cooldown", evs[0])
+	}
+	if e.RetryAfterMS != (2 * time.Minute).Milliseconds() {
+		t.Errorf("retry_after_ms = %d, want 120000: b serves m and unblocks first, not codex's 72h quota block", e.RetryAfterMS)
+	}
+	if e.Code != llm.CodeRateLimit {
+		t.Errorf("code = %q, want %q: the reason is b's rate limit, not codex's quota", e.Code, llm.CodeRateLimit)
+	}
+	h.wantAttempts()
 }

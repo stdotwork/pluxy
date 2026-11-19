@@ -1,7 +1,7 @@
 {
   "description": "An upstream 429 from a Responses upstream is an HTTP error for the client, with Retry-After.",
   "source": [
-    "core/internal/api/issue7017_retry_after_test.go"
+    "core/sdk/api/handlers/issue7017_retry_after_test.go"
   ],
   "client": {
     "path": "/v1/responses",

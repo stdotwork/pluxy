@@ -15,15 +15,16 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// closedPort returns the address of a port nothing listens on.
+// closedPort returns the address of a port nothing listens on: port 1 on loopback, which a test
+// run cannot bind, unlike a just-closed ephemeral port that the next core or test server started
+// may be given.
 func closedPort(t *testing.T) string {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	const addr = "127.0.0.1:1"
+	if c, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+		c.Close()
+		t.Fatalf("something listens on %s; the connection-refused cases need it closed", addr)
 	}
-	addr := l.Addr().String()
-	l.Close()
 	return "http://" + addr
 }
 
@@ -95,7 +96,9 @@ func TestLoginErrorRetryableOnlyWhenNotSent(t *testing.T) {
 }
 
 // proxyTo returns a server that passes every request to target, and closes the connection of
-// every request instead while hang is set.
+// every request instead while hang is set. It keeps no connection open between requests, so once
+// it is closed the next request is refused: a client still holding a kept-alive connection would
+// send the request on it and read EOF, which counts as sent.
 func proxyTo(t *testing.T, target string, hang *atomic.Bool) *httptest.Server {
 	t.Helper()
 	u, err := url.Parse(target)
@@ -103,13 +106,15 @@ func proxyTo(t *testing.T, target string, hang *atomic.Bool) *httptest.Server {
 		t.Fatal(err)
 	}
 	rp := httputil.NewSingleHostReverseProxy(u)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hang.Load() {
 			hangUp(w)
 			return
 		}
 		rp.ServeHTTP(w, r)
 	}))
+	srv.Config.SetKeepAlivesEnabled(false)
+	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -118,6 +123,7 @@ func proxyTo(t *testing.T, target string, hang *atomic.Bool) *httptest.Server {
 // `retryable`: a refused connection is retryable; a 503 and a connection closed after the request
 // was read are not.
 func TestRenewalErrorRetryableOnlyWhenNotSent(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name      string
 		fail      func(srv *oauthtest.Server, proxy *httptest.Server, hang *atomic.Bool)
@@ -129,6 +135,7 @@ func TestRenewalErrorRetryableOnlyWhenNotSent(t *testing.T) {
 		{"closed after the request", func(_ *oauthtest.Server, _ *httptest.Server, hang *atomic.Bool) { hang.Store(true) }, 0, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			srv := oauthtest.New(t)
 			if c.fail == nil {
 				// Only renewals fail; the login below still works.

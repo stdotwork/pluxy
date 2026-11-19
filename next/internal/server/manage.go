@@ -227,9 +227,10 @@ func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	right := ok && token != "" && sameKey(token, cfg.managementKeyDigest())
 	left, blockedNow := m.lockout.attempt(client, right)
 	if left > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(int((left+time.Second-1)/time.Second)))
+		wait := llm.WholeSeconds(left)
+		w.Header().Set("Retry-After", strconv.FormatInt(int64(wait/time.Second), 10))
 		writeManagementError(w, http.StatusForbidden, "blocked",
-			fmt.Sprintf("too many failed management keys from this address; try again in %s", left.Round(time.Second)))
+			fmt.Sprintf("too many failed management keys from this address; try again in %s", wait))
 		return
 	}
 	if !right {

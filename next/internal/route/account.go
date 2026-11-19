@@ -82,7 +82,7 @@ func (a *Account) Check() error {
 	if err := upheader.Check("headers", a.Headers); err != nil {
 		return err
 	}
-	return a.checkNames()
+	return a.CheckNames()
 }
 
 func (a *Account) weight() int {

@@ -88,13 +88,13 @@
     {
       "path": "upstream[0].body.tools[0].input_schema.$schema",
       "kind": "intended",
-      "reason": "Today's Gemini-to-Claude translator sends the system instruction as a user message, adds $schema and additionalProperties false to tool schemas and drops temperature and top_p; the new core sends the system instruction as system, the client's schema as given and the client's sampling options. The cache breakpoints follow from that: the new core marks the end of the system prompt (and, without one, the last tool), today's core the last tool.",
+      "reason": "Today's Gemini-to-Claude translator sends the system instruction as a user message and adds $schema and additionalProperties false to tool schemas; the new core sends the system instruction as system and the client's schema as given. The cache breakpoints follow from that: the new core marks the end of the system prompt (and, without one, the last tool), today's core the last tool.",
       "absent": true
     },
     {
       "path": "upstream[0].body.tools[0].input_schema.additionalProperties",
       "kind": "intended",
-      "reason": "Today's Gemini-to-Claude translator sends the system instruction as a user message, adds $schema and additionalProperties false to tool schemas and drops temperature and top_p; the new core sends the system instruction as system, the client's schema as given and the client's sampling options. The cache breakpoints follow from that: the new core marks the end of the system prompt (and, without one, the last tool), today's core the last tool.",
+      "reason": "Today's Gemini-to-Claude translator sends the system instruction as a user message and adds $schema and additionalProperties false to tool schemas; the new core sends the system instruction as system and the client's schema as given. The cache breakpoints follow from that: the new core marks the end of the system prompt (and, without one, the last tool), today's core the last tool.",
       "absent": true
     },
     {

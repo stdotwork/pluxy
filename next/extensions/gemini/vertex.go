@@ -315,7 +315,9 @@ func fetchToken(ctx context.Context, sa *serviceAccount) (string, time.Time, err
 		return "", time.Time{}, &llm.Error{Code: llm.CodeInternal, Message: "signing the service account assertion: " + err.Error(), Scope: llm.ScopeCredential}
 	}
 	form := url.Values{"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"}, "assertion": {assertion}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sa.TokenURI, strings.NewReader(form.Encode()))
+	// The exchange is left out of the call's capture: core does not know the token as a secret,
+	// nor the signed assertion that gets one.
+	req, err := http.NewRequestWithContext(sdk.Uncaptured(ctx), http.MethodPost, sa.TokenURI, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", time.Time{}, &llm.Error{Code: llm.CodeAuth, Message: "bad token_uri: " + err.Error(), Scope: llm.ScopeCredential}
 	}

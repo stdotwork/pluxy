@@ -35,6 +35,48 @@ fn file_link(target: &Path, link: &Path) -> Option<()> {
 }
 
 #[test]
+fn names_windows_would_read_as_another_file_are_told() {
+    for ok in [
+        "settings.json",
+        ".claude",
+        "a b.json",
+        "com10",
+        "COM0",
+        "nulx.txt",
+        "lpt",
+        "con-fig",
+        "x.nul",
+    ] {
+        assert_eq!(windows_name_problem(ok), None, "{ok}");
+    }
+    for bad in [
+        "settings.json.",
+        "settings.json ",
+        "dir.",
+        "settings.json:stream",
+        "a:b",
+        "a*b",
+        "a?b",
+        "a|b",
+        "a\u{1}b",
+        "NUL",
+        "nul.json",
+        "Nul .json",
+        "CON",
+        "aux.txt",
+        "PRN",
+        "COM1",
+        "com9.log",
+        "LPT1",
+        "lpt²",
+        "conin$",
+        "CONOUT$.x",
+    ] {
+        assert!(windows_name_problem(bad).is_some(), "{bad}");
+    }
+}
+
+#[test]
 fn mtime_ns_is_the_modification_time() {
     let dir = temp("mtime");
     let path = dir.join("f");
@@ -182,6 +224,29 @@ fn an_open_folder_or_file_is_made_private() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// A file this process has just made is made private through its handle (as the transactions
+/// library makes its temporary files before writing a byte).
+#[test]
+fn a_file_just_made_is_made_private_through_its_handle() {
+    let dir = temp("private-open");
+    let path = dir.join("f");
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+        use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
+        opts.access_mode(GENERIC_READ | GENERIC_WRITE | WRITE_DAC);
+    }
+    let f = opts.open(&path).unwrap();
+    assert!(!is_private(&path).unwrap());
+    make_private_open(&f).unwrap();
+    assert!(is_private(&path).unwrap());
+    drop(f);
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn make_private_refuses_a_link() {
     let dir = temp("private-link");
@@ -292,6 +357,174 @@ fn an_inherited_list_or_another_owner_is_not_private() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// Windows: an access list's text without the `AI` flag, which Windows sets on a list given
+/// through SetSecurityInfo (`D:P(…)` reads back `D:PAI(…)`, `D:(…)` as `D:AI(…)`) and which changes no
+/// entry, inheritance or protection.
+#[cfg(windows)]
+fn without_ai(sddl: &str) -> String {
+    match sddl.strip_prefix("D:").and_then(|s| s.split_once('(')) {
+        Some((flags, rest)) => format!("D:{}({rest}", flags.replace("AI", "")),
+        None => sddl.to_string(),
+    }
+}
+
+/// Windows: a file's access list is read as SDDL and given back as it was: a protected one (the
+/// file is then private), or its folder's again (inherited entries, not private). Anything that is
+/// not a list, or a NULL one (which allows everyone), is refused and the list kept.
+#[cfg(windows)]
+#[test]
+fn an_access_list_is_read_and_given_back() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Foundation::GENERIC_READ;
+    use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
+    let dir = temp("access-list");
+    let (plain, private) = (dir.join("plain"), dir.join("private"));
+    fs::write(&plain, b"x").unwrap();
+    drop(create_new_private(&private).unwrap());
+    let open = |p: &Path| {
+        fs::OpenOptions::new()
+            .access_mode(GENERIC_READ | WRITE_DAC)
+            .open(p)
+            .unwrap()
+    };
+    let inherited = access_list(&open(&plain)).unwrap();
+    let protected = access_list(&open(&private)).unwrap();
+    // The text alone: nothing of the system's buffer after it.
+    assert!(
+        !inherited.contains('\0') && !protected.contains('\0'),
+        "{inherited:?} {protected:?}"
+    );
+    assert!(
+        inherited.starts_with("D:") && !inherited.starts_with("D:P") && inherited.contains(";ID;"),
+        "{inherited}"
+    );
+    assert!(
+        protected.starts_with("D:P") && !protected.contains(";ID;"),
+        "{protected}"
+    );
+    set_access_list(&open(&plain), &protected).unwrap();
+    assert!(is_private(&plain).unwrap());
+    assert_eq!(
+        without_ai(&access_list(&open(&plain)).unwrap()),
+        without_ai(&protected)
+    );
+    set_access_list(&open(&plain), &inherited).unwrap();
+    assert!(!is_private(&plain).unwrap());
+    assert_eq!(
+        without_ai(&access_list(&open(&plain)).unwrap()),
+        without_ai(&inherited)
+    );
+    for bad in ["not an access list", "D:NO_ACCESS_CONTROL", "O:SY", "D:P\0"] {
+        assert!(set_access_list(&open(&plain), bad).is_err(), "{bad}");
+    }
+    assert_eq!(
+        without_ai(&access_list(&open(&plain)).unwrap()),
+        without_ai(&inherited)
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Windows: create_private_in makes a file in a folder's handle that is private from the start and
+/// that no other handle can open while it is held; an existing name or a name that is a path is
+/// refused, and in a folder that forbids setting access lists, so is the creation.
+#[cfg(windows)]
+#[test]
+fn a_private_file_is_made_in_a_folders_handle() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    let dir = temp("private-in");
+    let open_dir = |d: &Path| {
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(d)
+            .unwrap()
+    };
+    let folder = open_dir(&dir);
+    let mut f = create_private_in(&folder, "tmp".as_ref()).unwrap();
+    f.write_all(b"secret").unwrap();
+    assert!(is_private(&dir.join("tmp")).unwrap());
+    let shared = File::open(dir.join("tmp")).unwrap_err();
+    assert_eq!(shared.raw_os_error(), Some(32), "{shared}"); // ERROR_SHARING_VIOLATION
+    assert_eq!(
+        create_private_in(&folder, "tmp".as_ref())
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    for bad in ["", ".", "..", r"sub\x", "sub/x"] {
+        assert_eq!(
+            create_private_in(&folder, bad.as_ref()).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput,
+            "{bad:?}"
+        );
+    }
+    drop(f);
+    assert_eq!(fs::read(dir.join("tmp")).unwrap(), b"secret");
+    // A folder that forbids setting access lists: refused, nothing left.
+    let forbids = dir.join("forbids");
+    fs::create_dir(&forbids).unwrap();
+    assert!(icacls(&forbids, &["/deny", "*S-1-3-4:(OI)(CI)(IO)(WDAC)"]));
+    let e = create_private_in(&open_dir(&forbids), "tmp".as_ref()).unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::PermissionDenied, "{e}");
+    assert!(fs::symlink_metadata(forbids.join("tmp")).is_err());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Windows: rename_open renames a file through its own handle (one shared with no one) into the
+/// folder open as folder, over a file another handle still has open; a name that is a path, or
+/// empty, is refused.
+#[cfg(windows)]
+#[test]
+fn rename_open_replaces_a_file_through_the_handles() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+    use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_FLAG_BACKUP_SEMANTICS};
+    let dir = temp("rename-open");
+    let target = dir.join("target");
+    fs::write(&target, b"old").unwrap();
+    let mut held = File::open(&target).unwrap();
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .access_mode(GENERIC_READ | GENERIC_WRITE | DELETE)
+        .share_mode(0)
+        .open(dir.join("tmp"))
+        .unwrap();
+    f.write_all(b"new").unwrap();
+    let folder = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(&dir)
+        .unwrap();
+    for bad in ["", ".", "..", r"sub\target", "sub/target"] {
+        assert_eq!(
+            rename_open(&f, &folder, bad.as_ref()).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput,
+            "{bad:?}"
+        );
+    }
+    rename_open(&f, &folder, "target".as_ref()).unwrap();
+    drop(f);
+    assert_eq!(fs::read(&target).unwrap(), b"new");
+    assert!(!dir.join("tmp").exists());
+    // The handle open on the replaced file still reads it.
+    let mut old = String::new();
+    held.read_to_string(&mut old).unwrap();
+    assert_eq!(old, "old");
+    drop(held);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Windows: a handle on something that is not a file on a disk (the NUL device) is not made
+/// private.
+#[cfg(windows)]
+#[test]
+fn make_private_open_refuses_what_is_not_on_a_disk() {
+    let nul = fs::OpenOptions::new().write(true).open(r"\\.\NUL").unwrap();
+    assert!(make_private_open(&nul).is_err());
+}
+
 /// Windows: a folder in the user's temporary folder may be changed by no one but the user, SYSTEM
 /// and Administrators. Letting everyone read it changes nothing; letting everyone write it, or
 /// handing it to the Users group, lets others change it; an entry only passed down to what it
@@ -382,6 +615,23 @@ fn a_junction_is_not_opened_or_made_private_and_its_target_is_left_alone() {
     junction(&target, &link);
     assert!(open_regular(&link).is_err());
     assert!(make_private(&link).is_err());
+    // Nor through a handle open on the junction itself.
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+            READ_CONTROL, WRITE_DAC,
+        };
+        let itself = fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&link)
+            .unwrap();
+        assert_eq!(
+            make_private_open(&itself).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
     assert!(
         !is_private(&target).unwrap(),
         "the junction's target was changed"
@@ -442,4 +692,57 @@ fn a_file_only_another_user_may_use_is_not_private() {
         Some(p) => assert!(!is_private(p).unwrap(), "{p:?}"),
         None => eprintln!("skipped: no file of another user with no group or other permission"),
     }
+}
+
+#[test]
+fn a_program_is_a_file_this_system_would_start_by_its_path() {
+    let dir = temp("executable");
+    let named = |n: &str| {
+        let p = dir.join(n);
+        fs::write(&p, b"MZ").unwrap();
+        p
+    };
+    // A folder, a missing file and a plain file are never programs.
+    fs::create_dir(dir.join("folder.exe")).unwrap();
+    assert!(!executable(&dir.join("folder.exe")));
+    assert!(!executable(&dir.join("missing.exe")));
+    let plain = named("tool");
+    assert!(!executable(&plain));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // The extension means nothing here; an execute bit does, through a link too.
+        assert!(!executable(&named("tool.exe")));
+        fs::set_permissions(&plain, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(executable(&plain));
+        std::os::unix::fs::symlink(&plain, dir.join("link")).unwrap();
+        assert!(executable(&dir.join("link")));
+    }
+    #[cfg(windows)]
+    {
+        // A PE image (starting MZ) named by its extension, in any case, and nothing else.
+        assert!(executable(&named("tool.exe")));
+        assert!(executable(&named("tool.COM")));
+        assert!(!executable(&named("tool.cmd")));
+        assert!(!executable(&named("tool.exe.txt")));
+        // Named a program but not one: a script, an empty file, a single byte.
+        for (name, bytes) in [
+            ("script.exe", &b"#!/bin/sh"[..]),
+            ("empty.exe", b""),
+            ("short.com", b"M"),
+        ] {
+            let p = dir.join(name);
+            fs::write(&p, bytes).unwrap();
+            assert!(!executable(&p), "{name}");
+        }
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_folder_is_flushed_and_a_missing_one_is_an_error_on_unix() {
+    let dir = temp("sync");
+    sync_dir(&dir).unwrap();
+    assert_eq!(cfg!(windows), sync_dir(&dir.join("missing")).is_ok());
+    fs::remove_dir_all(dir).unwrap();
 }

@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { platform } from "./admission";
 
 /** The page: says hello, then makes each channel call its parent posts as `accessCall` and posts
  * every reply it gets back as `accessReply`, including replies to calls it did not make. */
@@ -82,12 +83,6 @@ function pack(root: string, f: Fixture): string {
   if (r.status !== 0) throw new Error(`tar exited with ${r.status}`);
   rmSync(dir, { recursive: true, force: true });
   return archive;
-}
-
-/** Go's platform name for this machine, as registry artifacts are keyed. */
-function platform(): string {
-  const arch = { x64: "amd64", arm64: "arm64" }[process.arch as string] ?? process.arch;
-  return `${process.platform}/${arch}`;
 }
 
 /** Builds the fixtures in root and returns the registries file the app's config should hold. */
@@ -195,7 +190,7 @@ export function buildAccessFixtures(root: string): object {
   mkdirSync(join(data, "stow"), { recursive: true });
   mkdirSync(join(data, "tree", "inner"), { recursive: true });
   // A second folder in tree, its name starting with another letter than inner's: a folder
-  // chooser's entry then has no single completion to add to a typed `tree/`.
+  // chooser's entry then has no single completion to add to an entered `tree/`.
   mkdirSync(join(data, "tree", "notes"));
   writeFileSync(join(data, "stow", "config"), contents.config);
   // A config manager's link (stow, chezmoi): the person chooses the link, the target is read.

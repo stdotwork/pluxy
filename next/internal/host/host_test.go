@@ -73,6 +73,18 @@ func fakeExtension(mode string) {
 		captureSettings()
 		return
 	}
+	if mode == "capture-stop" {
+		captureStop()
+		return
+	}
+	if mode == "mint-credential" {
+		mintCredential()
+		return
+	}
+	if mode == "echo-parts" {
+		echoParts()
+		return
+	}
 	if mode != "sleep-child" { // the child shares its parent's folder
 		_ = os.WriteFile("pid", []byte(strconv.Itoa(os.Getpid())), 0o644)
 		_ = os.WriteFile("env", []byte(strings.Join(os.Environ(), "\n")), 0o644)
@@ -90,13 +102,14 @@ func fakeExtension(mode string) {
 			}
 		}
 	case "no-describe":
-		// Handshake, then never answer describe.
+		// Handshake, then never answer describe. The file "handshook" says the line is written.
 		socket := os.Getenv(protocol.EnvSocket)
 		ln, err := net.Listen("unix", socket)
 		if err != nil {
 			os.Exit(1)
 		}
 		fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+		_ = os.WriteFile("handshook", nil, 0o644)
 		go func() {
 			for {
 				conn, err := ln.Accept()
@@ -151,9 +164,9 @@ func TestStartFailuresStayUnderTheDeadline(t *testing.T) {
 		mode    string
 		wantErr string
 	}{
-		{"close-stdout", "closed its stdout"},
+		{"close-stdout", "closed its stdout without a handshake and did not exit within 2s (starting its process took "},
 		{"endless-line", "longer than"},
-		{"no-describe", "describe"},
+		{"no-describe", "did not answer describe within 2s (starting its process took "},
 		{"child-holds-stderr", "no handshake"},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
@@ -194,6 +207,79 @@ func TestStartFailuresStayUnderTheDeadline(t *testing.T) {
 				t.Errorf("after Start failed, process %d still exists or was not reaped (signal 0: %v)", pid, err)
 			}
 		})
+	}
+}
+
+// A start that passes its limit says how long starting the program took, whether the handshake
+// was readable and, on Linux, what the program was doing, read before it is killed.
+func TestStartLimitErrorSaysWhereTheStartWas(t *testing.T) {
+	const startTimeout = 500 * time.Millisecond
+	dir := fakePackage(t, "silent") // writes its pid, then sleeps without a handshake
+	_, err := Start(filepath.Join(dir, ManifestFile), Options{StartTimeout: startTimeout, Log: io.Discard})
+	if err == nil {
+		t.Fatal("Start succeeded, want an error")
+	}
+	msg := err.Error()
+	t.Log(msg)
+	if !strings.HasPrefix(msg, "extension hosttest/silent sent no handshake within 500ms (") {
+		t.Errorf("error = %q, want the start limit's error", msg)
+	}
+	var took time.Duration
+	_, rest, ok := strings.Cut(msg, "starting its process took ")
+	if ok {
+		took, err = time.ParseDuration(strings.FieldsFunc(rest, func(r rune) bool { return r == ';' || r == ')' })[0])
+	}
+	if !ok || err != nil || took <= 0 || took >= startTimeout {
+		t.Errorf("error = %q, want how long starting the process took, between 0 and %s", msg, startTimeout)
+	}
+	want := []string{"handshake: not read"}
+	if runtime.GOOS == "linux" {
+		// The program sleeps in time.Sleep, so it was sleeping (S) and waiting in the kernel.
+		want = []string{"; handshake: not read, no bytes waiting in its stdout;", "; process state S;", "; wchan "}
+	}
+	for _, w := range want {
+		if !strings.Contains(msg, w) {
+			t.Errorf("error = %q, want it to contain %q", msg, w)
+		}
+	}
+	pid := readPID(t, filepath.Join(dir, "pid"))
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Errorf("after Start failed, process %d still exists or was not reaped (signal 0: %v)", pid, err)
+	}
+}
+
+// A handshake that is readable only once the limit has passed fails the start with the start
+// limit's error, whichever of the handshake and the limit core sees first; it is not accepted, and
+// describe does not fail on its own with a timeout. Core is held up between starting the program
+// and waiting for the handshake until both are ready, as a stalled start in CI was, so each run
+// is a coin toss between the two; a dozen runs see both.
+func TestLateHandshakeFailsWithTheStartLimitError(t *testing.T) {
+	const startTimeout = 300 * time.Millisecond
+	for i := range 12 {
+		dir := fakePackage(t, "no-describe")
+		hold := func(deadline time.Time) {
+			for start := time.Now(); ; time.Sleep(5 * time.Millisecond) {
+				if _, err := os.Stat(filepath.Join(dir, "handshook")); err == nil {
+					break
+				}
+				if time.Since(start) > 30*time.Second {
+					t.Error("the fake extension wrote no handshake within 30s")
+					break
+				}
+			}
+			time.Sleep(time.Until(deadline) + 10*time.Millisecond)
+		}
+		ext, err := Start(filepath.Join(dir, ManifestFile), Options{StartTimeout: startTimeout, Log: io.Discard, beforeHandshakeWait: hold})
+		if err == nil {
+			ext.Stop()
+			t.Fatalf("run %d: Start accepted a handshake read after the limit", i)
+		}
+		msg := err.Error()
+		if !strings.HasPrefix(msg, "extension hosttest/no-describe sent no handshake within 300ms (") ||
+			!strings.Contains(msg, "; handshake: readable") {
+			t.Fatalf("run %d: error = %q, want the start limit's error with the handshake readable", i, msg)
+		}
 	}
 }
 
@@ -425,43 +511,87 @@ func TestCallErrorsHoldNoSettingsSecret(t *testing.T) {
 	}
 }
 
-// syncBuffer is a log both of an extension's output streams write to.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
+// mintCredential is an extension whose refresh and login write the credential they make to stderr
+// before returning it, as a careless provider's debug output would. After the line it writes
+// mintFiller bytes more, which a pipe of the usual 64 KiB cannot hold: the write returns only once
+// core has read past the line, so core has the line before the result is sent. Where a pipe holds
+// more (1 MiB, on a Linux kernel with 64 KiB pages), the order is not forced and the test below
+// can pass without the hold; TestFreshCredentialInOutputBeforeItsResult forces it in process.
+// This one goes through a real program's stderr.
+func mintCredential() {
+	mint := func(op string) *protocol.Credential {
+		c := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "fresh-" + op + "-access-1234", RefreshToken: "fresh-" + op + "-refresh-1234"}
+		fmt.Fprintf(os.Stderr, "minted %s %s\n", c.AccessToken, c.RefreshToken)
+		line := strings.Repeat("f", 1023) + "\n"
+		_, _ = os.Stderr.WriteString(strings.Repeat(line, mintFiller/len(line)))
+		fmt.Fprintf(os.Stderr, "minted %s done\n", op)
+		return c
+	}
+	err := sdk.Serve(sdk.Extension{
+		ID:           "hosttest/mint-credential",
+		Version:      "0.0.0",
+		Generate:     func(context.Context, sdk.Call, *sdk.Stream) error { return nil },
+		LoginMethods: []protocol.LoginMethod{{Method: "mint", Kind: protocol.LoginAPIKey, Label: "Mint"}},
+		Login: func(context.Context, sdk.LoginCall, *sdk.LoginSession) (*protocol.Grant, error) {
+			return &protocol.Grant{Credential: mint("login")}, nil
+		},
+		Refresh: func(context.Context, sdk.RefreshCall) (*protocol.Credential, error) {
+			return mint("refresh"), nil
+		},
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }
 
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
+// mintFiller is more than a pipe of the usual size holds, and less than maxHeldOutput.
+const mintFiller = 512 << 10
 
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-// waitFor waits until the log holds every line in lines: the output streams are read on their
-// own, so a line can arrive after the call that wrote it has finished.
-func (b *syncBuffer) waitFor(t *testing.T, lines ...string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		out, missing := b.String(), ""
-		for _, l := range lines {
-			if !strings.Contains(out, l) {
-				missing = l
+// A credential an extension makes in a refresh or a login and writes to its output before it
+// returns it is logged without it: core has the line before the result, and still does not log
+// it in clear.
+func TestFreshCredentialIsNotLoggedBeforeItsResult(t *testing.T) {
+	for _, op := range []string{"refresh", "login"} {
+		t.Run(op, func(t *testing.T) {
+			log := &syncBuffer{}
+			ext, err := Start(filepath.Join(fakePackage(t, "mint-credential"), ManifestFile), Options{Log: log})
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		if missing == "" {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the log never got %q:\n%s", missing, out)
-		}
-		time.Sleep(10 * time.Millisecond)
+			defer ext.Stop()
+			ctx := context.Background()
+			var got *protocol.Credential
+			if op == "refresh" {
+				var e *llm.Error
+				got, e = ext.Refresh(ctx, protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, RefreshToken: "old-refresh-1234"}})
+				if e != nil {
+					t.Fatal(e)
+				}
+			} else {
+				l := ext.Login(ctx, protocol.Account{ID: "a"}, protocol.Login{Method: "mint"})
+				r := l.Next()
+				l.Close()
+				if r.Grant == nil {
+					t.Fatalf("login = %+v, want a grant", r)
+				}
+				got = r.Grant.Credential
+			}
+			access, refresh := "fresh-"+op+"-access-1234", "fresh-"+op+"-refresh-1234"
+			if got == nil || got.AccessToken != access || got.RefreshToken != refresh {
+				t.Fatalf("%s returned %+v, want the minted credential", op, got)
+			}
+			log.waitFor(t, "minted "+op+" done")
+			out := log.String()
+			for _, line := range strings.Split(out, "\n") {
+				if strings.Contains(line, access) || strings.Contains(line, refresh) {
+					t.Errorf("the log holds the fresh credential: %q", line)
+				}
+			}
+			if want := "[hosttest/mint-credential] minted [redacted] [redacted]\n"; !strings.Contains(out, want) {
+				t.Errorf("the log lacks %q", want)
+			}
+		})
 	}
 }
 
@@ -470,7 +600,9 @@ func (b *syncBuffer) waitFor(t *testing.T, lines ...string) {
 func TestLongOutputLineIsNotSplit(t *testing.T) {
 	const secret = "sk-split-secret-1234"
 	var out bytes.Buffer
-	l := &lineLogger{w: &out, prefix: "[x] ", redact: func(s string) string { return strings.ReplaceAll(s, secret, "[redacted]") }}
+	h := &held{}
+	h.add("x", &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: secret})
+	l := &lineLogger{out: &output{w: &out, held: h}, prefix: "[x] "}
 	// The first write passes the limit in the middle of the credential.
 	half := len(secret) / 2
 	for _, chunk := range []string{strings.Repeat("a", maxLogLine) + secret[:half], secret[half:] + "b\nshort " + secret + "\n"} {

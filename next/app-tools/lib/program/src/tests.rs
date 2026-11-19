@@ -575,3 +575,176 @@ fn cancelling_a_call_cancels_its_save_request() {
     assert_eq!(h.next()["error"]["code"], "cancelled");
     h.end().unwrap();
 }
+
+#[test]
+fn an_environment_names_a_wsl_distribution_and_user() {
+    assert_eq!(
+        environment::parse("wsl:Ubuntu-24.04:bob"),
+        Ok(("Ubuntu-24.04", "bob"))
+    );
+    for bad in [
+        "",
+        "wsl",
+        "wsl:Ubuntu",
+        "wsl::bob",
+        "wsl:Ubuntu:",
+        "lxc:a:b",
+        "wsl:a:b:c",
+    ] {
+        assert!(environment::parse(bad).is_err(), "{bad}");
+    }
+    assert_eq!(
+        environment::compare("wsl:Ubuntu:bob", (Some("Ubuntu"), "bob")),
+        Ok(())
+    );
+    assert_eq!(
+        environment::compare("wsl:Ubuntu:bob", (Some("Other"), "bob")),
+        Err("pluxy expected WSL Ubuntu/bob, this is Other/bob".into())
+    );
+    assert_eq!(
+        environment::compare("wsl:Ubuntu:bob", (Some("Ubuntu"), "alice")),
+        Err("pluxy expected WSL Ubuntu/bob, this is Ubuntu/alice".into())
+    );
+    assert_eq!(
+        environment::compare("wsl:Ubuntu:bob", (None, "bob")),
+        Err("pluxy expected WSL Ubuntu/bob, this is (not WSL)/bob".into())
+    );
+}
+
+#[test]
+fn the_user_is_the_effective_user_ids_name() {
+    let status = "Name:\tx\nUid:\t1000\t1001\t1001\t1001\nGid:\t5\t5\t5\t5\n";
+    assert_eq!(environment::effective_uid(status), Some(1001));
+    assert_eq!(environment::effective_uid("Name:\tx\n"), None);
+    let passwd = "root:x:0:0::/root:/bin/sh\nalice:x:1000:1000::/home/alice:/bin/sh\n\
+                  bob:x:1001:1001::/home/bob:/bin/sh\nbob2:x:1001:1001::/home/b:/bin/sh\n";
+    assert_eq!(environment::user_named(passwd, 1001), Some("bob"));
+    assert_eq!(environment::user_named(passwd, 0), Some("root"));
+    assert_eq!(environment::user_named(passwd, 7), None);
+}
+
+/// This test binary run again as a child, with env, running only `identity_child`: what it said.
+#[cfg(target_os = "linux")]
+fn identity_in_child(env: &[(&str, &str)]) -> String {
+    let env: Vec<(&str, &std::ffi::OsStr)> = env.iter().map(|(k, v)| (*k, v.as_ref())).collect();
+    identity_in_child_os(&env)
+}
+
+/// As `identity_in_child`, with values that need not be UTF-8.
+#[cfg(target_os = "linux")]
+fn identity_in_child_os(env: &[(&str, &std::ffi::OsStr)]) -> String {
+    let mut c = std::process::Command::new(std::env::current_exe().unwrap());
+    c.args([
+        "--exact",
+        "tests::identity_child",
+        "--nocapture",
+        "--test-threads=1",
+    ])
+    .env_remove("PLUXY_ENVIRONMENT")
+    .env_remove("WSL_DISTRO_NAME")
+    .env("PLUXY_PROGRAM_TEST_CHILD", "1")
+    .env("PLUXY_APP_CONTRACT_VERSIONS", "0")
+    .env("PLUXY_EXTENSION_ID", "example/tool")
+    .env("PLUXY_APP_ARTIFACT_SHA256", "ab".repeat(32));
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    let out = c.output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines()
+        .find_map(|l| l.split_once("identity: ").map(|(_, r)| r))
+        .unwrap_or_else(|| panic!("the child said nothing: {text}"))
+        .to_string()
+}
+
+/// Run by `identity_in_child` only: prints what `Identity::from_env` gives.
+#[test]
+fn identity_child() {
+    if std::env::var_os("PLUXY_PROGRAM_TEST_CHILD").is_none() {
+        return;
+    }
+    match Identity::from_env() {
+        Ok(i) => println!("identity: ok {}", i.id),
+        Err(e) => println!("identity: err {e}"),
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_program_in_another_distribution_or_as_another_user_refuses_to_start() {
+    let me = std::process::Command::new("id")
+        .arg("-un")
+        .output()
+        .unwrap();
+    let me = String::from_utf8(me.stdout).unwrap().trim().to_string();
+    // No environment: this computer, as before.
+    assert_eq!(identity_in_child(&[]), "ok example/tool");
+    // The distribution and user named: it starts.
+    let here = format!("wsl:Fake:{me}");
+    assert_eq!(
+        identity_in_child(&[("PLUXY_ENVIRONMENT", &here), ("WSL_DISTRO_NAME", "Fake")]),
+        "ok example/tool"
+    );
+    // Another distribution, another user, or not WSL at all: it stops before hello.
+    assert_eq!(
+        identity_in_child(&[("PLUXY_ENVIRONMENT", &here), ("WSL_DISTRO_NAME", "Other")]),
+        format!("err pluxy expected WSL Fake/{me}, this is Other/{me}")
+    );
+    assert_eq!(
+        identity_in_child(&[
+            ("PLUXY_ENVIRONMENT", "wsl:Fake:nosuchuser"),
+            ("WSL_DISTRO_NAME", "Fake")
+        ]),
+        format!("err pluxy expected WSL Fake/nosuchuser, this is Fake/{me}")
+    );
+    assert_eq!(
+        identity_in_child(&[("PLUXY_ENVIRONMENT", &here)]),
+        format!("err pluxy expected WSL Fake/{me}, this is (not WSL)/{me}")
+    );
+    assert!(identity_in_child(&[("PLUXY_ENVIRONMENT", "docker:x")]).starts_with("err "));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn an_environment_that_is_not_utf8_refuses_to_start() {
+    use std::os::unix::ffi::OsStrExt;
+    let bad = std::ffi::OsStr::from_bytes(b"wsl:Fake:b\xffob");
+    let said = identity_in_child_os(&[
+        ("PLUXY_ENVIRONMENT", bad),
+        ("WSL_DISTRO_NAME", "Fake".as_ref()),
+    ]);
+    assert_eq!(
+        said,
+        "err PLUXY_ENVIRONMENT is not UTF-8: start this program from pluxy's app"
+    );
+}
+
+/// In a real WSL distribution (the platforms workflow's WSL job runs this inside it, as the user
+/// it names): `PLUXY_WSL_TEST_EXPECT` is `<distribution>:<user>` this runs as, and
+/// `PLUXY_WSL_TEST_OTHER` another distribution's name.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "runs inside a real WSL distribution (next-app-tools-platforms.yml, WSL job)"]
+fn wsl_real_identity_is_the_distribution_and_user_wsl_runs_this_as() {
+    let expect = std::env::var("PLUXY_WSL_TEST_EXPECT").expect("PLUXY_WSL_TEST_EXPECT");
+    let other = std::env::var("PLUXY_WSL_TEST_OTHER").expect("PLUXY_WSL_TEST_OTHER");
+    let (distro, user) = expect.split_once(':').unwrap();
+    assert_eq!(
+        std::env::var("WSL_DISTRO_NAME").as_deref(),
+        Ok(distro),
+        "WSL sets the distribution's name"
+    );
+    assert_eq!(environment::check(&format!("wsl:{distro}:{user}")), Ok(()));
+    assert_eq!(
+        environment::check(&format!("wsl:{other}:{user}")),
+        Err(format!(
+            "pluxy expected WSL {other}/{user}, this is {distro}/{user}"
+        ))
+    );
+    assert_eq!(
+        environment::check(&format!("wsl:{distro}:root")),
+        Err(format!(
+            "pluxy expected WSL {distro}/root, this is {distro}/{user}"
+        ))
+    );
+}

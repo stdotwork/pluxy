@@ -1,10 +1,9 @@
 name: App CI
 
 on:
-  pull_request:
-    paths:
-      - 'extensions/app/**'
-      - '.github/workflows/app-ci.yml'
+  # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
+  # its paths below are touched.
+  workflow_call:
   push:
     branches:
       - main
@@ -14,7 +13,9 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A literal name: called from ci.yml, github.workflow is the caller's name, the same for every
+  # workflow it calls.
+  group: app-ci-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -27,7 +28,7 @@ defaults:
 jobs:
   frontend:
     name: Frontend
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-latest' }}
 
     steps:
       - name: Checkout code
@@ -55,7 +56,7 @@ jobs:
 
   rust:
     name: Rust
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-latest' }}
 
     steps:
       - name: Checkout code
@@ -75,7 +76,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: extensions/app/src-tauri -> target
-          save-if: ${{ runner.environment == 'github-hosted' }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' }}
 
       - name: Check Rust
         run: cargo check --locked

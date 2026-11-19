@@ -53,7 +53,8 @@ pub struct Binding {
     pub url: Url,
     pub pages_origin: String,
     /// For a page of a package on this device: its release's folder on the asset scheme
-    /// (`pluxy-app://localhost/<id>/<sha256>/`), the only place the page's frame may load from.
+    /// (`pluxy-app://localhost/<id>/<sha256>/`; `http://pluxy-app.localhost/<id>/<sha256>/` on
+    /// Windows, `device::asset_base`), the only place the page's frame may load from.
     /// None for a page core lists, which loads from pages_origin.
     pub device: Option<String>,
 }
@@ -75,14 +76,47 @@ impl Binding {
         let (_, digest) = folder.rsplit_once('/')?;
         Some((id.into(), digest.into()))
     }
-    /// The frame-src source of the page's wrapper document. A device page's folder is
-    /// enforced by the asset scheme, which serves a page webview only its own folder.
+    /// The frame-src source of the page's wrapper document: the asset scheme as the webview serves
+    /// it (`asset_source`) for a device page, whose folder the asset scheme enforces by serving a
+    /// page webview only its own folder.
     fn frame_source(&self) -> String {
         match &self.device {
-            Some(_) => format!("{}:", crate::device::ASSET_SCHEME),
+            Some(_) => asset_source(&crate::device::asset_base()),
             None => format!("{}/", self.pages_origin),
         }
     }
+}
+
+/// The CSP source that allows the asset scheme at base (`device::asset_base`): the scheme by name
+/// where the webview serves it as a scheme of its own, its origin where it is served as http
+/// (`http://pluxy-app.localhost` on Windows, which a `pluxy-app:` source does not allow: WebView2
+/// would show its error page in the frame instead).
+pub(crate) fn asset_source(base: &str) -> String {
+    match Url::parse(base) {
+        Ok(u) if u.scheme() == "http" || u.scheme() == "https" => u.origin().ascii_serialization(),
+        Ok(u) => format!("{}:", u.scheme()),
+        Err(_) => format!("{}:", crate::device::ASSET_SCHEME),
+    }
+}
+
+/// The requests a page webview refuses outright, as a WebView2 filter (`page_frames.rs`): the
+/// asset scheme's host over https. Where the asset scheme is served as `http://pluxy-app.localhost`
+/// (Windows), its CSP source (`asset_source`) also allows that host over https, as CSP lets an
+/// http source match its https form; the app serves nothing there (wry intercepts only the http
+/// form), so such a request would reach whatever answers on that host's port.
+pub fn refused_filter() -> String {
+    format!("https://{}.*", crate::device::ASSET_SCHEME)
+}
+
+/// Whether a page webview refuses url outright (`refused_filter`).
+pub fn refused_request(url: &str) -> bool {
+    Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "https"
+            && u.host_str().is_some_and(|h| {
+                h.strip_prefix(crate::device::ASSET_SCHEME)
+                    .is_some_and(|rest| rest.starts_with('.'))
+            })
+    })
 }
 
 #[derive(Default)]
@@ -257,6 +291,18 @@ impl Pages {
     }
     pub fn document_closed(&self, label: &str) -> bool {
         self.open.get(label).is_none_or(|w| w.document.closed)
+    }
+    /// Where page label's channel is, for the native test: its document loaded, its hello
+    /// admitted, the window's welcome on its way or delivered, closed, and the calls waiting.
+    #[cfg(feature = "native-test")]
+    pub fn channel_state(&self, label: &str) -> Value {
+        self.open.get(label).map_or(Value::Null, |w| {
+            let d = &w.document;
+            json!({
+                "loaded": d.loaded, "hello": d.hello, "welcome": d.welcome, "closed": d.closed,
+                "waiting": d.waiting.len(),
+            })
+        })
     }
     /// Every platform reports subframe navigation: WebKitGTK and WKWebView to the webview's
     /// navigation handler, WebView2 as FrameNavigationStarting. Ignore fragment-only changes (a same-document
@@ -1775,6 +1821,66 @@ mod tests {
         assert!(p.take_closed(&label).is_none());
     }
     #[test]
+    fn a_page_refuses_the_asset_host_over_https() {
+        // What Windows' CSP source `http://pluxy-app.localhost` also allows, over https at any port.
+        let prefix = refused_filter().trim_end_matches('*').to_string();
+        for url in [
+            "https://pluxy-app.localhost/example/notes/x/index.html",
+            "https://pluxy-app.localhost:443/x.js",
+            "https://pluxy-app.localhost:8443/x.js",
+            "HTTPS://PLUXY-APP.LOCALHOST/x.js",
+        ] {
+            assert!(refused_request(url), "{url}");
+            // The filter WebView2 is given sees it too.
+            assert!(
+                Url::parse(url).unwrap().as_str().starts_with(&prefix),
+                "{url}"
+            );
+        }
+        for url in [
+            "http://pluxy-app.localhost/example/notes/x/index.html",
+            "pluxy-app://localhost/x.js",
+            "https://pluxy-page.localhost/",
+            "https://pluxy-apps.localhost/x.js",
+            "https://example.com/pluxy-app.x",
+            "not a url",
+        ] {
+            assert!(!refused_request(url), "{url}");
+            if let Ok(u) = Url::parse(url) {
+                assert!(!u.as_str().starts_with(&prefix), "{url}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_device_frame_source_allows_the_asset_scheme_as_served() {
+        // Linux and macOS serve the asset scheme by its name; Windows as an http origin.
+        for base in ["pluxy-app://localhost/", "http://pluxy-app.localhost/"] {
+            let src = asset_source(base);
+            let page = Url::parse(&format!(
+                "{base}example/notes/{}/index.html",
+                "a".repeat(64)
+            ))
+            .unwrap();
+            // CSP: a scheme source (`x:`) allows by scheme, a host source by origin.
+            let allows = |u: &Url| match src.strip_suffix(':') {
+                Some(scheme) => u.scheme() == scheme,
+                None => u.origin().ascii_serialization() == src,
+            };
+            assert!(allows(&page), "frame-src {src} refuses {page}");
+            for other in [
+                "http://localhost:8401/x/index.html",
+                "http://pluxy-page.localhost/",
+            ] {
+                assert!(
+                    !allows(&Url::parse(other).unwrap()),
+                    "frame-src {src} allows {other}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn device_pages_stay_in_their_release_folder() {
         let now = Instant::now();
         let mut p = Pages::default();
@@ -1804,11 +1910,12 @@ mod tests {
         assert!(p.device_labels("example/other").is_empty());
         p.begin_document(&label);
         let (served, _) = serve_at(&mut p, &label, "GET", "/", b"", now);
-        assert!(
-            served.csp.contains("frame-src pluxy-app:;"),
-            "{}",
-            served.csp
-        );
+        let source = if cfg!(any(windows, target_os = "android")) {
+            "frame-src http://pluxy-app.localhost;"
+        } else {
+            "frame-src pluxy-app:;"
+        };
+        assert!(served.csp.contains(source), "{}", served.csp);
         p.frame_navigation(&label, &url);
         hello(&mut p, &label, now);
         assert!(!p.document_closed(&label));

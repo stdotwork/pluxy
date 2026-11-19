@@ -57,11 +57,16 @@ func main() {
 }
 
 // importAuthDir copies the credential files in today's core's auth folder dir into the
-// credential store of the config at configPath, and says what it imported and skipped.
+// credential store of the config at configPath, and says what it imported and skipped. The
+// config's notices (settings it ignores, a hashed management key) go to standard error, as
+// core's log does at start, so a script reading the counts on standard output does not see them.
 func importAuthDir(configPath, dir string) error {
 	cfg, err := server.LoadConfig(configPath)
 	if err != nil {
 		return core.ScrubConfigError(configPath, err)
+	}
+	for _, n := range cfg.Notices {
+		log.Print(n)
 	}
 	if err := legacy.CheckImportFolders(dir, cfg.CredentialsDir); err != nil {
 		return err
@@ -163,7 +168,9 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		if ln != nil {
 			ln.Close()
 		}
-		if !safeMode {
+		// Safe mode opens the credential store too, so it is no way past the store's errors.
+		var store *cred.OpenError
+		if !safeMode && !errors.As(err, &store) {
 			err = fmt.Errorf("%w (start with -safe-mode to run without extensions)", err)
 		}
 		return err

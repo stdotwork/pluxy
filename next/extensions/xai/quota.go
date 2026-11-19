@@ -17,7 +17,7 @@ import (
 )
 
 // A Grok login's quota is what the Grok CLI shows: two billing reads on the CLI's chat endpoint,
-// with the CLI's identity (setCLIIdentity), as today's panel reads them.
+// with the CLI's identity (setCLIIdentity), as the old panel read them.
 //
 //	GET {cli}/billing?format=credits   the weekly credit window
 //	GET {cli}/billing                  the monthly credits, the pay-as-you-go cap and the prepaid balance
@@ -39,7 +39,7 @@ const (
 )
 
 // Monthly credit allowances (in cents) that name SuperGrok and SuperGrok Heavy when the profile reads
-// name no plan, the ones today's panel recognises.
+// name no plan, the ones the old panel recognised.
 const (
 	superGrokLimitCents      = 15_000
 	superGrokHeavyLimitCents = 150_000

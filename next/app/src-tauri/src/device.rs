@@ -17,7 +17,7 @@
 //! person can roll back. With `--safe-mode`, no device page is listed, opened or served and no
 //! native tool is admitted; the catalog can still be managed.
 
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 pub use admission::main_window;
 pub use admission::{
     admitted_unlocked, native_candidate_unlocked, Admission, Admitted, OperationDecl, Roots,
@@ -433,7 +433,14 @@ fn private_dir(p: &Path) -> Result<(), String> {
         .create(p)
         .map_err(|e| format!("{}: {e}", p.display()))?;
     fs::set_permissions(p, fs::Permissions::from_mode(0o700))
-        .map_err(|e| format!("{}: {e}", p.display()))
+        .map_err(|e| format!("{}: {e}", p.display()))?;
+    // macOS: no extended access list entry either, so what is made in it inherits none
+    // (`private_macos.rs`).
+    #[cfg(target_os = "macos")]
+    fs::File::open(p)
+        .and_then(|d| crate::private_macos::clear_entries(&d))
+        .map_err(|e| format!("{}: {e}", p.display()))?;
+    Ok(())
 }
 #[cfg(windows)]
 fn private_dir(p: &Path) -> Result<(), String> {
@@ -442,6 +449,29 @@ fn private_dir(p: &Path) -> Result<(), String> {
 
 /// Removes a store or staging folder, whose files and folders are read-only.
 fn remove_tree(p: &Path) -> Result<(), String> {
+    // Windows: a frozen folder allows no delete inside it (`freeze`): each file's and folder's
+    // own list goes back to private first, never through a link.
+    #[cfg(windows)]
+    {
+        use crate::private_windows::{make_private, open_for_access_list};
+        fn writable(p: &Path, folder: bool) {
+            if let Ok(f) = open_for_access_list(p, folder) {
+                let _ = make_private(&f, folder);
+            }
+            if folder {
+                if let Ok(entries) = fs::read_dir(p) {
+                    for e in entries.flatten() {
+                        if let Ok(t) = e.file_type() {
+                            if !t.is_symlink() {
+                                writable(&e.path(), t.is_dir());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        writable(p, true);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -466,13 +496,26 @@ fn remove_tree(p: &Path) -> Result<(), String> {
 }
 
 /// Makes the folders under dir (and dir itself, when root is set) read-only and flushes them
-/// to disk, deepest first. The files in it were written read-only and flushed already.
+/// to disk, deepest first. The files in it were written read-only and flushed already; on
+/// Windows, where a file is made read-only by its access list, they are made so here
+/// (`private_windows::make_read_only`).
 fn freeze(dir: &Path, root: bool) -> Result<(), String> {
     for e in fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
         let e = e.map_err(|e| format!("{}: {e}", dir.display()))?;
         if e.file_type().map_err(|e| e.to_string())?.is_dir() {
             freeze(&e.path(), true)?;
+        } else {
+            #[cfg(windows)]
+            crate::private_windows::open_for_access_list(&e.path(), false)
+                .and_then(|f| crate::private_windows::make_read_only(&f, false))
+                .map_err(|err| format!("{}: {err}", e.path().display()))?;
         }
+    }
+    #[cfg(windows)]
+    if root {
+        crate::private_windows::open_for_access_list(dir, true)
+            .and_then(|f| crate::private_windows::make_read_only(&f, true))
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     #[cfg(unix)]
     if root {
@@ -480,7 +523,7 @@ fn freeze(dir: &Path, root: bool) -> Result<(), String> {
         fs::set_permissions(dir, fs::Permissions::from_mode(0o500))
             .map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     let _ = root;
     sync_dir(dir)
 }
@@ -502,13 +545,22 @@ fn sync_dir(dir: &Path) -> Result<(), String> {
 /// it was. Ok(Some): the new file is in place, but its folder could not be flushed to disk.
 fn write_private(path: &Path, bytes: &[u8]) -> Result<Option<String>, String> {
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-    let mut o = fs::OpenOptions::new();
-    o.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-    let mut f = o
-        .open(&tmp)
-        .map_err(|e| format!("{}: {e}", tmp.display()))?;
+    #[cfg(not(windows))]
+    let made = {
+        let mut o = fs::OpenOptions::new();
+        o.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+        o.open(&tmp)
+    };
+    // Windows: private as it is made (`private_windows`), so a leftover of an earlier run goes
+    // first.
+    #[cfg(windows)]
+    let made = {
+        let _ = fs::remove_file(&tmp);
+        crate::private_windows::create_new_private(&tmp)
+    };
+    let mut f = made.map_err(|e| format!("{}: {e}", tmp.display()))?;
     f.write_all(bytes)
         .and_then(|_| f.sync_all())
         .map_err(|e| format!("{}: {e}", tmp.display()))?;
@@ -1020,6 +1072,21 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// Whether f is a regular file; on Windows also one on a disk (`GetFileType`), not a pipe or a
+/// device a path can name there.
+fn regular(f: &fs::File) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{GetFileType, FILE_TYPE_DISK};
+        // SAFETY: f is open; the call only reads its type.
+        if unsafe { GetFileType(f.as_raw_handle() as _) } != FILE_TYPE_DISK {
+            return false;
+        }
+    }
+    f.metadata().is_ok_and(|m| m.is_file())
+}
+
 /// Reads a regular file of at most max bytes. Opened without blocking, so a FIFO or device in
 /// its place is refused rather than waited on.
 fn read_bounded(path: &Path, max: u64) -> Result<Vec<u8>, String> {
@@ -1043,7 +1110,7 @@ fn hash_file(path: &Path, max: u64) -> Result<(String, u64), String> {
     let mut f = o
         .open(path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    if !f.metadata().is_ok_and(|m| m.is_file()) {
+    if !regular(&f) {
         return Err(format!("{} is not a regular file", path.display()));
     }
     let mut h = Sha256::new();
@@ -1068,7 +1135,7 @@ fn hash_file(path: &Path, max: u64) -> Result<(String, u64), String> {
 /// Reads the open file f (named path in errors), which must be a regular file of at most max
 /// bytes.
 fn read_open(f: fs::File, path: &Path, max: u64) -> Result<Vec<u8>, String> {
-    if !f.metadata().is_ok_and(|m| m.is_file()) {
+    if !regular(&f) {
         return Err(format!("{} is not a regular file", path.display()));
     }
     let mut b = Vec::new();
@@ -1212,10 +1279,11 @@ fn local_path(p: &str) -> bool {
 }
 
 /// A local path that also stays inside its folder on Windows: no `:`, which names a drive or an
-/// alternate data stream there. Archive entries, the ui folder and local registry artifacts
-/// must be one.
+/// alternate data stream there, and no part that is a device's name (`vault::windows_device`),
+/// which opens the device there instead of a file. Checked on every system. Archive entries, the
+/// ui folder and local registry artifacts must be one.
 fn store_path(p: &str) -> bool {
-    local_path(p) && !p.contains(':')
+    local_path(p) && !p.contains(':') && !p.split('/').any(crate::vault::windows_device)
 }
 
 impl Ui {
@@ -2006,7 +2074,7 @@ fn fetch_artifact(base: &Base, a: &Artifact) -> Result<Vec<u8>, String> {
             if !store_path(&a.url) {
                 return Err(outside());
             }
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             {
                 let f = open_beneath(dir, &a.url).map_err(|e| format!("{}: {e}", outside()))?;
                 read_open(f, &dir.join(&a.url), a.size)
@@ -2014,7 +2082,7 @@ fn fetch_artifact(base: &Base, a: &Artifact) -> Result<Vec<u8>, String> {
             // shortcut: checks the path once, then opens it again, so a folder swapped for a
             // link in between is followed; open beneath the folder there too when other
             // platforms are supported.
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, windows)))]
             {
                 let inside = fs::canonicalize(dir)
                     .ok()
@@ -2051,6 +2119,41 @@ fn open_beneath(dir: &Path, rel: &str) -> Result<fs::File, String> {
         }
         // SAFETY: fd was just opened and nothing else owns it.
         cur = unsafe { fs::File::from_raw_fd(fd) };
+    }
+    Ok(cur)
+}
+
+/// Opens rel, a `store_path`, under dir one part at a time relative to the folder held open before
+/// it (`NtCreateFile`, `vault::at`), following no link at any step: a link is opened itself and
+/// refused. dir itself may be reached through links.
+#[cfg(windows)]
+fn open_beneath(dir: &Path, rel: &str) -> Result<fs::File, String> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE,
+    };
+    let mut cur = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    let parts: Vec<&str> = rel.split('/').collect();
+    for (i, part) in parts.iter().enumerate() {
+        let last = i + 1 == parts.len();
+        let access = if last {
+            FILE_GENERIC_READ
+        } else {
+            FILE_TRAVERSE | FILE_READ_ATTRIBUTES
+        };
+        let share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+        let f = crate::vault::at(&cur, part, access, share, !last, None)
+            .map_err(|e| format!("{part}: {e}"))?;
+        let m = f.metadata().map_err(|e| format!("{part}: {e}"))?;
+        if m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(format!("{part}: a link"));
+        }
+        cur = f;
     }
     Ok(cur)
 }

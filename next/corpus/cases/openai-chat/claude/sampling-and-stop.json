@@ -1,5 +1,5 @@
 {
-  "description": "Sampling options and stop sequences reach a Claude upstream as temperature, top_p, stop_sequences and max_tokens; the text reply comes back as Chat content.",
+  "description": "Stop sequences and max_tokens reach a Claude upstream as stop_sequences and max_tokens; temperature and top_p are left out, as they are for any claude- name not known as a Claude version (claude-test), since Claude 4.7 and later refuse non-default values and both together; the text reply comes back as Chat content.",
   "source": [
     "core/internal/translator/claude/openai/chat-completions/claude_openai_request.go",
     "core/internal/translator/claude/openai/chat-completions/claude_openai_response.go"
@@ -71,18 +71,6 @@
       "kind": "intended",
       "reason": "Today's core adds metadata.user_id, a hash it derives from the request, to every request it translates to Claude; the new core does not make up a user identifier for the client.",
       "absent": true
-    },
-    {
-      "path": "upstream[0].body.temperature",
-      "kind": "gap",
-      "reason": "Today's core removes temperature and top_p from every Claude request (newer Claude models refuse some sampling settings, such as both at once); the new core sends the client's sampling options. To settle: whether to drop them for the models that refuse them.",
-      "want": 0.5
-    },
-    {
-      "path": "upstream[0].body.top_p",
-      "kind": "gap",
-      "reason": "Today's core removes temperature and top_p from every Claude request (newer Claude models refuse some sampling settings, such as both at once); the new core sends the client's sampling options. To settle: whether to drop them for the models that refuse them.",
-      "want": 0.9
     },
     {
       "path": "upstream[0].headers.Authorization",

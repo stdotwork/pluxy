@@ -215,7 +215,7 @@ fn printable(s: &str) -> bool {
 
 /// The vault's folder: on Windows in the app's local data folder, so it stays on this machine
 /// when the profile roams; elsewhere in its data folder.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(native_stack), allow(dead_code))]
 pub fn folder<R: tauri::Runtime>(app: &impl tauri::Manager<R>) -> tauri::Result<PathBuf> {
     #[cfg(windows)]
     let dir = app.path().app_local_data_dir()?;
@@ -240,22 +240,50 @@ fn check_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn windows_refuses(name: &str) -> bool {
-    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
-    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
-            && stem.len() == 4
-            && matches!(stem.as_bytes()[3], b'1'..=b'9'));
-    device
+/// Whether name is one Windows paths cannot name plainly (see `check_name`); the core store's
+/// unpacking refuses such names too (`cores.rs`).
+pub(crate) fn windows_refuses(name: &str) -> bool {
+    windows_device(name)
         || name.ends_with(['.', ' '])
         || name
             .chars()
             .any(|c| c < ' ' || matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
 }
 
+/// Whether name is a device's name on Windows, where a path naming it opens the device, in any
+/// folder: `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9` and `LPT1` to `LPT9` (the digit also `¹`,
+/// `²` or `³`), in any case, alone or followed by an extension (`NUL.txt` is `NUL`). A name whose
+/// part before the extension ends in spaces is taken as the name without them (`NUL .txt`):
+/// Windows drops trailing spaces as it reads a path. Vault file names and the device store's paths
+/// (`device::store_path`) are checked with it.
+pub(crate) fn windows_device(name: &str) -> bool {
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+        return true;
+    }
+    let Some(digit) = stem
+        .strip_prefix("COM")
+        .or_else(|| stem.strip_prefix("LPT"))
+    else {
+        return false;
+    };
+    let mut digit = digit.chars();
+    matches!(
+        (digit.next(), digit.next()),
+        (Some('1'..='9' | '¹' | '²' | '³'), None)
+    )
+}
+
 #[cfg(windows)]
 #[path = "vault_windows.rs"]
 mod folder_windows;
+#[cfg(windows)]
+pub(crate) use folder_windows::at;
 #[cfg(windows)]
 use folder_windows::Folder;
 
@@ -312,7 +340,7 @@ fn clear_errno() {
 /// each opened without following a link (from its parent's descriptor below root), made (0700)
 /// when missing, and checked to be this user's folder that no one else may use. Its path, which
 /// the tool gets as `PLUXY_TOOL_DATA_DIR`; it stays across releases and when the tool is removed.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(native_stack), allow(dead_code))]
 pub(crate) fn tool_data_dir(root: &Path, id: &str) -> Result<PathBuf, String> {
     let part = |s: &str| {
         !s.is_empty()
@@ -344,6 +372,10 @@ impl Folder {
             f.set_permissions(fs::Permissions::from_mode(0o700))
                 .map_err(|e| format!("{what}: {e}"))?;
         }
+        // macOS: an extended access list is the mode's twin, so it is emptied too, and nothing
+        // made in the folder inherits an entry (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        crate::private_macos::clear_entries(&f).map_err(|e| format!("{what}: {e}"))?;
         Ok(Folder(f))
     }
 
@@ -433,7 +465,14 @@ impl Folder {
         }
         let mut f = unsafe { fs::File::from_raw_fd(fd) };
         let m = f.metadata().map_err(|e| e.to_string())?;
-        if !m.is_file() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o077 != 0 {
+        // macOS: a file with any extended access list entry is refused as one too open by its
+        // mode is (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        let listed = crate::private_macos::has_entries(&f).map_err(|e| format!("{name}: {e}"))?;
+        #[cfg(not(target_os = "macos"))]
+        let listed = false;
+        if !m.is_file() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o077 != 0 || listed
+        {
             return Err(format!(
                 "{name} must be a file of this user's that no one else may read"
             ));
@@ -1155,7 +1194,7 @@ impl Vault {
 }
 
 /// The vault as the program host reaches it.
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 impl crate::program::Private for Vault {
     fn journals(&self, id: &str) -> Result<Vec<Value>, String> {
         self.open_journals(id)

@@ -365,6 +365,9 @@ func (x ExtensionConfig) validate(name string, seen map[string]bool) error {
 		if err := upheader.Check(fmt.Sprintf("%s.accounts[%d].headers", name, i), a.Headers); err != nil {
 			return fmt.Errorf("config: %w", err)
 		}
+		if err := a.CheckNames(); err != nil {
+			return fmt.Errorf("config: %s.accounts[%d]: %w", name, i, err)
+		}
 	}
 	for _, ms := range []*int64{x.IdleStopMS, x.DrainTimeoutMS, &x.Restart.BackoffMS, &x.Restart.MaxBackoffMS, &x.Restart.StableMS} {
 		if ms != nil && (*ms < 0 || *ms > maxTimingMS) {

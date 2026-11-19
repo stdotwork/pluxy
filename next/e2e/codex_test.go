@@ -56,6 +56,8 @@ func TestCodexSubscriptionLoginAndConcurrentRefresh(t *testing.T) {
 	}
 
 	release := srv.BlockRefresh()
+	defer release() // a failed wait must not leave the held requests blocking cleanup
+	front := frontCore(t, base)
 	const n = 10
 	var wg sync.WaitGroup
 	status := make([]int, n)
@@ -64,7 +66,7 @@ func TestCodexSubscriptionLoginAndConcurrentRefresh(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp := postPath(t, context.Background(), base, "/v1/responses", clientKey, `{"model":"gpt-6.1-sol","input":"Say hello"}`)
+			resp := postPath(t, context.Background(), front.URL, "/v1/responses", clientKey, `{"model":"gpt-6.1-sol","input":"Say hello"}`)
 			b, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			status[i], text[i] = resp.StatusCode, string(b)
@@ -75,7 +77,7 @@ func TestCodexSubscriptionLoginAndConcurrentRefresh(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("no refresh reached the login server")
 	}
-	time.Sleep(300 * time.Millisecond) // every request is now waiting on the one refresh
+	front.waitFor(t, n) // every request is on its way to core, which waits on the one refresh
 	release()
 	wg.Wait()
 	for i := range n {

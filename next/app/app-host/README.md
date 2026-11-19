@@ -5,7 +5,7 @@ The signature verifier is shared Rust code in `src-tauri/src/artifact.rs`. The d
 installs page-only web packages and curated signed native tools on this device
 ([extensions on this device](../README.md#extensions-on-this-device)), grants signed web
 packages files through [Access](#access-for-web-packages), and runs an admitted tool's program
-on demand through the program host (`src-tauri/src/program.rs`, Linux).
+on demand through the program host (`src-tauri/src/program.rs`; Linux, Windows and macOS).
 Core recognizes app contributions to refuse app-only packages and use only the provider part of
 a mixed package. Start with the [tutorial](TUTORIAL.md).
 
@@ -168,8 +168,9 @@ reach.
 
 ## App program contract v0
 
-The Rust program host implements this contract on Linux; [The Linux host](#the-linux-host) says
-what it adds and what is still to come. It adds no provider operation and does not change
+The Rust program host implements this contract on Linux, Windows and macOS; [The Linux host](#the-linux-host)
+says what it adds and what is still to come, and [Windows and macOS](#windows-and-macos) how those
+differ. It adds no provider operation and does not change
 provider wire version 0.7. Start a verified absolute executable directly in its immutable
 package folder, with a cleared environment and only required platform values. Pass selected
 home/config/context explicitly; do not inherit shell credentials.
@@ -331,11 +332,50 @@ anything a caller passes. On top of the rules above:
   release go in no set order. The package's pages close at the switch. A cancelled confirmation
   or a candidate that fails installs nothing; the old release stays active and serving.
 
-Still to come: deleting a tool's data folder from the Device page; and Windows and macOS.
+Still to come: deleting a tool's data folder from the Device page.
+
+### Windows and macOS
+
+The app runs native tools on Windows and macOS as on Linux: enabling a package, its imports, the
+router, the program host, the launch service and the launcher (`program.rs`, `route.rs`,
+`spawn.rs`, `launcher.rs`) are built and wired there, under the rules of
+[The Linux host](#the-linux-host), with these differences:
+
+- On Windows a tool's `HOME` is the profile folder the person's clients use (`USERPROFILE`), and
+  it also gets `SystemRoot` (parts of Windows refuse to load without it), `APPDATA` and
+  `LOCALAPPDATA`, each as the app's own environment has it and only when it is a full path. Its
+  data folder is under the app's local data folder (`<app local data>/tools`), which does not
+  roam with the profile, made private by its access list as the vault's folders are.
+- On Windows an installed package's files and folders are read-only by their access lists: the
+  user and SYSTEM may read and run them, no one may write, delete or add to them, as 0444 and
+  0500 make them on Linux and macOS. A native release's program must be a `.exe` or `.com` file
+  starting `MZ` when it is installed.
+- Saving files (`files` frames, [Saving files](#saving-files)) stays Linux only: elsewhere the
+  host refuses them, as a host with no save service does.
+
+Every process the app starts goes through `src/owned/`, which is the only code in
+the app that signals or ends a process, and only one the app started and still holds: an unreaped
+child on Linux and macOS, the process handle and its job object on Windows. `owned_tests.rs`
+checks the sources for any other call that could end a process.
+
+| | Windows | macOS |
+| --- | --- | --- |
+| What runs | The file the host opened and checked: its path now (with `\\?\` removed), opened again with only reading shared, so it cannot be renamed, replaced or written until the process runs; only `.exe` and `.com` files that start with `MZ` | The file the host opened and checked, by the path it has now (`F_GETPATH`), once no other user can change that file or any folder above it and the path still names the same file (device, inode, size, mode and times). That reads each part's mode and extended access list together, from `/` down to the file, inherited entries too: an allow entry for another user or group that holds any right but the read-only ones (`read`, `execute`, `readattr`, `readextattr`, `readsecurity`, `synchronize`, and the kernel's generic read and execute) is refused, so `write`, `add_file`, `delete` and the like, the kernel's `generic_write` and `generic_all`, and any right not known today. The refusal gives the entry's number, who it is for, its rights and how to remove it (`chmod -a#`, or `chmod -N` for every entry, with the path quoted for the shell). Deny entries pass, as home folders carry `group:everyone deny delete`. For the program of a detached launch or a managed runtime, and the program a terminal launch runs, a folder above it may also be writable by the `admin` group, by its mode or an access list entry, as macOS makes `/Applications` and Homebrew makes its folders. Another admin account can then replace the program between the check and the exec (and, for a program inside an app, whatever it later loads or starts from its app: frameworks, plug-ins, helper apps), and, with or without that rule, can replace at any time what any program loads from such folders (Homebrew's libraries, a script's interpreter and modules) |
+| Handles and descriptors it gets | Only its three standard handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), made inheritable only while it starts | Every descriptor above 2 closes as it executes, but for a terminal launch the program it runs, as 3 (see `program` in [Launches and managed runtimes](#launches-and-managed-runtimes)) |
+| Tool, managed runtime, the app's core | A job object of its own, which ends the process and everything it started when stopped and when the app exits or crashes (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) | A process group of its own (a tool's, a runtime's); the app's core stays in the app's group |
+| Asked to stop | `CTRL_BREAK` to its process group on its own hidden console, then the job ends after the grace. An app that has a console of its own (a debug build run from a terminal) cannot send it, and ends the job at once | SIGTERM, then SIGKILL to the group after the grace, as on Linux |
+| Detached launch | Started outside every job of the app's, held by nothing once it runs. Refused, and nothing starts, when the job the app runs in does not let a process leave it (a terminal, an editor or a service that started the app may hold it in one) | A session and process group of its own, as on Linux, without the systemd scope |
+| If the app crashes | Tools, runtimes and the core end with their jobs; detached launches run on | A tool sees its input close and exits; managed runtimes and the core run on (macOS has no parent-death signal) and are reported `unknown` at the next start, as on Linux |
+
+Names of environment variables are compared ignoring case on Windows. Besides the names a launch
+never gets anywhere ([What a launch gets](#what-a-launch-gets)), it never gets `DYLD_*` on macOS,
+nor `COR_*` or `__COMPAT_LAYER` on Windows: each makes a program load code it was not asked to
+run. Nor does it get `WSLENV` on Windows, which would pass the Windows variables it names on into
+a WSL distribution.
 
 ## Calls between packages
 
-The Linux host routes every call of a native tool's operation, whoever makes it: the main window
+The host routes every call of a native tool's operation, whoever makes it: the main window
 (`program_call`), a page (its `native.call` method) or another native tool (a `call` frame on its
 pipe). Each call is checked against the catalog as it is at that moment, and the host, never the
 call, says who the caller is: the window, the page's webview and its package release, or the
@@ -546,9 +586,36 @@ The host spawns what a person confirmed; a tool never starts an agent itself thr
 naming a program. A `launch` operation's input names `executable`, `argv` (the arguments after the
 program's name) and `cwd`, and may name:
 
-- `program`: the program a terminal runs, which must be one of `argv`. The confirmation opens and
+- `program`: the program a terminal runs, the argument of `argv` its terminal runs (below; on
+  Windows, any of `argv`). The confirmation opens and
   hashes it as it does the executable, so a remembered approval does not stand for a replaced
-  program (a self-update) either, and the spawn refuses one changed since it was confirmed;
+  program (a self-update) either, and the spawn refuses one changed since it was confirmed. The
+  terminal starts it after the spawn, so the spawn also checks who could change it by then:
+  - on Linux the terminal finds it by the path `argv` names, the argument right after the
+    terminal's exec flag (`-e`, `-x` or `--`, which must be the first argument), which `program`
+    must be (refused otherwise). The check covers only a launch that names `program` there: a
+    package that starts a terminal without naming `program` gets no check, and the app has no
+    list of terminals to catch it. The spawn refuses the launch
+    unless that path still leads to the file confirmed and only root and the person can change
+    the file or where the path leads: each folder on the way, each link and the file must be
+    root's or the person's, writable by others only in a sticky folder (`/tmp`) whose entry is
+    root's or the person's, and by their group only when it is the person's own private group:
+    their primary group, named as they are, with no other member, no other user's primary group,
+    and no other line of `/etc/group` with its number (Homebrew on Linux, and a umask of 002,
+    make folders and programs writable by it). Other users and groups are read from
+    `/etc/passwd` and `/etc/group`: those from other sources (LDAP, sssd, systemd-userdb) are not
+    seen, and the group database is trusted to list a group's members. A program below a folder any other
+    group may write is refused, as is one reached through a link another user could change, or a
+    path through `/proc` (and `/dev/fd`, `/dev/std*`), which leads elsewhere for the terminal. The
+    refusal names the path and a `chmod g-w,o-w` that fixes it. It does not stop the person's
+    own processes from swapping the program;
+  - on macOS the terminal is the execution program, and `program` must be the argument right
+    after `--`. The app gives it the confirmed file as descriptor 3. It hands that descriptor to
+    the execution program it starts in Terminal's
+    window, which runs that file by the path it has then, under the rule for a direct launch's
+    program ([What runs](#windows-and-macos), `admin` folders included): a file put at the
+    program's path since the confirmation never runs. The spawn applies the same rule first, so
+    the app refuses a program in a folder another user may change;
 - `file` and `within`: the file the launch opens, which must be one of `argv`, and the folder it
   must be inside, named together, each by its resolved path. The confirmation resolves both and
   refuses, before any dialog:
@@ -562,7 +629,9 @@ program's name) and `cwd`, and may name:
     resolved path and without following links, so a folder made writable or turned into a
     link since the confirmation is refused. Folders above the one it must be inside are not
     checked;
-  - a folder that is `/`, the home folder or a folder above it;
+  - a folder that is `/`, the home folder or a folder above it, or any folder when the home
+    folder cannot be found (`HOME`, else the user's passwd entry, is missing or does not
+    resolve), since it cannot be checked against it;
   - a file whose content type is not plain text (`text/plain`, `application/json`,
     `application/x-ndjson`, `application/jsonl`, `text/markdown` or `text/x-log`). The type is
     the one GIO guesses from the file's name and first bytes, with the shared-mime-info rules
@@ -638,7 +707,8 @@ started does not end with it.
   interpreter gets the opened file's `/proc/self/fd` path. It starts in the cwd the confirmation
   opened.
 - /dev/null on stdin, stdout and stderr, and no other descriptor of the app's: no tool pipe, vault
-  file or socket.
+  file or socket. A terminal launch on macOS also gets the confirmed program its terminal runs, as
+  descriptor 3 (`program` in [Launches and managed runtimes](#launches-and-managed-runtimes)).
 - The launch environment, and nothing else of the app's: the app's own environment as it started
   holds `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, `LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TERM`,
   `COLORTERM`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, the XDG
@@ -819,8 +889,9 @@ The app keeps a host-private **vault** in its data folder (`vault`; on Windows i
 folder, which does not roam with the profile), owner-only: on Linux and macOS folders 0700 and
 files 0600 of the user; on Windows a protected access list whose allow entries name only the user
 and SYSTEM, set as each folder and file is made, and an owner that is the user, the token's default
-owner (Administrators for an elevated account) or SYSTEM, checked at each read. It holds the
-secrets the person entered, and each native tool's backups and journals. It is never a
+owner (Administrators for an elevated account) or SYSTEM, checked at each read. The vault holds
+each native tool's backups and journals on all three systems, and the secrets the person entered
+on Linux, the only system with secret entry yet. It is never a
 folder a package names or reads through the host, and no window or page API gives its paths, a
 secret's value, a backup's bytes or a journal's intent. A native tool has the user's full access
 and could read it directly: this separates APIs and storage, it is not an operating-system

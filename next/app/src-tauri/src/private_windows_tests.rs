@@ -234,3 +234,28 @@ fn a_folder_made_by_someone_else_meanwhile_is_checked_before_use() {
     BEFORE_CREATE.with(|h| *h.borrow_mut() = None);
     assert!(private(&raced) && private(&raced.join("y")));
 }
+
+#[test]
+fn a_new_private_file_is_private_as_made_at_any_path_length() {
+    let t = temp();
+    // The control: what the temporary folder passes down is not private.
+    let plain = t.0.join("plain");
+    fs::write(&plain, b"").unwrap();
+    assert!(!private(&plain));
+    let file = t.0.join("file");
+    drop(create_new_private(&file).unwrap());
+    assert!(private(&file));
+    assert_eq!(
+        create_new_private(&file).unwrap_err().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    // Longer than MAX_PATH (260), as std's own opens take it.
+    let deep = t.0.join("d".repeat(200));
+    let long = deep.join("e".repeat(60));
+    create_private_dir_all(&long).unwrap();
+    assert!(private(&deep) && private(&long));
+    let inside = long.join("file");
+    assert!(inside.as_os_str().len() > 260, "{}", inside.display());
+    drop(create_new_private(&inside).unwrap());
+    assert!(private(&inside));
+}

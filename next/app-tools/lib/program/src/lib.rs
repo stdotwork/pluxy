@@ -47,6 +47,8 @@ use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+pub mod environment;
+
 /// The contract major version this library speaks.
 pub const CONTRACT: i64 = 0;
 /// The largest frame a program may send; the host breaks the pipe of one that sends more.
@@ -175,7 +177,9 @@ pub struct Identity {
 
 impl Identity {
     /// From the host's environment: `PLUXY_APP_CONTRACT_VERSIONS` must list this contract,
-    /// `PLUXY_EXTENSION_ID` and `PLUXY_APP_ARTIFACT_SHA256` name the release.
+    /// `PLUXY_EXTENSION_ID` and `PLUXY_APP_ARTIFACT_SHA256` name the release. When
+    /// `PLUXY_ENVIRONMENT` names a WSL distribution and user, this must run in that distribution as
+    /// that user ([`environment::check`]); otherwise the program stops before it says hello.
     pub fn from_env() -> Result<Identity, String> {
         let var = |name: &str| {
             std::env::var(name)
@@ -191,6 +195,13 @@ impl Identity {
             return Err(format!(
                 "the app speaks contract versions {versions}, this program {CONTRACT}"
             ));
+        }
+        // Fail closed: a value that is set but not UTF-8 is refused, never taken for none.
+        if let Some(env) = std::env::var_os("PLUXY_ENVIRONMENT").filter(|v| !v.is_empty()) {
+            let env = env
+                .to_str()
+                .ok_or("PLUXY_ENVIRONMENT is not UTF-8: start this program from pluxy's app")?;
+            environment::check(env)?;
         }
         Ok(Identity {
             id: var("PLUXY_EXTENSION_ID")?,

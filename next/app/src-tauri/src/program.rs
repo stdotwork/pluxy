@@ -1,5 +1,5 @@
 //! The program host: runs the native tools this device admitted, on demand, as app program
-//! contract v0 says (`../app-host/README.md`). Linux only for now.
+//! contract v0 says (`../app-host/README.md`), on Linux, macOS and Windows (`owned.rs`).
 //!
 //! A tool starts at the first call or lease, from the record `device::Catalog::admitted` gives
 //! at that moment (`Host::new`'s resolver), never from anything a caller passes. The program
@@ -69,15 +69,19 @@
 //! Its `files` frames go to the host's save service (`Host::set_saver`, `savefile.rs`) the same way.
 
 use crate::managed::{start_when_free, BUSY_PAUSE};
+use crate::owned::{
+    kill_group, leader, read_some, Child, ChildStderr, ChildStdin, ChildStdout, Leader,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
-use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
+#[cfg(unix)]
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
@@ -198,22 +202,43 @@ impl From<&crate::device::Admitted> for Spec {
 pub struct ToolEnv {
     /// The app's own home folder: `HOME`.
     pub home: PathBuf,
-    /// `<app data>/tools`: each tool's data folder is `<publisher>/<name>` in it.
+    /// `<app data>/tools` (`<app local data>/tools` on Windows): each tool's data folder is
+    /// `<publisher>/<name>` in it.
     pub tools: PathBuf,
+    /// The app's own system folders a tool needs on Windows (`ToolEnv::system`); none elsewhere.
+    pub system: Vec<(&'static str, PathBuf)>,
 }
 
-/// The extra environment of spec's tool: `HOME` and its data folder, made now
-/// (`vault::tool_data_dir`); none without a `ToolEnv`. A folder that cannot be made fails the start.
+impl ToolEnv {
+    /// On Windows, `SystemRoot` (parts of Windows refuse to load without it), `APPDATA` and
+    /// `LOCALAPPDATA` (where some clients keep their files) as the app's own environment has them,
+    /// each only when it is a full path. None elsewhere.
+    pub fn system() -> Vec<(&'static str, PathBuf)> {
+        if !cfg!(windows) {
+            return Vec::new();
+        }
+        ["SystemRoot", "APPDATA", "LOCALAPPDATA"]
+            .into_iter()
+            .filter_map(|k| {
+                let v = PathBuf::from(std::env::var_os(k)?);
+                v.is_absolute().then_some((k, v))
+            })
+            .collect()
+    }
+}
+
+/// The extra environment of spec's tool: `HOME`, its data folder, made now
+/// (`vault::tool_data_dir`), and the system folders; none without a `ToolEnv`. A folder that
+/// cannot be made fails the start.
 fn tool_env(inner: &Inner, spec: &Spec) -> Result<Vec<(&'static str, PathBuf)>, String> {
     let Some(env) = inner.env.get() else {
         return Ok(Vec::new());
     };
     let data = crate::vault::tool_data_dir(&env.tools, &spec.id)
         .map_err(|e| format!("{}: its data folder: {e}", spec.id))?;
-    Ok(vec![
-        ("HOME", env.home.clone()),
-        ("PLUXY_TOOL_DATA_DIR", data),
-    ])
+    let mut vars = vec![("HOME", env.home.clone()), ("PLUXY_TOOL_DATA_DIR", data)];
+    vars.extend(env.system.iter().cloned());
+    Ok(vars)
 }
 
 /// Gives the admitted record for a package ID, checked now, or why there is none. Only the
@@ -444,7 +469,55 @@ pub struct Draining {
 /// Text with control and format characters escaped (such as U+202E, which reorders what follows
 /// it), as the native confirmation shows text.
 fn escape(text: &str) -> String {
-    crate::confirmation::escape_format_characters(text)
+    #[cfg(target_os = "linux")]
+    return crate::confirmation::escape_format_characters(text);
+    #[cfg(not(target_os = "linux"))]
+    escape_format(text)
+}
+
+/// `confirmation::escape_format_characters` where GTK, which it takes Unicode's categories from,
+/// is not there: control characters, the line and paragraph separators and the format characters
+/// (Unicode category Cf, as of Unicode 15.1) as `\uXXXX` UTF-16 escapes.
+#[cfg(not(target_os = "linux"))]
+fn escape_format(text: &str) -> String {
+    const FORMAT: &[(u32, u32)] = &[
+        (0x00AD, 0x00AD),
+        (0x0600, 0x0605),
+        (0x061C, 0x061C),
+        (0x06DD, 0x06DD),
+        (0x070F, 0x070F),
+        (0x0890, 0x0891),
+        (0x08E2, 0x08E2),
+        (0x180E, 0x180E),
+        (0x200B, 0x200F),
+        (0x202A, 0x202E),
+        (0x2060, 0x2064),
+        (0x2066, 0x206F),
+        (0xFEFF, 0xFEFF),
+        (0xFFF9, 0xFFFB),
+        (0x110BD, 0x110BD),
+        (0x110CD, 0x110CD),
+        (0x13430, 0x1343F),
+        (0x1BCA0, 0x1BCA3),
+        (0x1D173, 0x1D17A),
+        (0xE0001, 0xE0001),
+        (0xE0020, 0xE007F),
+    ];
+    let mut out = String::new();
+    for ch in text.chars() {
+        let c = ch as u32;
+        if ch.is_control()
+            || matches!(ch, '\u{2028}' | '\u{2029}')
+            || FORMAT.iter().any(|(a, b)| (*a..=*b).contains(&c))
+        {
+            for unit in ch.encode_utf16(&mut [0; 2]).iter() {
+                out.push_str(&format!("\\u{unit:04x}"));
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// text as it leaves the host: redacted, then escaped.
@@ -1419,7 +1492,7 @@ impl Host {
         compatible(&spec).map_err(unavailable)?;
         let program = open_program(&spec).map_err(unavailable)?;
         let env = tool_env(inner, &spec).map_err(unavailable)?;
-        let (run, hello_rx, cmd) = new_run(inner, spec, &program, &env);
+        let (run, hello_rx, cmd) = new_run(inner, spec, &program, &env).map_err(unavailable)?;
         {
             let mut slots = inner.slots();
             if inner.closing.load(Ordering::SeqCst) {
@@ -1586,6 +1659,12 @@ fn open_program(spec: &Spec) -> Result<std::fs::File, String> {
             spec.id
         ));
     }
+    // On Windows opened so that no process can write, rename or delete it while it is open: what
+    // is checked here is what runs (`owned::windows`).
+    #[cfg(windows)]
+    let mut f = crate::owned::windows::open_pinned(&spec.program)
+        .map_err(|e| format!("{}: {e}", spec.program.display()))?;
+    #[cfg(not(windows))]
     let mut f = std::fs::File::open(&spec.program)
         .map_err(|e| format!("{}: {e}", spec.program.display()))?;
     let mut h = Sha256::new();
@@ -1609,11 +1688,13 @@ fn open_program(spec: &Spec) -> Result<std::fs::File, String> {
 }
 
 /// The command that runs the opened program file f, as the contract says.
-fn command(spec: &Spec, f: &std::fs::File) -> Command {
-    // The kernel opens /proc/self/fd/<n>, the checked file, as it executes; the descriptor is
-    // close-on-exec, so the tool does not keep it.
-    let mut cmd = Command::new(format!("/proc/self/fd/{}", f.as_raw_fd()));
-    // Its command line; its short name (`comm`) stays the descriptor's number.
+#[cfg(unix)]
+fn command(spec: &Spec, f: &std::fs::File) -> Result<Command, String> {
+    // Linux: the kernel opens /proc/self/fd/<n>, the checked file, as it executes; the descriptor
+    // is close-on-exec, so the tool does not keep it. macOS: the path the checked file has now,
+    // once no other user can change it (`owned::exec_target`).
+    let mut cmd = Command::new(crate::owned::exec_target(f, crate::owned::Writers::Nobody)?);
+    // Its command line; on Linux its short name (`comm`) stays the descriptor's number.
     cmd.arg0(&spec.program)
         .env_clear()
         .env("PLUXY_APP_CONTRACT_VERSIONS", CONTRACT.to_string())
@@ -1628,7 +1709,9 @@ fn command(spec: &Spec, f: &std::fs::File) -> Command {
     let parent = unsafe { libc::getpid() };
     unsafe {
         cmd.pre_exec(move || {
-            // If the app dies without stopping it, it gets SIGTERM rather than living on.
+            // If the app dies without stopping it, it gets SIGTERM rather than living on. macOS
+            // has no such signal: its stdin's end tells it.
+            #[cfg(target_os = "linux")]
             if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -1637,20 +1720,36 @@ fn command(spec: &Spec, f: &std::fs::File) -> Command {
                 return Err(io::Error::from_raw_os_error(libc::ESRCH));
             }
             // Only its three pipes reach it: every other descriptor closes as it executes.
-            if libc::syscall(
-                libc::SYS_close_range,
-                3u32,
-                u32::MAX,
-                libc::CLOSE_RANGE_CLOEXEC,
-            ) != 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
+            crate::owned::close_on_exec_from_3()
         });
     }
-    cmd
+    Ok(cmd)
 }
+
+/// The command that runs the opened program file f, as the contract says: by its path, pinned
+/// (`owned::windows`), in a job of its own.
+#[cfg(windows)]
+fn command(spec: &Spec, f: &std::fs::File) -> Result<crate::owned::windows::Command, String> {
+    use crate::owned::windows::{self as w, Io, Kind};
+    let pinned = w::pin_file(f)?;
+    let mut cmd = w::Command::new(pinned, Kind::Tool);
+    cmd.arg0(&spec.program)
+        .env("PLUXY_APP_CONTRACT_VERSIONS", CONTRACT.to_string())
+        .env("PLUXY_EXTENSION_ID", &spec.id)
+        .env("PLUXY_APP_ARTIFACT_SHA256", &spec.sha256)
+        .current_dir(&spec.dir)
+        .stdin(Io::Piped)
+        .stdout(Io::Piped)
+        .stderr(Io::Piped)
+        // Its pipes carry secrets.
+        .secrets(true);
+    Ok(cmd)
+}
+
+#[cfg(unix)]
+type ToolCommand = Command;
+#[cfg(windows)]
+type ToolCommand = crate::owned::windows::Command;
 
 /// A new run of spec's tool, not started yet: its hello's receiver and its command, which runs
 /// the opened program file.
@@ -1659,7 +1758,9 @@ fn new_run(
     spec: Spec,
     program: &std::fs::File,
     env: &[(&str, PathBuf)],
-) -> (Arc<Run>, mpsc::Receiver<Value>, Command) {
+) -> Result<(Arc<Run>, mpsc::Receiver<Value>, ToolCommand), String> {
+    let mut cmd = command(&spec, program)?;
+    cmd.envs(env.iter().map(|(k, v)| (k, v)));
     let (hello_tx, hello_rx) = mpsc::channel();
     let gate = Arc::clone(&inner.slots().entry(spec.id.clone()).or_default().gate);
     let run = Arc::new(Run {
@@ -1686,16 +1787,14 @@ fn new_run(
         describing: Mutex::new(None),
         last_line: Mutex::new(None),
     });
-    let mut cmd = command(&run.spec, program);
-    cmd.envs(env.iter().map(|(k, v)| (k, v)));
-    (run, hello_rx, cmd)
+    Ok((run, hello_rx, cmd))
 }
 
 /// Starts run's supervisor thread, which spawns the tool; returns once it has been spawned.
 fn spawn_supervisor(
     inner: &Arc<Inner>,
     run: &Arc<Run>,
-    cmd: Command,
+    cmd: ToolCommand,
     program: std::fs::File,
 ) -> Result<(), String> {
     let (spawned_tx, spawned_rx) = mpsc::channel();
@@ -1730,7 +1829,7 @@ fn start(
     check(&spec).map_err(StartError::Refused)?;
     let program = open_program(&spec).map_err(failed)?;
     let env = tool_env(inner, &spec).map_err(failed)?;
-    let (run, hello_rx, cmd) = new_run(inner, spec, &program, &env);
+    let (run, hello_rx, cmd) = new_run(inner, spec, &program, &env).map_err(failed)?;
     {
         let mut slots = inner.slots();
         let slot = slots.entry(id.to_string()).or_default();
@@ -1983,39 +2082,11 @@ fn handshake(
     Ok(unknown.into_iter().map(|u| u.call).collect())
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Leader {
-    Running,
-    /// Exited, not reaped yet: until it is reaped its process group's number cannot be reused,
-    /// so the group can still be killed safely.
-    Exited,
-    /// Not this host's child to wait for any more: reaped by someone else.
-    Gone,
-}
-
-/// The tool's state, without reaping it.
-pub(crate) fn leader(pid: u32) -> Leader {
-    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-    let r = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            pid as libc::id_t,
-            &mut info,
-            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-        )
-    };
-    match (r, unsafe { info.si_pid() }) {
-        (0, 0) => Leader::Running,
-        (0, _) => Leader::Exited,
-        _ => Leader::Gone,
-    }
-}
-
 /// The supervisor thread: starts the tool and stays until it has exited and been reaped.
 fn supervise(
     inner: Arc<Inner>,
     run: Arc<Run>,
-    mut cmd: Command,
+    mut cmd: ToolCommand,
     program: std::fs::File,
     spawned: Sender<Result<(), String>>,
 ) {
@@ -2058,7 +2129,7 @@ fn supervise(
     let _ = spawned.send(Ok(()));
     let mut stopping: Option<Instant> = None;
     loop {
-        if leader(pid) != Leader::Running {
+        if leader(&child) != Leader::Running {
             break;
         }
         // Idle: no lease for the idle delay.
@@ -2106,15 +2177,10 @@ fn supervise(
         }
         std::thread::sleep(TICK);
     }
-    // The whole group: what it left, or all of it once the grace is over. Never once it has been
-    // reaped, when its group's number could be another's.
-    if leader(pid) != Leader::Gone {
-        unsafe {
-            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
-        }
-        // And itself, should it have left its group.
-        let _ = child.kill();
-    }
+    // The whole group (on Windows its job): what it left, or all of it once the grace is over, and
+    // itself should it have left its group. Never once it has been reaped, when its group's number
+    // could be another's (`owned`).
+    kill_group(&mut child);
     let status = child.wait();
     run.tx.lock().unwrap().take();
     run.closed.store(true, Ordering::SeqCst);
@@ -2221,36 +2287,11 @@ fn write_frames(mut stdin: ChildStdin, rx: mpsc::Receiver<Vec<u8>>, queued: &Ato
     }
 }
 
-/// Reads from fd until it has data, the end, or run is reaped: then None.
-fn read_some(run: &Run, r: &mut impl Read, fd: i32, buf: &mut [u8]) -> Option<usize> {
-    loop {
-        if run.closed.load(Ordering::SeqCst) {
-            return None;
-        }
-        let mut p = libc::pollfd {
-            fd,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let n = unsafe { libc::poll(&mut p, 1, TICK.as_millis() as i32) };
-        if n < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
-            return None;
-        }
-        if n > 0 {
-            return match r.read(buf) {
-                Ok(0) | Err(_) => None,
-                Ok(n) => Some(n),
-            };
-        }
-    }
-}
-
 fn read_frames(run: &Arc<Run>, mut stdout: ChildStdout) {
-    let fd = stdout.as_raw_fd();
     let mut buf = Vec::new();
     let mut chunk = vec![0u8; 64 << 10];
     let mut said_hello = false;
-    'read: while let Some(n) = read_some(run, &mut stdout, fd, &mut chunk) {
+    'read: while let Some(n) = read_some(&run.closed, &mut stdout, &mut chunk) {
         buf.extend_from_slice(&chunk[..n]);
         while buf.len() >= 4 {
             let len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
@@ -2629,7 +2670,6 @@ impl Rate<'_> {
 }
 
 fn read_log(run: &Run, mut stderr: ChildStderr) {
-    let fd = stderr.as_raw_fd();
     let mut line: Vec<u8> = Vec::new();
     let mut skipping = false;
     let mut chunk = vec![0u8; 8 << 10];
@@ -2639,7 +2679,7 @@ fn read_log(run: &Run, mut stderr: ChildStderr) {
         lines: 0,
         left_out: 0,
     };
-    while let Some(n) = read_some(run, &mut stderr, fd, &mut chunk) {
+    while let Some(n) = read_some(&run.closed, &mut stderr, &mut chunk) {
         for &b in &chunk[..n] {
             if b == b'\n' {
                 if !skipping {

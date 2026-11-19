@@ -105,6 +105,7 @@ dependencies = [
 name = "claude-desktop"
 version = "0.1.0"
 dependencies = [
+ "pluxy-files",
  "pluxy-program",
  "pluxy-transactions",
  "serde_json",
@@ -128,7 +129,6 @@ dependencies = [
  "pluxy-program",
  "pluxy-transactions",
  "serde_json",
- "toml_edit",
 ]
 
 [[package]]
@@ -271,6 +271,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "grok-setup"
+version = "0.1.0"
+dependencies = [
+ "pluxy-files",
+ "pluxy-program",
+ "pluxy-transactions",
+ "serde_json",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -292,6 +302,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb"
 dependencies = [
  "hashbrown 0.17.1",
+]
+
+[[package]]
+name = "hermes-setup"
+version = "0.1.0"
+dependencies = [
+ "pluxy-files",
+ "pluxy-program",
+ "pluxy-transactions",
+ "serde_json",
 ]
 
 [[package]]
@@ -401,11 +421,10 @@ dependencies = [
 name = "omp-setup"
 version = "0.1.0"
 dependencies = [
+ "pluxy-files",
  "pluxy-program",
  "pluxy-transactions",
- "saphyr",
  "serde_json",
- "yaml-edit",
 ]
 
 [[package]]
@@ -419,6 +438,7 @@ name = "opencode"
 version = "0.1.0"
 dependencies = [
  "jsonc-parser",
+ "pluxy-files",
  "pluxy-program",
  "pluxy-transactions",
  "serde_json",
@@ -431,6 +451,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f59006ce1e204c30956638535b74d317bca99477b9356dfaec54c37f6f600ab"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "pi-setup"
+version = "0.1.0"
+dependencies = [
+ "pluxy-files",
+ "pluxy-program",
+ "pluxy-transactions",
+ "serde_json",
 ]
 
 [[package]]
@@ -476,11 +506,18 @@ dependencies = [
 name = "pluxy-transactions"
 version = "0.1.0"
 dependencies = [
+ "cap-primitives",
  "cap-std",
  "getrandom",
+ "libc",
+ "pluxy-files",
  "pluxy-program",
+ "saphyr",
  "serde_json",
  "sha2",
+ "toml_edit",
+ "windows-sys 0.61.2",
+ "yaml-edit",
 ]
 
 [[package]]
@@ -1049,6 +1086,15 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "wsl"
+version = "0.1.0"
+dependencies = [
+ "pluxy-program",
+ "serde_json",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "yaml-edit"

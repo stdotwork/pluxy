@@ -1,11 +1,13 @@
 //! The host's spawn service: starts the launches the router confirmed (`route.rs`), for the tool
 //! that serves the confirmed call, which names nothing of the launch itself
-//! (`../app-host/README.md`, "Launches and managed runtimes"). Linux only, as the program host.
+//! (`../app-host/README.md`, "Launches and managed runtimes"), on Linux, macOS and Windows: the
+//! processes it starts and holds, and what it may do to them, are `owned.rs`'s.
 //!
 //! A launch runs the executable the confirmation opened (the opened file, never its path again)
 //! in the cwd it opened, with exactly the confirmed argv, the executable's name as named as its
 //! `argv[0]`, /dev/null on stdin, stdout and stderr, and no other descriptor of the app's (no
-//! tool pipe, vault file or socket). Its environment is the launch environment (`environment`):
+//! tool pipe, vault file or socket) but, for a terminal launch on macOS, the confirmed program
+//! the terminal runs, as 3 (`command`). Its environment is the launch environment (`environment`):
 //! selected values of the app's own environment as it started (`Snapshot`), the variables the
 //! confirmed launch set, inherited by name or removed, and the secrets the host resolved for it,
 //! each resolved at the moment it is given (the spawn, a runtime's start or restart) by the
@@ -37,18 +39,23 @@
 //! running, so the next start reports each as `unknown`; it never signals them, because a
 //! process ID alone does not prove it is still that runtime.
 
-use crate::program::{leader, Leader};
+use crate::owned::{kill_group, leader, term_group, Child, Leader};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::File;
+#[cfg(unix)]
 use std::io;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{FileExt, OpenOptionsExt};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::FileExt;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -56,6 +63,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// The launch environment policy's version: part of each launch's environment revision.
 const POLICY: u32 = 1;
 /// The session values a launch gets from the app's environment as it started, with `LC_*`.
+#[cfg(target_os = "linux")]
 pub const BASE: &[&str] = &[
     "HOME",
     "USER",
@@ -90,6 +98,69 @@ pub const BASE: &[&str] = &[
     "NO_PROXY",
     "ALL_PROXY",
 ];
+/// macOS: the user's session values, its per-user temporary folder and text encoding, the proxy
+/// variables.
+#[cfg(target_os = "macos")]
+pub const BASE: &[&str] = &[
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "PATH",
+    "LANG",
+    "LANGUAGE",
+    "TZ",
+    "TERM",
+    "COLORTERM",
+    "TMPDIR",
+    "__CF_USER_TEXT_ENCODING",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+];
+/// Windows (names in capitals: Windows compares them ignoring case): the user's profile and
+/// folders, the system's folders (`SYSTEMROOT` is needed by the network stack), the program
+/// search rules and the proxy variables.
+#[cfg(windows)]
+pub const BASE: &[&str] = &[
+    "USERPROFILE",
+    "USERNAME",
+    "USERDOMAIN",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "COMMONPROGRAMFILES",
+    "COMMONPROGRAMFILES(X86)",
+    "COMMONPROGRAMW6432",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "PATH",
+    "TEMP",
+    "TMP",
+    "OS",
+    "PROCESSOR_ARCHITECTURE",
+    "NUMBER_OF_PROCESSORS",
+    "COMPUTERNAME",
+    "LANG",
+    "TZ",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+];
 /// Names a launch may never set, inherit or receive a secret in: the app's own and its tests'
 /// (`PLUXY_`), the dynamic loader's (`LD_`) and the AppImage runtime's, and the .NET runtime's
 /// profiler and the legacy `COMPlus_` settings. Prefixes are upper case, as names are compared.
@@ -102,6 +173,14 @@ const NEVER_PREFIX: &[&str] = &[
     "DOTNET_PROFILER",
     "COMPLUS_",
 ];
+/// And per platform: macOS's dynamic loader (`DYLD_`), the .NET runtime's other settings on
+/// Windows (`COR_`).
+#[cfg(target_os = "linux")]
+const NEVER_PREFIX_PLATFORM: &[&str] = &[];
+#[cfg(target_os = "macos")]
+const NEVER_PREFIX_PLATFORM: &[&str] = &["DYLD_"];
+#[cfg(windows)]
+const NEVER_PREFIX_PLATFORM: &[&str] = &["COR_"];
 /// And names that make the dynamic loader, the C library or an interpreter load or run code of
 /// their own, like `LD_*`.
 const NEVER: &[&str] = &[
@@ -139,6 +218,12 @@ const NEVER: &[&str] = &[
     "NODE_PATH",
     "RUBYLIB",
 ];
+/// Windows adds a compatibility layer's code loading (`__COMPAT_LAYER`), and `WSLENV`, which
+/// would pass the Windows variables it names on into a WSL distribution.
+#[cfg(windows)]
+const NEVER_PLATFORM: &[&str] = &["__COMPAT_LAYER", "WSLENV"];
+#[cfg(not(windows))]
+const NEVER_PLATFORM: &[&str] = &[];
 /// At most this many names in each of set, unset, inherit and secrets.
 const MAX_NAMES: usize = 64;
 const MAX_NAME: usize = 128;
@@ -153,6 +238,7 @@ const TICK: Duration = Duration::from_millis(100);
 /// their session values from. Only `spawn` reads it.
 pub struct Snapshot {
     vars: BTreeMap<String, OsString>,
+    #[cfg(unix)]
     core: libc::rlimit,
 }
 
@@ -162,27 +248,38 @@ impl Snapshot {
     /// This process's environment and core limits now.
     pub fn now() -> Snapshot {
         let vars = std::env::vars_os()
-            .filter_map(|(k, v)| Some((k.into_string().ok()?, v)))
+            .filter_map(|(k, v)| Some((key(&k.into_string().ok()?), v)))
             .collect();
         Snapshot {
             vars,
+            #[cfg(unix)]
             core: core_limit(),
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn of(vars: &[(&str, &str)], core: libc::rlimit) -> Snapshot {
         Snapshot {
             vars: vars
                 .iter()
-                .map(|(k, v)| (k.to_string(), OsString::from(v)))
+                .map(|(k, v)| (key(k), OsString::from(v)))
                 .collect(),
             core,
         }
     }
 
+    #[cfg(all(test, not(unix)))]
+    pub fn of(vars: &[(&str, &str)]) -> Snapshot {
+        Snapshot {
+            vars: vars
+                .iter()
+                .map(|(k, v)| (key(k), OsString::from(v)))
+                .collect(),
+        }
+    }
+
     fn get(&self, name: &str) -> Option<&OsString> {
-        self.vars.get(name)
+        self.vars.get(&key(name))
     }
 }
 
@@ -196,15 +293,41 @@ pub fn snapshot() -> &'static Snapshot {
 /// inherit the limit, receive secrets on their pipes. The hard limit stays, so a developer can
 /// raise the soft one again (`prlimit --core=unlimited --pid <app>`). Launches given no secret get
 /// the limits the app started with back.
+/// On Windows, where there are no core files, the app asks for no error report of its own crash
+/// (`SEM_NOGPFAULTERRORBOX`), which a launch given a secret inherits; one given none starts with
+/// the system's default (`owned::windows`), and tools and runtimes given secrets die without a
+/// report in their jobs.
 pub fn capture() {
     let s = snapshot();
-    let lowered = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: s.core.rlim_max,
-    };
-    unsafe { libc::setrlimit(libc::RLIMIT_CORE, &lowered) };
+    #[cfg(unix)]
+    {
+        let lowered = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: s.core.rlim_max,
+        };
+        unsafe { libc::setrlimit(libc::RLIMIT_CORE, &lowered) };
+    }
+    #[cfg(windows)]
+    {
+        let _ = s;
+        use windows_sys::Win32::System::Diagnostics::Debug::{
+            GetErrorMode, SetErrorMode, SEM_NOGPFAULTERRORBOX,
+        };
+        unsafe { SetErrorMode(GetErrorMode() | SEM_NOGPFAULTERRORBOX) };
+    }
 }
 
+/// A variable's name as the app keeps it: on Windows in capitals, since Windows compares names
+/// ignoring case (`Path` is `PATH`).
+fn key(name: &str) -> String {
+    if cfg!(windows) {
+        name.to_ascii_uppercase()
+    } else {
+        name.to_string()
+    }
+}
+
+#[cfg(unix)]
 fn core_limit() -> libc::rlimit {
     let mut l = libc::rlimit {
         rlim_cur: 0,
@@ -278,7 +401,13 @@ fn valid_name(n: &str) -> Result<(), String> {
 fn allowed_name(n: &str) -> Result<(), String> {
     valid_name(n)?;
     let upper = n.to_ascii_uppercase();
-    if NEVER.contains(&upper.as_str()) || NEVER_PREFIX.iter().any(|p| upper.starts_with(p)) {
+    if NEVER.contains(&upper.as_str())
+        || NEVER_PLATFORM.contains(&upper.as_str())
+        || NEVER_PREFIX
+            .iter()
+            .chain(NEVER_PREFIX_PLATFORM)
+            .any(|p| upper.starts_with(p))
+    {
         return Err(format!("a launch may not set or inherit {n}"));
     }
     Ok(())
@@ -421,9 +550,15 @@ pub fn parse(
             ));
         }
     }
+    // Each name once, compared as the launch's environment compares them (`key`: ignoring case on
+    // Windows), so the confirmation shows every variable the launch gets, and only once.
+    let mut unset = std::collections::BTreeSet::new();
+    if let Some(n) = r.unset.iter().find(|n| !unset.insert(key(n))) {
+        return Err(format!("environment unset names {n} more than once"));
+    }
     let mut seen = std::collections::BTreeSet::new();
     for n in r.inherit.iter().chain(r.set.keys()).chain(r.secrets.keys()) {
-        if !seen.insert(n) {
+        if !seen.insert(key(n)) {
             return Err(format!(
                 "environment names {n} more than once in set, inherit and secrets"
             ));
@@ -492,6 +627,7 @@ impl Request {
 }
 
 /// The entries of a `:`-separated list s that are not inside folder dir.
+#[cfg(target_os = "linux")]
 fn outside(s: &OsString, dir: &OsString) -> OsString {
     let (s, dir) = (s.to_string_lossy(), dir.to_string_lossy());
     let dir = dir.trim_end_matches('/');
@@ -515,9 +651,10 @@ pub fn environment(
         .vars
         .iter()
         .filter(|(k, _)| BASE.contains(&k.as_str()) || k.starts_with("LC_"))
-        .filter(|(k, _)| !request.unset.contains(k))
+        .filter(|(k, _)| !request.unset.iter().any(|u| key(u) == **k))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    #[cfg(target_os = "linux")]
     if let Some(appdir) = snap.get("APPDIR") {
         for k in ["PATH", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS"] {
             if let Some(v) = env.get_mut(k) {
@@ -527,24 +664,26 @@ pub fn environment(
     }
     for n in &request.inherit {
         if let Some(v) = snap.get(n) {
-            env.insert(n.clone(), v.clone());
+            env.insert(key(n), v.clone());
         }
     }
     for (n, v) in &request.set {
-        env.insert(n.clone(), OsString::from(v));
+        env.insert(key(n), OsString::from(v));
     }
     for (n, v) in secrets {
-        env.insert(n.clone(), OsString::from(v));
+        env.insert(key(n), OsString::from(v));
     }
     if request.absolute_path {
         if let Some(v) = env.get_mut("PATH") {
+            // `;` and drive or UNC paths on Windows.
+            let sep = if cfg!(windows) { ';' } else { ':' };
             let kept: Vec<String> = v
                 .to_string_lossy()
-                .split(':')
-                .filter(|e| e.starts_with('/'))
+                .split(sep)
+                .filter(|e| !e.is_empty() && std::path::Path::new(e).is_absolute())
                 .map(String::from)
                 .collect();
-            *v = OsString::from(kept.join(":"));
+            *v = OsString::from(kept.join(&sep.to_string()));
         }
     }
     env.into_iter().collect()
@@ -555,17 +694,26 @@ pub fn environment(
 pub trait Opened: Send + Sync {
     fn executable(&self) -> &File;
     fn cwd(&self) -> &File;
+    /// The program a terminal runs (a launch that names one), opened, and its path as the launch
+    /// names it.
+    fn program(&self) -> Option<(&File, &Path)> {
+        None
+    }
     /// Refused once the executable or cwd changed since it was confirmed (replaced, or written
     /// in place).
     fn recheck(&self) -> Result<(), String>;
 }
 
+#[cfg(native_stack)]
 impl Opened for crate::confirmation::Authorized {
     fn executable(&self) -> &File {
         crate::confirmation::Authorized::executable(self).expect("a launch's executable")
     }
     fn cwd(&self) -> &File {
         crate::confirmation::Authorized::cwd(self).expect("a launch's cwd")
+    }
+    fn program(&self) -> Option<(&File, &Path)> {
+        crate::confirmation::Authorized::program(self)
     }
     fn recheck(&self) -> Result<(), String> {
         crate::confirmation::Authorized::recheck(self)
@@ -587,28 +735,39 @@ pub struct Launch {
 
 /// Whether f is a script (`#!`): its interpreter opens it again by its descriptor's path, so the
 /// descriptor must stay open across exec.
+#[cfg(target_os = "linux")]
 fn is_script(f: &File) -> bool {
     let mut b = [0u8; 2];
     f.read_at(&mut b, 0).ok() == Some(2) && &b == b"#!"
 }
 
 /// The command that runs launch l with environment env: managed (in a process group of its own,
-/// SIGTERM when its parent dies) or detached (a wrapper that starts it in a session of its own
-/// and exits). With secrets given, its core file size limits are 1 (soft and hard), inherited by
-/// its descendants: no core file and no core dump handler; otherwise it gets the app's starting
+/// on Linux SIGTERM when its parent dies) or detached (a wrapper that starts it in a session of its
+/// own and exits). With secrets given, its core file size limits are 1 (soft and hard), inherited
+/// by its descendants: no core file and no core dump handler; otherwise it gets the app's starting
 /// limits back.
-/// hold, for a detached launch: the pipes that hold its wrapper before it forks the launch, until
-/// the app has moved it into a scope of its own (`Hold`).
+/// hold, for a detached launch on Linux: the pipes that hold its wrapper before it forks the
+/// launch, until the app has moved it into a scope of its own (`Hold`).
+/// On Linux it runs the opened file itself (`/proc/self/fd`); on macOS the path that file has now,
+/// once no other user but a member of `admin` can change it (`owned::exec_target`,
+/// `owned::Writers::Admins`). The program a terminal launch names is checked too, since the
+/// terminal starts it after this: on Linux the terminal finds it by the path the launch names,
+/// which no other user may be able to change or redirect (`owned::path_target`); on macOS the
+/// execution program in Terminal's window runs it from the file checked here, which it gets as
+/// descriptor 3, by the path that file has then, checked again there under the same rule.
+#[cfg(unix)]
 fn command(
     l: &Launch,
     env: Vec<(String, OsString)>,
     holds_secrets: bool,
     hold: Option<[i32; 4]>,
-) -> Command {
+) -> Result<Command, String> {
     let exe = l.opened.executable();
-    let exe_fd = exe.as_raw_fd();
+    #[cfg(target_os = "linux")]
+    let (exe_fd, script) = (exe.as_raw_fd(), is_script(exe));
+    #[cfg(not(target_os = "linux"))]
+    let _ = hold;
     let cwd_fd = l.opened.cwd().as_raw_fd();
-    let script = is_script(exe);
     let detached = l.lifetime == Lifetime::Detached;
     // 1, not 0: with 0 the kernel still runs a `|` core dump handler (systemd-coredump), which
     // records the process's environment, the secret included, in the journal; with 1 it runs
@@ -621,7 +780,22 @@ fn command(
     } else {
         snapshot().core
     };
-    let mut cmd = Command::new(format!("/proc/self/fd/{exe_fd}"));
+    let mut cmd = Command::new(crate::owned::exec_target(
+        exe,
+        crate::owned::Writers::Admins,
+    )?);
+    #[cfg(target_os = "macos")]
+    let mut program_fd = None;
+    if let Some((program, named)) = l.opened.program() {
+        #[cfg(target_os = "linux")]
+        crate::owned::path_target(program, named)?;
+        #[cfg(target_os = "macos")]
+        {
+            let _ = named;
+            crate::owned::exec_target(program, crate::owned::Writers::Admins)?;
+            program_fd = Some(program.as_raw_fd());
+        }
+    }
     cmd.arg0(&l.named)
         .args(&l.argv)
         .env_clear()
@@ -646,6 +820,7 @@ fn command(
             if detached {
                 // Held until the app moved the wrapper into a scope of its own (or gave up), so
                 // the launch and everything it starts is in that scope from its fork on.
+                #[cfg(target_os = "linux")]
                 if let Some([pid_r, pid_w, go_r, go_w]) = hold {
                     libc::close(pid_r);
                     libc::close(go_w);
@@ -668,11 +843,14 @@ fn command(
                 if libc::setsid() == -1 {
                     return Err(err());
                 }
+                #[cfg(target_os = "linux")]
                 if libc::prctl(libc::PR_SET_PDEATHSIG, 0) != 0 {
                     return Err(err());
                 }
             } else {
-                // If the app dies without stopping it, it gets SIGTERM.
+                // If the app dies without stopping it, it gets SIGTERM (Linux only: macOS has no
+                // parent-death signal).
+                #[cfg(target_os = "linux")]
                 if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
                     return Err(err());
                 }
@@ -684,22 +862,50 @@ fn command(
                 return Err(err());
             }
             // No descriptor of the app's reaches it: every one but 0-2 closes as it executes.
-            if libc::syscall(
-                libc::SYS_close_range,
-                3u32,
-                u32::MAX,
-                libc::CLOSE_RANGE_CLOEXEC,
-            ) != 0
-            {
-                return Err(err());
-            }
+            crate::owned::close_on_exec_from_3()?;
+            #[cfg(target_os = "linux")]
             if script && libc::fcntl(exe_fd, libc::F_SETFD, 0) != 0 {
                 return Err(err());
+            }
+            // But the program a terminal runs, as 3 (`dup2` onto itself keeps close-on-exec).
+            #[cfg(target_os = "macos")]
+            if let Some(fd) = program_fd {
+                if libc::dup2(fd, 3) == -1 || libc::fcntl(3, libc::F_SETFD, 0) != 0 {
+                    return Err(err());
+                }
             }
             Ok(())
         });
     }
-    cmd
+    Ok(cmd)
+}
+
+/// The command that runs launch l with environment env on Windows (`owned::windows`): the opened
+/// executable and cwd pinned by the paths they have now; managed in a job of its own, detached
+/// outside every job of the app's.
+#[cfg(windows)]
+fn command(
+    l: &Launch,
+    env: Vec<(String, OsString)>,
+    holds_secrets: bool,
+) -> Result<crate::owned::windows::Command, String> {
+    use crate::owned::windows::{self as w, Io, Kind};
+    let kind = match l.lifetime {
+        Lifetime::Detached => Kind::Detached,
+        Lifetime::Managed => Kind::Managed,
+    };
+    let mut cmd = w::Command::new(w::pin_file(l.opened.executable())?, kind);
+    cmd.cwd(w::pin_dir(l.opened.cwd())?)
+        .arg0(&l.named)
+        .args(&l.argv)
+        .envs(env)
+        .stdin(if l.stdin.is_some() {
+            Io::Piped
+        } else {
+            Io::Null
+        })
+        .secrets(holds_secrets);
+    Ok(cmd)
 }
 
 /// A launch's secret as the host gave it: its vault secret ID, and the connection revision its
@@ -756,25 +962,41 @@ fn resolve(l: &Launch, package: &str, values: &dyn Values) -> Result<Resolved, S
     Ok(Resolved { env, stdin, given })
 }
 
-/// Writes a launch's stdin secret to its stdin pipe and closes it. The value fits the pipe's
-/// buffer (at most `MAX_VALUE`), so this never waits for the launch to read it.
-fn feed(stdin: Option<std::process::ChildStdin>, value: Option<String>) {
+/// Writes a launch's stdin secret to its stdin pipe and closes it. On Linux the value fits the
+/// pipe's buffer (at most `MAX_VALUE`), so this never waits for the launch to read it; elsewhere,
+/// where a pipe's buffer may be smaller, it is written on a thread of its own.
+fn feed(stdin: Option<impl std::io::Write + Send + 'static>, value: Option<String>) {
     if let (Some(mut pipe), Some(v)) = (stdin, value) {
-        use std::io::Write;
-        let _ = pipe.write_all(v.as_bytes());
+        let mut write = move || {
+            let _ = pipe.write_all(v.as_bytes());
+        };
+        if cfg!(target_os = "linux") {
+            write();
+        } else {
+            let _ = std::thread::Builder::new()
+                .name("pluxy-launch-stdin".into())
+                .spawn(write);
+        }
     }
 }
 
 /// Starts package's detached launch l, with its secrets' values resolved by values now and
 /// checked once more right before the spawn; returns once its wrapper has been reaped. With a
-/// systemd user manager on the session bus, the launch runs in a transient scope of its own
-/// (`scope`).
+/// systemd user manager on the session bus (Linux), the launch runs in a transient scope of its
+/// own (`scope`).
+#[cfg(unix)]
 pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), String> {
     l.opened.recheck()?;
     let r = resolve(l, package, values)?;
     let env = environment(snapshot(), &l.request, &r.env);
+    #[cfg(target_os = "linux")]
     let hold = Hold::new().ok();
-    let mut cmd = command(l, env, r.holds(), hold.as_ref().map(Hold::fds));
+    #[cfg(target_os = "linux")]
+    let fds = hold.as_ref().map(Hold::fds);
+    #[cfg(not(target_os = "linux"))]
+    let fds = None;
+    let mut cmd = command(l, env, r.holds(), fds)?;
+    #[cfg(target_os = "linux")]
     let mover = hold.as_ref().map(Hold::mover).transpose()?;
     let spawned = values.still(&r.given).and_then(|()| {
         cmd.spawn()
@@ -782,9 +1004,12 @@ pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), St
     });
     drop(cmd);
     // The wrapper has its copies (or never started): without the app's, the mover sees the end.
-    drop(hold);
-    if let Some(m) = mover {
-        let _ = m.join();
+    #[cfg(target_os = "linux")]
+    {
+        drop(hold);
+        if let Some(m) = mover {
+            let _ = m.join();
+        }
     }
     let mut wrapper = spawned?;
     feed(wrapper.stdin.take(), r.stdin);
@@ -792,14 +1017,36 @@ pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), St
     Ok(())
 }
 
+/// Starts package's detached launch l on Windows: outside every job of the app's, or refused
+/// before it runs when the app's job does not allow that (`owned::windows::NO_BREAKAWAY`); the
+/// host keeps nothing of it.
+#[cfg(windows)]
+pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), String> {
+    l.opened.recheck()?;
+    let r = resolve(l, package, values)?;
+    let env = environment(snapshot(), &l.request, &r.env);
+    let mut cmd = command(l, env, r.holds())?;
+    // Checked again now its executable and cwd are pinned (`command`): nothing can change them
+    // after this, and a change made since the check above is seen here.
+    l.opened.recheck()?;
+    values.still(&r.given)?;
+    let stdin = cmd
+        .spawn_detached()
+        .map_err(|e| format!("the launch did not start: {e}"))?;
+    feed(stdin, r.stdin);
+    Ok(())
+}
+
 /// The pipes that hold a detached launch's wrapper (`command`): it writes its process ID to the
 /// first, then waits on the second until the app has moved it into a scope of its own (`scope`)
 /// or given up. Every end is close-on-exec; the wrapper closes those it does not use.
+#[cfg(target_os = "linux")]
 struct Hold {
     pid: (std::os::fd::OwnedFd, std::os::fd::OwnedFd),
     go: (std::os::fd::OwnedFd, Option<std::os::fd::OwnedFd>),
 }
 
+#[cfg(target_os = "linux")]
 fn pipe() -> io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
     use std::os::fd::FromRawFd;
     let mut fds = [0i32; 2];
@@ -814,6 +1061,7 @@ fn pipe() -> io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
     })
 }
 
+#[cfg(target_os = "linux")]
 impl Hold {
     fn new() -> io::Result<Hold> {
         let pid = pipe()?;
@@ -864,6 +1112,7 @@ impl Hold {
 /// the launch's wrapper before it forks the launch, and waits until the wrapper's cgroup is that
 /// scope. With no user manager, or a refusal (the app runs in a cgroup the user manager does not
 /// own), the launch runs in the app's cgroup as before.
+#[cfg(target_os = "linux")]
 mod scope {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
@@ -1269,9 +1518,18 @@ impl Runtimes {
                     let _ = tx.send(Err(e));
                     return;
                 }
-                let mut cmd = command(&launch, env, holds, None);
-                let child = cmd.spawn();
-                drop(cmd);
+                #[cfg(unix)]
+                let cmd = command(&launch, env, holds, None);
+                // On Windows checked again once its executable and cwd are pinned (`command`):
+                // nothing can change them after this.
+                #[cfg(windows)]
+                let cmd = command(&launch, env, holds).and_then(|c| {
+                    launch.opened.recheck().map_err(|e| {
+                        format!("{e}; its executable or cwd changed since it was confirmed: launch it again")
+                    })?;
+                    Ok(c)
+                });
+                let child = cmd.and_then(|mut cmd| cmd.spawn().map_err(|e| e.to_string()));
                 match child {
                     Ok(mut c) => {
                         if let Some(e) = list.iter_mut().find(|e| e.id == rid) {
@@ -1284,7 +1542,7 @@ impl Runtimes {
                         }
                         shared.save(&list);
                         // Its stdin secret, still under the lock: only a launch that may run gets
-                        // it, and it fits the pipe's buffer, so this never waits.
+                        // it, and it never waits (`feed`).
                         feed(c.stdin.take(), stdin);
                         drop(list);
                         let _ = tx.send(Ok(()));
@@ -1494,7 +1752,9 @@ impl Shared {
         Ok(())
     }
 
-    /// Writes the runtimes running (or stopping) to the registry's file, owner-only.
+    /// Writes the runtimes running (or stopping) to the registry's file, readable only by this
+    /// user and replaced in one step (`managed::write_private`: 0600 on Linux and macOS, a
+    /// protected access list of this user and SYSTEM on Windows).
     fn save(&self, list: &[Entry]) {
         let Some(f) = &self.file else {
             return;
@@ -1504,19 +1764,7 @@ impl Shared {
             .filter(|e| matches!(e.state, State::Running | State::Stopping))
             .map(Entry::view)
             .collect();
-        let tmp = f.with_extension("tmp");
-        let written = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)
-            .and_then(|mut file| {
-                use std::io::Write;
-                file.write_all(json!(running).to_string().as_bytes())?;
-                file.sync_all()
-            })
-            .and_then(|_| std::fs::rename(&tmp, f));
+        let written = crate::managed::write_private(f, json!(running).to_string().as_bytes());
         if let Err(e) = written {
             eprintln!("pluxy-app: could not record the managed runtimes: {e}");
         }
@@ -1524,14 +1772,14 @@ impl Shared {
 }
 
 /// The supervisor: waits for runtime id's leader (started as token) to exit or be asked to stop;
-/// on a stop, SIGTERM to its group and SIGKILL after the grace; then SIGKILL to what is left of
-/// its group, while the leader is not reaped (its group's number cannot be reused until then),
-/// and the reap.
+/// on a stop, SIGTERM to its group (on Windows CTRL_BREAK) and SIGKILL after the grace (on Windows
+/// at once when it cannot get CTRL_BREAK); then SIGKILL to what is left of its group, while the
+/// leader is not reaped (its group's number cannot be reused until then; on Windows its job), and
+/// the reap (`owned`).
 fn supervise(shared: &Shared, id: &str, token: u64, mut child: Child) {
-    let pid = child.id();
     let mut term: Option<Instant> = None;
     loop {
-        if leader(pid) != Leader::Running {
+        if leader(&child) != Leader::Running {
             break;
         }
         let stop = shared
@@ -1542,7 +1790,9 @@ fn supervise(shared: &Shared, id: &str, token: u64, mut child: Child) {
             .find(|e| e.id == id && e.token == token)
             .is_none_or(|e| e.stop);
         if stop && term.is_none() {
-            unsafe { libc::killpg(pid as libc::pid_t, libc::SIGTERM) };
+            if !term_group(&child) {
+                break;
+            }
             term = Some(Instant::now());
         }
         if term.is_some_and(|t| t.elapsed() >= STOP) {
@@ -1550,10 +1800,7 @@ fn supervise(shared: &Shared, id: &str, token: u64, mut child: Child) {
         }
         std::thread::sleep(TICK);
     }
-    if leader(pid) != Leader::Gone {
-        unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
-        let _ = child.kill();
-    }
+    kill_group(&mut child);
     let status = child
         .wait()
         .map(|s| s.to_string())

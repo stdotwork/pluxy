@@ -156,13 +156,18 @@ fn owner_accepted(owner: PSID, user: &TokenSid, default_owner: &TokenSid, system
 
 /// An access list allowing this user and SYSTEM everything, inherited by what is made in a folder.
 fn private_acl(user: &TokenSid, system: &System, folder: bool) -> io::Result<Local<ACL>> {
+    acl_of(user, system, folder, FILE_ALL_ACCESS)
+}
+
+/// An access list allowing this user and SYSTEM access, inherited by what is made in a folder.
+fn acl_of(user: &TokenSid, system: &System, folder: bool, access: u32) -> io::Result<Local<ACL>> {
     let inheritance = if folder {
         SUB_CONTAINERS_AND_OBJECTS_INHERIT
     } else {
         NO_INHERITANCE
     };
     let entry = |sid: PSID, kind| EXPLICIT_ACCESS_W {
-        grfAccessPermissions: FILE_ALL_ACCESS,
+        grfAccessPermissions: access,
         grfAccessMode: SET_ACCESS,
         grfInheritance: inheritance,
         Trustee: TRUSTEE_W {
@@ -238,6 +243,31 @@ pub(crate) fn owned(f: &File) -> io::Result<bool> {
 
 /// Whether the object open as f (with `READ_CONTROL`) is private by the rule above.
 pub(crate) fn is_private(f: &File) -> io::Result<bool> {
+    private_without(f, 0)
+}
+
+/// Rights that write to a file or folder, add to or remove from it, or change its attributes,
+/// its access list or its owner: what `make_read_only` gives no one.
+const WRITES: u32 = 0x0002 // FILE_WRITE_DATA, FILE_ADD_FILE
+    | 0x0004 // FILE_APPEND_DATA, FILE_ADD_SUBDIRECTORY
+    | 0x0010 // FILE_WRITE_EA
+    | 0x0040 // FILE_DELETE_CHILD
+    | 0x0100 // FILE_WRITE_ATTRIBUTES
+    | 0x0001_0000 // DELETE
+    | 0x0004_0000 // WRITE_DAC
+    | 0x0008_0000 // WRITE_OWNER
+    | 0x1000_0000 // GENERIC_ALL
+    | 0x4000_0000; // GENERIC_WRITE
+
+/// Whether the object open as f (with `READ_CONTROL`) is as `make_read_only` leaves it: private
+/// by the rule above, and no allow entry grants a right that writes to it (`WRITES`). Its owner
+/// may still change the list, as on Unix the owner of a 0400 file may chmod it.
+pub(crate) fn is_read_only(f: &File) -> io::Result<bool> {
+    private_without(f, WRITES)
+}
+
+/// Whether the object open as f is private, with no allow entry granting any of forbidden.
+fn private_without(f: &File, forbidden: u32) -> io::Result<bool> {
     let user = TokenSid::user()?;
     let default_owner = TokenSid::default_owner()?;
     let system = System::sid()?;
@@ -289,7 +319,9 @@ pub(crate) fn is_private(f: &File) -> io::Result<bool> {
             // SAFETY: an allow entry is an ACCESS_ALLOWED_ACE, its SID starting at SidStart.
             let sid = unsafe { std::ptr::addr_of!((*(ace as *const ACCESS_ALLOWED_ACE)).SidStart) }
                 as PSID;
-            if !ours(sid) {
+            // SAFETY: as above.
+            let mask = unsafe { (*(ace as *const ACCESS_ALLOWED_ACE)).Mask };
+            if !ours(sid) || mask & forbidden != 0 {
                 return Ok(false);
             }
         } else if header.AceType != ACCESS_DENIED {
@@ -321,12 +353,67 @@ pub(crate) fn make_private(f: &File, folder: bool) -> io::Result<()> {
     })
 }
 
+/// Makes the object open as f (with `READ_CONTROL | WRITE_DAC`) read-only, the 0444/0500 of an
+/// installed package's files and folders on Linux and macOS: a protected list allowing only this
+/// user and SYSTEM to read and run it (a folder: list and traverse it), with no right to write,
+/// delete or add to it. The owner may still change the list (Windows lets an owner always), as a
+/// Unix owner may chmod: `make_private` undoes it. One owned by another account is refused.
+pub(crate) fn make_read_only(f: &File, folder: bool) -> io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
+    if !owned(f)? {
+        return Err(another_owner());
+    }
+    let acl = acl_of(
+        &TokenSid::user()?,
+        &System::sid()?,
+        folder,
+        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+    )?;
+    // SAFETY: f is open with WRITE_DAC; acl is a valid list.
+    win32(unsafe {
+        SetSecurityInfo(
+            handle(f),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            acl.0,
+            null(),
+        )
+    })
+}
+
+/// Opens path itself (never a link it names: a link is refused) for reading and changing its
+/// access list; a folder when folder is set, else a file.
+pub(crate) fn open_for_access_list(path: &std::path::Path, folder: bool) -> io::Result<File> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_READ_ATTRIBUTES, READ_CONTROL, WRITE_DAC,
+    };
+    let f = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    let m = f.metadata()?;
+    if m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || m.is_dir() != folder {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            if folder {
+                "a link or not a folder"
+            } else {
+                "a link or not a file"
+            },
+        ));
+    }
+    Ok(f)
+}
+
 /// Makes the folder path and every missing folder above it, each private as it is made (the
 /// protected list comes with the descriptor it is made with, so it is never open to others in
 /// between), then checks path as `make_private_dir` does: the `mkdir -p -m 0700` of `device.rs`'s
 /// `private_dir`. Folders that were there already, above path, are left as they are.
 pub(crate) fn create_private_dir_all(path: &std::path::Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
     let mut missing = Vec::new();
@@ -357,7 +444,7 @@ pub(crate) fn create_private_dir_all(path: &std::path::Path) -> io::Result<()> {
                 h(dir)
             }
         });
-        let name: Vec<u16> = dir.as_os_str().encode_wide().chain([0]).collect();
+        let name = verbatim(dir)?;
         // SAFETY: name is NUL-terminated; sa and its descriptor live through the call.
         if unsafe { CreateDirectoryW(name.as_ptr(), &sa) } == 0 {
             let e = io::Error::last_os_error();
@@ -375,6 +462,78 @@ pub(crate) fn create_private_dir_all(path: &std::path::Path) -> io::Result<()> {
     make_private_dir(path)
 }
 
+/// path as a NUL-terminated wide string for the calls that make files and folders: absolute, in
+/// its `\\?\` form (a share as `\\?\UNC\`), which takes any length, as std's own opens do for
+/// a long path. A plain path longer than MAX_PATH fails there with ERROR_PATH_NOT_FOUND.
+fn verbatim(path: &std::path::Path) -> io::Result<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt;
+    let w: Vec<u16> = std::path::absolute(path)?
+        .as_os_str()
+        .encode_wide()
+        .collect();
+    if w.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a NUL in the path",
+        ));
+    }
+    let backslash = u16::from(b'\\');
+    let prefix: Vec<u16> = if w.starts_with(&[backslash, backslash]) {
+        // `\\?\` and `\\.\` already; a share (`\\server\share`) as `\\?\UNC\server\share`.
+        if w.get(2)
+            .is_some_and(|&c| c == u16::from(b'?') || c == u16::from(b'.'))
+        {
+            Vec::new()
+        } else {
+            return Ok(r"\\?\UNC"
+                .encode_utf16()
+                .chain(w[1..].iter().copied())
+                .chain([0])
+                .collect());
+        }
+    } else {
+        r"\\?\".encode_utf16().collect()
+    };
+    Ok(prefix.into_iter().chain(w).chain([0]).collect())
+}
+
+/// Creates the file path, which must not exist, for writing, private as it is made (the
+/// `O_CREAT|O_EXCL` with 0600 of Linux and macOS): an existing path, a link too, is an
+/// `AlreadyExists` error.
+pub(crate) fn create_new_private(path: &std::path::Path) -> io::Result<File> {
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
+    };
+    let name = verbatim(path)?;
+    let private = Private::new(false)?;
+    let sa = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: private.descriptor(),
+        bInheritHandle: 0,
+    };
+    // SAFETY: name is NUL-terminated; sa and its descriptor live through the call.
+    let h = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            &sa,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            null_mut(),
+        )
+    };
+    if h == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: h is the handle CreateFileW opened, owned by nothing else.
+    Ok(unsafe { File::from_raw_handle(h as _) })
+}
+
 /// For the tests: called with each folder `create_private_dir_all` is about to make, to make it
 /// first, as another program could between the walk and the making.
 #[cfg(test)]
@@ -390,22 +549,7 @@ thread_local! {
 /// changing its access list, and makes it private as `make_private` does when it is not: the
 /// `chmod 0700` of `device.rs`'s `private_dir`.
 pub(crate) fn make_private_dir(path: &std::path::Path) -> io::Result<()> {
-    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_READ_ATTRIBUTES, READ_CONTROL, WRITE_DAC,
-    };
-    let f = std::fs::OpenOptions::new()
-        .access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)?;
-    let m = f.metadata()?;
-    if m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !m.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "a link or not a folder",
-        ));
-    }
+    let f = open_for_access_list(path, true)?;
     if is_private(&f)? {
         return Ok(());
     }

@@ -165,8 +165,8 @@ feature, it keeps the old label, unless the label named something this core does
   account. Nothing in the panel spends from an account behind a click, except an account's "Test".
 - The DEV tier preview: a preview for the old panel's developers.
 - The quota timeline, which drew each account's quota windows over the next days: a richer view of
-  the same data, which belongs to the desktop app. Each card shows every limit's use and when it
-  resets.
+  the same data. The desktop app does not have it either. Each card shows every limit's use and
+  when it resets.
 
 **Logs Viewer**
 
@@ -178,7 +178,8 @@ feature, it keeps the old label, unless the label named something this core does
 
 **Usage**
 
-- Prices and price sync: core records tokens, not prices. Cost views belong to the desktop app.
+- Prices and price sync: core records tokens, not prices. The desktop app dropped cost views too
+  ([its keep/drop record](../app/PARITY.md#usage-and-sessions)).
 - The storage cap and repair of the old app's database: core keeps its record in memory, limited
   by `usage.max_events` and `usage.max_age_ms`.
 
@@ -210,7 +211,8 @@ feature, it keeps the old label, unless the label named something this core does
   storage, so no other browser saw them.
 - "Edit", and copying a key made earlier: core shows a key in full only once, when it is made.
 - "Set management key": "Rotate" makes a new random key, shows it once and signs the panel in
-  with it. The desktop app shows no "Rotate" yet.
+  with it. In the desktop app, "Rotate" keeps the new key natively and shows it in a
+  native window, never in a webview ([the app's README](../app/README.md#how-the-app-reaches-core)).
 
 **System**
 
@@ -286,7 +288,7 @@ side touch shared files only by one line each:
 The priorities are a small, fast panel, and a kit the desktop app can build in unchanged.
 
 - **Preact** (`preact` 11, with hooks) is about 5 KB gzipped for a one-button page, against
-  57 KB for React 19 with react-dom, which today's panel and app use (both measured with Bun's
+  57 KB for React 19 with react-dom, which the old panel and the old app use (both measured with Bun's
   minifier). It keeps React's component model and JSX, so
   people who know React can work on the kit.
 - **Bun's bundler** compiles TypeScript and Preact's JSX and bundles the HTML page, its script

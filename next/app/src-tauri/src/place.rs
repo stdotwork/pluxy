@@ -242,16 +242,10 @@ pub fn forget(label: &str) {
 }
 
 /// Where the page webview labelled label actually is, in the window's overlay, if it shows
-/// (Linux only).
-#[cfg(feature = "native-test")]
+/// (Linux only; elsewhere the native test reads the webview's own bounds).
+#[cfg(all(feature = "native-test", target_os = "linux"))]
 pub fn allocation(label: &str) -> Option<Bounds> {
-    #[cfg(target_os = "linux")]
-    return gtk_overlay::allocation(label);
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = label;
-        None
-    }
+    gtk_overlay::allocation(label)
 }
 
 /// The page webview's own height request, its document's height (Linux only).

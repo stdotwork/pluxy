@@ -12,6 +12,14 @@ async function addAccount(id: string, method = "api_key") {
     input: { api_key: "account-tools-test-input" },
   });
   expect(r.status).toBe(202);
+  if (method === "browser") {
+    // The provider's device sign-in finishes on a fixed 3-second timer, which a 5-second poll
+    // can miss on a slow machine. A browser sign-in finishes when it is given the address.
+    const sent = await core.mgmt("POST", `/logins/${r.body.login.id}/input`, {
+      input: { redirect_url: "http://localhost/callback?code=ok" },
+    });
+    expect(sent.status).toBe(204);
+  }
   await expect
     .poll(
       async () =>
@@ -118,7 +126,7 @@ test("account health, cooldown reset, models and a paid test", async ({ page }) 
 });
 
 test("config models and credential tools follow core metadata", async ({ page }) => {
-  await addAccount("tools-oauth", "device");
+  await addAccount("tools-oauth", "browser");
   await openPanel(page, core);
   await signIn(page, core);
   let detail = await openAccount(page, "alpha-1");

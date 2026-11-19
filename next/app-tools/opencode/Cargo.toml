@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 # OpenCode's config is JSONC: edits go through a concrete syntax tree, so comments and formatting stay.
 jsonc-parser = { version = "0.34", default-features = false, features = ["cst", "serde_json"] }
+pluxy-files = { path = "../lib/files" }
 pluxy-program = { path = "../lib/program" }
 pluxy-transactions = { path = "../lib/transactions" }
 # Keys keep their order and numbers their digits in the values compared and written.

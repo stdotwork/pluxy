@@ -257,7 +257,7 @@ impl Admitted {
     }
     /// It, as native confirmations name a package: ID, source, digest, signer and key,
     /// contracts and generation.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     pub fn package(&self) -> crate::confirmation::Package {
         crate::confirmation::Package {
             id: self.id.clone(),
@@ -284,7 +284,7 @@ impl Admitted {
     /// The native confirmation enabling it shows: the main window as the requester; the tool,
     /// as the executor, with its ID, source, digest, signer and key, contracts, operations and
     /// program; and that it has full access to your user account.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     pub fn confirmation(&self) -> crate::confirmation::Action {
         let package = self.package();
         let operations: Vec<String> = self
@@ -319,7 +319,7 @@ impl Admitted {
 
 /// The main window, as native confirmations name the requester of what the person asked for
 /// there.
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 pub fn main_window() -> crate::confirmation::Package {
     crate::confirmation::Package {
         id: "main window".into(),
@@ -470,7 +470,15 @@ pub(super) fn native_release(
         use std::os::unix::fs::PermissionsExt;
         m.is_file() && m.permissions().mode() & 0o111 != 0
     });
-    #[cfg(not(unix))]
+    // Windows starts programs only (`.exe` or `.com`, starting `MZ`), never a script by its name.
+    #[cfg(windows)]
+    let executable = meta.is_ok_and(|m| m.is_file()) && {
+        let path = staged.join(program);
+        let f = fs::File::open(&path).map_err(|e| format!("program {program}: {e}"))?;
+        crate::owned::windows::image(&f, &path)?;
+        true
+    };
+    #[cfg(not(any(unix, windows)))]
     let executable = meta.is_ok_and(|m| m.is_file());
     if !r.tree.contains_key(program) || !executable {
         return Err(format!(

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -164,10 +163,11 @@ func TestStartupAccountCheck(t *testing.T) {
 			}
 		}
 	}
+	// Core logs a check before the listing shows it, but the test reads core's log from a pipe and
+	// the two checks finish in either order: wait for each line, not for one and then look for the
+	// other.
+	logs.waitFor(t, `account "good": check passed: the upstream lists 2 models`)
 	all := logs.waitFor(t, `account "bad": check failed: auth`)
-	if !strings.Contains(all, `account "good": check passed: the upstream lists 2 models`) {
-		t.Errorf("core did not log the good account's check; log:\n%s", all)
-	}
 	if strings.Contains(all, "sk-revoked") || strings.Contains(all, "sk-good") {
 		t.Errorf("core logged an upstream key; log:\n%s", all)
 	}
@@ -207,12 +207,10 @@ func TestStartupAccountCheck(t *testing.T) {
 // token in its base_url's query, from the errors of a check and of a request that quote it: the
 // check result, the client's reply, core's log and its error log hold [redacted] instead.
 func TestSettingsSecretIsRedacted(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	closed := ln.Addr().String() // nothing listens there once it is closed
-	ln.Close()
+	// Nothing listens on port 1, and a test run, not being root, cannot bind it. A port taken
+	// from 127.0.0.1:0 and closed again could be the one core binds next, for its own listener or
+	// its extension pages, which answer the check with 404 ("not_checked") instead of refusing it.
+	const closed = "127.0.0.1:1"
 	const secret = "sk-settings-token-e2e"
 	cfg := map[string]any{
 		"listen":         "127.0.0.1:0",
@@ -272,6 +270,7 @@ func TestSettingsSecretIsRedacted(t *testing.T) {
 // TestLoginAccountCheck shows core checking an account a login adds, with the token the login
 // got and without generating; renewing the token or reloading does not check it again.
 func TestLoginAccountCheck(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	base, _ := startOAuthCore(t)
 	deviceLogin(t, base, srv, "work")

@@ -14,7 +14,7 @@
 //! Once written, core must list the alias on those accounts; otherwise (a prefix the accounts are
 //! asked with, an exclusion, or core not answering) each account's previous `model_alias` is put
 //! back. Clear integration and Restore Backup of the Claude Desktop tool leave an alias made here:
-//! core's config is not the tool's file. Linux only, as native confirmations.
+//! core's config is not the tool's file. Linux only for now.
 
 use crate::client_keys::{connected, fresh};
 use crate::conn::Caller;

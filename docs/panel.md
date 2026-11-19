@@ -8,15 +8,15 @@ build the panel, add a page and use the kit is in [`next/ui/README.md`](../next/
 ## What parity with the old panel means
 
 The new panel replaced the old one (the React/Vite panel formerly in `extensions/panel`, now
-removed). Parity means that it looks and feels
-like the old panel: where a feature is kept, it keeps the old page, section, setting and button
-names, in a similar place, so someone who knows the old panel finds each thing where they expect
-it. A label changes only where it named something this core does differently, such as a file, a
-relay or a mislabelled setting, or where [docs/terms.md](terms.md), the repo's list of words for
-the UI, gives another word: the Quota Management card's "Renewal time" reads "Subscription ends".
+removed). Parity meant that it looked and felt like
+the old panel: where a feature was kept, it kept the old page, section, setting and button names,
+in a similar place, so someone who knew the old panel found each thing where they expected it. A
+label changed only where it named something this core does differently, such as a file, a relay
+or a mislabelled setting, or where [docs/terms.md](terms.md), the repo's list of words for the UI,
+gives another word: the Quota Management card's "Renewal time" reads "Subscription ends".
 
-Parity does not mean the same logic. The new core does things its own way, and the panel shows
-what it does. Old features are carried over only where they are worth keeping. Each one left out
+Parity did not mean the same logic. The new core does things its own way, and the panel shows
+what it does. Old features were carried over only where they were worth keeping. Each one left out
 has a reason, listed page by page in
 [What each page leaves out, and why](../next/ui/README.md#what-each-page-leaves-out-and-why).
 
@@ -26,9 +26,10 @@ The panel shows what core itself does, in compact pages, and nothing core cannot
 gets a field only when core runs it; the rest of the config file stays editable as text in the
 Config Panel's Source tab, and a setting gets its field when core starts running it.
 
-Richer views of the same data, such as usage analysis, prices and tools for coding agents, belong
-to the desktop app. The app shows the same core pages in the same places, and adds its own pages
-after them. Both show the pages of the extensions that run.
+Richer views and tools the panel does not have, such as the local usage of coding agents and the
+tools that set those agents up, belong to the desktop app. The app shows the same core pages in
+the same places, and adds its own pages after them. Both show the pages of the extensions that
+run.
 
 Nothing in the panel spends from an account behind a click, except an account's "Test", whose
 label says that it spends one request.
@@ -39,9 +40,9 @@ label says that it spends one request.
 | --- | --- |
 | Dashboard | The landing page, as in the old panel. Its ID stays `status`, from the earlier Status page, so the address `#/status` and theme rules for `data-page="status"` keep working. |
 | Accounts | The old Auth Files and AI Providers pages in one. This core has one kind of account, whether it comes from the config or from a sign-in. The old names stay as the source filter's options, "Auth files" and "AI providers". |
-| Add Account | Replaces OAuth Login. It adds API keys as well as sign-ins, from the login methods each running extension offers, so "OAuth" no longer describes it. |
-| System | Replaces Management Center Info. "Management Center" was the upstream panel's product name. |
-| Routing, Quota Management, Config Panel, Logs Viewer | The old names: these pages do the same job. |
+| Add Account | Replaced OAuth Login. It adds API keys as well as sign-ins, from the login methods each running extension offers, so "OAuth" no longer describes it. |
+| System | Replaced Management Center Info. "Management Center" was the upstream panel's product name. |
+| Routing, Quota Management, Config Panel, Logs Viewer | The old panel's names: these pages do the same job as the old ones did. |
 | Usage | A new page; see [The Usage page](#the-usage-page). |
 
 The navigation keeps the old panel's groups: Operate, Gateway, Observe, Control, and the
@@ -65,10 +66,12 @@ config layouts it reads, and a key is never shown after it is added.
 Core keeps a record of recent requests, in memory and within the limits `usage.max_events` and
 `usage.max_age_ms`. The panel's Usage page lists these requests, newest first, with filters,
 paging and a CSV export, and links each request's trace ID to its request log in the Logs Viewer.
-The totals and breakdowns by model, provider, account and key are on the Dashboard.
+The Dashboard shows the totals, the traffic chart and the providers; it has no breakdown by
+model, account or key.
 
 The page is in the panel, not only in the desktop app, because core keeps the record and no other
-page lists requests. It shows only what core records; prices and cost views belong to the app.
+page lists requests. It shows only what core records: tokens, with no prices or cost views, and the
+app has none either.
 
 ## Themes reach every page
 

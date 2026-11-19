@@ -42,7 +42,13 @@ type Options struct {
 	// StopTimeout bounds the wait for the program to exit after stdin closes. Default 5s.
 	StopTimeout time.Duration
 	// Log receives the program's stderr and later stdout, one prefixed line at a time, with
-	// the credentials the extension holds removed (protocol.Redactor). Default os.Stderr.
+	// the credentials the extension holds removed (protocol.Redactor). While a refresh or login
+	// runs, lines are held and written when it ends, so that the credential it makes is removed
+	// from them too (output): core ends a login after 15 minutes, but a refresh has no deadline,
+	// so one that hangs holds them until the program exits. At most 1 MiB is held, counting 64
+	// bytes for each line besides its text; past that, the rest of the held lines are left out,
+	// with notes. When more than 256 credentials are replaced while lines are held, all of the
+	// held lines are left out, with notes. Default os.Stderr.
 	Log io.Writer
 	// ProxyURL returns core's global proxy_url setting, read at each call: the proxy of every
 	// account without one of its own (proxyurl.Resolve). Nil: none.
@@ -55,6 +61,10 @@ type Options struct {
 	// are removed from what every call on the account sends back and from the program's
 	// output, as its credential is. Core passes configdoc.SettingsSecrets. Default: none.
 	SettingsSecrets func(settings []byte) []string
+
+	// beforeHandshakeWait, set only by tests, runs after the program has started and before
+	// core waits for its handshake, to hold core up there as a stalled start does.
+	beforeHandshakeWait func(deadline time.Time)
 }
 
 // Extension is a running extension program.
@@ -71,24 +81,40 @@ type Extension struct {
 	calls    atomic.Uint64
 	stopOnce sync.Once
 	held     held
+	out      output // the program's stderr and stdout lines
+
+	// startTook is how long starting the program took, from the start deadline being set to
+	// the program running, for the error of a start that passes Options.StartTimeout.
+	startTook time.Duration
 }
 
 // held are the credentials core has given the extension or got back from it, so that its output
 // is logged without them: for each account the latest two (after a refresh the extension may
 // still write the one it replaced), the secrets of every settings it has had (a call still
-// running after changes has old ones), and what a user entered during a login. Nothing is
-// forgotten while the extension's program runs, so this grows only with the accounts it has
-// served and their settings changes, and goes with the program.
-//
-// shortcut: a credential the extension creates (a refresh or login result) and writes out before
-// core has it is logged as written; the redaction catches it only once the result arrives.
+// running after changes has old ones), and what a user entered during a login. Outside a hold,
+// this grows only with the accounts the extension has served and their settings changes, and goes
+// with the program. A credential the extension makes (a refresh or login result) is added when the
+// result arrives; output is held until then (output), and while it is, the credentials a newer one
+// replaces are kept too (pin), up to maxReplaced, and dropped when the last hold ends.
 type held struct {
 	mu       sync.Mutex
 	by       map[string][]heldCredential
 	out      map[string][]heldCredential // the proxy and header secrets of each account, apart from by so no account ID can name them
 	settings map[string][]heldCredential // the secrets in each account's settings, apart in the same way
+	pins     int                         // output holds running
+	replaced []*protocol.Credential      // those the latest two replaced while pins > 0
+	overflow bool                        // more than maxReplaced were replaced during the holds running
 	redact   *protocol.Redactor
 }
+
+// maxReplaced bounds the credentials kept, while output is held, because newer ones replaced them.
+// Each change of a credential rebuilds the Redactor of all of them, so keeping many costs memory
+// and time that grow with every renewal. The count runs as long as any hold runs, so overlapping
+// holds share it, and it grows with the accounts the extension renews meanwhile: a busy extension,
+// or a hold that hangs, may pass it. Past it, the replaced credentials are no longer kept and every
+// held line is left out, with a note (output): lines are lost, never logged with a credential in
+// clear.
+const maxReplaced = 256
 
 type heldCredential struct {
 	key string // the credential as JSON, to tell whether it changed
@@ -128,11 +154,24 @@ func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.
 	}
 	cc := *c
 	list = append(list, heldCredential{string(b), &cc})
-	if n > 0 {
-		list = list[max(0, len(list)-n):]
+	if n > 0 && len(list) > n {
+		if h.pins > 0 && !h.overflow {
+			for _, hc := range list[:len(list)-n] {
+				h.replaced = append(h.replaced, hc.c)
+			}
+			if len(h.replaced) > maxReplaced {
+				h.replaced, h.overflow = nil, true
+			}
+		}
+		list = list[len(list)-n:]
 	}
 	(*m)[owner] = list
-	var all []*protocol.Credential
+	h.rebuild()
+}
+
+// rebuild makes the Redactor of every credential held. h.mu is held.
+func (h *held) rebuild() {
+	all := slices.Clone(h.replaced)
 	for _, by := range []map[string][]heldCredential{h.by, h.out, h.settings} {
 		for _, l := range by {
 			for _, hc := range l {
@@ -141,6 +180,35 @@ func (h *held) record(m *map[string][]heldCredential, owner string, c *protocol.
 		}
 	}
 	h.redact = protocol.NewRedactor(all...)
+}
+
+// pin keeps every credential held until unpin, also those newer ones replace: output held while
+// a refresh or login runs may hold any of them, and is redacted only when the hold ends.
+func (h *held) pin() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pins++
+}
+
+// unpin ends a pin; after the last, the credentials replaced meanwhile are dropped.
+func (h *held) unpin() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.pins--; h.pins == 0 {
+		h.overflow = false
+		if h.replaced != nil {
+			h.replaced = nil
+			h.rebuild()
+		}
+	}
+}
+
+// redactor returns the Redactor of every credential held now, and whether more than maxReplaced
+// were replaced during the holds running, so that some of them may be missing from it.
+func (h *held) redactor() (*protocol.Redactor, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.redact, h.overflow
 }
 
 // holdAccount records that the extension holds a's credential and the secrets in a's settings,
@@ -170,7 +238,9 @@ func (h *held) String(s string) string {
 }
 
 // Start starts the extension described by the manifest at manifestPath, does the handshake and
-// checks the extension's description against the manifest.
+// checks the extension's description against the manifest. A start that passes
+// Options.StartTimeout fails with one error (startLimitError), whether the handshake came too late
+// or not at all, or describe did not finish in time.
 func Start(manifestPath string, opts Options) (*Extension, error) {
 	m, err := LoadManifest(manifestPath)
 	if err != nil {
@@ -250,12 +320,14 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 	if err != nil {
 		return err
 	}
-	cmd.Stderr = &lineLogger{w: e.opts.Log, prefix: "[" + e.manifest.ID + "] ", redact: e.held.String}
+	e.out = output{w: e.opts.Log, held: &e.held, prefix: "[" + e.manifest.ID + "] "}
+	cmd.Stderr = &lineLogger{out: &e.out, prefix: "[" + e.manifest.ID + "] "}
 	cmd.WaitDelay = waitDelay
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting extension %s: %w", e.manifest.ID, err)
 	}
 	e.cmd, e.stdin = cmd, stdin
+	e.startTook = e.opts.StartTimeout - time.Until(deadline)
 
 	type handshake struct {
 		line string
@@ -267,7 +339,7 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 		line, err := r.ReadSlice('\n')
 		lines <- handshake{string(line), err}
 		// Keep draining stdout so the program never blocks on it.
-		_, _ = io.Copy(&lineLogger{w: e.opts.Log, prefix: "[" + e.manifest.ID + " stdout] ", redact: e.held.String}, r)
+		_, _ = io.Copy(&lineLogger{out: &e.out, prefix: "[" + e.manifest.ID + " stdout] "}, r)
 	}()
 	go func() {
 		e.waitErr = cmd.Wait()
@@ -275,10 +347,19 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 		os.RemoveAll(e.dir)
 	}()
 
+	if e.opts.beforeHandshakeWait != nil {
+		e.opts.beforeHandshakeWait(deadline)
+	}
 	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
 	select {
 	case h := <-lines:
+		if h.err == nil && !time.Now().Before(deadline) {
+			// Read only once the deadline had passed: the start failed, as if the timer had won.
+			err := e.startLimitError("sent no handshake", "readable, read after the limit")
+			e.abort()
+			return err
+		}
 		switch {
 		case h.err == nil:
 			if err := e.checkHandshake(h.line); err != nil {
@@ -295,13 +376,67 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 		case <-e.exited:
 			return fmt.Errorf("extension %s exited before its handshake: %v", e.manifest.ID, e.waitErr)
 		case <-timer.C:
+			err := e.startLimitError("closed its stdout without a handshake and did not exit", "not readable, stdout closed")
 			e.abort()
-			return fmt.Errorf("extension %s closed its stdout without a handshake and did not exit within %s", e.manifest.ID, e.opts.StartTimeout)
+			return err
 		}
 	case <-timer.C:
+		handshake := "not read"
+		select {
+		case h := <-lines:
+			if h.err == nil {
+				handshake = "readable, read after the limit"
+			} else {
+				handshake = "not readable, stdout closed"
+			}
+		default:
+			// The reader may hold part of a line it has read; only what is still in the pipe shows.
+			if f, ok := stdout.(*os.File); ok {
+				if n, ok := unreadBytes(f); ok && n > 0 {
+					handshake = fmt.Sprintf("not read, %d bytes waiting in its stdout", n)
+				} else if ok {
+					handshake = "not read, no bytes waiting in its stdout"
+				}
+			}
+		}
+		err := e.startLimitError("sent no handshake", handshake)
 		e.abort()
-		return fmt.Errorf("extension %s sent no handshake within %s", e.manifest.ID, e.opts.StartTimeout)
+		return err
 	}
+}
+
+// startLimitError is the error of a start that passed Options.StartTimeout. what says what the
+// program did not do in time, and handshake whether its handshake line could be read when core
+// looked. The error also says how long starting the program took and, where the system shows
+// them (Linux), the program's process state and the kernel function it waits in, read before
+// the program is killed.
+func (e *Extension) startLimitError(what, handshake string) error {
+	details := append([]string{"starting its process took " + e.startTook.String(), "handshake: " + handshake}, processState(e.PID())...)
+	return fmt.Errorf("extension %s %s within %s (%s)", e.manifest.ID, what, e.opts.StartTimeout, strings.Join(details, "; "))
+}
+
+// processState returns the state and wait channel of process pid from /proc, each left out
+// where it cannot be read.
+func processState(pid int) []string {
+	if pid <= 0 {
+		return nil
+	}
+	var out []string
+	proc := "/proc/" + strconv.Itoa(pid) + "/"
+	if b, err := os.ReadFile(proc + "stat"); err == nil {
+		// The command name in parentheses may hold spaces; the state is the first field after it.
+		if i := bytes.LastIndexByte(b, ')'); i >= 0 {
+			if f := strings.Fields(string(b[i+1:])); len(f) > 0 {
+				out = append(out, "process state "+f[0])
+			}
+		}
+	}
+	if b, err := os.ReadFile(proc + "wchan"); err == nil {
+		if w := strings.TrimSpace(string(b)); w != "" {
+			out = append(out, "wchan "+w)
+		}
+	}
+	return out
 }
 
 func (e *Extension) checkHandshake(line string) error {
@@ -318,7 +453,19 @@ func (e *Extension) checkHandshake(line string) error {
 	return nil
 }
 
+// describe asks the program to describe itself. A describe that times out at the start deadline
+// fails with the start limit's error, not with its own timeout; any other failure keeps its own
+// error.
 func (e *Extension) describe(deadline time.Time) error {
+	err := e.describeCall(deadline)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return e.startLimitError("did not answer describe", "read in time")
+	}
+	return err
+}
+
+func (e *Extension) describeCall(deadline time.Time) error {
 	d := net.Dialer{Deadline: deadline}
 	conn, err := d.Dial("unix", e.socket)
 	if err != nil {
@@ -426,8 +573,11 @@ func ServesEndpoints(info protocol.Info) bool {
 }
 
 // Endpoint starts an endpoint call, answered as a generate call is (see Generate). The reply's
-// body is redacted across its pieces: a secret in one of the forms core removes that is cut between
-// them is removed, but for any part of its start that a piece redacted whole had already sent
+// body is redacted across its pieces: a secret in one of the forms core removes, or spelled with
+// other escapes core decodes, that is cut between them is removed, but for the part of its start
+// that a piece sent whole (redacted as one text, as when it is too heavily escaped to hold back)
+// had already sent as it was; after such a piece, an escape it began that the next completes is
+// replaced too, so the client does not read one there that spells a secret
 // (protocol.BodyRedactor). An extension that serves no endpoints answers at once with an
 // unsupported error about the account, so routing moves on to another account.
 func (e *Extension) Endpoint(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
@@ -597,10 +747,12 @@ func (s *Stream) last() llm.Event {
 }
 
 // bodyPiece returns a body piece as the JSON string a native event carries. BodyRedactor cuts
-// a body only where a form of a secret starts or ends, before an ASCII byte (a number, or the
-// colon, bracket or comma before one), or, after text sent whole, at the start of a character it
-// left as it was, each of which is where a character starts, so the piece is valid UTF-8 as the
-// decoded string it came from was, and encodes exactly.
+// a body only where a character starts: where a form of a secret, or its spelling with escapes,
+// starts or ends, at a backslash or percent sign that starts an escape, before the colon, bracket
+// or comma before a number or the number, where a run of bytes that can be part of a spelling
+// starts, or, after text it sent whole or replaced with [redacted], at the start of a character
+// it left as it was. So the piece is valid UTF-8 as the decoded string it came from was, and
+// encodes exactly.
 func bodyPiece(text string) json.RawMessage {
 	b, _ := json.Marshal(text)
 	return b
@@ -634,14 +786,139 @@ func (s *Stream) Close() {
 // maxLogLine bounds a line of extension output that is logged.
 const maxLogLine = 64 << 10
 
-// lineLogger writes whole lines to w with a prefix, each passed through redact. A line longer
-// than maxLogLine is left out, with a note: cut into parts, a credential split between two of
-// them would not be recognised.
+// maxHeldOutput bounds the extension output held while a refresh or login runs: its text, plus
+// heldLineCost for each line.
+const maxHeldOutput = 1 << 20
+
+// heldLineCost is what a held line costs beyond its text (its entry in the queue, and room for
+// the queue to grow), so that a flood of empty lines is bounded too.
+const heldLineCost = 64
+
+// output is where the lines of a program's stderr and stdout go: to w, each with the credentials
+// the extension holds removed (held) when it is written.
+//
+// A refresh or login makes a credential core learns only from the call's result, and the
+// extension may write it out before that result arrives, or core may read the line first. So from
+// just before such a call is sent until its result is recorded (held.add), every line is held, and
+// then logged redacted with it. A line can't be told apart by call, as every call shares both
+// streams, so while any refresh or login runs, all lines wait, those of other calls too. A line
+// read after the result is redacted with it anyway. While lines are held, held also keeps the
+// credentials newer ones replace (held.pin), up to maxReplaced, so later renewals can't take one
+// away before the lines it may be in are logged. Once the held lines pass maxHeldOutput, the rest
+// of them are left out, with notes; once more than maxReplaced credentials have been replaced while
+// they wait, all of them are left out, with notes. No held line is logged before its redaction is
+// known or with it incomplete. The hold lasts as long as the call:
+// core ends a login after 15 minutes, but a refresh has no deadline, so one that hangs keeps the
+// lines held until the program exits, which ends it.
+type output struct {
+	mu      sync.Mutex
+	w       io.Writer
+	held    *held
+	prefix  string // of the notes about left-out lines
+	minting int    // refresh and login calls running
+	queue   []heldLine
+	size    int // what queue holds, counted as maxHeldOutput says
+	dropped int // lines left out since the queue was full
+}
+
+type heldLine struct{ prefix, text string }
+
+// line logs text with prefix, or holds it while a refresh or login runs.
+func (o *output) line(prefix, text string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	switch cost := len(text) + heldLineCost; {
+	case o.minting == 0:
+		o.write(prefix, text)
+	case o.dropped > 0:
+		o.dropped++
+	case o.overflowed():
+		o.dropQueue()
+		o.leaveOut(1, overflowNote)
+	case o.size+cost > maxHeldOutput:
+		o.leaveOut(1, sizeNote)
+	default:
+		o.queue = append(o.queue, heldLine{prefix, text})
+		o.size += cost
+	}
+}
+
+// The notes on held lines left out.
+var (
+	sizeNote = fmt.Sprintf("the output held while a refresh or login runs passed its limit of %d bytes, counting %d for each line besides its text; the rest of the held output is left out until it ends",
+		maxHeldOutput, heldLineCost)
+	overflowNote = fmt.Sprintf("more than %d credentials were replaced while a refresh or login runs; all of the held output is left out until it ends", maxReplaced)
+)
+
+// overflowed reports whether more than maxReplaced credentials were replaced during the holds
+// running, so that the held lines may hold one no longer known.
+func (o *output) overflowed() bool {
+	_, overflow := o.held.redactor()
+	return overflow
+}
+
+// leaveOut leaves out n lines, with note the first time. o.mu is held.
+func (o *output) leaveOut(n int, note string) {
+	if o.dropped == 0 {
+		o.note(note)
+	}
+	o.dropped += n
+}
+
+func (o *output) note(note string) { fmt.Fprintf(o.w, "%s(%s)\n", o.prefix, note) }
+
+// dropQueue leaves out the lines held so far, past maxReplaced, with its note: also after other
+// lines were left out for the size limit, whose note says only the rest is. o.mu is held.
+func (o *output) dropQueue() {
+	if len(o.queue) > 0 {
+		if o.dropped > 0 {
+			o.note(overflowNote)
+		}
+		o.leaveOut(len(o.queue), overflowNote)
+	}
+	o.queue, o.size = nil, 0
+}
+
+func (o *output) write(prefix, text string) {
+	fmt.Fprintf(o.w, "%s%s\n", prefix, o.held.String(text))
+}
+
+// hold holds the output from now until the returned release is called, at least once, after
+// the result of the refresh or login about to be sent is recorded.
+func (o *output) hold() (release func()) {
+	o.mu.Lock()
+	o.minting++
+	o.held.pin()
+	o.mu.Unlock()
+	return sync.OnceFunc(func() {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		defer o.held.unpin()
+		if o.minting--; o.minting > 0 {
+			return
+		}
+		// One Redactor for all the held lines: a renewal while they are written could otherwise
+		// pass maxReplaced and drop a credential one of them still holds.
+		r, overflow := o.held.redactor()
+		if overflow {
+			o.dropQueue()
+		}
+		for _, l := range o.queue {
+			fmt.Fprintf(o.w, "%s%s\n", l.prefix, r.String(l.text))
+		}
+		if o.dropped > 0 {
+			fmt.Fprintf(o.w, "%s(%d lines of output left out)\n", o.prefix, o.dropped)
+		}
+		o.queue, o.size, o.dropped = nil, 0, 0
+	})
+}
+
+// lineLogger passes whole lines to out with a prefix. A line longer than maxLogLine is left out,
+// with a note: cut into parts, a credential split between two of them would not be recognised.
 type lineLogger struct {
 	mu     sync.Mutex
-	w      io.Writer
+	out    *output
 	prefix string
-	redact func(string) string
 	buf    []byte
 	skip   bool // dropping the rest of a line longer than maxLogLine
 }
@@ -660,7 +937,7 @@ func (l *lineLogger) Write(p []byte) (int, error) {
 		case i > maxLogLine:
 			l.longLine()
 		default:
-			fmt.Fprintf(l.w, "%s%s\n", l.prefix, l.redact(string(l.buf[:i])))
+			l.out.line(l.prefix, string(l.buf[:i]))
 		}
 		l.skip = false
 		l.buf = l.buf[i+1:]
@@ -676,5 +953,5 @@ func (l *lineLogger) Write(p []byte) (int, error) {
 }
 
 func (l *lineLogger) longLine() {
-	fmt.Fprintf(l.w, "%s(a line longer than %d bytes, not logged)\n", l.prefix, maxLogLine)
+	l.out.line(l.prefix, fmt.Sprintf("(a line longer than %d bytes, not logged)", maxLogLine))
 }

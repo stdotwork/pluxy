@@ -449,14 +449,11 @@ func found(n *yaml.Node, strict bool) (out []*yaml.Node, texts map[*yaml.Node]st
 					keyRule(name, val, plain)
 				case secretHeader(name) || secretName(name):
 					if s := resolved(val); c.section && s.Kind == yaml.ScalarNode {
-						var v any
-						if s.Decode(&v) == nil {
-							if t, ok := legacy.HeaderText(v); ok {
-								if texts == nil {
-									texts = map[*yaml.Node]string{}
-								}
-								texts[s] = t
+						if t, ok := legacy.HeaderText(s); ok {
+							if texts == nil {
+								texts = map[*yaml.Node]string{}
 							}
+							texts[s] = t
 						}
 					}
 					all(val, true, anywhere)

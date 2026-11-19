@@ -28,12 +28,17 @@ import { createInterface } from "node:readline";
 import { smokeProblem } from "./appimage";
 import { checkRecovery } from "./recovery";
 import { busNames, documentPortal, gtkBackend, portalFrontend, type Service, trayWatcher } from "./services";
+import { SHOT_FILE, watchScreen } from "./shots";
 
 const [probe, appImage, nonce, app, ...appArgs] = process.argv.slice(2);
 if (!probe || !appImage || !nonce || !app) {
   console.error("usage: bun native/session.ts <session_probe> <AppImage> <nonce> <app> [args...]");
   process.exit(2);
 }
+
+// Read once and removed, so the app and what it starts never see it.
+const shotFile = process.env[SHOT_FILE];
+delete process.env[SHOT_FILE];
 
 const SETUP_FAILED = 78;
 const READY_MS = 30_000;
@@ -252,12 +257,18 @@ async function stopServices() {
 }
 
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
-  process.on(signal, () => void stopServices().then(() => process.exit(128)));
+  process.on(
+    signal,
+    () => void (stopShots?.() ?? Promise.resolve()).then(stopServices).then(() => process.exit(128)),
+  );
 }
 
 let code = SETUP_FAILED;
+let stopShots: (() => Promise<void>) | undefined;
 try {
   await setup();
+  // The session's last screen, when the run asked for it (PLUXY_APP_TEST_SHOTS in run.ts).
+  if (shotFile) stopShots = watchScreen(shotFile, say);
   code = await new Promise<number>((resolve, reject) => {
     // The startup and window suites launch the app themselves, several times and reading its
     // output; otherwise the app runs once here, and the tray checks read its output.
@@ -307,6 +318,7 @@ try {
   for (const r of running)
     for (const line of r.log) console.log(`native-prereq: ${r.service.package} | ${line}`);
 } finally {
+  await stopShots?.();
   await stopServices();
 }
 process.exit(code);

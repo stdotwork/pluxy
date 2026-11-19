@@ -16,19 +16,11 @@ import (
 
 // Environment switches:
 //
-//	PLUXY_CORPUS_OLD_CORE=1      also run today's core (built from ../../core, which must exist) and compare live
-//	PLUXY_CORPUS_OLD_CORE_BIN=…  run this old-core binary live (alone, it also turns live on) instead of building one
-//	PLUXY_CORPUS_RECORD=1        run the old core live and write its observations into the case files
-//	                             (built from ../../core unless PLUXY_CORPUS_OLD_CORE_BIN names a binary)
 //	PLUXY_CORPUS_REPORT=path     also write the report to path
 //	PLUXY_CORPUS_CASE=regexp     run only cases whose format/provider/name matches
 //	PLUXY_CORPUS_DUMP_NEW=dir    write each new-core observation to dir/<format>.<provider>.<name>.json
-var (
-	binDir    string
-	oldBinary string
-	record    = os.Getenv("PLUXY_CORPUS_RECORD") == "1"
-	liveOld   = record || os.Getenv("PLUXY_CORPUS_OLD_CORE") == "1" || os.Getenv("PLUXY_CORPUS_OLD_CORE_BIN") != ""
-)
+//	PLUXY_CORPUS_LOGS=1          with -v, log each core's output
+var binDir string
 
 func TestMain(m *testing.M) {
 	code := 1
@@ -48,26 +40,10 @@ func TestMain(m *testing.M) {
 }
 
 func setup() error {
-	if err := BuildNewCore("..", binDir); err != nil {
-		return err
-	}
-	if !liveOld {
-		return nil
-	}
-	if bin := os.Getenv("PLUXY_CORPUS_OLD_CORE_BIN"); bin != "" {
-		oldBinary = bin
-		return nil
-	}
-	oldBinary = filepath.Join(binDir, "old-core")
-	start := time.Now()
-	if err := BuildOldCore(filepath.Join("..", "..", "core"), oldBinary); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "corpus: built the old core in %s\n", time.Since(start).Round(time.Second))
-	return nil
+	return BuildNewCore("..", binDir)
 }
 
-// coreSlots limits how many cores run at once; each old core holds tens of MB.
+// coreSlots limits how many cores run at once.
 var coreSlots = make(chan struct{}, 4)
 
 func TestCorpus(t *testing.T) {
@@ -107,7 +83,7 @@ func TestCorpus(t *testing.T) {
 					t.Error(r.Err)
 				}
 				if !r.Verdict.OK() {
-					t.Errorf("new core differs from the old core outside the listed exceptions; see the corpus report")
+					t.Errorf("new core differs from the old core's recorded reply outside the listed exceptions; see the corpus report")
 				}
 			})
 		}
@@ -137,14 +113,7 @@ func TestCorpus(t *testing.T) {
 			}
 		}
 	}
-	reference := "the old core's recorded observations (set PLUXY_CORPUS_OLD_CORE=1 to run it live)"
-	if liveOld {
-		reference = "the old core, run live (built from core/)"
-		if bin := os.Getenv("PLUXY_CORPUS_OLD_CORE_BIN"); bin != "" {
-			reference = "the old core, run live (the binary at PLUXY_CORPUS_OLD_CORE_BIN: " + bin + ")"
-		}
-	}
-	report := Report(ordered, reference, global.Exceptions, staleGlobal)
+	report := Report(ordered, "the old core's recorded replies (recorded_old_core in the case files)", global.Exceptions, staleGlobal)
 	fmt.Println(report)
 	if path := os.Getenv("PLUXY_CORPUS_REPORT"); path != "" {
 		if err := os.WriteFile(path, []byte(report), 0o644); err != nil {
@@ -161,7 +130,7 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 	}
 	volatile = append(volatile, c.Volatile...)
 
-	newObs, err := observe(t, c, "new", func(dir, upstreamURL, _, _ string) (*Core, error) {
+	newObs, err := observe(t, c, func(dir, upstreamURL string) (*Core, error) {
 		return StartNewCore(binDir, dir, c.Provider, upstreamURL, newCoreModels(c), UpstreamKeys(c.Accounts), c.NewCoreConfig, c.NewCore, managementKey(c))
 	})
 	if err != nil {
@@ -196,40 +165,8 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 		Mask(ref, volatile)
 		SortAt(ref, c.Unordered)
 	}
-	if liveOld {
-		oldObs, err := observe(t, c, "old", func(dir, upstreamURL, proxyURL, caFile string) (*Core, error) {
-			return StartOldCore(OldCoreSetup{Binary: oldBinary, WorkDir: dir, Provider: c.Provider, UpstreamURL: upstreamURL, Models: caseModels(c), Keys: UpstreamKeys(c.Accounts),
-				ProxyURL: proxyURL, CAFile: caFile, Override: c.OldCore, ManagementKey: managementKey(c)})
-		})
-		if err != nil {
-			res.Err = fmt.Errorf("old core: %w", err)
-			return res
-		}
-		label(oldObs)
-		Mask(oldObs, volatile)
-		SortAt(oldObs, c.Unordered)
-		switch {
-		case record:
-			if err := c.SaveRecorded(oldObs); err != nil {
-				res.Err = err
-				return res
-			}
-		case ref == nil:
-			res.Err = fmt.Errorf("case has no recorded_old_core; run with PLUXY_CORPUS_RECORD=1")
-		default:
-			if d := Diff(map[string]any(ref), map[string]any(oldObs)); len(d) > 0 {
-				var b strings.Builder
-				b.WriteString("the live old core no longer matches recorded_old_core (re-record with PLUXY_CORPUS_RECORD=1, or mark the path volatile):")
-				for _, x := range d {
-					fmt.Fprintf(&b, "\n  %s: recorded %s, live %s", x.Path, Show(x.Want), Show(x.Got))
-				}
-				res.Err = fmt.Errorf("%s", b.String())
-			}
-		}
-		ref = oldObs
-	}
 	if ref == nil {
-		res.Err = fmt.Errorf("case has no recorded_old_core; run with PLUXY_CORPUS_RECORD=1")
+		res.Err = fmt.Errorf("case has no recorded_old_core, and the old core is gone, so none can be recorded (next/corpus/README.md, \"Adding cases\")")
 		return res
 	}
 	res.Verdict = Judge(ref, newObs, c.Exceptions, global.Exceptions)
@@ -240,72 +177,44 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 }
 
 // observe runs the case once against a core started by start, with a fresh fake upstream.
-// For the old core and a provider with Intercept set, start also gets the URL of an
-// intercepting proxy in front of the fake upstream and the test authority's certificate file.
-func observe(t *testing.T, c *Case, label string, start func(dir, upstreamURL, proxyURL, caFile string) (*Core, error)) (Observation, error) {
+func observe(t *testing.T, c *Case, start func(dir, upstreamURL string) (*Core, error)) (Observation, error) {
 	coreSlots <- struct{}{}
 	defer func() { <-coreSlots }()
-	aside := Providers[c.Provider].Aside
-	if label == "new" {
-		aside = withAccountCheck(aside)
-	}
-	up := NewFakeUpstream(c.Upstream, aside)
+	up := NewFakeUpstream(c.Upstream, withAccountCheck(Providers[c.Provider].Aside))
 	defer up.Close()
-	var proxyURL, caFile string
-	var ic *interceptor
-	if label == "old" && Providers[c.Provider].Intercept {
-		ca, err := TestCA(binDir)
-		if err != nil {
-			return nil, err
-		}
-		ic = up.Intercept(ca)
-		defer ic.Close()
-		proxyURL, caFile = ic.URL, ca.File
-	}
-	dir, err := os.MkdirTemp("", "pluxy-corpus-"+label+"-")
+	dir, err := os.MkdirTemp("", "pluxy-corpus-new-")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
-	core, err := start(dir, up.URL, proxyURL, caFile)
+	core, err := start(dir, up.URL)
 	if err != nil {
 		return nil, err
 	}
 	defer core.Stop()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	run := Run
-	if label == "old" {
-		run = RunOld
-	}
-	obs, err := run(ctx, c, core.URL, up)
+	obs, err := Run(ctx, c, core.URL, up)
 	if err != nil {
 		return nil, fmt.Errorf("%w\ncore output:\n%s", err, core.Logs())
 	}
-	if ic != nil {
-		if r := ic.Refused(); len(r) > 0 {
-			return nil, fmt.Errorf("the core tried to reach hosts the intercepting proxy refuses: %v", r)
-		}
-	}
 	if testing.Verbose() && os.Getenv("PLUXY_CORPUS_LOGS") == "1" {
-		t.Logf("%s core output:\n%s", label, core.Logs())
+		t.Logf("new core output:\n%s", core.Logs())
 	}
 	return obs, nil
 }
 
 // newCoreModels returns the models the new core's accounts list for the case: AccountModels, or
-// else, for a provider whose accounts today's core takes from its config's api-keys block, the
-// models the old core's config lists (caseModels), since both cores serve such an account only
-// the models it lists or, without a list, those of its provider's catalog.
+// else, unless the provider is a CatalogModels one, the request's model (caseModels).
 func newCoreModels(c *Case) []string {
-	if len(c.AccountModels) > 0 || Providers[c.Provider].OldCoreAuthFiles != nil {
+	if len(c.AccountModels) > 0 || Providers[c.Provider].CatalogModels {
 		return c.AccountModels
 	}
 	return caseModels(c)
 }
 
-// managementKey is the management key both cores get for the case: the corpus's when the case
-// calls a management API, else none (the management API is off).
+// managementKey is the management key the new core gets for the case: the corpus's when the case
+// calls its management API, else none (the management API is off).
 func managementKey(c *Case) string {
 	if c.UsesManagement() {
 		return ManagementKey
@@ -313,7 +222,7 @@ func managementKey(c *Case) string {
 	return ""
 }
 
-// caseModels returns the models the old core lists for the case: AccountModels, or else the
+// caseModels returns the models a case's accounts list: AccountModels, or else the
 // request's model without a thinking suffix such as "(high)". A Gemini request names its model in
 // the path (/v1beta/models/{model}:{method}), a WebSocket client in its first message.
 func caseModels(c *Case) []string {

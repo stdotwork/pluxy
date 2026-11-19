@@ -1,17 +1,24 @@
 //! The spawn service against real processes. The agent is the fixture program
 //! (`examples/program_fixture`), which this test program runs when its first argument says so
 //! (the hook in `program_tests.rs`); the host-crash check runs this test program as a host too
-//! (the hook below), which it then kills. Every process a test starts is ended by it, by process
-//! ID and only while its command line still names the test's folder.
+//! (the hook below), which it then kills. Every process a test starts is ended by it: on Linux by
+//! process ID and only while its command line still names the test's folder; elsewhere, where a
+//! process ID alone is all a test could name, through a file named `stop` in the test's folder,
+//! which the agents wait for (the fixture's `until_stop`). The lifetime checks on every platform
+//! are in `program_tests.rs` (`lifetime_*`).
 
 use super::*;
 use serde_json::Value;
 use std::path::Path;
 
 const AGENT: &str = "pluxy-fixture-agent";
+#[cfg(target_os = "linux")]
 const HOST: &str = "PLUXY_SPAWN_TEST_HOST";
 const CANARY: &str = "pluxy-spawn-test-canary-0f1e2d";
 
+// Linux only, with the check it serves: the parent-death signal and the orphans it leaves are
+// Linux's (`lifetime_a_host_crash_*` in `program_tests.rs` checks a host crash everywhere).
+#[cfg(target_os = "linux")]
 #[used]
 #[link_section = ".init_array"]
 static CRASH_HOST: extern "C" fn() = {
@@ -32,10 +39,26 @@ fn folder(name: &str) -> PathBuf {
     std::fs::canonicalize(&d).unwrap()
 }
 
+/// Folder dir, opened as a launch's cwd is (on Windows a folder opens only with backup
+/// semantics).
+fn open_dir(dir: &Path) -> File {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS)
+            .open(dir)
+            .unwrap()
+    }
+    #[cfg(not(windows))]
+    File::open(dir).unwrap()
+}
+
 fn opened(dir: &Path) -> Box<dyn Opened> {
     Box::new(Plain {
         executable: File::open(std::env::current_exe().unwrap()).unwrap(),
-        cwd: File::open(dir).unwrap(),
+        cwd: open_dir(dir),
     })
 }
 
@@ -68,11 +91,43 @@ fn record(path: &Path, not: u64) -> Value {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn owned(pid: u64, marker: &Path) -> bool {
     pid > 0
         && unsafe { libc::kill(pid as libc::pid_t, 0) } == 0
         && std::fs::read(format!("/proc/{pid}/cmdline"))
             .is_ok_and(|c| String::from_utf8_lossy(&c).contains(&*marker.to_string_lossy()))
+}
+
+/// The counts agent pid writes while it waits, under the record named marker (the fixture's
+/// `until_stop`).
+#[cfg(not(target_os = "linux"))]
+fn beats(pid: u64, marker: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.{pid}.beat", marker.display()))
+}
+
+/// The count in beat file f.
+#[cfg(not(target_os = "linux"))]
+fn count(f: &Path) -> Option<u64> {
+    std::fs::read_to_string(f).ok()?.trim().parse().ok()
+}
+
+/// Whether agent pid, of the record named marker, runs: its count advances (one every 50 ms).
+/// There is no command line to read here, and nothing is signalled.
+#[cfg(not(target_os = "linux"))]
+fn owned(pid: u64, marker: &Path) -> bool {
+    let f = beats(pid, marker);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut first = count(&f);
+    while pid > 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+        match (first, count(&f)) {
+            (Some(a), Some(b)) if b > a => return true,
+            (None, now) => first = now,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn ended(pid: u64, marker: &Path) -> bool {
@@ -87,12 +142,58 @@ fn ended(pid: u64, marker: &Path) -> bool {
 }
 
 /// Kills each process in pids that still runs as one of the test folder dir's.
+#[cfg(target_os = "linux")]
 fn clean(pids: &[u64], dir: &Path) {
     for &p in pids {
         if owned(p, dir) {
             unsafe { libc::kill(p as libc::pid_t, libc::SIGKILL) };
         }
     }
+}
+
+/// Ends the agents of the test folder dir, which each exit once a file named `stop` is there,
+/// and waits until no count there advances. Nothing is signalled.
+#[cfg(not(target_os = "linux"))]
+fn clean(_pids: &[u64], dir: &Path) {
+    let _ = std::fs::write(dir.join("stop"), "");
+    let counts = || -> Vec<Option<u64>> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|d| d.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+            .unwrap_or_default();
+        files.retain(|f| f.extension().is_some_and(|x| x == "beat"));
+        files.sort();
+        files.iter().map(|f| count(f)).collect()
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut before = counts();
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(300));
+        let now = counts();
+        if now == before {
+            return;
+        }
+        before = now;
+    }
+}
+
+/// Starts detached launch l for package: true once it runs. On Windows a detached launch runs
+/// only where the job the tests run in lets it leave (`owned::windows::breakaway`; GitHub's hosted
+/// runners do not), and is refused before it runs otherwise (`NO_BREAKAWAY`): false.
+fn let_go(l: &Launch, package: &str, values: &dyn Values) -> bool {
+    let r = detached(l, package, values);
+    #[cfg(windows)]
+    {
+        use crate::owned::windows::{breakaway, NO_BREAKAWAY};
+        if r.as_ref().is_err_and(|e| e.contains(NO_BREAKAWAY)) {
+            return false;
+        }
+        assert!(
+            breakaway().is_ok(),
+            "a detached launch was not refused in a job it may not leave: {r:?}"
+        );
+    }
+    r.unwrap();
+    true
 }
 
 fn pid(r: &Value, k: &str) -> u64 {
@@ -117,6 +218,7 @@ fn none(_: &str, _: &str) -> Result<String, String> {
     Err("no secret".into())
 }
 
+#[cfg(target_os = "linux")]
 fn limit(v: libc::rlim_t) -> Value {
     if v == libc::RLIM_INFINITY {
         json!("unlimited")
@@ -150,6 +252,36 @@ fn a_managed_terminal_launch_is_refused_and_a_managed_direct_launch_is_not() {
         }
         assert_eq!(parse(&ok, &none).unwrap().0, Lifetime::Detached);
     }
+}
+
+/// A name is the same name whatever its case where the environment ignores case (Windows): named
+/// twice, in one list or across set, inherit and secrets, the launch is refused, so its review
+/// shows each variable it gets once. Elsewhere `Path` and `PATH` are two variables.
+#[test]
+fn a_name_given_twice_as_the_environment_compares_names_is_refused() {
+    let secret_field = |f: &str| f == "key";
+    for twice in [
+        json!({"environment": {"set": {"Path": "a", "PATH": "b"}}}),
+        json!({"environment": {"set": {"Path": "a"}, "inherit": ["PATH"]}}),
+        json!({"environment": {"set": {"Path": "a"}, "secrets": {"PATH": "key"}}}),
+        json!({"environment": {"inherit": ["Path", "PATH"]}}),
+        json!({"environment": {"unset": ["Path", "PATH"]}}),
+    ] {
+        let r = parse(&twice, &secret_field);
+        if cfg!(windows) {
+            let e = r.unwrap_err();
+            assert!(e.contains("more than once"), "{twice}: {e}");
+        } else {
+            assert!(r.is_ok(), "{twice}: {r:?}");
+        }
+    }
+    // The same name twice is refused everywhere.
+    let e = parse(
+        &json!({"environment": {"set": {"PATH": "a"}, "inherit": ["PATH"]}}),
+        &secret_field,
+    )
+    .unwrap_err();
+    assert!(e.contains("more than once"), "{e}");
 }
 
 #[test]
@@ -265,6 +397,8 @@ fn a_launch_request_is_checked_and_its_review_shows_no_value_it_must_not() {
     assert_ne!(r.revision(lifetime), other.revision(lifetime));
 }
 
+// Linux only: its session values (`BASE`) and the AppImage's folders are Linux's.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_launch_environment_holds_session_values_and_what_was_asked_only() {
     let snap = Snapshot::of(
@@ -312,6 +446,9 @@ fn the_launch_environment_holds_session_values_and_what_was_asked_only() {
     assert_eq!(got, want);
 }
 
+// Linux only: sessions, descriptors read from /proc and core limits (the lifetime checks in
+// `program_tests.rs` check what a launch gets everywhere).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_detached_launch_leaves_the_app_with_only_what_it_was_given() {
     let dir = folder("detached");
@@ -425,12 +562,16 @@ fn a_managed_runtime_is_the_registrys_and_only_its_package_controls_it() {
     let checks = || {
         let p = pid(&x, "pid");
         assert_eq!(a["pid"].as_u64(), Some(p));
-        assert_eq!(x["pgid"].as_u64(), Some(p), "{x}");
-        assert_eq!(
-            x["ppid"].as_u64(),
-            Some(u64::from(std::process::id())),
-            "{x}"
-        );
+        // A group of its own, and the app's own child (on Windows its job: see the lifetime checks).
+        #[cfg(unix)]
+        {
+            assert_eq!(x["pgid"].as_u64(), Some(p), "{x}");
+            assert_eq!(
+                x["ppid"].as_u64(),
+                Some(u64::from(std::process::id())),
+                "{x}"
+            );
+        }
         assert!(std::fs::read_to_string(&file).unwrap().contains(&ida));
         assert_eq!(rt.status("pluxy/one", &ida).unwrap()["state"], "running");
         assert_eq!(rt.list("pluxy/one").len(), 2);
@@ -540,6 +681,7 @@ fn a_restart_resolves_its_secrets_again_for_its_package_and_a_refusal_refuses_it
 
 /// The host-crash check's host: starts a managed runtime whose leader leaves an orphan, and a
 /// detached agent, says so, and waits to be killed.
+#[cfg(target_os = "linux")]
 fn crash_host(dir: &Path) -> ! {
     let rt = Runtimes::open(Some(dir.join("runtimes.json")), Box::new(By(none)));
     let leader = dir.join("leader");
@@ -560,6 +702,9 @@ fn crash_host(dir: &Path) -> ! {
     }
 }
 
+// Linux only: the parent-death signal and the orphans it leaves are Linux's
+// (`lifetime_a_host_crash_*` in `program_tests.rs` checks a host crash on every platform).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_crashed_host_leaves_the_documented_orphans_and_its_next_start_does_not_signal_them() {
     let dir = folder("crash");
@@ -688,7 +833,7 @@ fn a_disabled_or_removed_packages_runtimes_are_retired_and_never_start_again() {
     gated.opened = Box::new(Gated {
         plain: Plain {
             executable: File::open(std::env::current_exe().unwrap()).unwrap(),
-            cwd: File::open(&dir).unwrap(),
+            cwd: open_dir(&dir),
         },
         gate: Mutex::new(gate),
         held,
@@ -842,7 +987,7 @@ fn a_restart_racing_a_removal_leaves_nothing_and_never_starts_the_dropped_launch
         gated.opened = Box::new(Gated {
             plain: Plain {
                 executable: File::open(std::env::current_exe().unwrap()).unwrap(),
-                cwd: File::open(&dir).unwrap(),
+                cwd: open_dir(&dir),
             },
             gate: Mutex::new(gate),
             held,
@@ -929,7 +1074,14 @@ fn a_launchs_stdin_secret_reaches_it_on_its_stdin_only() {
         };
         let rt = Runtimes::open(None, Box::new(By(value)));
         if lifetime == Lifetime::Detached {
-            detached(&l, "p", &By(value)).unwrap();
+            if !let_go(&l, "p", &By(value)) {
+                // Refused before it ran (Windows, in a job it may not leave): nothing started.
+                std::thread::sleep(Duration::from_millis(300));
+                let started = rec.exists();
+                let _ = std::fs::remove_dir_all(&dir);
+                assert!(!started, "a refused detached launch started");
+                continue;
+            }
         } else {
             rt.start("p", l).unwrap();
         }
@@ -938,6 +1090,7 @@ fn a_launchs_stdin_secret_reaches_it_on_its_stdin_only() {
         let checks = || {
             assert_eq!(r["stdin"], CANARY, "{r}");
             assert!(!r["env"].to_string().contains(CANARY), "{r}");
+            #[cfg(unix)]
             assert_eq!(r["core"], json!([1, 1]), "{r}");
         };
         let ok = std::panic::catch_unwind(checks);
@@ -1077,6 +1230,8 @@ fn a_launch_is_checked_once_more_right_before_its_spawn_and_nothing_starts_when_
     }
 }
 
+// Linux only: systemd's scopes.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_detached_launch_runs_in_a_scope_of_its_own_under_a_user_manager() {
     let dir = folder("scope");
@@ -1105,6 +1260,8 @@ fn a_detached_launch_runs_in_a_scope_of_its_own_under_a_user_manager() {
     ok.unwrap();
 }
 
+// Linux only: the session bus the systemd scopes are asked for on.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_bus_that_never_answers_holds_a_launch_no_longer_than_the_wait() {
     use gtk::gio;
@@ -1134,12 +1291,264 @@ fn a_bus_that_never_answers_holds_a_launch_no_longer_than_the_wait() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// On macOS a launch's program may sit below a folder the `admin` group may write, as in
+/// `/Applications` or Homebrew's folders (`owned::Writers::Admins`): such a launch starts.
+#[cfg(target_os = "macos")]
+#[test]
+fn on_macos_a_launch_from_a_folder_the_admin_group_may_write_starts() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = folder("admin");
+    let bin = dir.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let out = std::process::Command::new("/usr/bin/chgrp")
+        .arg("admin")
+        .arg(&bin)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "chgrp admin (the test's user must be in admin): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o775)).unwrap();
+    let program = bin.join("agent");
+    std::fs::write(&program, "#!/bin/sh\necho started > \"$1\"\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let started = dir.join("started");
+    let l = Launch {
+        opened: Box::new(Plain {
+            executable: File::open(&program).unwrap(),
+            cwd: open_dir(&dir),
+        }),
+        named: program.clone(),
+        // Its arguments after its name (`named`, given as argv[0]).
+        argv: vec![started.to_string_lossy().into_owned()],
+        lifetime: Lifetime::Detached,
+        request: Request::default(),
+        secrets: vec![],
+        stdin: None,
+    };
+    let r = detached(&l, "p", &By(none));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while r.is_ok() && !started.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let ran = started.exists();
+    let _ = std::fs::remove_dir_all(&dir);
+    r.unwrap();
+    assert!(ran, "the launch did not run");
+}
+
+/// A terminal launch as confirmed: the terminal, and the program it runs, opened and as the
+/// launch names it.
+#[cfg(unix)]
+struct InTerminal {
+    plain: Plain,
+    program: File,
+    named: PathBuf,
+}
+
+#[cfg(unix)]
+impl Opened for InTerminal {
+    fn executable(&self) -> &File {
+        &self.plain.executable
+    }
+    fn cwd(&self) -> &File {
+        &self.plain.cwd
+    }
+    fn program(&self) -> Option<(&File, &Path)> {
+        Some((&self.program, &self.named))
+    }
+    fn recheck(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// A shell script at p running body, which only its owner may change or run.
+#[cfg(unix)]
+fn script(p: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(p, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+/// A folder at p with mode.
+#[cfg(unix)]
+fn mode_dir(p: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir(p).unwrap();
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// A detached launch in dir of terminal, a stand-in terminal script running body (its arguments:
+/// the file `go` in dir, then args), with program named as the program it runs.
+#[cfg(unix)]
+fn in_terminal(dir: &Path, body: &str, program: &Path, args: &[&Path]) -> Launch {
+    let terminal = dir.join("terminal");
+    script(&terminal, body);
+    let mut argv = vec![dir.join("go").to_string_lossy().into_owned()];
+    argv.extend(args.iter().map(|a| a.to_string_lossy().into_owned()));
+    Launch {
+        opened: Box::new(InTerminal {
+            plain: Plain {
+                executable: File::open(&terminal).unwrap(),
+                cwd: open_dir(dir),
+            },
+            program: File::open(program).unwrap(),
+            named: program.to_path_buf(),
+        }),
+        named: terminal,
+        argv,
+        lifetime: Lifetime::Detached,
+        request: Request::default(),
+        secrets: vec![],
+        stdin: None,
+    }
+}
+
+/// A terminal as Linux's run a launch's program: once the file go exists, by its path, as
+/// `<program> <out>` after the flag `-e`.
+#[cfg(unix)]
+const BY_PATH: &str = r#"go=$1; shift 2; while [ ! -e "$go" ]; do sleep 0.05; done; exec "$@""#;
+
+/// Another file renamed over p, as another user who may write its folder could: it writes
+/// `swapped` to its first argument.
+#[cfg(unix)]
+fn swap(p: &Path) {
+    let new = p.with_extension("new");
+    script(&new, r#"echo swapped > "$1""#);
+    std::fs::rename(&new, p).unwrap();
+}
+
+/// What file p holds once it exists, within 20 seconds.
+#[cfg(unix)]
+fn wait_for(p: &Path) -> Option<String> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !p.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::fs::read_to_string(p).ok()
+}
+
+/// A terminal runs a launch's program by its path, while it starts, after every check of the
+/// app's: a program another user could swap in that time (here, in a folder anyone may write) is
+/// refused, and nothing runs.
+#[cfg(unix)]
+#[test]
+fn a_terminal_launchs_program_another_user_could_swap_is_refused() {
+    let dir = folder("swap");
+    let open = dir.join("open");
+    mode_dir(&open, 0o777);
+    let program = open.join("agent");
+    script(&program, r#"echo checked > "$1""#);
+    let out = dir.join("out");
+    let l = in_terminal(&dir, BY_PATH, &program, &[Path::new("-e"), &program, &out]);
+    let r = detached(&l, "p", &By(none));
+    swap(&program);
+    std::fs::write(dir.join("go"), "").unwrap();
+    let ran = r.is_ok().then(|| wait_for(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+    let e = r.expect_err(&format!("the launch started, and its terminal ran {ran:?}"));
+    assert!(
+        e.starts_with(&format!("{} may be changed by other users", open.display())),
+        "{e}"
+    );
+}
+
+/// On Linux the terminal resolves the program's path itself: each folder and link on the way must
+/// be one only root or the person can change. A program reached through the person's own link (as
+/// `~/.local/bin/claude`) starts; through a link in, or to, a folder anyone may write, it is
+/// refused, naming that folder.
+#[cfg(target_os = "linux")]
+#[test]
+fn on_linux_a_terminal_launchs_program_is_checked_along_its_links() {
+    use std::os::unix::fs::symlink;
+    let dir = folder("links");
+    let (versions, bin, open) = (dir.join("versions"), dir.join("bin"), dir.join("open"));
+    mode_dir(&versions, 0o755);
+    mode_dir(&bin, 0o755);
+    mode_dir(&open, 0o777);
+    script(&versions.join("agent"), r#"echo checked > "$1""#);
+    symlink("../versions/agent", bin.join("agent")).unwrap();
+    symlink("../versions/agent", open.join("agent")).unwrap();
+    script(&open.join("real"), r#"echo checked > "$1""#);
+    symlink("../open/real", bin.join("other")).unwrap();
+    let out = dir.join("out");
+    let run = |program: &Path| {
+        let l = in_terminal(&dir, BY_PATH, program, &[Path::new("-e"), program, &out]);
+        detached(&l, "p", &By(none))
+    };
+    let own = run(&bin.join("agent"));
+    std::fs::write(dir.join("go"), "").unwrap();
+    let ran = wait_for(&out);
+    let in_open = run(&open.join("agent"));
+    let to_open = run(&bin.join("other"));
+    let _ = std::fs::remove_dir_all(&dir);
+    own.unwrap();
+    assert_eq!(ran.as_deref(), Some("checked\n"));
+    for r in [in_open, to_open] {
+        let e = r.expect_err("a program another user could redirect started");
+        assert!(
+            e.starts_with(&format!("{} may be changed by other users", open.display())),
+            "{e}"
+        );
+    }
+}
+
+/// On macOS the terminal is the execution program, which runs the program in the window from the
+/// descriptor the app gives it (3): the file the app checked, even once another file has been
+/// renamed over its path. A program below a folder the `admin` group may write starts.
+#[cfg(target_os = "macos")]
+#[test]
+fn on_macos_a_terminal_launch_gets_the_checked_program_as_descriptor_3() {
+    let dir = folder("fd");
+    let bin = dir.join("bin");
+    mode_dir(&bin, 0o775);
+    let out = std::process::Command::new("/usr/bin/chgrp")
+        .arg("admin")
+        .arg(&bin)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "chgrp admin (the test's user must be in admin): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let program = bin.join("agent");
+    script(&program, r#"echo checked > "$1""#);
+    let copy = dir.join("copy");
+    let l = in_terminal(
+        &dir,
+        r#"while [ ! -e "$1" ]; do sleep 0.05; done; cat <&3 > "$2.part" && mv "$2.part" "$2""#,
+        &program,
+        &[&copy],
+    );
+    let r = detached(&l, "p", &By(none));
+    swap(&program);
+    std::fs::write(dir.join("go"), "").unwrap();
+    let got = r.is_ok().then(|| wait_for(&copy));
+    let _ = std::fs::remove_dir_all(&dir);
+    r.unwrap();
+    assert_eq!(
+        got.flatten().as_deref(),
+        Some("#!/bin/sh\necho checked > \"$1\"\n")
+    );
+}
+
 #[test]
 fn an_open_launch_gets_only_the_absolute_path_entries() {
-    let snap = Snapshot::of(
-        &[("HOME", "/home/me"), ("PATH", ".:bin:/usr/bin::/bin")],
-        core_limit(),
+    // Windows separates PATH's entries with `;`, and an absolute one names its drive.
+    #[cfg(unix)]
+    let (all, absolute) = (".:bin:/usr/bin::/bin", "/usr/bin:/bin");
+    #[cfg(windows)]
+    let (all, absolute) = (
+        r".;bin;C:\Windows;;D:\tools;\rooted",
+        r"C:\Windows;D:\tools",
     );
+    #[cfg(unix)]
+    let snap = Snapshot::of(&[("HOME", "/home/me"), ("PATH", all)], core_limit());
+    #[cfg(windows)]
+    let snap = Snapshot::of(&[("USERPROFILE", r"C:\Users\me"), ("PATH", all)]);
     let path = |r: &Request| {
         environment(&snap, r, &[])
             .into_iter()
@@ -1147,7 +1556,157 @@ fn an_open_launch_gets_only_the_absolute_path_entries() {
             .map(|(_, v)| v.to_string_lossy().into_owned())
     };
     let mut r = Request::default();
-    assert_eq!(path(&r).as_deref(), Some(".:bin:/usr/bin::/bin"));
+    assert_eq!(path(&r).as_deref(), Some(all));
     r.absolute_path = true;
-    assert_eq!(path(&r).as_deref(), Some("/usr/bin:/bin"));
+    assert_eq!(path(&r).as_deref(), Some(absolute));
+}
+
+/// A launch's files as the confirmation opened them, which records at each check whether its
+/// executable could be renamed then (what a pin forbids: an open or running program can be
+/// renamed otherwise) and refuses from its second check on.
+#[cfg(windows)]
+struct Probed {
+    plain: Plain,
+    path: PathBuf,
+    pinned: Mutex<Vec<bool>>,
+}
+
+#[cfg(windows)]
+impl Opened for Probed {
+    fn executable(&self) -> &File {
+        &self.plain.executable
+    }
+    fn cwd(&self) -> &File {
+        &self.plain.cwd
+    }
+    fn recheck(&self) -> Result<(), String> {
+        let moved = self.path.with_extension("moved");
+        let renamed = std::fs::rename(&self.path, &moved).is_ok();
+        if renamed {
+            std::fs::rename(&moved, &self.path).unwrap();
+        }
+        let mut pinned = self.pinned.lock().unwrap();
+        pinned.push(!renamed);
+        if pinned.len() > 1 {
+            return Err("changed since it was confirmed".into());
+        }
+        Ok(())
+    }
+}
+
+/// On Windows a launch is checked once more after its executable and cwd are pinned, when
+/// nothing can change them any more: a change made after the first check is seen then, and
+/// nothing starts.
+#[cfg(windows)]
+#[test]
+fn on_windows_a_launch_is_checked_again_once_its_files_are_pinned() {
+    let rt = Runtimes::open(None, Box::new(By(none)));
+    for lifetime in [Lifetime::Detached, Lifetime::Managed] {
+        let dir = folder("pinned");
+        let exe = dir.join("agent.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+        let rec = dir.join("agent");
+        let mut l = agent(&dir, &rec, &[], lifetime);
+        l.named = exe.clone();
+        let probed = Arc::new(Probed {
+            plain: Plain {
+                executable: File::open(&exe).unwrap(),
+                cwd: open_dir(&dir),
+            },
+            path: exe.clone(),
+            pinned: Mutex::default(),
+        });
+        struct Shared(Arc<Probed>);
+        impl Opened for Shared {
+            fn executable(&self) -> &File {
+                self.0.executable()
+            }
+            fn cwd(&self) -> &File {
+                self.0.cwd()
+            }
+            fn recheck(&self) -> Result<(), String> {
+                self.0.recheck()
+            }
+        }
+        l.opened = Box::new(Shared(Arc::clone(&probed)));
+        let e = if lifetime == Lifetime::Detached {
+            detached(&l, "p", &By(none)).unwrap_err()
+        } else {
+            rt.start("p", l).unwrap_err()
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        let started = rec.exists();
+        assert!(
+            e.contains("changed since it was confirmed"),
+            "{lifetime:?}: {e}"
+        );
+        assert!(
+            !started,
+            "{lifetime:?}: a launch refused at its second check started"
+        );
+        assert_eq!(
+            *probed.pinned.lock().unwrap(),
+            vec![false, true],
+            "{lifetime:?}: checked before and after its executable was pinned"
+        );
+        assert!(rt.list("p").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Resolves no secret: the runtimes file test starts nothing.
+struct NoValues;
+
+impl Values for NoValues {
+    fn value(&self, _: &str, id: &str) -> Result<(String, Option<u64>), String> {
+        Err(format!("{id}: no secrets here"))
+    }
+    fn still(&self, _: &[Given]) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// The runtimes file is written private, replacing the old one in one step: on Linux and macOS
+/// 0600, also when a temporary file of an earlier run is left beside it with wider bits or a link
+/// is left there; on Windows with a protected access list allowing only this user and SYSTEM.
+#[test]
+fn the_runtimes_file_is_private() {
+    let dir = folder("runtimes-file");
+    let file = dir.join("runtimes.json");
+    // Opening the registry writes the file once.
+    let rt = Runtimes::open(Some(file.clone()), Box::new(NoValues));
+    // What an earlier run could leave beside it: its temporary file, readable by others.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(dir.join("runtimes.tmp"), "[]").unwrap();
+        std::fs::set_permissions(
+            dir.join("runtimes.tmp"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+    }
+    rt.0.save(&[]);
+    let m = std::fs::symlink_metadata(&file).unwrap();
+    assert!(m.is_file(), "{m:?}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "[]");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(m.permissions().mode() & 0o777, 0o600);
+    }
+    #[cfg(windows)]
+    assert!(crate::private_windows::is_private(&std::fs::File::open(&file).unwrap()).unwrap());
+    // A link left where a temporary file could go is not written through.
+    #[cfg(unix)]
+    {
+        let elsewhere = dir.join("elsewhere");
+        std::fs::write(&elsewhere, "kept").unwrap();
+        let _ = std::fs::remove_file(dir.join("runtimes.tmp"));
+        std::os::unix::fs::symlink(&elsewhere, dir.join("runtimes.tmp")).unwrap();
+        rt.0.save(&[]);
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "kept");
+        assert!(std::fs::symlink_metadata(&file).unwrap().is_file());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

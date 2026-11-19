@@ -3,7 +3,8 @@
 This walkthrough prepares two package folders for the [app package contract](README.md).
 The desktop app installs the page-only package on this device. It installs the native package
 only from a curated registry, signed by a curated first-party key, and runs its program on
-demand once it is enabled (Linux).
+demand once it is enabled (on Linux, Windows and macOS, where the package has a program for the
+system).
 
 ## Make a page-only web package
 
@@ -39,8 +40,9 @@ appears in the navigation, labelled Unverified on the Device extensions page.
 For settings, add versioned `config` inside `app`, using the existing
 [settings schema](../../ui/extension-pages/README.md#config). To request a file later, declare
 `"resources":[{"id":"notes","kind":"file","operations":["read"]}]` inside `app`. This grants
-no access: signer approval and native confirmation are required. Keep this first package page-only
-until the broker is available.
+no access. A grant needs a release signed by its publisher and listed in a registry (a package
+installed from a file cannot get one), the signer's approval and a native confirmation on Linux
+([Access for web packages](README.md#access-for-web-packages)).
 
 ## Describe a native package
 

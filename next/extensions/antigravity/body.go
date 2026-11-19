@@ -19,7 +19,7 @@ import (
 // and how it was built. A Gemini client's body is the starting point as it is; any other is
 // translated, with the client's reasoning effort as thinking settings on Gemini models. Under the
 // reject drop policy a translation that drops anything is refused.
-func buildBody(req llm.Request) (map[string]json.RawMessage, *llm.Translation, error) {
+func buildBody(req llm.Request) (map[string]json.RawMessage, *llm.Translation, placeholders, error) {
 	tr := &llm.Translation{To: llm.FormatGeminiGenerate}
 	var body []byte
 	var losses []llm.Loss
@@ -33,13 +33,13 @@ func buildBody(req llm.Request) (map[string]json.RawMessage, *llm.Translation, e
 		var err error
 		body, losses, err = geminigenerate.EncodeRequest(req)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if req.Options.ReasoningEffort != "" {
 			var applied bool
 			body, applied, err = geminigenerate.ApplyEffort(body, req.Model, req.Options.ReasoningEffort)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			if applied {
 				losses = dropLoss(losses, "reasoning_effort")
@@ -48,7 +48,7 @@ func buildBody(req llm.Request) (map[string]json.RawMessage, *llm.Translation, e
 	}
 	var inner map[string]json.RawMessage
 	if err := json.Unmarshal(body, &inner); err != nil || inner == nil {
-		return nil, nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the request body is not a JSON object", Scope: llm.ScopeRequest}
+		return nil, nil, nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the request body is not a JSON object", Scope: llm.ScopeRequest}
 	}
 	claude := strings.Contains(strings.ToLower(req.Model), "claude")
 	// The model goes in the envelope, and Cloud Code applies no safety settings a client names
@@ -84,24 +84,21 @@ func buildBody(req llm.Request) (map[string]json.RawMessage, *llm.Translation, e
 			inner["systemInstruction"], _ = json.Marshal(si)
 		}
 	}
+	var added placeholders
 	if raw, ok := inner["tools"]; ok {
-		// Today's core keeps titles where it marks schemas for Claude and Gemini 3 Pro.
+		// Today's core keeps titles and adds placeholders where it marks schemas for Claude and
+		// Gemini 3 Pro.
 		m := strings.ToLower(req.Model)
-		keepTitle := claude || strings.Contains(m, "gemini-3-pro") || strings.Contains(m, "gemini-3.1-pro")
-		inner["tools"] = cleanTools(raw, claude, keepTitle)
+		group := claude || strings.Contains(m, "gemini-3-pro") || strings.Contains(m, "gemini-3.1-pro")
+		inner["tools"], added = cleanTools(raw, claude, group)
 	}
 	tr.Losses = losses
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
-		var paths []string
-		for _, l := range losses {
-			if l.Kind == llm.LossDropped {
-				paths = append(paths, l.Path)
-			}
-		}
-		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+		paths := tr.DroppedPaths()
+		return nil, nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
 			Message: "Antigravity cannot carry parts of this request: " + strings.Join(paths, ", ")}
 	}
-	return inner, tr, nil
+	return inner, tr, added, nil
 }
 
 // envelope wraps a GenerateContent body in Cloud Code's request: the model, the project, the

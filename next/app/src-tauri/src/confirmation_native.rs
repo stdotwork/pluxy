@@ -1,10 +1,9 @@
-//! Fixture actions and XTEST input exist only in native-test builds. The dialog response path
-//! is the production GTK handler, and the trusted-gesture path is a real native button click.
+//! Fixture actions and native input exist only in native-test builds. The dialog response path
+//! is the production native handler (GTK, Win32 or AppKit), worked through the UI driver
+//! (`ui_driver.rs`), and the trusted-gesture path is a real native button press.
 use super::*;
+use crate::native_test::ui::{self, Key};
 use crate::native_test::{eval, wait_for};
-use gtk::prelude::*;
-use std::os::unix::fs::PermissionsExt;
-use std::process::Command;
 use std::sync::mpsc;
 use tauri::{Manager, Webview};
 pub(crate) static PAGE_MAPPED_DISABLED: std::sync::atomic::AtomicBool =
@@ -12,8 +11,11 @@ pub(crate) static PAGE_MAPPED_DISABLED: std::sync::atomic::AtomicBool =
 pub(crate) static PAGE_CLAIMS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+/// For the Linux-only native checks that press GTK dialogs with xdotool themselves
+/// (`native_core.rs`, `release_native.rs`).
+#[cfg(target_os = "linux")]
 fn x(args: &[&str]) -> Result<String, String> {
-    let out = Command::new("xdotool")
+    let out = std::process::Command::new("xdotool")
         .args(args)
         .output()
         .map_err(|e| e.to_string())?;
@@ -25,11 +27,13 @@ fn x(args: &[&str]) -> Result<String, String> {
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().into())
 }
+#[cfg(target_os = "linux")]
 pub(crate) fn window(title: &str) -> Option<String> {
     x(&["search", "--onlyvisible", "--name", &format!("^{title}$")])
         .ok()
         .and_then(|s| s.lines().last().map(String::from))
 }
+#[cfg(target_os = "linux")]
 pub(crate) fn key(title: &str, keys: &str) -> Result<(), String> {
     let id = wait_for(title, || window(title))?;
     x(&["windowfocus", "--sync", &id])?;
@@ -80,96 +84,101 @@ fn ask(app: &tauri::AppHandle, main: &Webview, a: &Action) -> Result<String, Str
         .unwrap()
         .queue(p)?;
     main.eval(format!("window.__TAURI_INTERNALS__.invoke('confirmation_request', {{action: {}}}).catch(e => console.error(e))", serde_json::json!(id))).map_err(|e| e.to_string())?;
-    wait_for("real GTK confirmation", || {
-        window("pluxy native confirmation")
-    })?;
+    ui::wait_shown(app, text::CONFIRM_TITLE)?;
     Ok(id)
+}
+/// The key of the confirmation's button or check box labelled label.
+fn access(label: &str) -> Key {
+    Key::Access(text::access_key(label).expect("a label with an access key"))
 }
 fn confirm(app: &tauri::AppHandle, id: &str, remember: bool) -> Result<String, String> {
     if remember {
-        key("pluxy native confirmation", "alt+r")?;
+        // The Remember check box (`Prepared::remember_text`).
+        ui::press(app, text::CONFIRM_TITLE, Key::Access('r'))?;
     }
-    key("pluxy native confirmation", "alt+o")?;
+    ui::press(app, text::CONFIRM_TITLE, access(text::CONFIRM))?;
     result(app, id)?.ok_or("confirmed action returned no token".into())
 }
-/// Returns a token if remembered, otherwise the ID of the new dialog. Only X input can click.
+/// Returns a token if remembered, otherwise the ID of the new dialog. Only native input can
+/// press the fixture's button.
 fn trusted_start(app: &tauri::AppHandle, a: &Action) -> Result<(bool, String), String> {
     let (tx, rx) = mpsc::channel();
     let action = a.clone();
-    let handle = app.clone();
-    app.run_on_main_thread(move || {
-        let w = gtk::Window::new(gtk::WindowType::Toplevel);
-        w.set_title("pluxy trusted Start");
-        let button = gtk::Button::with_mnemonic("_Start fixture");
-        w.add(&button);
-        let app = handle.clone();
-        let weak = w.downgrade();
-        button.connect_clicked(move |_| {
-            let r = (|| {
-                let st = app.state::<crate::App>();
-                let mut c = st.confirmations.lock().unwrap();
-                let p = c.prepare(action.clone(), Origin::NativeUi)?;
-                match c.remembered(
-                    p,
-                    Gesture {
-                        created: Instant::now(),
-                        origin: Origin::NativeUi,
-                    },
-                ) {
-                    Ok(token) => Ok((true, token)),
-                    Err(p) => {
-                        let id = c.queue(*p)?;
-                        drop(c);
-                        request(&app, id.clone())?;
-                        Ok((false, id))
-                    }
+    let app2 = app.clone();
+    ui::fixture_button(app, "pluxy trusted Start", move || {
+        let app = app2;
+        let r = (|| {
+            let st = app.state::<crate::App>();
+            let mut c = st.confirmations.lock().unwrap();
+            let p = c.prepare(action.clone(), Origin::NativeUi)?;
+            match c.remembered(
+                p,
+                Gesture {
+                    created: Instant::now(),
+                    origin: Origin::NativeUi,
+                },
+            ) {
+                Ok(token) => Ok((true, token)),
+                Err(p) => {
+                    let id = c.queue(*p)?;
+                    drop(c);
+                    request(&app, id.clone())?;
+                    Ok((false, id))
                 }
-            })();
-            let _ = tx.send(r);
-            if let Some(w) = weak.upgrade() {
-                w.close();
             }
-        });
-        w.show_all();
-    })
-    .map_err(|e| e.to_string())?;
-    key("pluxy trusted Start", "alt+s")?;
+        })();
+        let _ = tx.send(r);
+    })?;
     rx.recv_timeout(Duration::from_secs(10))
         .map_err(|e| e.to_string())?
 }
 
-/// Shows a native window titled title with one button and presses it with X input: its click
-/// handler calls f with a gesture made there, as a trusted native launcher's would. For other
-/// native checks that start a trusted call (`routing_native.rs`).
+/// Shows a native window titled title with one button and presses it with native input: its
+/// press handler calls f with a gesture made there, as a trusted native launcher's would. For
+/// other native checks that start a trusted call (`routing_native.rs`).
+#[cfg(target_os = "linux")]
 pub(crate) fn click(
     app: &tauri::AppHandle,
     title: &str,
     f: impl FnOnce(Gesture) + Send + 'static,
 ) -> Result<(), String> {
-    let name = title.to_string();
-    let f = std::sync::Mutex::new(Some(f));
-    app.run_on_main_thread(move || {
-        let w = gtk::Window::new(gtk::WindowType::Toplevel);
-        w.set_title(&name);
-        let button = gtk::Button::with_mnemonic("_Start");
-        w.add(&button);
-        let weak = w.downgrade();
-        button.connect_clicked(move |_| {
-            if let Some(f) = f.lock().unwrap().take() {
-                f(Gesture {
-                    created: Instant::now(),
-                    origin: Origin::NativeUi,
-                });
-            }
-            if let Some(w) = weak.upgrade() {
-                w.close();
-            }
-        });
-        w.show_all();
+    ui::fixture_button(app, title, move || {
+        f(Gesture {
+            created: Instant::now(),
+            origin: Origin::NativeUi,
+        })
     })
-    .map_err(|e| e.to_string())?;
-    wait_for(title, || window(title))?;
-    key(title, "alt+s")
+}
+
+/// A program the fixture launch names, which ends at once with code: a shell script, or a
+/// command script on Windows.
+fn fixture_program(path: &Path, code: u8) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(path, format!("#!/bin/sh\nexit {code}\n")).map_err(|e| e.to_string())?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())
+    }
+    #[cfg(windows)]
+    {
+        fs::write(path, format!("@exit /b {code}\r\n")).map_err(|e| e.to_string())
+    }
+}
+
+/// Changes the program's metadata, not its bytes: its mode, or on Windows its read-only
+/// attribute.
+fn change_metadata(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o500)).map_err(|e| e.to_string())
+    }
+    #[cfg(windows)]
+    {
+        let mut p = fs::metadata(path).map_err(|e| e.to_string())?.permissions();
+        p.set_readonly(true);
+        fs::set_permissions(path, p).map_err(|e| e.to_string())
+    }
 }
 
 pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Result<(), String> {
@@ -179,10 +188,13 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
     ));
     fs::create_dir(&dir).map_err(|e| e.to_string())?;
     let checked = (|| {
-        let executable = dir.join("fixture-script");
-        fs::write(&executable, b"#!/bin/sh\nexit 0\n").map_err(|e| e.to_string())?;
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))
-            .map_err(|e| e.to_string())?;
+        let name = if cfg!(windows) {
+            "fixture-script.cmd"
+        } else {
+            "fixture-script"
+        };
+        let executable = dir.join(name);
+        fixture_program(&executable, 0)?;
         let pkg = Package {
             id: "fixture/confirm".into(),
             source: "native-fixture".into(),
@@ -199,7 +211,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
             files: vec![],
             launch: Some(Launch {
                 executable: executable.clone(),
-                argv: vec!["fixture-script".into(), "--exact".into()],
+                argv: vec![name.into(), "--exact".into()],
                 cwd: dir.clone(),
                 program: None,
                 opens: None,
@@ -224,11 +236,25 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         let before = snapshot();
         // Observe the actual channel response after main has handled the claim, not merely
         // the POST completing at ingress. A valid config.get on the same route is the control.
-        main.eval("window.__claimReplies = {}; const originalPost = MessagePort.prototype.postMessage; MessagePort.prototype.postMessage = function(data, ...rest) { if (data?.id === 'spoof-confirm' || data?.id === 'confirm-control') window.__claimReplies[data.id] = data; return originalPost.call(this, data, ...rest); }").map_err(|e| e.to_string())?;
-        page.eval("fetch('/frame').then(r => r.json()).then(info => fetch('/send', {method: 'POST', body: JSON.stringify({generation: info.generation, type: 'call', data: {v: 0, id: 'confirm-control', method: 'config.get', params: null}})}))").map_err(|e| e.to_string())?;
+        // The window passes a call on to its channel through a MessagePort too: each id seen,
+        // call or reply, is kept apart, to tell on a timeout which side never answered.
+        main.eval("window.__claimReplies = {}; window.__claimSeen = []; const originalPost = MessagePort.prototype.postMessage; MessagePort.prototype.postMessage = function(data, ...rest) { if (data?.id === 'spoof-confirm' || data?.id === 'confirm-control') { window.__claimReplies[data.id] = data; window.__claimSeen.push({id: data.id, reply: 'result' in data || 'error' in data}); } return originalPost.call(this, data, ...rest); }").map_err(|e| e.to_string())?;
+        page.eval("window.__controlSent = null; fetch('/frame').then(r => r.json()).then(info => fetch('/send', {method: 'POST', body: JSON.stringify({generation: info.generation, type: 'call', data: {v: 0, id: 'confirm-control', method: 'config.get', params: null}})})).then(async r => window.__controlSent = {status: r.status, body: await r.text()}, e => window.__controlSent = {error: String(e)})").map_err(|e| e.to_string())?;
         let control = wait_for("positive page channel control", || {
             eval(main, "window.__claimReplies['confirm-control'] ?? null")
                 .filter(|v| v.get("result").is_some() || v.get("error").is_some())
+        })
+        .map_err(|e| {
+            let st = app.state::<crate::App>();
+            let channel = st.pages.lock().unwrap().channel_state(page.label());
+            format!(
+                "{e}: {}",
+                serde_json::json!({
+                    "sent": eval(page, "window.__controlSent"),
+                    "window_seen": eval(main, "window.__claimSeen"),
+                    "native": channel,
+                })
+            )
         })?;
         require(
             control.get("result").is_some(),
@@ -278,15 +304,26 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
             snapshot() == before,
             "page approval claim changed native confirmation state",
         )?;
-        key("pluxy native confirmation", "alt+c")?;
+        ui::press(app, text::CONFIRM_TITLE, access(text::CANCEL))?;
         require(result(app, &id)?.is_none(), "cancel issued token")?;
+        // The close box gives the cancel answer at once, not the end of the lifetime.
+        #[cfg(not(target_os = "linux"))]
+        {
+            let id = ask(app, main, &a)?;
+            let asked = std::time::Instant::now();
+            ui::close_box(app, text::CONFIRM_TITLE)?;
+            require(
+                result(app, &id)?.is_none() && asked.elapsed() < LIFETIME / 2,
+                "the close box gave no cancel answer",
+            )?;
+        }
         let id = ask(app, main, &a)?;
         let t = confirm(app, &id, true)?;
         consume(app, &t)?;
         let (remembered, t) = trusted_start(app, &a)?;
         require(remembered, "exact native gesture did not remember")?;
         require(
-            window("pluxy native confirmation").is_none(),
+            !ui::shown(app, text::CONFIRM_TITLE),
             "remembered launch showed dialog",
         )?;
         consume(app, &t)?;
@@ -296,31 +333,29 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         require(!remembered, "different chain reused approval")?;
         let t = confirm(app, &id, false)?;
         consume(app, &t)?;
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o500))
-            .map_err(|e| e.to_string())?;
+        change_metadata(&executable)?;
         let (remembered, id) = trusted_start(app, &a)?;
         require(!remembered, "metadata change reused approval")?;
         let t = confirm(app, &id, true)?;
         consume(app, &t)?;
         fs::rename(&executable, dir.join("old")).map_err(|e| e.to_string())?;
-        fs::write(&executable, b"#!/bin/sh\nexit 1\n").map_err(|e| e.to_string())?;
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))
-            .map_err(|e| e.to_string())?;
+        fixture_program(&executable, 1)?;
         let (remembered, id) = trusted_start(app, &a)?;
         require(!remembered, "same-path replacement reused approval")?;
         let t = confirm(app, &id, true)?;
         // Real native settings revocation, before this token is consumed.
         settings(app)?;
-        key("pluxy remembered launches", "Tab")?;
-        // Revoke the newest approval using a real button at a stable mnemonic, assigned below.
-        key("pluxy remembered launches", "alt+r")?;
+        ui::press(app, text::SETTINGS_TITLE, Key::Tab)?;
+        // Revoke the newest approval using a real button at a stable mnemonic: only the first
+        // (newest) row's button has one.
+        ui::press(app, text::SETTINGS_TITLE, access(text::REVOKE))?;
         wait_for("native revocation", || {
             let st = app.state::<crate::App>();
             let c = st.confirmations.lock().unwrap();
             (!c.issued.contains_key(&t)).then_some(())
         })?;
         require(consume(app, &t).is_err(), "revoked unconsumed token worked")?;
-        key("pluxy remembered launches", "Escape")?;
+        ui::press(app, text::SETTINGS_TITLE, Key::Escape)?;
         // Re-establish an exact approval, then prove page Start cannot consume it.
         let id = ask(app, main, &a)?;
         let t = confirm(app, &id, true)?;
@@ -333,31 +368,33 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
             .prepare_page(a.clone())?;
         PAGE_MAPPED_DISABLED.store(false, std::sync::atomic::Ordering::SeqCst);
         let id = super::page_start(app, p)?;
-        wait_for("page Start dialog", || window("pluxy native confirmation"))?;
-        let (tx, rx) = mpsc::channel();
-        app.run_on_main_thread(move || {
-            let dialog = gtk::Window::list_toplevels().into_iter().find_map(|w| {
-                w.downcast::<gtk::Dialog>()
-                    .ok()
-                    .filter(|d| d.title().as_deref() == Some("pluxy native confirmation"))
-            });
-            let state = dialog.map(|d| {
-                (
-                    PAGE_MAPPED_DISABLED.load(std::sync::atomic::Ordering::SeqCst),
-                    d.widget_for_response(gtk::ResponseType::Cancel)
-                        .unwrap()
-                        .is_focus(),
-                )
-            });
-            let _ = tx.send(state);
-        })
-        .map_err(|e| e.to_string())?;
+        ui::wait_shown(app, text::CONFIRM_TITLE)?;
+        let state = (
+            PAGE_MAPPED_DISABLED.load(std::sync::atomic::Ordering::SeqCst),
+            ui::cancel_focused(app, text::CONFIRM_TITLE)?,
+        );
         require(
-            rx.recv_timeout(Duration::from_secs(5))
-                .map_err(|e| e.to_string())?
-                == Some((true, true)),
+            state == (true, true),
             "page dialog did not delay Confirm and focus Cancel",
         )?;
+        // Windows: a click message posted to the dialog during the delay, not made on the
+        // disabled button, answers nothing either.
+        #[cfg(windows)]
+        {
+            let enabled = ui::post_click(app, text::CONFIRM_TITLE, text::CONFIRM)?;
+            std::thread::sleep(Duration::from_millis(300));
+            let answered = app
+                .state::<crate::App>()
+                .confirmations
+                .lock()
+                .unwrap()
+                .results
+                .contains_key(&id);
+            require(
+                !enabled && !answered && ui::shown(app, text::CONFIRM_TITLE),
+                "a posted click answered the delayed Confirm",
+            )?;
+        }
         require(
             app.state::<crate::App>()
                 .confirmations
@@ -379,21 +416,9 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
                 "page flood was admitted",
             )?;
         }
-        let (tx, rx) = mpsc::channel();
-        app.run_on_main_thread(move || {
-            let shown = gtk::Window::list_toplevels()
-                .into_iter()
-                .filter_map(|w| w.downcast::<gtk::Window>().ok())
-                .find(|w| w.title().as_deref() == Some("pluxy launch notice") && w.is_visible())
-                .and_then(|w| w.child())
-                .and_then(|c| c.downcast::<gtk::Label>().ok())
-                .map(|l| l.text().to_string());
-            let _ = tx.send(shown);
-        })
-        .map_err(|e| e.to_string())?;
-        let shown = rx
-            .recv_timeout(Duration::from_secs(5))
-            .map_err(|e| e.to_string())?
+        let shown = ui::texts(app, text::NOTICE_TITLE)?
+            .into_iter()
+            .next()
             .ok_or("host-owned launch notice not visible")?;
         require(
             shown.contains("fixture/confirm")
@@ -404,12 +429,40 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         std::thread::sleep(Duration::from_millis(1100));
         let token = confirm(app, &id, false)?;
         consume(app, &token)?;
+        // Confirm pressed while it is still disabled: the press waits for it, then confirms. A
+        // press that went at once would be dropped, and the dialog would wait out its lifetime.
+        std::thread::sleep(Duration::from_millis(1100));
+        let p = app
+            .state::<crate::App>()
+            .confirmations
+            .lock()
+            .unwrap()
+            .prepare_page(a.clone())?;
+        PAGE_MAPPED_DISABLED.store(false, std::sync::atomic::Ordering::SeqCst);
+        let id = super::page_start(app, p)?;
+        ui::wait_shown(app, text::CONFIRM_TITLE)?;
+        let waited = ui::waited();
+        let token = confirm(app, &id, false)?;
+        require(
+            PAGE_MAPPED_DISABLED.load(std::sync::atomic::Ordering::SeqCst)
+                && ui::waited() == waited + 1,
+            "a press on the delayed Confirm did not wait for it",
+        )?;
+        consume(app, &token)?;
         crate::native_test::log(
             "confirmations",
-            serde_json::json!({"passed": true, "checks": ["confirm", "cancel", "page-spoof", "exact-native-gesture", "different-chain", "metadata", "replacement", "revoke", "page-flood-notice"]}),
+            serde_json::json!({"passed": true, "close_box": cfg!(not(target_os = "linux")), "checks": ["confirm", "cancel", "page-spoof", "exact-native-gesture", "different-chain", "metadata", "replacement", "revoke", "page-flood-notice", "press-waits-for-confirm"]}),
         );
         Ok(())
     })();
+    // The replaced program keeps its read-only attribute on Windows, which removal refuses.
+    #[cfg(windows)]
+    if let Ok(m) = fs::metadata(dir.join("old")) {
+        let mut p = m.permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        p.set_readonly(false);
+        let _ = fs::set_permissions(dir.join("old"), p);
+    }
     let _ = fs::remove_dir_all(dir);
     checked
 }

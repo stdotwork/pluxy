@@ -17,15 +17,13 @@
 //! executable, the program a terminal runs, the cwd, the execution program's release, the
 //! environment) asks again, and remembering it again revokes the approval it replaces. One start
 //! per launch per second; each shows a host-owned notice of
-//! what started, unless that is turned off. Linux only, as the program host.
+//! what started, unless that is turned off. Where the program host runs (`native_stack`).
 
 use crate::{confirmation, route, spawn, App};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -134,31 +132,26 @@ impl Launcher {
         }
     }
 
+    /// Writes the launcher's file, readable and writable only by this user, in a folder only this
+    /// user may use (`managed::write_private`).
     fn save(&self) -> Result<(), String> {
         let dir = self
             .file
             .parent()
             .ok_or("the launcher's file has no folder")?;
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .map_err(|e| e.to_string())?;
-        let tmp = dir.join(format!(".launcher-{}", crate::managed::random_key()));
-        let r = (|| {
-            let mut f = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&tmp)
-                .map_err(|e| e.to_string())?;
-            f.write_all(&serde_json::to_vec_pretty(&self.store).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
-            f.sync_all().map_err(|e| e.to_string())?;
-            fs::rename(&tmp, &self.file).map_err(|e| e.to_string())
-        })();
-        let _ = fs::remove_file(&tmp);
-        r
+        #[cfg(unix)]
+        let made = {
+            use std::os::unix::fs::DirBuilderExt;
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(dir)
+        };
+        #[cfg(windows)]
+        let made = crate::private_windows::create_private_dir_all(dir);
+        made.map_err(|e| e.to_string())?;
+        let bytes = serde_json::to_vec_pretty(&self.store).map_err(|e| e.to_string())?;
+        crate::managed::write_private(&self.file, &bytes).map_err(|e| e.to_string())
     }
 
     /// Drops launches whose approval is gone.
@@ -246,14 +239,17 @@ fn search_path() -> Vec<String> {
     spawn::environment(spawn::snapshot(), &spawn::Request::default(), &[])
         .into_iter()
         .find(|(k, _)| k == "PATH")
-        .map(|(_, v)| {
-            v.to_string_lossy()
-                .split(':')
-                .filter(|e| e.starts_with('/'))
-                .map(String::from)
-                .collect()
-        })
+        .map(|(_, v)| path_entries(&v))
         .unwrap_or_default()
+}
+
+/// The absolute folders of a PATH value, split as this system splits it (`:` on Linux and macOS;
+/// `;` on Windows, where an entry may be quoted); empty and relative entries are left out.
+fn path_entries(path: &std::ffi::OsStr) -> Vec<String> {
+    std::env::split_paths(path)
+        .filter(|p| p.is_absolute())
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect()
 }
 
 /// Calls op of the execution program from the window, on a thread of its own that ends with the

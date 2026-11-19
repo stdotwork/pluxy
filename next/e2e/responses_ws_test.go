@@ -462,21 +462,23 @@ func TestResponsesWebSocketKeepsItsAccountWhenBusy(t *testing.T) {
 	if _, data, err := busy.Read(ctx); err != nil || !strings.Contains(string(data), "response.created") {
 		t.Fatalf("busy socket's first message %q, %v", data, err)
 	}
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		close(hold)
-	}()
+	// The slot stays taken until "two" has ended, so "two" is routed while sk-a is busy.
+	defer close(hold)
 
 	b, _ = json.Marshal(wsCreate("two", ""))
 	if err := c.Write(ctx, websocket.MessageText, b); err != nil {
 		t.Fatal(err)
 	}
-	// Read the turn to its end, or to the socket's end.
+	// Read the turn to its end, or to the socket's end (core refuses it and ends the socket).
+	// With sk-a's slot held, a turn that completes ran on another account.
 	for {
 		_, data, err := c.Read(ctx)
 		if err != nil || strings.Contains(string(data), `"response.completed"`) || strings.Contains(string(data), `"type":"error"`) {
 			break
 		}
+	}
+	if ctx.Err() != nil {
+		t.Fatal("the turn neither ended nor was refused while sk-a was busy")
 	}
 	if keys := keysOf(u.connections()); slices.Contains(keys, "sk-b") {
 		t.Errorf("upstream sockets use keys %v; the socket moved to sk-b", keys)

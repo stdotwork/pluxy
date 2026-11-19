@@ -3,8 +3,10 @@ package legacy
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -355,7 +357,7 @@ observability:
 `)
 	n := notices(r)
 	for _, want := range []string{
-		"not supported yet, ignored: client.codex.enable-apply-patch\n",
+		"not supported yet, ignored: client.codex.enable-apply-patch (built when someone uses a non-Codex model through the Codex client and needs apply_patch on it)\n",
 		"dropped, ignored: plugins (replaced by packages), routing.session-affinity-rebind-on (no need found), server.commercial-mode (it turns off features this core does not have), upstream.claude.session-date-pin-days (making other clients look like Claude Code is out of scope), upstream.claude.tool-search (Codex's tool search on Claude accounts: off by default, with no panel or app control)\n",
 		"unknown keys, ignored: server.discovery-typo\n",
 		"websocket-compression: false is not supported",
@@ -372,13 +374,14 @@ observability:
 }
 
 // TestDecidedDroppedSettings: settings decided not to be built are named as dropped, with their
-// reason, and never as "not supported yet"; the neighbours that are still to come stay Later.
+// reason, and never as "not supported yet"; the settings that are still to come stay Later, each
+// with what would bring it.
 func TestDecidedDroppedSettings(t *testing.T) {
 	r := translate(t, `
 server:
   response-compression: {enabled: true, min-bytes: 10}
   discovery: {enabled: true, service-name: x}
-routing: {session-affinity-rebind-on: quota}
+routing: {session-affinity-rebind-on: quota, session-affinity-subagents: false}
 oauth:
   request-scoped-errors: [{status: 400}]
   providers:
@@ -398,8 +401,17 @@ api-keys:
         - {name: m, alias: m, display-name: D, max-context-length: 9, input-modalities: [text], output-modalities: [text], is-compat: true, use-max-completion-tokens: true, thinking: {levels: [low]}, force-mapping: true, image: true}
   vertex:
     - name: v
-      keys: [{api-key: k, openapi: true}]
-      models: [{name: m, support-configuration-update: true}]
+      keys: [{api-key: k, openapi: true, openapi-location: us-central1}]
+      models: [{name: m, support-configuration-update: true, openapi: true}]
+  xai:
+    - name: x
+      websockets: true
+      keys: [{api-key: k}]
+client: {codex: {enable-apply-patch: true, optimize-multi-agent-v2: true}}
+upstream:
+  codex: {upstream-request-compression: true, upstream-request-compression-min-bytes: 2048, stream-bootstrap-buffering: true, stream-bootstrap-timeout: 5s}
+multimedia: {gpt-image-2-base-model: gpt-6-image, video-result-auth-cache-ttl: 1h}
+models: {catalog: "https://example.com/models.json", codex-catalog: /etc/codex.json, devin-catalog: "https://example.com/devin.json"}
 `)
 	var later, dropped string
 	for _, n := range r.Notices {
@@ -419,6 +431,11 @@ api-keys:
 		"api-keys.openai-compatibility.models.input-modalities", "api-keys.openai-compatibility.models.output-modalities",
 		"api-keys.openai-compatibility.models.is-compat", "api-keys.openai-compatibility.models.use-max-completion-tokens",
 		"api-keys.openai-compatibility.models.thinking",
+		"api-keys.openai-compatibility.models.image", "api-keys.vertex.models.support-configuration-update",
+		"api-keys.xai.websockets", "routing.session-affinity-subagents (",
+		"upstream.codex.upstream-request-compression (", "upstream.codex.upstream-request-compression-min-bytes (",
+		"multimedia.gpt-image-2-base-model (", "multimedia.video-result-auth-cache-ttl (",
+		"models.catalog (", "models.codex-catalog (", "models.devin-catalog (",
 	} {
 		if !strings.Contains(dropped, want) {
 			t.Errorf("not named as dropped: %q\n%s", want, notices(r))
@@ -428,8 +445,10 @@ api-keys:
 		}
 	}
 	for _, want := range []string{
-		"api-keys.openai-compatibility.models.force-mapping", "api-keys.openai-compatibility.models.image",
-		"api-keys.vertex.models.support-configuration-update", "api-keys.vertex.openapi",
+		"api-keys.openai-compatibility.models.force-mapping (built when", "api-keys.vertex.openapi (built when",
+		"api-keys.vertex.openapi-location (built when", "api-keys.vertex.models.openapi (built when",
+		"client.codex.enable-apply-patch (built when", "client.codex.optimize-multi-agent-v2 (built when",
+		"upstream.codex.stream-bootstrap-buffering (built when", "upstream.codex.stream-bootstrap-timeout (built when",
 	} {
 		if !strings.Contains(later, want) {
 			t.Errorf("not named as not supported yet: %q\n%s", want, notices(r))
@@ -437,6 +456,31 @@ api-keys:
 		if strings.Contains(dropped, want) {
 			t.Errorf("named as dropped: %q\n%s", want, notices(r))
 		}
+	}
+}
+
+// TestSessionAffinitySubagents: true is today's default and asks for nothing; false asks to spread
+// subagents over the pool, which is not done here, so it is named.
+func TestSessionAffinitySubagents(t *testing.T) {
+	for _, v := range []string{"true", "false"} {
+		r := translate(t, "routing: {session-affinity: true, session-affinity-subagents: "+v+"}")
+		got := strings.Contains(notices(r), "routing.session-affinity-subagents")
+		if got != (v == "false") {
+			t.Errorf("subagents %s: named = %v\n%s", v, got, notices(r))
+		}
+	}
+}
+
+// TestContainerSettings: a setting of a container that has no rule of its own is an unknown key,
+// not one "not supported yet".
+func TestContainerSettings(t *testing.T) {
+	r := translate(t, "observability: {logs: {mystery: 1}}\nmodels: {mystery: 1}\n")
+	n := notices(r)
+	if !strings.Contains(n, "unknown keys, ignored: ") || !strings.Contains(n, "observability.logs.mystery") || !strings.Contains(n, "models.mystery") {
+		t.Errorf("notices:\n%s", n)
+	}
+	if strings.Contains(n, "not supported yet") {
+		t.Errorf("an unknown key is called not supported yet:\n%s", n)
 	}
 }
 
@@ -554,6 +598,216 @@ claude-api-key:
 	}`)
 }
 
+// A text setting written as a scalar YAML reads as something else (a number in any base, an
+// exponent, infinity, true, a date, a number too big for 64 bits) is its text as written, as
+// today's core's typed decoder keeps it: its loader (config.LoadConfigOptional) reads each of
+// these into its string fields unchanged.
+func TestTextKeptAsWritten(t *testing.T) {
+	for _, s := range []string{
+		"0123", "1e5", "0x1F", "0o17", "0b101", ".inf", "-.Inf", ".NaN", "true", "False", "1_000", "+12", "1.0", "-0",
+		"2001-12-14", "9223372036854775808", "123456789012345678901234567890",
+	} {
+		t.Run(s, func(t *testing.T) {
+			r := translate(t, `
+server:
+  host: `+s+`
+  tls:
+    enable: true
+    cert: `+s+`
+    key: `+s+`
+  trusted-proxies:
+    - `+s+`
+routing:
+  strategy: `+s+`
+  session-affinity: true
+  session-affinity-ttl: `+s+`
+observability:
+  pprof:
+    enable: true
+    addr: `+s+`
+requests:
+  payload:
+    override:
+      - models:
+          - name: `+s+`
+            protocol: `+s+`
+            from-protocol: `+s+`
+            headers:
+              X-H: `+s+`
+            exist:
+              - `+s+`
+            not-exist:
+              - `+s+`
+        params:
+          p: x
+    default:
+      - models:
+          - name: `+s+`
+        params:
+          p: x
+    default-raw:
+      - models:
+          - name: `+s+`
+        params:
+          p: '"x"'
+    override-raw:
+      - models:
+          - name: `+s+`
+        params:
+          p: '"x"'
+    filter:
+      - models:
+          - name: `+s+`
+            protocol: `+s+`
+        params:
+          - `+s+`
+access:
+  api-keys:
+    - `+s+`
+management:
+  secret-key: `+s+`
+oauth:
+  auth-dir: `+s+`
+  providers:
+    codex:
+      signin-with-chatgpt-identifier: `+s+`
+  model-alias:
+    claude:
+      - name: `+s+`
+        alias: alias-1
+        display-name: `+s+`
+      - name: name-2
+        alias: `+s+`
+  excluded-models:
+    claude:
+      - `+s+`
+claude-api-key:
+  - api-key: `+s+`
+    prefix: `+s+`
+    base-url: `+s+`
+    headers:
+      X-A: `+s+`
+    models:
+      - name: `+s+`
+        alias: alias-4
+      - name: name-3
+        alias: `+s+`
+    excluded-models:
+      - `+s+`
+api-keys:
+  codex:
+    - name: `+s+`
+      base-url: https://codex.example.com
+      keys:
+        - api-key: `+s+`
+`)
+			lower := strings.ToLower(s)
+			want := map[string]any{
+				"listen":          net.JoinHostPort(s, "8317"),
+				"tls":             map[string]any{"enable": true, "cert": s, "key": s},
+				"trusted_proxies": []any{s},
+				// Not a duration, so the default hour, as in today's core.
+				"routing": map[string]any{"request_retry": 0, "session_affinity": map[string]any{"ttl_ms": 3600000}},
+				"pprof":   map[string]any{"enable": true, "addr": s},
+				"payload": map[string]any{
+					"override": []any{map[string]any{
+						"models": []any{map[string]any{"name": s, "protocol": s, "from-protocol": s, "headers": map[string]any{"X-H": s},
+							"exist": []any{s}, "not-exist": []any{s}}},
+						"params": map[string]any{"p": "x"},
+					}},
+					"default":      []any{map[string]any{"models": []any{map[string]any{"name": s}}, "params": map[string]any{"p": "x"}}},
+					"default-raw":  []any{map[string]any{"models": []any{map[string]any{"name": s}}, "params": map[string]any{"p": `"x"`}}},
+					"override-raw": []any{map[string]any{"models": []any{map[string]any{"name": s}}, "params": map[string]any{"p": `"x"`}}},
+					"filter":       []any{map[string]any{"models": []any{map[string]any{"name": s, "protocol": s}}, "params": []any{s}}},
+				},
+				"client_keys":    []any{s},
+				"management_key": s,
+				"extensions": map[string]any{
+					Claude: map[string]any{
+						"model_alias":     []any{map[string]any{"name": s, "alias": "alias-1", "display_name": s}, map[string]any{"name": "name-2", "alias": s}},
+						"excluded_models": []any{lower},
+						"accounts": []any{map[string]any{
+							"id": "claude-api-key-1", "credential": map[string]any{"kind": "api_key", "api_key": s},
+							"prefix": s, "settings": map[string]any{"base_url": s}, "headers": map[string]any{"X-A": s},
+							"models":          []any{map[string]any{"name": s, "alias": "alias-4"}, map[string]any{"name": "name-3", "alias": s}},
+							"excluded_models": []any{lower},
+						}},
+					},
+					Codex: map[string]any{"accounts": []any{map[string]any{
+						"id": AccountID(s), "credential": map[string]any{"kind": "api_key", "api_key": s},
+						"settings": map[string]any{"base_url": "https://codex.example.com"},
+					}}},
+				},
+			}
+			wb, err := json.Marshal(want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			equalJSON(t, r.Config, string(wb))
+			if r.AuthDir != s || r.Import.SIWCIdentifier != s {
+				t.Errorf("AuthDir = %q, SIWCIdentifier = %q, want %q", r.AuthDir, r.Import.SIWCIdentifier, s)
+			}
+			if n := notices(r); !strings.Contains(n, fmt.Sprintf("routing.strategy %q is not known", s)) {
+				t.Errorf("notices do not name the strategy %q:\n%s", s, n)
+			}
+			// A quota response mode no such text is valid for is refused, naming the text as
+			// written.
+			y := "routing: {cooldown: {quota-response-mode: " + s + "}}"
+			if _, err := Translate([]byte(y)); err == nil || !strings.Contains(err.Error(), strconv.Quote(s)) {
+				t.Errorf("%s: err = %v, want it to name %q", y, err, s)
+			}
+			// No such text is a proxy URL either, so the proxy URL check refuses a proxy-url (its
+			// error does not show a value that is not a URL, so it cannot show which text was
+			// read, but it is the URL check's, not a refusal to read the value as text).
+			for _, y := range []string{"requests: {proxy-url: " + s + "}", "claude-api-key: [{api-key: k, proxy-url: " + s + "}]"} {
+				if _, err := Translate([]byte(y)); err == nil || !strings.Contains(err.Error(), "proxy-url \"(not a valid proxy URL)\"") {
+					t.Errorf("%s: err = %v, want the proxy URL check's error", y, err)
+				}
+			}
+		})
+	}
+	// Payload values (a rule's params, a model's match) are values, as in today's core.
+	r0 := translate(t, "payload:\n  override:\n    - models: [{name: m, match: [{a: 0123}]}]\n      params: {p: 0123, q: true, r: 1e5}\n")
+	equalJSON(t, r0.Config["payload"], `{"override": [{"models": [{"name": "m", "match": [{"a": 83}]}], "params": {"p": 83, "q": true, "r": 100000}}]}`)
+	// Null is no text, as in today's core: no key, so no account.
+	r := translate(t, "access: {api-keys: [k]}\nclaude-api-key:\n  - api-key: ~\n")
+	if _, ok := r.Config["extensions"]; ok {
+		t.Errorf("api-key: ~ made an account: %v", r.Config["extensions"])
+	}
+}
+
+// Aliases and merge keys read as yaml.v3 reads them, text kept as written through them: a key's
+// own field wins over a merged one, and an earlier mapping of a merged list over a later one. A
+// file yaml.v3 refuses (repeated keys, excessive aliasing) is refused.
+func TestAliasesAndMergeKeys(t *testing.T) {
+	r := translate(t, `
+x-first: &first {base-url: 0x1F, prefix: first}
+x-second: &second {base-url: second, prefix: second, proxy-url: "http://proxy.example:8080"}
+claude-api-key:
+  - <<: [*first, *second]
+    api-key: &k 0123
+    prefix: own
+access: {api-keys: [*k]}
+`)
+	equalJSON(t, r.Config, `{
+		"listen": ":8317", "routing": {"request_retry": 0},
+		"client_keys": ["0123"],
+		"extensions": {"pluxy/claude": {"accounts": [{"id": "claude-api-key-1", "credential": {"kind": "api_key", "api_key": "0123"},
+			"prefix": "own", "proxy_url": "http://proxy.example:8080", "settings": {"base_url": "0x1F"}}]}}
+	}`)
+	bomb := "a: &a [x, x, x, x, x, x, x, x, x, x]\n"
+	for i, prev := 1, "a"; i < 9; i++ {
+		name := string(rune('a' + i))
+		bomb += name + ": &" + name + " [" + strings.Repeat("*"+prev+", ", 9) + "*" + prev + "]\n"
+		prev = name
+	}
+	for _, y := range []string{"claude-api-key: [{api-key: 0123, api-key: 0124}]", bomb} {
+		if _, err := Translate([]byte(y)); err == nil {
+			t.Errorf("%.60q: no error", y)
+		}
+	}
+}
+
 // A key with no api-key (today's core serves an upstream that needs none) is not supported
 // yet: it adds no account and is named, and the rest of the file still loads.
 func TestKeysWithoutAPIKey(t *testing.T) {
@@ -644,6 +898,47 @@ openai-compatibility:
 	}
 	if strings.Contains(n, "unknown") || strings.Contains(n, "force-model-prefix") || strings.Contains(n, "excluded-models,") {
 		t.Errorf("notices name a key that is read:\n%s", n)
+	}
+}
+
+// Entries of an openai-compatibility group that share an alias are a pool in today's core. The
+// import keeps the first and names the alias and every member it drops; a model listed twice
+// loses nothing and is not named, and in the other sections, where today's core also takes the
+// first entry, nothing is named.
+func TestAliasPoolIsNamedOnImport(t *testing.T) {
+	r := translate(t, `
+codex-api-key:
+  - api-key: k1
+    base-url: https://codex.example.com
+    models:
+      - {name: up-a, alias: pub-a}
+      - {name: up-c, alias: pub-a}
+openai-compatibility:
+  - name: compat
+    base-url: https://compat.example.com/v1
+    api-key-entries: [{api-key: k2}]
+    models:
+      - {name: deepseek-v3.1, alias: claude-opus-4.66}
+      - {name: glm-5, alias: claude-opus-4.66}
+      - {name: kimi-k2.5, alias: claude-opus-4.66}
+      - {name: glm-5, alias: claude-opus-4.66}
+      - {name: plain}
+      - {name: plain}
+`)
+	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
+	equalJSON(t, exts[OpenAICompatible].(map[string]any)["accounts"], `[{
+		"id": "compat", "models": [{"name": "deepseek-v3.1", "alias": "claude-opus-4.66"}, "plain"],
+		"settings": {"base_url": "https://compat.example.com/v1"},
+		"credential": {"kind": "api_key", "api_key": "k2"}
+	}]`)
+	n := notices(r)
+	for _, want := range []string{`openai-compatibility key compat`, `alias "claude-opus-4.66"`, `lists 3 upstream models`, `does not pool models yet`, `serves only the first, "deepseek-v3.1"`, `dropped: "glm-5", "kimi-k2.5"`} {
+		if !strings.Contains(n, want) {
+			t.Errorf("notices lack %q:\n%s", want, n)
+		}
+	}
+	if strings.Count(n, "claude-opus-4.66") != 1 || strings.Contains(n, "plain") || strings.Contains(n, "pub-a") {
+		t.Errorf("notices name more than the one pool:\n%s", n)
 	}
 }
 
@@ -1029,5 +1324,201 @@ func TestPayload(t *testing.T) {
 	}
 	if _, err := Translate([]byte("requests:\n  payload: [1]\n")); err == nil || !strings.Contains(err.Error(), "requests.payload must be a mapping") {
 		t.Errorf("a payload list: err = %v", err)
+	}
+}
+
+// Today's core reads a config.yaml with yaml.v3, which matches a key to its field exactly: a key
+// written in another letter case, or not a payload key at all, is dropped, and the rule keeps
+// what else it has (a rule without models matches nothing; a model without a name matches
+// nothing). The importer drops the same keys and names each in a notice, where the JSON config's
+// decoder would have matched them case-insensitively and applied them. Each want is what today's
+// core's loader (config.ParseConfigBytes) kept of the same file.
+func TestPayloadKeysExact(t *testing.T) {
+	const rule = "    - models: [{name: m}]\n      params: {p: 1}\n"
+	for _, c := range []struct{ name, payload, want, notice string }{
+		{"list", "  Override:\n" + rule, `{}`, "requests.payload.Override (today's core reads override)"},
+		{"raw list", "  OVERRIDE-RAW:\n" + rule, `{}`, "requests.payload.OVERRIDE-RAW (today's core reads override-raw)"},
+		{"filter list", "  Filter:\n    - models: [{name: m}]\n      params: [a]\n", `{}`, "requests.payload.Filter (today's core reads filter)"},
+		{"models", "  override:\n    - Models: [{name: m}]\n      params: {p: 1}\n", `{"override": [{"params": {"p": 1}}]}`, "requests.payload.override[0].Models (today's core reads models)"},
+		{"params", "  override:\n    - models: [{name: m}]\n      Params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}]}]}`, "requests.payload.override[0].Params (today's core reads params)"},
+		{"name", "  override:\n    - models: [{Name: m, protocol: codex}]\n      params: {p: 1}\n", `{"override": [{"models": [{"protocol": "codex"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Name (today's core reads name)"},
+		{"name as a number", "  override:\n    - models: [{Name: 0123, protocol: codex}]\n      params: {p: 1}\n", `{"override": [{"models": [{"protocol": "codex"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Name (today's core reads name)"},
+		{"protocol", "  override:\n    - models: [{name: m, Protocol: codex}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Protocol (today's core reads protocol)"},
+		{"from-protocol", "  override:\n    - models: [{name: m, From-Protocol: claude}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].From-Protocol (today's core reads from-protocol)"},
+		{"headers", "  override:\n    - models: [{name: m, Headers: {X-A: '*'}}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Headers (today's core reads headers)"},
+		{"match", "  override:\n    - models: [{name: m, Match: [{a: 1}]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Match (today's core reads match)"},
+		{"not-match", "  override:\n    - models: [{name: m, Not-Match: [{a: 1}]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Not-Match (today's core reads not-match)"},
+		{"exist", "  override:\n    - models: [{name: m, Exist: [a]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Exist (today's core reads exist)"},
+		{"not-exist", "  override:\n    - models: [{name: m, NOT-EXIST: [a]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].NOT-EXIST (today's core reads not-exist)"},
+		{"filter params", "  filter:\n    - models: [{name: m}]\n      Params: [a]\n", `{"filter": [{"models": [{"name": "m"}]}]}`, "requests.payload.filter[0].Params (today's core reads params)"},
+		{"filter models", "  filter:\n    - Models: [{name: m}]\n      params: [a]\n", `{"filter": [{"params": ["a"]}]}`, "requests.payload.filter[0].Models (today's core reads models)"},
+		{"unknown keys", "  override:\n    - models: [{name: m, bogus: 1}]\n      params: {p: 1}\n      extra: 2\n  other: []\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`,
+			"requests.payload.other (not a payload key), requests.payload.override[0].extra (not a payload key), requests.payload.override[0].models[0].bogus (not a payload key)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			nested := "  " + strings.ReplaceAll(strings.TrimSuffix(c.payload, "\n"), "\n", "\n  ") + "\n"
+			for _, doc := range []string{"requests:\n  payload:\n" + nested, "payload:\n" + c.payload} {
+				r := translate(t, doc)
+				equalJSON(t, r.Config["payload"], c.want)
+				if n := notices(r); !strings.Contains(n, "payload keys ignored, as today's core ignores them (it matches key names exactly): ") || !strings.Contains(n, c.notice) {
+					t.Errorf("notices do not say %q:\n%s", c.notice, n)
+				}
+			}
+		})
+	}
+	// The exact spellings carry no notice about keys.
+	r := translate(t, "payload:\n  override:\n"+rule)
+	if n := notices(r); strings.Contains(n, "payload") {
+		t.Errorf("notices name payload for exact keys:\n%s", n)
+	}
+	// Only the payload's own keys are matched exactly: a path, a header name and a match key are
+	// the user's text and keep their case.
+	r = translate(t, "payload:\n  override:\n    - models: [{name: m, headers: {X-Mixed-Case: '*'}, match: [{Mixed.Path: 1}], exist: [Mixed.Path]}]\n      params: {Mixed.Path: 1}\n")
+	equalJSON(t, r.Config["payload"], `{"override": [{"models": [{"name": "m", "headers": {"X-Mixed-Case": "*"}, "match": [{"Mixed.Path": 1}], "exist": ["Mixed.Path"]}], "params": {"Mixed.Path": 1}}]}`)
+	if n := notices(r); strings.Contains(n, "payload") {
+		t.Errorf("notices name payload for user text:\n%s", n)
+	}
+}
+
+// A -raw rule's param goes across as today's core sent it upstream (found by running its loader
+// and its payloadRawValue on the same file): a string is the JSON text itself; any other value
+// is what json.Marshal makes of it, so a date YAML reads as one is the JSON string of its
+// RFC 3339 form; a param that is null, or that json.Marshal refuses (.inf, .nan, also inside a
+// list), is skipped, and the rule's other params still apply. The importer carries the first
+// two and drops the skipped ones, naming each.
+func TestPayloadRawParams(t *testing.T) {
+	for _, c := range []struct{ name, params, want, notice string }{
+		{"date", "{p: 2024-01-15}", `{"p": "\"2024-01-15T00:00:00Z\""}`, ""},
+		{"date and time", "{p: 2024-01-15T10:30:00Z}", `{"p": "\"2024-01-15T10:30:00Z\""}`, ""},
+		{"date and time with fractions", "{p: 2024-01-15T10:30:00.123456789Z}", `{"p": "\"2024-01-15T10:30:00.123456789Z\""}`, ""},
+		{"date in a list", "{p: [2024-01-15, 1]}", `{"p": ["2024-01-15T00:00:00Z", 1]}`, ""},
+		{"date in a mapping", "{p: {d: 2024-01-15}}", `{"p": {"d": "2024-01-15T00:00:00Z"}}`, ""},
+		{"+inf", "{p: .inf, q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: not JSON (json: unsupported value: +Inf), dropped: today's core skipped the param`},
+		{"-inf", "{p: -.inf, q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: not JSON (json: unsupported value: -Inf), dropped: today's core skipped the param`},
+		{"nan", "{p: .nan, q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: not JSON (json: unsupported value: NaN), dropped: today's core skipped the param`},
+		{"inf in a list", "{p: [.inf], q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: not JSON (json: unsupported value: +Inf), dropped: today's core skipped the param`},
+		{"null", "{p: ~, q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: null, dropped: today's core skipped the param`},
+		{"values and JSON text", `{p: 5, q: 0123, r: 1e5, s: true, t: 1.50, u: '{"a":1}'}`, `{"p": 5, "q": 83, "r": 100000, "s": true, "t": 1.5, "u": "{\"a\":1}"}`, ""},
+	} {
+		for _, list := range []string{"override-raw", "default-raw"} {
+			t.Run(c.name+" in "+list, func(t *testing.T) {
+				r := translate(t, "payload:\n  "+list+":\n    - models: [{name: m}]\n      params: "+c.params+"\n")
+				equalJSON(t, r.Config["payload"], `{"`+list+`": [{"models": [{"name": "m"}], "params": `+c.want+`}]}`)
+				n := notices(r)
+				if c.notice == "" {
+					if strings.Contains(n, "payload") {
+						t.Errorf("notices name payload:\n%s", n)
+					}
+					return
+				}
+				want := strings.ReplaceAll(c.notice, "override-raw", list)
+				if !strings.Contains(n, "config.yaml: "+want) {
+					t.Errorf("notices do not say %q:\n%s", want, n)
+				}
+			})
+		}
+	}
+	// A param of a rule that is not a -raw one keeps its value as it is: a date stays a date.
+	r := translate(t, "payload:\n  override:\n    - models: [{name: m}]\n      params: {p: 2024-01-15}\n")
+	equalJSON(t, r.Config["payload"], `{"override": [{"models": [{"name": "m"}], "params": {"p": "2024-01-15T00:00:00Z"}}]}`)
+}
+
+// Today's core drops a -raw rule as a whole when a param of it is a string that is empty or not
+// JSON once trimmed, with a warning in its log, and goes on loading; the rest of the list stays.
+// The importer drops the same rule and names it. Each case is what today's core's loader kept
+// (and, for the last, applied) of the same file.
+func TestPayloadRawStringNotJSON(t *testing.T) {
+	rule := func(list, params string) string {
+		return "payload:\n  " + list + ":\n    - models: [{name: m}]\n      params: " + params + "\n"
+	}
+	const dropped = `requests.payload.override-raw[0]: param "p" is a string that is not JSON, rule dropped: today's core dropped the whole rule and logged a warning`
+	for _, c := range []struct{ name, doc, want, notice string }{
+		{"a date in quotes", rule("override-raw", "{p: '2024-01-15'}"), `{"override-raw": []}`, dropped},
+		{"a word", rule("override-raw", "{p: foo}"), `{"override-raw": []}`, dropped},
+		{"an empty string", rule("override-raw", "{p: ''}"), `{"override-raw": []}`, dropped},
+		{"spaces only", rule("override-raw", "{p: '   '}"), `{"override-raw": []}`, dropped},
+		{"a date with a zone after a space, which YAML reads as text", rule("override-raw", "{p: 2024-01-15 10:30:00 +02:00}"), `{"override-raw": []}`, dropped},
+		{"another param that is fine", rule("override-raw", "{p: foo, q: 1}"), `{"override-raw": []}`, dropped},
+		{"default-raw", rule("default-raw", "{p: foo, q: 1}"), `{"default-raw": []}`, strings.ReplaceAll(dropped, "override-raw", "default-raw")},
+		{"padded JSON text is kept as written", rule("override-raw", "{p: ' 5 '}"), `{"override-raw": [{"models": [{"name": "m"}], "params": {"p": " 5 "}}]}`, ""},
+		{"only that rule goes", "payload:\n  override-raw:\n    - models: [{name: m}]\n      params: {p: foo}\n    - models: [{name: m}]\n      params: {q: 1}\n",
+			`{"override-raw": [{"models": [{"name": "m"}], "params": {"q": 1}}]}`, dropped},
+		{"only that list loses it", "payload:\n  default-raw:\n    - models: [{name: m}]\n      params: {p: '1'}\n    - models: [{name: m}]\n      params: {q: ''}\n",
+			`{"default-raw": [{"models": [{"name": "m"}], "params": {"p": "1"}}]}`, `requests.payload.default-raw[1]: param "q" is a string that is not JSON, rule dropped`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := translate(t, c.doc)
+			equalJSON(t, r.Config["payload"], c.want)
+			n := notices(r)
+			if c.notice == "" && strings.Contains(n, "payload") || c.notice != "" && !strings.Contains(n, "config.yaml: "+c.notice) {
+				t.Errorf("notices do not say %q:\n%s", c.notice, n)
+			}
+		})
+	}
+}
+
+// A value json.Marshal refuses (.inf and .nan, alone or in a list or mapping) outside a -raw
+// rule, as today's core's payload code handled it (found by running it on each case):
+//   - in a param of override or default it skipped the param, or, for a top-level .inf, .nan or
+//     -.inf in default and -.inf in override, wrote +Inf, NaN or -Inf into the body, which is not
+//     JSON; the importer drops the param either way, since there is no value to carry;
+//   - in a match, the model never matched, and in a not-match, the condition never equalled and
+//     so never excluded a request; a model of a filter rule is read the same way.
+//
+// Each of these used to fail the whole load with a bare "json: unsupported value".
+func TestPayloadNonJSONValues(t *testing.T) {
+	const wrote = "dropped: today's core skipped the param or wrote invalid JSON into the body"
+	rule := func(list, params string) string {
+		return "payload:\n  " + list + ":\n    - models: [{name: m}]\n      params: " + params + "\n"
+	}
+	model := func(list, m string) string {
+		params := "{p: 1}"
+		if list == "filter" {
+			params = "[a]"
+		}
+		return "payload:\n  " + list + ":\n    - models: [" + m + "]\n      params: " + params + "\n"
+	}
+	const (
+		noModels   = `{"override": [{"models": [], "params": {"p": 1}}]}`
+		oneModel   = `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`
+		infMatch   = `requests.payload.override[0].models[0]: match[0]["a"] is not JSON (json: unsupported value: +Inf), model dropped: today's core never matched it`
+		infNotMach = `requests.payload.override[0].models[0]: not-match[0]["a"] is not JSON (json: unsupported value: +Inf), condition dropped: it never equalled a value in today's core`
+	)
+	for _, c := range []struct{ name, doc, want, notice string }{
+		{"override +inf", rule("override", "{p: .inf, q: 1}"), `{"override": [{"models": [{"name": "m"}], "params": {"q": 1}}]}`, `requests.payload.override[0].params["p"]: not JSON (json: unsupported value: +Inf), ` + wrote},
+		{"override -inf", rule("override", "{p: -.inf, q: 1}"), `{"override": [{"models": [{"name": "m"}], "params": {"q": 1}}]}`, `not JSON (json: unsupported value: -Inf), ` + wrote},
+		{"override nan", rule("override", "{p: .nan, q: 1}"), `{"override": [{"models": [{"name": "m"}], "params": {"q": 1}}]}`, `not JSON (json: unsupported value: NaN), ` + wrote},
+		{"override inf in a list", rule("override", "{p: [.inf, 1], q: 1}"), `{"override": [{"models": [{"name": "m"}], "params": {"q": 1}}]}`, `requests.payload.override[0].params["p"]: not JSON`},
+		{"override inf in a mapping", rule("override", "{p: {a: .inf}, q: 1}"), `{"override": [{"models": [{"name": "m"}], "params": {"q": 1}}]}`, `requests.payload.override[0].params["p"]: not JSON`},
+		{"default +inf", rule("default", "{p: .inf, q: 1}"), `{"default": [{"models": [{"name": "m"}], "params": {"q": 1}}]}`, `requests.payload.default[0].params["p"]: not JSON (json: unsupported value: +Inf), ` + wrote},
+		{"default nan", rule("default", "{p: .nan, q: 1}"), `{"default": [{"models": [{"name": "m"}], "params": {"q": 1}}]}`, `not JSON (json: unsupported value: NaN), ` + wrote},
+		{"default inf in a list", rule("default", "{p: [.inf], q: 1}"), `{"default": [{"models": [{"name": "m"}], "params": {"q": 1}}]}`, `requests.payload.default[0].params["p"]: not JSON`},
+		{"match +inf", model("override", "{name: m, match: [{a: .inf}]}"), noModels, infMatch},
+		{"match -inf", model("override", "{name: m, match: [{a: -.inf}]}"), noModels, `match[0]["a"] is not JSON (json: unsupported value: -Inf), model dropped`},
+		{"match nan", model("override", "{name: m, match: [{a: .nan}]}"), noModels, `match[0]["a"] is not JSON (json: unsupported value: NaN), model dropped`},
+		{"match inf in a list", model("override", "{name: m, match: [{a: [.inf]}]}"), noModels, `match[0]["a"] is not JSON`},
+		{"match inf beside a value", model("override", "{name: m, match: [{a: .inf, b: 1}]}"), noModels, `match[0]["a"] is not JSON`},
+		{"match inf drops only its model", model("override", "{name: m, match: [{a: .inf}]}, {name: m}"), oneModel, infMatch},
+		{"filter match inf", model("filter", "{name: m, match: [{a: .inf}]}"), `{"filter": [{"models": [], "params": ["a"]}]}`, `requests.payload.filter[0].models[0]: match[0]["a"] is not JSON`},
+		{"not-match inf", model("override", "{name: m, not-match: [{a: .inf}]}"), `{"override": [{"models": [{"name": "m", "not-match": [{}]}], "params": {"p": 1}}]}`, infNotMach},
+		{"not-match inf beside a value", model("override", "{name: m, not-match: [{a: .inf, b: 1}]}"), `{"override": [{"models": [{"name": "m", "not-match": [{"b": 1}]}], "params": {"p": 1}}]}`, infNotMach},
+		{"filter not-match inf", model("filter", "{name: m, not-match: [{a: .inf}]}"), `{"filter": [{"models": [{"name": "m", "not-match": [{}]}], "params": ["a"]}]}`, `requests.payload.filter[0].models[0]: not-match[0]["a"] is not JSON`},
+		// Dates are fine in these places: today's core sends and compares the JSON string of the date.
+		{"date param", rule("override", "{p: 2024-01-15}"), `{"override": [{"models": [{"name": "m"}], "params": {"p": "2024-01-15T00:00:00Z"}}]}`, ""},
+		{"date in match", model("override", "{name: m, match: [{a: 2024-01-15}]}"), `{"override": [{"models": [{"name": "m", "match": [{"a": "2024-01-15T00:00:00Z"}]}], "params": {"p": 1}}]}`, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := translate(t, c.doc)
+			equalJSON(t, r.Config["payload"], c.want)
+			if n := notices(r); c.notice == "" && strings.Contains(n, "payload") || !strings.Contains(n, c.notice) {
+				t.Errorf("notices do not say %q:\n%s", c.notice, n)
+			}
+		})
+	}
+	// A value JSON cannot hold where today's core reads another type fails the load by naming the
+	// rules (today's core refuses the file too), not with a bare "json: unsupported value".
+	_, err := Translate([]byte("payload:\n  override:\n    - models: [{name: m, match: .inf}]\n      params: {p: 1}\n"))
+	if err == nil || !strings.Contains(err.Error(), "requests.payload: a value is not JSON where today's core reads another type") {
+		t.Errorf("a match that is .inf: err = %v", err)
 	}
 }

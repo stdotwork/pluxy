@@ -45,7 +45,7 @@
 //! but the call; the host spawns exactly the confirmed launch, once (`spawner`). A tool's `runtime`
 //! frames reach only its own package's managed runtimes.
 //!
-//! Linux only, as the program host.
+//! Linux, Windows and macOS, as the program host (`native_stack`).
 
 use crate::confirmation::{self, Authorized, Gesture};
 use crate::device::{self, Grant, Refused};
@@ -868,17 +868,40 @@ fn launch_of(
                 .collect::<Option<Vec<_>>>()
         })
         .ok_or_else(|| fail("invalid_request", "a launch names its argv, as strings"))?;
-    // The program a terminal runs: bound as the executable is, and it must be what argv runs.
+    // The program a terminal runs: bound as the executable is, and it must be what argv runs,
+    // since the spawn checks it as that (`spawn::command`): on Linux the argument right after the
+    // terminal's exec flag (`-e`, `-x` or `--`, the first argument), on macOS the one right after
+    // `--` (the execution program's terminal mode); elsewhere one of argv. A launch that names no
+    // program is not checked as a terminal's: the app has no list of terminals.
     let program = match input.get("program") {
         None => None,
         Some(v) => {
             let p = v
                 .as_str()
                 .ok_or_else(|| fail("invalid_request", "a launch's program is a path"))?;
-            if !argv.iter().any(|a| a == p) {
+            #[cfg(target_os = "linux")]
+            let runs = argv
+                .first()
+                .is_some_and(|f| ["-e", "-x", "--"].contains(&f.as_str()))
+                && argv.get(1).is_some_and(|a| a == p);
+            #[cfg(target_os = "macos")]
+            let runs = argv
+                .iter()
+                .position(|a| a == "--")
+                .and_then(|i| argv.get(i + 1))
+                .is_some_and(|a| a == p);
+            #[cfg(windows)]
+            let runs = argv.iter().any(|a| a == p);
+            if !runs {
                 return Err(fail(
                     "invalid_request",
-                    "a launch's program must be one of its argv",
+                    if cfg!(target_os = "linux") {
+                        "a launch's program must be the argument right after the terminal's exec flag (-e, -x or --), its first"
+                    } else if cfg!(target_os = "macos") {
+                        "a launch's program must be the argument right after --"
+                    } else {
+                        "a launch's program must be one of its argv"
+                    },
                 ));
             }
             Some(PathBuf::from(p))
@@ -1259,7 +1282,10 @@ fn spawn_frame(
     }
 }
 
-/// The host's save service for tools' `files` frames (`program::Host::set_saver`).
+/// The host's save service for tools' `files` frames (`program::Host::set_saver`). Linux only for
+/// now: the save dialog (`savefile.rs`) is GTK's; elsewhere the host has none and refuses the
+/// frames ("this host saves no files").
+#[cfg(target_os = "linux")]
 pub fn saver(app: AppHandle) -> program::Saver {
     Arc::new(move |tool, context, frame, cancel| save_frame(&app, tool, context, frame, cancel))
 }
@@ -1271,6 +1297,7 @@ pub fn saver(app: AppHandle) -> program::Saver {
 /// package, and saves them there. One save per call: once asked, the call's bytes are gone, whatever
 /// the answer. Refused unless the tool still runs its package's admitted release, as its own calls
 /// are; a page or tool never names the path.
+#[cfg(target_os = "linux")]
 fn save_frame(
     app: &AppHandle,
     tool: &Hop,
@@ -1433,6 +1460,83 @@ fn confirmed_authorized(app: &AppHandle, id: &str, cancel: &Cancel) -> Result<Au
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A terminal launch's program is the argument its terminal runs, the one the spawn checks:
+    /// on Linux right after the terminal's flag, on macOS right after `--`.
+    #[cfg(unix)]
+    #[test]
+    fn a_launchs_program_must_be_the_argument_its_terminal_runs() {
+        let executor = confirmation::Package {
+            id: "pluxy/execution".into(),
+            source: "test".into(),
+            digest: "d".into(),
+            signer: "s".into(),
+            contract: "1".into(),
+            generation: 1,
+        };
+        let launch = |argv: Value, program: &str| {
+            launch_of(
+                &json!({"executable": "/usr/bin/xterm", "argv": argv, "cwd": "/",
+                    "program": program}),
+                &executor,
+            )
+        };
+        #[cfg(target_os = "linux")]
+        let (runs, other) = (
+            json!(["-e", "/bin/agent", "/bin/other"]),
+            json!(["-e", "/bin/other", "/bin/agent"]),
+        );
+        // Right after a flag that is not the exec flag: the terminal runs what follows `--`.
+        #[cfg(target_os = "linux")]
+        {
+            let e = launch(
+                json!(["--title", "/bin/agent", "--", "/tmp/x"]),
+                "/bin/agent",
+            )
+            .map(|_| ())
+            .unwrap_err();
+            assert!(e.message.contains("exec flag"), "{}", e.message);
+            for flag in ["-e", "-x", "--"] {
+                assert!(
+                    launch(json!([flag, "/bin/agent"]), "/bin/agent").is_ok(),
+                    "{flag}"
+                );
+            }
+        }
+        #[cfg(target_os = "macos")]
+        let (runs, other) = (
+            json!([
+                "terminal",
+                "--with",
+                "terminal",
+                "--app",
+                "/T.app",
+                "--",
+                "/bin/agent",
+                "/bin/other"
+            ]),
+            json!([
+                "terminal",
+                "--with",
+                "terminal",
+                "--app",
+                "/T.app",
+                "--",
+                "/bin/other",
+                "/bin/agent"
+            ]),
+        );
+        let l = launch(runs, "/bin/agent").map_err(|e| e.message).unwrap();
+        assert_eq!(l.program, Some(PathBuf::from("/bin/agent")));
+        let e = launch(other, "/bin/agent").map(|_| ()).unwrap_err();
+        assert_eq!(e.code, "invalid_request");
+        assert!(
+            e.message
+                .starts_with("a launch's program must be the argument right after"),
+            "{}",
+            e.message
+        );
+    }
 
     #[test]
     fn a_launch_delivers_the_secrets_its_environment_gives_the_process() {

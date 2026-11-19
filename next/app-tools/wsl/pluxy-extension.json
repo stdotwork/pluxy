@@ -1,0 +1,73 @@
+{
+  "manifest_version": 1,
+  "id": "pluxy/wsl",
+  "version": "0.1.0",
+  "app": {
+    "version": 0,
+    "tier": "native",
+    "host_versions": [0],
+    "programs": {
+      "windows/amd64": "bin/pluxy-wsl.exe",
+      "windows/arm64": "bin/pluxy-wsl.exe"
+    },
+    "operations": [
+      {
+        "id": "distros",
+        "description": "List the WSL distributions on this computer, without starting any",
+        "effect": "read",
+        "input_schema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "output_schema": { "type": "object", "required": ["distros", "installed"] }
+      },
+      {
+        "id": "users",
+        "description": "List the users of a WSL distribution (this starts the distribution)",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "distro": { "type": "string", "minLength": 1, "maxLength": 64 }
+          },
+          "required": ["distro"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object", "required": ["users", "default", "arch", "wsl"] }
+      },
+      {
+        "id": "check",
+        "description": "Check a WSL distribution and user: the user's home, the processor and the Windows drives mounted there",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "distro": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "user": { "type": "string", "minLength": 1, "maxLength": 32 }
+          },
+          "required": ["distro", "user"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object", "required": ["distro", "user", "home", "arch", "wsl", "automount", "drives"] }
+      },
+      {
+        "id": "prepare",
+        "description": "Prepare a launch inside a WSL distribution as a user: the wsl.exe command to confirm",
+        "effect": "read",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "distro": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "user": { "type": "string", "minLength": 1, "maxLength": 32 },
+            "kind": { "enum": ["terminal", "direct"] },
+            "program": { "type": "string", "minLength": 1, "maxLength": 255 },
+            "override": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "args": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 32768 } },
+            "cwd": { "type": "string", "minLength": 1, "maxLength": 4096 }
+          },
+          "required": ["distro", "user", "kind"],
+          "additionalProperties": false
+        },
+        "output_schema": { "type": "object", "required": ["launch", "kind"] }
+      }
+    ],
+    "state": { "version": 0, "readable_versions": [0] }
+  }
+}

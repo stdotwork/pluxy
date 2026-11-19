@@ -2,13 +2,16 @@
 //! its data folder, supervises (only that process) and stops when it quits or the person picks
 //! another mode.
 
+use crate::owned::Child;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::ExitStatus;
+#[cfg(unix)]
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, Weak};
@@ -63,7 +66,8 @@ pub fn random_key() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// Writes `path` readable only by this user, replacing it in one step.
+/// Writes `path` readable only by this user, replacing it in one step: on Windows with a protected
+/// access list allowing only this user and SYSTEM.
 pub fn write_private(path: &Path, data: &[u8]) -> io::Result<()> {
     write_private_with_nonce(path, data, random_key)
 }
@@ -86,14 +90,11 @@ fn write_private_with_nonce(
         let mut name = name.to_os_string();
         name.push(format!(".{}.tmp", nonce()));
         let tmp = parent.join(name);
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create_new(true);
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-        }
-        match opts.open(&tmp) {
+        let made = create_temp(&folder, &tmp);
+        #[cfg(windows)]
+        let made = create_temp(&tmp);
+        match made {
             Ok(f) => break (tmp, f),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
@@ -121,11 +122,41 @@ fn write_private_with_nonce(
     result
 }
 
+/// Makes tmp, in the folder open as folder, new and for writing, readable only by this user
+/// (`write_private`'s temporary file), never through a link. macOS: where the volume keeps access
+/// lists, with an empty one that takes nothing from the folder's, so no entry is on it at any
+/// moment (`private_macos.rs`).
+#[cfg(target_os = "macos")]
+fn create_temp(folder: &fs::File, tmp: &Path) -> io::Result<fs::File> {
+    crate::private_macos::create_new_in(folder, tmp, 0o600)
+}
+#[cfg(all(unix, not(target_os = "macos")))]
+fn create_temp(_folder: &fs::File, tmp: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(tmp)
+}
+/// Windows: with a protected access list allowing only this user and SYSTEM, given as it is made
+/// (`private_windows.rs`).
+#[cfg(windows)]
+fn create_temp(tmp: &Path) -> io::Result<fs::File> {
+    crate::private_windows::create_new_private(tmp)
+}
+
 /// The core config the app keeps, `<dir>/config.json`. The app writes it once, the first time,
 /// with a free loopback port that then stays the core's, fresh keys and folders under dir; after
 /// that it is the person's to edit (core reloads it), and the app only reads the management key.
+/// On macOS dir is first emptied of extended access list entries (`clear_core_folder`).
 pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
     let path = dir.join("config.json");
+    #[cfg(target_os = "macos")]
+    fs::create_dir_all(dir)
+        .and_then(|_| clear_core_folder(dir))
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
     if path.exists() {
         return Ok(path);
     }
@@ -144,6 +175,36 @@ pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
     let text = serde_json::to_vec_pretty(&cfg).expect("a JSON value");
     write_private(&path, &text).map_err(|e| format!("writing {}: {e}", path.display()))?;
     Ok(path)
+}
+
+/// macOS: the app's core folder holds the core's keys (config.json) and its credentials, so it
+/// keeps no extended access list entry, the rule of the app's other private folders
+/// (`private_macos.rs`): the folder, its config and the credentials and packages folders the
+/// config names by default are given an empty list, and so is each credential file with an
+/// entry (cleared, not refused: the core owns them, and refusing would stop it). The folder is
+/// opened by its path and `credentials` is listed by its path; what is inside the folder is
+/// opened beneath it, never through a link, so a linked credential file is skipped. The core
+/// writes into folders that pass nothing on.
+#[cfg(target_os = "macos")]
+fn clear_core_folder(dir: &Path) -> io::Result<()> {
+    use crate::private_macos::{clear_entries, open_beneath};
+    let root = fs::File::open(dir)?;
+    clear_entries(&root)?;
+    if let Some(f) = open_beneath(&root, "config.json", false)? {
+        clear_entries(&f)?;
+    }
+    if let Some(d) = open_beneath(&root, "packages", true)? {
+        clear_entries(&d)?;
+    }
+    if let Some(d) = open_beneath(&root, "credentials", true)? {
+        clear_entries(&d)?;
+        for e in fs::read_dir(dir.join("credentials"))? {
+            if let Some(f) = open_beneath(&d, e?.file_name(), false)? {
+                clear_entries(&f)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The address core is to listen on, from `listen` in the core config at path: an IP address and
@@ -247,22 +308,17 @@ pub struct ManagedCore {
 impl ManagedCore {
     /// Starts the open program (named name in messages) with the config in dir (made if missing)
     /// and waits until core says where it listens. The program runs from that open file, the one
-    /// its caller checked, not from its path again. On Unix the app binds core's `listen` address
-    /// itself and hands core the socket (`-listen-fd`), keeping its own copy; core must say it
-    /// listens there. Core's log goes to the app's stderr, each line prefixed `core: `. on_exit
-    /// runs once core has exited. Off Unix it refuses: the open program cannot be started from.
-    #[cfg_attr(
-        not(unix),
-        allow(unreachable_code, unused_variables, unused_mut, unused_assignments)
-    )]
+    /// its caller checked (on macOS and Windows by the path it has now, checked again: see
+    /// `owned`). On Unix the app binds core's `listen` address itself and hands core the socket
+    /// (`-listen-fd`), keeping its own copy; core must say it listens there. On Windows it runs
+    /// in a job of its own, which ends it if the app ends without stopping it. Core's log goes to
+    /// the app's stderr, each line prefixed `core: `. on_exit runs once core has exited.
     pub fn start(
         program: File,
         name: &Path,
         dir: &Path,
         on_exit: Option<OnExit>,
     ) -> Result<ManagedCore, String> {
-        #[cfg(not(unix))]
-        return Err("starting the app's own core is supported on Linux only".into());
         let cfg = ensure_config(dir)?;
         let key = management_key(&cfg)?;
         #[cfg(unix)]
@@ -270,22 +326,20 @@ impl ManagedCore {
         #[cfg(not(unix))]
         let hold: Option<Hold> = None;
         #[cfg(unix)]
-        let fd = {
-            use std::os::fd::AsRawFd;
-            program.as_raw_fd()
-        };
-        #[cfg(unix)]
-        let mut cmd = Command::new(format!("/proc/self/fd/{fd}"));
-        // Never run: `start` refused above.
-        #[cfg(not(unix))]
-        let mut cmd = Command::new(name);
+        let mut cmd = Command::new(crate::owned::exec_target(
+            &program,
+            crate::owned::Writers::Nobody,
+        )?);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
             cmd.arg0(name);
-            // The child keeps the open program across exec, which a #! script's interpreter
-            // then reads (as /dev/fd/N); the app's own copy closes on exec as usual.
+            // On Linux the child keeps the open program across exec, which a #! script's
+            // interpreter then reads (as /dev/fd/N); the app's own copy closes on exec as usual.
+            #[cfg(target_os = "linux")]
             unsafe {
+                use std::os::fd::AsRawFd;
+                let fd = program.as_raw_fd();
                 cmd.pre_exec(move || {
                     if libc::fcntl(fd, libc::F_SETFD, 0) != 0 {
                         return Err(io::Error::last_os_error());
@@ -294,7 +348,19 @@ impl ManagedCore {
                 });
             }
         }
-        cmd.arg("-config").arg(&cfg);
+        // Its environment is the app's, as on Unix, where it inherits it.
+        #[cfg(windows)]
+        let mut cmd = {
+            use crate::owned::windows::{self as w, Io, Kind};
+            let mut c = w::Command::new(w::pin_file(&program)?, Kind::Managed);
+            c.arg0(name)
+                .envs(std::env::vars_os())
+                .stdin(Io::Null)
+                .stdout(Io::Null)
+                .stderr(Io::Piped);
+            c
+        };
+        cmd.args([std::ffi::OsStr::new("-config"), cfg.as_os_str()]);
         #[cfg(unix)]
         if let Some(l) = &hold {
             use std::os::fd::AsRawFd;
@@ -311,8 +377,9 @@ impl ManagedCore {
                 });
             }
         }
-        cmd.current_dir(dir)
-            .stdin(Stdio::null())
+        cmd.current_dir(dir);
+        #[cfg(unix)]
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
         #[cfg(target_os = "linux")]
@@ -537,12 +604,11 @@ impl ManagedCore {
                 self.wait(Duration::from_secs(1));
                 return;
             }
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(c.id() as libc::pid_t, libc::SIGTERM);
+            // SIGTERM to it (on Windows CTRL_BREAK to its group), while it is unreaped; one that
+            // cannot be asked (on Windows: no console it can get one on) is ended at once.
+            if !crate::owned::term_process(&c) {
+                let _ = c.kill();
             }
-            #[cfg(not(unix))]
-            let _ = c.kill();
         }
         if !self.wait(STOP_TIMEOUT) {
             self.kill();
@@ -622,9 +688,108 @@ pub fn owns_listener(core: &ManagedCore, base: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn owns_listener(_core: &ManagedCore, _base: &str) -> Result<(), String> {
-    Err("checking that the app's own core is what listens works on Linux only for now".into())
+/// On Windows: every listener on base's port, on any address, is the core's process (the
+/// system's table of listeners and the process that owns each, which lists every user's). The
+/// app holds the core's process handle, so its process ID is not another process's meanwhile.
+#[cfg(windows)]
+pub fn owns_listener(core: &ManagedCore, base: &str) -> Result<(), String> {
+    let not = || format!("the started core is not listening on {base} itself");
+    let port = url::Url::parse(base)
+        .ok()
+        .and_then(|u| u.port_or_known_default())
+        .ok_or_else(not)?;
+    let owners =
+        listener_owners(port).map_err(|e| format!("reading this computer's listeners: {e}"))?;
+    if core.exited().is_some() || owners.is_empty() || owners.iter().any(|p| *p != core.pid()) {
+        return Err(not());
+    }
+    Ok(())
+}
+
+/// The process IDs owning each TCP socket listening on port, IPv4 and IPv6, on any address.
+#[cfg(windows)]
+fn listener_owners(port: u16) -> io::Result<Vec<u32>> {
+    use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetExtendedTcpTable, MIB_TCP6TABLE_OWNER_PID, MIB_TCPTABLE_OWNER_PID,
+        TCP_TABLE_OWNER_PID_LISTENER,
+    };
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
+    let mut found = Vec::new();
+    for family in [AF_INET, AF_INET6] {
+        // u64s, so the table is aligned as its rows need.
+        let mut buf: Vec<u64> = Vec::new();
+        let mut size = 0u32;
+        loop {
+            let r = unsafe {
+                GetExtendedTcpTable(
+                    buf.as_mut_ptr().cast(),
+                    &mut size,
+                    0,
+                    u32::from(family),
+                    TCP_TABLE_OWNER_PID_LISTENER,
+                    0,
+                )
+            };
+            match r {
+                NO_ERROR => break,
+                // The table grew since its size was asked: ask again.
+                ERROR_INSUFFICIENT_BUFFER => buf = vec![0; (size as usize).div_ceil(8) + 1],
+                e => return Err(io::Error::from_raw_os_error(e as i32)),
+            }
+        }
+        if buf.is_empty() {
+            continue;
+        }
+        // The port is in network byte order, in the low 16 bits.
+        let ours = |p: u32| u16::from_be(p as u16) == port;
+        unsafe {
+            if family == AF_INET {
+                let t = &*(buf.as_ptr() as *const MIB_TCPTABLE_OWNER_PID);
+                let rows = std::slice::from_raw_parts(t.table.as_ptr(), t.dwNumEntries as usize);
+                found.extend(
+                    rows.iter()
+                        .filter(|r| ours(r.dwLocalPort))
+                        .map(|r| r.dwOwningPid),
+                );
+            } else {
+                let t = &*(buf.as_ptr() as *const MIB_TCP6TABLE_OWNER_PID);
+                let rows = std::slice::from_raw_parts(t.table.as_ptr(), t.dwNumEntries as usize);
+                found.extend(
+                    rows.iter()
+                        .filter(|r| ours(r.dwLocalPort))
+                        .map(|r| r.dwOwningPid),
+                );
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// On macOS: core still runs and base is the address of the socket the app bound and gave it,
+/// which the app still holds; base is a loopback address (`conn::local_origin`). No other user
+/// can listen where that address's connections would go meanwhile: the system refuses another
+/// user's bind of that address, or of a wildcard over it, on a port a socket of this user's
+/// holds, unless both set `SO_REUSEPORT`, which the app's socket does not (checked on the CI
+/// runner with a second user, `next-app-platforms.yml`). A wildcard the app held would not be
+/// kept so (another user's dual-stack `[::]` binds over `0.0.0.0` there), but the app never
+/// sends its key to one. Other processes of this user are not looked at: they can read the
+/// core's config, management key and all, anyway.
+#[cfg(target_os = "macos")]
+pub fn owns_listener(core: &ManagedCore, base: &str) -> Result<(), String> {
+    let not = || format!("the started core is not listening on {base} itself");
+    let u = url::Url::parse(base).map_err(|_| not())?;
+    let port = u.port_or_known_default().ok_or_else(not)?;
+    let ip: std::net::IpAddr = match u.host() {
+        Some(url::Host::Ipv4(a)) => a.into(),
+        Some(url::Host::Ipv6(a)) => a.into(),
+        _ => return Err(not()),
+    };
+    let held = core.hold.as_ref().and_then(|l| l.local_addr().ok());
+    if core.exited().is_some() || held != Some(SocketAddr::new(ip, port)) {
+        return Err(not());
+    }
+    Ok(())
 }
 
 /// The inodes of the sockets listening on port, on any address.
@@ -717,7 +882,99 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn private_write_is_private_on_windows() {
+        use crate::private_windows::tests::private;
+        let dir = std::env::temp_dir().join(format!("pluxy-private-{}", super::random_key()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("connection.json");
+        // The control: what the temporary folder passes down is not private.
+        std::fs::write(&path, b"{}").unwrap();
+        assert!(!private(&path));
+        let key = super::random_key();
+        super::write_private(&path, key.as_bytes()).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), key.as_bytes());
+        assert!(private(&path));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        // A path longer than MAX_PATH (260), as the vault's records can be, and as std takes it.
+        let deep = dir.join("d".repeat(200));
+        std::fs::create_dir(&deep).unwrap();
+        let long = deep.join("index.json");
+        assert!(long.as_os_str().len() > 260, "{}", long.display());
+        super::write_private(&long, key.as_bytes()).unwrap();
+        assert_eq!(std::fs::read(&long).unwrap(), key.as_bytes());
+        assert!(private(&long));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     use super::*;
+
+    /// macOS: a file written privately takes nothing from its folder's inheritable access list
+    /// entries, also while it is being written, so it is as private as its 0600 mode says.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn private_write_has_no_access_list_on_macos() {
+        let dir = temp("acl");
+        crate::private_macos::add_entry(&dir, "everyone allow list,file_inherit");
+        let has =
+            |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+        // The control: a file made the plain way inherits the entry.
+        let plain = dir.join("plain.json");
+        fs::write(&plain, b"{}").unwrap();
+        assert!(has(&plain));
+        // The temporary file write_private makes, checked on the descriptor it is made with,
+        // before anything else is done to it.
+        let folder = fs::File::open(&dir).unwrap();
+        let made = create_temp(&folder, &dir.join("connection.json.tmp")).unwrap();
+        assert!(!crate::private_macos::has_entries(&made).unwrap());
+        let path = dir.join("connection.json");
+        write_private(&path, b"{}").unwrap();
+        assert!(!has(&path));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// macOS: the core folder from an install whose folders others may use is emptied of
+    /// extended access list entries before the core starts: the folder, its config, the
+    /// credentials and packages folders and each credential file. The folder is opened by its
+    /// path; a link inside it is not followed.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_core_folder_keeps_no_access_list() {
+        use crate::private_macos::add_entry;
+        let base = temp("core-acl");
+        let dir = base.join("core");
+        ensure_config(&dir).unwrap();
+        let creds = dir.join("credentials");
+        let packages = dir.join("packages");
+        fs::create_dir_all(&creds).unwrap();
+        fs::create_dir_all(&packages).unwrap();
+        let cred = creds.join("account.json");
+        fs::write(&cred, b"{}").unwrap();
+        // A link to a file outside, whose entry is not the app's to change.
+        let outside = base.join("outside.json");
+        fs::write(&outside, b"{}").unwrap();
+        add_entry(&outside, "everyone allow read");
+        std::os::unix::fs::symlink(&outside, creds.join("link.json")).unwrap();
+        let inherit = "everyone allow list,file_inherit,directory_inherit";
+        add_entry(&dir, inherit);
+        add_entry(&dir.join("config.json"), "everyone allow write");
+        add_entry(&creds, inherit);
+        add_entry(&packages, inherit);
+        add_entry(&cred, "everyone allow read");
+        let has =
+            |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+        let all = [&dir, &dir.join("config.json"), &creds, &packages, &cred];
+        for p in all {
+            assert!(has(p), "{}", p.display());
+        }
+        ensure_config(&dir).unwrap();
+        for p in all {
+            assert!(!has(p), "{}", p.display());
+        }
+        assert!(has(&outside));
+        fs::remove_dir_all(base).unwrap();
+    }
 
     fn temp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("pluxy-app-{name}-{}", random_key()));
@@ -776,13 +1033,13 @@ mod tests {
     }
 
     /// A script line saying the core listens on the socket the app will give it.
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn listening(dir: &Path) -> String {
         let addr = listen_addr(&ensure_config(dir).unwrap()).unwrap();
         format!("echo 'pluxy: listening on http://{addr}' >&2")
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn script(dir: &Path, body: &str) -> PathBuf {
         let script = dir.join("core.sh");
         fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -797,7 +1054,7 @@ mod tests {
     /// Commands start the core from worker threads that end when idle; the core must outlive
     /// the thread that started it (on Linux the parent-death signal follows that thread).
     #[test]
-    #[cfg(target_os = "linux")] // the core starts from /proc/self/fd, which only Linux has
+    #[cfg(unix)] // a #! script stands in for the core; Windows runs programs only
     fn the_core_outlives_the_thread_that_started_it() {
         let dir = temp("thread");
         let program = script(&dir, &format!("{}\nexec sleep 30", listening(&dir)));
@@ -848,8 +1105,73 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    /// The real core (`next/cmd/pluxy`), built once by `go build` into a folder of its own.
+    fn real_core() -> PathBuf {
+        static BUILT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        BUILT
+            .get_or_init(|| {
+                let dir = temp("real-core");
+                let program = dir.join(if cfg!(windows) { "pluxy.exe" } else { "pluxy" });
+                let mut go = std::process::Command::new("go");
+                go.args(["build", "-o"])
+                    .arg(&program)
+                    .arg("./cmd/pluxy")
+                    .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+                #[cfg(windows)]
+                let built = crate::owned::windows::std_spawn(&mut go);
+                #[cfg(not(windows))]
+                let built = go.spawn();
+                let status = built
+                    .and_then(|mut c| c.wait())
+                    .expect("go, to build the core");
+                assert!(status.success(), "go build ./cmd/pluxy: {status}");
+                program
+            })
+            .clone()
+    }
+
+    /// The real core starts from the file the app opened, listens where its config says, is the
+    /// only thing listening on that port before the key goes there, and stops when asked: on
+    /// Unix it drains and exits cleanly. (On Windows it would get CTRL_BREAK only from an app
+    /// with no console of its own; this test program has one, so it is ended at once there.)
     #[test]
-    #[cfg(target_os = "linux")] // the core starts from /proc/self/fd, which only Linux has
+    fn the_real_core_starts_owns_its_port_and_stops() {
+        let program = real_core();
+        let dir = temp("real");
+        let mut core =
+            ManagedCore::start(File::open(&program).unwrap(), &program, &dir, None).unwrap();
+        let base = core.base().to_string();
+        owns_listener(&core, &base).unwrap();
+        let port = url::Url::parse(&base).unwrap().port().unwrap();
+        // Another program listening on the same port, on another loopback address: the key must
+        // not be sent there.
+        #[cfg(not(target_os = "macos"))]
+        {
+            let other = TcpListener::bind(("127.0.0.2", port)).unwrap();
+            let err = owns_listener(&core, &base).unwrap_err();
+            assert!(err.contains("not listening"), "{err}");
+            drop(other);
+            owns_listener(&core, &base).unwrap();
+        }
+        // macOS checks that base is the socket the app gave the core.
+        #[cfg(target_os = "macos")]
+        {
+            let elsewhere = format!("http://127.0.0.1:{}", if port == 1 { 2 } else { port - 1 });
+            assert!(owns_listener(&core, &elsewhere).is_err());
+            assert!(owns_listener(&core, &format!("http://[::1]:{port}")).is_err());
+        }
+        core.stop();
+        let why = core.exited().expect("the core stopped");
+        assert!(cfg!(windows) || why.contains("exit status: 0"), "{why}");
+        assert!(
+            owns_listener(&core, &base).is_err(),
+            "a stopped core still owns {base}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)] // a #! script stands in for the core; Windows runs programs only
     fn a_core_that_exits_at_start_says_why() {
         let dir = temp("exit");
         let script = dir.join("core.sh");
@@ -868,6 +1190,41 @@ mod tests {
             .unwrap();
         assert!(err.contains("listen is required"), "{err}");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// On macOS the app's own core never runs below a folder the `admin` group may write
+    /// (`owned::Writers::Nobody`): refused before it starts. The core here would otherwise run
+    /// and exit saying why.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn on_macos_a_core_below_a_folder_the_admin_group_may_write_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp("admin");
+        let bin = dir.join("bin");
+        fs::create_dir(&bin).unwrap();
+        let out = std::process::Command::new("/usr/bin/chgrp")
+            .arg("admin")
+            .arg(&bin)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "chgrp admin (the test's user must be in admin): {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o775)).unwrap();
+        let script = bin.join("core.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\necho 'pluxy: config: listen is required' >&2\nexit 3\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let err = ManagedCore::start(File::open(&script).unwrap(), &script, &dir, None)
+            .err()
+            .unwrap();
+        fs::remove_dir_all(dir).unwrap();
+        assert!(err.contains("may be changed by other users"), "{err}");
     }
 
     #[cfg(unix)]

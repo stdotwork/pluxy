@@ -2,7 +2,6 @@ package llm
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"time"
 )
@@ -53,16 +52,13 @@ func (u *UsageLimit) resetIn() time.Duration { return max(u.ResetsAt.Sub(u.At), 
 // retryable false, and the window, provider and last upstream error when known.
 func (u *UsageLimit) ErrorObject() map[string]any {
 	in := u.resetIn()
-	shown := in.Round(time.Second)
-	if in > 0 && in < time.Second {
-		shown = time.Second
-	}
+	shown := WholeSeconds(in)
 	o := map[string]any{
 		"code":          "model_cooldown",
 		"message":       u.Message(),
 		"model":         u.Model,
 		"reset_time":    shown.String(),
-		"reset_seconds": int64(math.Ceil(in.Seconds())),
+		"reset_seconds": int64(shown / time.Second),
 		"type":          "usage_limit_reached",
 		"resets_at":     u.ResetsAt.Unix(),
 		"retryable":     false,
@@ -81,7 +77,7 @@ func (u *UsageLimit) ErrorObject() map[string]any {
 
 // ResetAfter is the countdown in the message Anthropic clients get: whole seconds, at least one.
 func (u *UsageLimit) ResetAfter() time.Duration {
-	return max(u.resetIn().Round(time.Second), time.Second)
+	return max(WholeSeconds(u.resetIn()), time.Second)
 }
 
 // Headers are the reply's headers, in place of Retry-After (a client that honours Retry-After

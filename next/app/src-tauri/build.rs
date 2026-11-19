@@ -11,6 +11,15 @@ fn main() {
             || std::env::var("PROFILE").as_deref() == Ok("debug"),
         "native-test fixture actions must never be built in a release profile"
     );
+    // `native_stack`: the platforms the app runs native tools on (the router, the program host,
+    // the spawn service, the vault, the launcher and the native confirmations they ask).
+    println!("cargo:rustc-check-cfg=cfg(native_stack)");
+    if matches!(
+        std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("linux" | "windows" | "macos")
+    ) {
+        println!("cargo:rustc-cfg=native_stack");
+    }
     use sha2::{Digest, Sha256};
     // Package tooling validates these snapshots from the same OUT_DIR as the app build.
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo OUT_DIR"));
@@ -35,14 +44,22 @@ fn main() {
     );
     std::fs::write(out.join("app-cargo-features.json"), &json).expect("write feature snapshot");
     println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
-    println!("cargo:rerun-if-changed=tauri.conf.json");
-    println!("cargo:rerun-if-changed=tauri.linux.conf.json");
-    let config = build_config::merged(
+    let (config, files) = build_config::merged(
         &std::env::current_dir().unwrap(),
         &std::env::var("TARGET").unwrap(),
         std::env::var("TAURI_CONFIG").ok().as_deref(),
     )
     .expect("merged Tauri config");
+    // Only the files the config was read from, as tauri-build does: Cargo counts a watched path
+    // that does not exist as changed on every build, which reran this script and rebuilt the app
+    // on every build, even with nothing changed. The empty tauri.linux.conf.json,
+    // tauri.macos.conf.json and tauri.windows.conf.json exist so that each platform's file is read
+    // and watched from the start: Cargo cannot watch for a file being added, so a platform file
+    // added later would not rerun this script, and the app could embed a config its snapshot and
+    // receipt do not describe. Keep them, empty or not (tests/release_config.rs checks).
+    for file in files {
+        println!("cargo:rerun-if-changed={}", file.display());
+    }
     let config = serde_json::to_vec(&config).unwrap();
     std::fs::write(out.join("app-tauri-config.json"), &config).expect("write merged config");
     let mut digest = Sha256::new();

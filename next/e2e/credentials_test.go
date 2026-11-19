@@ -5,10 +5,15 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httptrace"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,11 +109,54 @@ type accountList struct {
 	} `json:"accounts"`
 }
 
+// arrivals is a pass-through in front of core that counts the client requests it has written to
+// core's socket. Core shows nothing from outside about a request that waits on a held refresh:
+// the wait is in its model-list read, before any account is reserved, and the fake provider
+// never sees the waiting requests. So the test counts the requests that have left for core.
+type arrivals struct {
+	URL   string // send the client requests here
+	count atomic.Int64
+}
+
+func frontCore(t *testing.T, base string) *arrivals {
+	t.Helper()
+	target, err := url.Parse(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &arrivals{}
+	proxy := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
+		pr.SetURL(target)
+		pr.Out = pr.Out.WithContext(httptrace.WithClientTrace(pr.Out.Context(), &httptrace.ClientTrace{
+			WroteRequest: func(httptrace.WroteRequestInfo) { a.count.Add(1) },
+		}))
+	}}
+	srv := httptest.NewServer(proxy)
+	t.Cleanup(srv.Close)
+	a.URL = srv.URL
+	return a
+}
+
+// waitFor blocks until want requests have been written to core, and fails the test with the
+// count if that does not happen within ten seconds. Held in front of a refresh, they are the
+// requests core has, or is about to have, waiting on it.
+func (a *arrivals) waitFor(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for a.count.Load() < int64(want) {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d requests reached core while the refresh was held", a.count.Load(), want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // The slice's check: an account added by device login through the management API serves
 // requests; when its access token is about to expire, many concurrent requests share one
 // refresh call (the fake provider rotates refresh tokens and revokes the grant on any reuse),
 // and all of them are served with the renewed token.
 func TestLoginAndConcurrentRefresh(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	// The first token expires in a second, inside core's renewal lead; renewed ones last.
 	srv.AccessTTL = func(n int) time.Duration {
@@ -132,6 +180,8 @@ func TestLoginAndConcurrentRefresh(t *testing.T) {
 	}
 
 	release := srv.BlockRefresh()
+	defer release() // a failed wait must not leave the held requests blocking cleanup
+	front := frontCore(t, base)
 	const n = 20
 	var wg sync.WaitGroup
 	status := make([]int, n)
@@ -139,7 +189,7 @@ func TestLoginAndConcurrentRefresh(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp := post(t, context.Background(), base, clientKey, plainBody)
+			resp := post(t, context.Background(), front.URL, clientKey, plainBody)
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			status[i] = resp.StatusCode
@@ -150,7 +200,7 @@ func TestLoginAndConcurrentRefresh(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("no refresh reached the provider")
 	}
-	time.Sleep(300 * time.Millisecond) // every request is now waiting on the one refresh
+	front.waitFor(t, n) // every request is on its way to core, which waits on the one refresh
 	release()
 	wg.Wait()
 	for i, s := range status {
@@ -191,6 +241,7 @@ func TestLoginAndConcurrentRefresh(t *testing.T) {
 // A refresh whose account is removed while the refresh is running is refused: the result is
 // not written, and the removed account does not come back.
 func TestRefreshOfRemovedAccountIsRefused(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	base, credDir := startOAuthCore(t)
 	deviceLogin(t, base, srv, "work")
@@ -226,6 +277,7 @@ func TestRefreshOfRemovedAccountIsRefused(t *testing.T) {
 // When the upstream refuses an access token that has not expired (revoked early), core renews
 // the credential once and serves the request on the same account with the new token.
 func TestRefusedTokenIsRenewedAndRetried(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	base, _ := startOAuthCore(t)
 	deviceLogin(t, base, srv, "work")
@@ -246,6 +298,7 @@ func TestRefusedTokenIsRenewedAndRetried(t *testing.T) {
 // reload they still serve requests, and a refused token is still renewed through the
 // extension.
 func TestLoginAccountsSurviveReload(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	base, _ := startOAuthCore(t)
 	deviceLogin(t, base, srv, "work")

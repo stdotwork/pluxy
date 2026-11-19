@@ -61,11 +61,26 @@ type ModelAlias struct {
 	DisplayName string `json:"display_name,omitempty"`
 }
 
+// CheckNames checks the account's naming settings, naming the account in the error.
+func (a *Account) CheckNames() error {
+	if err := a.checkNames(); err != nil {
+		return fmt.Errorf("account %q: %w", a.ID, err)
+	}
+	return nil
+}
+
 // checkNames checks the account's naming settings.
 func (a *Account) checkNames() error {
+	first := map[string]int{}
 	for i, m := range a.Models {
 		if strings.TrimSpace(m.Name) == "" {
 			return fmt.Errorf("models[%d] has no name", i)
+		}
+		// A name clients use maps to one upstream model; a second entry would be ignored.
+		if j, ok := first[m.public()]; !ok {
+			first[m.public()] = i
+		} else if a.Models[j].Name != m.Name {
+			return fmt.Errorf("models[%d]: the alias %q is already used by models[%d] (%q); an account serves one model under a name, and models do not pool yet", i, m.public(), j, a.Models[j].Name)
 		}
 	}
 	for i, r := range a.ModelAlias {

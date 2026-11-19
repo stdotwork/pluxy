@@ -34,7 +34,8 @@ pub enum Mode {
     Remote,
 }
 
-/// What the app keeps in its config folder, `connection.json`, readable only by this user.
+/// What the app keeps in `connection.json`, readable only by this user: in its config folder, on
+/// Windows in its local application data folder (lib.rs).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1342,7 +1343,7 @@ impl Connection {
     }
 
     /// Changes each time the connection does (another core, mode or key).
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(native_stack), allow(dead_code))]
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
@@ -1352,7 +1353,7 @@ impl Connection {
     }
 
     /// The core the connection reaches, as client keys are bound to it: its mode and origin.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     pub fn target(&self) -> Option<crate::vault::CoreTarget> {
         Some(crate::vault::CoreTarget {
             mode: self.settings.mode?,

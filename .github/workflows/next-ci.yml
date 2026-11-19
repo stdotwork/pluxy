@@ -1,11 +1,10 @@
 name: Next CI
 
 on:
+  # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
+  # its paths below are touched.
+  workflow_call:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'next/**'
-      - '.github/workflows/next-ci.yml'
   push:
     branches:
       - main
@@ -14,7 +13,9 @@ on:
       - '.github/workflows/next-ci.yml'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A literal name: called from ci.yml, github.workflow is the caller's name, the same for every
+  # workflow it calls.
+  group: next-ci-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -32,6 +33,8 @@ defaults:
 
 jobs:
   next:
+    # GitHub's runners, never PLUXY_LINUX_CLOUD_RUNNER: this job is shorter than the native test, so
+    # Namespace's vCPUs are kept for that (AGENTS.md, "Where jobs run").
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -128,12 +131,16 @@ jobs:
           # post-step runs git there with the job token in its environment, so the image must not be
           # able to change git's config. The one folder in it that the browser tests write is the panel
           # build (next/internal/panel/dist), made here so Docker doesn't create it owned by root.
-          # Playwright's output goes to the container's /tmp: it removes and recreates its output
-          # folder, which fails on a mount point.
+          # Playwright's output goes to a folder under the runner's temp folder, mounted writable, for
+          # the upload step below: it removes and recreates its output folder, which fails on a mount
+          # point, so the mount is the folder above it. The folder holds nothing the job token or
+          # git could reach.
           # Submodules aren't supported: fail rather than mount their .git files unreviewed.
           if [ -e "$GITHUB_WORKSPACE/.gitmodules" ] || [ -L "$GITHUB_WORKSPACE/.gitmodules" ]; then echo "::error::a submodule's .git file would need its own read-only mount" >&2; exit 1; fi
           dist="$GITHUB_WORKSPACE/next/internal/panel/dist"
           mkdir -p "$dist"
+          output="$RUNNER_TEMP/playwright"
+          mkdir -p "$output"
           docker run --rm --init --ipc=host --entrypoint "" \
             --user "$(id -u):$(id -g)" \
             -e CI -e HOME=/tmp -e CGO_ENABLED=0 \
@@ -142,7 +149,43 @@ jobs:
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
             -v "$GITHUB_WORKSPACE/.git:$GITHUB_WORKSPACE/.git:ro" \
             -v "$dist:$dist" \
+            -v "$output:$output" \
             -v "$goroot:$goroot:ro" -v "$bun_dir:$bun_dir:ro" \
             -v "$gomodcache:$gomodcache:ro" \
             -w "$PWD" \
-            "$PLAYWRIGHT_IMAGE" bun run test:browser --output /tmp/test-results
+            "$PLAYWRIGHT_IMAGE" bun run test:browser --output "$output/test-results"
+      # The panel's screenshots (every chromium test) and the traces of failed tests, for a PR to
+      # link as proof of what the UI showed. Kept 7 days.
+      - name: Upload the browser test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-test-output
+          path: ${{ runner.temp }}/playwright/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The credential store's Windows code (internal/cred/file_windows.go): the access lists of the
+  # credentials folder and its files, read back from the file system, which the Linux job cannot
+  # do. Only internal/cred, pure Go, so no C compiler is needed.
+  cred-windows:
+    name: credentials (windows)
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Vet
+        run: go vet ./internal/cred/
+      # -v lists each test, so the log shows the Windows access-list test ran.
+      - name: Test
+        run: go test -count=1 -v ./internal/cred/

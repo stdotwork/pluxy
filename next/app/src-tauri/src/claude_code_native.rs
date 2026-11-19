@@ -39,6 +39,9 @@
 //!   Anthropic variable in its environment; an executable override runs the override instead;
 //! - uninstall: disabled and removed, no pluxy/claude-code process is left and the files are as
 //!   the last step left them;
+//! - easy: Beginner Mode, the guided setup (`easy_mode_native.rs`): a sign-in in its Add Account,
+//!   then Claude Code installed, enabled, applied and started through the guide, with cancels
+//!   that change nothing and a confirmation the guide cannot answer;
 //! - audit: the key and the login canary are in no window answer and no confirmation, no
 //!   temporary file is left, and files no step names keep their bytes.
 //!
@@ -768,6 +771,22 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )?;
     passed("uninstall");
 
+    // ---- easy: Beginner Mode installs, enables, applies and starts Claude Code again
+    // (easy_mode_native.rs)
+    step(
+        "easy",
+        super::easy_mode::run(&super::easy_mode::Ctx {
+            app,
+            main,
+            seen: &seen,
+            hidden: &hidden,
+            x: &x,
+            key: &key,
+            secret: &secret,
+        }),
+    )?;
+    passed("easy");
+
     // ---- audit
     step(
         "audit",
@@ -781,6 +800,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             let mut left = leftovers(&home.join(".claude"))?;
             left.extend(leftovers(&home.join("dotfiles"))?);
             left.extend(leftovers(&home.join(".local/share/chezmoi"))?);
+            left.extend(leftovers(&home.join("easy"))?);
             require(left.is_empty(), format!("temporary files left: {left:?}"))?;
             untouched()?;
             require(

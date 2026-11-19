@@ -5,6 +5,11 @@ with a tray icon. It shows core's pages in the same places and with the same the
 panel, then adds its own Connection and Device extensions pages. Extension pages, from core and
 from packages installed on this device, open in webviews of their own.
 
+Linux is the only platform the app supports now; Windows, macOS and WSL are later work
+([Platforms](#platforms)). [`PARITY.md`](PARITY.md) lists the agent clients and usage sources the
+app sets up or reads, with their files and the native test session that checks each, and records
+what happened to each feature of the old desktop app.
+
 | Folder | What it holds |
 | --- | --- |
 | `src/` | The window: the kit's shell and pages, the app's host (`host.ts`), the Connection page, and how extension pages are drawn (`nativePage.tsx`) |
@@ -12,15 +17,20 @@ from packages installed on this device, open in webviews of their own.
 | `src-tauri/` | The native side: commands, the connection to core, the app's own core, extension page webviews, the tray |
 | `native/` | The native test (`run.ts`), its sessions and fixtures |
 | `package.ts` | The test-package and release-package commands ([Packages](#packages)) |
+| `PARITY.md` | The agent clients and usage sources, and the record of the old desktop app's features |
 
 ## How the app reaches core
 
 The Connection page picks one of three modes. The app keeps the choice in `connection.json` in
-its config folder (on Linux `~/.config/dev.pluxy.desktop/`), readable only by your user.
+its config folder (on Linux `~/.config/dev.pluxy.desktop/`), readable only by your user. On
+Windows it is in the local application data folder instead (`%LOCALAPPDATA%\dev.pluxy.desktop\`),
+and so is the app's own core's folder (`core/`), since both can hold a management key: the config
+and data folders are in the roaming one (`%APPDATA%`), which a roaming profile copies to its
+server and to the person's other computers.
 
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
-| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it. |
+| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
 | Core on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address and management key. | Leaves it running. The app never starts or stops it. |
 | Remote core (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
@@ -28,8 +38,11 @@ Addresses are origins only (scheme, host and port). A key you give is checked ag
 (`GET /v0/management/status`) before the app switches to it. It is kept in `connection.json` only
 when you tick "Keep the key on this device"; otherwise it lasts until the app quits.
 
-The native side holds the management key. On Linux, "Enter management key" on the Connection
-page opens a GTK dialog with a hidden entry, "Keep the key on this device", and OK/Cancel.
+The native side holds the management key. "Enter management key" on the Connection page opens a
+native dialog with a hidden entry, "Keep the key on this device", and OK/Cancel: a GTK dialog on
+Linux, a Win32 dialog with a password edit control on Windows, and a sheet on the window with an
+`NSSecureTextField` on macOS. On Windows and macOS the dialog is modal to the app's window only:
+the app's other native dialogs and the tray stay usable meanwhile.
 Before opening it, native code validates the mode, origin and certificate authority file. The
 dialog identifies the target origin, any custom certificate authority, and an origin switch.
 The origin switch names the connection you last confirmed and the app saved (not the client
@@ -45,12 +58,14 @@ The window calls core through the
 `<core>/v0/management/...` only, following no redirects and, for a core on this computer, no
 proxy from the environment. Path segments that are, or decode to, `.` or `..` are refused.
 
-Rotate on the Config page's Connectivity tab rotates the management key natively, on Linux: the
-app opens its native confirmation, which names the core and how the new key will be kept, then
+Rotate on the Config page's Connectivity tab rotates the management key natively: the app opens
+its native confirmation, which names the core and how the new key will be kept, then
 calls core's `POST /v0/management/management-key/rotate` itself. It keeps the new key as the old
 one was kept (in `connection.json`, for this session only, or, for the app's own core, in that
 core's config file, which core writes) and shows it once in a native window with Copy and
-Close, for other programs that used the old key and for signing in again. That window stays open
+Close, for other programs that used the old key and for signing in again. On Windows Copy marks
+the copy to stay out of clipboard history, cloud clipboard and clipboard monitors; on macOS it adds
+the `org.nspasteboard.ConcealedType` type clipboard managers take to mean a password. That window stays open
 when the main window closes to the tray, and a later rotation's window replaces it. The window
 gets only how it went: the key never reaches a webview. `core_call` refuses every path under
 `/management-key`, however it is spelled. If the new key cannot be saved, the app keeps using
@@ -65,7 +80,9 @@ address or key can always be fixed there.
 ## The app's own core
 
 In managed mode the app runs only core versions it installed itself, each in a folder of its own
-under `cores/versions/` in the app's data folder. Until one is installed, the app runs no core
+under `cores/versions/` in the app's data folder (on Windows the local application data folder,
+which stays on this computer; a store there that is not on a fixed local drive, such as a network
+share, is refused). Until one is installed, the app runs no core
 and the window shows only the Connection page, with **Core versions**. There, the app lists
 what is installed, which version runs and which ran before it, and what the core source offers.
 
@@ -88,12 +105,16 @@ app reads only releases with `product` `core`, their `version`, and their `artif
 | `signature` | The detached Ed25519 signature of those bytes |
 | `key_id` | The publisher key that signed it |
 
-The archive is a gzip tar file of the core's folder, as provider releases are packed: `pluxy` at
-the top, and anything beside it, such as `bundled/`. It may hold only regular files and folders,
-no links, devices or names that leave the folder, at most 10,000 entries, and at most 512 MiB
-decompressed in all (headers and the data of folder entries count too). Each file is made from
-the folder before it, following no links. Release versions may not start with `custom-`, which
-adopted programs use.
+The archive is a gzip tar file of the core's folder, as provider releases are packed: `pluxy` (on
+Windows `pluxy.exe`) at the top, and anything beside it, such as `bundled/`. It may hold only
+regular files and folders, no links, devices or names that leave the folder, at most 10,000
+entries, and at most 512 MiB decompressed in all (headers and the data of folder entries count
+too). On Windows it may also hold no two names that differ only in case, compared as Windows
+compares them (`σ` and `ς` too), and no name Windows cannot hold plainly (a `:` stream, a device
+name such as `CON`, a trailing dot or space). The folder it is unpacked into is opened by its path, refusing a
+link there; below it each folder and file is made from the folder held open before it, following
+no links (on Windows relative to the folder's handle, which is held so no one can rename that
+folder meanwhile). Release versions may not start with `custom-`, which adopted programs use.
 
 **Install** (or **Update to** a newer version): the app copies the archive into its own folder and
 checks it with the shared verifier (`src-tauri/src/artifact.rs`) and the app's trust
@@ -105,10 +126,14 @@ dialog, and nothing is installed. Release builds have no publisher keys yet, so 
 every release; test builds trust only a test runner's temporary roots (below).
 
 Once confirmed, the app unpacks the archive into a new version folder, records each file's
-SHA-256 (in `cores/records/`, apart from the folders), and makes the files read-only. Before
-every start it opens every file beneath the version's folder without following links, checks
-that it is a regular file of the recorded size, then its digest, and runs the core from the
-program file it just checked, not from its path again. A changed version does not start:
+SHA-256 (in `cores/records/`, apart from the folders), and makes the files read-only (on Windows
+by their access lists: this user and SYSTEM may read them, no one may write; the folders are
+private to this user and SYSTEM). Before every start it opens the version's folder by its path
+(refusing a link there) and every file beneath it without following links, checks that it is a
+regular file of the recorded size and still read-only, then its digest, and starts the core from
+the program file it just checked: on Linux from the open file itself; on macOS and Windows from
+the path that file has now, after checking that the path still names that same file
+(`src-tauri/src/owned/`). A changed version does not start:
 **Install … again** installs the same release over it, through the same checks and confirmation;
 a changed adopted copy is copied in again by adopting the same program again.
 
@@ -148,7 +173,8 @@ A **core program** you name on the Connection page (or `pluxy` beside the app) i
 place. **Adopt this core program** shows its path, size and SHA-256 in the native confirmation;
 once confirmed, the app copies it into a version of its own, `custom-<its SHA-256>`, if it is
 still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
-without being read), and runs the copy. Only the program is copied, nothing beside it (such as
+without being read; on Unix it must be executable, on Windows a program image named `.exe` or
+`.com`), and runs the copy. Only the program is copied, nothing beside it (such as
 `bundled/`), so an adopted core starts without the bundled packages a release brings. An adopted
 program has no signature.
 
@@ -232,6 +258,17 @@ not answer within 20 seconds, or at once if the first could not listen. A socket
 behind is removed by the next app, which holds the lock.
 The lock is not inherited by the app's core.
 
+An update or rollback ([Application update](#application-update)) hands the profile to the
+version it starts without the profile ever being free. On Linux and macOS the app hands that
+version the lock itself (its open file, which the new version adopts). On Windows a lock cannot be
+handed on, so the app stops listening, writes `instance/successor.json` (a random nonce, the
+program's path and its SHA-256) and starts the new version with that nonce in
+`PLUXY_APP_SUCCESSOR`. A launch that finds the lock held, its nonce in that record (at most five
+minutes old), and itself the program the record names, byte for byte, removes the record and is
+the app at once: it listens, so a later launch raises its window, while it waits for the lock,
+which the earlier version holds until it ends. Without the lock within 120 seconds it exits. Any
+other launch is an ordinary later launch.
+
 ## Privacy mode
 
 The navigation's **Privacy mode** toggle masks account e-mail addresses and identifiers where
@@ -265,7 +302,8 @@ Preferences live in `startup.json` beside `connection.json`, readable only by yo
 A malformed file is moved to `startup.damaged-<random>.json` and defaults are used; failure to
 read or keep it aside is logged and still does not prevent startup. Saving preferences does
 not restart or change the current connection. No system service or second core supervisor is
-created. Login registration is implemented on Linux only. Registration resolves the executable
+created. This section describes Linux; Windows and macOS are later work ([Platforms](#platforms)).
+Registration resolves the executable
 when you enable it: the AppImage path if present, otherwise the running executable. It must be
 an existing regular file; paths containing percent or backslash are refused. Saving unrelated
 choices leaves the entry unchanged.
@@ -297,10 +335,10 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `page_open`, `page_place`, `page_close` | Opens an extension page's webview over part of the window, moves it, closes it |
 | `page_send` | Passes the window's channel messages to a page's webview |
 | `confirmation_request` | Opens native review for an opaque action ID already prepared by native code; returns no approval or token |
-| `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches (Linux) |
+| `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches |
 | `release_get`, `release_check` | The release feed's view (versions, dates, status); `release_check` reads the feed first ("Check for Updates") |
 | `release_channel_set` | Picks the Stable or the Preview (latest) channel |
-| `release_source_set` | Asks to change or remove the feed's address; opens a native confirmation (Linux) and applies nothing itself |
+| `release_source_set` | Asks to change or remove the feed's address; opens a native confirmation and applies nothing itself |
 | `release_notes_open`, `release_notes_place`, `release_notes_close` | Opens a release's notes in a webview of their own over part of the window, moves it, closes it |
 | `release_notes_full` | Opens the release's notes address from the feed in the browser ("View full release notes") |
 | `device_list` | This device's extension catalog |
@@ -308,19 +346,29 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_install` | Installs or updates a package from one of those registries |
 | `device_install_file` | Opens the native file chooser and installs or updates the package chosen there (Linux) |
 | `device_enable`, `device_remove`, `device_rollback` | Enables or disables (a native tool only through its native confirmation), removes, or rolls back a package on this device |
-| `device_imports` | Allows a curated web package's native imports, through a native confirmation, or revokes them (Linux) |
+| `device_imports` | Allows a curated web package's native imports, through a native confirmation, or revokes them |
 | `device_page_open` | Opens a webview for a page of a package on this device, at the address its catalog keeps |
 | `access_list` | The approved signers and every grant of Access |
 | `access_signer` | Opens a native confirmation to approve a device package's signer for its source |
 | `access_grant` | Opens the native file chooser for a package's declared resource, then a native confirmation, and keeps the grant |
 | `access_revoke` | Revokes a grant, answering once the reads under it have finished |
-| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given (Linux) |
-| `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, its vault journals, open and recently ended, or why they cannot be read, and its managed runtimes, running, ended or `unknown` (left running by a run of the app that did not stop them) (Linux) |
+| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given |
+| `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, its vault journals, open and recently ended, or why they cannot be read, and its managed runtimes, running, ended or `unknown` (left running by a run of the app that did not stop them) |
 | `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID (Linux) |
 | `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one (Linux) |
 | `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key (Linux) |
 | `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it (Linux) |
 | `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it (Linux) |
+| `launcher_state` | The launcher's state: whether the execution program can be used, the remembered launches with their source, the recent folders and the notice setting |
+| `launcher_terminals` | The terminals the execution program finds, Automatic first |
+| `launcher_launch` | A new launch, prepared by the execution program; it always opens the native confirmation |
+| `launcher_start` | Starts a remembered launch again in one click, from the window only, with its remembered approval |
+| `launcher_forget` | Forgets a remembered launch, revoking its approval |
+| `launcher_settings` | Whether a one-click start shows a launch notice |
+| `app_update_get` | The Application Update card's state |
+| `app_update_start` | **Update Now**: downloads, checks and installs the newer release, then restarts the app; the window hears `pluxy-app-update` as it goes |
+| `app_update_cancel` | **Cancel Download** |
+| `app_update_rollback` | Rolls back to a version that ran here and was kept, by its digest, after the native confirmation |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
 | `privacy_get`, `privacy_set` | Reads or saves privacy mode |
@@ -353,9 +401,8 @@ exact version-0 call schema and known methods. Each document gets one hello, 30 
 per rolling second and eight calls awaiting answers. A call remains in flight until the native
 reply callback confirms delivery, or the page closes. Requests and replies carry the document's
 native generation; a second document cannot reconnect. Native subframe navigation detection is
-verified on Linux WebKit. Windows currently reports only top-level navigation through this callback;
-subframe closure there still depends on the wrapper's load notification and has not been verified.
-Direct frame requests use these same checks.
+verified on Linux WebKit ([Platforms](#platforms) covers the other systems). Direct frame requests
+use these same checks.
 
 One extension may open four pages, with 60 admitted calls per rolling second and 16 in flight
 across them. Closing pages preserves the package's recent rate budget. At most 16 page webviews
@@ -453,7 +500,7 @@ takes a new format number, which this app refuses.
 | `published` | RFC 3339 in UTC, ending in `Z`, on a day its month has; second 60 (a leap second) is refused |
 | `notes` | Optional Markdown, at most 64 KiB |
 | `notes_url` | Optional `https://` address with a host and no user name or password, at most 2048 bytes as given and once normalised (percent-encoded) |
-| `update` | Optional, app releases only: signed update artifacts by the updater's target name; the app reads `linux-x86_64-appimage`. Each is `{"url": <https address, as notes_url>, "signature": <Tauri updater signature, base64, at most 4096 characters>, "size": <exact bytes, 1 to 1 GiB>}` |
+| `update` | Optional, app releases only: signed update artifacts by the updater's target name; the app reads `linux-x86_64-appimage` (an AppImage), `windows-x86_64-exe` (the program) and `darwin-aarch64-app` or `darwin-x86_64-app` (the app bundle as a `.app.tar.gz`). Each is `{"url": <https address, as notes_url>, "signature": <Tauri updater signature, base64, at most 4096 characters>, "size": <exact bytes, 1 to 1 GiB>}` |
 
 The whole feed is at most 1 MiB. The feed is not signed: https is its only protection, and
 nothing in it is trusted as markup. Signed update artifacts have their own signatures. Production
@@ -464,19 +511,46 @@ feed addresses, keys and formats are decided at release; until then there is no 
 Version Management's Application Update card offers **Update Now** when the feed's latest app
 release on the chosen channel is newer than the running version and has an artifact for this
 system, and says why not otherwise. It uses the stock Tauri updater plugin
-(`tauri-plugin-updater` 2.14.1) for its release check and signature check only, and replaces the
-AppImage itself, in this order (`src-tauri/src/updater.rs`):
+(`tauri-plugin-updater` 2.14.1) for its release check and signature check only, never for
+installing, and puts the new version in place itself (`src-tauri/src/updater/`). What it replaces
+is the installed copy:
+
+- Linux: the AppImage (`updater/appimage.rs`);
+- Windows: the program of a folder bundle, a folder of yours holding the one self-contained
+  `.exe` (`updater/exe.rs`);
+- macOS: the `.app` bundle (`updater/app.rs`).
+
+In this order:
 
 1. The updater gate ([below](#the-updater-gate)) must pass. The plugin is registered only when
    the gate passes as the app starts, and the gate runs again before each use: a build without
    updater trust never loads it and says the updater is not configured.
-2. The installation must be an AppImage this updater can replace: the bundle type Tauri's bundler
-   compiles into the program is AppImage, `APPIMAGE` names an absolute regular file (not a link)
-   of this user's that no one else can write to, in such a folder, with a type-2 AppImage header,
-   and the program runs from inside it (`APPDIR`). A .deb or .rpm install is refused with how to
-   update through the package manager, and anything else as an unknown format, before anything is
-   downloaded, even when the feed has a signed update. The stock plugin would itself run
-   `pkexec dpkg -i` or `rpm -U` for those.
+2. The installation must be one this updater can replace, or nothing is downloaded, even when the
+   feed has a signed update:
+   - Linux: the bundle type Tauri's bundler compiles into the program is AppImage, `APPIMAGE`
+     names an absolute regular file (not a link) of this user's that no one else can write to, in
+     such a folder, with a type-2 AppImage header, and the program runs from inside it (`APPDIR`).
+     A .deb or .rpm install is refused with how to update through the package manager, and
+     anything else as an unknown format. The stock plugin would itself run `pkexec dpkg -i` or
+     `rpm -U` for those.
+   - Windows: the program carries no bundle type (an MSI or NSIS setup patches one in: such a copy
+     is refused with how to update through its installer), is on a fixed local drive (not a
+     network share or a mapped drive), and it and its folder are plain (no link or junction),
+     yours, and writable by no one else (SYSTEM and Administrators aside). The stock plugin would
+     run the installer for those, and nothing here does: no installer, `msiexec`, elevation,
+     scheduled task or service.
+   - macOS: the program runs as `<name>.app/Contents/MacOS/<program>` of a bundle whose
+     `Info.plist` names this app's identifier and that program; it was started by a path with no
+     link in it, neither the program nor any folder above it (Tauri refuses such a path on macOS,
+     and the plugin needs it: start the app from its real location, for example from Finder); the
+     bundle is not running from a translocated copy (macOS runs an app opened from Downloads or a
+     disk image from a read-only copy: move it into a folder of your own such as `~/Applications`
+     first); the bundle and its folder are yours and writable by no one else, so a bundle in
+     `/Applications` is refused, because other administrators can change that folder; and the
+     volume is APFS, which swaps two folders in one step. The stock plugin would ask for an
+     administrator's password when it cannot write the bundle; nothing here does (no
+     `osascript`, `sudo`, `installer` or `authopen`), and the quarantine attribute is neither
+     added nor removed.
 3. The plugin restores the release from the feed (`restore_update`): its default comparison
    allows only a version newer than the running one, and the signature must carry the announced
    version. No custom comparison is set, so the feed can never offer a downgrade.
@@ -484,26 +558,49 @@ AppImage itself, in this order (`src-tauri/src/updater.rs`):
    certificate roots), exactly the announced size, showing progress. A server that sends nothing
    for 30 seconds fails the download; **Cancel Download** stops it within that time and changes
    nothing.
-5. The plugin checks the signature against the compiled updater key; the bytes must be a type-2
-   AppImage.
-6. The running version's AppImage is kept in the app's data folder (`updates/kept/`, the last
-   three versions), pinned by its SHA-256 in `updates/history.json`, and `updates/pending.json`
-   records the install. The app records the AppImage's digest as it starts; if the file has
-   changed since, nothing is kept or installed and the page asks for a restart first. Then the app
-   writes the new AppImage over the old one in one step: a temporary file in the same folder,
-   flushed to disk, renamed over it, and the folder flushed.
-7. The app stops as Quit does (its native tools and its own core stop) and hides its window, but
-   keeps its profile lock and hands it to the new AppImage it starts, so no other launch takes the
-   profile meanwhile; the tray stays responsive while it waits. It waits up to 90 seconds for
-   the new version to accept itself: once it has started, with the installed file's digest the one
-   pinned, it writes `updates/accepted.json`. If it ends first or does not accept in time, the kept
-   copy (checked against its digest) is put back the same way, the page later says the update
-   failed, and the earlier version starts again with the lock. If the kept copy cannot be put back,
-   nothing is started, and the page says which file in `updates/kept/` to copy over the AppImage.
+5. The plugin checks the signature against the compiled updater key. Then the bytes must be this
+   system's: a type-2 AppImage; a 64-bit Windows program (not a library) for this processor; or,
+   on macOS, a `.app.tar.gz` holding one `<name>.app` folder of folders and regular files only (no
+   links, devices, `..`, absolute paths, or setuid, setgid or sticky bits; at most 4096 entries
+   and 1 GiB), unpacked into a new folder of yours next to the bundle (`.pluxy-update-<hex>`),
+   whose `Info.plist` names this app's identifier and program and the announced version
+   (`CFBundleShortVersionString`), with a program for this Mac.
+6. The running version's copy is kept in the app's data folder (`updates/kept/`, the last three
+   versions), pinned in `updates/history.json` by its SHA-256 (on macOS, a digest of the bundle's
+   whole tree: every folder, file, size, content digest and execute bit), and
+   `updates/pending.json` records the install. The app records that digest as it starts; if the
+   installed copy has changed since, nothing is kept or installed and the page asks for a restart
+   first. Then the new version goes in place:
+   - Linux: a temporary file in the same folder, flushed to disk, renamed over the AppImage, and
+     the folder flushed: the AppImage is the old one or the new one.
+   - Windows: a running program can be renamed but not replaced, so the new program is written
+     next to it and flushed, the running one is renamed aside (`.pluxy-old-<hex>.exe`) and the new
+     one renamed into its place, each rename written through to disk (a file a virus scanner holds
+     is waited out for 5 seconds); if the second rename fails, the first is undone. Between the
+     two renames the folder has no program under its name: should the computer lose power right
+     then, rename the `.pluxy-old-<hex>.exe` beside it back (or copy the kept copy from
+     `updates/kept/`). What is left aside is removed once the new version runs and the old one has
+     ended.
+   - macOS: the unpacked bundle and the installed one swap places in one step (`renamex_np` with
+     `RENAME_SWAP`): the bundle is the old one or the new one. The old one, now in the
+     `.pluxy-update-<hex>` folder, is removed once the new version runs and the old one has ended.
+7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
+   that order; detached launches run on) and hides its window, but keeps its profile and starts the
+   new version as its successor, handing the profile over so no other launch takes it meanwhile
+   ([One app per profile](#one-app-per-profile)); the tray stays responsive while it waits. On
+   macOS the new version's program is started directly, not through Launch Services. The app
+   holds that process (on Linux and macOS in a process group of its own, on Windows by its process
+   handle, outside the app's own jobs) and waits up to 90 seconds for it to accept itself: once it
+   has started, with the installed copy's digest the one pinned, it writes
+   `updates/accepted.json`, and the app lets it go and exits. If it ends first or does not accept
+   in time, the app ends that process (and only it, with what it started), puts the kept copy
+   (checked against its digest) back the same way, the page later says the update failed, and the
+   earlier version starts again with the profile. If the kept copy cannot be put back, nothing is
+   started, and the page says which copy in `updates/kept/` to put in place of the installed one.
 
 **Roll back to <version>…** lists versions that ran here and were kept. It restores only such a
 copy, only while it still has its pinned digest, and only after the native confirmation (with
-the version, digest and file); then the same restart and acceptance follow. It passes the
+the version, digest and installed copy); then the same restart and acceptance follow. It passes the
 updater gate first, as Update Now does, so a build without updater trust refuses it. A version
 never installed here, or a kept copy that changed, is refused without a dialog. While its
 confirmation is open, Update Now and other rollbacks wait.
@@ -575,23 +672,24 @@ records that admission against the release, source, signer and key. Disabling, u
 back or removing it ends the admission, so a new release asks again. A native release replaces
 another only if it reads the state version the other writes.
 
-The program host (`src-tauri/src/program.rs`, Linux) runs an admitted tool only on demand: at its
+The program host (`src-tauri/src/program.rs`; on Linux, Windows and macOS) runs an admitted tool only on demand: at its
 first call from the window, from what `Catalog::admitted` returns then, after checking the
 admission, the root, the signature and every installed file again. It opens the program, checks
 its SHA-256 against the record and runs that opened file, in its package folder, with a cleared
-environment, only its three private pipes, a process group of its own and a parent-death signal,
-from a supervisor thread that stays until the tool has been reaped. Calls follow [app program
+environment, only its three private pipes, a process group of its own (on Windows a job object)
+and on Linux a parent-death signal, from a supervisor thread that stays until the tool has been reaped. Calls follow [app program
 contract v0](app-host/README.md#app-program-contract-v0), one at a time. When the last call
 ends, the tool stops after 30 seconds idle; closing the window cancels its calls, so their tools
 stop when idle. Any change to its package (disable, update, roll back, remove) and quitting the
 app stop it at once, and once the app is quitting no call starts a tool. Stopping closes its
 stdin, kills its whole process group after five seconds and reaps it: no process or thread of it
-is left. If the app itself dies, the tool gets SIGTERM and nothing kills its group, so a tool must
-end the processes it started when its input ends and on SIGTERM. Pages, including the tool's own,
+is left. If the app itself dies, the tool gets SIGTERM on Linux, sees its input close on macOS,
+and ends with its job on Windows ([Windows and macOS](app-host/README.md#windows-and-macos)), so
+a tool must end the processes it started when its input ends and on SIGTERM. Pages, including the tool's own,
 have no program command and no route to its pipes; they reach operations only through the router,
 below.
 
-Every call of a native tool's operation goes through the router (`src-tauri/src/route.rs`, Linux):
+Every call of a native tool's operation goes through the router (`src-tauri/src/route.rs`):
 from the window, from a page (its `native.call` method, answered in the page's own webview) and
 from another native tool (a call on its pipe). The router checks each call against the catalog at
 that moment: a tool calls only what it imports and its target exports, under an accepted export
@@ -646,7 +744,10 @@ frame loads from the `pluxy-app:` scheme. That scheme serves a page webview only
 release folder it was opened for, only while that release is active and enabled, and only while
 each file still has the SHA-256 recorded at install. Each file is served sandboxed, as core's
 pages site does: scripts, styles, images and fonts from the scheme only, no requests from script,
-no frames or forms. The webview may not navigate its frame out of that folder. Installing,
+no frames or forms. On Windows WebView2 serves the scheme as `http://pluxy-app.localhost`, so the
+policy names that origin, which also lets the page ask for `https://pluxy-app.localhost`; the
+app serves nothing there, so a page webview answers every `https://pluxy-app.` request with 403
+itself, before it leaves the app. The webview may not navigate its frame out of that folder. Installing,
 rolling back, disabling or removing a package closes its open page webviews at once; the window
 then opens the new release's page, if the page is still listed.
 
@@ -717,7 +818,8 @@ a flag when a file is added and has no call that reports it, so no portal grant 
 the broker never reads the file behind it.
 
 Grants and approved signers are in `access.json` beside `connection.json`, readable only by your
-user (mode 0600, folder 0700), written by an exclusive temporary file, sync and rename. A damaged
+user (mode 0600, folder 0700, and on macOS no extended access list entry on the folder, so the
+file inherits none), written by an exclusive temporary file, sync and rename. A damaged
 or unsupported file is moved to `access.json.corrupt-<time>` and Access starts with no grants; if
 it cannot be moved, Access refuses grants and reads until it is fixed. Handles opened for reads
 are kept while the app runs; after a restart each target is opened again and its identity
@@ -726,12 +828,12 @@ checked.
 This is a check that cooperates with the person, not a sandbox: another program of the same user
 can change files between a check and a read.
 
-## Native confirmations (Linux)
+## Native confirmations
 
 Native code prepares each immutable action with its requester chain, executing package, full
 source/digest/signer/contract/generation, selected and resolved file identities, and launch recipe
-where applicable. The main window can ask to review that preparation's opaque ID. A GTK dialog
-shows the action and, for a native tool, “full access to your user account”. Only its native
+where applicable. The main window can ask to review that preparation's opaque ID. A native dialog
+(GTK on Linux, Win32 on Windows, AppKit on macOS) shows the action and, for a native tool, “full access to your user account”. Only its native
 response handler issues approval. No IPC command accepts an approval result, gesture flag or token
 consumption request. Page webviews have no confirmation capability.
 
@@ -748,11 +850,21 @@ a native notice and a log message. Symlinks, files owned by another user and
 group/world-writable files are refused; remembering stays disabled if the unsafe file cannot be
 safely preserved. Newly created settings folders use mode 0700 and files use 0600. On open and
 save, an existing folder owned by this user is tightened to 0700 if group/world-writable; a folder
-owned by another user is refused. Disabled persistence hides Remember. If saving fails after
-confirmation, the one-time token is still issued and a native notice/log reports the failure.
+owned by another user is refused. On macOS the folder is also emptied of extended access list
+entries, and a settings file with any entry is refused like a group/world-writable one. Disabled
+persistence hides Remember. If saving fails after confirmation, the one-time token is still issued and a native notice/log reports the failure.
+On Windows the same checks read the owner and access list instead of the mode: the file and
+folder must be owned by this user, by the owner this process gives what it makes (for an elevated
+administrator, the Administrators group) or by SYSTEM, and have a protected access list (one that
+takes nothing from its folder's) whose allow entries are only this user's and SYSTEM's; a missing
+access list is refused. A new or unsafe folder, and each file the app saves, gets such a list
+(the folder's inherited by what is made in it). Reparse points (symbolic links and junctions) are
+refused as symlinks are on Unix. The app tools' file library (`next/app-tools/lib/files`) uses the
+same rule.
 
 An executable is opened before checking its canonical path, device/inode, size, mtime, ctime and
-mode. SHA-256 is computed once for that metadata and cached in memory; unchanged metadata reuses
+mode (on Windows: the volume serial number and file index, size, last write and change times, and
+attributes; a program is a file ending in `.exe`, `.com`, `.bat` or `.cmd`). SHA-256 is computed once for that metadata and cached in memory; unchanged metadata reuses
 it. A new app process hashes once before using persisted approvals. Metadata changes or same-path
 replacement require review again. A consumed token exposes the checked open executable and cwd
 handles for a later launcher to use with `fexecve` and `fchdir`. The executable handle is opened
@@ -770,10 +882,12 @@ a remembered approval, and only those dialogs offer Remember. Gesture constructi
 is private to native handlers and fixtures, and a gesture expires after five seconds.
 
 Page Start uses the separate native entry point, always opens a fresh dialog, permits one pending
-confirmation per original package and one attempt per second, and shows a GTK notice with
+confirmation per original package and one attempt per second, and shows a native notice with
 requester, action and outcome, including refusals. Page/Import pending entries have their own
 limit of 16; trusted requests have a separate limit of 64. Page dialogs focus Cancel and keep
-Confirm disabled for one second after mapping. Non-UTF-8 paths are refused before review;
+Confirm disabled for one second after mapping. (On macOS a button takes the keyboard focus only
+with full keyboard access turned on; Cancel is the default button there, which Return presses.)
+A launch that opens a file in the person's own app is refused before review off Linux. Non-UTF-8 paths are refused before review;
 Unicode format characters (including bidi and zero-width characters), control characters and
 Pango line separators (U+2028/U+2029) are displayed as escaped Unicode.
 
@@ -852,7 +966,10 @@ an edit made in the same instant by another program may be lost. **Start CLI** a
 recipe (`claude` in a terminal, no arguments) and starts it through the launcher in the chosen
 working directory (recently used ones offered), terminal and optional program path; the launcher's
 confirmation shows it in full. The key is not part of the launch: Claude Code reads it from its
-settings.
+settings. The card's terminal list loads again whenever this device's packages change
+(`pluxy-device`), such as when the launcher is enabled from Beginner Mode; a chosen terminal the
+list no longer offers falls back to Automatic (`src/startCli.ts`). Every client page's Start CLI
+does the same.
 
 **Backup and restore** (`src/backups.tsx`, the backup browser every writer's page shows) keeps
 manual backups of the previewed file in the app's vault through the tool's standard backup
@@ -878,7 +995,7 @@ Code page it is the window's own page, because **Apply** gives the tool the clie
 (`~/.codex`), selected files (links followed and kept), or a selected folder (such as a
 `CODEX_HOME`); it shows the status, the files it writes to, whether a key is in config.toml and the
 provider Codex uses now. When that provider is not pluxy's, it says that Codex hides conversations
-of another provider from resume until their history is synced, which session management offers;
+of another provider from resume, and that the app does not sync or change past conversations;
 nothing is rewritten. Files Codex would not take (config.toml not TOML, for example, or a catalog
 with no models list) show why instead of the form: Apply and Close configuration stay off, and
 Restore Backup and the backups stay reachable. Choosing other files drops the last preview, so read
@@ -1014,6 +1131,148 @@ arguments; `~/.bun/bin/omp` or `~/.local/bin/omp`, where bun and Oh My Pi's inst
 when one exists) and starts it through the launcher in the chosen working directory (recently used
 ones offered), terminal and optional program path. Each launch's confirmation shows it in full; the
 key is not part of a launch: Oh My Pi reads it from its models file. Oh My Pi has no desktop app.
+
+## Grok Build
+
+The Grok Build page sets up and starts Grok Build with this core (`src/grok.tsx`). It needs the
+curated native tool `pluxy/grok-setup` ([app tools](../app-tools/README.md#grok-setup)) and, for
+**Start CLI**, the execution program, both installed and enabled on the Device extensions page. Like
+the Claude Code page it is the window's own page, because **Apply** gives the tool the client key.
+
+**Read configuration** previews Grok Build's `config.toml`: its user config (`~/.grok/config.toml`),
+a selected file (such as `$GROK_HOME/config.toml`; a link is followed and kept) or a file in a
+selected folder; it shows the status, the file it writes to, Grok Build's default model now and
+whether a key is in pluxy's entry, never the key, and notes model entries an older app left
+(`cpa-gui/…`), which pluxy leaves alone. A file Grok Build would not take shows as refused, with the
+reason: Apply and Close configuration stay off, Restore Backup and the backups stay available. The **Model catalog** holds the models pluxy's entries
+list: those the file has, and the core's served models, added (all selected, as the old app wrote
+them all) when **Refresh models** is pressed, never in the background. Each can be left out or
+given its **Context window**; the **Default model** is one of the selected models. Apply stays off,
+with a notice, while more than 256 models are selected. The **Authentication Key** is one of the
+vault's plain secrets or this tool's client keys, or a new one through native key entry.
+
+**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
+**Close configuration** (Clear) and **Restore Backup** call the tool on the file the last preview
+pinned (changing the file selection drops that preview; the tool refuses a file changed since),
+whose native confirmation names the file, the key's label for Apply, and that an edit made in
+the same instant by another program may be lost; **Backup and restore** keeps the file in manual
+backups, as on the Claude Code page. **Start CLI** asks the tool for its recipe (`~/.grok/bin/grok`
+when Grok Build's installer put it there, else `grok` from PATH, in a terminal with no arguments)
+and starts it through the launcher in the chosen working directory, terminal and optional program
+path. The key is not part of the launch: Grok Build reads it from config.toml. Grok Build has no
+Linux desktop app.
+
+## Hermes Agent
+
+The Hermes Agent page sets up and starts Hermes Agent with this core (`src/hermes.tsx`). It needs
+the curated native tool `pluxy/hermes-setup` ([app tools](../app-tools/README.md#hermes-setup))
+and, for **Start CLI**, the execution program, both installed and enabled on the Device extensions
+page. Like the Claude Code page it is the window's own page, because **Apply** gives the tool the
+client key.
+
+**Read settings** previews Hermes Agent's `config.yaml`: in its default home (`~/.hermes`, or the
+profile `~/.hermes/active_profile` names), in a selected Hermes home folder (the folder
+`HERMES_HOME` names, or a profile's `~/.hermes/profiles/<name>`; the folder may be a link, as
+chezmoi can make) or as a selected file (a link, as stow makes, is followed and kept). It shows
+whether pluxy's integration is applied, the file it writes to, the provider's address, whether a
+key is in the file, the selected provider and the default model, never the key, and warns when the
+old desktop app's `cpa-gui` provider is still there. **Default model** is the model Hermes Agent
+starts with through this core (the core's served models are suggested; **Refresh models** reloads
+them). The **Authentication Key** is one of the vault's secrets (a captured client key only when it
+is this tool's), or a new one through native key entry (**Add key…**).
+
+A file Hermes would not take shows as refused, with the reason: **Apply** and **Clear integration**
+stay off, and **Restore Backup** and the backups stay available. Choosing another file or folder
+drops the last preview. **Connect in One Click** (or **Update Configuration** / **Repair
+Connection** once applied), **Clear integration** and **Restore Backup** call the tool with the file
+the last preview pinned (the tool refuses it if the file changed since), and its native
+confirmation names the file it resolves to, the key's label for Apply, and that an edit made
+in the same instant by another program may be lost; comments and everything else in the file stay,
+including the person's own settings under the pluxy provider. **Backup and restore** is the shared
+backup browser. **Start CLI** asks the tool for its recipe (`hermes` in a terminal, no arguments,
+which starts a chat; `~/.local/bin/hermes`, where Hermes's installer puts it, when it exists) and
+starts it through the launcher in the chosen working directory (recently used ones offered),
+terminal and optional program path. Each launch's confirmation shows it in full; the key is not
+part of a launch: Hermes Agent reads it from its config file. Hermes Agent's desktop app is not
+offered: its Linux packages are not released.
+
+## Pi
+
+The Pi page sets up and starts Pi with this core (`src/pi.tsx`). It needs the curated native tool
+`pluxy/pi-setup` ([app tools](../app-tools/README.md#pi-setup)) and, for **Start CLI**, the
+execution program, both installed and enabled on the Device extensions page. Like the Claude Code
+page it is the window's own page, because **Apply** gives the tool the client key.
+
+Pi reaches the core through the CLIProxyAPI provider plugin. The tool carries a reviewed copy of
+it and installs it as a local Pi package in Pi's agent folder; it never runs `pi install` or npm.
+**Read settings** previews Pi's files, `cliproxyapi.json`, `settings.json` and the plugin's model
+cache `cliproxyapi-models.json`, in its agent folder (`~/.pi/agent`) or in a selected agent folder
+(the one `PI_CODING_AGENT_DIR` names; the folder may be a link, as chezmoi can make), or as the
+linked files in a folder (links, as stow makes, are followed and kept). Files Pi would not take
+are still read: the page says why, leaves Apply, Clear and Uninstall off, and keeps Restore Backup
+and the backups. It shows whether the plugin is
+installed and its version (with **Update available** when the tool carries another), whether
+pluxy's integration is applied, the files it writes to, whether a key is in `cliproxyapi.json` and
+Pi's default provider and model, never the key; it warns when `settings.json` still lists the npm
+copy an older app installed, or when a folder of the plugin's name is not pluxy's. **Model** is the
+model Pi starts with through this core (the core's served models are suggested; **Refresh models**
+reloads them; the plugin itself lists the core's Codex catalog in Pi). The **Authentication Key**
+is one of the vault's secrets, or a new one through native key entry (**Add key…**).
+
+**Install Pi Plugin** (or **Connect in One Click**, **Update Configuration** / **Repair
+Connection** once installed) installs the plugin when it is not there and writes the core's
+address, the key and Pi's defaults. **Plugin management** has **Update Pi Plugin** (the tool's copy
+replaces the installed one) and **Uninstall Pi Plugin** (its entry and folder go; the connection
+settings stay). **Clear integration** and **Restore Backup** also remove the plugin's folder once
+`settings.json` no longer lists it. Each of these previews the files again and calls the tool,
+whose native confirmation names the files it resolves to (or the agent folder, for Update), the
+key's label for Apply, and that an edit made in the same instant by another program may be lost;
+everything else in the files stays. **Backup and restore** is the shared backup browser. **Start
+CLI** asks the tool for its recipe (`pi` in a terminal, no arguments; `~/.pi/agent/bin/pi` or
+`~/.local/bin/pi`, where Pi's installer puts it, when one exists) and starts it through the
+launcher in the chosen working directory (recently used ones offered), terminal and optional
+program path. The key is not part of a launch: the plugin reads it from `cliproxyapi.json`. Pi has
+no desktop app.
+
+## Agent usage and Codex sessions
+
+Two more pages come from optional native tools' own pages, listed in the navigation with core's
+extension pages once their package is installed and enabled: **Agent usage**, from the usage hub
+`pluxy/agent-usage` and its parsers ([its README](../app-tools/agent-usage/README.md)), and
+**Codex sessions**, from the read-only reader `pluxy/codex-sessions`
+([app tools](../app-tools/README.md#codex-sessions)). They are extension pages in page webviews,
+as above, and reach their tools only through the router.
+
+## Beginner Mode
+
+Beginner Mode (`src/easyMode.tsx`, in the Operate group) is the guided setup of the old app's Easy
+mode, in its two steps. **Connect a model** is the Add Account page's own sign-in (every browser,
+device code and API-key method core's extensions offer); it counts core's accounts, and **Next:
+Configure Agent** stays off until there is one. **Connect an agent** lists the agent clients this
+window can set up (the eight client pages above, Claude Code to Pi) whose optional tool is
+installed on this device or offered by a registry, and the launcher (`pluxy/execution`) that
+**Start CLI** runs through: **Install** installs a tool from its registry, **Enable** opens the
+tool's native confirmation ("full access to your user account"), answered in that dialog only,
+and **Set up** shows the client's own page below, where its configuration is applied and the
+client started as on that page. The guide writes nothing itself and keeps no draft: a cancelled
+confirmation, or leaving the guide, leaves files and packages as they were; Close configuration
+and Restore Backup on the client's page undo an apply.
+
+A client joins the list by being an agent page: a window page that names the package it drives
+(`AgentPage` in `src/easyMode.tsx`), listed in `agentPages` in `src/agentPages.ts`. The list itself
+(`src/easyModeItems.ts`) has no per-client code.
+
+### Manage Clients
+
+The navigation lists a client's page only while the person wants it there. By default (automatic) it
+lists the clients whose tool is installed on this device, enabled or not, with the installed ones
+first; a tool a registry only offers is not listed, since Beginner Mode is where it is installed. The
+**Manage Clients** page (Control group) has a checkbox for every client with a search box, **Restore
+automatic display** and **Save**; Save is off for an empty selection ("Keep at least one client
+visible."). The choice is kept in the window's prefs (`pluxy.agent-clients`, on this device, like the
+theme), and saving automatic removes it. Whichever client page is open stays listed while it is
+open, so hiding it never strands the person. Beginner Mode still offers every client, and the list
+logic is in `src/clientListItems.ts`.
 
 ## Build and check
 
@@ -1171,7 +1430,8 @@ the next launch becomes the app, starts its core and is the one a later launch r
 the socket and its address are gone when the app quits. The other profile's data folder is too long
 for a socket path, and a second launch of it still raises it.
 
-Then, in another session (`native/update.ts`, `native/update-session.ts`, `update_native.rs`),
+Then, in another session (`native/update.ts`, `native/update-session.ts`, with the cases in
+`native/update-cases.ts` that the platform runner's update session shares, and `update_native.rs`),
 the [application update](#application-update) on one profile with a test trust profile, against
 a fake https feed whose releases the check switches: the test package refuses Update Now without
 its trust profile's nonce, and as its own program with the bundle type a .deb, an .rpm or no
@@ -1181,10 +1441,11 @@ the AppImage), with a rollback refused for the same reason each time, before any
 signature by an untrusted key (with the trusted key's ID), a signed version other than the
 announced one and the window's direct call of the plugin, cancels a slow download, undoes an
 update whose new version exits instead of accepting itself, updates 0.1.0 to 0.2.0 with its core
-stopped and started again, refuses rollbacks to a version never installed and to a changed kept
+stopped and started again (while 0.2.0 holds its acceptance open, a third launch raises its window
+and exits, and 0.1.0's process has ended once 0.2.0 runs), refuses rollbacks to a version never installed and to a changed kept
 copy without a dialog, cancels one in the native confirmation, and rolls back to 0.1.0. The
-session checks the installed AppImage's digest after each step, its feed's downloads and the
-versions that ran itself.
+session checks the installed AppImage's digest after each step, that nothing is left beside it,
+its feed's downloads and the versions that ran itself.
 The `native-test` feature is for that test alone; release builds never have it.
 
 In local and remote modes, the test also drives the real GTK dialog with `xdotool`: good keys
@@ -1221,7 +1482,7 @@ around the test-feature dev binary, and on the test package under a neutral name
 own: the first two pass and the rest are refused.
 
 The same native run uses fixture actions (compiled only with `native-test`) and real X input
-from `xdotool` to confirm, cancel, opt into remembering, click a native Start button and revoke
+from `xdotool` (on Windows and macOS, the UI driver's input: see [Limits](#limits)) to confirm, cancel, opt into remembering, click a native Start button and revoke
 in native settings. It checks one-use token consumption and open handles, page command/message
 spoof refusal, exact native-gesture reuse without a dialog, different-chain review, changed
 executable metadata and same-path replacement review, revoked-token refusal, and page Start flood
@@ -1271,7 +1532,8 @@ fails the run at setup, naming its package, and never skips:
 - the tray watcher service, which owns `org.kde.StatusNotifierWatcher`: the probe registers a
   status notifier item with it and finds the item in `RegisteredStatusNotifierItems`;
 - a disposable AppImage, built from a pinned release of the AppImage type 2 runtime (downloaded
-  into `~/.cache/pluxy-app-native`, its SHA-256 checked; `mksquashfs` builds the image), which runs
+  into `~/.cache/pluxy-app-native`, its SHA-256 checked; a refused or failed request (403, 429, 5xx,
+  a network error) is tried again within a minute, bytes with another digest never; `mksquashfs` builds the image), which runs
   with `APPIMAGE_EXTRACT_AND_RUN=1`, the FUSE-free way to run an AppImage, in the run's cleared
   environment. It is a fixture, not the app's own package.
 
@@ -1345,61 +1607,166 @@ key equals the compiled `plugins.updater.pubkey`. With the `native-test` feature
 the gate's result, with the marker, identifier and product name it read, as its first step.
 The app's updater ([Application update](#application-update)) calls it.
 
+## Platforms
+
+Linux is the only platform the app supports now: what this README describes is Linux's unless a
+passage names another system (as the management key's dialogs, [Native
+confirmations](#native-confirmations) and [Packages](#packages) do), and so is every check in
+[Build and check](#build-and-check). Windows, macOS and WSL are later work, and the Linux checks
+say nothing about them. Some groundwork for them is merged, and CI runs it on disposable
+Windows and macOS runners (`.github/workflows/next-app-platforms.yml`), but it does not make the
+app supported there:
+
+- The app's crate builds and passes clippy and its Rust tests there.
+- The management key's native entry and rotation, and the native confirmations, have Win32
+  dialogs on Windows and AppKit dialogs on macOS ([How the app reaches core](#how-the-app-reaches-core),
+  [Native confirmations](#native-confirmations)).
+- Four parts of the native test run there:
+  - the platform session (`native/platform.ts`, `PLATFORM_SHARDS` in `native/shards.ts`): one app
+    per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
+    Windows, a LaunchAgent on macOS), the tray and the close preference;
+  - the package session: the test package and the release gate ([Packages](#packages));
+  - the update session: the test package (a folder bundle on Windows, an app bundle on macOS)
+    updates itself to its signed newer version and rolls back, and crafted installs are refused
+    ([Application update](#application-update));
+  - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
+    test core, with the window's and page's command probes, the native confirmations, key entry and
+    key rotation. [Limits](#limits) says how its input is made.
+- The vault's private storage is built and unit tested there ([Limits](#limits)).
+- How the app starts, holds and stops processes is built there (`src-tauri/src/owned/`: a job
+  object on Windows, a process group on macOS), and CI checks that each of its lifetime tests ran
+  and passed ([Windows and macOS](app-host/README.md#windows-and-macos)). Native tools, their
+  managed runtimes, confirmed launches and the app's own update (`owned::Successor`: the new
+  version, held until it accepts itself) reach it at run time there; the app's own core, which
+  would too, is refused (below).
+- Native tools run there as on Linux: enabling a package and its native imports, the router, the
+  program host, the launch service and the launcher, and the vault for tools' backups and
+  journals, with the differences [Windows and macOS](app-host/README.md#windows-and-macos) lists.
+  A client page reaches its writer tool only where that tool has a program for the system
+  ([app tools](../app-tools/README.md) says which do). Clippy and the Rust tests check this there;
+  no native session starts a tool on those systems yet, and outside tests nothing can be
+  installed to run, as there are no production trust roots ([Limits](#limits)).
+- On Windows, the page document's address is `http://pluxy-page.localhost/`, and the app holds a
+  page's frame to its site through WebView2's frame navigation event (`src-tauri/src/page_frames.rs`).
+- The app tools' readers, usage parsers and execution program, the writer library and the
+  Claude Code and Codex setup tools build and pass their tests there, and `pluxy/wsl` lists WSL
+  distributions and users ([app tools](../app-tools/README.md)).
+
+Access gives no page anything there: approving a signer and making a grant are Linux only, so no
+signer or grant can be made. On Windows its commands and a page's Access calls are refused; on
+macOS its list, revocation and a page's calls answer, with nothing granted.
+
+Still refused at run time there: a native tool's `files` frames (saving a file), the vault's
+secret entry and list, client keys and core aliases, the app's own core
+(the store of its versions opens, but installing, adopting and rolling back a version need the
+native confirmation, which core changes have on Linux only, so no version is installed and none
+starts), installing a package from a file, a launch that opens a file and opening an address in
+the browser. Changing the release feed works there through the native confirmation. The app
+updates itself, with test updater trust only, as an AppImage on Linux, as a folder bundle's
+program on Windows and as an app bundle on macOS ([Application update](#application-update)).
+
 ## Limits
 
 - Device extensions: no production trust roots (so no curated source outside tests) or settings
-  yet, and native tools run on Linux only (5.11 or later: the program host needs
-  `close_range` with `CLOSE_RANGE_CLOEXEC`); a confirmed launch-class call is passed to its
-  operation, and the app starts nothing itself yet; installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
+  yet, and native tools run on Linux (5.11 or later: the program host needs `close_range` with
+  `CLOSE_RANGE_CLOEXEC`), Windows and macOS, where a tool's `files` frames (saving a file) are
+  refused; the host starts only a launch the person confirmed,
+  when the tool serving that call asks ([Launches and managed runtimes](app-host/README.md#launches-and-managed-runtimes));
+  installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
-- Vault: Linux only. Its storage is built and unit tested on Windows (in the local data folder,
-  private by its access list) and macOS too, but not used there yet. Secrets are kept in a file
-  only the user may read (0600 on Linux and macOS) in the app's data folder, not in the system
-  keyring, and only exact values are redacted. On macOS the modes are checked, not extended access
-  lists. The window has no vault page yet. Secrets reach
-  native tools' pipes and the environment of a process a confirmed launch starts (the launching
-  tool holds only a reference); a client key is checked at each use, also at a launch's spawn and
-  each restart. Backups have no retention: a package keeps at most 256.
-- Access: Linux only (5.8 or later: grants record the `statx` mount ID); web packages only; reads only (no writes or watchers); a signature only
+- On macOS a launch you confirm, in a terminal or not, may run a program from a folder that every
+  administrator of the Mac can change, such as `/Applications` or Homebrew's folders. Another
+  administrator account can swap that program in the moment between the last check and its
+  start, or, for a program inside an app, what it later starts from that app. For any program
+  that uses those folders, wherever it is, that account can also change at any time what it loads
+  from them (Homebrew's libraries, a script's interpreter). A script's interpreter opens the
+  checked script again by its path, as for a direct launch. The app's
+  own core and native tools never run from such a folder: the app refuses them there.
+- On Linux a terminal finds a launch's program by its path as it starts, so the app refuses a
+  terminal launch whose program another user could change or redirect by then: a program below a
+  folder that others, or a group other than your own private group, may write, one reached
+  through a link such a user could change, or one such a group may write. Your private group
+  (your primary group, named as you are, with no other member, no other user's primary group,
+  and no other group with its number) may write them: Homebrew on Linux makes its folders
+  writable by it, and so does a umask of 002. Users and groups are read from `/etc/passwd` and
+  `/etc/group`: ones from LDAP, sssd or systemd-userdb are not seen. The refusal names the path and a
+  `chmod g-w,o-w` that fixes it. Nothing stops your own processes from swapping the program
+  before the terminal starts it. A direct launch runs the file the app checked, wherever it is.
+- Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
+  entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the
+  local data folder, private by its access list. Secrets are kept in a file only the user may read
+  (0600 on Linux and macOS) in the app's data folder, not in the system keyring, and only exact
+  values are redacted. On macOS, where an extended access list can let others in whatever the mode,
+  a vault folder with any entry is given an empty list (as a too-open one is tightened to 0700, so
+  nothing made in it inherits an entry) and a vault file with any is refused. The app's other
+  private folders (Access's store, remembered launches, cores, extensions, the instance folder and
+  the app's core's folder) are emptied the same way; files written privately are made, where the
+  volume supports access lists, with an empty list that takes nothing from their folder; and the
+  remembered launches file, the instance folder's lock and address and an installed core's files are
+  refused with any entry. In the core's folder its config, its `credentials` and `packages` folders
+  and each credential file (not one that is a link) are emptied of entries before the core starts,
+  not refused: the core owns them. Other files and folders already inside these folders keep any
+  entry they had from before. The window has no vault page yet. Secrets reach native tools' pipes
+  and the environment of a process a confirmed launch starts (the launching tool holds only a
+  reference); a client key is checked at each use, also at a launch's spawn and each restart.
+  Backups have no retention: a package keeps at most 256.
+- Access: signers and grants can be made on Linux only (5.8 or later: grants record the `statx`
+  mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test runs on Linux only. On Windows and macOS, CI builds the app's crate, runs
-  clippy and the Rust tests (`.github/workflows/next-app-platforms.yml`); the native features
-  (confirmations, key entry, process ownership, starting the app's own core) stay Linux only
-  and refuse at run time. On Windows the page document's address is
-  `http://pluxy-page.localhost/`.
+- The native test runs on Linux, except its platform, package, update and dialogs sessions, which
+  CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
+  refuses there).
+- The dialogs session runs only on disposable CI runners (`native/runner.ts`): on Windows the app's
+  folders are the account's known folders, which no environment variable redirects, so it refuses to
+  start when they exist and removes only the ones it made. Its input does not come from a keyboard:
+  on Windows it is `SendInput` when the dialog has the foreground, otherwise the same key messages
+  posted to the focused control; on macOS key and mouse events made in the app and given to AppKit.
+  Both go through the app's real message handling and the dialogs' controls, but miss what only a
+  person at the machine would hit, such as another app taking the keyboard. The session's summary
+  counts which way each input went.
 - No installer or bundled core yet: the only packages are the test AppImage, the test folder
   bundle (Windows) and the test app bundle (macOS), which are not for release.
-  The app updates only itself, only as an AppImage, on Linux x86_64, and only with test updater
-  trust until release keys exist. Rollback keeps the last three versions that ran on this
-  profile; a new version that hangs is stopped after 90 seconds and the earlier one put back, but
-  one that crashes later, after accepting itself, is not. If the old app itself is killed during
-  those 90 seconds, nothing puts the earlier version back: copy the newest file in
-  `updates/kept/` in the app's data folder over the AppImage to run it again.
-- Changing the release feed needs the native confirmation, so it works on Linux only, and so
-  does opening an address in the browser.
+  The app updates only itself: as an AppImage on Linux x86_64, as a folder bundle's program on
+  Windows x86_64 and as an app bundle on macOS, and only with test updater trust until release
+  keys exist. The native test updates it on Linux, on Windows and on Apple silicon Macs; Intel
+  Macs and Windows on ARM are built for but not run, and how a stock Mac's Gatekeeper and privacy
+  prompts or Windows SmartScreen treat an updated copy is not tested (the app's own download
+  carries no quarantine or Mark of the Web). Rollback keeps the last three versions that ran on
+  this profile; a new version that hangs is stopped after 90 seconds and the earlier one put back,
+  but one that crashes later, after accepting itself, is not. If the old app itself is killed
+  during those 90 seconds, nothing puts the earlier version back: put the newest copy in
+  `updates/kept/` in the app's data folder in place of the installed one to run it again. On
+  Windows a new version waits at most 120 seconds for the old one to end and free the profile,
+  then exits.
+- Opening an address in the browser works on Linux only.
 - Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
   the renderer writes alignment as inline style, which the notes' policy refuses.
 - The app's own core comes only from a local index file for now; an https source joins with the
   release feed. Installing, rolling back and adopting need the native confirmation, so they work
-  on Linux only, and the core store builds on Unix only.
+  on Linux only. The store itself works on Windows too, which its unit tests check on the Windows
+  CI runner.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.
-- Native key entry is implemented on Linux only. Windows and macOS refuse key entry until
-  their native dialogs are implemented; there is no webview entry fallback.
+- Native key entry and confirmations have no webview entry fallback on any system
+  ([Platforms](#platforms) says where they run). Secret entry for the vault and client keys stays
+  Linux only, with the vault.
+- The native dialogs on Windows and macOS are not modal to the whole app: only key entry is modal,
+  to the window. No dialog runs a modal loop of its own, which would hold the app's other work.
 - Hidden native entry keeps keys out of the webview API. It does not isolate them from another
   process with the same user's operating-system access, and transient native buffers are not
-  guaranteed to be erased from memory.
+  guaranteed to be erased from memory. macOS turns on Secure Event Input while the secure field
+  has the focus; Windows has nothing like it, so a keyboard hook of the same user sees what is
+  typed.
 - A kept key is stored in `connection.json`, not in the system keyring.
 - The Linux native suite checks the app's own tray item in the watcher's registration list,
   drives its Start, Stop and Restart through the item's D-Bus menu, and checks startup without a
   watcher. It does not check every desktop's tray UI.
 - The tray host is asked about only when the window closes: if it goes away while the app sits
   in the tray, the app stays there with no way back to it but stopping it.
-- Raising the first app's window is Unix only (a Unix socket); where there is none, a second
-  launch exits with an error and the first's window stays as it was. The native test checks that
-  the raised window is shown, not that it has the keyboard focus: that is the desktop's to give.
+- The native test checks that the first app's raised window is shown, not that it has the
+  keyboard focus: that is the desktop's to give.
 - The native test needs the desktop services above, and the pinned AppImage runtime from
   github.com (or a copy in its cache folder), so it does not run offline on a bare machine.
 - Native admission bounds work after a scheme request reaches the handler. They do not bound
@@ -1458,7 +1825,14 @@ cargo run --locked --example validate-release-config -- \
 `build.rs` writes the config using tauri-utils' base/platform merge followed by `TAURI_CONFIG`,
 plus the trust and feature snapshots, in Cargo's `OUT_DIR`. A digest of all three is embedded in
 the app. The validator compares its own compiled inputs and requires the matching receipt in an
-artifact. Supply the actual app executable along with every package. The validator streams each
+artifact. It also merges the config files in `src-tauri` again as `build.rs` does (with
+`TAURI_CONFIG` from its own environment) and refuses a config snapshot that differs: Cargo reruns
+`build.rs` only when a config file it read changes, so a build from before a new platform file
+keeps the old snapshot. For the same reason `src-tauri` keeps a platform config file for each
+desktop system, `tauri.linux.conf.json`, `tauri.macos.conf.json` and `tauri.windows.conf.json`,
+even when it is empty (`{}`): `build.rs` watches the files it read, and Cargo cannot watch for a
+file being added, so a platform file added later would not rerun `build.rs`. Keep them.
+Supply the actual app executable along with every package. The validator streams each
 regular file for test markers, test identifiers and Tauri updater keys or signatures. Each
 artifact must be a well-formed executable, ELF (type, machine and program headers inside the
 file), PE (an executable image for x86, x86-64 or arm64, its optional header inside the file) or

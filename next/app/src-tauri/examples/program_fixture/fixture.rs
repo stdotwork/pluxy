@@ -96,8 +96,10 @@ use std::time::Duration;
 pub const CHILD: &str = "PLUXY_FIXTURE_CHILD";
 /// The first argument that makes it the spawn check's agent (`agent`); its group member and its
 /// orphan get this with `-child` and `-orphan` added.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub const AGENT: &str = "pluxy-fixture-agent";
+/// The first argument that makes it the lifetime checks' stand-in agent or runtime (`heartbeat`),
+/// on every platform.
+pub const HEARTBEAT: &str = "pluxy-fixture-heartbeat";
 
 /// How the unit tests make it misbehave, from `fixture.json`. Absent: it behaves.
 #[derive(Default)]
@@ -140,6 +142,8 @@ struct Mode {
     exit_after_describe: bool,
     /// A vault request it sends in describe, for the describe.
     describe_vault: Option<Value>,
+    /// Adds to `summary`'s output what it holds at this descriptor or handle number (`probe`).
+    probe: Option<u64>,
 }
 
 impl Mode {
@@ -177,6 +181,7 @@ impl Mode {
             stderr_burst: v["stderr_burst"].as_u64().unwrap_or_default() as usize,
             exit_after_describe: v["exit_after_describe"] == true,
             describe_vault: v.get("describe_vault").cloned(),
+            probe: v["probe"].as_u64(),
         }
     }
 }
@@ -206,6 +211,21 @@ fn error(id: &Value, code: &str, message: &str) -> Value {
 
 /// The file descriptors open in this process, but for the one listing them.
 fn fds() -> Vec<u32> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut out: Vec<u32> = std::fs::read_dir("/dev/fd")
+            .map(|d| {
+                d.filter_map(|e| e.ok())
+                    .filter_map(|e| e.file_name().to_str()?.parse().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        // The listing's own descriptor is closed by now.
+        out.retain(|fd| unsafe { libc::fcntl(*fd as i32, libc::F_GETFD) } != -1);
+        out.sort();
+        return out;
+    }
+    #[allow(unreachable_code)]
     let mut out: Vec<u32> = std::fs::read_dir("/proc/self/fd")
         .map(|d| {
             d.filter_map(|e| e.ok())
@@ -222,6 +242,212 @@ fn fds() -> Vec<u32> {
 fn sleep_forever() -> ! {
     loop {
         std::thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+/// Writes text to path whole: to a file beside it, then renamed into place.
+fn put(path: &str, text: String) {
+    let tmp = format!("{path}.tmp");
+    if std::fs::write(&tmp, text).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
+/// Waits until a file named `stop` exists in path's folder, then exits: how the spawn checks end
+/// the agents they started where they may not signal a process by its ID. There (not on Linux)
+/// it writes a count to `<path>.<process ID>.beat` every 50 ms meanwhile, which shows them it
+/// runs.
+fn until_stop(path: &str) -> ! {
+    let stop = std::path::Path::new(path).with_file_name("stop");
+    #[cfg(not(target_os = "linux"))]
+    let (beat, mut n) = (format!("{path}.{}.beat", std::process::id()), 0u64);
+    loop {
+        if stop.exists() {
+            std::process::exit(0);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            n += 1;
+            put(&beat, n.to_string());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// What this process holds at descriptor or handle number n, for the lifetime checks' probe of
+/// what a process was given: on unix the device and inode of what n is open to, on Windows the
+/// bytes waiting in the pipe n is a handle of (looked at, not taken); null when n is not open.
+fn probe(n: u64) -> Value {
+    #[cfg(unix)]
+    {
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstat(n as libc::c_int, &mut st) } != 0 {
+            return Value::Null;
+        }
+        json!(format!("{}:{}", st.st_dev, st.st_ino))
+    }
+    #[cfg(windows)]
+    {
+        let mut buf = [0u8; 64];
+        let mut got = 0u32;
+        let ok = unsafe {
+            windows_sys::Win32::System::Pipes::PeekNamedPipe(
+                n as usize as windows_sys::Win32::Foundation::HANDLE,
+                buf.as_mut_ptr().cast(),
+                buf.len() as u32,
+                &mut got,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Value::Null;
+        }
+        json!(String::from_utf8_lossy(&buf[..got as usize]))
+    }
+}
+
+/// When process (a handle to it) was created, in Windows' own count (100 ns since 1601). With its
+/// ID, it tells the process from a later one given the same ID, which Windows may do as soon as the
+/// first has ended and its last handle has closed.
+#[cfg(windows)]
+pub fn created(process: windows_sys::Win32::Foundation::HANDLE) -> Option<u64> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    let zero = || FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero(), zero(), zero(), zero());
+    let ok = unsafe {
+        windows_sys::Win32::System::Threading::GetProcessTimes(
+            process,
+            &mut created,
+            &mut exited,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    (ok != 0).then(|| (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+}
+
+/// The file the heartbeat writes when it is asked to stop, for its signal handler.
+#[cfg(unix)]
+static TERM_FILE: std::sync::OnceLock<std::ffi::CString> = std::sync::OnceLock::new();
+#[cfg(unix)]
+static IGNORE_TERM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(windows)]
+static TERM_PATH: std::sync::OnceLock<(String, bool)> = std::sync::OnceLock::new();
+
+#[cfg(unix)]
+extern "C" fn on_heartbeat_term(_: libc::c_int) {
+    unsafe {
+        if let Some(p) = TERM_FILE.get() {
+            let fd = libc::open(
+                p.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_CLOEXEC,
+                0o600,
+            );
+            if fd >= 0 {
+                libc::close(fd);
+            }
+        }
+        if !IGNORE_TERM.load(std::sync::atomic::Ordering::SeqCst) {
+            libc::_exit(0);
+        }
+    }
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn on_heartbeat_ctrl(kind: u32) -> windows_sys::core::BOOL {
+    if kind != windows_sys::Win32::System::Console::CTRL_BREAK_EVENT {
+        return 0;
+    }
+    if let Some((p, ignore)) = TERM_PATH.get() {
+        let _ = std::fs::write(p, "");
+        if !ignore {
+            std::process::exit(0);
+        }
+    }
+    1
+}
+
+/// The lifetime checks' stand-in agent or runtime, on every platform, started as
+/// `<program> HEARTBEAT <file> [child] [ignore] [probe=<n>] [other arguments]`. It writes what it
+/// was started with (process ID, on Windows when it was created (`created`), arguments, working
+/// folder, environment, and with `probe=<n>` what it holds at descriptor or handle n, `probe`) to
+/// `<file>.json`, then a count to file every 50 ms (written whole, then renamed into place), until
+/// `<file>.stop` exists: then it exits 0. With `child` it first starts itself again as the
+/// heartbeat `<file>.child` (in its process group, on Windows its job). Asked to stop (SIGTERM; on
+/// Windows CTRL_BREAK) it writes `<file>.term` and exits 0, or with `ignore` goes on.
+pub fn heartbeat(args: &[String]) -> ! {
+    let Some(file) = args.get(2).cloned() else {
+        std::process::exit(2);
+    };
+    let ignore = args.iter().any(|a| a == "ignore");
+    let term = format!("{file}.term");
+    #[cfg(unix)]
+    unsafe {
+        let _ = TERM_FILE.set(std::ffi::CString::new(term).unwrap_or_default());
+        IGNORE_TERM.store(ignore, std::sync::atomic::Ordering::SeqCst);
+        libc::signal(
+            libc::SIGTERM,
+            on_heartbeat_term as *const () as libc::sighandler_t,
+        );
+    }
+    #[cfg(windows)]
+    unsafe {
+        let _ = TERM_PATH.set((term, ignore));
+        windows_sys::Win32::System::Console::SetConsoleCtrlHandler(Some(on_heartbeat_ctrl), 1);
+    }
+    if args.iter().skip(3).any(|a| a == "child") {
+        if let Ok(exe) = std::env::current_exe() {
+            let mut c = std::process::Command::new(exe);
+            c.arg(HEARTBEAT).arg(format!("{file}.child"));
+            if ignore {
+                c.arg("ignore");
+            }
+            let _ = c
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+    }
+    let env: serde_json::Map<String, Value> = std::env::vars_os()
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().into_owned(),
+                json!(v.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    let probed = args
+        .iter()
+        .skip(3)
+        .find_map(|a| a.strip_prefix("probe=")?.parse().ok())
+        .map(probe);
+    #[cfg(windows)]
+    let created = created(unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() });
+    #[cfg(not(windows))]
+    let created: Option<u64> = None;
+    let seen = json!({
+        "pid": std::process::id(),
+        "created": created,
+        "argv": std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+        "cwd": std::env::current_dir().ok(),
+        "env": env,
+        "probe": probed,
+    });
+    put(&format!("{file}.json"), seen.to_string());
+    let stop = format!("{file}.stop");
+    let mut n: u64 = 0;
+    loop {
+        if std::path::Path::new(&stop).exists() {
+            std::process::exit(0);
+        }
+        n += 1;
+        put(&file, n.to_string());
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -616,16 +842,17 @@ fn pdeathsig() -> i64 {
 }
 
 /// The spawn check's agent, started as `<program> AGENT <record> [orphan]`: it starts its group
-/// member (itself again, with the record's path, which sleeps in its process group) and, with `orphan`, a descendant that
-/// starts a session of its own and ignores SIGTERM (as an agent's helper may), which writes its
-/// process ID to `<record>.orphan`. Then it writes what it sees of itself to record (written
-/// whole, then renamed into place): its process, parent, group and session IDs, its arguments,
-/// working folder, environment, open descriptors and where each leads, its core file size limits
-/// and its group member's process ID. With `FIXTURE_READ_STDIN` in its environment it first reads
-/// its stdin to its end (at most 64 KiB), as a credential bridge takes its key, and records that
-/// too (`stdin`). Then it sleeps until it is killed. SIGTERM ends it, as the
-/// default action, leaving its group member to whoever kills its group.
-#[cfg(target_os = "linux")]
+/// member (itself again, with the record's path, which waits in its process group) and, with
+/// `orphan` (unix), a descendant that starts a session of its own and ignores SIGTERM (as an
+/// agent's helper may), which writes its process ID to `<record>.orphan`. Then it writes what it
+/// sees of itself to record (written whole, then renamed into place): its process ID, arguments,
+/// working folder, environment and its group member's process ID; on unix its parent, group and
+/// session IDs and its core file size limits; on Linux its open descriptors and where each leads.
+/// With `FIXTURE_READ_STDIN` in its environment it first reads its stdin to its end (at most
+/// 64 KiB), as a credential bridge takes its key, and records that too (`stdin`). Then it waits
+/// until it is killed, or until a file named `stop` is in the record's folder, as do its group
+/// member and its orphan (`until_stop`). SIGTERM ends it, as the default action, leaving its group
+/// member to whoever kills its group.
 fn agent(args: &[String]) -> ! {
     let stdin = std::env::var_os("FIXTURE_READ_STDIN").map(|_| {
         let mut b = Vec::new();
@@ -638,26 +865,26 @@ fn agent(args: &[String]) -> ! {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
     };
+    let record = args.get(2).cloned().unwrap_or_default();
     match args.get(1).map(String::as_str) {
-        Some(a) if a == format!("{AGENT}-child") => sleep_forever(),
+        Some(a) if a == format!("{AGENT}-child") => until_stop(&record),
+        #[cfg(unix)]
         Some(a) if a == format!("{AGENT}-orphan") => {
             unsafe {
                 libc::setsid();
                 libc::signal(libc::SIGTERM, libc::SIG_IGN);
             }
-            if let Some(p) = args.get(2) {
-                let _ = std::fs::write(p, std::process::id().to_string());
-            }
-            sleep_forever();
+            let _ = std::fs::write(&record, std::process::id().to_string());
+            until_stop(&record);
         }
         _ => {}
     }
-    let record = args.get(2).cloned().unwrap_or_default();
     let mut c = std::process::Command::new(&exe);
     // The record's path makes its command line its own, for the harness that ends it.
     c.arg(format!("{AGENT}-child")).arg(&record);
     quiet(&mut c);
     let child = c.spawn().ok().map(|c| c.id());
+    #[cfg(unix)]
     if args.get(3).map(String::as_str) == Some("orphan") {
         let mut o = std::process::Command::new(&exe);
         o.arg(format!("{AGENT}-orphan"))
@@ -665,15 +892,6 @@ fn agent(args: &[String]) -> ! {
         quiet(&mut o);
         let _ = o.spawn();
     }
-    let fds: Vec<Value> = fds()
-        .into_iter()
-        .map(|fd| {
-            let target = std::fs::read_link(format!("/proc/self/fd/{fd}"))
-                .map(|t| t.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            json!({"fd": fd, "target": target})
-        })
-        .collect();
     let env: serde_json::Map<String, Value> = std::env::vars_os()
         .map(|(k, v)| {
             (
@@ -682,36 +900,53 @@ fn agent(args: &[String]) -> ! {
             )
         })
         .collect();
-    let mut core = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    unsafe { libc::getrlimit(libc::RLIMIT_CORE, &mut core) };
-    let limit = |v: libc::rlim_t| {
-        if v == libc::RLIM_INFINITY {
-            json!("unlimited")
-        } else {
-            json!(v)
-        }
-    };
-    let seen = json!({
+    // Windows adds nothing to it.
+    #[cfg_attr(windows, allow(unused_mut))]
+    let mut seen = json!({
         "pid": std::process::id(),
-        "ppid": unsafe { libc::getppid() },
-        "pgid": unsafe { libc::getpgrp() },
-        "sid": unsafe { libc::getsid(0) },
         "argv": std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>(),
         "cwd": std::env::current_dir().ok(),
         "env": env,
-        "fds": fds,
-        "core": [limit(core.rlim_cur), limit(core.rlim_max)],
         "child": child,
         "stdin": stdin,
     });
+    #[cfg(target_os = "linux")]
+    {
+        let fds: Vec<Value> = fds()
+            .into_iter()
+            .map(|fd| {
+                let target = std::fs::read_link(format!("/proc/self/fd/{fd}"))
+                    .map(|t| t.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                json!({"fd": fd, "target": target})
+            })
+            .collect();
+        seen["fds"] = json!(fds);
+    }
+    #[cfg(unix)]
+    {
+        let mut core = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        unsafe { libc::getrlimit(libc::RLIMIT_CORE, &mut core) };
+        let limit = |v: libc::rlim_t| {
+            if v == libc::RLIM_INFINITY {
+                json!("unlimited")
+            } else {
+                json!(v)
+            }
+        };
+        seen["ppid"] = json!(unsafe { libc::getppid() });
+        seen["pgid"] = json!(unsafe { libc::getpgrp() });
+        seen["sid"] = json!(unsafe { libc::getsid(0) });
+        seen["core"] = json!([limit(core.rlim_cur), limit(core.rlim_max)]);
+    }
     let tmp = format!("{record}.tmp");
     if std::fs::write(&tmp, seen.to_string()).is_ok() {
         let _ = std::fs::rename(&tmp, &record);
     }
-    sleep_forever();
+    until_stop(&record);
 }
 
 /// The launcher check's stand-in terminal, started as `x-terminal-emulator -e <command...>`: it
@@ -782,6 +1017,15 @@ pub fn main() -> ! {
     if std::env::var_os(CHILD).is_some() {
         sleep_forever();
     }
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).is_some_and(|a| a == HEARTBEAT) {
+            heartbeat(&args);
+        }
+        if args.get(1).is_some_and(|a| a.starts_with(AGENT)) {
+            agent(&args);
+        }
+    }
     #[cfg(target_os = "linux")]
     {
         let args: Vec<String> = std::env::args().collect();
@@ -798,9 +1042,6 @@ pub fn main() -> ! {
             .is_some_and(|n| n == "xdg-open")
         {
             opener(&args);
-        }
-        if args.get(1).is_some_and(|a| a.starts_with(AGENT)) {
-            agent(&args);
         }
     }
     let mode = Mode::read();
@@ -941,8 +1182,14 @@ pub fn main() -> ! {
                                 .iter()
                                 .copied()
                                 .fold("", |a, b| if b.len() > a.len() { b } else { a });
+                        // On macOS CoreFoundation, which this program links, sets
+                        // `__CF_USER_TEXT_ENCODING` in its own environment as it starts: not
+                        // something the host gave it.
                         let mut names: Vec<String> = std::env::vars_os()
                             .map(|(k, _)| k.to_string_lossy().into_owned())
+                            .filter(|k| {
+                                !(cfg!(target_os = "macos") && k == "__CF_USER_TEXT_ENCODING")
+                            })
                             .collect();
                         names.sort();
                         #[cfg(unix)]
@@ -975,6 +1222,9 @@ pub fn main() -> ! {
                         });
                         if let Some(n) = mode.pad {
                             out["pad"] = json!("x".repeat(n));
+                        }
+                        if let Some(n) = mode.probe {
+                            out["probe"] = probe(n);
                         }
                         if mode.unknown_frame {
                             write_frame(&mut output, &json!({"type": "bogus", "id": id}));

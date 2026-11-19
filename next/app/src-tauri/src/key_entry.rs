@@ -1,18 +1,41 @@
-//! Native secret entry, and the native window showing a rotated key once. Only this module reads
-//! GTK's hidden entry or shows a key; no key is returned to IPC.
+//! Native secret entry, and the native window showing a rotated key once. Only this module (and,
+//! on Windows and macOS, its platform file) reads the hidden entry or shows a key; no key is
+//! returned to IPC. Linux uses GTK here; Windows `key_entry_windows.rs`; macOS
+//! `key_entry_macos.rs`.
 use tauri::AppHandle;
 
 pub(crate) struct Input {
     #[cfg(target_os = "linux")]
     pub key: gtk::glib::GString,
+    /// Cleared from memory when dropped.
     #[cfg(not(target_os = "linux"))]
-    pub key: String,
+    pub key: zeroize::Zeroizing<String>,
     pub remember: bool,
 }
 
+/// The dialogs' fixed texts, in GTK's mnemonic form (`dialog.rs` renders them elsewhere).
+pub(crate) mod text {
+    pub(crate) const MANAGEMENT_TITLE: &str = "pluxy management key";
+    pub(crate) const REVEAL_TITLE: &str = "pluxy new management key";
+    pub(crate) const KEEP: &str = "_Keep the key on this device";
+    pub(crate) const CANCEL: &str = "_Cancel";
+    pub(crate) const OK: &str = "_OK";
+    pub(crate) const COPY: &str = "Co_py";
+    pub(crate) const CLOSE: &str = "_Close";
+}
+
+#[cfg(windows)]
+#[path = "key_entry_windows.rs"]
+mod platform;
+#[cfg(target_os = "macos")]
+#[path = "key_entry_macos.rs"]
+mod platform;
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) use platform::{request_as, reveal};
+
 /// The management key's entry, with its choice to keep the key on this device.
 pub(crate) fn request(app: &AppHandle, summary: String) -> Result<Option<Input>, &'static str> {
-    request_as(app, "pluxy management key", summary, true)
+    request_as(app, text::MANAGEMENT_TITLE, summary, true)
 }
 
 /// A hidden entry titled title, saying summary; with keep, a choice (off at first) to keep the
@@ -42,8 +65,8 @@ pub(crate) fn request_as(
             Some(&parent),
             gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
             &[
-                ("_Cancel", gtk::ResponseType::Cancel),
-                ("_OK", gtk::ResponseType::Accept),
+                (text::CANCEL, gtk::ResponseType::Cancel),
+                (text::OK, gtk::ResponseType::Accept),
             ],
         );
         dialog.set_default_response(gtk::ResponseType::Accept);
@@ -58,7 +81,7 @@ pub(crate) fn request_as(
         entry.set_input_purpose(gtk::InputPurpose::Password);
         entry.set_activates_default(true);
         content.add(&entry);
-        let keep_choice = gtk::CheckButton::with_mnemonic("_Keep the key on this device");
+        let keep_choice = gtk::CheckButton::with_mnemonic(text::KEEP);
         // Each entry starts session-only. Remembering requires an explicit native choice.
         keep_choice.set_active(false);
         if keep {
@@ -120,12 +143,12 @@ pub(crate) fn reveal(app: &AppHandle, key: String, notice: String) {
         // Not destroyed with its parent: closing the main window to the tray must leave the
         // only display of the new key open.
         let dialog = gtk::Dialog::with_buttons(
-            Some("pluxy new management key"),
+            Some(text::REVEAL_TITLE),
             parent.as_ref(),
             gtk::DialogFlags::empty(),
             &[
-                ("Co_py", gtk::ResponseType::Apply),
-                ("_Close", gtk::ResponseType::Close),
+                (text::COPY, gtk::ResponseType::Apply),
+                (text::CLOSE, gtk::ResponseType::Close),
             ],
         );
         dialog.set_default_response(gtk::ResponseType::Close);
@@ -164,7 +187,7 @@ pub(crate) fn reveal(app: &AppHandle, key: String, notice: String) {
     });
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 pub(crate) fn request_as(
     _: &AppHandle,
     _: &'static str,

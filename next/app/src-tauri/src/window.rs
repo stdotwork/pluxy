@@ -1,5 +1,5 @@
-//! What closing the window does, and the window's size and place, kept in `window.json` beside
-//! `connection.json`, readable only by this user.
+//! What closing the window does, and the window's size and place, kept in `window.json` in the
+//! app's config folder, readable only by this user.
 //!
 //! Closing asks (Ask every time), quits (Exit App) or leaves the app in the tray (Minimize to
 //! Tray), which destroys the window and its webviews. Without a usable tray, closing quits

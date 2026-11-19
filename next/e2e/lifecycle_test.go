@@ -360,6 +360,27 @@ func TestStartRefusesConfigWithoutClientKeys(t *testing.T) {
 	}
 }
 
+// A credential store core cannot open stops it with the store's error, and without the hint to
+// start in safe mode: safe mode opens the store too.
+func TestStartRefusedByTheCredentialStore(t *testing.T) {
+	cfg := lifecycleConfig(testPackage(t, "0.1.0"), newGate(t), nil)
+	notFolder := filepath.Join(t.TempDir(), "credentials")
+	if err := os.WriteFile(notFolder, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg["credentials_dir"] = notFolder
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeConfig(t, path, cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, filepath.Join(binDir, "pluxy"), "-config", path).CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.Contains(string(out), "credential store: "+notFolder+" is not a folder") ||
+		strings.Contains(string(out), "-safe-mode") || strings.Contains(string(out), "listening on") {
+		t.Errorf("core exited with %v:\n%s\nwant exit status 1 with the credential store's error, before listening and without the safe mode hint", err, out)
+	}
+}
+
 // A reload may switch the config's extension to another one: the new one serves new requests
 // and the old one drains, without a restart.
 func TestReloadSwitchesToAnotherExtension(t *testing.T) {

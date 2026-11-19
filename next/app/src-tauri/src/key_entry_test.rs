@@ -1,6 +1,8 @@
-//! Real GTK entry input through XTEST; test keys never enter JavaScript.
+//! Real native entry input through the UI driver (`ui_driver.rs`); test keys never enter
+//! JavaScript.
+use super::ui::{self, Key};
 use super::*;
-use std::process::Command;
+use crate::key_entry::text;
 use std::sync::Mutex;
 
 /// When the test last saw a key dialog on screen, and last pressed Escape in one. Escape is
@@ -8,15 +10,9 @@ use std::sync::Mutex;
 static DIALOG_SHOWN: Mutex<Option<Instant>> = Mutex::new(None);
 static CANCEL_SENT: Mutex<Option<Instant>> = Mutex::new(None);
 
-pub(super) fn xdotool(args: &[&str]) -> Result<String, String> {
-    let out = Command::new("xdotool")
-        .args(args)
-        .output()
-        .map_err(|_| "could not run xdotool")?;
-    if !out.status.success() {
-        return Err("xdotool failed".into());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+/// The key that presses the button or check box labelled label (GTK mnemonic form).
+pub(super) fn access(label: &str) -> Key {
+    Key::Access(crate::confirmation::text::access_key(label).expect("a label with an access key"))
 }
 
 fn answer(
@@ -26,95 +22,50 @@ fn answer(
     cancel: bool,
 ) -> std::thread::JoinHandle<Result<(), String>> {
     std::thread::spawn(move || {
-        let id = wait_for("the native key dialog", || {
-            xdotool(&[
-                "search",
-                "--onlyvisible",
-                "--name",
-                "^pluxy management key$",
-            ])
-            .ok()
-            .filter(|s| !s.is_empty())
-        })?;
+        ui::wait_shown(&app, text::MANAGEMENT_TITLE)?;
         *DIALOG_SHOWN.lock().unwrap() = Some(Instant::now());
-        // Read real GTK labels and entry properties on the GTK thread; expected origin comes
-        // from the running connection, independently of the dialog's preparation code.
+        // Read the real native texts and entry; expected origin comes from the running
+        // connection, independently of the dialog's preparation code.
         let view = app.state::<App>().conn.lock().unwrap().view();
         let expected = format!("Key for {}", view.target.ok_or("no expected core")?);
         let ca = view.ca_file;
-        let (tx, rx) = mpsc::channel();
-        app.run_on_main_thread(move || {
-            use gtk::prelude::*;
-            fn inspect(widget: &gtk::Widget, labels: &mut Vec<String>, hidden: &mut bool) {
-                if let Some(label) = widget.downcast_ref::<gtk::Label>() {
-                    labels.push(label.text().to_string());
-                }
-                if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
-                    *hidden = !gtk::prelude::EntryExt::is_visible(entry);
-                }
-                if let Some(container) = widget.downcast_ref::<gtk::Container>() {
-                    for child in container.children() {
-                        inspect(&child, labels, hidden);
-                    }
-                }
-            }
-            let mut labels = Vec::new();
-            let mut hidden = false;
-            for widget in gtk::Window::list_toplevels() {
-                let Ok(window) = widget.downcast::<gtk::Window>() else {
-                    continue;
-                };
-                if window.title().as_deref() == Some("pluxy management key") {
-                    inspect(window.upcast_ref(), &mut labels, &mut hidden);
-                }
-            }
-            let text = labels.join("\n");
-            let _ = tx.send(
-                hidden
-                    && text.contains(&expected)
-                    && ca.is_none_or(|ca| text.contains(&format!("Certificate authority: {ca}"))),
-            );
-        })
-        .map_err(|_| "could not inspect native destination")?;
-        if !rx
-            .recv_timeout(Duration::from_secs(5))
-            .map_err(|_| "missing GTK label audit")?
+        let shown = ui::texts(&app, text::MANAGEMENT_TITLE)?.join("\n");
+        let hidden = ui::secret_hidden(&app, text::MANAGEMENT_TITLE)?;
+        if !(hidden
+            && shown.contains(&expected)
+            && ca.is_none_or(|ca| shown.contains(&format!("Certificate authority: {ca}"))))
         {
             return Err(
                 "native dialog did not identify the expected core/CA with hidden entry".into(),
             );
         }
-        let id = id.lines().next().ok_or("no dialog window")?;
-        xdotool(&["windowfocus", "--sync", id])?;
-        // Entry gets initial focus. Send bytes via stdin, never argv or a shell.
-        use std::io::Write;
-        let mut child = Command::new("xdotool")
-            .args(["type", "--clearmodifiers", "--file", "-"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|_| "could not start native input")?;
-        child
-            .stdin
-            .take()
-            .ok_or("no input pipe")?
-            .write_all(key.as_bytes())
-            .map_err(|_| "could not type native input")?;
-        if !child.wait().map_err(|_| "native input failed")?.success() {
-            return Err("native input failed".into());
+        // The entry gets the initial focus.
+        ui::type_text(&app, text::MANAGEMENT_TITLE, &key)?;
+        // Once, what another process sees of the entry through UI Automation.
+        #[cfg(windows)]
+        {
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            let mut result = Ok(());
+            ONCE.call_once(|| {
+                result = ui::uia_canary(&app, text::MANAGEMENT_TITLE, &key).map(|v| log("uia", v));
+            });
+            result?;
         }
         if keep {
-            xdotool(&["key", "--clearmodifiers", "alt+k"])?;
+            ui::press(&app, text::MANAGEMENT_TITLE, access(text::KEEP))?;
         }
-        xdotool(&[
-            "key",
-            "--clearmodifiers",
-            if cancel { "Escape" } else { "alt+o" },
-        ])?;
         if cancel {
             *CANCEL_SENT.lock().unwrap() = Some(Instant::now());
         }
+        ui::press(
+            &app,
+            text::MANAGEMENT_TITLE,
+            if cancel {
+                Key::Escape
+            } else {
+                access(text::OK)
+            },
+        )?;
         Ok(())
     })
 }
@@ -213,14 +164,7 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
     {
         return Err("invalid target did not return the specific validation reason".into());
     }
-    if xdotool(&[
-        "search",
-        "--onlyvisible",
-        "--name",
-        "^pluxy management key$",
-    ])
-    .is_ok()
-    {
+    if ui::shown(app, text::MANAGEMENT_TITLE) {
         return Err("invalid destination opened a secret dialog".into());
     }
     let before = app.state::<App>().conn.lock().unwrap().view();
@@ -285,6 +229,14 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
             != 0o600
         {
             return Err("kept key file is not private".into());
+        }
+    }
+    // On Windows a kept key lives in the local, not the roaming, application data.
+    #[cfg(windows)]
+    {
+        let local = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+        if !settings.starts_with(&local) {
+            return Err("kept key file is not in the local application data".into());
         }
     }
     if app
@@ -373,6 +325,13 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
     }
 
     clean_webview(main, &[key, wrong])?;
+    // Nothing typed into the entry reached the clipboard.
+    if ui::clipboard(app)
+        .0
+        .is_some_and(|c| c.contains(key) || c.contains(wrong))
+    {
+        return Err("a typed key reached the clipboard".into());
+    }
 
     log(
         "keyentry",
@@ -380,4 +339,47 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
         "session": true, "remember": true, "webviews_clean": true, "events_clean": true}),
     );
     Ok(())
+}
+
+/// Off Linux: the window that key entry is shown on goes while the entry is open (closed to the
+/// tray). The entry gives the cancel answer and closes with it, key entry can be asked for again,
+/// and the connection is as it was. Returns the window's webview once it is open again.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn owner_gone(app: &AppHandle, main: &Webview) -> Result<Webview, String> {
+    if app.state::<App>().conn.lock().unwrap().mode() == Some(crate::conn::Mode::Managed) {
+        return Ok(main.clone());
+    }
+    let before = app.state::<App>().conn.lock().unwrap().view();
+    main.eval("window.__TAURI_INTERNALS__.invoke('key_entry', {change: null}).catch(() => {})")
+        .map_err(|_| "could not request key entry")?;
+    ui::wait_shown(app, text::MANAGEMENT_TITLE)?;
+    app.get_window(WINDOW)
+        .ok_or("no window")?
+        .close()
+        .map_err(|e| e.to_string())?;
+    wait_for("the window to close to the tray", || {
+        app.get_window(WINDOW).is_none().then_some(())
+    })?;
+    // The cancel answer ends the request: key entry is free again, and its window has gone.
+    wait_for("key entry to end with its window", || {
+        let open = app.state::<App>().key_entry_open.load(Ordering::SeqCst);
+        (!open && ui::count(app, text::MANAGEMENT_TITLE) == 0).then_some(())
+    })?;
+    let after = app.state::<App>().conn.lock().unwrap().view();
+    let unchanged = after.signed_in == before.signed_in && after.remembered == before.remembered;
+    let reopen = app.clone();
+    app.run_on_main_thread(move || {
+        let _ = crate::open_window(&reopen);
+    })
+    .map_err(|_| "could not open the window again")?;
+    let main = wait_for("the window", || app.get_webview(MAIN))?;
+    wait_for("the window's shell", || {
+        eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
+    })?;
+    watch(&main)?;
+    log(
+        "owner_gone",
+        json!({"entry_closed": true, "free_again": true, "connection_unchanged": unchanged}),
+    );
+    Ok(main)
 }

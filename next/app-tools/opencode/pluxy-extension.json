@@ -9,8 +9,11 @@
       0
     ],
     "programs": {
+      "darwin/amd64": "bin/opencode",
+      "darwin/arm64": "bin/opencode",
       "linux/amd64": "bin/opencode",
-      "linux/arm64": "bin/opencode"
+      "linux/arm64": "bin/opencode",
+      "windows/amd64": "bin/opencode.exe"
     },
     "operations": [
       {
@@ -736,7 +739,7 @@
       },
       {
         "id": "recipe",
-        "description": "How the launcher starts OpenCode: the CLI (opencode) in a terminal, or the desktop app (/opt/OpenCode/ai.opencode), with no arguments",
+        "description": "How the launcher starts OpenCode, with no arguments: the CLI (opencode; opencode.exe on Windows) in a terminal, or the desktop app (/opt/OpenCode/ai.opencode on Linux, OpenCode.app in /Applications or ~/Applications on macOS, Programs\\ai.opencode.desktop\\OpenCode.exe in the local application data folder on Windows)",
         "effect": "read",
         "input_schema": {
           "type": "object",

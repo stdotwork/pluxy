@@ -113,6 +113,89 @@ pub fn is_private(path: &Path) -> io::Result<bool> {
     imp::is_private(path)
 }
 
+/// Makes the file or folder open as file private, as [`make_private`] does, through that handle
+/// (which must have been opened with the right to change its permissions or access list). Meant for
+/// what this process has just made itself.
+pub fn make_private_open(file: &File) -> io::Result<()> {
+    imp::make_private_open(file)
+}
+
+/// Windows: the access list of the file open as file, in the system's text form (SDDL), with
+/// whether it is protected (`D:P(…)`) or takes up its folder's (`D:AI(…)`, inherited entries
+/// marked `ID`).
+#[cfg(windows)]
+pub fn access_list(file: &File) -> io::Result<String> {
+    imp::access_list(file)
+}
+
+/// Windows: gives the file open as file the access list sddl (as [`access_list`] writes it):
+/// protected if it says so; else it takes up its folder's inheritable entries besides its own.
+#[cfg(windows)]
+pub fn set_access_list(file: &File, sddl: &str) -> io::Result<()> {
+    imp::set_access_list(file, sddl)
+}
+
+/// Windows: creates the file name, which must not exist, in the folder open as folder (no path is
+/// looked up again), private from the moment it is made (its protected list given at creation, as
+/// [`create_new_private`] does), open to read, write, delete and change its list, and shared with
+/// no other handle: a temporary file nothing else can open until it is renamed and closed. A name
+/// that is a path, empty, `.` or `..` is refused; in a folder that forbids setting access lists
+/// (see [`create_new_private`]) the creation is refused with `PermissionDenied`.
+#[cfg(windows)]
+pub fn create_private_in(folder: &File, name: &std::ffi::OsStr) -> io::Result<File> {
+    imp::create_private_in(folder, name)
+}
+
+/// Windows: renames the file open as file to name in the folder open as folder, replacing a file
+/// there, through the handles (no path is looked up again). The file must have been opened with
+/// the right to delete it.
+#[cfg(windows)]
+pub fn rename_open(file: &File, folder: &File, name: &std::ffi::OsStr) -> io::Result<()> {
+    imp::rename_open(file, folder, name)
+}
+
+/// Why Windows would not take name, one part of a path, as the file it names, or None when it
+/// would: a name ending in a dot or a blank (Windows drops them), one holding a character Windows
+/// reserves (`:`, which names a stream of a file, `/ * ? " < > |` or a control character), or a
+/// device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9`, `CONIN$`,
+/// `CONOUT$`, in any case, with or without an extension). A plain string check, the same on every
+/// platform.
+pub fn windows_name_problem(name: &str) -> Option<&'static str> {
+    if name.ends_with(['.', ' ']) {
+        return Some("it ends in a dot or a blank, which Windows drops");
+    }
+    if name
+        .chars()
+        .any(|c| c.is_control() || matches!(c, ':' | '/' | '*' | '?' | '"' | '<' | '>' | '|'))
+    {
+        return Some("it holds a character Windows reserves (a colon names a stream of a file)");
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .to_uppercase();
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix).is_some_and(|n| {
+            let mut c = n.chars();
+            matches!(
+                (c.next(), c.next()),
+                (Some('1'..='9' | '¹' | '²' | '³'), None)
+            )
+        })
+    };
+    if matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || numbered("COM")
+        || numbered("LPT")
+    {
+        return Some("it is a device name");
+    }
+    None
+}
+
 /// Whether anyone but this user may change the file or folder path (not followed if it is a link),
 /// on Windows: its owner is not this user, the owner this process gives what it makes, SYSTEM or
 /// the Administrators group; or it has no access list (which allows everyone); or an allow entry
@@ -156,6 +239,49 @@ pub fn create_locked(path: &Path) -> io::Result<Lock> {
 #[cfg(any(windows, target_os = "macos"))]
 pub fn take_lock(path: &Path) -> io::Result<Option<Lock>> {
     imp::take_lock(path)
+}
+
+/// Whether path (a link followed) is a program someone may start by its path: on Linux and macOS
+/// a regular file with an execute permission bit; on Windows, which has no such bit and starts a
+/// file as a program by its name's extension, a regular file named `….exe` or `….com` (in any
+/// case) that is a PE image (starts with `MZ`), the rule the execution program launches by.
+pub fn executable(path: &Path) -> bool {
+    let Ok(m) = fs::metadata(path) else {
+        return false;
+    };
+    if !m.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        m.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(windows)]
+    {
+        use std::io::Read;
+        let named = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("exe") || e.eq_ignore_ascii_case("com"));
+        let mut magic = [0u8; 2];
+        named
+            && File::open(path).is_ok_and(|mut f| f.read_exact(&mut magic).is_ok())
+            && magic == *b"MZ"
+    }
+}
+
+/// Flushes the folder path, so a rename or removal in it lasts. On Windows this does nothing: the
+/// file system logs a folder's entries itself, and a folder cannot be flushed through a handle
+/// opened to read it.
+pub fn sync_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    return File::open(path).and_then(|d| d.sync_all());
+    #[cfg(windows)]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 #[cfg(unix)]
@@ -238,6 +364,24 @@ mod imp {
         f.set_permissions(fs::Permissions::from_mode(mode))
     }
 
+    pub fn make_private_open(f: &File) -> io::Result<()> {
+        let m = f.metadata()?;
+        if m.uid() != unsafe { libc::geteuid() } {
+            return Err(another_owner());
+        }
+        let mode = if m.is_dir() {
+            0o700
+        } else if m.is_file() {
+            0o600
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a file or folder",
+            ));
+        };
+        f.set_permissions(fs::Permissions::from_mode(mode))
+    }
+
     pub fn is_private(path: &Path) -> io::Result<bool> {
         let m = fs::symlink_metadata(path)?;
         Ok(m.uid() == unsafe { libc::geteuid() } && m.permissions().mode() & 0o077 == 0)
@@ -283,23 +427,34 @@ mod imp {
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     use std::os::windows::io::{AsRawHandle, FromRawHandle};
     use std::ptr::{null, null_mut};
+    use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
+    use windows_sys::Wdk::Storage::FileSystem::{
+        FileRenameInformation, FileRenameInformationEx, NtCreateFile, NtSetInformationFile,
+        FILE_CREATE, FILE_NON_DIRECTORY_FILE, FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION,
+        FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS, FILE_SYNCHRONOUS_IO_NONALERT,
+    };
     use windows_sys::Win32::Foundation::{
-        CloseHandle, LocalFree, ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_SUCCESS,
-        GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+        CloseHandle, LocalFree, RtlNtStatusToDosError, ERROR_ACCESS_DENIED,
+        ERROR_SHARING_VIOLATION, ERROR_SUCCESS, GENERIC_READ, GENERIC_WRITE, HANDLE,
+        INVALID_HANDLE_VALUE, NTSTATUS, OBJ_CASE_INSENSITIVE, STATUS_INVALID_INFO_CLASS,
+        STATUS_INVALID_PARAMETER, STATUS_NOT_IMPLEMENTED, STATUS_NOT_SUPPORTED, UNICODE_STRING,
     };
     use windows_sys::Win32::Security::Authorization::{
-        GetSecurityInfo, SetEntriesInAclW, SetSecurityInfo, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE,
-        SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_IS_WELL_KNOWN_GROUP,
-        TRUSTEE_W,
+        ConvertSecurityDescriptorToStringSecurityDescriptorW,
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SetEntriesInAclW,
+        SetSecurityInfo, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SDDL_REVISION_1, SET_ACCESS,
+        SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
     };
     use windows_sys::Win32::Security::{
-        CreateWellKnownSid, EqualSid, GetAce, GetSecurityDescriptorControl, GetTokenInformation,
-        InitializeSecurityDescriptor, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
-        TokenOwner, TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid, ACCESS_ALLOWED_ACE,
-        ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
+        CreateWellKnownSid, EqualSid, GetAce, GetSecurityDescriptorControl,
+        GetSecurityDescriptorDacl, GetTokenInformation, InitializeSecurityDescriptor,
+        SetSecurityDescriptorControl, SetSecurityDescriptorDacl, TokenOwner, TokenUser,
+        WinBuiltinAdministratorsSid, WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
+        DACL_SECURITY_INFORMATION, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
         PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
         SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE, SE_DACL_PROTECTED,
         SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_INFORMATION_CLASS, TOKEN_QUERY,
+        UNPROTECTED_DACL_SECURITY_INFORMATION,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateDirectoryW, CreateFileW, FileIdInfo, GetFileInformationByHandle,
@@ -307,9 +462,10 @@ mod imp {
         FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_REPARSE_POINT,
         FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        FILE_TYPE_DISK, OPEN_EXISTING, READ_CONTROL, WRITE_DAC,
+        FILE_TYPE_DISK, OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE, WRITE_DAC,
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
     /// `ACCESS_ALLOWED_ACE_TYPE` and `ACCESS_DENIED_ACE_TYPE` (winnt.h).
     const ACCESS_ALLOWED: u8 = 0;
@@ -495,20 +651,32 @@ mod imp {
 
     pub fn make_private(path: &Path) -> io::Result<()> {
         let f = open_itself(path, FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)?;
+        refuse_link(&f.metadata()?)?;
+        make_private_open(&f)
+    }
+
+    pub fn make_private_open(f: &File) -> io::Result<()> {
         let m = f.metadata()?;
+        // A link (symbolic link or junction) opened itself, or anything not on a disk, is refused.
         refuse_link(&m)?;
+        if !(m.is_dir() || m.is_file()) || unsafe { GetFileType(handle(f)) } != FILE_TYPE_DISK {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a file or folder",
+            ));
+        }
         let user = TokenSid::user()?;
         let default_owner = TokenSid::default_owner()?;
         let system = System::sid()?;
         // Another account's file is refused, never taken over, as on Linux and macOS.
-        let (owner, _sd) = owner_of(&f)?;
+        let (owner, _sd) = owner_of(f)?;
         if !owner_accepted(owner, &user, &default_owner, &system) {
             return Err(another_owner());
         }
         let acl = private_acl(&user, &system, m.is_dir())?;
         win32(unsafe {
             SetSecurityInfo(
-                handle(&f),
+                handle(f),
                 SE_FILE_OBJECT,
                 DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                 null_mut(),
@@ -517,6 +685,203 @@ mod imp {
                 null(),
             )
         })
+    }
+
+    pub fn access_list(f: &File) -> io::Result<String> {
+        let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+        win32(unsafe {
+            GetSecurityInfo(
+                handle(f),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                &mut sd,
+            )
+        })?;
+        let sd = Local(sd);
+        let mut text: *mut u16 = null_mut();
+        let mut len = 0u32;
+        ok(unsafe {
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                sd.0,
+                SDDL_REVISION_1,
+                DACL_SECURITY_INFORMATION,
+                &mut text,
+                &mut len,
+            )
+        })?;
+        let text = Local(text);
+        let wide = unsafe { std::slice::from_raw_parts(text.0, len as usize) };
+        // The text ends at its first NUL: the length the system gives may count more after it.
+        let wide = &wide[..wide.iter().position(|&c| c == 0).unwrap_or(wide.len())];
+        String::from_utf16(wide)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "an access list not in UTF-16"))
+    }
+
+    pub fn set_access_list(f: &File, sddl: &str) -> io::Result<()> {
+        let bad = || io::Error::new(io::ErrorKind::InvalidInput, "not an access list");
+        let text: Vec<u16> = sddl.encode_utf16().chain([0]).collect();
+        if text[..text.len() - 1].contains(&0) {
+            return Err(bad());
+        }
+        let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+        ok(unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                text.as_ptr(),
+                SDDL_REVISION_1,
+                &mut sd,
+                null_mut(),
+            )
+        })?;
+        let sd = Local(sd);
+        let (mut present, mut defaulted) = (0, 0);
+        let mut dacl: *mut ACL = null_mut();
+        ok(unsafe { GetSecurityDescriptorDacl(sd.0, &mut present, &mut dacl, &mut defaulted) })?;
+        // No list, or a NULL one (which allows everyone), is not one this gives.
+        if present == 0 || dacl.is_null() {
+            return Err(bad());
+        }
+        let mut control = 0u16;
+        let mut revision = 0u32;
+        ok(unsafe { GetSecurityDescriptorControl(sd.0, &mut control, &mut revision) })?;
+        let protection = if control & SE_DACL_PROTECTED != 0 {
+            PROTECTED_DACL_SECURITY_INFORMATION
+        } else {
+            UNPROTECTED_DACL_SECURITY_INFORMATION
+        };
+        win32(unsafe {
+            SetSecurityInfo(
+                handle(f),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | protection,
+                null_mut(),
+                null_mut(),
+                dacl,
+                null(),
+            )
+        })
+    }
+
+    /// An NTSTATUS as a result, its error as the matching Win32 one.
+    fn nt(status: NTSTATUS) -> io::Result<()> {
+        if status >= 0 {
+            Ok(())
+        } else {
+            Err(io::Error::from_raw_os_error(
+                unsafe { RtlNtStatusToDosError(status) } as i32,
+            ))
+        }
+    }
+
+    /// A single name in a folder, as UTF-16: not empty, no separator, no NUL, not `.` or `..`.
+    fn single_name(name: &std::ffi::OsStr) -> io::Result<Vec<u16>> {
+        let wide: Vec<u16> = name.encode_wide().collect();
+        if wide.is_empty()
+            || wide.contains(&0)
+            || wide.iter().any(|c| *c == b'\\' as u16 || *c == b'/' as u16)
+            || name == "."
+            || name == ".."
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a file name",
+            ));
+        }
+        Ok(wide)
+    }
+
+    pub fn create_private_in(folder: &File, name: &std::ffi::OsStr) -> io::Result<File> {
+        let name = single_name(name)?;
+        let len = u16::try_from(name.len() * 2)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "a name too long"))?;
+        let object = UNICODE_STRING {
+            Length: len,
+            MaximumLength: len,
+            Buffer: name.as_ptr() as *mut u16,
+        };
+        // The native call: it makes the file relative to the folder's handle, with the private
+        // descriptor, in one step.
+        with_private(false, |sa| {
+            let attributes = OBJECT_ATTRIBUTES {
+                Length: std::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
+                RootDirectory: handle(folder),
+                ObjectName: &object,
+                Attributes: OBJ_CASE_INSENSITIVE,
+                SecurityDescriptor: unsafe { (*sa).lpSecurityDescriptor } as *const _,
+                SecurityQualityOfService: null(),
+            };
+            let mut h: HANDLE = null_mut();
+            let mut status = IO_STATUS_BLOCK::default();
+            nt(unsafe {
+                NtCreateFile(
+                    &mut h,
+                    GENERIC_READ | GENERIC_WRITE | DELETE | WRITE_DAC | SYNCHRONIZE,
+                    &attributes,
+                    &mut status,
+                    null(),
+                    FILE_ATTRIBUTE_NORMAL,
+                    0,
+                    FILE_CREATE,
+                    FILE_NON_DIRECTORY_FILE
+                        | FILE_SYNCHRONOUS_IO_NONALERT
+                        | FILE_OPEN_REPARSE_POINT,
+                    null(),
+                    0,
+                )
+            })?;
+            Ok(unsafe { File::from_raw_handle(h as _) })
+        })
+    }
+
+    pub fn rename_open(f: &File, folder: &File, name: &std::ffi::OsStr) -> io::Result<()> {
+        let name = single_name(name)?;
+        // The native call: the Win32 one takes no folder handle (RootDirectory must be null).
+        let head = std::mem::offset_of!(FILE_RENAME_INFORMATION, FileName);
+        let bytes = (head + name.len() * 2).max(std::mem::size_of::<FILE_RENAME_INFORMATION>());
+        // u64s keep the structure's handle field aligned.
+        let mut buf = vec![0u64; bytes.div_ceil(8)];
+        let info = buf.as_mut_ptr() as *mut FILE_RENAME_INFORMATION;
+        let rename = |class, posix: bool| unsafe {
+            if posix {
+                (*info).Anonymous.Flags =
+                    FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS;
+            } else {
+                (*info).Anonymous.Flags = 0;
+                (*info).Anonymous.ReplaceIfExists = true;
+            }
+            (*info).RootDirectory = handle(folder);
+            (*info).FileNameLength = (name.len() * 2) as u32;
+            std::ptr::copy_nonoverlapping(
+                name.as_ptr(),
+                std::ptr::addr_of_mut!((*info).FileName) as *mut u16,
+                name.len(),
+            );
+            let mut status = IO_STATUS_BLOCK::default();
+            NtSetInformationFile(
+                handle(f),
+                &mut status,
+                info as *const core::ffi::c_void,
+                bytes as u32,
+                class,
+            )
+        };
+        // POSIX semantics (the name is replaced even while another program has the old file
+        // open) where the file system has them; else the classic rename, which replaces too.
+        let status = rename(FileRenameInformationEx, true);
+        if [
+            STATUS_INVALID_PARAMETER,
+            STATUS_INVALID_INFO_CLASS,
+            STATUS_NOT_SUPPORTED,
+            STATUS_NOT_IMPLEMENTED,
+        ]
+        .contains(&status)
+        {
+            return nt(rename(FileRenameInformation, false));
+        }
+        nt(status)
     }
 
     /// A SID this process's token names, in the buffer that holds it: its user, or its default

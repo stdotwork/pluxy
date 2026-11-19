@@ -1,0 +1,24 @@
+[package]
+name = "wsl"
+version = "0.1.0"
+description = "Lists WSL distributions and their users, checks one and prepares launches in it, for pluxy's desktop app on Windows"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Named so that no bare `wsl.exe` ever finds this program instead of Windows' own.
+[[bin]]
+name = "pluxy-wsl"
+path = "src/main.rs"
+
+[dependencies]
+pluxy-program = { path = "../lib/program" }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_System_Console",
+  "Win32_System_Registry",
+  "Win32_System_SystemInformation",
+] }

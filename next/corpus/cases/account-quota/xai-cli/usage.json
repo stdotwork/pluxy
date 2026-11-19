@@ -1,8 +1,8 @@
 {
-  "description": "A Grok login's quota: the new core's GET /v0/management/accounts/{id}/quota against the billing and plan requests today's panel sends through the old core's api-call relay.",
+  "description": "A Grok login's quota: the new core's GET /v0/management/accounts/{id}/quota against the billing and plan requests the old panel sends through the old core's api-call relay.",
   "source": [
-    "extensions/panel/src/features/quota/providers/xai/data.ts fetchXaiQuota, requestXaiSubscription",
-    "extensions/panel/src/utils/quota/constants.ts XAI_BILLING_*_URL, XAI_USER_URL, XAI_SETTINGS_URL, XAI_REQUEST_HEADERS",
+    "d0f7af2ff:extensions/panel/src/features/quota/providers/xai/data.ts fetchXaiQuota, requestXaiSubscription",
+    "d0f7af2ff:extensions/panel/src/utils/quota/constants.ts XAI_BILLING_*_URL, XAI_USER_URL, XAI_SETTINGS_URL, XAI_REQUEST_HEADERS",
     "core/internal/api/handlers/management/api_tools.go APICall"
   ],
   "client": {"method":"GET","path":"/v0/management/accounts/corpus/quota","auth":"management-key"},

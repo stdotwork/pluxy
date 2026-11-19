@@ -61,13 +61,19 @@ tar = { version = "=0.4.46", default-features = false }
 # The macOS login item, a LaunchAgent property list (src/startup.rs). Already in the tree through
 # tauri-utils.
 plist = "1"
+# The app's own update (src/updater/): the signature check only; the app installs the update
+# itself and never calls the plugin's install. No default features: no gzip/zip payloads; its
+# HTTP client is never used (the app downloads natively).
+tauri-plugin-updater = { version = "=2.14.1", default-features = false, features = ["rustls-tls"] }
 # Access (src/access.rs): reads relative to a folder the person granted, never leaving it.
 cap-std = "=4.0.3"
 # Bytes a page reads through Access travel as base64 in its channel's JSON.
 base64 = "=0.23.1"
 
-# The single-instance pipe and the Run key (src/instance/win.rs, src/startup/registry.rs); private
-# files (src/private_windows.rs) and the vault's folders (src/vault_windows.rs): access lists, and
+# The single-instance pipe and the Run key (src/instance/win.rs, src/startup/registry.rs); the
+# processes the app starts and holds (src/owned/windows.rs: CreateProcessW, job objects, console
+# control, file identity) and the core's listener check (src/managed.rs); private files
+# (src/private_windows.rs) and the vault's folders (src/vault_windows.rs): access lists, and
 # opening, renaming and listing relative to a held folder. Already in the tree through cap-std and
 # tauri's dirs; the version is the locked one.
 [target.'cfg(windows)'.dependencies]
@@ -76,24 +82,94 @@ windows-sys = { version = "=0.61.2", features = [
     "Wdk_Foundation",
     "Wdk_Storage_FileSystem",
     "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
     "Win32_System_IO",
+    "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_Registry",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
 ] }
+# Native key entry and confirmations (src/key_entry_windows.rs, src/confirmation_ui_windows.rs,
+# src/dialog_windows.rs) and the remembered launches' file identities and access checks
+# (src/confirmation_windows.rs): the windows crate Tauri uses, more of its API. The key typed is
+# cleared from memory with zeroize (already here through rustls).
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_DataExchange",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_System_Threading",
+  "Win32_UI_Controls",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+zeroize = "1"
 # The WebView2 bindings wry uses (the same version, so one copy), to watch a page's frame
 # navigations (src/page_frames.rs).
 webview2-com = "=0.39.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-# The app's own update (src/updater.rs): signature check and AppImage install only. No default
-# features: no gzip/zip payloads; its HTTP client is never used (the app downloads natively).
-tauri-plugin-updater = { version = "=2.14.1", default-features = false, features = ["rustls-tls"] }
+
+# Native key entry and confirmations on macOS (src/key_entry_macos.rs,
+# src/confirmation_ui_macos.rs, src/dialog_macos.rs): the AppKit bindings Tauri uses.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "NSArray",
+  "NSDate",
+  "NSGeometry",
+  "NSObject",
+  "NSRunLoop",
+  "NSString",
+  "NSThread",
+  "NSTimer",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "objc2-core-foundation",
+  "NSActionCell",
+  "NSApplication",
+  "NSButton",
+  "NSButtonCell",
+  "NSCell",
+  "NSClipView",
+  "NSColor",
+  "NSControl",
+  "NSEvent",
+  "NSFont",
+  "NSGraphics",
+  "NSGraphicsContext",
+  "NSPanel",
+  "NSPasteboard",
+  "NSResponder",
+  "NSRunningApplication",
+  "NSScrollView",
+  "NSSecureTextField",
+  "NSText",
+  "NSTextField",
+  "NSTextFieldCell",
+  "NSTextView",
+  "NSView",
+  "NSWindow",
+] }
+zeroize = "1"
 
 # The same GTK Tauri uses, to lay page webviews over the window (src/place.rs).
 [target.'cfg(target_os = "linux")'.dependencies]

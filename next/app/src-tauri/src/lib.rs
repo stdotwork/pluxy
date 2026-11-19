@@ -17,10 +17,13 @@ pub static PLUXY_TEST_BUILD: [u8; 31] = *b"PLUXY_TEST_BUILD_DO_NOT_RELEASE";
 pub mod access;
 pub mod artifact;
 pub mod client;
-#[cfg(target_os = "linux")]
+// Built for the router and the runtimes; its key capture and entry commands (`client_key_*`)
+// stay Linux only until their Windows and macOS slice.
+#[cfg(native_stack)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod client_keys;
 mod command_names;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 pub mod confirmation;
 pub mod conn;
 #[cfg(target_os = "linux")]
@@ -28,44 +31,57 @@ mod core_aliases;
 mod core_updates;
 pub mod cores;
 pub mod device;
+#[cfg(any(windows, target_os = "macos"))]
+mod dialog;
+#[cfg(target_os = "macos")]
+mod dialog_macos;
+#[cfg(windows)]
+mod dialog_windows;
+pub(crate) mod format_chars;
 pub mod instance;
 mod key_entry;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 pub mod launcher;
 pub mod managed;
 #[cfg(feature = "native-test")]
 mod native_test;
 pub mod notes;
+// The processes the app starts and holds, for `program` and `spawn`.
+#[cfg_attr(not(native_stack), allow(dead_code))]
+mod owned;
 #[cfg(windows)]
 mod page_frames;
 pub mod pages;
 mod place;
 mod privacy;
+#[cfg(target_os = "macos")]
+mod private_macos;
 #[cfg(windows)]
 mod private_windows;
-#[cfg(target_os = "linux")]
+// Built and tested on every platform; the app starts tools where `native_stack` is set
+// (`build.rs`).
+#[cfg_attr(not(native_stack), allow(dead_code))]
 pub mod program;
 pub mod recovery;
 pub mod release;
 #[cfg(debug_assertions)]
 pub mod release_config;
-#[cfg(all(target_os = "linux", feature = "native-test"))]
+#[cfg(feature = "native-test")]
 mod release_native;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 pub mod route;
 #[cfg(target_os = "linux")]
 pub mod savefile;
-#[cfg(target_os = "linux")]
+#[cfg_attr(not(native_stack), allow(dead_code))]
 pub mod spawn;
 mod startup;
 pub mod trust;
-#[cfg(all(target_os = "linux", feature = "native-test"))]
+#[cfg(feature = "native-test")]
 mod update_native;
-#[cfg(unix)]
 mod updater;
 mod updates;
 pub mod vault;
-#[cfg(all(windows, feature = "artifact-test-trust"))]
+#[cfg(windows)]
 mod win_acl;
 pub mod window;
 
@@ -99,7 +115,7 @@ struct App {
     /// A change of the app's own core waiting for its native confirmation (`core_updates.rs`).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     core_change: Mutex<Option<core_updates::Pending>>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     confirmations: Mutex<confirmation::Confirmations>,
     /// The page webviews' own web context's folder: nothing shared with the window's.
     pages_dir: std::path::PathBuf,
@@ -122,20 +138,20 @@ struct App {
     #[cfg(unix)]
     access_done: std::sync::Condvar,
     /// The admitted native tools that run, on demand (`program.rs`).
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     programs: program::Host,
     /// Page calls of native operations in flight (`route.rs`).
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     routes: route::Routes,
     /// Secrets the person entered natively, references to them, and tools' backups and journals
     /// (`vault.rs`).
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     vault: std::sync::Arc<vault::Vault>,
     /// The managed runtimes tools started through the host's spawn service (`spawn.rs`).
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     runtimes: spawn::Runtimes,
     /// The launcher's remembered launches, recent folders and notice setting (`launcher.rs`).
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     launcher: Mutex<launcher::Launcher>,
     status: Mutex<Option<MenuItem<Wry>>>,
     /// Start, Stop and Restart, in that order.
@@ -151,8 +167,7 @@ struct App {
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
     rotation_open: AtomicBool,
-    /// The app's own update (`updater.rs`).
-    #[cfg(unix)]
+    /// The app's own update (`updater/`).
     updater: updater::State,
 }
 
@@ -434,8 +449,15 @@ fn close_pages(app: &AppHandle) {
         notes.clear();
         l
     };
-    // Each one that cannot be closed stays in `closing`.
+    // Each one that cannot be closed stays in `closing`. Off Linux this runs on the main
+    // thread, where the closes must not run inline (`close_webviews`).
+    #[cfg(target_os = "linux")]
     let _ = close_webviews(app, labels);
+    #[cfg(not(target_os = "linux"))]
+    {
+        let app = app.clone();
+        std::thread::spawn(move || close_webviews(&app, labels));
+    }
 }
 
 /// Closes page webviews whose pages are unbound already, and those that could not be closed
@@ -447,9 +469,15 @@ fn close_pages(app: &AppHandle) {
 /// close inline (`send_user_message`), removing the webview's last reference, whose drop
 /// destroys the WebKit widget (wry 0.57.1, `InnerWebView::drop`), before `close` returns. From
 /// another thread `close` only posts the message.
+///
+/// Off Linux, never call this on the main thread: a page webview being made there holds
+/// tauri-runtime-wry's store of web contexts (`create_webview`) while WebView2 delivers the
+/// window's calls, and a webview dropped meanwhile on that thread waits for the same store
+/// (`WebviewWrapper::drop`) for good. From another thread the closes are posted, and the event
+/// loop holds them until the webview being made is done.
 fn close_webviews(app: &AppHandle, labels: Vec<String>) -> Vec<String> {
     // Their calls of native operations in flight are cancelled, their answers not delivered.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     for l in &labels {
         app.state::<App>().routes.page_closed(l);
     }
@@ -521,20 +549,26 @@ fn quit(app: &AppHandle) {
         return;
     }
     remember_window(app);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     st.confirmations.lock().unwrap().invalidate();
     // Off the calling thread, which may be the main one: a recovery or a tray action can hold
     // the connection for seconds while a core starts or stops. Tray actions refuse to start now.
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        #[cfg(target_os = "linux")]
-        app.state::<App>().programs.stop_all();
-        // The app's managed runtimes stop with it; detached launches are not its own.
-        #[cfg(target_os = "linux")]
-        app.state::<App>().runtimes.stop_all();
-        app.state::<App>().conn.lock().unwrap().stop_core();
+        stop_owned(&app.state::<App>());
         app.exit(0);
     });
+}
+
+/// Stops what the app owns, in this order: its native tools, its managed runtimes, then its own
+/// core, if it runs one. Quit, the restart after an update install (`updater::restart_into`) and
+/// the app's exit all stop it this way. Detached launches are not the app's own and run on.
+fn stop_owned(st: &App) {
+    #[cfg(native_stack)]
+    st.programs.stop_all();
+    #[cfg(native_stack)]
+    st.runtimes.stop_all();
+    st.conn.lock().unwrap().stop_core();
 }
 
 /// Saves the window's size and place, as it is now if it is open.
@@ -619,12 +653,12 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         app,
         "launch-settings",
         "Remembered launches…",
-        cfg!(target_os = "linux"),
+        cfg!(any(target_os = "linux", windows, target_os = "macos")),
         None::<&str>,
     )?;
     let sep = PredefinedMenuItem::separator(app)?;
     // Remembered launches, one click each (`launcher.rs`).
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     let launches = launcher::tray_menu(app)?;
     let start = MenuItem::with_id(app, "core-start", "Start core", false, None::<&str>)?;
     let stop = MenuItem::with_id(app, "core-stop", "Stop core", false, None::<&str>)?;
@@ -635,7 +669,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &status, &start, &stop, &restart, &sep, &open, &access, &quit_item,
         ],
     )?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     menu.insert(&launches, 6)?;
     let mut tray = TrayIconBuilder::with_id("pluxy")
         .tooltip("pluxy")
@@ -677,11 +711,11 @@ fn tray_menu(app: &AppHandle, id: &str) {
         }
         "core-start" | "core-stop" | "core-restart" => tray_action(app, id),
         "quit" => quit(app),
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
         "launch-settings" => {
             let _ = confirmation::settings(app);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(native_stack)]
         id if id.starts_with("launch:") => launcher::tray_start(app, id),
         _ => {}
     }
@@ -1027,7 +1061,7 @@ async fn management_key_rotate(webview: Webview) -> Result<client::Reply, String
     .map_err(|_| "native rotation failed".into())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 fn rotate(app: &AppHandle) -> client::Reply {
     let st = app.state::<App>();
     let prepared = st.conn.lock().unwrap().prepare_rotation();
@@ -1072,12 +1106,12 @@ fn rotate(app: &AppHandle) -> client::Reply {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 fn rotate(_: &AppHandle) -> client::Reply {
     client::Reply::failed(
         501,
         "unsupported",
-        "native key rotation is currently supported on Linux only",
+        "native key rotation is supported on Linux, Windows and macOS only",
     )
 }
 
@@ -1100,8 +1134,12 @@ impl Rect {
     }
 }
 
-/// Opens a webview for an extension page over rect of the window, and returns its label.
-#[tauri::command]
+/// Opens a webview for an extension page over rect of the window, and returns its label. Off
+/// Linux it runs as an async command, off the main thread: a command on the main thread that
+/// makes a WebView2 never returns on Windows. On Linux it stays on the main thread, where the
+/// page's GTK overlay is made (`place::adopt`).
+#[cfg_attr(target_os = "linux", tauri::command)]
+#[cfg_attr(not(target_os = "linux"), tauri::command(async))]
 #[allow(clippy::too_many_arguments)]
 fn page_open(
     webview: Webview,
@@ -1128,8 +1166,10 @@ fn page_open(
     )
 }
 
-/// Opens a webview for page of package id on this device, at the address its catalog gives.
-#[tauri::command]
+/// Opens a webview for page of package id on this device, at the address its catalog gives. On
+/// the main thread on Linux only, as `page_open` is.
+#[cfg_attr(target_os = "linux", tauri::command)]
+#[cfg_attr(not(target_os = "linux"), tauri::command(async))]
 fn device_page_open(
     webview: Webview,
     state: tauri::State<App>,
@@ -1301,7 +1341,11 @@ fn page_place(webview: Webview, label: String, rect: Rect) -> Result<(), String>
     )
 }
 
-#[tauri::command]
+/// Closes a page webview of the window's. Off Linux it runs as an async command, off the main
+/// thread, where closing a webview may never return (`close_webviews`); on Linux it stays on the
+/// main thread.
+#[cfg_attr(target_os = "linux", tauri::command)]
+#[cfg_attr(not(target_os = "linux"), tauri::command(async))]
 fn page_close(webview: Webview, state: tauri::State<App>, label: String) -> Result<(), String> {
     trusted(&webview)?;
     page_webview(webview.app_handle(), &label)?;
@@ -1348,6 +1392,7 @@ fn deliver_page(app: &AppHandle, label: &str, generation: &str, msg: Value) -> R
             #[cfg(feature = "native-test")]
             if result == "true" {
                 native_test::privacy::delivered(&sent);
+                native_test::page_delivered(&callback_label, &sent);
             }
             finish_page_delivery(
                 &callback_app,
@@ -1396,26 +1441,26 @@ fn notify_page_closed(app: &AppHandle, label: &str) {
 #[tauri::command]
 fn confirmation_request(webview: Webview, action: String) -> Result<(), String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     {
         confirmation::request(webview.app_handle(), action)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
         let _ = action;
-        Err("native confirmations are supported on Linux only".into())
+        Err("native confirmations are supported on Linux, Windows and macOS only".into())
     }
 }
 #[tauri::command]
 fn confirmation_settings(webview: Webview) -> Result<(), String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     {
         confirmation::settings(webview.app_handle())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
-        Err("native confirmations are supported on Linux only".into())
+        Err("native confirmations are supported on Linux, Windows and macOS only".into())
     }
 }
 
@@ -1480,7 +1525,7 @@ fn device_changed_as(
         f(&mut catalog)?;
         // Disabled or removed: nothing could control its managed runtimes any more. They are
         // retired under the catalog's lock, so a later enable reopens it only after this.
-        #[cfg(target_os = "linux")]
+        #[cfg(native_stack)]
         match catalog.get(id) {
             None => st.runtimes.close(id, true),
             Some(p) if !p.enabled => st.runtimes.close(id, false),
@@ -1497,15 +1542,15 @@ fn device_changed_as(
     left.extend(close_webviews(app, labels));
     // Its registrations end with any change, a swap too: its jobs, as consumer or producer, are
     // cancelled and nothing more of them is delivered.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     st.routes.jobs.revoke(id);
     // A native tool runs only as the release it was admitted as: any change stops it, and its
     // next call starts it from its record then, if it still has one.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     if stop_tool {
         st.programs.stop(id);
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     let _ = stop_tool;
     let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
     if left.is_empty() {
@@ -1519,7 +1564,7 @@ fn device_changed_as(
 /// the person enabled is a swap (`native_swap`).
 fn device_commit(app: &AppHandle, c: device::Candidate) -> Result<device::View, String> {
     let id = c.id.clone();
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     if app
         .state::<App>()
         .device
@@ -1537,7 +1582,7 @@ fn device_commit(app: &AppHandle, c: device::Candidate) -> Result<device::View, 
 /// confirmation; the program host starts and describes it, with no call; only then is it
 /// committed and does it serve, while the old release's tool drains (`program::Host::switch`).
 /// A cancel or a failure leaves the active release enabled and serving, as it was.
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 fn native_swap(
     app: &AppHandle,
     id: &str,
@@ -1608,7 +1653,7 @@ fn native_swap(
 /// Asks the person to confirm what in a native confirmation, which the window cannot answer
 /// for them, and waits for the outcome: true once they confirmed (its single-use token spent),
 /// false if they cancelled.
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 fn ask_native(app: &AppHandle, what: confirmation::Action, id: &str) -> Result<bool, String> {
     let st = app.state::<App>();
     let action = {
@@ -1784,7 +1829,7 @@ async fn device_enable(
             return native_enable(&app, &id);
         }
         // Disabling stops its managed runtimes: asked first, when any runs.
-        #[cfg(target_os = "linux")]
+        #[cfg(native_stack)]
         if !enabled {
             launcher::confirm_runtimes(&app, &id, "Disable")?;
         }
@@ -1799,7 +1844,7 @@ async fn device_enable(
 /// Enables native tool id once the person confirmed it in a native confirmation that shows
 /// its ID, source, digest, signer and full access to their user account. The catalog admits
 /// it only if it is still the release that was shown.
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
     let st = app.state::<App>();
     // Its files are hashed without holding the catalog (`checked_unlocked`).
@@ -1822,10 +1867,10 @@ fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
     })
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(native_stack))]
 fn native_enable(_app: &AppHandle, id: &str) -> Result<device::View, String> {
     Err(format!(
-        "{id} is a native tool; native confirmations are supported on Linux only"
+        "{id} is a native tool; native tools run on Linux, Windows and macOS only"
     ))
 }
 
@@ -1841,7 +1886,7 @@ async fn device_imports(
     trusted(&webview)?;
     let app = webview.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        #[cfg(target_os = "linux")]
+        #[cfg(native_stack)]
         {
             let st = app.state::<App>();
             let roots = trust::TrustStore::current();
@@ -1872,10 +1917,12 @@ async fn device_imports(
             let view = st.device.lock().unwrap().view(&roots);
             Ok(view)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(native_stack))]
         {
             let _ = (app, allowed);
-            Err(format!("{id}: native imports are supported on Linux only"))
+            Err(format!(
+                "{id}: native imports are supported on Linux, Windows and macOS only"
+            ))
         }
     })
     .await
@@ -1887,7 +1934,7 @@ async fn device_remove(webview: Webview, id: String) -> Result<device::View, Str
     trusted(&webview)?;
     tauri::async_runtime::spawn_blocking(move || {
         // Removing stops its managed runtimes: asked first when any runs.
-        #[cfg(target_os = "linux")]
+        #[cfg(native_stack)]
         launcher::confirm_runtimes(webview.app_handle(), &id, "Remove")?;
         let view = device_change(&webview, &id, |c| c.remove(&id));
         // A removed package keeps no grants: installing it again starts with none.
@@ -2278,7 +2325,7 @@ async fn device_rollback(webview: Webview, id: String) -> Result<device::View, S
     trusted(&webview)?;
     let app = webview.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        #[cfg(target_os = "linux")]
+        #[cfg(native_stack)]
         {
             let swaps = {
                 let st = app.state::<App>();
@@ -2299,7 +2346,7 @@ async fn device_rollback(webview: Webview, id: String) -> Result<device::View, S
 
 /// What the program host starts tool id from: its admitted record, checked now
 /// (`Catalog::admitted`).
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 fn program_resolver(app: AppHandle) -> program::Resolve {
     Box::new(move |id| {
         // Its files are hashed without holding the catalog (`checked_unlocked`).
@@ -2323,7 +2370,7 @@ async fn program_call(
     ticket: Option<String>,
 ) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         // Registered now, before it can wait, so a cancel or the window's closing reaches it.
@@ -2348,10 +2395,10 @@ async fn program_call(
         .await
         .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = (package, op, input, ticket);
-        Err("native tools run on Linux only for now".into())
+        Err("native tools run on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2359,14 +2406,14 @@ async fn program_call(
 #[tauri::command]
 fn program_cancel(webview: Webview, ticket: String) -> Result<(), String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         webview.state::<App>().programs.cancel(&ticket)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = ticket;
-        Err("native tools run on Linux only for now".into())
+        Err("native tools run on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2374,7 +2421,7 @@ fn program_cancel(webview: Webview, ticket: String) -> Result<(), String> {
 #[tauri::command]
 fn program_status(webview: Webview, package: String) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let st = webview.state::<App>();
         let mut status =
@@ -2393,10 +2440,10 @@ fn program_status(webview: Webview, package: String) -> Result<Value, String> {
         }
         Ok(status)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = package;
-        Err("native tools run on Linux only for now".into())
+        Err("native tools run on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2405,16 +2452,16 @@ fn program_status(webview: Webview, package: String) -> Result<Value, String> {
 #[tauri::command]
 async fn launcher_state(webview: Webview) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || Ok(launcher::state(&app)))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
-        Err("the launcher runs on Linux only for now".into())
+        Err("the launcher runs on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2422,16 +2469,16 @@ async fn launcher_state(webview: Webview) -> Result<Value, String> {
 #[tauri::command]
 async fn launcher_terminals(webview: Webview) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || launcher::terminals(&app))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
-        Err("the launcher runs on Linux only for now".into())
+        Err("the launcher runs on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2440,17 +2487,17 @@ async fn launcher_terminals(webview: Webview) -> Result<Value, String> {
 #[tauri::command]
 async fn launcher_launch(webview: Webview, launch: Value) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || launcher::launch(&app, &launch))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = launch;
-        Err("the launcher runs on Linux only for now".into())
+        Err("the launcher runs on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2460,7 +2507,7 @@ async fn launcher_launch(webview: Webview, launch: Value) -> Result<Value, Strin
 #[tauri::command]
 async fn launcher_start(webview: Webview, id: String) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         let gesture = confirmation::Gesture::main_window();
@@ -2468,10 +2515,10 @@ async fn launcher_start(webview: Webview, id: String) -> Result<Value, String> {
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = id;
-        Err("the launcher runs on Linux only for now".into())
+        Err("the launcher runs on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2479,17 +2526,17 @@ async fn launcher_start(webview: Webview, id: String) -> Result<Value, String> {
 #[tauri::command]
 async fn launcher_forget(webview: Webview, id: String) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || launcher::forget(&app, &id))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = id;
-        Err("the launcher runs on Linux only for now".into())
+        Err("the launcher runs on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2497,17 +2544,17 @@ async fn launcher_forget(webview: Webview, id: String) -> Result<Value, String> 
 #[tauri::command]
 async fn launcher_settings(webview: Webview, notice: bool) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || launcher::settings(&app, notice))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = notice;
-        Err("the launcher runs on Linux only for now".into())
+        Err("the launcher runs on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2730,6 +2777,13 @@ fn asset_queue() -> &'static SyncSender<AssetJob> {
     })
 }
 
+/// A device page file's CSP, as core's pages site: sandboxed with scripts, loading only from the
+/// asset scheme, given as source (`pages::asset_source`; there this webview gets only its own
+/// folder), and no requests from script, frames or forms.
+fn asset_csp(s: &str) -> String {
+    format!("sandbox allow-scripts; default-src 'none'; script-src {s}; style-src {s}; img-src {s} data: blob:; font-src {s} data:; media-src {s} data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'")
+}
+
 fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static str)>) {
     #[cfg(feature = "native-test")]
     native_test::log(
@@ -2738,16 +2792,19 @@ fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static st
     );
     #[cfg(not(feature = "native-test"))]
     let _ = (&job.label, &job.path);
+    job.responder.respond(asset_response(status, found));
+}
+
+/// The asset scheme's answer: found's bytes and type with status, under the asset CSP for this
+/// system's asset scheme (`asset_csp`) when found.
+fn asset_response(status: u16, found: Option<(Vec<u8>, &'static str)>) -> Response<Vec<u8>> {
     let (body, kind) = found.unwrap_or((Vec::new(), "text/plain"));
-    // As core's pages site: sandboxed with scripts, loading only from the asset scheme (where
-    // this webview gets only its own folder), and no requests from script, frames or forms.
-    let s = device::ASSET_SCHEME;
     let csp = if status == 200 {
-        format!("sandbox allow-scripts; default-src 'none'; script-src {s}:; style-src {s}:; img-src {s}: data: blob:; font-src {s}: data:; media-src {s}: data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'")
+        asset_csp(&pages::asset_source(&device::asset_base()))
     } else {
         "sandbox; default-src 'none'".to_string()
     };
-    let resp = Response::builder()
+    Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, kind)
         .header("Content-Security-Policy", csp)
@@ -2757,8 +2814,7 @@ fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static st
         .header("X-Content-Type-Options", "nosniff")
         .header("Referrer-Policy", "no-referrer")
         .body(body)
-        .expect("a response");
-    job.responder.respond(resp);
+        .expect("a response")
 }
 
 /// The `pluxy-page:` scheme: the page webviews' app document and their way to the window.
@@ -2797,15 +2853,15 @@ fn page_scheme(
         let spawned = std::thread::Builder::new()
             .name("pluxy-page-call".into())
             .spawn(move || {
-                #[cfg(target_os = "linux")]
+                #[cfg(native_stack)]
                 route::call_page(&app, &m.label, &m.generation, &id, &m.data["params"]);
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(not(native_stack))]
                 let _ = deliver_page(
                     &app,
                     &m.label,
                     &m.generation,
                     serde_json::json!({"type": "message", "data": {"v": 0, "id": id,
-                        "error": {"code": "unavailable", "message": "native tools run on Linux only for now"}}}),
+                        "error": {"code": "unavailable", "message": "native tools run on Linux, Windows and macOS only"}}}),
                 );
             });
         if let Err(e) = spawned {
@@ -2814,7 +2870,10 @@ fn page_scheme(
         None
     });
     if let Some(m) = msg {
-        #[cfg(all(target_os = "linux", feature = "native-test"))]
+        #[cfg(all(
+            any(target_os = "linux", windows, target_os = "macos"),
+            feature = "native-test"
+        ))]
         if m.kind == "call" && m.data.get("id").and_then(Value::as_str) == Some("spoof-confirm") {
             confirmation::native::PAGE_CLAIMS.fetch_add(1, Ordering::SeqCst);
         }
@@ -2870,7 +2929,7 @@ fn page_scheme(
 pub fn run() {
     // The launch environment comes from the app's environment as it starts, before anything
     // changes it; the app's own core file limit is lowered then too (`spawn::capture`).
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     spawn::capture();
     std::hint::black_box(&PLUXY_BUILD_RECEIPT);
     #[cfg(any(feature = "native-test", feature = "artifact-test-trust"))]
@@ -2878,18 +2937,15 @@ pub fn run() {
     let context = tauri::generate_context!();
     // The updater plugin exists only when the updater gate passes, before anything else runs: a
     // build without updater trust never loads it.
-    #[cfg(unix)]
     let gate = trust::updater_gate(
         context.config(),
         std::path::Path::new(&std::env::var_os("HOME").unwrap_or_default()),
     );
     let builder = tauri::Builder::default();
-    #[cfg(unix)]
     let builder = match &gate {
         Ok(key) => builder.plugin(tauri_plugin_updater::Builder::new().pubkey(key).build()),
         Err(_) => builder,
     };
-    #[cfg(unix)]
     let updater_plugin = gate.map(|_| ());
     let app = builder
         .invoke_handler(tauri::generate_handler![
@@ -2954,13 +3010,9 @@ pub fn run() {
             window_close,
             privacy_get,
             privacy_set,
-            #[cfg(unix)]
             updater::app_update_get,
-            #[cfg(unix)]
             updater::app_update_start,
-            #[cfg(unix)]
             updater::app_update_cancel,
-            #[cfg(unix)]
             updater::app_update_rollback,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
@@ -3007,10 +3059,10 @@ pub fn run() {
                 app.config().identifier.clone(),
             );
             let preferences = startup_store.load();
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
             let confirmations =
                 confirmation::Confirmations::open(config.join("remembered-launches.json"))?;
-            #[cfg(target_os = "linux")]
+            #[cfg(native_stack)]
             let launcher_file = launcher::file(&config);
             let release_settings = release::settings_path(&config);
             let device_dirs = device::Dirs {
@@ -3044,8 +3096,28 @@ pub fn run() {
             if let Some(w) = &access_store.warning {
                 eprintln!("pluxy-app: {w}");
             }
+            #[cfg(not(windows))]
             let data = app.path().app_data_dir()?;
+            // The files that hold secrets: connection.json (a kept management key) and the app's
+            // own core's folder (its config holds the core's management key, and the core keeps
+            // its credentials there). On Windows they go in the local application data, which
+            // stays on this machine: the config and data folders are in the roaming one, which a
+            // roaming profile copies to its server and the person's other machines.
+            #[cfg(windows)]
+            let secrets = app.path().app_local_data_dir()?;
+            #[cfg(not(windows))]
+            let secrets = config.clone();
+            #[cfg(windows)]
+            let core = secrets.join("core");
+            #[cfg(not(windows))]
             let core = data.join("core");
+            // The app's own core versions: on Windows in the local application data too, so the
+            // programs (a core and its packages per version) stay on this machine and are not
+            // copied to the roaming profile's server; `cores.rs` refuses a store off a fixed
+            // local drive.
+            #[cfg(windows)]
+            let cores = secrets.join("cores");
+            #[cfg(not(windows))]
             let cores = data.join("cores");
             // When the app's core exits, the tray and the window show it. Off this thread: the
             // exit may come while a connection change holds the connection.
@@ -3069,7 +3141,7 @@ pub fn run() {
             let window_prefs = window::Store::open(config.join("window.json"));
             let conn = Connection::open_at_startup(
                 Dirs {
-                    config,
+                    config: secrets,
                     core,
                     cores,
                 },
@@ -3078,9 +3150,9 @@ pub fn run() {
             );
             #[cfg(feature = "native-test")]
             native_test::hold_for_early_exit();
-            #[cfg(target_os = "linux")]
+            #[cfg(native_stack)]
             let vault = std::sync::Arc::new(vault::Vault::open(vault::folder(app)?));
-            #[cfg(target_os = "linux")]
+            #[cfg(native_stack)]
             if let Some(w) = vault.broken() {
                 eprintln!("pluxy-app: the vault is not used: {w}");
             }
@@ -3097,7 +3169,7 @@ pub fn run() {
                 startup: Mutex::new((startup_store, preferences)),
                 conn: Mutex::new(conn),
                 core_change: Mutex::new(None),
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
                 confirmations: Mutex::new(confirmations),
                 pages_dir,
                 pages: Mutex::new(Pages::default()),
@@ -3111,16 +3183,16 @@ pub fn run() {
                 access: Mutex::new(access_store),
                 #[cfg(unix)]
                 access_done: std::sync::Condvar::new(),
-                #[cfg(target_os = "linux")]
+                #[cfg(native_stack)]
                 programs: program::Host::new(
                     program_resolver(app.handle().clone()),
                     Default::default(),
                 ),
-                #[cfg(target_os = "linux")]
+                #[cfg(native_stack)]
                 routes: route::Routes::default(),
-                #[cfg(target_os = "linux")]
+                #[cfg(native_stack)]
                 vault: std::sync::Arc::clone(&vault),
-                #[cfg(target_os = "linux")]
+                #[cfg(native_stack)]
                 runtimes: spawn::Runtimes::open(
                     Some(app.path().app_data_dir()?.join("runtimes.json")),
                     // Checked as a delivery to the runtime's package at each start and restart,
@@ -3128,7 +3200,7 @@ pub fn run() {
                     // refused.
                     Box::new(client_keys::Launches(app.handle().clone())),
                 ),
-                #[cfg(target_os = "linux")]
+                #[cfg(native_stack)]
                 launcher: Mutex::new(launcher::Launcher::open(launcher_file)),
                 status: Mutex::new(None),
                 core_actions: Mutex::new(Vec::new()),
@@ -3140,44 +3212,52 @@ pub fn run() {
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
                 rotation_open: AtomicBool::new(false),
-                #[cfg(unix)]
                 updater: updater::State::new(updater_plugin.clone()),
             });
             let handle = app.handle().clone();
             // Tools' own calls of other packages' operations go through the router.
-            #[cfg(target_os = "linux")]
+            #[cfg(native_stack)]
             handle
                 .state::<App>()
                 .programs
                 .set_route(route::route(handle.clone()));
             // And their vault frames, describe's journals and what is redacted, to the vault.
-            #[cfg(target_os = "linux")]
+            #[cfg(native_stack)]
             handle
                 .state::<App>()
                 .programs
                 .set_private(vault as std::sync::Arc<dyn program::Private>);
             // And their spawn and runtime frames, to the host's spawn service.
-            #[cfg(target_os = "linux")]
+            #[cfg(native_stack)]
             handle
                 .state::<App>()
                 .programs
                 .set_spawner(route::spawner(handle.clone()));
-            // And their files frames, to the host's save service.
+            // And their files frames, to the host's save service (Linux only for now).
             #[cfg(target_os = "linux")]
             handle
                 .state::<App>()
                 .programs
                 .set_saver(route::saver(handle.clone()));
-            // Tools get the app's home and a data folder of their own, beside the vault.
-            #[cfg(target_os = "linux")]
+            // Tools get the app's home and a data folder of their own, beside the vault: on
+            // Windows the profile folder clients use (`USERPROFILE`) and the local data folder,
+            // which does not roam.
+            #[cfg(native_stack)]
             handle
                 .state::<App>()
                 .programs
                 .set_tool_env(program::ToolEnv {
+                    #[cfg(windows)]
+                    home: std::env::home_dir().ok_or("the app has no home folder")?,
+                    #[cfg(not(windows))]
                     home: app.path().home_dir()?,
+                    #[cfg(windows)]
+                    tools: app.path().app_local_data_dir()?.join("tools"),
+                    #[cfg(not(windows))]
                     tools: app.path().app_data_dir()?.join("tools"),
+                    system: program::ToolEnv::system(),
                 });
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
             if let Some(message) = handle
                 .state::<App>()
                 .confirmations
@@ -3225,9 +3305,7 @@ pub fn run() {
                 show_in_dock(&handle, false);
             }
             // A version an update installed accepts itself, which the earlier one waits for.
-            #[cfg(unix)]
             updater::accept(&handle);
-            #[cfg(unix)]
             updater::record_started_from(&handle);
             #[cfg(feature = "native-test")]
             native_test::start(handle);
@@ -3251,14 +3329,14 @@ pub fn run() {
                     }
                 }
                 WindowEvent::Destroyed => {
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
                     app.state::<App>()
                         .confirmations
                         .lock()
                         .unwrap()
                         .invalidate();
                     // Its native tool calls end, so their tools stop when idle.
-                    #[cfg(target_os = "linux")]
+                    #[cfg(native_stack)]
                     app.state::<App>().programs.cancel_all();
                     // Its webviews went with it.
                     app.state::<App>().pages.lock().unwrap().clear();
@@ -3291,11 +3369,7 @@ pub fn run() {
         }
         RunEvent::Exit => {
             if let Some(st) = app.try_state::<App>() {
-                #[cfg(target_os = "linux")]
-                st.programs.stop_all();
-                #[cfg(target_os = "linux")]
-                st.runtimes.stop_all();
-                st.conn.lock().unwrap().stop_core();
+                stop_owned(&st);
             }
             if let Some(i) = app.try_state::<instance::Instance>() {
                 i.release();
@@ -3308,6 +3382,49 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_device_page_loads_its_files_from_the_asset_scheme_as_served() {
+        // Linux and macOS serve the asset scheme by its name; Windows as an http origin. The
+        // answer the scheme gives here is held to this system's.
+        let here = if cfg!(any(windows, target_os = "android")) {
+            "http://pluxy-app.localhost/"
+        } else {
+            "pluxy-app://localhost/"
+        };
+        assert_eq!(device::asset_base(), here);
+        let served = asset_response(200, Some((b"<p>".to_vec(), "text/html")));
+        let served = served.headers()["Content-Security-Policy"]
+            .to_str()
+            .unwrap();
+        for (base, source) in [
+            ("pluxy-app://localhost/", "pluxy-app:"),
+            ("http://pluxy-app.localhost/", "http://pluxy-app.localhost"),
+        ] {
+            let csp = if base == here {
+                served.to_string()
+            } else {
+                asset_csp(&pages::asset_source(base))
+            };
+            for directive in [
+                "script-src",
+                "style-src",
+                "img-src",
+                "font-src",
+                "media-src",
+            ] {
+                let listed = csp
+                    .split(';')
+                    .map(str::trim)
+                    .find_map(|d| d.strip_prefix(directive))
+                    .unwrap_or_default();
+                assert!(
+                    listed.split_whitespace().any(|s| s == source),
+                    "{directive} does not list {source}: {csp}"
+                );
+            }
+        }
+    }
 
     fn managed(state: &'static str, version: u64) -> View {
         View {
@@ -3450,7 +3567,6 @@ mod tests {
         ] {
             assert!(all.iter().any(|a| a == c), "{c} missing from {all:?}");
         }
-        #[cfg(unix)]
         assert!(all.iter().any(|a| a == "plugin:updater|check"));
         assert!(all.iter().all(|c| !c.contains("__app-acl__")));
         assert!(all.len() > 100, "{} plugin commands", all.len());

@@ -45,3 +45,14 @@ func TestUsageLimitReply(t *testing.T) {
 		t.Errorf("ResetAfter = %v, want at least a second", d)
 	}
 }
+
+// The countdown in the reply is whole seconds rounded up, the same in reset_time, reset_seconds and
+// the Anthropic message: 1.2s left is 2s in all three.
+func TestUsageLimitCountdownRoundsUp(t *testing.T) {
+	at := time.Unix(1_800_000_000, 0)
+	u := &UsageLimit{ResetsAt: at.Add(1200 * time.Millisecond), At: at}
+	o := u.ErrorObject()
+	if o["reset_time"] != "2s" || o["reset_seconds"] != int64(2) || u.ResetAfter() != 2*time.Second {
+		t.Errorf("1.2s left: reset_time %v, reset_seconds %v, ResetAfter %v; want 2s, 2 and 2s", o["reset_time"], o["reset_seconds"], u.ResetAfter())
+	}
+}

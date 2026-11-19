@@ -367,6 +367,9 @@ fn changed_files_are_not_served_or_rolled_back_to() {
         fs::set_permissions(file.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
     }
+    // Windows: the release's access lists make it read-only (`freeze`).
+    #[cfg(windows)]
+    thaw(file.parent().unwrap());
     fs::write(&file, b"tampered").unwrap();
     let e = c.rollback("example/notes").unwrap_err();
     assert!(e.contains("changed since it was installed"), "{e}");
@@ -384,6 +387,9 @@ fn changed_files_are_not_served_or_rolled_back_to() {
         fs::set_permissions(file.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
     }
+    // Windows: the release's access lists make it read-only (`freeze`).
+    #[cfg(windows)]
+    thaw(file.parent().unwrap());
     fs::write(&file, b"tampered").unwrap();
     assert!(c
         .asset("example/notes", &digest(&v1), "index.html")
@@ -559,21 +565,116 @@ fn registry_without_a_version_takes_the_highest_release() {
 
 /// Removes a test's folder, the store's read-only releases in it too.
 fn done(root: PathBuf) {
-    #[cfg(unix)]
     thaw(&root);
     fs::remove_dir_all(&root).unwrap();
 }
 
-/// Sets every folder under dir, and dir, writable again, so a test can change or remove it.
-#[cfg(unix)]
+/// Sets every folder under dir, and dir, writable again (on Windows every file too, which its
+/// access list makes read-only), so a test can change or remove it.
 fn thaw(dir: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    #[cfg(windows)]
+    writable(dir, true);
     for e in fs::read_dir(dir).unwrap().flatten() {
-        if e.file_type().unwrap().is_dir() {
+        let t = e.file_type().unwrap();
+        if t.is_dir() {
             thaw(&e.path());
+        } else {
+            #[cfg(windows)]
+            if !t.is_symlink() {
+                writable(&e.path(), false);
+            }
         }
     }
+}
+
+/// Windows: p's access list private again, which `freeze` made read-only.
+#[cfg(windows)]
+fn writable(p: &Path, folder: bool) {
+    use crate::private_windows::{make_private, open_for_access_list};
+    make_private(&open_for_access_list(p, folder).unwrap(), folder).unwrap();
+}
+
+/// A Windows device's name, as any part of a path, alone or with an extension and in any case,
+/// never reaches the store: there it would open the device (`NUL`, `COM1`) instead of a file in the
+/// package folder. Checked on every system, as `:` is. Names that only start like one stay allowed.
+#[test]
+fn windows_device_names_never_reach_the_store() {
+    let mut refused = vec![
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "con",
+        "Nul",
+        "aUx",
+        "nul.txt",
+        "NUL.tar.gz",
+        "Con.json",
+        "COM¹",
+        "lpt³.log",
+        "NUL .txt",
+        "CON ",
+    ];
+    let numbered: Vec<String> = (1..=9)
+        .flat_map(|n| [format!("COM{n}"), format!("lpt{n}"), format!("Com{n}.x")])
+        .collect();
+    refused.extend(numbered.iter().map(String::as_str));
+    for name in refused {
+        for p in [
+            name.to_string(),
+            format!("pages/{name}"),
+            format!("{name}/index.html"),
+        ] {
+            assert!(!store_path(&p), "{p:?} is a store path");
+        }
+    }
+    for name in [
+        "CONSOLE",
+        "console.txt",
+        "nulls",
+        "AUXILIARY",
+        "PRNT.md",
+        "COM",
+        "COM0",
+        "COM10",
+        "LPT",
+        "lpt0.x",
+        "lpt10",
+        "COMA",
+        "xCON",
+        "x.con",
+        "con_x",
+        ".con",
+    ] {
+        for p in [name.to_string(), format!("pages/{name}")] {
+            assert!(store_path(&p), "{p:?} is not a store path");
+        }
+    }
+
+    // On the unpack route: an archive entry so named is refused before anything is written; the
+    // same archive with a near-miss name stages.
+    let root = temp();
+    let d = dirs(&root);
+    let m = manifest("example/w", "1", Value::Null);
+    let a = archive(&[
+        ("pluxy-extension.json", &m),
+        ("pages/index.html", b"x"),
+        ("pages/NUL.txt", b"x"),
+    ]);
+    let e = stage(&d, &a, local("w"), None, &NoRoots).unwrap_err();
+    assert!(e.contains("leaves the package folder"), "{e}");
+    let a = archive(&[
+        ("pluxy-extension.json", &m),
+        ("pages/index.html", b"x"),
+        ("pages/CONSOLE.txt", b"x"),
+    ]);
+    stage(&d, &a, local("w"), None, &NoRoots).unwrap();
+    done(root);
 }
 
 #[test]
@@ -791,7 +892,6 @@ fn a_damaged_release_folder_is_replaced_when_installed_again() {
     install(&mut c, &v1, local("n")).unwrap();
     install(&mut c, &package("example/notes", "2.0.0"), local("n")).unwrap();
     let release = d.store().join(digest(&v1));
-    #[cfg(unix)]
     thaw(&release);
     let file = release.join("pages/index.html");
     #[cfg(unix)]
@@ -1172,6 +1272,28 @@ fn blob() -> Vec<u8> {
         .collect()
 }
 
+/// A native test package's program: on Windows named and starting as a program image (`.exe`,
+/// `MZ`), which admission asks for there; a script elsewhere.
+const TOOL: &str = if cfg!(windows) {
+    "bin/tool.exe"
+} else {
+    "bin/tool"
+};
+
+/// The program `TOOL` holds, marked with tag.
+fn tool_bytes(tag: &str) -> Vec<u8> {
+    if cfg!(windows) {
+        format!("MZ {tag}\n").into_bytes()
+    } else {
+        format!("#!/bin/sh\n# {tag}\n").into_bytes()
+    }
+}
+
+/// `TOOL`'s path in folder dir.
+fn tool_in(dir: &Path) -> PathBuf {
+    TOOL.split('/').fold(dir.to_path_buf(), |p, s| p.join(s))
+}
+
 /// A native tool's archive: its manifest, an executable program for this computer and a data
 /// file of about 200 KiB.
 fn native_package(id: &str, version: &str) -> Vec<u8> {
@@ -1184,10 +1306,15 @@ fn native_package(id: &str, version: &str) -> Vec<u8> {
 
 /// `native_package`, writing and reading the state versions state names.
 fn native_package_state(id: &str, version: &str, state: Value) -> Vec<u8> {
+    native_archive(id, version, state, TOOL, &tool_bytes(version))
+}
+
+/// `native_package_state`, with program holding bytes as its program.
+fn native_archive(id: &str, version: &str, state: Value, program: &str, bytes: &[u8]) -> Vec<u8> {
     let m = serde_json::to_vec(&serde_json::json!({
         "manifest_version": 1, "id": id, "version": version,
         "app": {"version": 0, "tier": "native", "host_versions": [0],
-            "programs": {platform(): "bin/tool"},
+            "programs": {platform(): program},
             "operations": [{"id": "inspect", "description": "Report its state",
                 "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}],
             "state": state}
@@ -1198,11 +1325,7 @@ fn native_package_state(id: &str, version: &str, state: Value) -> Vec<u8> {
     for (name, data, mode) in [
         ("pluxy-extension.json", m.as_slice(), 0o644),
         ("data/blob", blob.as_slice(), 0o644),
-        (
-            "bin/tool",
-            format!("#!/bin/sh\n# {version}\n").as_bytes(),
-            0o755,
-        ),
+        (program, bytes, 0o755),
     ] {
         let mut h = tar::Header::new_gnu();
         h.set_path(name).unwrap();
@@ -1277,7 +1400,16 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
     let web_desc = package("pluxy/webdesc", "1.0.0");
     let signed_native = native_package("example/signednative", "1.0.0");
     let web_native = native_package("example/webnative", "1.0.0");
+    // A script named as the program, with no `.exe`: no program on Windows.
+    let script = native_archive(
+        "pluxy/script",
+        "1.0.0",
+        serde_json::json!({"version": 0, "readable_versions": [0]}),
+        "bin/tool",
+        b"#!/bin/sh\n",
+    );
     for (f, b) in [
+        ("script", &script),
         ("badkey", &bad_key),
         ("longkey", &long_key),
         ("webdesc", &web_desc),
@@ -1354,6 +1486,7 @@ fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
         // Signed, but its descriptor names another release.
         "pluxy/renamed": one(signed_artifact("renamed", &renamed, Some((&key, "pluxy/renamed", "2.0.0")))),
         "example/native": one(signed_artifact("lookalike", &lookalike, None)),
+        "pluxy/script": one(signed_artifact("script", &script, Some((&key, "pluxy/script", "1.0.0")))),
     }});
     // Native tools signed by a key no root names: as a native tool, and as a web package.
     let native_signed = signed_artifact(
@@ -1614,7 +1747,7 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
     let dir = d.store().join(&sha);
     assert_eq!(
         (&a.sha256, &a.dir, &a.program),
-        (&sha, &dir, &dir.join("bin").join("tool"))
+        (&sha, &dir, &tool_in(&dir))
     );
     assert_eq!(
         (
@@ -1633,9 +1766,9 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
         digest(&blob())
     );
     // The program's digest at install, from the fixture's own bytes.
-    assert_eq!(a.program_sha256(), digest(b"#!/bin/sh\n# 1.0.0\n"));
+    assert_eq!(a.program_sha256(), digest(&tool_bytes("1.0.0")));
     // The person asks in the main window; the tool is what runs.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let action = a.confirmation();
         assert_eq!(action.chain.len(), 1);
@@ -1643,7 +1776,7 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
         assert_eq!(action.executor.id, "pluxy/tool");
         assert_eq!(action.executor.digest, sha);
         assert!(action.native_tool);
-        assert_eq!(action.files, vec![dir.join("bin").join("tool")]);
+        assert_eq!(action.files, vec![tool_in(&dir)]);
     }
     let mut changed = a.clone();
     changed.version = "9".into();
@@ -1801,7 +1934,7 @@ fn native_with(id: &str, version: &str, extra: Value) -> Vec<u8> {
     let mut m = serde_json::json!({
         "manifest_version": 1, "id": id, "version": version,
         "app": {"version": 0, "tier": "native", "host_versions": [0],
-            "programs": {platform(): "bin/tool"},
+            "programs": {platform(): TOOL},
             "operations": [
                 {"id": "read", "description": "Read", "effect": "read",
                     "input_schema": {"type": "object"}, "output_schema": {"type": "object"}},
@@ -1821,8 +1954,8 @@ fn native_with(id: &str, version: &str, extra: Value) -> Vec<u8> {
     for (name, data, mode) in [
         ("pluxy-extension.json", m.as_slice(), 0o644),
         (
-            "bin/tool",
-            format!("#!/bin/sh\n# {id} {version}\n").as_bytes(),
+            TOOL,
+            tool_bytes(&format!("{id} {version}")).as_slice(),
             0o755,
         ),
     ] {
@@ -1849,7 +1982,7 @@ fn imports_exports_and_effects_are_validated() {
         let mut m = serde_json::json!({"manifest_version": 1, "id": "pluxy/a", "version": "1",
             "app": {"version": 0, "tier": tier, "host_versions": [0]}});
         if tier == "native" {
-            m["app"]["programs"] = serde_json::json!({platform(): "bin/tool"});
+            m["app"]["programs"] = serde_json::json!({platform(): TOOL});
             m["app"]["operations"] = serde_json::json!([{"id": "op", "description": "d",
                 "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}]);
             m["app"]["state"] = serde_json::json!({"version": 0, "readable_versions": [0]});
@@ -2067,7 +2200,7 @@ fn produced_and_consumed_kinds_are_validated() {
         let mut m = serde_json::json!({"manifest_version": 1, "id": "pluxy/a", "version": "1",
             "app": {"version": 0, "tier": tier, "host_versions": [0]}});
         if tier == "native" {
-            m["app"]["programs"] = serde_json::json!({platform(): "bin/tool"});
+            m["app"]["programs"] = serde_json::json!({platform(): TOOL});
             m["app"]["operations"] = serde_json::json!([{"id": "op", "description": "d",
                 "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}]);
             m["app"]["state"] = serde_json::json!({"version": 0, "readable_versions": [0]});
@@ -2502,7 +2635,7 @@ fn dependencies_cycles_consent_and_grants() {
     // An optional import may be missing.
     enable(&mut c, "pluxy/opt", &roots).unwrap();
     let a = candidate(&c, "pluxy/relay", &roots).unwrap();
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let what = a.confirmation().what;
         assert!(
@@ -2568,7 +2701,7 @@ fn dependencies_cycles_consent_and_grants() {
     assert!(e.message.contains("Unverified"), "{e:?}");
     let consent = c.consent_candidate("pluxy/guide", &roots).unwrap();
     assert_eq!(consent.targets.len(), 1);
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let what = c
             .consent_confirmation("pluxy/guide", &consent, &roots)
@@ -2687,7 +2820,7 @@ fn registrations_and_job_grants_are_the_catalogs() {
     let me = ("pluxy/jhub", hub.sha256(), hub.installed_at());
     let src = c.admitted("pluxy/jsrc", &roots).unwrap();
     let named = ("pluxy/jsrc", src.sha256(), src.installed_at());
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let what = src.confirmation().what;
         assert!(
@@ -2938,4 +3071,173 @@ fn private_folders_are_private_on_windows() {
     junction(&target, &link);
     assert!(private_dir(&link).is_err());
     assert!(!private(&target));
+}
+
+/// Windows: an installed release is read-only as 0444/0500 make it on Unix: no file in it can be
+/// written or deleted, and nothing added to its folders, by an account without the backup and
+/// restore privileges (`as_unprivileged`), yet removing the package removes it.
+#[cfg(windows)]
+#[test]
+fn installed_releases_are_read_only_on_windows() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    let release = d.store().join(digest(&v1));
+    let file = release.join("pages").join("index.html");
+    let denied = |what: &str, r: std::io::Result<()>| {
+        assert_eq!(
+            r.map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::PermissionDenied),
+            "{what}"
+        )
+    };
+    as_unprivileged(|| {
+        denied("writing a file", fs::write(&file, b"tampered").map(|_| ()));
+        denied("deleting a file", fs::remove_file(&file));
+        denied(
+            "adding a file",
+            fs::write(release.join("pages").join("new.html"), b"x"),
+        );
+        denied("adding a folder", fs::create_dir(release.join("new")));
+    });
+    assert_eq!(fs::read(&file).unwrap(), b"<p>1.0.0");
+    c.remove("example/notes").unwrap();
+    assert!(c.take_cleanup().is_none());
+    assert!(store_names(&d).is_empty(), "{:?}", store_names(&d));
+    done(root);
+}
+
+/// Runs f on this thread with a copy of the process's token without the backup, restore and
+/// take-ownership privileges (the same user and groups, Administrators included). Windows' own
+/// `DeleteFileW` and `CreateDirectoryW` open with backup intent, which those privileges, where a
+/// process has them enabled (as an administrator's may), let past any access list, as root passes
+/// a Unix mode.
+#[cfg(windows)]
+fn as_unprivileged(f: impl FnOnce()) {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LUID};
+    use windows_sys::Win32::Security::{
+        AdjustTokenPrivileges, ImpersonateSelf, LookupPrivilegeValueW, RevertToSelf,
+        SecurityImpersonation, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_REMOVED, TOKEN_ADJUST_PRIVILEGES,
+        TOKEN_PRIVILEGES, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
+    // SAFETY: each call gets valid pointers to locals; the token is this thread's own copy.
+    unsafe {
+        assert_ne!(ImpersonateSelf(SecurityImpersonation), 0);
+        let mut token: HANDLE = std::ptr::null_mut();
+        assert_ne!(
+            OpenThreadToken(
+                GetCurrentThread(),
+                TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                0,
+                &mut token
+            ),
+            0
+        );
+        for name in [
+            "SeBackupPrivilege",
+            "SeRestorePrivilege",
+            "SeTakeOwnershipPrivilege",
+        ] {
+            let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+            let mut luid = LUID {
+                LowPart: 0,
+                HighPart: 0,
+            };
+            if LookupPrivilegeValueW(std::ptr::null(), wide.as_ptr(), &mut luid) == 0 {
+                continue;
+            }
+            let without = TOKEN_PRIVILEGES {
+                PrivilegeCount: 1,
+                Privileges: [LUID_AND_ATTRIBUTES {
+                    Luid: luid,
+                    Attributes: SE_PRIVILEGE_REMOVED,
+                }],
+            };
+            // A privilege the token does not hold is not there to remove: nothing changes.
+            AdjustTokenPrivileges(
+                token,
+                0,
+                &without,
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+        }
+        CloseHandle(token);
+    }
+    f();
+    // SAFETY: this thread impersonates the copy made above.
+    assert_ne!(unsafe { RevertToSelf() }, 0);
+}
+
+/// Windows: a registry's local artifact is opened beneath the index's folder, never through a
+/// junction in it; and a release whose program is a script, not a `.exe`, is refused.
+#[cfg(windows)]
+#[test]
+fn junctions_and_scripts_are_refused_on_windows() {
+    use crate::private_windows::tests::junction;
+    let root = temp();
+    let d = dirs(&root);
+    let reg = root.join("reg");
+    fs::create_dir_all(reg.join("pkgs")).unwrap();
+    let outside = root.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    let v1 = package("example/notes", "1.0.0");
+    fs::write(outside.join("n1.tar.gz"), &v1).unwrap();
+    fs::write(reg.join("pkgs").join("n1.tar.gz"), &v1).unwrap();
+    junction(&outside, &reg.join("sub"));
+    let p = platform();
+    let art = |url: &str| serde_json::json!({p.clone(): {"url": url, "sha256": digest(&v1), "size": v1.len()}});
+    let index = serde_json::json!({"registry_version": 0, "packages": {
+        "example/notes": {"releases": [
+            {"version": "2.0.0", "artifacts": art("sub/n1.tar.gz")},
+            {"version": "1.0.0", "artifacts": art("pkgs/n1.tar.gz")}
+        ]}
+    }});
+    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "fixture", "url": reg.join("index.json")}]}))
+        .unwrap(),
+    )
+    .unwrap();
+    let e =
+        stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("2.0.0")).unwrap_err();
+    assert!(e.contains("not a file inside the index's folder"), "{e}");
+    // The positive control on the same route.
+    stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("1.0.0")).unwrap();
+    done(root);
+
+    let root = temp();
+    let (d, roots) = native_fixture(&root);
+    let e = stage_from_registry(&d, &roots, "curated", "pluxy/script", Some("1.0.0")).unwrap_err();
+    assert!(e.contains("is not a program (.exe)"), "{e}");
+    stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some("1.0.0")).unwrap();
+    done(root);
+}
+
+/// macOS: the store's folders keep no extended access list entry, as they keep no group or other
+/// mode bits, so a release put in the store inherits none.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_store_passes_no_access_list_on() {
+    let root = temp();
+    let d = dirs(&root);
+    fs::create_dir_all(d.store()).unwrap();
+    let has = |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+    for p in [&d.root, &d.store()] {
+        crate::private_macos::add_entry(p, "everyone allow list,file_inherit,directory_inherit");
+        assert!(has(p), "{}", p.display());
+    }
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    for p in [&d.root, &d.store(), &d.store().join(digest(&v1))] {
+        assert!(!has(p), "{}", p.display());
+    }
+    done(root);
 }

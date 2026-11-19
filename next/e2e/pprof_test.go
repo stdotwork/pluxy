@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -91,6 +92,25 @@ func pprofGet(t *testing.T, url string) (int, []byte) {
 	return resp.StatusCode, b
 }
 
+// unclaimedAddr returns a free loopback address that core could bind but that no listener started
+// in the run can be given. Its port is below the system's ephemeral range (from 32768 on Linux,
+// from 49152 on macOS and Windows), where every core and test server here gets its port. A port
+// from freePort could be the one core's own listener or extension pages take next.
+func unclaimedAddr(t *testing.T) string {
+	t.Helper()
+	for range 1000 {
+		addr := fmt.Sprintf("127.0.0.1:%d", 10000+rand.IntN(10000))
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			continue
+		}
+		l.Close()
+		return addr
+	}
+	t.Fatal("no free port in 10000-19999")
+	return ""
+}
+
 // listening reports whether something accepts connections at addr.
 func listening(addr string) bool {
 	c, err := net.DialTimeout("tcp", addr, time.Second)
@@ -120,7 +140,7 @@ func TestPprofOffByDefault(t *testing.T) {
 // The default build has no profiling pages. With the setting on it says so once, listens on
 // nothing and answers no profiling page.
 func TestPprofDefaultBuildSaysItHasNoProfiling(t *testing.T) {
-	addr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	addr := unclaimedAddr(t)
 	base, _, logs := runCoreArgs(t, pprofCfg(t, map[string]any{"enable": true, "addr": addr}), noWatch...)
 	all := logs.waitFor(t, "extension pages on")
 	if !strings.Contains(all, "go build -tags pprof ./cmd/pluxy") {

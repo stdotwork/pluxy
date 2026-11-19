@@ -166,7 +166,8 @@ type chatLine struct {
 
 // chat sends a chat request with the bearer token. A cancelled ctx stops the request. A request
 // that got no reply is a retryable error, except when login is set: a login error is retryable
-// only when the request never reached the provider.
+// only when the request never reached the provider. Only a login request is tracked: tracking
+// sends it on a new connection, and model requests keep reusing theirs.
 func chat(ctx context.Context, base, token, model string, stream, login bool) (*http.Response, error) {
 	body, err := json.Marshal(map[string]any{"model": model, "stream": stream})
 	if err != nil {
@@ -178,13 +179,16 @@ func chat(ctx context.Context, base, token, model string, stream, login bool) (*
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req, sent := sdk.TrackSend(req)
+	sent := func() bool { return false }
+	if login {
+		req, sent = sdk.TrackSend(req)
+	}
 	resp, err := upstream.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the provider", Retryable: !login || !sent(), Scope: llm.ScopeEndpoint}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the provider", Retryable: !sent(), Scope: llm.ScopeEndpoint}
 	}
 	return resp, nil
 }
