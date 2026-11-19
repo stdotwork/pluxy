@@ -319,9 +319,10 @@ never the words of an upstream's reply. `routing.explain` `false` leaves out the
 and the member, and keeps the trace ID.
 
 `pluxy route <model>` (`GET /v0/management/route?model=<name>`) says what a request for the model
-would do now without sending one: the accounts in the order it would try them (the account's
-priority, then the strategy's turns) and those it would leave out, as above. Asking changes no
-routing state.
+would do now without sending one: the accounts in the order it would try them (the step of the
+model's fallback chain, the account's priority, then the strategy's turns) and those it would leave
+out, as above. For a model with a chain the reply has the chain (`chain`) and each account its step
+(`step`, from 1). Asking changes no routing state.
 
 `drop_policy` (top level) says what happens when translating a request to the upstream's format
 would drop part of it: `"report"` (the default) sends it and logs what was dropped, `"reject"`
@@ -1346,6 +1347,13 @@ the request, for example a 429 or a 401) moves the request on to another account
 failure goes to the client. Once a reply has started, nothing is retried. Extensions never
 retry on their own.
 
+A model name is served by the accounts of one provider: the provider (extension) of the
+highest-priority account that serves the name, the first in the config's order on a tie. Accounts
+whose model list could not be read serve any model, but they decide the provider only when no
+account lists the name. When another provider serves the same name too, its accounts take none of
+these requests, however blocked the first provider's are; a fallback chain (below) is how a name
+moves to another provider or model.
+
 An account is eligible when it serves the model, no block covers it and it is under its
 concurrency limit. Refusals block what they are about, for as long as the upstream said
 (`Retry-After`) or else by backoff: a rate limit or quota on one model (a plain 429, as today's
@@ -1393,7 +1401,10 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
     "max_attempts": 0,
     "max_accounts": 0,
     "max_wait_ms": 0,
-    "session_affinity": {"ttl_ms": 3600000}
+    "session_affinity": {"ttl_ms": 3600000},
+    "chains": {
+      "claude-opus-5-5": [{"model": "claude-opus-5-5", "provider": "pluxy/claude"}, {"model": "gpt-6.1-sol"}]
+    }
   },
   "extension": {
     "accounts": [
@@ -1415,6 +1426,7 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
 | `quota_response_mode` | What a client gets when every account that serves its model is out of quota until a reset the upstream named, the first of them more than 5 minutes away: `retryable` (default) a retryable 429 with `Retry-After`, as for any block; `usage-limit` the final usage-limit reply below. |
 | `explain` | `false` leaves out of replies the headers that name the account (`X-Pluxy-Account`, `X-Pluxy-Provider`, `X-Pluxy-Model`, `X-Pluxy-Attempts`) and the `pluxy` member of errors (see [Run it](#run-it)), for a core whose client keys go to people who should not see which accounts serve them. The trace ID stays. Default `true`. |
 | `session_affinity` | On by default, with no setting needed: requests of one session go to the same account while it is eligible, so a coding agent's conversation keeps its provider-side prompt cache. `{"enabled": false}` turns it off; `{"ttl_ms": 1800000}` sets how long a session stays bound after its last request (default one hour, 3600000). The session comes from the `X-Claude-Code-Session-Id`, `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`; a request with none takes turns as usual. Bindings are per client key and model. A `config.yaml` keeps today's default, off (below). |
+| `chains` | Fallback chains, by the model name clients ask for (below). Default: none. |
 | account `priority` | Higher first; lower accounts serve only while every higher one is blocked. Default 0. |
 | account `weight` | For `weighted`. Default 1; 0 leaves the account out. |
 | account `disable_cooling` | Overrides `disable_cooling` for the account. |
@@ -1425,6 +1437,7 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
 A client can pin a request to one account with the `X-Pluxy-Account: <id>` header, naming the
 account by its ID or its public ID (the one replies give). A pinned request never goes to another
 account.
+
 
 With `quota_response_mode` `usage-limit`, a request that ends with a rate or quota refusal (or
 finds every account blocked) gets today's core's usage-limit reply when each account that serves
@@ -1453,6 +1466,35 @@ there only when every account belongs to one extension; `limit_window_minutes` o
 is known. `last_upstream_error` and the message's last error have credentials, tokens and local
 paths replaced, as today's core replaces them. A stream that has already started ends with the
 same error, and a Chat Completions stream then with `data: [DONE]`.
+
+### Fallback chains
+
+A chain lists, under a model name clients ask for, the steps a request for it goes through in
+order: each step is a model, and optionally the one provider (`provider`, an extension's ID) and
+the accounts (`accounts`, their IDs) that serve it. A step that names neither is served as a name
+with no chain is: by one provider's accounts. A request uses the first step's accounts, by priority
+and strategy as above, and moves to the next step only when no account of the step can serve it
+now: each is blocked, at its concurrency limit, or refused the request in a way that is safe to try
+elsewhere. Moving on needs no wait; when no step can serve now, the request waits, within
+`max_wait_ms`, for the first account of any step to come back. It never moves once its reply has
+started, nor for an error about the request itself (a 400, a refusal of its content), which would
+end the same way on the next step. A session bound to an account stays on that account and its
+step's model while it can serve, even once an earlier step could serve again.
+
+A chain has at most 8 steps. A step names a model, never another chain (a step may name the
+chain's own name: that is the model of the name). A chain's name may be one no account serves,
+such as `my-fast`: it is then in the model lists, as its first served step's model.
+
+| Call | Command | What it does |
+| --- | --- | --- |
+| `GET /v0/management/chains` | `pluxy chain list` | The chains, by name |
+| `PUT /v0/management/chains/{name}` | `pluxy chain set <name> <step>...` | Sets the chain, `{"steps": [{"model", "provider", "accounts"}]}`, and writes it to the config file. A step on the command line is `model[@provider][:account,account]`. 422 for more than 8 steps, a step that names another chain, or a step no account serves now. A config.yaml cannot hold chains (409) |
+| `DELETE /v0/management/chains/{name}` | `pluxy chain remove <name>` | Removes it: the name goes back to one provider's accounts. 404 when there is none |
+
+The reply of a request served through a chain names the account, provider and model of the step
+that served it (`X-Pluxy-*`), and its usage event the step (`chain_step`, from 1). An error's
+`left_out` entries then also name each account's `provider` and `model`, since one account can
+serve two steps; `pluxy route` shows the chain and the step of each account.
 
 ### Outbound proxy
 
@@ -1637,7 +1679,7 @@ any request:
 | `GET /v1beta/models/{name}` | One model, named with or without `models/`, or a 404. |
 
 A list holds each model the accounts serve, once under each name a client can ask for it by,
-sorted by name. An account whose config lists `models` lists those. An account without `models`
+and the name of each fallback chain no account serves, sorted by name. An account whose config lists `models` lists those. An account without `models`
 lists the models its extension says the account serves (the protocol's `models` operation, from
 version 0.3), under the account's naming rules below; an extension that cannot say adds nothing
 for it. The same list decides which models such an account serves: a request for a model no
