@@ -753,6 +753,17 @@ model name (refused with 400; set `generation_config.thinking_level` instead), a
 that drops a thought step whose signature does not look like one Gemini issued. An
 `"interactions": true` account still serves Chat Completions, Responses, Messages and Gemini
 clients, through GenerateContent with the same key.
+
+**Compaction.** `POST /v1/responses/compact` (also `POST /backend-api/codex/responses/compact`) is
+served on every Gemini account (Gemini API keys, Vertex AI service accounts and express mode keys,
+without needing `interactions`). The Responses request is translated to `GenerateContent` with the
+extension's schema, turn and call-ID repairs, stop sequences and structured output cleared, tools
+kept with `toolConfig` in `NONE` mode so the model answers in text while keeping tool declarations
+for any tool history, and the Codex CLI's compaction prompt (`prompt.md`) appended as a user
+turn. The request runs once, not streamed; thought parts are excluded, and the summary comes back
+as OpenAI's `response.compaction` object carrying one user message with the Codex CLI's
+`summary_prefix.md` followed by a newline and the summary. An incomplete or empty summary fails as
+a non-retryable request error.
 **Turn fixes.** Google refuses some conversations that clients send, so the extension changes the
 turns of every GenerateContent request to the Gemini API or Vertex AI, as today's core does, a
 Gemini client's own request included. A first turn from the model gets an empty user turn

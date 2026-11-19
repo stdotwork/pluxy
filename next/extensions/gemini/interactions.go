@@ -37,14 +37,19 @@ const defaultAPIRevision = "2026-05-20"
 // maxInteractionsReply limits what is read of an upstream's whole (not streamed) reply.
 const maxInteractionsReply = 64 << 20
 
-// endpoint serves endpoint calls: the Interactions API, on an account that opts in.
+// endpoint serves endpoint calls: Responses compaction on any Gemini account (compact.go), and
+// the Interactions API on an account that opts in.
 func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	ctx = withAccountID(ctx, call.Account.ID)
 	format := ""
 	if call.Request.Native != nil {
 		format = call.Request.Native.Format
 	}
-	if format != llm.FormatGeminiInteractions {
+	switch format {
+	case llm.FormatOpenAIResponsesCompact:
+		return compact(ctx, call, out)
+	case llm.FormatGeminiInteractions:
+	default:
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: fmt.Sprintf("the Gemini extension does not serve %q", format)}
 	}
