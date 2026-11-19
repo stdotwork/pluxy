@@ -1,6 +1,6 @@
 // The panel in a real browser, served by a real core with fake extensions (next/e2e/panelcore).
 // Run it with `bun run test:browser`, which builds the panel first.
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -143,6 +143,102 @@ test("panel shows core, switches layout and theme live, and recovers from custom
     if (r.url !== outside) expect(new URL(r.url).origin, r.url).toBe(core.base);
   }
   expect(requests.some((r) => r.url.includes(core.key))).toBe(false);
+  expect(problems).toEqual([]);
+});
+
+test("themes are kept by core: added from a file and from pasted JSON, followed, exported, removed", async ({
+  page,
+}) => {
+  const fixtures = join(import.meta.dirname, "..", "tests", "fixtures");
+  const nightfall = join(fixtures, "t3-docs-nightfall.json");
+  const dawn = readFileSync(join(fixtures, "t3-short-variants-css.json"), "utf8");
+  interface Themes {
+    current: string;
+    themes: { id: string; name: string }[];
+  }
+  const stored = async () => (await core.mgmt<Themes>("GET", "/themes")).body;
+  const variable = (name: string) =>
+    page.evaluate((n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim(), name);
+  const picker = page.getByRole("radiogroup", { name: "Theme" });
+
+  await core.mgmt("PUT", "/theme", { id: "" });
+  const { problems } = await open(page);
+  await signIn(page, core);
+  await goTo(page, "Themes");
+  await expect(picker.getByRole("radio", { name: "Default" })).toBeChecked();
+  const defaultBg = await variable("--px-color-bg");
+  expect(await variable("--app-theme-canvas")).toBe("");
+
+  // A T3 Code theme file, chosen as a file: it applies at once and core keeps it.
+  await page.getByLabel("Theme file", { exact: true }).setInputFiles(nightfall);
+  await expect(page.getByText("Nightfall was added and turned on.")).toBeVisible();
+  await expect(picker.getByRole("radio", { name: "Nightfall" })).toBeChecked();
+  await expect.poll(() => variable("--px-color-bg")).not.toBe(defaultBg);
+  const nightfallBg = await variable("--px-color-bg");
+  expect(await variable("--app-theme-canvas")).toBe(nightfallBg);
+  expect(await stored()).toEqual({
+    current: "t3/nightfall",
+    themes: [expect.objectContaining({ id: "t3/nightfall", name: "Nightfall" })],
+  });
+
+  // Pasted JSON goes the same way.
+  const paste = page.getByLabel("Or paste a theme file's JSON");
+  const add = page.getByRole("button", { name: "Add", exact: true });
+  await expect(add).toBeDisabled();
+  await paste.fill(dawn);
+  await add.click();
+  await expect(picker.getByRole("radio", { name: "Dawn and Dusk" })).toBeChecked();
+  await expect(paste).toHaveValue("");
+  await expect.poll(() => variable("--px-color-bg")).not.toBe(nightfallBg);
+  const dawnBg = await variable("--px-color-bg");
+  expect((await stored()).current).toBe("t3/dawn-and-dusk");
+
+  // JSON the reader refuses says why in place, stays in the box, and never reaches core.
+  await paste.fill('{"name": "No colours", "appearance": "dark"}');
+  await add.click();
+  await expect(page.getByRole("alert").filter({ hasText: "Not added:" })).toBeVisible();
+  await expect(paste).toHaveValue(/No colours/);
+  expect((await stored()).themes.map((t) => t.id)).toEqual(["t3/dawn-and-dusk", "t3/nightfall"]);
+  expect(await variable("--px-color-bg")).toBe(dawnBg);
+
+  // After a reload the theme is still on.
+  await page.reload();
+  await expect(nav(page)).toBeVisible();
+  await expect.poll(() => variable("--px-color-bg")).toBe(dawnBg);
+  await goTo(page, "Themes");
+  await expect(picker.getByRole("radio", { name: "Dawn and Dusk" })).toBeChecked();
+
+  // A change made elsewhere (another window, `pluxy theme set`) is followed when the window gets focus.
+  await core.mgmt("PUT", "/theme", { id: "t3/nightfall" });
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(picker.getByRole("radio", { name: "Nightfall" })).toBeChecked();
+  await expect.poll(() => variable("--px-color-bg")).toBe(nightfallBg);
+
+  // Export saves the theme's file as it was given.
+  const saving = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export Nightfall as a theme file" }).click();
+  const saved = await saving;
+  expect(saved.suggestedFilename()).toBe("nightfall.json");
+  expect(JSON.parse(readFileSync(await saved.path(), "utf8"))).toEqual(
+    JSON.parse(readFileSync(nightfall, "utf8")),
+  );
+
+  // Removing the theme that is on asks first, then goes back to the default.
+  await page.getByRole("button", { name: "Remove Nightfall" }).click();
+  await page.getByRole("button", { name: "Yes, remove nightfall" }).click();
+  await expect(picker.getByRole("radio", { name: "Nightfall" })).toHaveCount(0);
+  await expect(picker.getByRole("radio", { name: "Default" })).toBeChecked();
+  await expect.poll(() => variable("--px-color-bg")).toBe(defaultBg);
+  expect(await stored()).toEqual({
+    current: "",
+    themes: [expect.objectContaining({ id: "t3/dawn-and-dusk" })],
+  });
+
+  await picker.getByRole("radio", { name: "Dawn and Dusk" }).check();
+  await page.getByRole("button", { name: "Remove Dawn and Dusk" }).click();
+  await page.getByRole("button", { name: "Yes, remove dawn and dusk" }).click();
+  await expect(picker.getByRole("radio")).toHaveCount(3);
+  expect((await stored()).themes).toEqual([]);
   expect(problems).toEqual([]);
 });
 
