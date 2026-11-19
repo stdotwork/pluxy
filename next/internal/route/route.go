@@ -832,10 +832,11 @@ func (r *Router) failure(a *Account, model string, seq uint64, e *llm.Error) {
 }
 
 // retrySafe reports whether a failed attempt may be tried again elsewhere: the extension says
-// the upstream certainly did not run it, and the failure is about the account (so the account
-// is now blocked and the next attempt goes to another one, or waits). An account that cannot
-// serve this request (unsupported, about the account rather than the request) is not blocked:
-// it was tried this round, so the next attempt goes to another account.
+// the upstream certainly did not run it, and the failure is not about the request itself.
+// account_closed moves on to sibling accounts when retryable is true unless its scope is
+// request (the refusal is about this request's content). An account that cannot serve this
+// request (unsupported, about the account rather than the request) is not blocked: it was tried
+// this round, so the next attempt goes to another account.
 func retrySafe(e *llm.Error) bool {
 	if e == nil || !e.Retryable {
 		return false

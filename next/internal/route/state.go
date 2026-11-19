@@ -565,18 +565,16 @@ func (s *State) availability(a *Account, model string, now time.Time) (until tim
 }
 
 // failure records what the failed attempt with sequence number seq on account a for model says
-// about the account. Failures about the request or the caller record nothing, and so does a
-// failure on a scope where an attempt that started after this one has already succeeded: the
-// newest result wins. transient replaces the backoff for a failing upstream or endpoint: above
-// 0 it is the block's length, below 0 no block is kept.
+// about the account. account_closed always bans the account; other failures about the request
+// or the caller record nothing, and so does a failure on a scope where an attempt that started
+// after this one has already succeeded: the newest result wins. transient replaces the backoff
+// for a failing upstream or endpoint: above 0 it is the block's length, below 0 no block is
+// kept.
 func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now time.Time, transient time.Duration) {
 	if e == nil {
 		return
 	}
 	if e.Code == llm.CodeAccountClosed {
-		if e.Scope == llm.ScopeRequest {
-			return
-		}
 		s.mu.Lock()
 		if s.stale(scopeKey{kind: scopeCredential, id: a.ID}, a) || (seq > 0 && seq <= s.unbannedSeq[a.ID]) {
 			s.mu.Unlock()

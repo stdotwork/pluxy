@@ -879,7 +879,7 @@ Codes an extension sends:
 | `invalid_request` | The upstream rejected the request itself. |
 | `auth` | The credential was refused. |
 | `permission` | The credential is valid but not allowed this request. |
-| `account_closed` | Version 0.19. The provider closed, suspended or deactivated the account, or refused it for a breach of terms. Set `retryable: true` when core should move on to another account, and `retryable: false` when the refusal is about the request's content so core must not send it to sibling accounts. |
+| `account_closed` | Version 0.19. The provider closed, suspended or deactivated the account, or refused it for a breach of terms. Core always bans the account. When `retryable` is true, the request moves on to sibling accounts as any retry-safe account failure does, unless `scope` is `request` (the refusal is about this request's content): then it stops there. |
 | `not_found` | The model or resource does not exist upstream. |
 | `rate_limit` | Too many requests; try again later. |
 | `quota` | A usage allowance is used up. |

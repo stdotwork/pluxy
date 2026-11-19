@@ -649,11 +649,11 @@ func TestBannedAccountScenario6AndPersistence(t *testing.T) {
 	}
 }
 
-// Sibling rule: account_closed with Retryable true moves on to the next account; account_closed
-// with Retryable false (a refusal about the request's content) bans the account and stops
-// without sending to siblings.
+// Sibling rule: account_closed always bans the account; when retryable is true it moves on to
+// sibling accounts unless scope is request (the refusal is about this request's content), in
+// which case it stops there.
 func TestAccountClosedSiblingRule(t *testing.T) {
-	t.Run("account closure rotates to sibling", func(t *testing.T) {
+	t.Run("credential scope bans and moves on to sibling", func(t *testing.T) {
 		h := newHarness(t, Config{}, accts("a", "b")...)
 		h.on("a", fail(llm.Error{Code: llm.CodeAccountClosed, Status: 400, Retryable: true, Scope: llm.ScopeCredential, Message: "This organization has been disabled."}))
 		h.on("b", ok())
@@ -663,9 +663,9 @@ func TestAccountClosedSiblingRule(t *testing.T) {
 			t.Errorf("a health = %+v, want banned", got)
 		}
 	})
-	t.Run("content ToS refusal bans account and stops before sibling", func(t *testing.T) {
+	t.Run("request scope bans and stops before sibling", func(t *testing.T) {
 		h := newHarness(t, Config{}, accts("a", "b")...)
-		h.on("a", fail(llm.Error{Code: llm.CodeAccountClosed, Status: 403, Retryable: false, Scope: llm.ScopeCredential, Message: "This service has been disabled in this account for violation of Terms of Service."}))
+		h.on("a", fail(llm.Error{Code: llm.CodeAccountClosed, Status: 403, Retryable: true, Scope: llm.ScopeRequest, Message: "Account suspended for this request's content."}))
 		h.on("b", ok())
 		evs := h.run(h.req("m"))
 		last := evs[len(evs)-1]
