@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.17
+# pluxy extension protocol, version 0.18
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -25,9 +25,10 @@ back, for core's request logs. Version 0.14 adds [payload rules](#payload-rules)
 upstream JSON body that the config sets, fills in or removes. Version 0.15 has a session turn carry
 them too. Version 0.16 adds an error's `dropped`: what a refusal under the `reject` drop policy
 could not carry. Version 0.17 adds a captured body's `body_stopped`: the extension did not read it
-to its end. It is deliberately small; later versions add capabilities and more operations
+to its end. Version 0.18 adds a quota limit's `feature`: the limit counts a feature of the plan,
+not the account's requests to its models. It is deliberately small; later versions add capabilities and more operations
 without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.17 (see
+core that speaks 0.18 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -389,7 +390,9 @@ account cannot be checked without a generation (the upstream has no such call), 
 Version 0.5. Core asks what an account's plan allows and how much of it is used, for the
 management API's quota view (`GET /v0/management/accounts/{id}/quota`). Core sends it only to an
 extension that reports `protocol_minor` 5 or more and lists `quota` in `operations`, and only when
-someone asks: core does not poll.
+someone asks or to check an account that routing keeps out after a refusal (at most once every 15
+minutes for each such account; see core's README, "Accounts and routing"): core does not poll
+accounts that serve.
 
 ```json
 {"type": "call", "id": "c-22", "op": "quota", "account": {"id": "work", "settings": {...}, "credential": {...}}}
@@ -419,9 +422,18 @@ event as for `generate`.
 | limit `resets_at` | When it resets, in Unix seconds. |
 | limit `window_seconds` | The length of its usage window. |
 | limit `models` | The models it applies to, when not all of the account's. |
+| limit `feature` | Optional, since 0.18: `true` when the limit counts a feature of the plan (code review, another app's allowance, a credit pool for one product) rather than the account's requests to its models. A feature's limit lists no `models`. Core ignores it from an extension older than 0.18. |
 | `raw` | The provider's replies the quota was read from, as one JSON object, for what `limits` has no place for. |
 
-Every field of a limit but `id` is optional; report what the provider gives. Read the quota from the
+Every field of a limit but `id` is optional; report what the provider gives.
+
+Core's routing reads `limits` to check a block it keeps on an account after a refusal: a limit with
+a `resets_at` to come that is used up (`used_percent` 100, or `remaining` 0) keeps the block until
+it resets, if it covers the block. A limit covers the whole account unless it says otherwise: one
+with `models` covers only blocks on those models, and one with `feature` covers none. So a limit
+that counts only some of the account's requests must say so, with `models` when the extension can
+name them and `feature` when it counts a feature, or core may keep the whole account out until it
+resets. Read the quota from the
 provider's own usage endpoint for the account's subscription, with the same client identity
 (user agent and the like) the extension uses for the account's requests, and never with a request
 that spends from the plan (a generation). An account that has no plan to report (an API key, or
@@ -1315,7 +1327,7 @@ recorded.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.17. An extension reports the minor version it
+raise the minor version: this document is version 0.18. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1340,8 +1352,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.15 | The `payload` of a [session turn](#turns). |
 | 0.16 | An error's `dropped`. |
 | 0.17 | A captured body's `body_stopped` ([upstream capture](#upstream-capture)). |
+| 0.18 | A [quota](#quota) limit's `feature`. |
 
-## What version 0.17 leaves out
+## What version 0.18 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

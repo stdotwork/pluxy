@@ -724,7 +724,8 @@ func (k *kit) check(t *testing.T) {
 }
 
 // quota checks the quota operation: an extension that lists it answers for the ScenarioText account
-// with a quota whose limits each have an ID, none twice, and a used share from 0 to 100, or with an
+// with a quota whose limits each have an ID, none twice, and a used share from 0 to 100, and none
+// both a feature's and some models' (minor version 18), or with an
 // error that has a code and a message (an account with no plan to report answers unsupported);
 // one that does not list it refuses the call with code unsupported.
 func (k *kit) quota(t *testing.T) {
@@ -753,6 +754,9 @@ func (k *kit) quota(t *testing.T) {
 		seen[l.ID] = true
 		if l.UsedPercent != nil && (*l.UsedPercent < 0 || *l.UsedPercent > 100) {
 			t.Errorf("limits[%d] (%s) used_percent %v is not from 0 to 100", i, l.ID, *l.UsedPercent)
+		}
+		if l.Feature && len(l.Models) > 0 {
+			t.Errorf("limits[%d] (%s) is a feature's limit and lists models %v; a feature's limit lists none", i, l.ID, l.Models)
 		}
 	}
 }

@@ -1313,8 +1313,11 @@ not believed: the account is held for 30 minutes and checked after 15. The upstr
 replaces the block's end, sooner or later; a backoff core chose itself only moves a block later.
 A rate limit or quota block on an account or one of its models with more than 15 minutes left is
 checked every 15 minutes. The check reads the account's usage from its provider (the extension's
-`quota` call): no full usage window ends the block, and otherwise the block lasts until the full
-window that resets last resets. An account with no usage reading, such as an API key, lets one
+`quota` call). A usage window covers a block on the whole account when it counts every request on
+the account, and a block on one model when it does that or counts that model's requests; a window
+that counts other models only, or a feature of the plan such as code review, covers neither (the
+extension says which; see `protocol/README.md`, "quota"). When no window that covers the block is
+full, the block ends; otherwise it lasts until the covering full window that resets last resets. An account with no usage reading, such as an API key, lets one
 request through at the check instead, and that request's outcome decides. A real request is never
 the check where a reading exists. A check that cannot be made leaves the block and is made again
 15 minutes later. Quota blocks are saved to `state/routing.json` beside the config file (mode

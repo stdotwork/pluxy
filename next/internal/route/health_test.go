@@ -405,3 +405,46 @@ func TestSavedBlocks(t *testing.T) {
 		t.Errorf("saved after a reset: %+v", s)
 	}
 }
+
+// A check holds a block only on a full usage window that covers it: a block on the account's
+// credential on a window of the whole account, a block on one model on that or a window that
+// names the model, and no block on a window of a feature of the plan (code review, another
+// app's allowance). Here only a window of model m1 and a feature's window are full.
+func TestCheckHoldsOnlyOnCoveringWindows(t *testing.T) {
+	const m, hr = time.Minute, time.Hour
+	reading := func(now time.Time) (*protocol.Quota, *llm.Error) {
+		return &protocol.Quota{Limits: []protocol.QuotaLimit{
+			{ID: "five_hour", UsedPercent: pct(40), ResetsAt: now.Add(2 * hr).Unix(), WindowSeconds: 5 * 3600},
+			{ID: "weekly", UsedPercent: pct(60), ResetsAt: now.Add(50 * hr).Unix(), WindowSeconds: 7 * 24 * 3600},
+			{ID: "weekly_m1", UsedPercent: pct(100), ResetsAt: now.Add(70 * hr).Unix(), WindowSeconds: 7 * 24 * 3600, Models: []string{"m1"}},
+			{ID: "code_review_weekly", UsedPercent: pct(100), ResetsAt: now.Add(90 * hr).Unix(), WindowSeconds: 7 * 24 * 3600, Feature: true},
+		}}, nil
+	}
+	for _, c := range []struct {
+		name, model, scope string
+		state              string
+		left               time.Duration
+	}{
+		{"the whole account, refused on m1", "m1", llm.ScopeCredential, HealthOK, 0},
+		{"another model", "m2", llm.ScopeModel, HealthOK, 0},
+		{"the model the full window names", "m1", llm.ScopeModel, HealthExhausted, 70 * hr},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, Config{}, accts("a")...)
+			rd := &fakeReadings{}
+			h.r.UseReadings(rd)
+			h.on("a", fail(llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: c.scope, RetryAfterMS: (5 * hr).Milliseconds()}))
+			h.run(h.req(c.model))
+			h.now = h.now.Add(15 * m)
+			check(reading)(h, rd)
+			got := h.healthOf("a")
+			var left time.Duration
+			if got.Until != nil {
+				left = got.Until.Sub(h.now)
+			}
+			if got.State != c.state || left != c.left {
+				t.Errorf("after the check: %s for %v (%s), want %s for %v", got.State, left, got.Why, c.state, c.left)
+			}
+		})
+	}
+}

@@ -32,8 +32,11 @@ var noReading = &llm.Error{Code: llm.CodeUnsupported, Message: "no usage reading
 // account's credential or one of its models that has more than the check interval left is
 // checked once per interval (see State.SetCheckInterval), and a block whose end was not believed
 // or that was read back at start is checked too. The check is the provider's own usage reading,
-// where the account has one: it ends the block when no window it covers is full, and otherwise
-// moves the block's end to the reset of the full window that resets last, sooner or later. Where
+// where the account has one: it ends the block when no usage window that covers the block is
+// full, and otherwise moves the block's end to the reset of the covering full window that resets
+// last, sooner or later. A window covers a block on the account's credential when it counts the
+// whole account (it names no models and is not a feature's), and a block on one model when it
+// counts the whole account or names the model; a feature's window covers no block. Where
 // the account has no reading, the check lets the next request through instead, and that
 // request's outcome is the answer. A reading that cannot be made leaves the block; it is tried
 // again an interval on. Readings are made one at a time; core calls Check on a timer.
@@ -129,11 +132,12 @@ func (s *State) checked(claims []claim, q *protocol.Quota, e *llm.Error, now tim
 // fullWindow returns the reset of the full usage window in q that resets last among those that
 // cover scope k, and its length in minutes; full is false when none is full. A usage window is a
 // limit with a reset time to come; it is full when it is used to 100% or nothing of it remains.
-// A window for some models only covers a block on one of them, never the whole account. A
+// A window that names models covers a block on one of them, never the whole account; one that
+// counts a feature of the plan covers no block; any other covers every block on the account. A
 // balance or a count without a reset time is never what holds an account.
 func fullWindow(q *protocol.Quota, k scopeKey, now time.Time) (reset time.Time, window int64, full bool) {
 	for _, l := range q.Limits {
-		if l.Unlimited || l.ResetsAt <= now.Unix() {
+		if l.Feature || l.Unlimited || l.ResetsAt <= now.Unix() {
 			continue
 		}
 		if len(l.Models) > 0 && (k.kind != scopeModel || !slices.Contains(l.Models, k.model)) {

@@ -11,6 +11,9 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
+// featureMinor is the protocol minor version that adds a quota limit's feature.
+const featureMinor = 18
+
 // ReportsQuota reports whether an extension that described itself with info reads its accounts'
 // quota: it implements minor version 5 or later and lists the quota operation.
 func ReportsQuota(info protocol.Info) bool {
@@ -19,7 +22,8 @@ func ReportsQuota(info protocol.Info) bool {
 
 // Quota runs a quota call: what account's plan allows and how much of it is used. Every string
 // of the account's credential and every secret in its settings is removed from the reply, as
-// from every other reply.
+// from every other reply. A limit's feature counts only from an extension that implements minor
+// version 18 or later.
 func (e *Extension) Quota(ctx context.Context, account protocol.Account) (*protocol.Quota, *llm.Error) {
 	proxy, perr := e.outbound(&account)
 	if perr != nil {
@@ -61,6 +65,9 @@ func (e *Extension) Quota(ctx context.Context, account protocol.Account) (*proto
 				}
 			}
 			l.ID, l.Label, l.Unit = redact.String(l.ID), redact.String(l.Label), redact.String(l.Unit)
+			if e.info.ProtocolMinor < featureMinor {
+				l.Feature = false
+			}
 			l.Models = slices.Clone(l.Models)
 			for j := range l.Models {
 				l.Models[j] = redact.String(l.Models[j])
