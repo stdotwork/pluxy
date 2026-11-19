@@ -98,6 +98,7 @@ type Manager struct {
 	loginSeq uint64
 	onChange func()
 	onReauth func(id string)
+	onRemove func(id string)
 }
 
 type flight struct {
@@ -127,12 +128,14 @@ type Options struct {
 	Reserved func(id string) bool
 	// OnReauth is called after an existing account signs in again with a new credential.
 	OnReauth func(id string)
+	// OnRemove is called after an account is deleted from the store.
+	OnRemove func(id string)
 }
 
 // NewManager returns the manager for store's accounts on provs.
 func NewManager(store *Store, provs Providers, opts Options) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{store: store, provs: provs, reserved: opts.Reserved, onReauth: opts.OnReauth,
+	m := &Manager{store: store, provs: provs, reserved: opts.Reserved, onReauth: opts.OnReauth, onRemove: opts.OnRemove,
 		now: time.Now, ctx: ctx, cancel: cancel,
 		flights: map[string]*flight{}, renewals: map[string]*renewal{}, logins: map[string]*login{}}
 	if m.reserved == nil {
@@ -648,6 +651,9 @@ func (m *Manager) Remove(id string) error {
 		}
 	}
 	m.mu.Unlock()
+	if m.onRemove != nil {
+		m.onRemove(id)
+	}
 	m.changed()
 	return nil
 }

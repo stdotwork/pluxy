@@ -775,3 +775,22 @@ func TestRenewalUnderOldSettingsIsDropped(t *testing.T) {
 		t.Errorf("record: refresh %q settings %s; want refresh-1 and the new settings", rec.Credential.RefreshToken, rec.Account.Settings)
 	}
 }
+
+func TestRemoveCallsOnRemove(t *testing.T) {
+	store, err := Open(FileBackend{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var removed []string
+	m := NewManager(store, single{&fakeProvider{}}, Options{OnRemove: func(id string) { removed = append(removed, id) }})
+	defer m.Close()
+	if _, err := m.Create(Record{ID: "acct", Extension: provID, State: StateActive, Credential: protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Remove("acct"); err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 1 || removed[0] != "acct" {
+		t.Errorf("OnRemove = %v, want [acct]", removed)
+	}
+}

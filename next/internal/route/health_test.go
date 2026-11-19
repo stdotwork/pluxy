@@ -678,3 +678,67 @@ func TestAccountClosedSiblingRule(t *testing.T) {
 		}
 	})
 }
+
+// A ban ends only when a person enables the account, signs in again, or deletes it: leaving
+// the router (e.g. a failed refresh or an extension not running at reload) or a settings
+// change keeps the account banned when it returns.
+func TestBanSurvivesLeavingRouterSettingsChangeAndRetain(t *testing.T) {
+	h := newHarness(t, Config{}, accts("a", "b")...)
+	h.on("a", fail(llm.Error{Code: llm.CodeAccountClosed, Status: 400, Retryable: true, Scope: llm.ScopeCredential, Message: "This organization has been disabled."}))
+	h.on("b", ok())
+	h.runOK("m")
+	if got := h.healthOf("a"); got.State != HealthBanned {
+		t.Fatalf("a health after account_closed = %+v, want banned", got)
+	}
+
+	// 1. Account leaves the router (e.g. reauth_required) and returns.
+	h.setAccounts(accts("b")...)
+	if !h.r.state.IsBanned("a") {
+		t.Errorf("after leaving router via SetAccounts: IsBanned(a) = false, want true")
+	}
+	h.setAccounts(accts("a", "b")...)
+	if got := h.healthOf("a"); got.State != HealthBanned {
+		t.Errorf("after returning to router: a health = %+v, want banned", got)
+	}
+
+	// 2. Settings change in place (restart).
+	h.setAccounts(withSettings(Account{ID: "a"}, `{"base_url":"https://other.invalid"}`), Account{ID: "b"})
+	if got := h.healthOf("a"); got.State != HealthBanned {
+		t.Errorf("after settings change: a health = %+v, want banned", got)
+	}
+
+	// 3. Reload with its extension stopped (Retain drops a), then reload with it running again.
+	r2, err := New(Config{}, accts("b"), h.r.attempt, h.r.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	same := func(old, cur *Account) bool { return string(old.Settings) == string(cur.Settings) }
+	h.r.state.Retain(h.r, r2, same)
+	if !h.r.state.IsBanned("a") {
+		t.Errorf("after Retain without a: IsBanned(a) = false, want true")
+	}
+	r3, err := New(Config{}, accts("a", "b"), h.r.attempt, h.r.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.r.state.Retain(r2, r3, same)
+	if got := r3.state.Health(Account{ID: "a"}, h.now, Hold{}); got.State != HealthBanned {
+		t.Errorf("after Retain with a back: a health = %+v, want banned", got)
+	}
+
+	// Requests still skip a.
+	h.on("a", ok())
+	h.on("b", ok())
+	h.attempts = nil
+	h.runOK("m")
+	h.wantAttempts("b")
+
+	// 4. Deleting the account drops its ban (so re-adding it starts ok).
+	r3.state.RetainBans(func(id string) bool { return id != "a" })
+	if r3.state.IsBanned("a") {
+		t.Errorf("after RetainBans without a: IsBanned(a) = true, want false")
+	}
+	if got := r3.state.Health(Account{ID: "a"}, h.now, Hold{}); got.State != HealthOK {
+		t.Errorf("after deletion: a health = %+v, want ok", got)
+	}
+}

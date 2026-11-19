@@ -567,7 +567,7 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 			c.discard(next, prev)
 			return nil, err
 		}
-		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved, OnReauth: func(id string) { c.state.Unban(id) }})
+		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved, OnReauth: func(id string) { c.state.Unban(id) }, OnRemove: func(id string) { c.state.Unban(id) }})
 	}
 	router.UseCredentials(c.creds)
 	router.UseReadings(readings{c})
@@ -637,6 +637,7 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	}
 	if prev != nil {
 		c.state.Retain(prev.Router, next.Router, sameAccount)
+		c.state.RetainBans(func(id string) bool { _, ok := c.account(next, id); return ok })
 	}
 	for id, g := range next.exts {
 		g.SetPolicy(policy(c.extensionConfig(next, id)))

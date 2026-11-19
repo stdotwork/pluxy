@@ -301,6 +301,48 @@ func NewState() *State {
 		checkEvery: defaultCheckEvery, changes: make(chan struct{}, 1)}
 }
 
+// RetainBans drops bans for accounts that known reports no longer exist (deleted accounts),
+// keeping bans for accounts that merely left routing temporarily (such as a stopped extension
+// or reauth_required).
+func (s *State) RetainBans(known func(id string) bool) {
+	if known == nil {
+		return
+	}
+	s.mu.Lock()
+	if len(s.bans) == 0 {
+		s.mu.Unlock()
+		return
+	}
+	ids := make([]string, 0, len(s.bans))
+	for id := range s.bans {
+		ids = append(ids, id)
+	}
+	s.mu.Unlock()
+
+	var drop []string
+	for _, id := range ids {
+		if !known(id) {
+			drop = append(drop, id)
+		}
+	}
+	if len(drop) == 0 {
+		return
+	}
+	s.mu.Lock()
+	changed := false
+	for _, id := range drop {
+		if ban, ok := s.bans[id]; ok && !known(id) {
+			delete(s.bans, id)
+			s.unbannedSeq[id] = max(s.unbannedSeq[id], s.seq, ban.mark)
+			changed = true
+		}
+	}
+	if changed {
+		s.notify()
+	}
+	s.mu.Unlock()
+}
+
 // IsBanned reports whether account id is currently banned.
 func (s *State) IsBanned(id string) bool {
 	s.mu.Lock()
@@ -400,17 +442,6 @@ func (s *State) Retain(prevRouter, nextRouter *Router, same func(old, cur *Accou
 			delete(s.last, id)
 		}
 	}
-	banChanged := false
-	for id := range s.bans {
-		if !kept[id] {
-			delete(s.bans, id)
-			delete(s.unbannedSeq, id)
-			banChanged = true
-		}
-	}
-	if banChanged {
-		s.notify()
-	}
 	s.mu.Unlock()
 
 	s.affinity.retain(kept, changed, gen)
@@ -466,17 +497,8 @@ func (s *State) restart(old, fresh []*Account, kept map[string]bool) {
 			s.drop(k)
 		}
 	}
-	banChanged := false
 	for id := range revs {
 		delete(s.last, id)
-		if _, ok := s.bans[id]; ok {
-			delete(s.bans, id)
-			delete(s.unbannedSeq, id)
-			banChanged = true
-		}
-	}
-	if banChanged {
-		s.notify()
 	}
 	s.mu.Unlock()
 	for _, a := range fresh {
@@ -518,11 +540,6 @@ func (s *State) forget(id string) {
 		}
 	}
 	delete(s.last, id)
-	if _, ok := s.bans[id]; ok {
-		delete(s.bans, id)
-		delete(s.unbannedSeq, id)
-		s.notify()
-	}
 	s.revs[id]++
 	rev := s.revs[id]
 	s.mu.Unlock()
