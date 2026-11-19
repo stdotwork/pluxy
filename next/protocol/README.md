@@ -1196,8 +1196,8 @@ Rules:
   message: connecting the upstream socket for it makes no second one, so the rules apply once per
   turn.
 - Paths are relative to the model request. An extension whose body carries the request inside
-  another object applies them inside it: the Antigravity extension's body is
-  `{"project": ..., "request": {...}}`, and its rules apply inside `request`, as in today's core.
+  another object applies them inside it: if an extension's body is
+  `{"project": ..., "request": {...}}`, its rules apply inside `request`.
 - In this order, checking each rule's conditions on the body as it is when the rule's turn comes:
   `default`, then `default-raw`, each rule in order, each of its params in sorted path order,
   writing a value only where the body has none and no earlier default wrote one (the first

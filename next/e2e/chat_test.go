@@ -58,7 +58,6 @@ func build(dir string) error {
 		{filepath.Join("kimi", "kimi"), "../extensions/kimi"},
 		{filepath.Join("xai", "xai"), "../extensions/xai"},
 		{filepath.Join("gemini", "gemini"), "../extensions/gemini"},
-		{filepath.Join("antigravity", "antigravity"), "../extensions/antigravity"},
 		{filepath.Join("devin", "devin"), "../extensions/devin"},
 		{filepath.Join("meta", "meta"), "../extensions/meta"},
 		{"testext", "./testext"},
@@ -82,7 +81,7 @@ func build(dir string) error {
 		return err
 	}
 	for id, name := range map[string]string{"example/oauth": "oauth", "pluxy/codex": "codex", "pluxy/claude": "claude", "pluxy/gemini": "gemini", "pluxy/kimi": "kimi", "pluxy/xai": "xai",
-		"pluxy/antigravity": "antigravity", "pluxy/devin": "devin", "pluxy/meta": "meta"} {
+		"pluxy/devin": "devin", "pluxy/meta": "meta"} {
 		manifest["id"] = id
 		manifest["programs"] = map[string]string{runtime.GOOS + "/" + runtime.GOARCH: name}
 		b, _ = json.Marshal(manifest)
