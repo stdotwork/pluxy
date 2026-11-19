@@ -39,13 +39,19 @@ var noReading = &llm.Error{Code: llm.CodeUnsupported, Message: "no usage reading
 // counts the whole account or names the model; a feature's window covers no block. Where
 // the account has no reading, the check lets the next request through instead, and that
 // request's outcome is the answer. A reading that cannot be made leaves the block; it is tried
-// again an interval on. Readings are made one at a time; core calls Check on a timer.
+// again an interval on. Only accounts the router routes over are checked: a block on one that is
+// turned off or waits for a sign-in stays due until it routes again. Readings are made one at a
+// time; core calls Check on a timer.
 func (r *Router) Check(ctx context.Context) {
 	accounts, _ := r.snapshot()
 	r.mu.RLock()
 	rd := r.readings
 	r.mu.RUnlock()
-	due := r.state.due(r.now())
+	routes := make(map[string]bool, len(accounts))
+	for _, a := range accounts {
+		routes[a.ID] = true
+	}
+	due := r.state.due(r.now(), routes)
 	for _, a := range accounts {
 		claims := due[a.ID]
 		if len(claims) == 0 {
@@ -77,15 +83,16 @@ type claim struct {
 	until time.Time
 }
 
-// due takes on the checks due at now, by account ID: each one's next check moves an interval
-// on when more than an interval is left (nextCheck), so a check that never answers is made again
-// then.
-func (s *State) due(now time.Time) map[string][]claim {
+// due takes on the checks due at now on the accounts in routes, by account ID: each one's next
+// check moves an interval on when more than an interval is left (nextCheck), so a check that
+// never answers is made again then. A block on an account that does not route now (turned off,
+// or waiting for a sign-in) is left due, to be checked once it routes again.
+func (s *State) due(now time.Time, routes map[string]bool) map[string][]claim {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := map[string][]claim{}
 	for k, st := range s.scopes {
-		if k.kind == scopeEndpoint {
+		if k.kind == scopeEndpoint || !routes[k.id] {
 			continue
 		}
 		for i := range st.blocks {

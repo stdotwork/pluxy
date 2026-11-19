@@ -516,3 +516,28 @@ func TestMissingModelLeavesHealthOK(t *testing.T) {
 		t.Errorf("cooldowns = %+v, want model m's for 12h", rt.Cooldowns)
 	}
 }
+
+// A saved block on an account that does not route now (turned off, or waiting for a sign-in) is
+// not checked, and its check stays due: once the account routes again, the next run of the
+// checks reads it, not one an interval later.
+func TestCheckSkipsAccountsThatDoNotRoute(t *testing.T) {
+	h := newHarness(t, Config{}, accts("a")...)
+	rd := &fakeReadings{read: func(string) (*protocol.Quota, *llm.Error) {
+		return windows(h.now, 0, 5*time.Hour, 0, 7*24*time.Hour), nil
+	}}
+	h.r.UseReadings(rd)
+	h.r.state.Load([]SavedBlock{{Account: "x", Scope: "credential", Until: h.now.Add(3 * time.Hour), Source: SourceProvider}}, h.now, nil)
+	h.r.Check(context.Background())
+	if len(rd.calls) != 0 {
+		t.Errorf("readings = %v, want none: x does not route", rd.calls)
+	}
+	h.now = h.now.Add(time.Minute)
+	h.setAccounts(accts("a", "x")...)
+	h.r.Check(context.Background())
+	if !slices.Equal(rd.calls, []string{"x"}) {
+		t.Errorf("readings once x routes = %v, want x's", rd.calls)
+	}
+	if got := h.healthOf("x"); got.State != HealthOK {
+		t.Errorf("x after its check: %+v, want ok", got)
+	}
+}
