@@ -59,6 +59,9 @@ type clientFormat struct {
 	// googleKeys accepts the client key where Google's clients send it: in x-goog-api-key or
 	// the key query parameter.
 	googleKeys bool
+	// noKeepAlive keeps keep-alive comments off the format's streams: Google's clients read
+	// every SSE line as JSON, and Google's API never sends a comment.
+	noKeepAlive bool
 }
 
 // bodyOnly adapts a parser for a format whose request is all in its body.
@@ -128,10 +131,11 @@ var geminiFormat = clientFormat{
 		}
 		return geminigenerate.ParseRequest(model, method == "streamGenerateContent", body)
 	},
-	stream:     func(w io.Writer, _ llm.Request) eventWriter { return geminigenerate.NewStreamWriter(w) },
-	aggregate:  func(llm.Request) aggregator { return geminigenerate.NewAggregator() },
-	errorBody:  geminigenerate.ErrorResponse,
-	googleKeys: true,
+	stream:      func(w io.Writer, _ llm.Request) eventWriter { return geminigenerate.NewStreamWriter(w) },
+	aggregate:   func(llm.Request) aggregator { return geminigenerate.NewAggregator() },
+	errorBody:   geminigenerate.ErrorResponse,
+	googleKeys:  true,
+	noKeepAlive: true,
 }
 
 // Generation is what one request runs on from start to end: a config snapshot and the router
@@ -391,9 +395,15 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 	if m != nil {
 		m.sent = http.StatusOK
 	}
-	ka := startKeepAlive(w, http.NewResponseController(w))
-	defer ka.stop()
-	sw := f.stream(ka, req)
+	rc := http.NewResponseController(w)
+	var out io.Writer = w
+	flush := rc.Flush
+	if !f.noKeepAlive {
+		ka := startKeepAlive(w, rc)
+		defer ka.stop()
+		out, flush = ka, ka.Flush
+	}
+	sw := f.stream(out, req)
 	defer func() { logTranslation(r, request, sw) }()
 	for {
 		// Writes block while the client is slow, and the next event is not read until the
@@ -401,7 +411,7 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 		if err := sw.Write(ev); err != nil {
 			return
 		}
-		if err := ka.Flush(); err != nil {
+		if err := flush(); err != nil {
 			return
 		}
 		if ev.Terminal() {

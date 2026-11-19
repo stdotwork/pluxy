@@ -12,20 +12,29 @@ import (
 )
 
 // A streamed reply that the extension holds quiet for longer than 15 seconds gets ": keep-alive"
-// comments on every streaming route, and then finishes normally once the extension goes on.
+// comments on the Chat, Responses and Messages routes, and then finishes normally once the extension
+// goes on. The Gemini route gets none: Google's API never sends comments, and its Python SDK
+// fails on a line that is not JSON.
 func TestKeepAliveOnQuietStreams(t *testing.T) {
 	g := newGate(t)
 	base := runCore(t, lifecycleConfig(testPackage(t, "0.1.0"), g, nil))
-	routes := []struct{ name, path, body string }{
-		{"chat", "/v1/chat/completions", `{"model":"gated","stream":true,"messages":[{"role":"user","content":"hi"}]}`},
-		{"responses", "/v1/responses", `{"model":"gated","stream":true,"input":"hi"}`},
-		{"messages", "/v1/messages", `{"model":"gated","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hi"}]}`},
-		{"gemini", "/v1beta/models/gated:streamGenerateContent?alt=sse", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`},
+	routes := []struct {
+		name, path, body string
+		quiet            bool // no comment is wanted
+	}{
+		{"chat", "/v1/chat/completions", `{"model":"gated","stream":true,"messages":[{"role":"user","content":"hi"}]}`, false},
+		{"responses", "/v1/responses", `{"model":"gated","stream":true,"input":"hi"}`, false},
+		{"messages", "/v1/messages", `{"model":"gated","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hi"}]}`, false},
+		{"gemini", "/v1beta/models/gated:streamGenerateContent?alt=sse", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, true},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var heard sync.WaitGroup
-	heard.Add(len(routes))
+	for _, rt := range routes {
+		if !rt.quiet {
+			heard.Add(1)
+		}
+	}
 	type result struct {
 		name, before, after string
 		keepAlive           bool
@@ -47,7 +56,17 @@ func TestKeepAliveOnQuietStreams(t *testing.T) {
 			r := bufio.NewReader(resp.Body)
 			var before strings.Builder
 			once := sync.OnceFunc(heard.Done)
+			if rt.quiet {
+				once = func() {}
+			}
 			defer once()
+			if rt.quiet {
+				// Read to the end: a comment anywhere in the quiet or after it is a failure.
+				b, _ := io.ReadAll(r)
+				res.keepAlive = strings.Contains(string(b), ": keep-alive")
+				res.after = string(b)
+				return
+			}
 			for {
 				line, err := r.ReadString('\n')
 				before.WriteString(line)
@@ -67,13 +86,19 @@ func TestKeepAliveOnQuietStreams(t *testing.T) {
 	}
 	heard.Wait()
 	quiet := time.Since(start)
+	// The routes without comments have been quiet as long as the others by now; let a comment
+	// that would come late come.
+	time.Sleep(time.Second)
 	g.open()
 	for range routes {
 		res := <-results
+		quietRoute := res.name == "gemini"
 		switch {
 		case res.status != http.StatusOK:
 			t.Errorf("%s: status %d: %s", res.name, res.status, res.before)
-		case !res.keepAlive:
+		case quietRoute && res.keepAlive:
+			t.Errorf("%s: a keep-alive comment on a route whose clients do not take comments: %q", res.name, res.after)
+		case !quietRoute && !res.keepAlive:
 			t.Errorf("%s: no keep-alive comment while the extension was quiet: %q", res.name, res.before)
 		case !strings.Contains(res.after, "done") || strings.Contains(res.after, "event: error") || strings.Contains(res.after, `"error":{`):
 			t.Errorf("%s: after the keep-alive the stream did not finish normally: %q", res.name, res.after)
