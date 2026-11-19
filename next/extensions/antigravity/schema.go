@@ -28,7 +28,9 @@ import (
 //   - a union with one non-null branch becomes that branch, nullable; for Claude models, whose
 //     backend rejects unions in function declarations, every union becomes its strongest branch
 //     (object over array over scalar) with the other types hinted ("Accepts: a | b");
-//   - other JSON Schema keywords are removed;
+//   - other JSON Schema keywords are removed, and so is title, except in a response schema (Google's
+//     Schema type has a title field, and today's core keeps it there) and, for Claude and Gemini 3 Pro,
+//     in a function's parameters and response;
 //   - for Claude and Gemini 3 Pro (the models today's core marks this way), a function's
 //     parameters get a required placeholder in every object that requires nothing: "reason" (a
 //     string) in one with no properties, "_" (a boolean) in one with properties and none
@@ -40,7 +42,7 @@ import (
 type schemaMode struct {
 	response     bool // a response schema, not a function's parameters
 	claude       bool // a function declaration for a Claude model
-	keepTitle    bool
+	keepTitle    bool // keep title: Google's Schema has the field; a function's parameters and response lose it for other models
 	placeholders bool // add the placeholders to a function's parameters
 }
 
@@ -84,8 +86,9 @@ const maxRefDepth = 16
 
 // cleanTools returns a request's tools with every function declaration's schemas cleaned: its
 // parameters (parametersJsonSchema renamed to parameters) and its response. group is true for
-// Claude and Gemini 3 Pro, which keep titles and get placeholders in their parameters; the second
-// result says where the placeholders went, leaving out any that a client schema at the same path
+// Claude and Gemini 3 Pro, which keep titles (also in a function's response) and get placeholders
+// in their parameters; the second result says where the placeholders went, leaving out any that
+// a client schema at the same path
 // (another union branch, whole as the client wrote it even where Claude's cleaning keeps one; a
 // tuple item; a function declared again under the same name) declares a name the placeholder
 // has, as a property or in required: stripping would take the client's key, so that placeholder
@@ -136,7 +139,7 @@ func cleanTools(raw json.RawMessage, claude, group bool) (json.RawMessage, place
 					}
 				}
 				if r, ok := d["response"]; ok {
-					d["response"] = cleanSchema(r, schemaMode{response: true})
+					d["response"] = cleanSchema(r, schemaMode{response: true, keepTitle: group})
 				}
 			}
 			t[key], _ = json.Marshal(decls)
@@ -171,7 +174,7 @@ func cleanResponseSchema(gen map[string]json.RawMessage) bool {
 		}
 	}
 	if v, ok := gen["responseSchema"]; ok {
-		gen["responseSchema"] = cleanSchema(v, schemaMode{response: true})
+		gen["responseSchema"] = cleanSchema(v, schemaMode{response: true, keepTitle: true})
 		changed = true
 	}
 	return changed

@@ -891,7 +891,7 @@ async function runApp(
         JSON.stringify(buildAccessFixtures(access)),
       );
       // No recent files for the session's GTK programs, the portal's file chooser among them:
-      // with recent files, a folder chooser opens in its Recent view, where a typed folder
+      // with recent files, a folder chooser opens in its Recent view, where an entered folder
       // cannot be chosen (GTK 3.24 gtkfilechooserwidget.c gtk_file_chooser_widget_get_files);
       // without, it opens in a folder (startup mode falls back to the current folder).
       mkdirSync(join(dirs.config, "gtk-3.0"), { recursive: true });

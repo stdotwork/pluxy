@@ -3,14 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 
 /// A folder with executables named names (and a non-executable `plain`).
 fn bin(names: &[&str]) -> PathBuf {
-    let d = std::env::temp_dir().join(format!(
-        "pluxy-execution-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let d = std::env::temp_dir().join(crate::test_folder_name("pluxy-execution"));
     std::fs::create_dir_all(&d).unwrap();
     for n in names.iter().chain(&["plain"]) {
         let p = d.join(n);

@@ -307,6 +307,29 @@ fn probe(n: u64) -> Value {
     }
 }
 
+/// When process (a handle to it) was created, in Windows' own count (100 ns since 1601). With its
+/// ID, it tells the process from a later one given the same ID, which Windows may do as soon as the
+/// first has ended and its last handle has closed.
+#[cfg(windows)]
+pub fn created(process: windows_sys::Win32::Foundation::HANDLE) -> Option<u64> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    let zero = || FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero(), zero(), zero(), zero());
+    let ok = unsafe {
+        windows_sys::Win32::System::Threading::GetProcessTimes(
+            process,
+            &mut created,
+            &mut exited,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    (ok != 0).then(|| (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+}
+
 /// The file the heartbeat writes when it is asked to stop, for its signal handler.
 #[cfg(unix)]
 static TERM_FILE: std::sync::OnceLock<std::ffi::CString> = std::sync::OnceLock::new();
@@ -350,12 +373,12 @@ unsafe extern "system" fn on_heartbeat_ctrl(kind: u32) -> windows_sys::core::BOO
 
 /// The lifetime checks' stand-in agent or runtime, on every platform, started as
 /// `<program> HEARTBEAT <file> [child] [ignore] [probe=<n>] [other arguments]`. It writes what it
-/// was started with (process ID, arguments, working folder, environment, and with `probe=<n>` what
-/// it holds at descriptor or handle n, `probe`) to `<file>.json`, then a count to file every 50 ms
-/// (written whole, then renamed into place), until `<file>.stop` exists: then it exits 0. With
-/// `child` it first starts itself again as the heartbeat `<file>.child` (in its process group, on
-/// Windows its job). Asked to stop (SIGTERM; on Windows CTRL_BREAK) it writes `<file>.term` and
-/// exits 0, or with `ignore` goes on.
+/// was started with (process ID, on Windows when it was created (`created`), arguments, working
+/// folder, environment, and with `probe=<n>` what it holds at descriptor or handle n, `probe`) to
+/// `<file>.json`, then a count to file every 50 ms (written whole, then renamed into place), until
+/// `<file>.stop` exists: then it exits 0. With `child` it first starts itself again as the
+/// heartbeat `<file>.child` (in its process group, on Windows its job). Asked to stop (SIGTERM; on
+/// Windows CTRL_BREAK) it writes `<file>.term` and exits 0, or with `ignore` goes on.
 pub fn heartbeat(args: &[String]) -> ! {
     let Some(file) = args.get(2).cloned() else {
         std::process::exit(2);
@@ -403,8 +426,13 @@ pub fn heartbeat(args: &[String]) -> ! {
         .skip(3)
         .find_map(|a| a.strip_prefix("probe=")?.parse().ok())
         .map(probe);
+    #[cfg(windows)]
+    let created = created(unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() });
+    #[cfg(not(windows))]
+    let created: Option<u64> = None;
     let seen = json!({
         "pid": std::process::id(),
+        "created": created,
         "argv": std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>(),
         "cwd": std::env::current_dir().ok(),
         "env": env,

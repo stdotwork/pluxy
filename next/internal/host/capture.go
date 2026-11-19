@@ -10,8 +10,13 @@ import (
 const captureMinor = 13
 
 // CaptureFunc receives a captured call's upstream exchanges, with the call's account ID. Every
-// string in d has had the call's credentials removed (protocol.Redactor); a body's BodySize is
-// the length of what is left of it plus what was cut out (see redactDiagnostic).
+// string in d has had the call's credentials removed in the spellings protocol.Redactor knows,
+// and the bytes beside a cut or a stopped read that start a form of a credential, of 4 bytes or
+// more, are left out. A start of a secret spelled another way (JSON or percent escapes, a
+// carriage return before a line break) can still be where a body was cut or its read stopped: the
+// caller that writes a body trims what else could be one, as the request log does (the window
+// and run of key characters in server/upstreamlog.go). A body's BodySize is the length of what is
+// left of it plus what was cut out (see redactDiagnostic).
 type CaptureFunc func(account string, d protocol.Diagnostic)
 
 type captureKey struct{}
@@ -35,8 +40,9 @@ func capture(ctx context.Context, info protocol.Info) CaptureFunc {
 
 // redactDiagnostic removes r's credentials from every string of d. In a body it also removes the
 // bytes beside a cut that could be a secret cut in two (Redactor.TrimCut), and, where the body was
-// not read to its end (BodyStopped), the bytes at its end that could be the start of a secret cut
-// off there; it redacts a start and an end with nothing between them as one text and joins them
+// not read to its end (BodyStopped), the run at its end that starts a form of a credential
+// (Redactor.TrimCut again, so a start spelled with escapes is not recognised: see CaptureFunc);
+// it redacts a start and an end with nothing between them as one text and joins them
 // (Redactor.Body), and it sets BodySize to the length of what is left of the pieces plus the bytes
 // left out between them, so a body that was cut is told from one that only got shorter because a
 // credential was replaced. The bytes removed where the read stopped are not counted: nothing

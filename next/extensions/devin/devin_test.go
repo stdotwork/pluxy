@@ -373,7 +373,9 @@ func TestForwardInputsStops(t *testing.T) {
 }
 
 // A server that holds the stream open after the reply's end frame does not hold the reply back:
-// the extension reads on past the end frame for a moment only.
+// the extension reads on past the end frame for afterEndWait only, no less (readToEnd gives up
+// only then, so a reply that returns sooner did not read on) and no more than a little over.
+// What the log then records of that body is covered by e2e.TestUpstreamCaptureDevinReplyLoggedWhole.
 func TestReplyNotHeldAfterEndFrame(t *testing.T) {
 	srv := devintest.New(t)
 	srv.Chat = func(w http.ResponseWriter, r *http.Request, _ devintest.Request) {
@@ -386,7 +388,11 @@ func TestReplyNotHeldAfterEndFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := time.Since(start); d > 10*time.Second {
+	d := time.Since(start)
+	if d < afterEndWait {
+		t.Errorf("the reply took %v, less than %v: the extension did not read on past the end frame", d, afterEndWait)
+	}
+	if d > 10*time.Second {
 		t.Errorf("the reply took %v with the stream held open after its end frame", d)
 	}
 	if got := out.types(); !strings.HasSuffix(got, "finish") {
