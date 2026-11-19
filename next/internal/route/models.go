@@ -1,6 +1,7 @@
 package route
 
 import (
+	"cmp"
 	"context"
 	"log"
 	"slices"
@@ -471,10 +472,11 @@ func modelIDs(list *protocol.ModelList) []string {
 
 // Models returns every model the router's accounts serve, each under every name a client can ask
 // for it by, and each fallback chain's new name, sorted by name; a name two accounts serve is
-// listed once, as the first account in order of the provider that serves it lists it. A model the account's config lists itself shows its upstream name as its
-// display name, when the router was made as created and the owner its extension names; one from
-// the extension's list shows what the extension says about it. An account whose list cannot be
-// read lists only its config's models.
+// listed once, as ServedModels describes it: as the account that serves it first lists it. A model
+// the account's config lists itself shows its upstream name as its display name, when the router
+// was made as created and the owner its extension names; one from the extension's list shows
+// what the extension says about it. An account whose list cannot be read lists only its config's
+// models.
 func (r *Router) Models(ctx context.Context) []protocol.Model {
 	served := r.ServedModels(ctx)
 	out := make([]protocol.Model, len(served))
@@ -492,80 +494,131 @@ type ServedModel struct {
 	Upstream string `json:"upstream"`
 	// Extension is the extension of that account.
 	Extension string `json:"extension"`
-	// Accounts are the IDs of every account that serves the name, in the router's order.
+	// Accounts are the IDs of the accounts a request for the name uses, highest priority first
+	// (with a chain, step by step).
 	Accounts []string `json:"accounts"`
 }
 
-// ServedModels is Models with each model's extension, upstream name and serving accounts. An
-// account that serves any model because its list is not known lists none, as Models lists none.
-// A name that accounts of two providers list is the model of the provider that serves it (the
-// provider of its highest-priority account, the first in order on a tie), with that provider's
-// accounts, since requests for it go there alone unless a chain says otherwise.
+// ServedModels is Models with each model's extension, upstream name and serving accounts. A
+// name's entry follows routing: its provider is the one a request for it goes to (stepTargets),
+// its accounts are that provider's that serve the name, highest priority first, and its model is
+// as the first of them that lists the name has it. An account that serves any model because its
+// list is not known lists no name, but serves those of its provider. A name whose accounts are all
+// held is not listed: no request for it can be served now.
 func (r *Router) ServedModels(ctx context.Context) []ServedModel {
-	accounts, creds := r.snapshot()
-	r.mu.RLock()
-	catalog := r.catalog
-	r.mu.RUnlock()
+	accounts, creds := r.knownSnapshot()
+	catalog := r.catalogFunc()
+	now := r.now()
+	lists := make([]*protocol.ModelList, len(accounts))
+	var wg sync.WaitGroup
+	for i, a := range accounts {
+		wg.Go(func() { lists[i] = r.listOf(ctx, a, creds, catalog, now) })
+	}
+	wg.Wait()
+	l := modelLists{lists: lists, names: make([][]Name, len(accounts)), served: map[string][]string{}}
+	var order []string // the names accounts in service list, each once
+	seen := map[string]bool{}
+	for i, a := range accounts {
+		var ids []string
+		if lists[i] != nil {
+			ids = modelIDs(lists[i])
+		}
+		// As served: an account without models of its own serves those its list names.
+		if len(a.Models) == 0 && len(ids) > 0 {
+			l.served[a.ID] = ids
+		}
+		l.names[i] = a.names(ids, r.cfg.ForceModelPrefix)
+		if a.Held != "" {
+			continue
+		}
+		for _, n := range l.names[i] {
+			if !seen[n.Public] {
+				seen[n.Public] = true
+				order = append(order, n.Public)
+			}
+		}
+	}
 	out := []ServedModel{}
-	index := map[string]int{}    // by name
-	top := map[string]*Account{} // by name: the account whose provider serves it
-	for _, a := range accounts {
-		// For an account whose config lists its models, only the list's owner is used.
-		list := r.listOf(ctx, a, creds, catalog, r.now())
-		if list == nil {
-			list = &protocol.ModelList{}
-		}
-		owner := list.OwnedBy
-		if owner == "" {
-			owner = a.ID
-		}
-		byID := map[string]protocol.Model{}
-		for _, m := range list.Models {
-			if _, dup := byID[m.ID]; !dup {
-				byID[m.ID] = m
-			}
-		}
-		for _, n := range a.names(modelIDs(list), r.cfg.ForceModelPrefix) {
-			i, ok := index[n.Public]
-			switch {
-			case ok && a.Extension == top[n.Public].Extension:
-				out[i].Accounts = append(out[i].Accounts, a.ID)
-				continue
-			case ok && a.Priority <= top[n.Public].Priority:
-				continue // another provider serves the name
-			}
-			top[n.Public] = a
-			var m protocol.Model
-			if len(a.Models) > 0 {
-				m = protocol.Model{DisplayName: n.Upstream, Created: r.created.Unix()}
-			} else {
-				m = byID[n.Upstream]
-				m.GenerationMethods = slices.Clone(m.GenerationMethods)
-				m.InputModalities = slices.Clone(m.InputModalities)
-				m.OutputModalities = slices.Clone(m.OutputModalities)
-				if m.Name != "" {
-					m.Name = renameResource(m.Name, n.Upstream, n.Public)
-				}
-			}
-			m.ID = n.Public
-			if n.DisplayName != "" {
-				m.DisplayName = n.DisplayName
-			}
-			if m.OwnedBy == "" {
-				m.OwnedBy = owner
-			}
-			entry := ServedModel{Model: m, Extension: a.Extension, Upstream: n.Upstream, Accounts: []string{a.ID}}
-			if ok {
-				out[i] = entry // a higher-priority provider's account
-				continue
-			}
-			index[n.Public] = len(out)
-			out = append(out, entry)
+	index := map[string]int{} // by name
+	for _, name := range order {
+		steps := []Step{{Model: name}}
+		serving, _ := split(r.targets(steps, accounts, l.served))
+		if e, ok := r.servedEntry(name, steps, serving, accounts, l); ok {
+			index[name] = len(out)
+			out = append(out, e)
 		}
 	}
 	out = r.chainModels(accounts, out, index)
 	slices.SortFunc(out, func(a, b ServedModel) int { return strings.Compare(a.ID, b.ID) })
 	return out
+}
+
+// modelLists are the model lists of a router's known accounts, by their index: each list, the
+// names each account serves, and the lists of accounts without models of their own, as served
+// returns them.
+type modelLists struct {
+	lists  []*protocol.ModelList
+	names  [][]Name
+	served map[string][]string
+}
+
+// servedEntry is the entry of name, served by targets, the targets of steps: its accounts,
+// highest priority first within a step, and the model of the first of them that lists its step's
+// model, under name. ok is false when no target lists its step's model.
+func (r *Router) servedEntry(name string, steps []Step, targets []target, accounts []*Account, l modelLists) (ServedModel, bool) {
+	targets = slices.Clone(targets)
+	slices.SortStableFunc(targets, func(a, b target) int { return cmp.Or(a.step-b.step, b.a.Priority-a.a.Priority) })
+	var e ServedModel
+	found := false
+	for _, t := range targets {
+		if !slices.Contains(e.Accounts, t.a.ID) {
+			e.Accounts = append(e.Accounts, t.a.ID)
+		}
+		if found {
+			continue
+		}
+		i := slices.Index(accounts, t.a)
+		j := slices.IndexFunc(l.names[i], func(n Name) bool { return n.Public == steps[t.step].Model && n.Upstream == t.model })
+		if j < 0 {
+			continue
+		}
+		found = true
+		e.Model, e.Upstream, e.Extension = r.listedModel(t.a, l.names[i][j], l.lists[i], name), t.model, t.a.Extension
+	}
+	return e, found
+}
+
+// listedModel is the model n of account a, whose list from its extension is list, under name. A
+// model the account's config lists itself shows its upstream name as its display name, when the
+// router was made as created and the owner its extension names; one from the extension's list
+// shows what the extension says about it.
+func (r *Router) listedModel(a *Account, n Name, list *protocol.ModelList, name string) protocol.Model {
+	owner := a.ID
+	if list != nil && list.OwnedBy != "" {
+		owner = list.OwnedBy
+	}
+	var m protocol.Model
+	if len(a.Models) > 0 {
+		m = protocol.Model{DisplayName: n.Upstream, Created: r.created.Unix()}
+	} else if list != nil {
+		if i := slices.IndexFunc(list.Models, func(x protocol.Model) bool { return x.ID == n.Upstream }); i >= 0 {
+			m = list.Models[i]
+		}
+		m.GenerationMethods = slices.Clone(m.GenerationMethods)
+		m.InputModalities = slices.Clone(m.InputModalities)
+		m.OutputModalities = slices.Clone(m.OutputModalities)
+		if m.Name != "" {
+			m.Name = renameResource(m.Name, n.Upstream, name)
+		}
+	}
+	m.ID = name
+	if n.DisplayName != "" {
+		m.DisplayName = n.DisplayName
+	}
+	if m.OwnedBy == "" {
+		m.OwnedBy = owner
+	}
+	return m
 }
 
 // chainModels adds to out, the models the accounts serve with index giving each one's place by
