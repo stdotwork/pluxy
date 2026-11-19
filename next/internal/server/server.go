@@ -391,8 +391,9 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 	if m != nil {
 		m.sent = http.StatusOK
 	}
-	rc := http.NewResponseController(w)
-	sw := f.stream(w, req)
+	ka := startKeepAlive(w, http.NewResponseController(w))
+	defer ka.stop()
+	sw := f.stream(ka, req)
 	defer func() { logTranslation(r, request, sw) }()
 	for {
 		// Writes block while the client is slow, and the next event is not read until the
@@ -400,7 +401,7 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 		if err := sw.Write(ev); err != nil {
 			return
 		}
-		if err := rc.Flush(); err != nil {
+		if err := ka.Flush(); err != nil {
 			return
 		}
 		if ev.Terminal() {
