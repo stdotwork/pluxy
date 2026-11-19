@@ -1,6 +1,8 @@
 //! Validate final release inputs, not a source config before Tauri merges overrides.
+use crate::bundled_manifest::Manifest;
 use crate::trust::{read_bounded, TrustConfig, COMPILED_TEST_TRUST, PRODUCTION_TRUST};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom};
 use std::{
     fs,
@@ -18,7 +20,20 @@ pub struct ReleaseInputs {
     pub bundled_trust: PathBuf,
     pub artifacts: Vec<PathBuf>,
 }
+/// Checks the release inputs, and the core each package comes with against the bundled core's
+/// manifest compiled into this build (build.rs, from `PLUXY_BUNDLED_CORE`); the build's receipt,
+/// which every artifact must carry, covers that manifest too.
 pub fn validate(inputs: &ReleaseInputs) -> Result<(), String> {
+    let core = match include_str!(concat!(env!("OUT_DIR"), "/bundled_core.json")).trim() {
+        "null" => None,
+        raw => Some(Manifest::parse(raw.as_bytes(), crate::cores::PROGRAM)?),
+    };
+    validate_with_core(inputs, core.as_ref())
+}
+
+/// `validate`, with core in place of the manifest compiled into this build: for the gate's own
+/// tests, whose build has none. Only `validate` binds a package's core to the app built with it.
+pub fn validate_with_core(inputs: &ReleaseInputs, core: Option<&Manifest>) -> Result<(), String> {
     if COMPILED_TEST_TRUST || cfg!(feature = "native-test") {
         return Err("release validator was compiled with a test feature".into());
     }
@@ -41,7 +56,7 @@ pub fn validate(inputs: &ReleaseInputs) -> Result<(), String> {
     let _: tauri::Config = serde_json::from_slice(&read_bounded(&inputs.tauri_config)?)
         .map_err(|_| "invalid final Tauri configuration")?;
     if config.get("identifier").and_then(Value::as_str) != Some(RELEASE_IDENTIFIER)
-        || config.get("productName").and_then(Value::as_str) != Some("pluxy")
+        || config.get("productName").and_then(Value::as_str) != Some(RELEASE_PRODUCT)
     {
         return Err("release identifier/product must be dev.pluxy.desktop/pluxy".into());
     }
@@ -127,12 +142,14 @@ pub fn validate(inputs: &ReleaseInputs) -> Result<(), String> {
         .and_then(Value::as_str)
         .unwrap_or("pluxy-app");
     for artifact in &inputs.artifacts {
-        scan_artifact(artifact, name)?;
+        scan_artifact(artifact, name, core)?;
     }
     Ok(())
 }
 /// The release app's identifier (its macOS bundle identifier too).
 const RELEASE_IDENTIFIER: &str = "dev.pluxy.desktop";
+/// The release app's product name, which names its resource folder in an AppImage.
+const RELEASE_PRODUCT: &str = "pluxy";
 
 fn json_file(path: &Path) -> Result<Value, String> {
     serde_json::from_slice(&read_bounded(path)?)
@@ -249,16 +266,17 @@ const FORBIDDEN: [(&[u8], &str); 4] = [
     ),
 ];
 
-/// Checks one artifact; name is the app executable's name in a package. Each must be the app
-/// executable (ELF, PE or Mach-O), a type-2 AppImage holding it at usr/bin/<name>, a Windows
-/// folder bundle holding <name>.exe or a macOS app bundle holding Contents/MacOS/<name>, and
-/// carry this build's receipt itself.
-fn scan_artifact(path: &Path, name: &str) -> Result<(), String> {
+/// Checks one artifact; name is the app executable's name in a package, core the bundled core's
+/// manifest of the app built with it. Each must be the app executable (ELF, PE or Mach-O), a
+/// type-2 AppImage holding it at usr/bin/<name>, a Windows folder bundle holding <name>.exe or a
+/// macOS app bundle holding Contents/MacOS/<name>, and carry this build's receipt itself. A
+/// package must carry the core core lists, and none without one (`check_core`).
+fn scan_artifact(path: &Path, name: &str, core: Option<&Manifest>) -> Result<(), String> {
     let meta =
         fs::symlink_metadata(path).map_err(|e| format!("artifact missing/unreadable: {e}"))?;
     let what = path.display().to_string();
     let receipt = if meta.is_dir() {
-        scan_bundle(path, name, &what)?
+        scan_bundle(path, name, core, &what)?
     } else if meta.is_file() {
         let open = || fs::File::open(path).map_err(|e| format!("{what}: {e}"));
         match format(path)? {
@@ -266,7 +284,7 @@ fn scan_artifact(path: &Path, name: &str) -> Result<(), String> {
             Format::AppImage(offset) => {
                 // The files inside first, then every byte of the AppImage itself.
                 let app = Path::new("usr/bin").join(name);
-                let inside = scan_appimage(path, offset, &app)?;
+                let inside = scan_appimage(path, offset, &app, core)?;
                 scan_stream(open()?, &what)?;
                 inside
             }
@@ -555,12 +573,25 @@ fn well_formed_macho(file: &mut (impl Read + Seek), header: &[u8], len: u64) -> 
 /// Checks a bundle folder given as an artifact: a macOS app bundle (a folder named `*.app`), whose
 /// app executable is Contents/MacOS/<name>, a Mach-O file; or a Windows folder bundle, whose app
 /// executable is <name>.exe at its top, a PE file. An app bundle's Info.plist must name the
-/// release (`check_info_plist`). Every file in it is checked as a file inside an AppImage is.
-/// Says whether the app executable carries the build's receipt.
-fn scan_bundle(path: &Path, name: &str, what: &str) -> Result<bool, String> {
-    let (app, kind) = if path.extension().is_some_and(|e| e == "app") {
+/// release (`check_info_plist`). The core it carries is checked against core (`check_core`), then
+/// every file in it as a file inside an AppImage is. Says whether the app executable carries the
+/// build's receipt.
+fn scan_bundle(
+    path: &Path,
+    name: &str,
+    core: Option<&Manifest>,
+    what: &str,
+) -> Result<bool, String> {
+    let (app, kind, layout) = if path.extension().is_some_and(|e| e == "app") {
         check_info_plist(path, name, what)?;
-        (Path::new("Contents/MacOS").join(name), Exec::MachO)
+        (
+            Path::new("Contents/MacOS").join(name),
+            Exec::MachO,
+            CoreLayout {
+                program: "Contents/MacOS".into(),
+                bundled: "Contents/Resources/core/bundled".into(),
+            },
+        )
     } else {
         // The names at the folder's top first, as an app bundle's Info.plist is read first: a
         // test program there refuses it for its name, whatever its folders hold and in whatever
@@ -577,12 +608,143 @@ fn scan_bundle(path: &Path, name: &str, what: &str) -> Result<bool, String> {
                 return Err(format!("{what}!{n}: test file name in package"));
             }
         }
-        (PathBuf::from(format!("{name}.exe")), Exec::Pe)
+        (
+            PathBuf::from(format!("{name}.exe")),
+            Exec::Pe,
+            CoreLayout {
+                program: PathBuf::new(),
+                bundled: "bundled".into(),
+            },
+        )
+    };
+    let pinned = check_core(path, &layout, core, what)?;
+    let known = Known {
+        app: &app,
+        kind,
+        pinned: &pinned,
     };
     let mut budget = Budget::default();
     let mut receipt = false;
-    scan_tree(path, path, (&app, kind), what, 0, &mut budget, &mut receipt)?;
+    scan_tree(path, path, &known, what, 0, &mut budget, &mut receipt)?;
     Ok(receipt)
+}
+
+/// Where a package carries the core it comes with, as the app finds it there
+/// (`bundled_core::place`): the folder holding the core's program and the folder holding what its
+/// manifest lists under `bundled/`, each relative to the package's top.
+struct CoreLayout {
+    program: PathBuf,
+    bundled: PathBuf,
+}
+
+/// Checks the core a package (its top folder, root) carries against core, the bundled core's
+/// manifest of the app built with it, as the app checks the files before it installs them
+/// (`cores::Store::install_bundled`): each file the manifest lists is at its place, a regular file
+/// (not a link) of the listed size and SHA-256; and the bundled folder holds nothing else but
+/// folders. Without a manifest the package may carry no core program and no bundled folder: the
+/// app would have nothing to check them against. Returns the listed files' paths under root.
+fn check_core(
+    root: &Path,
+    layout: &CoreLayout,
+    core: Option<&Manifest>,
+    what: &str,
+) -> Result<HashSet<PathBuf>, String> {
+    let at = |rel: &Path| format!("{what}!{}", rel.display());
+    let Some(core) = core else {
+        for rel in [
+            layout.program.join("pluxy"),
+            layout.program.join("pluxy.exe"),
+            layout.bundled.clone(),
+        ] {
+            if fs::symlink_metadata(root.join(&rel)).is_ok() {
+                return Err(format!(
+                    "{}: a core in the package, but this build comes with none (no bundled core manifest)",
+                    at(&rel)
+                ));
+            }
+        }
+        return Ok(HashSet::new());
+    };
+    let mut pinned = HashSet::new();
+    for file in &core.files {
+        let rel = match file.path.strip_prefix("bundled/") {
+            Some(rest) => layout.bundled.join(rest),
+            None => layout.program.join(&file.path),
+        };
+        let path = root.join(&rel);
+        let meta = fs::symlink_metadata(&path).map_err(|_| {
+            format!(
+                "{}: missing, though the bundled core's manifest lists it",
+                at(&rel)
+            )
+        })?;
+        if !meta.is_file() {
+            return Err(format!("{}: not a regular file", at(&rel)));
+        }
+        if meta.len() != file.size
+            || sha256_file(&path).map_err(|e| format!("{}: {e}", at(&rel)))? != file.sha256
+        {
+            return Err(format!(
+                "{}: differs from the bundled core's manifest (core {})",
+                at(&rel),
+                core.version
+            ));
+        }
+        pinned.insert(rel);
+    }
+    match fs::symlink_metadata(root.join(&layout.bundled)) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(pinned),
+        Err(e) => return Err(format!("{}: {e}", at(&layout.bundled))),
+        Ok(meta) if !meta.is_dir() => {
+            return Err(format!("{}: not a folder", at(&layout.bundled)));
+        }
+        Ok(_) => {}
+    }
+    let mut folders = vec![layout.bundled.clone()];
+    while let Some(folder) = folders.pop() {
+        for entry in
+            fs::read_dir(root.join(&folder)).map_err(|e| format!("{}: {e}", at(&folder)))?
+        {
+            let rel = folder.join(
+                entry
+                    .map_err(|e| format!("{}: {e}", at(&folder)))?
+                    .file_name(),
+            );
+            let meta =
+                fs::symlink_metadata(root.join(&rel)).map_err(|e| format!("{}: {e}", at(&rel)))?;
+            if meta.is_dir() {
+                folders.push(rel);
+            } else if !pinned.contains(&rel) {
+                return Err(format!("{}: not in the bundled core's manifest", at(&rel)));
+            }
+        }
+    }
+    Ok(pinned)
+}
+
+/// A file's SHA-256, in lowercase hex as a manifest records it.
+fn sha256_file(path: &Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = fs::File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        digest.update(&buffer[..n]);
+    }
+    Ok(crate::artifact::hex(&digest.finalize()))
+}
+
+/// What a walk of a package (`scan_tree`) knows of it: its app executable (a path under its top)
+/// and the kind of executable that must be, and the files the bundled core's manifest pins
+/// (`check_core`), each a path under its top.
+struct Known<'a> {
+    app: &'a Path,
+    kind: Exec,
+    pinned: &'a HashSet<PathBuf>,
 }
 
 /// An app bundle's Contents/Info.plist: a regular file of at most JSON_MAX bytes, a property list
@@ -700,10 +862,16 @@ const JSON_MAX: u64 = 1 << 20;
 const LISTING_MAX: u64 = 64 << 20;
 const OUTPUT_MAX: u64 = 1 << 20;
 
-/// Unpacks an AppImage's squashfs image into a private temporary folder and checks every file in
-/// it. Says whether its app executable (app, inside it) carries the build's receipt. The folder is
-/// removed after, and a failure to remove it is an error.
-fn scan_appimage(path: &Path, offset: u64, app: &Path) -> Result<bool, String> {
+/// Unpacks an AppImage's squashfs image into a private temporary folder and checks the core it
+/// carries against core (`check_core`), then every file in it. Says whether its app executable
+/// (app, inside it) carries the build's receipt. The folder is removed after, and a failure to
+/// remove it is an error.
+fn scan_appimage(
+    path: &Path,
+    offset: u64,
+    app: &Path,
+    core: Option<&Manifest>,
+) -> Result<bool, String> {
     let what = path.display().to_string();
     let mut random = [0; 12];
     getrandom::fill(&mut random).map_err(|e| e.to_string())?;
@@ -718,7 +886,7 @@ fn scan_appimage(path: &Path, offset: u64, app: &Path) -> Result<bool, String> {
     builder
         .create(&dir)
         .map_err(|e| format!("{}: {e}", dir.display()))?;
-    let result = unpack_and_scan(path, offset, app, &dir, &what);
+    let result = unpack_and_scan(path, offset, app, core, &dir, &what);
     let removed = remove_unpacked(&dir)
         .map_err(|e| format!("{what}: could not remove {}: {e}", dir.display()));
     match (result, removed) {
@@ -749,6 +917,7 @@ fn unpack_and_scan(
     path: &Path,
     offset: u64,
     app: &Path,
+    core: Option<&Manifest>,
     dir: &Path,
     what: &str,
 ) -> Result<bool, String> {
@@ -785,17 +954,24 @@ fn unpack_and_scan(
         &errors,
         what,
     )?;
+    // The core program beside the app's, and its bundled/ in the app's resource folder, where
+    // the AppImage bundler puts resources.
+    let layout = CoreLayout {
+        program: "usr/bin".into(),
+        bundled: Path::new("usr/lib")
+            .join(RELEASE_PRODUCT)
+            .join("core")
+            .join("bundled"),
+    };
+    let pinned = check_core(&root, &layout, core, what)?;
+    let known = Known {
+        app,
+        kind: Exec::Elf,
+        pinned: &pinned,
+    };
     let mut budget = Budget::default();
     let mut receipt = false;
-    scan_tree(
-        &root,
-        &root,
-        (app, Exec::Elf),
-        what,
-        0,
-        &mut budget,
-        &mut receipt,
-    )?;
+    scan_tree(&root, &root, &known, what, 0, &mut budget, &mut receipt)?;
     Ok(receipt)
 }
 
@@ -914,12 +1090,12 @@ struct Budget {
 }
 
 /// Checks a folder unpacked from an AppImage, or a bundle folder: names, links, contents, nested
-/// containers and JSON. Sets receipt when its app executable (app's path, under root) is an
-/// executable of app's kind with the build's receipt.
+/// containers and JSON. Sets receipt when its app executable (known's, under root) is an
+/// executable of known's kind with the build's receipt.
 fn scan_tree(
     root: &Path,
     dir: &Path,
-    app: (&Path, Exec),
+    known: &Known,
     appimage: &str,
     depth: usize,
     budget: &mut Budget,
@@ -949,7 +1125,7 @@ fn scan_tree(
         }
         let meta = fs::symlink_metadata(&path).map_err(|e| format!("{what}: {e}"))?;
         if meta.is_dir() {
-            scan_tree(root, &path, app, appimage, depth + 1, budget, receipt)?;
+            scan_tree(root, &path, known, appimage, depth + 1, budget, receipt)?;
         } else if meta.is_symlink() {
             let target = fs::read_link(&path).map_err(|e| format!("{what}: {e}"))?;
             let target = target.to_string_lossy().to_ascii_lowercase();
@@ -968,7 +1144,11 @@ fn scan_tree(
                 .take(HEAD)
                 .read_to_end(&mut head)
                 .map_err(|e| format!("{what}: {e}"))?;
-            if let Some(kind) = container(&head) {
+            let rel = path.strip_prefix(root).unwrap_or(&path);
+            // A file the bundled core's manifest pins, such as a package archive under bundled/,
+            // is the core release's own, checked file by file against it (`check_core`): it is
+            // not looked inside, but its bytes are scanned and its JSON checked as any file's.
+            if let Some(kind) = container(&head).filter(|_| !known.pinned.contains(rel)) {
                 return Err(format!(
                     "{what}: compressed or archive file ({kind}) cannot be checked"
                 ));
@@ -978,8 +1158,8 @@ fn scan_tree(
             file.seek(SeekFrom::Start(0))
                 .map_err(|e| format!("{what}: {e}"))?;
             let has = scan_stream(&mut file, &what)?;
-            if path.strip_prefix(root).is_ok_and(|p| p == app.0) {
-                *receipt = has && executable(&mut file, &head, meta.len()) == Some(app.1);
+            if rel == known.app {
+                *receipt = has && executable(&mut file, &head, meta.len()) == Some(known.kind);
             }
             check_json(&path, name.ends_with(".json"), first, meta.len(), &what)?;
         } else {

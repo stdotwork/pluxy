@@ -68,7 +68,7 @@ fn main() {
         }
         None => "null".into(),
     };
-    std::fs::write(out.join("bundled_core.json"), bundled)
+    std::fs::write(out.join("bundled_core.json"), &bundled)
         .expect("write the bundled core's manifest");
     println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
     println!("cargo:rerun-if-changed=tauri.conf.json");
@@ -81,11 +81,14 @@ fn main() {
     .expect("merged Tauri config");
     let config = serde_json::to_vec(&config).unwrap();
     std::fs::write(out.join("app-tauri-config.json"), &config).expect("write merged config");
+    // The receipt: a digest of the config, the trust and feature snapshots and the bundled core's
+    // manifest, so a package's app executable binds the release gate to the core it must carry.
     let mut digest = Sha256::new();
     for bytes in [
         &config[..],
         include_bytes!("trust/production.json").as_slice(),
         json.as_bytes(),
+        bundled.as_bytes(),
     ] {
         digest.update((bytes.len() as u64).to_le_bytes());
         digest.update(bytes);

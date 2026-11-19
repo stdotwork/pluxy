@@ -1,5 +1,6 @@
 #![cfg(debug_assertions)]
-use pluxy_app::release_config::{validate, ReleaseInputs};
+use pluxy_app::bundled_manifest::{Entry as CoreFile, Manifest};
+use pluxy_app::release_config::{validate, validate_with_core, ReleaseInputs};
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 
@@ -1513,5 +1514,375 @@ fn release_config_checks_app_bundle_info_plist() {
         Some("Info.plist: test build marker/identity"),
     );
     case("the clean bundle again", Some(PLIST.as_bytes()), None);
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// A bundled core's manifest for files (path as a core version's folder names it, bytes): the
+/// program first, the rest under `bundled/`.
+fn core_manifest(files: &[(&str, &[u8])]) -> Manifest {
+    use sha2::{Digest, Sha256};
+    Manifest {
+        version: "1.2.3".into(),
+        descriptor_sha256: "d".repeat(64),
+        files: files
+            .iter()
+            .map(|(path, bytes)| CoreFile {
+                path: (*path).into(),
+                size: bytes.len() as u64,
+                sha256: pluxy_app::artifact::hex(&Sha256::digest(bytes)),
+                executable: !path.starts_with("bundled/"),
+            })
+            .collect(),
+    }
+}
+
+fn validate_core(
+    f: &Fixture,
+    artifact: &std::path::Path,
+    core: Option<&Manifest>,
+) -> Result<(), String> {
+    let mut inputs = f.inputs.clone();
+    inputs.artifacts = vec![artifact.to_path_buf()];
+    validate_with_core(&inputs, core)
+}
+
+/// A core's files: its program (named program), a clean package index and a package archive.
+fn core_files(program: &str) -> Vec<(String, Vec<u8>)> {
+    vec![
+        (program.into(), b"core program".to_vec()),
+        (
+            "bundled/index.json".into(),
+            br#"{"registry_version":1,"packages":{"pluxy/alpha":{"releases":[]}}}"#.to_vec(),
+        ),
+        ("bundled/alpha.tar.gz".into(), gzip_bytes()),
+    ]
+}
+
+// A package carries the core its app's manifest lists, at the place the app reads it from, and
+// nothing else in its bundled folder; a build without a manifest carries no core. Each refusal
+// has the clean package of the same form on the same route as its positive control.
+#[test]
+fn release_config_checks_the_core_a_bundle_comes_with() {
+    let f = Fixture::new();
+    if cfg!(feature = "artifact-test-trust") || cfg!(feature = "native-test") {
+        return;
+    }
+    let receipt = env!("PLUXY_BUILD_RECEIPT").as_bytes();
+    let mut wrong = Vec::new();
+    // (form, the bundle, the app executable in it, its core program's folder, its bundled folder,
+    // the core program's name)
+    let forms = [
+        (
+            "folder bundle",
+            f.dir.join("pluxy"),
+            ("pluxy-app.exe", pe(receipt)),
+            "",
+            "bundled",
+            "pluxy.exe",
+        ),
+        (
+            "app bundle",
+            f.dir.join("pluxy.app"),
+            ("Contents/MacOS/pluxy-app", macho(receipt)),
+            "Contents/MacOS/",
+            "Contents/Resources/core/bundled",
+            "pluxy",
+        ),
+    ];
+    for (form, bundle, (app, app_bytes), program_dir, bundled_dir, program) in &forms {
+        let files = core_files(program);
+        let manifest = core_manifest(
+            &files
+                .iter()
+                .map(|(p, b)| (p.as_str(), b.as_slice()))
+                .collect::<Vec<_>>(),
+        );
+        // The package's files: the app's, then the core's at their places, then extra.
+        let place = |path: &str| match path.strip_prefix("bundled/") {
+            Some(rest) => format!("{bundled_dir}/{rest}"),
+            None => format!("{program_dir}{path}"),
+        };
+        let write = |core: &[(String, Vec<u8>)], extra: &[(&str, &[u8])]| {
+            let mut all: Vec<(String, Vec<u8>)> = vec![(app.to_string(), app_bytes.clone())];
+            if *form == "app bundle" {
+                all.push(("Contents/Info.plist".into(), PLIST.as_bytes().to_vec()));
+            }
+            all.extend(core.iter().map(|(p, b)| (place(p), b.clone())));
+            all.extend(extra.iter().map(|(p, b)| (p.to_string(), b.to_vec())));
+            let refs: Vec<(&str, &[u8])> = all
+                .iter()
+                .map(|(p, b)| (p.as_str(), b.as_slice()))
+                .collect();
+            tree(bundle, &refs);
+        };
+        // validate itself takes the manifest compiled into this build: these tests' build has
+        // none.
+        write(&files, &[]);
+        expect_on(
+            &mut wrong,
+            &format!("{form}: a core, at the gate with this build's manifest"),
+            validate_alone(&f, &[bundle]),
+            Some("but this build comes with none"),
+        );
+        let mut case = |name: &str, core: Option<&Manifest>, reason: Option<&str>| {
+            expect_on(
+                &mut wrong,
+                &format!("{form}: {name}"),
+                validate_core(&f, bundle, core),
+                reason,
+            );
+        };
+        case("its core as its manifest lists it", Some(&manifest), None);
+        case(
+            "a core, from a build without a manifest",
+            None,
+            Some("but this build comes with none"),
+        );
+        write(&files[1..], &[]);
+        case(
+            "only bundled/, from a build without a manifest",
+            None,
+            Some("but this build comes with none"),
+        );
+        write(&files[..1], &[]);
+        case(
+            "only the core program, from a build without a manifest",
+            None,
+            Some(&format!(
+                "{program}: a core in the package, but this build comes with none"
+            )),
+        );
+        write(&[], &[]);
+        case("no core, from a build without a manifest", None, None);
+        case(
+            "no core, though its manifest lists one",
+            Some(&manifest),
+            Some("missing, though the bundled core's manifest lists it"),
+        );
+        write(&files[..2], &[]);
+        case(
+            "a listed archive missing",
+            Some(&manifest),
+            Some("alpha.tar.gz: missing, though the bundled core's manifest lists it"),
+        );
+        let mut changed = files.clone();
+        changed[1].1 =
+            br#"{"registry_version":2,"packages":{"pluxy/alpha":{"releases":[]}}}"#.to_vec();
+        write(&changed, &[]);
+        case(
+            "a listed file changed, its size kept",
+            Some(&manifest),
+            Some("index.json: differs from the bundled core's manifest (core 1.2.3)"),
+        );
+        let mut changed = files.clone();
+        changed[0].1.push(b'!');
+        write(&changed, &[]);
+        case(
+            "its core program changed",
+            Some(&manifest),
+            Some(&format!(
+                "{program}: differs from the bundled core's manifest"
+            )),
+        );
+        write(&files, &[(&place("bundled/extra.json"), b"{}")]);
+        case(
+            "an extra file in bundled/",
+            Some(&manifest),
+            Some("extra.json: not in the bundled core's manifest"),
+        );
+        write(
+            &files,
+            &[(&place("bundled/sub/beta.tar.gz"), &gzip_bytes())],
+        );
+        case(
+            "an extra archive in a folder under bundled/",
+            Some(&manifest),
+            Some("beta.tar.gz: not in the bundled core's manifest"),
+        );
+        // Only the files the manifest pins are let through unopened: an archive elsewhere is
+        // still refused.
+        write(&files, &[(&place("other.tar.gz"), &gzip_bytes())]);
+        case(
+            "an archive beside the core program",
+            Some(&manifest),
+            Some("compressed or archive file (gzip) cannot be checked"),
+        );
+        // A pinned file is still checked as any file: test packages in its index refuse it.
+        let mut test_index = files.clone();
+        test_index[1].1 =
+            br#"{"registry_version":1,"packages":{"test/alpha":{"releases":[]}}}"#.to_vec();
+        let test_manifest = core_manifest(
+            &test_index
+                .iter()
+                .map(|(p, b)| (p.as_str(), b.as_slice()))
+                .collect::<Vec<_>>(),
+        );
+        write(&test_index, &[]);
+        case(
+            "a core whose index lists test packages, as its manifest pins it",
+            Some(&test_manifest),
+            Some("index.json: test/private/key input"),
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            write(&files, &[]);
+            let index = bundle.join(place("bundled/index.json"));
+            fs::rename(&index, bundle.join("index.json")).unwrap();
+            let up = "../".repeat(bundled_dir.matches('/').count() + 1);
+            symlink(format!("{up}index.json"), &index).unwrap();
+            case(
+                "a listed file that is a link",
+                Some(&manifest),
+                Some("index.json: not a regular file"),
+            );
+            // No archive in it, which the walk would refuse where the link leads: only the
+            // folder check refuses this one.
+            let plain = &files[..2];
+            let plain_manifest = core_manifest(
+                &plain
+                    .iter()
+                    .map(|(p, b)| (p.as_str(), b.as_slice()))
+                    .collect::<Vec<_>>(),
+            );
+            write(&[], &[]);
+            let real = bundle.join("elsewhere");
+            for (path, bytes) in plain {
+                let to = match path.strip_prefix("bundled/") {
+                    Some(rest) => real.join(rest),
+                    None => bundle.join(place(path)),
+                };
+                fs::create_dir_all(to.parent().unwrap()).unwrap();
+                fs::write(to, bytes).unwrap();
+            }
+            let link = bundle.join(bundled_dir);
+            fs::create_dir_all(link.parent().unwrap()).unwrap();
+            symlink(
+                format!(
+                    "{}elsewhere",
+                    "../".repeat(bundled_dir.matches('/').count())
+                ),
+                &link,
+            )
+            .unwrap();
+            case(
+                "a bundled folder that is a link",
+                Some(&plain_manifest),
+                Some("bundled: not a folder"),
+            );
+        }
+        write(&files, &[]);
+        case(
+            "its core as its manifest lists it, again",
+            Some(&manifest),
+            None,
+        );
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+// The AppImage form: the core program beside the app's in usr/bin, its bundled/ in the app's
+// resource folder, usr/lib/pluxy/core/bundled.
+#[test]
+#[cfg(target_os = "linux")]
+fn release_config_checks_the_core_an_appimage_comes_with() {
+    let Some(t) = Images::new() else { return };
+    let mut wrong = Vec::new();
+    let files = core_files("pluxy");
+    let refs: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|(p, b)| (p.as_str(), b.as_slice()))
+        .collect();
+    let manifest = core_manifest(&refs);
+    let core = |lib: &str, from: &[(String, Vec<u8>)]| -> Vec<(String, Vec<u8>)> {
+        from.iter()
+            .map(|(p, b)| {
+                let at = match p.strip_prefix("bundled/") {
+                    Some(rest) => format!("usr/lib/{lib}/core/bundled/{rest}"),
+                    None => format!("usr/bin/{p}"),
+                };
+                (at, b.clone())
+            })
+            .collect()
+    };
+    let mut case = |name: &str, extra: &[(String, Vec<u8>)], m: Option<&Manifest>, reason| {
+        let mut all = t.clean();
+        all.extend(extra.iter().map(|(p, b)| (p.as_str(), Entry::File(b))));
+        appimage(&t.image, 2, b"runtime", &all);
+        let mut inputs = t.f.inputs.clone();
+        inputs.artifacts = vec![t.image.clone()];
+        expect(&mut wrong, name, validate_with_core(&inputs, m), reason);
+    };
+    let clean = core("pluxy", &files);
+    case(
+        "its core as its manifest lists it",
+        &clean,
+        Some(&manifest),
+        None,
+    );
+    case(
+        "a core, from a build without a manifest",
+        &clean,
+        None,
+        Some("pluxy.AppImage!usr/bin/pluxy: a core in the package, but this build comes with none"),
+    );
+    case("no core, from a build without a manifest", &[], None, None);
+    case(
+        "only the core program, from a build without a manifest",
+        &clean[..1],
+        None,
+        Some("usr/bin/pluxy: a core in the package, but this build comes with none"),
+    );
+    case(
+        "its bundled/ under the test product's folder",
+        &core("pluxy Test", &files),
+        Some(&manifest),
+        Some("usr/lib/pluxy/core/bundled/index.json: missing"),
+    );
+    let mut changed = files.clone();
+    changed[2].1.push(0);
+    case(
+        "a listed archive changed",
+        &core("pluxy", &changed),
+        Some(&manifest),
+        Some("alpha.tar.gz: differs from the bundled core's manifest"),
+    );
+    let mut extra = clean.clone();
+    extra.push((
+        "usr/lib/pluxy/core/bundled/beta.tar.gz".into(),
+        gzip_bytes(),
+    ));
+    case(
+        "an extra archive in bundled/",
+        &extra,
+        Some(&manifest),
+        Some("beta.tar.gz: not in the bundled core's manifest"),
+    );
+    case(
+        "its core as its manifest lists it, again",
+        &clean,
+        Some(&manifest),
+        None,
+    );
+    let mut images = t.clean();
+    let linked = clean
+        .iter()
+        .filter(|(p, _)| !p.ends_with("index.json"))
+        .map(|(p, b)| (p.as_str(), Entry::File(b)));
+    images.extend(linked);
+    images.push(("usr/share/index.json", Entry::File(&files[1].1)));
+    images.push((
+        "usr/lib/pluxy/core/bundled/index.json",
+        Entry::Link("../../../../share/index.json"),
+    ));
+    appimage(&t.image, 2, b"runtime", &images);
+    let mut inputs = t.f.inputs.clone();
+    inputs.artifacts = vec![t.image.clone()];
+    expect(
+        &mut wrong,
+        "a listed file that is a link",
+        validate_with_core(&inputs, Some(&manifest)),
+        Some("index.json: not a regular file"),
+    );
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
