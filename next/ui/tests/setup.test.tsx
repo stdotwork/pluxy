@@ -166,6 +166,10 @@ function view(
   );
 }
 
+/** The labels of the page's primary buttons: there is one at a time. */
+const primary = (page: string) =>
+  [...page.matchAll(/data-variant="primary"[^>]*>([^<]*)</g)].map((m) => m[1]);
+
 /** How many checkboxes the page shows ticked. */
 const ticked = (page: string) => page.match(/<input type="checkbox" checked/g)?.length ?? 0;
 
@@ -178,7 +182,7 @@ test("a first run with nothing found offers every provider unticked, and may sta
   expect(ticked(page)).toBe(0);
   expect(toInstall(nothingFound, {}, {})).toEqual([]);
   expect(page).toContain("pluxy will run with no provider");
-  expect(page).toContain(">Start without a provider</button>");
+  expect(primary(page)).toEqual(["Start without a provider"]);
   // An account comes after a provider; a client's text can be shown at once.
   expect(page).toContain("This comes after Start");
   expect(page).not.toContain("Sign-in methods");
@@ -193,7 +197,7 @@ test("found clients, a sign-in and a CLIProxyAPI setup are named, and what they 
   expect(page).toContain("<strong>Claude Code 2.4.1</strong>");
   expect(page).toContain("Does not point at pluxy yet");
   expect(page).toContain("<strong>Codex is signed in on this machine</strong>");
-  expect(page).toContain("A CLIProxyAPI setup with 7 accounts is at ");
+  expect(page).toContain("<strong>A CLIProxyAPI setup with 7 accounts</strong>");
   expect(page).toContain("pluxy import cpa ~/.cli-proxy-api/config.yaml");
   expect(page).toContain("Other machines on the network can reach pluxy at this address.");
   // The two suggested providers are ticked, with why; the client pick is no checkbox at all.
@@ -202,14 +206,17 @@ test("found clients, a sign-in and a CLIProxyAPI setup are named, and what they 
   expect(page).not.toContain("Claude Code settings");
   expect(toInstall(found, {}, {})).toEqual(["pluxy/codex", "pluxy/claude"]);
   expect(page).toContain("Start installs: Codex, Claude.");
+  expect(primary(page)).toEqual(["Start"]);
   expect(page).toContain("Other clients (4)");
-  // With a provider installed and no account, the sign-in found is named above the sign-in.
-  const after = view(found, { results: { "pluxy/codex": { status: "done" } } });
-  expect(after).toContain("Codex is signed in on this machine. You can sign in to the same account here.");
+  // With its provider installed and no account, the sign-in found is named above the sign-in.
+  const named = "Codex is signed in on this machine. You can sign in to the same account here.";
+  expect(page).not.toContain(named);
+  expect(view(found, { results: { "pluxy/claude": { status: "done" } } })).not.toContain(named);
+  expect(view(found, { results: { "pluxy/codex": { status: "done" } } })).toContain(named);
   // With an account, the part is one line.
   const connected = view(found, { results: { "pluxy/codex": { status: "done" } }, accounts: 2 });
   expect(connected).toContain("2 accounts connected.");
-  expect(connected).not.toContain("You can sign in to the same account here.");
+  expect(connected).not.toContain(named);
 });
 
 test("a client's state is said in words, and a refused file says why that is fine", () => {
@@ -282,6 +289,7 @@ test("Start sends only ticked providers; a failed one says why and is sent again
   expect(second.results["pluxy/claude"]?.status).toBe("done");
   expect(view(found, { choices, results: second.results })).not.toContain("Could not install");
   expect(toInstall(found, choices, second.results)).toEqual([]);
+  expect(primary(view(found, { choices, results: second.results }))).toEqual(["Finish"]);
 
   // A call that fails as a whole changes no result.
   const down = fakeHost(() => ({ status: 0 }));
@@ -303,6 +311,8 @@ test("opened again after setup, the page is a status and offers no Finish", () =
   expect(page.match(/<input type="checkbox" checked disabled/g)?.length).toBe(2);
   // One more provider can still be installed from here.
   const more = { ...allSet, picks: [...allSet.picks, pick("pluxy/gemini", "Gemini")] };
+  expect(view(more, { accounts: 2 })).not.toContain(">Install</button>");
+  expect(view(more, { accounts: 2 })).toContain("Tick the ones you have an account for.");
   expect(view(more, { accounts: 2, choices: { "pluxy/gemini": true } })).toContain(">Install</button>");
 });
 

@@ -1,7 +1,7 @@
 // What the Setup page works out from core's replies, apart from the page so it can be tested
 // without a browser.
 
-import type { Api, Package, Setup, SetupApplyResult, SetupClient, SetupPick } from "../api";
+import type { Api, Package, Setup, SetupApplyResult, SetupClient, SetupPick, SetupSignIn } from "../api";
 import type { Reply } from "../host";
 
 /** What the person ticked or unticked themselves, by pick ID. A pick not in it follows core's suggestion. */
@@ -66,6 +66,16 @@ export function hasProvider(setup: Setup, results: Results, packages: Package[] 
     providerPicks(setup).some((pick) => isInstalled(pick, results)) ||
     packages.some((p) => !clients.has(p.id))
   );
+}
+
+/** The sign-ins found whose provider is installed: the ones signing in on this page can use. */
+export function signInsToName(setup: Setup, results: Results): SetupSignIn[] {
+  const installed = new Set(
+    providerPicks(setup)
+      .filter((pick) => isInstalled(pick, results))
+      .map((pick) => pick.id),
+  );
+  return setup.found.sign_ins.filter((signIn) => installed.has(signIn.provider));
 }
 
 /** The clients found installed, and the rest. */

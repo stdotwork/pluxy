@@ -20,6 +20,7 @@ import {
   providerPicks,
   type Results,
   scanState,
+  signInsToName,
   splitClients,
   start,
   toInstall,
@@ -44,20 +45,19 @@ const t = strings("setup", {
   neverLooked: "pluxy has not looked at this machine yet.",
   nothingFound: "No client, sign-in or CLIProxyAPI setup was found.",
   clientFound: "{name} {version}",
-  clientFoundHint: "A client: a coding tool that can send its requests through pluxy.",
   signInHint: "pluxy read nothing from this sign-in. It only saw that it is there.",
   importFound: {
-    one: "A CLIProxyAPI setup with {count} account is at {config}.",
-    other: "A CLIProxyAPI setup with {count} accounts is at {config}.",
+    one: "A CLIProxyAPI setup with {count} account",
+    other: "A CLIProxyAPI setup with {count} accounts",
   },
-  importHow: "To bring it across, run this where pluxy is installed:",
+  importHow: "It is at {config}. To bring it across, run this where pluxy is installed:",
   listens: "pluxy listens on {address}.",
   reachable: "Other machines on the network can reach pluxy at this address.",
   lookedAt: "Looked {when}.",
 
   providers: "Providers",
-  providersHint:
-    "A provider lets pluxy use one kind of account, such as a Claude subscription. Tick the ones you have an account for.",
+  providersHint: "A provider lets pluxy use one kind of account, such as a Claude subscription.",
+  tickHint: "Tick the ones you have an account for.",
   noPicks: "pluxy has no provider to offer here. The Extensions page lists what can be installed.",
   installed: "Installed",
   failed: "Could not install {title}: {error}",
@@ -71,7 +71,7 @@ const t = strings("setup", {
   installing: "Installing…",
   nothingTicked:
     "Nothing is ticked, so pluxy will run with no provider. You can add one later on the Extensions page.",
-  nothingMore: "Nothing more to install. Tick a provider above to add it.",
+  nothingMore: "Nothing more to install.",
   allInstalled: "Every provider on the list is installed.",
 
   account: "Connect an account",
@@ -190,12 +190,10 @@ export function Found(props: {
           ))}
           {setup.found.imports.map((found) => (
             <li key={`import/${found.config}`}>
-              <strong>
-                {rich(t("importFound", { count: found.accounts }), {
-                  config: <span class="mono">{found.config}</span>,
-                })}
-              </strong>
-              <span class="muted">{t("importHow")}</span>
+              <strong>{t("importFound", { count: found.accounts })}</strong>
+              <span class="muted">
+                {rich(t("importHow"), { config: <span class="mono">{found.config}</span> })}
+              </span>
               <Code value={`pluxy import cpa ${found.config}`} />
             </li>
           ))}
@@ -239,7 +237,10 @@ export function Providers(props: {
         <Empty>{t("noPicks")}</Empty>
       ) : (
         <>
-          <p class="muted setup-hint">{t("providersHint")}</p>
+          <p class="muted setup-hint">
+            {t("providersHint")}{" "}
+            {picks.every((pick) => isInstalled(pick, props.results)) ? t("allInstalled") : t("tickHint")}
+          </p>
           <ul class="setup-rows">
             {picks.map((pick) => (
               <PickRow key={pick.id} pick={pick} button={button} {...props} />
@@ -326,10 +327,11 @@ export function Start(props: {
         {t("startWithout")}
       </Button>
     );
-  } else if (picks.length > 0 && picks.every((pick) => isInstalled(pick, props.results))) {
-    line = t("allInstalled");
-  } else {
+  } else if (setup.first_run) {
     line = t("nothingMore");
+  } else {
+    // After setup the part has nothing to say until a provider is ticked.
+    return null;
   }
   return (
     <Card title={setup.first_run ? t("startTitle") : t("install")}>
@@ -345,6 +347,7 @@ export function Start(props: {
 /** The Add Account page's sign-in, once a provider is installed and core has no account. */
 export function Account(props: {
   setup: Setup;
+  results: Results;
   count?: number;
   provider: boolean;
   error?: string;
@@ -368,7 +371,7 @@ export function Account(props: {
           <p class="muted setup-hint">
             {t("accountHint")} {t("accountSkip")}
           </p>
-          {setup.found.sign_ins.map((signIn) => (
+          {signInsToName(setup, props.results).map((signIn) => (
             <Notice key={`${signIn.provider}/${signIn.from}`} tone="muted">
               {t("signInFound", { label: signIn.label })}
             </Notice>
@@ -423,10 +426,10 @@ function PasteText(props: { client: SetupClient }) {
           {error && <Notice tone="danger">{error}</Notice>}
           {key ? (
             <>
-              <KeyNotice title={t("newKey")} value={key} close={() => setKey(undefined)} seen={() => {}} />
               <p class="setup-hint">
                 {rich(t("keyInText"), { placeholder: <span class="mono">{data.key}</span> })}
               </p>
+              <KeyNotice title={t("newKey")} value={key} close={() => setKey(undefined)} seen={() => {}} />
             </>
           ) : (
             <div class="setup-line">
@@ -624,7 +627,8 @@ export function SetupView(props: {
   onFinish: () => void;
 }) {
   const { setup, choices, results, errors } = props;
-  const nothingLeft = toInstall(setup, choices, results).length === 0;
+  // One primary button at a time: Finish takes it once Start has nothing left to do.
+  const finishNext = toInstall(setup, choices, results).length === 0 && props.provider;
   return (
     <>
       <PageHead title={t("title")} />
@@ -656,6 +660,7 @@ export function SetupView(props: {
         />
         <Account
           setup={setup}
+          results={results}
           count={props.accounts}
           provider={props.provider}
           error={errors?.accounts}
@@ -668,7 +673,7 @@ export function SetupView(props: {
             <div class="setup-line">
               <span class="muted">{t("finishHint")}</span>
               <Button
-                variant={nothingLeft ? "primary" : "quiet"}
+                variant={finishNext ? "primary" : "quiet"}
                 disabled={props.finishing || props.applying}
                 onClick={props.onFinish}
               >
