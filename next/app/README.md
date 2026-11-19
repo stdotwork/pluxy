@@ -80,7 +80,9 @@ address or key can always be fixed there.
 ## The app's own core
 
 In managed mode the app runs only core versions it installed itself, each in a folder of its own
-under `cores/versions/` in the app's data folder. Until one is installed, the app runs no core
+under `cores/versions/` in the app's data folder (on Windows the local application data folder,
+which stays on this computer; a store there that is not on a fixed local drive, such as a network
+share, is refused). Until one is installed, the app runs no core
 and the window shows only the Connection page, with **Core versions**. There, the app lists
 what is installed, which version runs and which ran before it, and what the core source offers.
 
@@ -103,12 +105,16 @@ app reads only releases with `product` `core`, their `version`, and their `artif
 | `signature` | The detached Ed25519 signature of those bytes |
 | `key_id` | The publisher key that signed it |
 
-The archive is a gzip tar file of the core's folder, as provider releases are packed: `pluxy` at
-the top, and anything beside it, such as `bundled/`. It may hold only regular files and folders,
-no links, devices or names that leave the folder, at most 10,000 entries, and at most 512 MiB
-decompressed in all (headers and the data of folder entries count too). Each file is made from
-the folder before it, following no links. Release versions may not start with `custom-`, which
-adopted programs use.
+The archive is a gzip tar file of the core's folder, as provider releases are packed: `pluxy` (on
+Windows `pluxy.exe`) at the top, and anything beside it, such as `bundled/`. It may hold only
+regular files and folders, no links, devices or names that leave the folder, at most 10,000
+entries, and at most 512 MiB decompressed in all (headers and the data of folder entries count
+too). On Windows it may also hold no two names that differ only in case, compared as Windows
+compares them (`σ` and `ς` too), and no name Windows cannot hold plainly (a `:` stream, a device
+name such as `CON`, a trailing dot or space). The folder it is unpacked into is opened by its path, refusing a
+link there; below it each folder and file is made from the folder held open before it, following
+no links (on Windows relative to the folder's handle, which is held so no one can rename that
+folder meanwhile). Release versions may not start with `custom-`, which adopted programs use.
 
 **Install** (or **Update to** a newer version): the app copies the archive into its own folder and
 checks it with the shared verifier (`src-tauri/src/artifact.rs`) and the app's trust
@@ -120,10 +126,14 @@ dialog, and nothing is installed. Release builds have no publisher keys yet, so 
 every release; test builds trust only a test runner's temporary roots (below).
 
 Once confirmed, the app unpacks the archive into a new version folder, records each file's
-SHA-256 (in `cores/records/`, apart from the folders), and makes the files read-only. Before
-every start it opens every file beneath the version's folder without following links, checks
-that it is a regular file of the recorded size, then its digest, and runs the core from the
-program file it just checked, not from its path again. A changed version does not start:
+SHA-256 (in `cores/records/`, apart from the folders), and makes the files read-only (on Windows
+by their access lists: this user and SYSTEM may read them, no one may write; the folders are
+private to this user and SYSTEM). Before every start it opens the version's folder by its path
+(refusing a link there) and every file beneath it without following links, checks that it is a
+regular file of the recorded size and still read-only, then its digest, and starts the core from
+the program file it just checked: on Linux from the open file itself; on macOS and Windows from
+the path that file has now, after checking that the path still names that same file
+(`src-tauri/src/owned/`). A changed version does not start:
 **Install … again** installs the same release over it, through the same checks and confirmation;
 a changed adopted copy is copied in again by adopting the same program again.
 
@@ -163,7 +173,8 @@ A **core program** you name on the Connection page (or `pluxy` beside the app) i
 place. **Adopt this core program** shows its path, size and SHA-256 in the native confirmation;
 once confirmed, the app copies it into a version of its own, `custom-<its SHA-256>`, if it is
 still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
-without being read), and runs the copy. Only the program is copied, nothing beside it (such as
+without being read; on Unix it must be executable, on Windows a program image named `.exe` or
+`.com`), and runs the copy. Only the program is copied, nothing beside it (such as
 `bundled/`), so an adopted core starts without the bundled packages a release brings. An adopted
 program has no signature.
 
@@ -534,9 +545,11 @@ In this order:
      and the plugin needs it: start the app from its real location, for example from Finder); the
      bundle is not running from a translocated copy (macOS runs an app opened from Downloads or a
      disk image from a read-only copy: move it into a folder of your own such as `~/Applications`
-     first); the bundle is yours and writable by no one else; its folder is either yours and
-     writable by no one else, or the stock `/Applications` under the rule below; and the volume is
-     APFS, which swaps two folders in one step. The stock plugin would ask for an administrator's
+     first); the bundle is yours and writable by no one else, neither by its mode nor by an
+     extended access list entry that lets another account than you or root do more than read
+     (deny entries, such as the stock `group:everyone deny delete`, are fine); its folder is
+     either yours and writable by no one else in the same way, or the stock `/Applications` under
+     the rule below; and the volume is APFS, which swaps two folders in one step. The stock plugin would ask for an administrator's
      password when it cannot write the bundle; nothing here does (no `osascript`, `sudo`,
      `installer` or `authopen`), and the quarantine attribute is neither added nor removed.
 
@@ -581,7 +594,8 @@ In this order:
    identifier and program and the announced version (`CFBundleShortVersionString`), with a
    program for this Mac. The staging folder is `updates/staging/<hex>` in the app's data folder
    when that is on the bundle's volume, and only if every folder from your home folder down to it
-   is yours, not a link, and writable by no one else (checked for the folders that exist before
+   is yours, not a link, and writable by no one else, by the same rule as the bundle's folder
+   (mode and access list; checked for the folders that exist before
    anything is made in them, and again once the staging folder is made; otherwise nothing is
    unpacked, and the page says which folder to fix); only on another volume is it
    `.pluxy-update-<hex>` next to the bundle, and only when the bundle's folder is yours and
@@ -606,8 +620,8 @@ In this order:
      with `RENAME_SWAP`, by name in the staging folder and the bundle's folder, each opened
      without following a link, the staging folder next to the bundle through the bundle's open
      folder; read through those open folders, the bundle's folder must still pass the rule that
-     admitted it (yours and writable by no one else, or the stock `/Applications` with the staging
-     folder private, not next to the bundle), and the staging folder still the one made, yours and
+     admitted it (yours and writable by no one else, by its mode and its access list, or the stock
+     `/Applications` with the staging folder private, not next to the bundle), and the staging folder still the one made, yours and
      0700): the bundle is the old one or the new one. With private
      staging, nothing else in the bundle's folder is made, changed or removed. The old bundle, now
      in the staging folder, is removed once the new version runs and the old one has ended.
@@ -617,7 +631,8 @@ In this order:
    its name: on Windows the new program right after it is created and the aside copy just before
    the rename (each by its volume serial number and file ID), on macOS the staging folder right
    after it is created (by its device and inode, read through the open folder, which must be empty
-   and yours alone). When the record
+   and yours alone, and is given an empty access list, so it takes no entry from its folder). When
+   the record
    cannot be written, the install deletes what it just made and stops. Should the app stop in the
    moment between making one and recording it, that empty folder or file stays unrecorded, and no
    later start removes it. Removal at a later start goes through the record only. An entry that is
@@ -792,7 +807,10 @@ frame loads from the `pluxy-app:` scheme. That scheme serves a page webview only
 release folder it was opened for, only while that release is active and enabled, and only while
 each file still has the SHA-256 recorded at install. Each file is served sandboxed, as core's
 pages site does: scripts, styles, images and fonts from the scheme only, no requests from script,
-no frames or forms. The webview may not navigate its frame out of that folder. Installing,
+no frames or forms. On Windows WebView2 serves the scheme as `http://pluxy-app.localhost`, so the
+policy names that origin, which also lets the page ask for `https://pluxy-app.localhost`; the
+app serves nothing there, so a page webview answers every `https://pluxy-app.` request with 403
+itself, before it leaves the app. The webview may not navigate its frame out of that folder. Installing,
 rolling back, disabling or removing a package closes its open page webviews at once; the window
 then opens the new release's page, if the page is still listed.
 
@@ -863,7 +881,8 @@ a flag when a file is added and has no call that reports it, so no portal grant 
 the broker never reads the file behind it.
 
 Grants and approved signers are in `access.json` beside `connection.json`, readable only by your
-user (mode 0600, folder 0700), written by an exclusive temporary file, sync and rename. A damaged
+user (mode 0600, folder 0700, and on macOS no extended access list entry on the folder, so the
+file inherits none), written by an exclusive temporary file, sync and rename. A damaged
 or unsupported file is moved to `access.json.corrupt-<time>` and Access starts with no grants; if
 it cannot be moved, Access refuses grants and reads until it is fixed. Handles opened for reads
 are kept while the app runs; after a restart each target is opened again and its identity
@@ -894,8 +913,9 @@ a native notice and a log message. Symlinks, files owned by another user and
 group/world-writable files are refused; remembering stays disabled if the unsafe file cannot be
 safely preserved. Newly created settings folders use mode 0700 and files use 0600. On open and
 save, an existing folder owned by this user is tightened to 0700 if group/world-writable; a folder
-owned by another user is refused. Disabled persistence hides Remember. If saving fails after
-confirmation, the one-time token is still issued and a native notice/log reports the failure.
+owned by another user is refused. On macOS the folder is also emptied of extended access list
+entries, and a settings file with any entry is refused like a group/world-writable one. Disabled
+persistence hides Remember. If saving fails after confirmation, the one-time token is still issued and a native notice/log reports the failure.
 On Windows the same checks read the owner and access list instead of the mode: the file and
 folder must be owned by this user, by the owner this process gives what it makes (for an elevated
 administrator, the Administrators group) or by SYSTEM, and have a protected access list (one that
@@ -1656,7 +1676,7 @@ Linux is the only platform the app supports now: what this README describes is L
 passage names another system (as the management key's dialogs, [Native
 confirmations](#native-confirmations) and [Packages](#packages) do), and so is every check in
 [Build and check](#build-and-check). Windows, macOS and WSL are later work, and the Linux checks
-say nothing about them. Some groundwork for them is merged, and CI runs it on GitHub-hosted
+say nothing about them. Some groundwork for them is merged, and CI runs it on disposable
 Windows and macOS runners (`.github/workflows/next-app-platforms.yml`), but it does not make the
 app supported there:
 
@@ -1703,13 +1723,12 @@ macOS its list, revocation and a page's calls answer, with nothing granted.
 
 Still refused at run time there: a native tool's `files` frames (saving a file), the vault's
 secret entry and list, client keys and core aliases, the app's own core
-(on Windows the store of its versions does not open, so nothing installs or starts; on macOS the
-store opens, but installing, adopting and rolling back a version need the native confirmation,
-which core changes have on Linux only, so no version is installed and none starts), installing a
-package from a file, a launch that opens a file and opening an address in the browser. Changing
-the release feed works there through the native confirmation. The app updates itself, with test
-updater trust only, as an AppImage on Linux, as a folder bundle's program on Windows and as an
-app bundle on macOS ([Application update](#application-update)).
+(the store of its versions opens, but installing, adopting and rolling back a version need the
+native confirmation, which core changes have on Linux only, so no version is installed and none
+starts), installing a package from a file, a launch that opens a file and opening an address in
+the browser. Changing the release feed works there through the native confirmation. The app
+updates itself, with test updater trust only, as an AppImage on Linux, as a folder bundle's
+program on Windows and as an app bundle on macOS ([Application update](#application-update)).
 
 ## Limits
 
@@ -1720,15 +1739,42 @@ app bundle on macOS ([Application update](#application-update)).
   when the tool serving that call asks ([Launches and managed runtimes](app-host/README.md#launches-and-managed-runtimes));
   installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
+- On macOS a launch you confirm, in a terminal or not, may run a program from a folder that every
+  administrator of the Mac can change, such as `/Applications` or Homebrew's folders. Another
+  administrator account can swap that program in the moment between the last check and its
+  start, or, for a program inside an app, what it later starts from that app. For any program
+  that uses those folders, wherever it is, that account can also change at any time what it loads
+  from them (Homebrew's libraries, a script's interpreter). A script's interpreter opens the
+  checked script again by its path, as for a direct launch. The app's
+  own core and native tools never run from such a folder: the app refuses them there.
+- On Linux a terminal finds a launch's program by its path as it starts, so the app refuses a
+  terminal launch whose program another user could change or redirect by then: a program below a
+  folder that others, or a group other than your own private group, may write, one reached
+  through a link such a user could change, or one such a group may write. Your private group
+  (your primary group, named as you are, with no other member, no other user's primary group,
+  and no other group with its number) may write them: Homebrew on Linux makes its folders
+  writable by it, and so does a umask of 002. Users and groups are read from `/etc/passwd` and
+  `/etc/group`: ones from LDAP, sssd or systemd-userdb are not seen. The refusal names the path and a
+  `chmod g-w,o-w` that fixes it. Nothing stops your own processes from swapping the program
+  before the terminal starts it. A direct launch runs the file the app checked, wherever it is.
 - Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
   entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the
-  local data folder, private by its access list. Secrets are kept in a file
-  only the user may read (0600 on Linux and macOS) in the app's data folder, not in the system
-  keyring, and only exact values are redacted. On macOS the modes are checked, not extended access
-  lists. The window has no vault page yet. Secrets reach
-  native tools' pipes and the environment of a process a confirmed launch starts (the launching
-  tool holds only a reference); a client key is checked at each use, also at a launch's spawn and
-  each restart. Backups have no retention: a package keeps at most 256.
+  local data folder, private by its access list. Secrets are kept in a file only the user may read
+  (0600 on Linux and macOS) in the app's data folder, not in the system keyring, and only exact
+  values are redacted. On macOS, where an extended access list can let others in whatever the mode,
+  a vault folder with any entry is given an empty list (as a too-open one is tightened to 0700, so
+  nothing made in it inherits an entry) and a vault file with any is refused. The app's other
+  private folders (Access's store, remembered launches, cores, extensions, the instance folder and
+  the app's core's folder) are emptied the same way; files written privately are made, where the
+  volume supports access lists, with an empty list that takes nothing from their folder; and the
+  remembered launches file, the instance folder's lock and address and an installed core's files are
+  refused with any entry. In the core's folder its config, its `credentials` and `packages` folders
+  and each credential file (not one that is a link) are emptied of entries before the core starts,
+  not refused: the core owns them. Other files and folders already inside these folders keep any
+  entry they had from before. The window has no vault page yet. Secrets reach native tools' pipes
+  and the environment of a process a confirmed launch starts (the launching tool holds only a
+  reference); a client key is checked at each use, also at a launch's spawn and each restart.
+  Backups have no retention: a package keeps at most 256.
 - Access: signers and grants can be made on Linux only (5.8 or later: grants record the `statx`
   mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
@@ -1736,14 +1782,14 @@ app bundle on macOS ([Application update](#application-update)).
 - The native test runs on Linux, except its platform, package, update and dialogs sessions, which
   CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
   refuses there).
-- The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
-  account's known folders, which no environment variable redirects, so it refuses to start when
-  they exist and removes only the ones it made. Its input does not come from a keyboard: on
-  Windows it is `SendInput` when the dialog has the foreground, otherwise the same key messages
-  posted to the focused control; on macOS key and mouse events made in the app and given to
-  AppKit. Both go through the app's real message handling and the dialogs' controls, but miss
-  what only a person at the machine would hit, such as another app taking the keyboard. The
-  session's summary counts which way each input went.
+- The dialogs session runs only on disposable CI runners (`native/runner.ts`): on Windows the app's
+  folders are the account's known folders, which no environment variable redirects, so it refuses to
+  start when they exist and removes only the ones it made. Its input does not come from a keyboard:
+  on Windows it is `SendInput` when the dialog has the foreground, otherwise the same key messages
+  posted to the focused control; on macOS key and mouse events made in the app and given to AppKit.
+  Both go through the app's real message handling and the dialogs' controls, but miss what only a
+  person at the machine would hit, such as another app taking the keyboard. The session's summary
+  counts which way each input went.
 - No installer or bundled core yet: the only packages are the test AppImage, the test folder
   bundle (Windows) and the test app bundle (macOS), which are not for release.
   The app updates only itself: as an AppImage on Linux x86_64, as a folder bundle's program on
@@ -1763,7 +1809,8 @@ app bundle on macOS ([Application update](#application-update)).
   the renderer writes alignment as inline style, which the notes' policy refuses.
 - The app's own core comes only from a local index file for now; an https source joins with the
   release feed. Installing, rolling back and adopting need the native confirmation, so they work
-  on Linux only, and the core store builds on Unix only.
+  on Linux only. The store itself works on Windows too, which its unit tests check on the Windows
+  CI runner.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.
@@ -1843,7 +1890,14 @@ cargo run --locked --example validate-release-config -- \
 `build.rs` writes the config using tauri-utils' base/platform merge followed by `TAURI_CONFIG`,
 plus the trust and feature snapshots, in Cargo's `OUT_DIR`. A digest of all three is embedded in
 the app. The validator compares its own compiled inputs and requires the matching receipt in an
-artifact. Supply the actual app executable along with every package. The validator streams each
+artifact. It also merges the config files in `src-tauri` again as `build.rs` does (with
+`TAURI_CONFIG` from its own environment) and refuses a config snapshot that differs: Cargo reruns
+`build.rs` only when a config file it read changes, so a build from before a new platform file
+keeps the old snapshot. For the same reason `src-tauri` keeps a platform config file for each
+desktop system, `tauri.linux.conf.json`, `tauri.macos.conf.json` and `tauri.windows.conf.json`,
+even when it is empty (`{}`): `build.rs` watches the files it read, and Cargo cannot watch for a
+file being added, so a platform file added later would not rerun `build.rs`. Keep them.
+Supply the actual app executable along with every package. The validator streams each
 regular file for test markers, test identifiers and Tauri updater keys or signatures. Each
 artifact must be a well-formed executable, ELF (type, machine and program headers inside the
 file), PE (an executable image for x86, x86-64 or arm64, its optional header inside the file) or

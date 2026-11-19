@@ -1,18 +1,20 @@
 # Differential test corpus
 
-The corpus checks the new core against today's core (`core/`) at the HTTP seam. Each case sends
-one client request to a core whose provider points at a fake upstream server. The fake upstream
-records every request it gets and answers with scripted replies. The runner then compares what
-the two cores did: the reply the client got and the requests that reached the upstream.
+The corpus checks the new core against the old core at the HTTP seam. Each case sends
+one client request to the new core, whose provider points at a fake upstream server. The fake
+upstream records every request it gets and answers with scripted replies. The runner then compares
+what the new core did, the reply the client got and the requests that reached the upstream, with
+what the old core did for the same case, which the case file holds as `recorded_old_core`.
 
-The new core must match the old one except where a case lists an **exception**. Each exception
+The new core must match the recording except where a case lists an **exception**. Each exception
 gives a reason, so every difference is on the record.
 
-Which old core: in this repository, "today's core", "the old core" and `core/...` paths in this
-document, in code comments and in the cases' `source` fields mean the old core in `core/`. Once
-`core/` is removed, they mean `core/` at the last commit that still has it; the commit will be
-named here when that happens. The recorded replies need no old core to run, and
-[re-recording](#re-recording-against-the-old-core) works from a worktree of that commit.
+Which old core, and where it went: in this repository, "today's core", "the old core" and `core/...`
+paths in this document, in code comments and in the cases' `source` fields mean the Go proxy that
+was in `core/` until it was removed from the repository. It is not in the repository any more, and
+nothing here builds or runs it, so the `core/...` paths in `source` fields name files you cannot
+open here. The recorded replies in the case files are the reference: they were recorded from live
+runs of that core before it was removed, and they are not re-recorded.
 
 ## Running it
 
@@ -23,53 +25,29 @@ go test -count=1 -v -run TestCorpus ./corpus
 ```
 
 This builds the new core and compares it with the old core's replies recorded in the case files.
-It does not build or run the old core, so it is fast enough for every CI run. The report is
-printed at the end (with `-v`).
+The report is printed at the end (with `-v`). It is fast enough for every CI run, and CI runs it in
+`next-ci.yml`.
 
 | Variable | Effect |
 | --- | --- |
-| `PLUXY_CORPUS_OLD_CORE=1` | Also build `core/` (with cgo) and run it live. Fails if the live old core no longer matches a recording. Works only while `core/` is in the repository. |
-| `PLUXY_CORPUS_OLD_CORE_BIN=path` | Run this old-core binary live instead of building one. Set alone, it also turns on the live run. |
-| `PLUXY_CORPUS_RECORD=1` | Run the old core live and write its observations into the case files (`recorded_old_core`). Builds `core/` unless `PLUXY_CORPUS_OLD_CORE_BIN` names a binary. |
 | `PLUXY_CORPUS_REPORT=path` | Also write the report to a file. |
 | `PLUXY_CORPUS_CASE=regexp` | Run only cases whose `format/provider/name` matches. |
 | `PLUXY_CORPUS_DUMP_NEW=dir` | Write each new-core observation to a file in `dir`, to read the values an exception's `want` needs. |
-| `PLUXY_CORPUS_LOGS=1` | With `-v`, log each core's output. |
+| `PLUXY_CORPUS_LOGS=1` | With `-v`, log the core's output. |
 
-CI runs the fast form in `next-ci.yml` and the live form in `next-corpus.yml` (on changes to
-`next/` or `core/`).
+### The recorded replies are the reference
 
-### Re-recording against the old core
+The corpus has no mode that runs the old core, and nothing in it writes `recorded_old_core`. A case
+file's recording is never edited by hand and never regenerated. A case with no `recorded_old_core`
+fails. When the new core is meant to differ from a recording, the case lists an exception with its
+reason; see [Adding cases](#adding-cases) for a new case.
 
-The variables combine like this: the old core runs live when any of `PLUXY_CORPUS_OLD_CORE=1`,
-`PLUXY_CORPUS_RECORD=1` or `PLUXY_CORPUS_OLD_CORE_BIN` is set. If `PLUXY_CORPUS_OLD_CORE_BIN` is
-set, that binary runs and nothing is built, whatever the other two say. If it is not set, the
-runner builds the old core from the repository's `core/` folder, so `PLUXY_CORPUS_OLD_CORE=1` and
-`PLUXY_CORPUS_RECORD=1` without a binary work only while `core/` is in the repository. With
-`PLUXY_CORPUS_RECORD=1` the live observations are written into the case files; without it they are
-compared with the recordings and the report.
+## How the new core is run
 
-This route keeps working after `core/` is removed: build the old core from a worktree of the last
-commit that has it, then point the corpus at the binary. From the repository root, with `<commit>`
-the commit this document names (or any commit that has `core/`):
-
-```bash
-git worktree add /tmp/old-core-tree <commit>
-(cd /tmp/old-core-tree/core && CGO_ENABLED=1 go build -o /tmp/old-core ./cmd/server)
-cd next
-PLUXY_CORPUS_OLD_CORE_BIN=/tmp/old-core PLUXY_CORPUS_RECORD=1 go test -count=1 -run TestCorpus ./corpus
-# or, to compare live without writing: PLUXY_CORPUS_OLD_CORE_BIN=/tmp/old-core go test -count=1 -v -run TestCorpus ./corpus
-git worktree remove --force /tmp/old-core-tree && rm /tmp/old-core
-```
-
-A single case: add `PLUXY_CORPUS_CASE=<name>`. The report says which old core ran.
-
-## How a core is run
-
-Both cores run as separate programs on random local ports, each with a fresh temporary folder
-holding its config, its auth folder and its `HOME`. Their environment is cleared except for
-`PATH`, and outbound proxies are set to a closed local port, so the old core's background
-version checks cannot reach the internet. The fake upstream is on loopback, which is never
+The new core runs as a separate program on a random local port, with a fresh temporary folder
+holding its config and its `HOME`. Its environment is cleared except for `PATH` and `TZ=UTC` (the
+zone the recordings were made in), and outbound proxies are set to a closed local port, so its
+background requests cannot reach the internet. The fake upstream is on loopback, which is never
 proxied.
 
 The generated config is the same for every case:
@@ -78,27 +56,31 @@ The generated config is the same for every case:
   (not a secret); a case with `accounts` above 1 gets more accounts, keyed
   `sk-corpus-upstream-2`, `sk-corpus-upstream-3` and so on, all pointed at the same upstream;
 - the client key `corpus-client-key`;
-- routing that never waits: the old core has no extra retry rounds (`request-retry: 0`), no
-  waits (`max-retry-interval: 0`) and no cooldowns; the new core runs its default routing,
-  which also never waits. Both still move a request on to another account within one round;
-- for the old core: the bundled panel off, management off unless the case calls a management API
-  (see [Management API cases](#management-api-cases)), response compression off, the embedded
-  model catalog (`-local-model`), and the request's model listed for the account (the old core
-  serves only listed models; `account_models` in a case overrides this for both cores). A provider
-  set up from the old core's `api-keys` block lists the same model for the new core's account,
-  since both cores serve an account without a list only its provider's catalog.
+- routing that never waits: the new core runs its default routing, which never waits, and still
+  moves a request on to another account within one round;
+- the management API off unless the case calls it (see [Management API cases](#management-api-cases));
+- the models the account lists: the request's model (`account_models` in a case overrides this).
+  A provider marked `CatalogModels` in `cores.go`, one the old core took from auth files, lists
+  none, so its extension serves its own catalog.
 
 The client sends no `Accept-Encoding`, so replies are observed as the core sent them.
 
-Providers with their own folder of cases:
+The old core's replies were recorded on the same setup. It ran with the same account and keys, no
+extra retry rounds (`request-retry: 0`), no waits (`max-retry-interval: 0`) and no cooldowns, the
+bundled panel off, management off unless the case called a management API, response compression
+off, its embedded model catalog (`-local-model`), and the request's model listed for the account
+(it served only listed models). It took a provider from its `api-keys` block or from auth files,
+as the table below says.
 
-| Provider | New core | Today's core |
+Providers with their own folder of cases, with what the old core ran when each was recorded:
+
+| Provider | New core | Old core (as recorded) |
 | --- | --- | --- |
 | `openai-compatible` | OpenAI-compatible extension, `wire_api` chat | an `openai-compatibility` entry |
 | `openai-responses`, `anthropic`, `gemini` | OpenAI-compatible extension, `wire_api` responses, messages or gemini | a Codex API key without the Codex identity, a Claude API key, a Gemini API key |
 | `codex` | Codex extension, API key | a Codex API key (Codex identity on) |
 | `codex-oauth` | Codex extension, a ChatGPT subscription's OAuth credential | a Codex auth file |
-| `codex-siwc` | Codex extension, the OAuth credential a Sign in with ChatGPT login produces (`siwc` in its data) with `base_url` | a Codex auth file with a nested `siwc` token set and `use_siwc`. Today's core sends a non-Codex client's requests to `https://api.openai.com/v1` whatever the file says, so it runs through the intercepting proxy (below) |
+| `codex-siwc` | Codex extension, the OAuth credential a Sign in with ChatGPT login produces (`siwc` in its data) with `base_url` | a Codex auth file with a nested `siwc` token set and `use_siwc`. Today's core sent a non-Codex client's requests to `https://api.openai.com/v1` whatever the file said, so it ran through an intercepting proxy (below) |
 | `gemini-api-key` | Gemini extension, API key | a Gemini API key |
 | `interactions` | Gemini extension, API key, `"interactions": true` in the account's settings | an `interactions` group with `base-url` and an API key |
 | `vertex-api-key` | Gemini extension, Vertex settings and an express mode key | a `vertex` API-key entry |
@@ -106,30 +88,27 @@ Providers with their own folder of cases:
 | `kimi` | Kimi extension, a Kimi Code OAuth credential | a Kimi auth file |
 | `meta` | Meta extension, a Muse Code login's OAuth credential (the minted key and its device token) | a Meta auth file with the key and `base_url` |
 | `meta-api-key` | Meta extension, an API key | a `meta` group with `base-url` and an API key |
-| `antigravity` | Antigravity extension, an OAuth credential with its project | an Antigravity auth file with `base_url`, the project and saved model hints; its `fetchAvailableModels` calls are answered aside |
-| `devin` | Devin extension, a session token as an API key credential | a Devin auth file with the token and `base_url`; its `GetUserStatus` calls are answered aside. Models are named `devin/<model>`, as today's core lists them; Gemini clients write the slash as `%2F` in the path, with `account_models` naming the model |
+| `antigravity` | Antigravity extension, an OAuth credential with its project | an Antigravity auth file with `base_url`, the project and saved model hints. The new core's `fetchAvailableModels` call is answered aside by the fake upstream, so it is not part of a case |
+| `devin` | Devin extension, a session token as an API key credential | a Devin auth file with the token and `base_url`; its `GetUserStatus` calls were answered aside, and the new core makes none. Models are named `devin/<model>`, as today's core lists them; Gemini clients write the slash as `%2F` in the path, with `account_models` naming the model |
 | `xai` | xAI extension, an API key | an `xai` group with `base-url` and an API key |
 | `xai-cli` | xAI extension, a Grok login's OAuth credential with `base_url` | an xAI auth file with `auth_kind` `oauth`, an expiry far ahead and `base_url` |
 | `codex-ws` | Codex extension, API key, `"websockets": true` in the account's settings | a Codex API key with `websockets: true` |
-| `claude-oauth` | Claude extension, a subscription's OAuth credential with `base_url` | a Claude auth file with an access token expiring far ahead. Today's core sends a subscription's requests to `api.anthropic.com` whatever the file says, so only the management cases (below) reach the fake upstream with this provider |
+| `claude-oauth` | Claude extension, a subscription's OAuth credential with `base_url` | a Claude auth file with an access token expiring far ahead. Today's core sent a subscription's requests to `api.anthropic.com` whatever the file said, so only the management cases (below) reached the fake upstream with this provider |
 
-Today's core sends a ChatGPT subscription's requests to `https://chatgpt.com/backend-api/codex`,
-which no setting moves. For `codex-oauth` the runner therefore gives the old core an HTTP proxy
-(the auth file's `proxy_url`) that accepts `CONNECT` only to `chatgpt.com:443`, ends the TLS
-connection itself with a certificate from a test authority made for the run (the old core
-trusts it through `SSL_CERT_FILE`), and hands the requests to the fake upstream. A plain
-request for the fake upstream's own address (the old core's management `api-call` sends a quota
-request there through the auth file's proxy) is passed to it. A `CONNECT` to any other host is
-refused and fails the case, so nothing reaches the internet: this is how the
-corpus noticed that today's core renews a subscription's token at `auth.openai.com` on a 401,
-which the corpus does not fake (no `codex-oauth` case answers 401). The fake tokens are
-unsigned JWTs that expire in 2100, so neither core renews them, and the old core is given time
-to load its auth file before the case runs. The subscription cases use `gpt-6.1-sol`, because
-today's core serves a subscription only the models in its catalog.
+Today's core sent a ChatGPT subscription's requests to `https://chatgpt.com/backend-api/codex`,
+which no setting moves. For `codex-oauth` the old core was therefore run behind an HTTP proxy
+(the auth file's `proxy_url`) that accepted `CONNECT` only to `chatgpt.com:443`, ended the TLS
+connection itself with a certificate from a test authority made for the run, and handed the
+requests to the fake upstream; a `CONNECT` to any other host was refused and failed the case, so
+nothing reached the internet. That is how the corpus noticed that today's core renews a
+subscription's token at `auth.openai.com` on a 401, which the corpus does not fake (no
+`codex-oauth` case answers 401). The fake tokens are unsigned JWTs that expire in 2100, so neither
+core renews them. The subscription cases use `gpt-6.1-sol`, because today's core served a
+subscription only the models in its catalog.
 
-A Vertex service account works the same way: today's core always calls
+A Vertex service account was recorded the same way: today's core always calls
 `https://aiplatform.googleapis.com` and trades the account's signed JWT for a token at
-`https://oauth2.googleapis.com/token`, so both hosts go through the proxy, and each `vertex`
+`https://oauth2.googleapis.com/token`, so both hosts went through the proxy, and each `vertex`
 case's first upstream reply is the token endpoint's. The new core's account points `base_url`
 and the key's `token_uri` at the fake upstream, and the new core runs with
 `PLUXY_TEST_LOGIN_HOSTS=1`, without which the Gemini extension takes only Google's token
@@ -200,25 +179,28 @@ sends is recorded, whenever it arrives; after the last step the fake upstream re
 core closes the socket. A `hold` reply (HTTP) keeps the response open after its body until the core
 ends the request, like an upstream still generating.
 
-`old_client` and `old_client_more`: see [Management API cases](#management-api-cases).
+`old_client` and `old_client_more`: what the old core was sent when its reply was recorded; see
+[Management API cases](#management-api-cases). Nothing runs them now.
 
-`account_models`: models the account lists in both cores (see above).
+`account_models`: models the account lists in the new core (the old core listed them too when its
+reply was recorded; see above).
 
 `new_core_config`: settings added to the new core's config, by top-level key, for a behaviour
-today's core has by default and the new core only when configured (CORS, for example). Today's
-core runs with its usual config.
+today's core had by default and the new core has only when configured (CORS, for example). The
+old core's replies were recorded with its usual config.
 
-`accounts`: how many provider accounts both cores have (default 1). The old core orders equal
-accounts by an ID hashed from the upstream URL, which changes from run to run, so multi-account
-cases mark `upstream[*].headers.Authorization` volatile, or set `label_accounts`: each account's
-key in the upstream requests' headers becomes `account-1`, `account-2` and so on, numbered in
-the order the accounts were first used, which compares the pattern of turns.
+`accounts`: how many provider accounts the new core has (default 1; the old core had as many when
+its reply was recorded). The old core ordered equal accounts by an ID hashed from the upstream
+URL, which changed from run to run, so multi-account cases mark
+`upstream[*].headers.Authorization` volatile, or set `label_accounts`: each account's key in the
+upstream requests' headers becomes `account-1`, `account-2` and so on, numbered in the order the
+accounts were first used, which compares the pattern of turns.
 
-`old_core` and `new_core` add settings to each core's generated config: `config` merges at the
-top level, `account` into every account, and `accounts` its n-th entry into the n-th account
-(for the old core the n-th key of its `api-keys` block), for settings such as a weight. A
-`null` removes a value, such as `{"account": {"models": null}}` for an account without a models
-list.
+`new_core` adds settings to the new core's generated config: `config` merges at the top level,
+`account` into every account, and `accounts` its n-th entry into the n-th account, for settings
+such as a weight. A `null` removes a value, such as `{"account": {"models": null}}` for an account
+without a models list. `old_core` holds the same kind of settings for the old core's config when
+its reply was recorded; nothing runs it now.
 
 `volatile`: paths whose values change between runs (timestamps, trace IDs). They are replaced by
 `"(volatile)"` before any comparison.
@@ -245,7 +227,8 @@ difference.
 The test run also corrupts each value of each case's new-core observation in turn and fails if the
 case still passes, so an exception cannot hide a difference it was not written for.
 
-`recorded_old_core` is written by `PLUXY_CORPUS_RECORD=1`; do not edit it by hand.
+`recorded_old_core` is the old core's reply, recorded before the old core was removed. Do not edit
+it by hand or regenerate it.
 
 ## Observations and paths
 
@@ -279,27 +262,28 @@ A path joins keys with `.` and puts array indexes in brackets:
 
 ## Management API cases
 
-The two cores manage accounts through different APIs, so a case about one of their account calls
-sends each core its own request. Both cores run with the management API on and the corpus
+The two cores managed accounts through different APIs, so a case about one of their account calls
+sent each core its own request. The new core runs with the management API on and the corpus
 management key `corpus-management-key` (not a secret) when a request has `"auth":
-"management-key"`; the new core's `management_key` and the old core's `management.secret-key`
-are set to it.
+"management-key"`; its `management_key` is set to it. The old core ran with its
+`management.secret-key` set to the same key.
 
-- `client` goes to the new core. `old_client`, when set, goes to the old core instead, in the
-  same schema. `old_client_more` lists further requests the old core gets after it, in order, one
-  reply each.
+- `client` goes to the new core. `old_client`, when set, is what the old core was sent instead,
+  in the same schema, and `old_client_more` lists further requests it was sent after that, in
+  order, one reply each. Nothing sends them now; they stay in the case files as the record of how
+  the reply was recorded.
 - In the old core's requests (and in any request's `body_text`), `{{upstream}}` stands for the fake upstream's base URL, and
-  `{{auth_index}}` for the `auth_index` the old core gives its one auth file (a hash of the file's
-  path, so it changes every run; the runner reads it from the old core's `GET
-  /v0/management/auth-files`). The old core's `POST /v0/management/api-call` relay needs both: it
-  calls an absolute URL and puts the account's token where a header or the body says `$TOKEN$`.
-- The old core's reply to `old_client` is the case's `client`; the replies to `old_client_more`
-  are `client_more`, which the new core's observation does not have.
+  `{{auth_index}}` stood for the `auth_index` the old core gave its one auth file (a hash of the
+  file's path). The old core's `POST /v0/management/api-call` relay needed both: it calls an
+  absolute URL and puts the account's token where a header or the body says `$TOKEN$`. Only
+  `{{upstream}}` is expanded now, in a `body_text` sent to the new core.
+- The old core's reply to `old_client` is the case's recorded `client`; the replies to
+  `old_client_more` are the recorded `client_more`, which the new core's observation does not have.
 
 `account-quota/<provider>/usage.json` compares the new core's `GET
 /v0/management/accounts/{id}/quota` with the quota requests the old panel made through the
-relay (`extensions/panel/src/features/quota/` at commit `d0f7af2ff`, the last commit with the old panel; the cases' `source` fields write it `d0f7af2ff:<path>`). Today's core fetches no quota on its own; the old
-core's `old_client` replays the panel's requests for the provider, in the order the new core makes
+relay (`extensions/panel/src/features/quota/` at commit `d0f7af2ff`, the last commit with the old panel; the cases' `source` fields write it `d0f7af2ff:<path>`). Today's core fetched no quota on its own; the old
+core's `old_client` replayed the panel's requests for the provider, in the order the new core makes
 its own, with the panel's URLs moved to the fake upstream. What is compared is the upstream
 requests: method, path, headers, body and the token. Only these are compared, not the panel's
 reading of the replies, which is TypeScript in the panel. The client's replies differ by design (the
@@ -309,8 +293,8 @@ own client identity, not the panel's pinned one. The Meta extension honours a `m
 where its quota call goes, only when core runs with `PLUXY_TEST_LOGIN_HOSTS=1`; the runner sets it
 for a case that calls the management API, and the Meta account's `mint_url` points at the fake
 upstream. Devin has no quota case: its new call and the panel's differ in encoding (protobuf against
-JSON), so every part of them would be an exception, and today's core makes its own protobuf
-`GetUserStatus` call only as a background refresh, which the runner cannot trigger and answers
+JSON), so every part of them would be an exception, and today's core made its own protobuf
+`GetUserStatus` call only as a background refresh, which the runner could not trigger and answered
 aside.
 
 `account-models/<provider>/catalog-list.json` compares the new core's `GET
@@ -320,9 +304,9 @@ owners must be equal and in the same order; the fields only one list has are exc
 pinned or covered by a `*` path.
 
 `vertex-import/vertex/*.json` compares the new core's `POST /v0/management/vertex/import` with
-today's route of the same path. Both cores get the same request, so there is no `old_client`: a
+today's route of the same path. Both cores were sent the same request, so there is no `old_client`: a
 multipart body written as `body_text` with a fixed boundary in the `Content-Type` header. A request's
-`body_text` (for either core) may hold two placeholders: `{{upstream}}`, the fake upstream's base
+`body_text` may hold two placeholders: `{{upstream}}`, the fake upstream's base
 URL (the key's `token_uri` is `{{upstream}}/token`), and `{{private_key}}`, the RSA key the runner
 makes for the run (`corpusRSA`), as the inside of a JSON string, so no case holds a key. The old
 core saves the key without contacting Google; the new core fetches a token at the key's
@@ -334,12 +318,21 @@ counterpart in today's core and are in `e2e/verteximport_test.go`.
 
 ## Adding cases
 
-1. Write the case file without `recorded_old_core`. Take the behaviour from today's core: its
-   tests, code or an issue, and name it in `source`.
-2. Record it: `PLUXY_CORPUS_RECORD=1 PLUXY_CORPUS_CASE=<name> go test -count=1 -run TestCorpus ./corpus`.
-   Recording also lays out the file in the corpus style (one stream event per line).
+The old core is gone, so no case can be recorded from it any more. A new case needs a
+`recorded_old_core` that already exists:
+
+1. Write the case file. Take the behaviour from today's core (its tests, code or an issue) and
+   name it in `source`.
+2. Give it the old core's reply from a recording made before the removal: the `recorded_old_core`
+   of an existing case whose request and scripted upstream replies are the same as the new
+   case's. Copy it unchanged, keep the corpus layout (one stream event per line) and say in
+   `description` which case it comes from.
 3. Run the corpus. For each difference the report lists, fix the new core or add an exception
-   with its reason.
+   with its reason. Where the new core is meant to differ, `kind` is `intended` and `want` (or
+   `absent`) pins the new value, as described above.
+
+A behaviour the old core never had has no reply to compare with, so it is not a corpus case: pin it
+in a Go test beside the code, as `e2e/verteximport_test.go` does for the cases it lists.
 
 A provider whose upstream speaks Connect with protobuf messages (Devin's API server) scripts its
 replies as `connect` frames: each is `{"message": {...}}`, a data frame, or `{"end": {...}}`, the
@@ -350,20 +343,20 @@ text, and an array a repeated field. The provider's `Proto` schema (`cores.go`) 
 message's nested and repeated fields, so a recorded protobuf request is decoded into the same JSON
 form and compared like any body (`connect.go`).
 
-A provider whose core calls the upstream on its own, outside the case (today's core probes an
-Antigravity login's models when it loads it and again later), sets `Aside` in its entry: the fake
+A provider whose core calls the upstream on its own, outside the case (the new core asks Cloud Code
+which models an Antigravity login has when it loads it), sets `Aside` in its entry: the fake
 upstream answers those calls with a fixed reply and neither records them nor uses up a scripted
 reply.
 
-A new provider needs an entry in `Providers` (`cores.go`): how each core's config points that
-provider at the fake upstream (for the old core, its `api-keys` block, or auth files with
-`OldCoreAuthFiles`, and `Intercept` for a fixed upstream host). A new extension also goes in
-`NewCoreExtensions`.
+A new provider needs an entry in `Providers` (`cores.go`): how the new core's config points that
+provider at the fake upstream, and `CatalogModels` when its accounts list no models. A new
+extension also goes in `NewCoreExtensions`.
 
 ### Codex client catalog
 
-The cases in `codex-models/codex/` send `GET /v1/models?client_version=...` to both
-cores with the same configured account models. The runner already preserves the query string.
+The cases in `codex-models/codex/` send `GET /v1/models?client_version=...` to the new core with
+the same account models the old core had when its reply was recorded. The runner preserves the
+query string.
 The recorded replies cover the current and legacy reasoning levels. An unknown model is omitted
 by the new catalog, while the old core synthesizes it from a default template; that intended
 exception pins an empty catalog to avoid claiming capabilities for an unknown model. Catalog

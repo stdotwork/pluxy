@@ -11,8 +11,19 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
+// maxErrorRaw limits the upstream bytes an error keeps for diagnostics. Longer data is not kept:
+// a cut of it could fall inside a credential, whose start core's redaction cannot recognise.
+const maxErrorRaw = 1 << 20
+
+// malformed returns the error for upstream data that is not the JSON it should be. The data, when
+// it is no longer than maxErrorRaw, is kept in Raw as a JSON string when it is not JSON, so the
+// error can still be sent to core.
 func malformed(msg string, data []byte) *llm.Error {
-	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Raw: llm.RawJSON(data)}
+	e := &llm.Error{Code: llm.CodeUpstream, Message: msg}
+	if len(data) <= maxErrorRaw {
+		e.Raw = llm.RawJSON(data)
+	}
+	return e
 }
 
 // chunk is one GenerateContentResponse: a whole non-streamed reply, or one chunk of a stream.

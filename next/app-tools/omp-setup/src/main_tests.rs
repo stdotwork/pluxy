@@ -75,3 +75,55 @@ fn files_oh_my_pi_would_not_take_are_reported_refused_not_failed() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Writes a program file at p, executable where this system has the bit.
+fn program_file(p: &std::path::Path) {
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(p, "MZ").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+#[test]
+fn the_recipe_starts_the_first_installed_omp_this_system_runs_else_the_one_on_path() {
+    let d = tmp();
+    let (home, local) = (d.join("home"), d.join("local"));
+    let program = |os: &str, local: Option<&std::path::Path>| {
+        crate::recipe(os, &home, local)["program"].clone()
+    };
+    for os in ["linux", "macos", "windows"] {
+        assert_eq!(program(os, Some(&local)), "omp", "{os}");
+    }
+    // omp.sh/install's ~/.local/bin/omp, and install.ps1's %LOCALAPPDATA%\omp\omp.exe.
+    let (script, script_exe) = (
+        home.join(".local/bin/omp"),
+        local.join("omp").join("omp.exe"),
+    );
+    program_file(&script);
+    program_file(&script_exe);
+    // A file without an extension is no program on Windows.
+    let unix = |p: &std::path::Path| if cfg!(unix) { json!(p) } else { json!("omp") };
+    assert_eq!(program("linux", None), unix(&script));
+    assert_eq!(program("macos", None), unix(&script));
+    assert_eq!(program("windows", Some(&local)), json!(script_exe));
+    // No LOCALAPPDATA, or one that is not a full path: that copy is not looked for.
+    assert_eq!(program("windows", None), "omp");
+    assert_eq!(
+        program("windows", Some(std::path::Path::new("local"))),
+        "omp"
+    );
+    // bun's global copy comes first: ~/.bun/bin/omp, omp.exe on Windows.
+    let (bun, bun_exe) = (
+        home.join(".bun/bin/omp"),
+        home.join(".bun").join("bin").join("omp.exe"),
+    );
+    program_file(&bun);
+    program_file(&bun_exe);
+    assert_eq!(program("linux", None), unix(&bun));
+    assert_eq!(program("macos", None), unix(&bun));
+    assert_eq!(program("windows", Some(&local)), json!(bun_exe));
+    std::fs::remove_dir_all(d).unwrap();
+}

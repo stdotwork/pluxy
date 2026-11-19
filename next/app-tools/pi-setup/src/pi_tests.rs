@@ -333,10 +333,15 @@ fn entries_are_recognised_in_every_form() {
     )));
 }
 
+/// A full path on this system: under `/`, or `C:\` on Windows.
+fn abs(p: &str) -> PathBuf {
+    PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" }).join(p)
+}
+
 #[test]
 fn targets_are_the_three_files_of_one_folder() {
     let root = |p: &str| Selection::Root {
-        root: PathBuf::from("/a"),
+        root: abs("a"),
         path: p.into(),
     };
     let ok = [
@@ -346,13 +351,13 @@ fn targets_are_the_three_files_of_one_folder() {
     ];
     assert_eq!(
         crate::agent_of(&[&ok[0], &ok[1], &ok[2]]).unwrap(),
-        PathBuf::from("/a")
+        abs("a")
     );
-    let file = |p: &str| Selection::File(PathBuf::from(p));
+    let file = |p: &str| Selection::File(abs(p));
     let mixed = [
-        file("/a/cliproxyapi.json"),
-        file("/b/settings.json"),
-        file("/a/cliproxyapi-models.json"),
+        file("a/cliproxyapi.json"),
+        file("b/settings.json"),
+        file("a/cliproxyapi-models.json"),
     ];
     assert!(crate::agent_of(&[&mixed[0], &mixed[1], &mixed[2]]).is_err());
     let swapped = [
@@ -381,7 +386,14 @@ fn tree(dir: &Path) -> Vec<(String, Vec<u8>)> {
             if p.is_dir() {
                 stack.push(p);
             } else {
-                let rel = p.strip_prefix(dir).unwrap().to_string_lossy().into_owned();
+                // Joined with `/` on every system, as the adapter's own file names are.
+                let rel = p
+                    .strip_prefix(dir)
+                    .unwrap()
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
                 out.push((rel, std::fs::read(&p).unwrap()));
             }
         }
@@ -498,15 +510,16 @@ fn a_preview_reads_again_once_when_a_file_changed_between_its_reads() {
 #[test]
 fn a_preview_takes_the_three_files_selected() {
     use serde_json::json;
+    let file = |n: &str| json!({"file": abs("s").join(n)});
     let input = json!({"targets": [
-        {"file": "/s/cliproxyapi.json"}, {"file": "/s/settings.json"}, {"file": "/s/cliproxyapi-models.json"},
+        file("cliproxyapi.json"), file("settings.json"), file("cliproxyapi-models.json"),
     ]});
     let sels = crate::selections(&input).unwrap();
     assert_eq!(
         crate::agent_of(&[&sels[0], &sels[1], &sels[2]]).unwrap(),
-        PathBuf::from("/s")
+        abs("s")
     );
-    assert!(crate::selections(&json!({"targets": [{"file": "/s/settings.json"}]})).is_err());
+    assert!(crate::selections(&json!({"targets": [file("settings.json")]})).is_err());
 }
 
 #[test]
@@ -551,12 +564,13 @@ fn clear_and_uninstall_refuse_files_pi_or_the_plugin_would_not_take() {
 fn the_file_systems_root_is_no_agent_folder() {
     // An empty folder field on the page sends empty paths; a bare `/` folder is refused too.
     let at = |d: &str| crate::FILES.map(|n| Selection::File(PathBuf::from(format!("{d}{n}"))));
-    for d in ["/", ""] {
+    // A drive's root on Windows too.
+    for d in ["/", "", if cfg!(windows) { "C:\\" } else { "/" }] {
         let s = at(d);
         assert!(crate::agent_of(&[&s[0], &s[1], &s[2]]).is_err(), "{d:?}");
     }
     let root = |p: &str| Selection::Root {
-        root: PathBuf::from("/"),
+        root: abs(""),
         path: p.into(),
     };
     let s = crate::FILES.map(root);
@@ -573,4 +587,46 @@ fn removing_the_plugin_leaves_nothing_under_its_name_or_beside_it() {
     std::fs::create_dir(agent.join(".pluxy-cliproxyapi-provider.old-1-2")).unwrap();
     assert_eq!(adapter::state(&agent), State::Absent);
     std::fs::remove_dir_all(&agent).unwrap();
+}
+
+#[test]
+fn the_recipe_starts_the_installers_pi_where_this_system_runs_it_else_the_one_on_path() {
+    let home = temp("recipe");
+    let program = |os: &str| crate::recipe(os, &home)["program"].clone();
+    for os in ["linux", "macos", "windows"] {
+        assert_eq!(program(os), "pi", "{os}");
+    }
+    // pi.dev/install.sh's copies: ~/.local/bin/pi, and its fallback in Pi's folder first.
+    // install.ps1's pi.cmd launcher is never named (it is not an npm shim).
+    let write = |p: &Path| {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "MZ").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    };
+    let (local_bin, own) = (home.join(".local/bin/pi"), home.join(".pi/agent/bin/pi"));
+    write(&local_bin);
+    write(&home.join(".pi/agent/bin/pi.cmd"));
+    write(&home.join(".pi/agent/bin/pi.exe"));
+    // A file without an extension is no program on Windows.
+    let unix = |p: &Path| {
+        if cfg!(unix) {
+            serde_json::json!(p)
+        } else {
+            serde_json::json!("pi")
+        }
+    };
+    assert_eq!(program("linux"), unix(&local_bin));
+    assert_eq!(program("macos"), unix(&local_bin));
+    write(&own);
+    assert_eq!(program("linux"), unix(&own));
+    assert_eq!(program("macos"), unix(&own));
+    assert_eq!(program("windows"), "pi");
+    // On Windows no installed copy is looked for at all (also where this test runs on Windows,
+    // which runs none of the Unix copies anyway).
+    assert!(crate::installed("windows", &home).is_empty());
+    std::fs::remove_dir_all(home).unwrap();
 }
