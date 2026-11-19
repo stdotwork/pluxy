@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -410,16 +411,19 @@ func TestFileBackendPermissions(t *testing.T) {
 	if _, err := store.Update("acct", rec.Registration, rec.Version, func(r *Record) { r.Label = "x" }); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := os.Stat(dir); st.Mode().Perm() != 0o700 {
-		t.Errorf("folder mode %v, want 0700", st.Mode().Perm())
+	// Windows keeps no such modes; TestFileBackendWindowsAccessList reads its access lists.
+	if runtime.GOOS != "windows" {
+		if st, _ := os.Stat(dir); st.Mode().Perm() != 0o700 {
+			t.Errorf("folder mode %v, want 0700", st.Mode().Perm())
+		}
+		st, _ := os.Stat(filepath.Join(dir, "acct.json"))
+		if st.Mode().Perm() != 0o600 {
+			t.Errorf("file mode %v, want 0600", st.Mode().Perm())
+		}
 	}
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 1 || entries[0].Name() != "acct.json" {
 		t.Fatalf("folder holds %v, want only acct.json", entries)
-	}
-	st, _ := os.Stat(filepath.Join(dir, "acct.json"))
-	if st.Mode().Perm() != 0o600 {
-		t.Errorf("file mode %v, want 0600", st.Mode().Perm())
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "acct.json"))
 	var onDisk Record

@@ -27,7 +27,7 @@
 //! One line on stderr: `native-test: access <JSON>`.
 
 use super::device::{call, listed, ok, refused, require, settle, start, x};
-use super::{eval, log, wait_for};
+use super::{chooser, eval, log, wait_for};
 use crate::MAIN;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -60,27 +60,21 @@ fn chooser_title(id: &str, resource: &str, folder: bool) -> String {
     )
 }
 
-/// Types path into the chooser titled title and accepts it. The session has no recent files
-/// (run.ts), so a folder chooser opens in a folder, where the typed location is what it
-/// chooses. A folder is typed as `<folder>/`: text ending in a separator names that folder
+/// Enters path in the chooser titled title and accepts it. The session has no recent files
+/// (run.ts), so a folder chooser opens in a folder, where the entered location is what it
+/// chooses. A folder is entered as `<folder>/`: text ending in a separator names that folder
 /// itself (gtkfilechooserentry.c `gtk_file_chooser_get_directory_for_text`), and with two
 /// subfolders starting with different letters (native/access.ts) the entry has no single
-/// completion to add to it.
-fn choose(title: &str, path: &Path, folder: bool) -> Result<(), String> {
+/// completion to add to it. `chooser::enter` pastes it.
+fn choose(main: &Webview, title: &str, path: &Path, folder: bool) -> Result<(), String> {
     let id = wait_for(title, || window(title))?;
-    x(&["windowfocus", "--sync", &id])?;
-    x(&["key", "--clearmodifiers", "ctrl+l"])?;
-    std::thread::sleep(Duration::from_millis(300));
     let path = path.to_str().ok_or("fixture path is not UTF-8")?;
-    let typed = if folder {
+    let entered = if folder {
         format!("{path}/")
     } else {
         path.to_string()
     };
-    x(&["type", "--clearmodifiers", "--delay", "20", &typed])?;
-    std::thread::sleep(Duration::from_millis(300));
-    x(&["key", "--clearmodifiers", "Return"])?;
-    Ok(())
+    chooser::enter(main.app_handle(), &id, "ctrl+l", entered)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -109,7 +103,7 @@ fn grant(
     if answer == Answer::CancelChooser {
         key(&title, "Escape")?;
     } else {
-        choose(&title, path, folder)?;
+        choose(main, &title, path, folder)?;
         key(
             CONFIRMATION,
             if answer == Answer::Confirm {
@@ -146,7 +140,7 @@ fn grant_refused(
         "access_grant",
         json!({"id": id, "resource": resource}),
     )?;
-    choose(&chooser_title(id, resource, folder), path, folder)?;
+    choose(main, &chooser_title(id, resource, folder), path, folder)?;
     let r = settle(main, &slot)?;
     require(
         r["ok"] == false && window(CONFIRMATION).is_none(),

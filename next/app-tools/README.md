@@ -1062,7 +1062,20 @@ desktop app's list): `x-terminal-emulator` (System terminal), `gnome-terminal` (
 `xfce4-terminal` (`-x`), `mate-terminal` (`-x`), `kitty`, `alacritty`, `ghostty` and `xterm`, each
 running the program after `-e` unless noted. A terminal launch runs `<terminal> <flag> <program>
 <args>`; a direct one `<program> <args>`. The program must be an executable file, the working folder
-an existing absolute folder.
+an existing absolute folder. The terminal finds the program by that path as it starts, after the
+app's checks, so the app refuses a terminal launch whose program another user could change or
+redirect by then: one below a folder others or a group may write (a sticky folder such as `/tmp`
+aside, and the person's own private group, as Homebrew on Linux and a umask of 002 make them: a
+group no other user in `/etc/passwd` and `/etc/group` has, users and groups from other sources
+such as LDAP being unseen),
+reached through a link such a user could change, through `/proc`, or that such a group may write
+(`../app/app-host/README.md`, "Launches and managed runtimes"). `launch` refuses, before the host
+is asked, a launch of a terminal of the list above whose argv starts with its exec flag but that
+does not name as its `program` the argument right after it, one that names a `program` whose
+argv does not start with that flag, and on Linux and macOS a launch that names a `program` but
+is no terminal's: the app checks `program` as the file the terminal runs. A terminal of the list
+started without its exec flag and naming no `program` (its own window, or its own options) is a
+direct launch of it.
 
 A launch's `lifetime` is `detached` or `managed`, and **`managed` applies to direct launches only**.
 The host keeps and stops a managed runtime through the process it started, and for a terminal
@@ -1140,8 +1153,18 @@ private folder in the per-user temporary folder with a Unix socket and a `.comma
 Terminal open the file (`/usr/bin/open -a`), and hands the program, arguments, folder and
 environment over the socket to the first connection from this user; the file only runs
 `<execution> attach <socket>`, so nothing of the launch is written to a file or read by a shell.
-In the window, the program runs with the launch's environment and the window's own `TERM…`,
-`LC_TERMINAL…` and `PATH`. When macOS holds `open` back for 20 seconds (a quarantine or a
+The program itself goes over the socket too, as the file the app confirmed and checked: the app
+gives it to the execution program as descriptor 3, and a terminal launch without it is refused.
+That refusal is silent today: the app does not read the terminal mode's exit code or error
+output, so an app that gives no descriptor (one older than this execution program) sees its
+terminal launches start and no window open. A terminal launch must name as its `program` the
+argument right after `--`.
+In the window, that file runs, by the path it has then, once no other user but a member of
+`admin` can change it or a folder above it and that path still names it (the rule the app holds
+a direct launch's program to); otherwise the window says which path another user could change,
+and nothing runs. A file put at the program's path since the app checked it never runs. The
+program runs with the launch's environment and the window's own `TERM…`, `LC_TERMINAL…` and
+`PATH`. When macOS holds `open` back for 20 seconds (a quarantine or a
 permission prompt), the launch fails as blocked; when no window takes it within 60 seconds, as
 expired. A launch whose hand-over would be over 1 MiB (the program, arguments, folder and
 environment) is refused before Terminal opens.

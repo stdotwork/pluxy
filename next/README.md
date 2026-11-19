@@ -2,8 +2,8 @@
 
 A new core for pluxy, built from scratch to replace the old core, the Go proxy that was in `core/`.
 (In this README and in the corpus, "today's core" and "the old core" mean that core, and `core/...`
-paths are files in it as they are at commit `0b84f013f18e1bbf528533b1c6f2c2dbdb19fc67`, the last commit
-that changed `core/`. The folder has since been removed from the repository.) Core receives client
+paths are files in it. The folder has been removed from the repository, so those paths name files
+you cannot open here.) Core receives client
 requests and hands them to **provider extensions**: separate programs, one per kind of upstream, that core
 starts and talks to over a local socket. Today it serves OpenAI Chat Completions, OpenAI
 Responses, Anthropic Messages and Gemini GenerateContent (streamed and not, over HTTP) through the
@@ -47,7 +47,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `app/` | The desktop app: the kit's second build in a Tauri window, with a tray icon and three ways to reach core ([README](app/README.md)). Linux only for now; its agent clients and the record of the old desktop app's features are in [PARITY.md](app/PARITY.md). |
 | `app-tools/` | The desktop app's optional native tools: agent client setup, the launcher, the usage hub and its parsers, the Codex session reader, and the libraries they share ([README](app-tools/README.md)). |
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
-| `corpus/` | Differential test corpus: cases replayed against this core and today's core, with listed exceptions ([README](corpus/README.md)). |
+| `corpus/` | Differential test corpus: cases replayed against this core and compared with today's core's recorded replies, with listed exceptions ([README](corpus/README.md)). |
 
 Go extensions build each upstream client's transport with `sdk.Upstream(base)`, where `base` is
 their configured `*http.Transport`. This includes login, token refresh and WebSocket handshake
@@ -1130,17 +1130,19 @@ translated system instructions go as a user turn. Each function declaration's sc
 `parameters`, and a response schema as `responseSchema`, in the subset Cloud Code takes, as today's
 core cleans them: local `$ref`s inlined, `const` as an enum, constraints and short enums moved into
 the description as hints (`minLength: 1`, `Allowed: a, b`), a type list such as
-`["string","null"]` as one nullable type, and other JSON Schema keywords removed; for a Claude
-model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
+`["string","null"]` as one nullable type, each `allOf` merged into the schema that holds it
+(Cloud Code's schema has no `allOf`: the branches' required names join the schema's, and their
+other keys fill the ones it lacks, its own winning), and other JSON Schema keywords removed; for a
+Claude model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
 object in a function's parameters that requires nothing gets a required placeholder property:
 `reason` (a string) where it has no properties, `_` (a boolean) where it has some and none is
-required. An object is a schema of type `object`, or one with no type whose properties come only
-from its `allOf` branches (it then gets that type); a union object (with `anyOf` or `oneOf`) gets
-none; an `allOf` branch counts with the object it merges into, so that object's properties and
-required names are the branches' too. Every schema with `properties` and no type gets type
-`object`, whatever the model, as in today's core; an `allOf` branch keeps its own type or none. A
-function's response schema gets no placeholder: today's core adds one there, but the schema
-describes what the client returns, and nothing would remove the placeholder. The extension removes
+required. An object is a schema of type `object`; a union object (with `anyOf` or `oneOf`) gets
+none. Every schema with `properties` and no type gets type `object`, whatever the model, as in
+today's core. A function's response schema gets no placeholder: today's core adds one there, but the schema
+describes what the client returns, and nothing would remove the placeholder. A response format's schema keeps
+the `title` of every schema in it, as today's core does: Google's Schema type has a `title` field. A
+function's parameters and response schema lose their titles except for Claude and Gemini 3 Pro, also
+as in today's core. The extension removes
 the placeholders from the model's calls before any client format sees them; today's core does that
 only for Messages clients. It leaves a placeholder in a call where a client schema at the same path
 declares the name, as a property or in `required`: the other branches of a union (also those
@@ -1153,6 +1155,21 @@ taken out of the envelope's `response` field. A 429 is a used-up quota when Goog
 wait from Google's retry details or message. It holds back only that model on the account, as
 today's core cools only the model that answered, except a used-up credit balance
 (`INSUFFICIENT_G1_CREDITS_BALANCE`), which holds back the account.
+
+A `functionCall` part of a Cloud Code reply is one whole call, as Gemini sends calls, and a part
+with no name is a call with no name. Today's core treats such a part three ways. A Messages client
+gets a nameless part that comes while a call is open as more input for that call
+(`core/internal/translator/antigravity/claude/antigravity_claude_response.go`). A Chat client gets
+it as a second call with an empty name. A Responses client does not get it. The Messages
+behaviour is not kept, because nothing shows that Cloud Code sends such parts in reply to the
+requests the extension makes. Google's Vertex AI documentation shows nameless parts only for
+streamed function call arguments (`streamFunctionCallArguments`, Gemini 3 and later), which a
+request has to ask for, and whose parts carry `partialArgs`, not `args`. Neither core nor the
+extension asks for it. Today's core added the behaviour to its Gemini Messages translator in
+December 2025 with no recorded stream, and to its Antigravity one in October 2026, eleven months
+after that translator was written. Its tests use made-up chunks. It also appends each part's
+whole `args` object to the call's input, so a second part with arguments gives the client
+`{"a":"1"}{"b":"2"}`, which is not JSON.
 
 Not built, from today's core: the paid Google AI credits fallback, its own cache of Antigravity's
 reasoning (thought signatures travel in band, as for Gemini), the per-account model probe
@@ -1231,6 +1248,25 @@ account, unless Devin says the account's daily or weekly quota is exhausted, whi
 account. A monthly or unnamed quota holds back only the model. Devin's `canceled` is a cancelled
 request (499), as in today's core. An error after Devin sent any frame (output, usage or a
 signature) is not retry-safe, and a reply that ends without its end frame is an error.
+
+A refusal with an HTTP error status takes its message from a Connect error body's `message`, and
+an error in the end frame takes the frame's. Both are cleaned, as is the code when it is not one
+of Connect's, and the error's raw body is the body or frame rebuilt from the cleaned code and
+message only, so its other fields are dropped. Unlike today's core, which passes any other body
+on as it is, the extension passes such a body on only as the message, only when it read the body
+whole (under 1 MiB, and not broken off), and cleaned. The cleaned text is one line, cut after
+1000 characters with an ellipsis. Replaced by `[redacted]` are: every run of token characters
+(letters, digits and `_-.+/=~`) holding 4 or more consecutive characters of one of the account's
+secrets: its session token after the public `devin-session-token$` prefix, the values of its
+secret headers, its proxy's user name and password and the secrets in its settings; `Bearer` and
+`Basic` values; the values of fields named like `access_token`, `token` or `api_key`; and any
+other run of 24 or more token characters. A run is also read with its escapes decoded (JSON's
+`\/` and `\uXXXX`, `%XX`), so a piece written with escapes between its characters is replaced
+too. Core removes only whole copies of an account's secrets, and such text can hold part of one
+the upstream echoed, split across lines or cut short. Otherwise the message names only the status
+(`Devin answered 500 Internal Server Error`), or, for a quota read whose reply broke off, says
+that it broke off. The 4-character rule can also replace a word that shares 4 characters with
+one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
@@ -1620,6 +1656,16 @@ credential through the extension shortly before it expires. Only the extension t
 account ever receives its credential. The protocol side is in the
 [protocol README](protocol/README.md#login-and-refresh).
 
+On Windows, where file modes do not limit who can read a file, the folder and each file get a
+protected access list that lets in only core's user and SYSTEM. Core checks the folder each time it
+loads or saves the accounts and makes it private if it is not. It refuses to start, or to save, when
+`credentials_dir` is a link or a file, or a folder owned by another account than core's user (or
+SYSTEM). A folder made by pluxy run as administrator is owned by the Administrators group, so a run
+without administrator rights refuses it: take ownership of the folder and its files from an
+elevated prompt (`takeown /f <folder> /r`), or move the folder away and sign the accounts in again.
+A file in the folder that is a link, or that another account owns, is skipped with a notice in the
+log rather than loaded.
+
 An extension may return non-secret account settings with a login grant. When adding an
 account, core uses those as defaults: properties explicitly supplied in `POST /accounts.settings`
 win (including `null`; nested objects are replaced as a whole). The extension validates and
@@ -1937,7 +1983,7 @@ it `[warn ]`; every other line is `[info ]`.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/logs` | Lines of `main.log` and its rotated files (not the request logs), oldest first: with `after` (a time in Unix seconds, such as a reply's `latest-timestamp`), the oldest `limit` lines written after it, so a reader can page forward; without it, the newest `limit` lines. `limit` defaults to 1000, at most 10000. The reply holds `lines`, `line-count` and `latest-timestamp` (the newest returned line's time, in seconds with milliseconds; `after` itself when there is none). A line with no time of its own counts as written with the line before it. |
+| `GET /v0/management/logs` | Lines of `main.log` and its rotated files (not the request logs), oldest first: with `after` (a time in Unix seconds, such as a reply's `latest-timestamp`), the oldest `limit` lines written after it, so a reader can page forward and miss none (every write has a time later than the write before it, and a page that ends inside one write's lines holds the rest of them, so it can have a few more than `limit`); without it, the newest `limit` lines. `limit` defaults to 1000, at most 10000. The reply holds `lines`, `line-count` and `latest-timestamp` (the newest returned line's time, in seconds with milliseconds; `after` itself when there is none). A line with no time of its own counts as written with the line before it. |
 | `DELETE /v0/management/logs` | Empties `main.log` and deletes its rotated files; replies with `removed`, how many files it deleted. Request logs stay. |
 
 Both answer 400 while logging to file is off, as today's core does. Today's core also takes a
@@ -1967,7 +2013,8 @@ too, and counted with the rest. On each side that is, first, a window of 12 byte
 of the longest form of a secret the log removes that holds a character other than a key's (the
 secret as it is, or escaped, whichever is longest). That holds every part of such a secret the
 line cut in a spelling of up to 11 bytes for each of its bytes; the log also removes spellings
-with deeper escapes, and a part of one of those cut at the line can stay. Secrets made only of
+with deeper escapes (such as a percent escape nested 6 times, `%252525252573` for `s`, 13 bytes
+for each byte), and a part of one of those cut at the line can stay. Secrets made only of
 letters, digits and `-_.~+/=%\`, as API keys and tokens are, need no window: the run of those
 characters that goes on from the edge is left out in any case, and it holds any part of such a
 secret, whatever its length. Where the edge then cuts through a secret in one of its forms, 4
@@ -1994,7 +2041,31 @@ refused attempt and the retry on another account show as two pairs. Each body ke
 KiB and its last 96 KiB, less what beside the cut could be part of a secret, as for the reply, a
 streamed reply recorded as the extension reads it, without holding it back; when a request made
 more than two upstream requests, the first and the last are kept, with a line saying how many
-were left out between them. A Responses WebSocket turn that opens the upstream socket holds its
+were left out between them. A body that was not read to its end (the extension read only the
+first MiB of an error or stopped at a stream's last event, a read failed, or the transport stopped
+sending a request body) ends with the line `[... the body was not read past here ...]`, and what
+before it could be the start of a secret cut off there is left out: 4 bytes or more that start a
+form of the account's credential, and, for a secret the log removes, what it leaves out on the
+start's side of a cut (above), with the window reaching back no further than the last line break.
+No spelling of a secret the log decodes holds a raw line break, and each line of a secret that
+spans lines is removed on its own, so a stream keeps every whole event; but such a secret with a
+line of fewer than 8 bytes can keep that line where the read stopped after it: always when it is 1
+or 2 bytes, and when it is 3 to 7 bytes if the body spells it with JSON or percent escapes or ends
+it with a carriage return and a line feed. Upgrade if a config takes such a secret. A body with no
+line break near its end, such as JSON on one line or server-sent events with bare carriage returns,
+loses the whole window, all of a short one: that is accepted for a body whose read really
+stopped. A streamed reply ends with the line too when the extension stops at the last event of
+the upstream's format, as the Claude, Codex, Kimi, xAI, Meta and OpenAI-compatible providers do
+(Chat's `data: [DONE]`, Responses' `response.completed`, Messages' `message_stop`): then the reply
+was not cut, and what was left unread is only what the upstream sent after that event, usually
+nothing but the end of the transfer. Devin's reply is binary frames with no line breaks, so the
+Devin provider reads on past its end frame to the body's end, for at most 64 KiB and 1 second;
+past that its reply is complete but its body is marked, and its end within the window is left
+out. The Gemini and Antigravity providers read their streams to the end. A response with neither a
+length nor chunked encoding whose connection closes early reads, in Go, as a body that ended
+there, also over TLS closed without its closing alert between two records (a close inside a
+record is marked), so it gets no line and nothing is left out: marking such bodies would cut
+complete ones too. That needs protocol 0.17; with an older extension a body ends as the read stopped. A Responses WebSocket turn that opens the upstream socket holds its
 handshake; the messages on that socket are not written. This needs an
 extension that implements [protocol](protocol/README.md#upstream-capture) 0.13; it is captured
 only while `logs.request_log` is on, so error logs written with it off have no upstream sections,
@@ -2010,8 +2081,14 @@ Secrets are left out of every request log: values of headers and query parameter
 hold `authorization`, `api-key`, `apikey`, `api_key`, `token`, `secret`, `cookie` or `password`,
 and `key` (an authorization header keeps its scheme, as in `Bearer [redacted]`), and, anywhere in
 the file, every client key, the management key, every config account's credential and the
-secrets in its settings (as `GET /config` finds them, those of 8 bytes or more), in the forms the
-credential redaction finds (JSON escapes, percent-encoding and the rest). Replies and upstream
+secrets in its settings (as `GET /config` finds them, those of 8 bytes or more), and the user info of
+the global `proxy_url` and of each account's (the forms the extension removes from its replies: the
+user info as written and decoded, its base64 `Proxy-Authorization` login, and the user name and
+password alone when each is 8 bytes or more), in the forms the credential redaction finds (JSON
+escapes, percent-encoding and the rest). A secret made of parts, such as a session token behind a
+public prefix (`devin-session-token$<jwt>`), the token of a `Bearer` value or a cookie's value, has
+each part of 8 bytes or more removed on its own too (the extension protocol's
+[Accounts](protocol/README.md#accounts) lists the structures). Replies and upstream
 sections come from the extension with the account's own credential, the secrets in its settings,
 its proxy's password and its secret header values already removed; in the upstream sections the
 values of headers and query parameters whose names hold `auth`, `key`, `token`, `secret`,
@@ -2161,6 +2238,11 @@ this core does not support yet, and one line naming the settings it ignores for 
 nothing and is not named, nor is any setting of a feature whose `enabled` switch is off.
 Neither line stops core from starting. Settings that did nothing in today's core either (marked
 "dead") are accepted without a word. A key today's core does not know is named as unknown.
+Keys are matched exactly, as today's core matches them: `Port:` is not `port:`, so it is not
+read, and a key in another letter case in the `payload` rules is dropped and named in the log. The
+`payload` rules that today's core skipped or dropped when it applied them (a `-raw` string that
+is not JSON, a `.inf` or `.nan`) are dropped and named too; the table row for `requests.payload.*`
+below lists them.
 [`-import-auth`](#importing-todays-auth-folder) prints the same lines on standard error before it
 imports, so a migration sees them before core ever starts.
 
@@ -2247,7 +2329,7 @@ are accepted silently.
 | `quota-exceeded.switch-project`, `quota-exceeded.switch-preview-model` | | Dead |
 | `requests.proxy-url` (`proxy-url`) | `proxy_url`: the [outbound proxy](#outbound-proxy) of every account. A value that is not an `http`, `https`, `socks5` or `socks5h` URL, `direct` or `none` fails the load, where today's core logs it and goes without the proxy. | Supported |
 | Every `proxy-url` on a group or key | The account's `proxy_url`: a key's own, else its group's. | Supported |
-| `requests.payload.*` (`payload`) | `payload`: the [payload rules](#payload-rules), with today's lists and fields. A path outside the parts today's example config uses, or a raw value that is not JSON, fails the load. Today's `protocol` named the upstream's API format; here it names the extension. | Supported |
+| `requests.payload.*` (`payload`) | `payload`: the [payload rules](#payload-rules), with today's lists and fields. A path outside the parts today's example config uses fails the load. Today's `protocol` named the upstream's API format; here it names the extension. Each rule is carried as today's core applied it, and every difference below is named in the log. A key is matched exactly: one in another letter case (`Override:`, `Name:`) or not a payload key was never read there, so it is dropped. A `-raw` param goes across as today's core sent it: a date (`2024-01-15`) is the JSON string `"2024-01-15T00:00:00Z"`, and a param that is null, `.inf` or `.nan` (today's core skipped it, and applied the rule's other params) is dropped. A `-raw` rule with a string param that is empty or not JSON is dropped as a whole, as today's core dropped it with a warning. A `.inf` or `.nan` (alone or inside a list or mapping) in a `default` or `override` param is dropped: today's core skipped the param or wrote `+Inf`, `NaN` or `-Inf` into the body, which no upstream accepts. A `model` whose `match` holds one is dropped, as today's core never matched it, and a `not-match` condition that holds one is dropped, as it never excluded a request there. | Supported |
 | `requests.tls-handshake-timeout-seconds`, `requests.passthrough-headers`, `requests.nonstream-keepalive-interval`, `requests.streaming.*` (each also at the top level) | A request is retried on another account until its reply starts. | Dropped: off by default and no need found |
 | `client.codex.enable-apply-patch` | Models without a Codex template are left out of the [Codex client catalog](#codex-client-catalog), so there is no entry to add `apply_patch` to. | Later: built when someone uses a non-Codex model through the Codex client and needs `apply_patch` on it |
 | `client.codex.optimize-multi-agent-v2` (`codex.optimize-multi-agent-v2`) | | Later: built when Codex multi-agent v2 sub-agents need to reach non-Codex providers |

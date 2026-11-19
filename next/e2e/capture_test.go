@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stdotwork/pluxy/next/extensions/devin/devintest"
 )
 
 // Upstream capture: with request-log on, a request's log also holds what the extension sent
@@ -160,6 +162,7 @@ func sections(text, title string) []string {
 }
 
 func TestUpstreamCapture(t *testing.T) {
+	t.Parallel()
 	refusing, serving := newCaptureUpstream(t, true), newCaptureUpstream(t, false)
 	proxy := newHTTPProxy(t, true)
 	manifest, frames := tapPackage(t, "pluxy/openai-compatible", filepath.Join(binDir, "openai-compatible"))
@@ -486,6 +489,7 @@ func wantNoCutSecretPart(t *testing.T, text string) {
 // to the upstream sections of the request log, which leave out the bytes beside a cut that could
 // be part of one, whatever its characters.
 func TestUpstreamCaptureCutKeepsNoConfigSecretPart(t *testing.T) {
+	t.Parallel()
 	t.Run("request", func(t *testing.T) {
 		serving := newCaptureUpstream(t, false)
 		dir := t.TempDir()
@@ -547,4 +551,125 @@ func TestUpstreamCaptureCutKeepsNoConfigSecretPart(t *testing.T) {
 		}
 		wantNoCutSecretPart(t, readLog(t, dir, "v1-responses-*.log"))
 	})
+}
+
+// A secret that an extension's read of an upstream body stopped inside leaves no start of it at
+// the end of the request log's upstream response: here the provider reads the first MiB of an
+// error body, and the MiB ends inside the account's API key, or inside the management key, which
+// the upstream repeats as a gateway's error might, as it is or with JSON's \u escapes for each
+// character that is not ASCII, which are not among the forms the log removes.
+func TestUpstreamCaptureStoppedReadKeepsNoSecretStart(t *testing.T) {
+	const umlautKey = `p\u00e4sswort!Geheim-2024-xyz` // the key as JSON with \u escapes spells it
+	for _, tc := range []struct {
+		name, managementKey, secret, spelled string
+		in                                   int // how far into spelled the first MiB ends
+	}{
+		{"credential", cutSecret, captureKeyB, captureKeyB, 10},
+		{"config secret", cutSecret, cutSecret, cutSecret, 10},
+		{"config secret in escapes", "pässwort!Geheim-2024-xyz", "pässwort!Geheim-2024-xyz", umlautKey, 16},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const mark = "MARK repeated "
+			// The first MiB, which the provider reads of an error, ends tc.in bytes into the secret.
+			prefix := `{"error":{"type":"rate_limit","message":"`
+			// Words, not one run of a key's characters, which the log leaves out beside a cut.
+			fill := func(n int) string { return strings.Repeat("x ", n/2+1)[:n] }
+			reply := prefix + fill(1<<20-len(prefix)-len(mark)-tc.in) + mark + tc.spelled + fill(1<<20) + `"}}`
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				io.WriteString(w, reply)
+			}))
+			t.Cleanup(up.Close)
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.json")
+			b, _ := json.Marshal(map[string]any{
+				"listen":         "127.0.0.1:0",
+				"client_keys":    []string{clientKey},
+				"management_key": tc.managementKey,
+				"logs":           map[string]any{"request_log": true},
+				"extension": map[string]any{
+					"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+					"accounts": []any{map[string]any{"id": "stop", "settings": map[string]any{"base_url": up.URL + "/v1"},
+						"credential": map[string]any{"kind": "api_key", "api_key": captureKeyB}}},
+				},
+			})
+			os.WriteFile(cfgPath, b, 0o600)
+			base, _ := runCoreFile(t, cfgPath, noWatch...)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			resp := post(t, ctx, base, clientKey, `{"model":"gpt-cap","messages":[{"role":"user","content":"hi"}]}`)
+			io.Copy(io.Discard, resp.Body) // to its end: the log is written before the reply ends
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusTooManyRequests {
+				t.Fatalf("status %d, want the upstream's 429", resp.StatusCode)
+			}
+			text := readLog(t, dir, "v1-chat-completions-*.log")
+			resps := sections(text, "UPSTREAM RESPONSE")
+			if len(resps) == 0 {
+				t.Fatalf("no upstream response in the log:\n%.2000s", text)
+			}
+			for _, r := range resps {
+				if !strings.Contains(r, "Status: 429") || !strings.Contains(r, fill(64)) {
+					t.Errorf("the upstream response is not the error with its body:\n%.2000s", r)
+				}
+			parts:
+				for _, s := range []string{tc.secret, tc.spelled} {
+					for i := 0; i+4 <= len(s); i++ {
+						if j := strings.Index(r, s[i:i+4]); j >= 0 {
+							t.Errorf("the upstream response keeps part of the secret where the read stopped: %q",
+								r[max(0, j-40):min(len(r), j+40)])
+							break parts
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// A Devin reply that its upstream sends frame by frame, holding the stream open a moment after
+// its end frame, is logged whole: the extension reads on past the end frame to the body's end,
+// so the body is not taken for one whose read stopped, and the log does not leave out its end as
+// it would for a config secret's start, which here, with a character a key does not have, would
+// take all of a short reply.
+func TestUpstreamCaptureDevinReplyLoggedWhole(t *testing.T) {
+	srv := devintest.New(t)
+	srv.Chat = func(w http.ResponseWriter, r *http.Request, _ devintest.Request) {
+		devintest.Stream(w, r, 300*time.Millisecond, devintest.Text("devin-whole-"), devintest.Text("reply"),
+			devintest.Usage(11, 7), devintest.End(""))
+	}
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	b, _ := json.Marshal(map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": "mgmt@probe.example-key",
+		"logs":           map[string]any{"request_log": true},
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "devin", "pluxy-extension.json"),
+			"accounts": []any{map[string]any{"id": "devin", "models": []string{"swe-2"}, "settings": json.RawMessage(srv.Settings()),
+				"credential": map[string]any{"kind": "api_key", "api_key": srv.Token()}}},
+		},
+	})
+	os.WriteFile(cfgPath, b, 0o600)
+	base, _ := runCoreFile(t, cfgPath, noWatch...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	resp := post(t, ctx, base, clientKey, `{"model":"swe-2","messages":[{"role":"user","content":"hi"}]}`)
+	reply, _ := io.ReadAll(resp.Body) // to its end: the log is written before the reply ends
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(reply), "devin-whole-") {
+		t.Fatalf("request: %d %s", resp.StatusCode, reply)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "logs", "v1-chat-completions-*.log"))
+	if len(matches) != 1 {
+		t.Fatalf("request logs %v, want one", matches)
+	}
+	text, _ := os.ReadFile(matches[0])
+	resps := sections(string(text), "UPSTREAM RESPONSE")
+	if len(resps) != 1 || !strings.Contains(resps[0], "devin-whole-") || !strings.Contains(resps[0], "reply") ||
+		strings.Contains(resps[0], "not read past here") {
+		t.Errorf("the Devin reply is not logged whole:\n%v", resps)
+	}
 }

@@ -430,9 +430,29 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         std::thread::sleep(Duration::from_millis(1100));
         let token = confirm(app, &id, false)?;
         consume(app, &token)?;
+        // Confirm pressed while it is still disabled: the press waits for it, then confirms. A
+        // press that went at once would be dropped, and the dialog would wait out its lifetime.
+        std::thread::sleep(Duration::from_millis(1100));
+        let p = app
+            .state::<crate::App>()
+            .confirmations
+            .lock()
+            .unwrap()
+            .prepare_page(a.clone())?;
+        PAGE_MAPPED_DISABLED.store(false, std::sync::atomic::Ordering::SeqCst);
+        let id = super::page_start(app, p)?;
+        ui::wait_shown(app, text::CONFIRM_TITLE)?;
+        let waited = ui::waited();
+        let token = confirm(app, &id, false)?;
+        require(
+            PAGE_MAPPED_DISABLED.load(std::sync::atomic::Ordering::SeqCst)
+                && ui::waited() == waited + 1,
+            "a press on the delayed Confirm did not wait for it",
+        )?;
+        consume(app, &token)?;
         crate::native_test::log(
             "confirmations",
-            serde_json::json!({"passed": true, "close_box": cfg!(not(target_os = "linux")), "checks": ["confirm", "cancel", "page-spoof", "exact-native-gesture", "different-chain", "metadata", "replacement", "revoke", "page-flood-notice"]}),
+            serde_json::json!({"passed": true, "close_box": cfg!(not(target_os = "linux")), "checks": ["confirm", "cancel", "page-spoof", "exact-native-gesture", "different-chain", "metadata", "replacement", "revoke", "page-flood-notice", "press-waits-for-confirm"]}),
         );
         Ok(())
     })();

@@ -64,7 +64,9 @@ jobs:
         with:
           workspaces: next/app-tools -> target
           key: ${{ matrix.os }}
-          save-if: ${{ runner.environment == 'github-hosted' }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' }}
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # Unit tests with an empty temporary home, so no test can reach the runner's own.
@@ -136,6 +138,9 @@ jobs:
         with:
           workspaces: next/app-tools -> target
           key: wsl
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the Windows tests and the Linux programs
         run: |
           cargo test --locked -p wsl --test real_wsl --no-run

@@ -27,8 +27,9 @@ func cloneObservation(t testing.TB, o Observation) Observation {
 	return c
 }
 
-// setAt replaces the value at segs in place; the parents must exist.
-func setAt(t testing.TB, o Observation, segs []segment, v any) {
+// setAt replaces the value at segs in place and returns the value it replaced; the parents must
+// exist.
+func setAt(t testing.TB, o Observation, segs []segment, v any) any {
 	t.Helper()
 	var cur any = map[string]any(o)
 	for i, s := range segs {
@@ -36,20 +37,23 @@ func setAt(t testing.TB, o Observation, segs []segment, v any) {
 		switch c := cur.(type) {
 		case map[string]any:
 			if last {
+				old := c[s.key]
 				c[s.key] = v
-				return
+				return old
 			}
 			cur = c[s.key]
 		case []any:
 			if last {
+				old := c[s.index]
 				c[s.index] = v
-				return
+				return old
 			}
 			cur = c[s.index]
 		default:
 			t.Fatalf("setAt %s: no container at segment %d", formatPath(segs), i)
 		}
 	}
+	return nil
 }
 
 // nodePaths lists the path of every value in o, containers before their children.
@@ -86,10 +90,14 @@ func nodePaths(o Observation) [][]segment {
 func probeSurvivors(t testing.TB, want, got Observation, caseEx, globalEx []Exception) []string {
 	t.Helper()
 	var out []string
-	for _, segs := range nodePaths(got) {
-		probe := cloneObservation(t, got)
-		setAt(t, probe, segs, probeValue)
-		if Judge(want, probe, caseEx, globalEx).OK() {
+	// One copy, probed one value at a time and put back after each probe: copying the whole
+	// observation for every value made large cases take tens of seconds.
+	probe := cloneObservation(t, got)
+	for _, segs := range nodePaths(probe) {
+		old := setAt(t, probe, segs, probeValue)
+		ok := Judge(want, probe, caseEx, globalEx).OK()
+		setAt(t, probe, segs, old)
+		if ok {
 			out = append(out, formatPath(segs))
 		}
 	}
@@ -172,6 +180,7 @@ func TestProbeWithoutExceptionsRejectsEverything(t *testing.T) {
 	_, cases := loadCorpus(t)
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			ref := recordedOf(t, c)
 			if got := probeSurvivors(t, ref, ref, nil, nil); len(got) > 0 {
 				t.Errorf("probes survived with no exceptions at: %s", strings.Join(got, ", "))

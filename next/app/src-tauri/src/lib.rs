@@ -67,7 +67,7 @@ pub mod recovery;
 pub mod release;
 #[cfg(debug_assertions)]
 pub mod release_config;
-#[cfg(all(target_os = "linux", feature = "native-test"))]
+#[cfg(feature = "native-test")]
 mod release_native;
 #[cfg(native_stack)]
 pub mod route;
@@ -77,13 +77,12 @@ pub mod savefile;
 pub mod spawn;
 mod startup;
 pub mod trust;
-#[cfg(all(target_os = "linux", feature = "native-test"))]
+#[cfg(feature = "native-test")]
 mod update_native;
-#[cfg(unix)]
 mod updater;
 mod updates;
 pub mod vault;
-#[cfg(all(windows, feature = "artifact-test-trust"))]
+#[cfg(windows)]
 mod win_acl;
 pub mod window;
 
@@ -172,8 +171,7 @@ struct App {
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
     rotation_open: AtomicBool,
-    /// The app's own update (`updater.rs`).
-    #[cfg(unix)]
+    /// The app's own update (`updater/`).
     updater: updater::State,
 }
 
@@ -2989,6 +2987,13 @@ fn asset_queue() -> &'static SyncSender<AssetJob> {
     })
 }
 
+/// A device page file's CSP, as core's pages site: sandboxed with scripts, loading only from the
+/// asset scheme, given as source (`pages::asset_source`; there this webview gets only its own
+/// folder), and no requests from script, frames or forms.
+fn asset_csp(s: &str) -> String {
+    format!("sandbox allow-scripts; default-src 'none'; script-src {s}; style-src {s}; img-src {s} data: blob:; font-src {s} data:; media-src {s} data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'")
+}
+
 fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static str)>) {
     #[cfg(feature = "native-test")]
     native_test::log(
@@ -2997,16 +3002,19 @@ fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static st
     );
     #[cfg(not(feature = "native-test"))]
     let _ = (&job.label, &job.path);
+    job.responder.respond(asset_response(status, found));
+}
+
+/// The asset scheme's answer: found's bytes and type with status, under the asset CSP for this
+/// system's asset scheme (`asset_csp`) when found.
+fn asset_response(status: u16, found: Option<(Vec<u8>, &'static str)>) -> Response<Vec<u8>> {
     let (body, kind) = found.unwrap_or((Vec::new(), "text/plain"));
-    // As core's pages site: sandboxed with scripts, loading only from the asset scheme (where
-    // this webview gets only its own folder), and no requests from script, frames or forms.
-    let s = device::ASSET_SCHEME;
     let csp = if status == 200 {
-        format!("sandbox allow-scripts; default-src 'none'; script-src {s}:; style-src {s}:; img-src {s}: data: blob:; font-src {s}: data:; media-src {s}: data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'")
+        asset_csp(&pages::asset_source(&device::asset_base()))
     } else {
         "sandbox; default-src 'none'".to_string()
     };
-    let resp = Response::builder()
+    Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, kind)
         .header("Content-Security-Policy", csp)
@@ -3016,8 +3024,7 @@ fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static st
         .header("X-Content-Type-Options", "nosniff")
         .header("Referrer-Policy", "no-referrer")
         .body(body)
-        .expect("a response");
-    job.responder.respond(resp);
+        .expect("a response")
 }
 
 /// The `pluxy-page:` scheme: the page webviews' app document and their way to the window.
@@ -3140,18 +3147,15 @@ pub fn run() {
     let context = tauri::generate_context!();
     // The updater plugin exists only when the updater gate passes, before anything else runs: a
     // build without updater trust never loads it.
-    #[cfg(unix)]
     let gate = trust::updater_gate(
         context.config(),
         std::path::Path::new(&std::env::var_os("HOME").unwrap_or_default()),
     );
     let builder = tauri::Builder::default();
-    #[cfg(unix)]
     let builder = match &gate {
         Ok(key) => builder.plugin(tauri_plugin_updater::Builder::new().pubkey(key).build()),
         Err(_) => builder,
     };
-    #[cfg(unix)]
     let updater_plugin = gate.map(|_| ());
     let app = builder
         .invoke_handler(tauri::generate_handler![
@@ -3220,13 +3224,9 @@ pub fn run() {
             window_close,
             privacy_get,
             privacy_set,
-            #[cfg(unix)]
             updater::app_update_get,
-            #[cfg(unix)]
             updater::app_update_start,
-            #[cfg(unix)]
             updater::app_update_cancel,
-            #[cfg(unix)]
             updater::app_update_rollback,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
@@ -3312,6 +3312,7 @@ pub fn run() {
             if let Some(w) = &access_store.warning {
                 eprintln!("pluxy-app: {w}");
             }
+            #[cfg(not(windows))]
             let data = app.path().app_data_dir()?;
             // The files that hold secrets: connection.json (a kept management key) and the app's
             // own core's folder (its config holds the core's management key, and the core keeps
@@ -3326,6 +3327,13 @@ pub fn run() {
             let core = secrets.join("core");
             #[cfg(not(windows))]
             let core = data.join("core");
+            // The app's own core versions: on Windows in the local application data too, so the
+            // programs (a core and its packages per version) stay on this machine and are not
+            // copied to the roaming profile's server; `cores.rs` refuses a store off a fixed
+            // local drive.
+            #[cfg(windows)]
+            let cores = secrets.join("cores");
+            #[cfg(not(windows))]
             let cores = data.join("cores");
             // When the app's core exits, the tray and the window show it. Off this thread: the
             // exit may come while a connection change holds the connection.
@@ -3422,7 +3430,6 @@ pub fn run() {
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
                 rotation_open: AtomicBool::new(false),
-                #[cfg(unix)]
                 updater: updater::State::new(updater_plugin.clone()),
             });
             let handle = app.handle().clone();
@@ -3516,9 +3523,7 @@ pub fn run() {
                 show_in_dock(&handle, false);
             }
             // A version an update installed accepts itself, which the earlier one waits for.
-            #[cfg(unix)]
             updater::accept(&handle);
-            #[cfg(unix)]
             updater::record_started_from(&handle);
             #[cfg(feature = "native-test")]
             native_test::start(handle);
@@ -3595,6 +3600,49 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_device_page_loads_its_files_from_the_asset_scheme_as_served() {
+        // Linux and macOS serve the asset scheme by its name; Windows as an http origin. The
+        // answer the scheme gives here is held to this system's.
+        let here = if cfg!(any(windows, target_os = "android")) {
+            "http://pluxy-app.localhost/"
+        } else {
+            "pluxy-app://localhost/"
+        };
+        assert_eq!(device::asset_base(), here);
+        let served = asset_response(200, Some((b"<p>".to_vec(), "text/html")));
+        let served = served.headers()["Content-Security-Policy"]
+            .to_str()
+            .unwrap();
+        for (base, source) in [
+            ("pluxy-app://localhost/", "pluxy-app:"),
+            ("http://pluxy-app.localhost/", "http://pluxy-app.localhost"),
+        ] {
+            let csp = if base == here {
+                served.to_string()
+            } else {
+                asset_csp(&pages::asset_source(base))
+            };
+            for directive in [
+                "script-src",
+                "style-src",
+                "img-src",
+                "font-src",
+                "media-src",
+            ] {
+                let listed = csp
+                    .split(';')
+                    .map(str::trim)
+                    .find_map(|d| d.strip_prefix(directive))
+                    .unwrap_or_default();
+                assert!(
+                    listed.split_whitespace().any(|s| s == source),
+                    "{directive} does not list {source}: {csp}"
+                );
+            }
+        }
+    }
 
     fn managed(state: &'static str, version: u64) -> View {
         View {
@@ -3737,7 +3785,6 @@ mod tests {
         ] {
             assert!(all.iter().any(|a| a == c), "{c} missing from {all:?}");
         }
-        #[cfg(unix)]
         assert!(all.iter().any(|a| a == "plugin:updater|check"));
         assert!(all.iter().all(|c| !c.contains("__app-acl__")));
         assert!(all.len() > 100, "{} plugin commands", all.len());

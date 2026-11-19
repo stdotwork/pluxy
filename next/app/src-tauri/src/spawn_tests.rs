@@ -1339,6 +1339,202 @@ fn on_macos_a_launch_from_a_folder_the_admin_group_may_write_starts() {
     assert!(ran, "the launch did not run");
 }
 
+/// A terminal launch as confirmed: the terminal, and the program it runs, opened and as the
+/// launch names it.
+#[cfg(unix)]
+struct InTerminal {
+    plain: Plain,
+    program: File,
+    named: PathBuf,
+}
+
+#[cfg(unix)]
+impl Opened for InTerminal {
+    fn executable(&self) -> &File {
+        &self.plain.executable
+    }
+    fn cwd(&self) -> &File {
+        &self.plain.cwd
+    }
+    fn program(&self) -> Option<(&File, &Path)> {
+        Some((&self.program, &self.named))
+    }
+    fn recheck(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// A shell script at p running body, which only its owner may change or run.
+#[cfg(unix)]
+fn script(p: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(p, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+/// A folder at p with mode.
+#[cfg(unix)]
+fn mode_dir(p: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir(p).unwrap();
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// A detached launch in dir of terminal, a stand-in terminal script running body (its arguments:
+/// the file `go` in dir, then args), with program named as the program it runs.
+#[cfg(unix)]
+fn in_terminal(dir: &Path, body: &str, program: &Path, args: &[&Path]) -> Launch {
+    let terminal = dir.join("terminal");
+    script(&terminal, body);
+    let mut argv = vec![dir.join("go").to_string_lossy().into_owned()];
+    argv.extend(args.iter().map(|a| a.to_string_lossy().into_owned()));
+    Launch {
+        opened: Box::new(InTerminal {
+            plain: Plain {
+                executable: File::open(&terminal).unwrap(),
+                cwd: open_dir(dir),
+            },
+            program: File::open(program).unwrap(),
+            named: program.to_path_buf(),
+        }),
+        named: terminal,
+        argv,
+        lifetime: Lifetime::Detached,
+        request: Request::default(),
+        secrets: vec![],
+        stdin: None,
+    }
+}
+
+/// A terminal as Linux's run a launch's program: once the file go exists, by its path, as
+/// `<program> <out>` after the flag `-e`.
+#[cfg(unix)]
+const BY_PATH: &str = r#"go=$1; shift 2; while [ ! -e "$go" ]; do sleep 0.05; done; exec "$@""#;
+
+/// Another file renamed over p, as another user who may write its folder could: it writes
+/// `swapped` to its first argument.
+#[cfg(unix)]
+fn swap(p: &Path) {
+    let new = p.with_extension("new");
+    script(&new, r#"echo swapped > "$1""#);
+    std::fs::rename(&new, p).unwrap();
+}
+
+/// What file p holds once it exists, within 20 seconds.
+#[cfg(unix)]
+fn wait_for(p: &Path) -> Option<String> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !p.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::fs::read_to_string(p).ok()
+}
+
+/// A terminal runs a launch's program by its path, while it starts, after every check of the
+/// app's: a program another user could swap in that time (here, in a folder anyone may write) is
+/// refused, and nothing runs.
+#[cfg(unix)]
+#[test]
+fn a_terminal_launchs_program_another_user_could_swap_is_refused() {
+    let dir = folder("swap");
+    let open = dir.join("open");
+    mode_dir(&open, 0o777);
+    let program = open.join("agent");
+    script(&program, r#"echo checked > "$1""#);
+    let out = dir.join("out");
+    let l = in_terminal(&dir, BY_PATH, &program, &[Path::new("-e"), &program, &out]);
+    let r = detached(&l, "p", &By(none));
+    swap(&program);
+    std::fs::write(dir.join("go"), "").unwrap();
+    let ran = r.is_ok().then(|| wait_for(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+    let e = r.expect_err(&format!("the launch started, and its terminal ran {ran:?}"));
+    assert!(
+        e.starts_with(&format!("{} may be changed by other users", open.display())),
+        "{e}"
+    );
+}
+
+/// On Linux the terminal resolves the program's path itself: each folder and link on the way must
+/// be one only root or the person can change. A program reached through the person's own link (as
+/// `~/.local/bin/claude`) starts; through a link in, or to, a folder anyone may write, it is
+/// refused, naming that folder.
+#[cfg(target_os = "linux")]
+#[test]
+fn on_linux_a_terminal_launchs_program_is_checked_along_its_links() {
+    use std::os::unix::fs::symlink;
+    let dir = folder("links");
+    let (versions, bin, open) = (dir.join("versions"), dir.join("bin"), dir.join("open"));
+    mode_dir(&versions, 0o755);
+    mode_dir(&bin, 0o755);
+    mode_dir(&open, 0o777);
+    script(&versions.join("agent"), r#"echo checked > "$1""#);
+    symlink("../versions/agent", bin.join("agent")).unwrap();
+    symlink("../versions/agent", open.join("agent")).unwrap();
+    script(&open.join("real"), r#"echo checked > "$1""#);
+    symlink("../open/real", bin.join("other")).unwrap();
+    let out = dir.join("out");
+    let run = |program: &Path| {
+        let l = in_terminal(&dir, BY_PATH, program, &[Path::new("-e"), program, &out]);
+        detached(&l, "p", &By(none))
+    };
+    let own = run(&bin.join("agent"));
+    std::fs::write(dir.join("go"), "").unwrap();
+    let ran = wait_for(&out);
+    let in_open = run(&open.join("agent"));
+    let to_open = run(&bin.join("other"));
+    let _ = std::fs::remove_dir_all(&dir);
+    own.unwrap();
+    assert_eq!(ran.as_deref(), Some("checked\n"));
+    for r in [in_open, to_open] {
+        let e = r.expect_err("a program another user could redirect started");
+        assert!(
+            e.starts_with(&format!("{} may be changed by other users", open.display())),
+            "{e}"
+        );
+    }
+}
+
+/// On macOS the terminal is the execution program, which runs the program in the window from the
+/// descriptor the app gives it (3): the file the app checked, even once another file has been
+/// renamed over its path. A program below a folder the `admin` group may write starts.
+#[cfg(target_os = "macos")]
+#[test]
+fn on_macos_a_terminal_launch_gets_the_checked_program_as_descriptor_3() {
+    let dir = folder("fd");
+    let bin = dir.join("bin");
+    mode_dir(&bin, 0o775);
+    let out = std::process::Command::new("/usr/bin/chgrp")
+        .arg("admin")
+        .arg(&bin)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "chgrp admin (the test's user must be in admin): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let program = bin.join("agent");
+    script(&program, r#"echo checked > "$1""#);
+    let copy = dir.join("copy");
+    let l = in_terminal(
+        &dir,
+        r#"while [ ! -e "$1" ]; do sleep 0.05; done; cat <&3 > "$2.part" && mv "$2.part" "$2""#,
+        &program,
+        &[&copy],
+    );
+    let r = detached(&l, "p", &By(none));
+    swap(&program);
+    std::fs::write(dir.join("go"), "").unwrap();
+    let got = r.is_ok().then(|| wait_for(&copy));
+    let _ = std::fs::remove_dir_all(&dir);
+    r.unwrap();
+    assert_eq!(
+        got.flatten().as_deref(),
+        Some("#!/bin/sh\necho checked > \"$1\"\n")
+    );
+}
+
 #[test]
 fn an_open_launch_gets_only_the_absolute_path_entries() {
     // Windows separates PATH's entries with `;`, and an absolute one names its drive.

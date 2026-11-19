@@ -241,7 +241,9 @@ fn check_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn windows_refuses(name: &str) -> bool {
+/// Whether name is one Windows paths cannot name plainly (see `check_name`); the core store's
+/// unpacking refuses such names too (`cores.rs`).
+pub(crate) fn windows_refuses(name: &str) -> bool {
     windows_device(name)
         || name.ends_with(['.', ' '])
         || name
