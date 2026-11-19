@@ -17,6 +17,8 @@ const defaultMaxTokens = 32000
 
 type encoder struct {
 	losses []llm.Loss
+	// keepModelTurn: the conversation's trailing assistant turns are kept (EncodeOptions).
+	keepModelTurn bool
 }
 
 func (e *encoder) lose(kind, path, detail string) {
@@ -128,7 +130,21 @@ type outMessage struct {
 // conversation then gets the repairs RepairTurns describes, each reported. It does not look at
 // req.Native; callers that can pass the native body through do so first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
-	e := &encoder{}
+	return EncodeRequestWith(req, EncodeOptions{})
+}
+
+// EncodeOptions changes how EncodeRequestWith builds a body.
+type EncodeOptions struct {
+	// KeepModelTurn keeps the conversation's trailing assistant turns on every model: they are
+	// the end of the conversation, not a prefill the reply continues. It is for requests that
+	// Anthropic takes ending on the model's turn, such as on-demand compaction; a generation
+	// leaves it off. Every other repair still runs.
+	KeepModelTurn bool
+}
+
+// EncodeRequestWith builds a Messages request body as EncodeRequest does, changed by opts.
+func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
+	e := &encoder{keepModelTurn: opts.KeepModelTurn}
 	o := req.Options
 	out := map[string]any{"model": req.Model, "stream": req.Stream}
 	if o.MaxOutputTokens != nil {

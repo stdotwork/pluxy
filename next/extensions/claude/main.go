@@ -477,6 +477,12 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 }
 
 func buildBodyWithTTL(req llm.Request, cacheTTL string) ([]byte, *llm.Translation, error) {
+	return buildBodyWith(req, cacheTTL, anthropicmessages.EncodeOptions{})
+}
+
+// buildBodyWith builds the body as buildBodyWithTTL does, encoding a request in another format
+// with opts (anthropicmessages.EncodeRequestWith).
+func buildBodyWith(req llm.Request, cacheTTL string, opts anthropicmessages.EncodeOptions) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatAnthropicMessages}
 	if n := req.Native; n != nil {
 		tr.From = n.Format
@@ -510,7 +516,7 @@ func buildBodyWithTTL(req llm.Request, cacheTTL string) ([]byte, *llm.Translatio
 			return body, tr, nil
 		}
 	}
-	body, losses, err := anthropicmessages.EncodeRequest(req)
+	body, losses, err := anthropicmessages.EncodeRequestWith(req, opts)
 	if err != nil {
 		return nil, nil, err
 	}

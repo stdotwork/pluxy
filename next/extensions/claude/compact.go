@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -56,21 +57,10 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	// A conversation that ends on the model's turn is summarized with that turn: Anthropic takes
 	// one on a compaction request (its docs' compaction loop sends one to Claude Opus 5.5), though
-	// the Messages encoder drops it for the models that refuse prefill on a generation. A
-	// placeholder user turn keeps it through the encoder and is taken out again.
-	placeholder := endsOnModelTurn(req.Items)
-	if placeholder {
-		req.Items = append(req.Items, llm.Item{Type: llm.ItemTypeMessage, Role: llm.RoleUser, TextContent: true,
-			Content: []llm.Part{{Type: llm.PartText, Text: compactPlaceholder}}})
-	}
-	body, _, err := buildBodyWithTTL(req, s.CacheTTL)
+	// the Messages encoder drops it as a prefill on a generation for the models that refuse one.
+	body, _, err := buildBodyWith(req, s.CacheTTL, anthropicmessages.EncodeOptions{KeepModelTurn: true})
 	if err != nil {
 		return err
-	}
-	if placeholder {
-		if body, err = dropPlaceholder(body); err != nil {
-			return err
-		}
 	}
 	if s.RebuildMidSystemMessage {
 		if body, err = moveSystemMessages(body); err != nil {
@@ -123,50 +113,6 @@ func compactionRequest(call llm.Request) (llm.Request, error) {
 		req.Options.ToolChoice = nil
 	}
 	return req, nil
-}
-
-// compactPlaceholder is the text of the user turn compact adds after a conversation that ends
-// on the model's turn, and takes out once the body is built.
-const compactPlaceholder = "pluxy compaction placeholder 7f3c2a9e"
-
-// endsOnModelTurn reports whether a conversation ends on the model's reply: an assistant message
-// or reasoning. A tool call left without its result is not one: the encoder adds the missing
-// result as a user turn.
-func endsOnModelTurn(items []llm.Item) bool {
-	if len(items) == 0 {
-		return false
-	}
-	last := items[len(items)-1]
-	switch last.Type {
-	case llm.ItemTypeMessage:
-		return last.Role == llm.RoleAssistant
-	case llm.ItemTypeReasoning:
-		return true
-	}
-	return false
-}
-
-// dropPlaceholder takes the placeholder user turn back out of a built Messages body: it must be
-// the last message, alone.
-func dropPlaceholder(body []byte) ([]byte, error) {
-	var m map[string]json.RawMessage
-	var msgs []struct {
-		Role    string `json:"role"`
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	var raw []json.RawMessage
-	if json.Unmarshal(body, &m) != nil || json.Unmarshal(m["messages"], &raw) != nil || json.Unmarshal(m["messages"], &msgs) != nil || len(msgs) < 2 {
-		return nil, fmt.Errorf("compaction: the built body has no conversation to take the placeholder from")
-	}
-	last := msgs[len(msgs)-1]
-	if last.Role != llm.RoleUser || len(last.Content) != 1 || last.Content[0].Type != "text" || last.Content[0].Text != compactPlaceholder {
-		return nil, fmt.Errorf("compaction: the built body does not end on the placeholder user turn")
-	}
-	m["messages"], _ = json.Marshal(raw[:len(raw)-1])
-	return json.Marshal(m)
 }
 
 // compactionBody makes a Messages body a compaction request: it adds the compaction parameter

@@ -128,9 +128,8 @@ func TestCompactThroughExtension(t *testing.T) {
 	var msgs []struct {
 		Role string `json:"role"`
 	}
-	if json.Unmarshal(sent["messages"], &msgs) != nil || len(msgs) == 0 || msgs[len(msgs)-1].Role != "assistant" ||
-		strings.Contains(string(reqs[0].Body), compactPlaceholder) {
-		t.Errorf("upstream messages %s; want them to end on the assistant's reply, with no placeholder", sent["messages"])
+	if json.Unmarshal(sent["messages"], &msgs) != nil || len(msgs) == 0 || msgs[len(msgs)-1].Role != "assistant" {
+		t.Errorf("upstream messages %s; want them to end on the assistant's reply", sent["messages"])
 	}
 	if !strings.Contains(string(sent["tools"]), `"shell"`) {
 		t.Errorf("upstream tools = %s, want the shell tool", sent["tools"])
@@ -239,8 +238,7 @@ func TestCompactionBody(t *testing.T) {
 	}
 }
 
-// A conversation that ends on a tool's output (a user turn on Claude) goes as it is, with no
-// placeholder to take out.
+// A conversation that ends on a tool's output (a user turn on Claude) goes as it is.
 func TestCompactEndingOnToolOutput(t *testing.T) {
 	srv := claudetest.New(t)
 	srv.Messages = func(w http.ResponseWriter, r *http.Request, req claudetest.Request) {
@@ -265,7 +263,7 @@ func TestCompactEndingOnToolOutput(t *testing.T) {
 	}
 	got := srv.Requests()[0].Body
 	if json.Unmarshal(got, &sent) != nil || len(sent.Messages) != 3 || sent.Messages[2].Role != "user" ||
-		len(sent.Messages[2].Content) != 1 || sent.Messages[2].Content[0].Type != "tool_result" || strings.Contains(string(got), compactPlaceholder) {
-		t.Errorf("upstream body %s; want the conversation ending on the tool result, with no placeholder", got)
+		len(sent.Messages[2].Content) != 1 || sent.Messages[2].Content[0].Type != "tool_result" {
+		t.Errorf("upstream body %s; want the conversation ending on the tool result", got)
 	}
 }
