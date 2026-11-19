@@ -67,12 +67,13 @@ func TestKeepAliveComments(t *testing.T) {
 	}
 }
 
-// Writes more often than the interval keep the comments away.
+// Writes more often than the interval keep the comments away. The writes span three intervals,
+// so a write that did not put the comment off would let one through.
 func TestKeepAliveNotWhileWriting(t *testing.T) {
-	shortKeepAlive(t, 400*time.Millisecond)
+	shortKeepAlive(t, 200*time.Millisecond)
 	rec := httptest.NewRecorder()
 	k := startKeepAlive(rec, http.NewResponseController(rec))
-	for range 10 {
+	for range 30 {
 		time.Sleep(20 * time.Millisecond)
 		if _, err := k.Write([]byte("data: {}\n\n")); err != nil {
 			t.Fatal(err)
@@ -80,7 +81,7 @@ func TestKeepAliveNotWhileWriting(t *testing.T) {
 	}
 	k.stop()
 	if strings.Contains(rec.Body.String(), keepAliveComment) {
-		t.Errorf("a comment between writes 20ms apart, with 400ms before one: %q", rec.Body.String())
+		t.Errorf("a comment between writes 20ms apart, with 200ms before one: %q", rec.Body.String())
 	}
 }
 

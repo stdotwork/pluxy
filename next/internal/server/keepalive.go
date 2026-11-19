@@ -12,7 +12,9 @@ import (
 // model can think for minutes without a word. Tests shorten it.
 var keepAliveAfter = 15 * time.Second
 
-// keepAliveComment is what core writes. Every SSE reader ignores a line that starts with a colon.
+// keepAliveComment is what core writes. The SSE format makes a line that starts with a colon a
+// comment, which readers that follow it skip; Google's Python Gemini SDK does not, so the Gemini
+// route gets none.
 const keepAliveComment = ": keep-alive\n\n"
 
 // keepAlive writes a streamed reply's bytes to the client and, whenever keepAliveAfter passes with
