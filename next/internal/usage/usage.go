@@ -80,6 +80,9 @@ type Event struct {
 	// Provider is the extension the last attempt went to, Account its account.
 	Provider string `json:"provider,omitempty"`
 	Account  string `json:"account,omitempty"`
+	// ChainStep is the step of the model's fallback chain the last attempt was for, from 1;
+	// absent for a model with no chain.
+	ChainStep int `json:"chain_step,omitempty"`
 	// KeyID identifies the client key the request came with, as the management API lists client
 	// keys; empty with no client keys set.
 	KeyID string `json:"key_id,omitempty"`

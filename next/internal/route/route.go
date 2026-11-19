@@ -144,7 +144,7 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("routing.quota_response_mode %q: want %q or %q", c.QuotaResponseMode, QuotaRetryable, QuotaUsageLimit)
 	}
-	return validateChains(c.Chains)
+	return ValidateChains(c.Chains)
 }
 
 // Stream is the reply to a request: events until one terminal event.

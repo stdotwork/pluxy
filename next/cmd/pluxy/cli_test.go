@@ -94,6 +94,32 @@ func TestEveryRouteHasACommand(t *testing.T) {
 	}
 }
 
+// chain set reads each step as model[@provider][:account,account].
+func TestParseStep(t *testing.T) {
+	for _, c := range []struct {
+		in, model, provider string
+		accounts            []string
+		bad                 bool
+	}{
+		{in: "gpt-6.1-sol", model: "gpt-6.1-sol"},
+		{in: "claude-opus-5-5@pluxy/claude", model: "claude-opus-5-5", provider: "pluxy/claude"},
+		{in: "claude-opus-5-5@pluxy/claude:a,b", model: "claude-opus-5-5", provider: "pluxy/claude", accounts: []string{"a", "b"}},
+		{in: "claude-opus-5-5:a", model: "claude-opus-5-5", accounts: []string{"a"}},
+		{in: "llama3:8b@", model: "llama3:8b"},
+		{in: "@pluxy/claude", bad: true},
+		{in: "opus:", bad: true},
+		{in: "opus:a,,b", bad: true},
+	} {
+		s, err := parseStep(c.in)
+		switch {
+		case c.bad && err == nil:
+			t.Errorf("parseStep(%q) = %+v, want an error", c.in, s)
+		case !c.bad && (err != nil || s.Model != c.model || s.Provider != c.provider || !slices.Equal(s.Accounts, c.accounts)):
+			t.Errorf("parseStep(%q) = %+v, %v; want %s, %q, %v", c.in, s, err, c.model, c.provider, c.accounts)
+		}
+	}
+}
+
 // Exit codes and output of the client subcommands against a fake core.
 func TestCLIOutput(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

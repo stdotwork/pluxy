@@ -162,6 +162,29 @@ func (c *Client) ResetCooldowns(ctx context.Context, id string) (CooldownResetRe
 	return v, err
 }
 
+// Chains is GET /chains: the fallback chains.
+func (c *Client) Chains(ctx context.Context) (ChainsReply, error) {
+	var out ChainsReply
+	err := c.get(ctx, "/chains", nil, &out)
+	return out, err
+}
+
+// SetChain is PUT /chains/{name}: name's fallback chain becomes steps.
+func (c *Client) SetChain(ctx context.Context, name string, steps []ChainStep) (Chain, error) {
+	var out Chain
+	_, err := c.Call(ctx, http.MethodPut, ChainPath(name), nil, ChainRequest{Steps: steps}, &out)
+	return out, err
+}
+
+// RemoveChain is DELETE /chains/{name}: name goes back to the default, one provider's accounts.
+func (c *Client) RemoveChain(ctx context.Context, name string) error {
+	_, err := c.Call(ctx, http.MethodDelete, ChainPath(name), nil, nil, nil)
+	return err
+}
+
+// ChainPath is the path of name's chain, its name escaped as one path segment.
+func ChainPath(name string) string { return "/chains/" + url.PathEscape(name) }
+
 // Route is GET /route: what a request for model would do now, sent to no one.
 func (c *Client) Route(ctx context.Context, model string) (RouteReply, error) {
 	var out RouteReply

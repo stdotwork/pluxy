@@ -73,7 +73,8 @@ func ValidateChain(name string, steps []Step, chains map[string][]Step) error {
 	return nil
 }
 
-func validateChains(chains map[string][]Step) error {
+// ValidateChains checks every chain of chains, as ValidateChain does.
+func ValidateChains(chains map[string][]Step) error {
 	names := make([]string, 0, len(chains))
 	for n := range chains {
 		names = append(names, n)

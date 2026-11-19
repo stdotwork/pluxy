@@ -37,8 +37,10 @@ const (
 // command is one client subcommand: the words that name it, its arguments, the management
 // calls it makes (as the API's patterns, which the route table test checks) and what it does.
 type command struct {
-	words   string
-	args    []string
+	words string
+	args  []string
+	// more: the last argument may be given more than once (at least once).
+	more    bool
 	routes  []string
 	summary string
 	// flags adds the command's own flags.
@@ -262,12 +264,23 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.RouteReply
 			return x.call(http.MethodGet, "/route", url.Values{"model": {x.args[0]}}, nil, &r, func() {
+				chain := len(r.Chain) > 0
+				if chain {
+					x.printf("chain %s: %s\n\n", r.Model, chainText(r.Chain))
+				}
+				// With a chain, each account's step leads its row.
+				row := func(step string, cells ...string) []string {
+					if !chain {
+						return cells
+					}
+					return append([]string{step}, cells...)
+				}
 				if len(r.Order) == 0 {
 					x.printf("no account would be tried for %s\n", r.Model)
 				} else {
-					rows := [][]string{{"TRY", "PUBLIC ID", "ID", "PROVIDER", "MODEL"}}
+					rows := [][]string{row("STEP", "TRY", "PUBLIC ID", "ID", "PROVIDER", "MODEL")}
 					for i, s := range r.Order {
-						rows = append(rows, []string{strconv.Itoa(i + 1), s.Account, s.ID, s.Provider, s.Model})
+						rows = append(rows, row(strconv.Itoa(s.Step), strconv.Itoa(i+1), s.Account, s.ID, s.Provider, s.Model))
 					}
 					x.table(rows)
 				}
@@ -275,15 +288,52 @@ var commands = []command{
 					return
 				}
 				x.printf("\nleft out:\n")
-				rows := [][]string{{"PUBLIC ID", "ID", "STATE", "UNTIL"}}
+				rows := [][]string{row("STEP", "PUBLIC ID", "ID", "STATE", "UNTIL")}
 				for _, l := range r.LeftOut {
 					until := "-"
 					if l.Until != nil {
 						until = l.Until.Local().Format(time.DateTime)
 					}
-					rows = append(rows, []string{l.Account, l.ID, l.State, until})
+					rows = append(rows, row(strconv.Itoa(l.Step), l.Account, l.ID, l.State, until))
 				}
 				x.table(rows)
+			})
+		}},
+	{words: "chain list", routes: []string{"GET /chains"}, summary: "the fallback chains",
+		run: func(x *invocation) error {
+			var r management.ChainsReply
+			return x.call(http.MethodGet, "/chains", nil, nil, &r, func() {
+				if len(r.Chains) == 0 {
+					x.printf("no chains: each model is served by the accounts of one provider\n")
+					return
+				}
+				rows := [][]string{{"NAME", "STEPS"}}
+				for _, c := range r.Chains {
+					rows = append(rows, []string{c.Name, chainText(c.Steps)})
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "chain set", args: []string{"name", "step"}, more: true, routes: []string{"PUT /chains/{name}"},
+		summary: "set a model name's fallback chain; a step is model[@provider][:account,account]",
+		run: func(x *invocation) error {
+			var steps []management.ChainStep
+			for _, a := range x.args[1:] {
+				s, err := parseStep(a)
+				if err != nil {
+					return err
+				}
+				steps = append(steps, s)
+			}
+			var r management.Chain
+			return x.call(http.MethodPut, management.ChainPath(x.args[0]), nil, management.ChainRequest{Steps: steps}, &r, func() {
+				x.printf("chain %s: %s\n", r.Name, chainText(r.Steps))
+			})
+		}},
+	{words: "chain remove", args: []string{"name"}, routes: []string{"DELETE /chains/{name}"}, summary: "remove a fallback chain: the name goes back to one provider's accounts",
+		run: func(x *invocation) error {
+			return x.call(http.MethodDelete, management.ChainPath(x.args[0]), nil, nil, nil, func() {
+				x.printf("chain %s removed\n", x.args[0])
 			})
 		}},
 	accountSwitch("enable", false, "turn an account on"),
@@ -516,6 +566,41 @@ func validThemePart(s string) bool {
 	return true
 }
 
+// chainText writes a chain's steps as chain set takes them.
+func chainText(steps []management.ChainStep) string {
+	parts := make([]string, len(steps))
+	for i, s := range steps {
+		parts[i] = s.String()
+	}
+	return strings.Join(parts, " -> ")
+}
+
+// parseStep reads a step as chain set takes it: model[@provider][:account,account]. The model
+// ends at the first @; without one, at the last colon, so a model whose name holds a colon is
+// written with an @ after it (llama3:8b@ for any provider).
+func parseStep(s string) (management.ChainStep, error) {
+	step := management.ChainStep{Model: s}
+	accounts, hasAccounts := "", false
+	if model, after, ok := strings.Cut(s, "@"); ok {
+		step.Model = model
+		step.Provider, accounts, hasAccounts = strings.Cut(after, ":")
+	} else if i := strings.LastIndexByte(s, ':'); i >= 0 {
+		step.Model, accounts, hasAccounts = s[:i], s[i+1:], true
+	}
+	if hasAccounts {
+		for _, a := range strings.Split(accounts, ",") {
+			if a == "" {
+				return step, usageError(fmt.Sprintf("step %q: an account ID is empty", s))
+			}
+			step.Accounts = append(step.Accounts, a)
+		}
+	}
+	if step.Model == "" {
+		return step, usageError(fmt.Sprintf("step %q names no model", s))
+	}
+	return step, nil
+}
+
 func cmpOr(a, b string) string {
 	if a != "" {
 		return a
@@ -603,6 +688,18 @@ func printFlat(x *invocation, v any) {
 	x.table(rows)
 }
 
+// argsUsage is how help and usage errors write cmd's arguments.
+func argsUsage(cmd *command) string {
+	out := ""
+	for _, a := range cmd.args {
+		out += " <" + a + ">"
+	}
+	if cmd.more {
+		out += "..."
+	}
+	return out
+}
+
 // find returns the command args start with, and the arguments after its words.
 func find(args []string) (*command, []string) {
 	var best *command
@@ -623,14 +720,12 @@ func help(w io.Writer, prefix string) {
 	fmt.Fprintln(w, "       pluxy <command> [--json] [--config file | --url address --key key]")
 	fmt.Fprintln(w)
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	for _, c := range commands {
+	for i := range commands {
+		c := &commands[i]
 		if !strings.HasPrefix(c.words+" ", prefix) {
 			continue
 		}
-		line := c.words
-		for _, a := range c.args {
-			line += " <" + a + ">"
-		}
+		line := c.words + argsUsage(c)
 		fmt.Fprintf(tw, "  %s\t%s\n", line, c.summary)
 	}
 	tw.Flush()
@@ -679,12 +774,8 @@ func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string)
 		pos = append(pos, fs.Arg(0))
 		rest = fs.Args()[1:]
 	}
-	if len(pos) != len(cmd.args) {
-		want := ""
-		for _, a := range cmd.args {
-			want += " <" + a + ">"
-		}
-		fmt.Fprintf(stderr, "pluxy: usage: pluxy %s%s [flags]\n", cmd.words, want)
+	if len(pos) != len(cmd.args) && !(cmd.more && len(pos) > len(cmd.args)) {
+		fmt.Fprintf(stderr, "pluxy: usage: pluxy %s%s [flags]\n", cmd.words, argsUsage(cmd))
 		return exitUsage
 	}
 	t, err := findCore(*configPath, cmpOr(*addr, getenv("PLUXY_URL")), cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY")))
@@ -712,10 +803,19 @@ func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string)
 	return code
 }
 
+// usageError is a wrong command line that a command finds as it runs, such as a step chain set
+// cannot read.
+type usageError string
+
+func (e usageError) Error() string { return string(e) }
+
 // exitCode is the exit code for a command's error.
 func exitCode(err error) int {
 	var ae *management.APIError
+	var ue usageError
 	switch {
+	case errors.As(err, &ue):
+		return exitUsage
 	case management.IsUnreachable(err):
 		return exitUnreachable
 	case errors.As(err, &ae):

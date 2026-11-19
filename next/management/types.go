@@ -240,6 +240,26 @@ type AccountPatch struct {
 // account is named by its ID and its public ID, the one replies name it by.
 type RouteReply = route.Plan
 
+// ChainStep is one step of a fallback chain: a model, and optionally the one provider and the
+// accounts (by ID) that serve it.
+type ChainStep = route.Step
+
+// Chain is a fallback chain: the model name clients ask for, and its steps in order.
+type Chain struct {
+	Name  string      `json:"name"`
+	Steps []ChainStep `json:"steps"`
+}
+
+// ChainsReply is GET /chains's reply, sorted by name.
+type ChainsReply struct {
+	Chains []Chain `json:"chains"`
+}
+
+// ChainRequest is PUT /chains/{name}'s body.
+type ChainRequest struct {
+	Steps []ChainStep `json:"steps"`
+}
+
 // CooldownResetReply is POST /accounts/{id}/cooldown/reset's reply.
 type CooldownResetReply struct {
 	// Account is the account after the reset.
