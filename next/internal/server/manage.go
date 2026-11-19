@@ -69,6 +69,8 @@ type AccountView struct {
 	// Headers are the account's headers, with a placeholder in place of each secret value, the
 	// one GET /config shows for it (configdoc.Redactor.Headers).
 	Headers map[string]string `json:"headers,omitempty"`
+	// Timeouts overrides routing.timeouts for this account (header_ms, idle_ms, total_ms).
+	Timeouts *protocol.Timeouts `json:"timeouts,omitempty"`
 	// Settings are an account added by login's settings, with a placeholder in place of each
 	// secret (Management.Redactor), as GET /config shows the config file.
 	Settings json.RawMessage `json:"settings,omitempty"`
@@ -117,6 +119,7 @@ func (v *AccountView) fields(a route.Account, state *route.State, red AccountRed
 	v.Priority, v.Weight, v.MaxConcurrency, v.Prefix = a.Priority, a.Weight, a.MaxConcurrency, a.Prefix
 	v.DisableCooling, v.RequestRetry = a.DisableCooling, a.RequestRetry
 	v.Models, v.ExcludedModels, v.ModelAlias, v.Endpoint = a.Models, a.ExcludedModels, a.ModelAlias, a.Endpoint
+	v.Timeouts = a.Timeouts
 	v.ProxyURL = proxyurl.Redact(a.ProxyURL)
 	if red != nil {
 		v.Headers = red.Headers(a.Headers)
@@ -450,6 +453,10 @@ func (m *Management) add(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	if err := route.ValidateTimeouts("timeouts", req.Timeouts); err != nil {
+		writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	m.startLogin(w, r, cred.LoginRequest{Account: req.Account, Extension: req.Extension, Method: req.Method, Input: req.Input})
 }
 
@@ -566,6 +573,13 @@ var patchFields = map[string]func(a *route.Account, raw json.RawMessage) error{
 	},
 	// headers is set by Management.patchHeaders, which needs the management API's redactor.
 	"headers": nil,
+	"timeouts": func(a *route.Account, raw json.RawMessage) error {
+		a.Timeouts = nil
+		if err := unmarshalSet(raw, &a.Timeouts); err != nil {
+			return err
+		}
+		return route.ValidateTimeouts("value", a.Timeouts)
+	},
 }
 
 // patchHeaders sets a.Headers to raw. A placeholder GET /accounts shows for a secret value,

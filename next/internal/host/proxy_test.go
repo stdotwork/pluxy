@@ -394,3 +394,31 @@ func TestOldExtensionGetsNoCallWithPayloadRules(t *testing.T) {
 		t.Fatalf("call no rule matches: event %+v, want the extension's hang-up", ev)
 	}
 }
+
+func TestResolveTimeouts(t *testing.T) {
+	ms := func(v int64) *int64 { return &v }
+	global := &protocol.Timeouts{HeaderMS: ms(1000), IdleMS: ms(2000)}
+	e := &Extension{
+		info: protocol.Info{ProtocolMinor: protocol.Minor},
+		opts: Options{Timeouts: func() *protocol.Timeouts { return global }},
+	}
+
+	// Account overrides header_ms to 0 (off), inherits idle_ms (2000) from global, and total_ms
+	// (600000) from protocol defaults.
+	acct := protocol.Account{ID: "a", Timeouts: &protocol.Timeouts{HeaderMS: ms(0)}}
+	e.resolveTimeouts(&acct)
+	if acct.Timeouts == nil || *acct.Timeouts.HeaderMS != 0 || *acct.Timeouts.IdleMS != 2000 || *acct.Timeouts.TotalMS != defaultTotalTimeoutMS {
+		t.Fatalf("resolved = %+v, want header=0 idle=2000 total=%d", acct.Timeouts, defaultTotalTimeoutMS)
+	}
+
+	// Older extensions (< minor 18) do not receive Timeouts.
+	old := &Extension{
+		info: protocol.Info{ProtocolMinor: timeoutsMinor - 1},
+		opts: Options{Timeouts: func() *protocol.Timeouts { return global }},
+	}
+	acctOld := protocol.Account{ID: "a", Timeouts: &protocol.Timeouts{HeaderMS: ms(100)}}
+	old.resolveTimeouts(&acctOld)
+	if acctOld.Timeouts != nil {
+		t.Errorf("old extension got timeouts %+v, want nil", acctOld.Timeouts)
+	}
+}

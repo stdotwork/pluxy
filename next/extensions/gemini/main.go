@@ -236,10 +236,7 @@ func postBody(ctx context.Context, t target, body []byte, stream bool, model str
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		var op *net.OpError
-		dial := errors.As(err, &op) && op.Op == "dial"
-		// A failed dial never reached the upstream, so trying again is safe.
-		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: sdk.Retryable(err)}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()

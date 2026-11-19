@@ -16,6 +16,15 @@ const proxyMinor = 11
 // headersMinor is the protocol minor version that adds an account's headers.
 const headersMinor = 12
 
+// timeoutsMinor is the protocol minor version that adds an account's timeouts.
+const timeoutsMinor = 18
+
+const (
+	defaultHeaderTimeoutMS int64 = 60_000
+	defaultIdleTimeoutMS   int64 = 300_000
+	defaultTotalTimeoutMS  int64 = 600_000
+)
+
 // outbound turns account.ProxyURL, the account's own proxy_url setting, into the proxy the call
 // carries: that setting, else Options.ProxyURL; none for direct or none. It refuses the call when
 // it needs a proxy or headers and the extension predates them, which would send it without. The
@@ -69,4 +78,39 @@ func outboundSecrets(c *protocol.Credential) map[string]string {
 		out[fmt.Sprintf("header %d", i)] = f
 	}
 	return out
+}
+
+// resolveTimeouts resolves account.Timeouts against Options.Timeouts and the defaults (60s
+// header, 5m idle, 10m total). Extensions older than minor 18 do not receive the field.
+func (e *Extension) resolveTimeouts(account *protocol.Account) {
+	if e.info.ProtocolMinor < timeoutsMinor {
+		account.Timeouts = nil
+		return
+	}
+	var global *protocol.Timeouts
+	if e.opts.Timeouts != nil {
+		global = e.opts.Timeouts()
+	}
+	if global == nil {
+		global = &protocol.Timeouts{}
+	}
+	own := account.Timeouts
+	if own == nil {
+		own = &protocol.Timeouts{}
+	}
+	pick := func(a, g *int64, def int64) *int64 {
+		v := def
+		if g != nil {
+			v = *g
+		}
+		if a != nil {
+			v = *a
+		}
+		return &v
+	}
+	account.Timeouts = &protocol.Timeouts{
+		HeaderMS: pick(own.HeaderMS, global.HeaderMS, defaultHeaderTimeoutMS),
+		IdleMS:   pick(own.IdleMS, global.IdleMS, defaultIdleTimeoutMS),
+		TotalMS:  pick(own.TotalMS, global.TotalMS, defaultTotalTimeoutMS),
+	}
 }

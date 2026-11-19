@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.17
+# pluxy extension protocol, version 0.18
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -25,9 +25,10 @@ back, for core's request logs. Version 0.14 adds [payload rules](#payload-rules)
 upstream JSON body that the config sets, fills in or removes. Version 0.15 has a session turn carry
 them too. Version 0.16 adds an error's `dropped`: what a refusal under the `reject` drop policy
 could not carry. Version 0.17 adds a captured body's `body_stopped`: the extension did not read it
-to its end. It is deliberately small; later versions add capabilities and more operations
-without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.17 (see
+to its end. Version 0.18 adds the account's [`timeouts`](#timeouts): upstream request limits for
+response headers, stream byte gaps and non-streamed completion. It is deliberately small; later
+versions add capabilities and more operations without changing what is described here. An
+extension written for version 0 works unchanged with a core that speaks 0.18 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -549,6 +550,7 @@ the endpoint (or does not serve it for this account's credential) answers with c
 | `credential` | The credential for this call (below). |
 | `proxy_url` | Since 0.11, optional: the proxy every upstream request of this call goes through (below). Absent: no proxy. |
 | `headers` | Since 0.12, optional: extra HTTP headers every upstream request of this call carries, an object of header name to value (below). Absent: none. |
+| `timeouts` | Since 0.18, optional: upstream request limits in milliseconds (`header_ms`, `idle_ms`, `total_ms`; below). Absent: extension defaults. |
 
 An extension only ever receives its own accounts: core stores each credential with the ID of the
 extension that created it and never sends it to another.
@@ -665,6 +667,21 @@ whose names are secret, including a value the extension set itself under such a 
 them; the other headers stay. As with a proxy, the SDK answers a call that carries headers with
 `unsupported` (scope `credential`, retryable) and never runs the handler when the extension
 process has not created any `sdk.Upstream` transport.
+
+### Timeouts
+
+From version 0.18 an account may carry `timeouts`, an object with `header_ms`, `idle_ms` and
+`total_ms` in milliseconds. Each is optional; `0` turns that limit off. On a streamed upstream
+request, `header_ms` (default 60000) bounds the wait for HTTP response headers and `idle_ms`
+(default 300000) bounds the gap between raw upstream body bytes (and between messages on an
+upstream WebSocket turn). On a request that is not streamed, `total_ms` (default 600000) bounds
+the whole upstream request from start to finish. Core resolves each limit from the account's
+override and `routing.timeouts`, and sends `timeouts` only to extensions whose `protocol_minor`
+is 18 or more.
+
+A timeout that fires before any upstream response byte arrives is retry-safe so core can move the
+request to another account; once response headers or reply bytes have arrived, it ends the
+stream or request with an error instead.
 
 ## The request
 
@@ -1340,8 +1357,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.15 | The `payload` of a [session turn](#turns). |
 | 0.16 | An error's `dropped`. |
 | 0.17 | A captured body's `body_stopped` ([upstream capture](#upstream-capture)). |
+| 0.18 | The account's optional [`timeouts`](#timeouts). |
 
-## What version 0.17 leaves out
+## What version 0.18 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

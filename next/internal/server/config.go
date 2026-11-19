@@ -365,6 +365,9 @@ func (x ExtensionConfig) validate(name string, seen map[string]bool) error {
 		if err := upheader.Check(fmt.Sprintf("%s.accounts[%d].headers", name, i), a.Headers); err != nil {
 			return fmt.Errorf("config: %w", err)
 		}
+		if err := route.ValidateTimeouts(fmt.Sprintf("%s.accounts[%d].timeouts", name, i), a.Timeouts); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
 		if err := a.CheckNames(); err != nil {
 			return fmt.Errorf("config: %s.accounts[%d]: %w", name, i, err)
 		}
