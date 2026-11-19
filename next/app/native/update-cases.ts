@@ -523,6 +523,18 @@ export interface Route {
   say: Say;
 }
 
+/** Whether the stage reports come from as many different processes. A process id is reused (on
+ * Windows a later stage can get an earlier stage's), so each report carries a value its process made
+ * once, at its start (`run`): two reports with the same one come from the same process. */
+export function stagesAreProcesses(stages: Step[]): boolean {
+  const runs = stages.map((s) => s.run);
+  return (
+    stages.every((s) => typeof s.pid === "number") &&
+    runs.every((r) => typeof r === "string" && r !== "") &&
+    new Set(runs).size === runs.length
+  );
+}
+
 /** The update route (see the top of this file), and its checks. Returns the steps it saw. */
 export async function updateRoute(o: Route): Promise<Set<string>> {
   const { check, say } = o;
@@ -592,10 +604,9 @@ export async function updateRoute(o: Route): Promise<Set<string>> {
       `${name}: next to the installed copy: ${JSON.stringify(beside)}, not only ${own}`,
     );
   }
-  const allPids = stages.map((s) => s.pid);
   check(
-    new Set(allPids).size === allPids.length && allPids.every((p) => typeof p === "number"),
-    `each stage is not a process of its own: ${JSON.stringify(allPids)}`,
+    stagesAreProcesses(stages),
+    `each stage is not a process of its own: ${JSON.stringify(stages.map((s) => [s.pid, s.run]))}`,
   );
   check(
     earlierEnded === true,
