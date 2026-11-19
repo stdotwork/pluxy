@@ -292,6 +292,39 @@ func TestOpaqueOutput(t *testing.T) {
 	}
 }
 
+// An assistant message's phase, which Codex sets on its output messages, is listed: a client in
+// another format has no place for it.
+func TestOpaqueOutputPhase(t *testing.T) {
+	item := `{"type":"response.output_item.done","output_index":1,"item":{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Looking."}]}}`
+	if got := OpaqueOutput(json.RawMessage(item)); !reflect.DeepEqual(got, []string{"output[1].phase"}) {
+		t.Errorf("item event: %q", got)
+	}
+	resp := `{"object":"response","output":[{"type":"message","content":[]},{"type":"message","phase":"final_answer","content":[]}]}`
+	if got := OpaqueOutput(json.RawMessage(resp)); !reflect.DeepEqual(got, []string{"output[1].phase"}) {
+		t.Errorf("response: %q", got)
+	}
+}
+
+// A replayed assistant message keeps its phase when the request is built again for a Responses
+// upstream.
+func TestPhaseSurvivesEncoding(t *testing.T) {
+	req, err := ParseRequest([]byte(`{"model":"m","input":[{"role":"user","content":"go"},{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Looking."}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Native = nil
+	body, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Input []map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || len(out.Input) != 2 || out.Input[1]["phase"] != "commentary" || len(losses) != 0 {
+		t.Errorf("input %v, losses %v", out.Input, losses)
+	}
+}
+
 // Opaque reasoning data the aggregator keeps counts toward its size, which core bounds.
 func TestAggregatorSizeCountsOpaque(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","input":"hi"}`))
