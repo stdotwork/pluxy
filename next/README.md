@@ -1556,9 +1556,9 @@ for it. The same list decides which models such an account serves: a request for
 account serves is refused without calling an upstream, as today's core refuses it (404
 `model_not_found`; today's core answers 400). An account whose extension has no list, an empty
 one, or one it could not read within 15 seconds serves any model, and core asks again a minute
-later. Core asks an
-extension once per account and keeps the answer until the accounts change: a reload, or an
-account added, removed or signed in again.
+later. Core asks again for each known list every 30 minutes with jitter, when an account's
+credential is renewed or it signs in again, and on `POST /v0/management/models/refresh`; a
+refresh that fails, times out or comes back empty keeps the last good list.
 
 ### Codex client catalog
 
@@ -1830,6 +1830,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
 | `GET /v0/management/models` | The models `GET /v1/models` lists, as one list in the same order: `models`, each with `id` (the name clients use), what the extension says about the model (`owned_by`, `display_name`, limits, ...), `upstream` (its name upstream), `extension` (the extension of the account whose entry the list shows) and `accounts` (the IDs of every account that serves the name, in routing order). An account that serves any model because its list is not known lists none. Never a credential. |
+| `POST /v0/management/models/refresh` | Ask providers for their model lists again now; optional JSON body `{"account": "<id>"}` for one account. Returns the updated `models` list and per-account `accounts` results (`models`, `kept`, `error`). A read that fails, times out or comes back empty keeps the last good list. |
 | `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate`, this core's own, under its own name (below). |
 | `PATCH /v0/management/settings` | Changes the settings the body names (`{"routing": {"strategy": "fill-first"}}`) and replies with them all. 400 for a name or value it does not take. |
 
