@@ -4,17 +4,13 @@
 
 use crate::notes::{Doc, Style};
 use crate::release::{self, Channel, Product, View};
-#[cfg(target_os = "linux")]
-use crate::MAIN;
-use crate::{trusted, App, Rect};
-#[cfg(target_os = "linux")]
+use crate::{trusted, App, Rect, MAIN};
 use std::time::{Duration, Instant};
 use tauri::webview::NewWindowResponse;
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder, WebviewUrl,
     Window,
 };
-#[cfg(target_os = "linux")]
 use tauri::{Emitter, EventTarget};
 
 /// The certificates a feed's https is checked against: the public roots. A native-test build
@@ -102,12 +98,6 @@ pub async fn release_channel_set(webview: Webview, channel: Channel) -> Result<V
 #[tauri::command]
 pub fn release_source_set(webview: Webview, source: Option<String>) -> Result<(), String> {
     trusted(&webview)?;
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = source;
-        Err("changing the release feed needs a native confirmation, on Linux only for now".into())
-    }
-    #[cfg(target_os = "linux")]
     {
         use crate::confirmation::{self, Action, Package};
         let app = webview.app_handle().clone();
@@ -158,7 +148,6 @@ pub fn release_source_set(webview: Webview, source: Option<String>) -> Result<()
 }
 
 /// Waits for the confirmation's native result; only a confirmed, consumed token applies the change.
-#[cfg(target_os = "linux")]
 fn settle_source(app: &AppHandle, id: &str) {
     let st = app.state::<App>();
     // The dialog cancels itself after its lifetime; window close invalidates it sooner.
@@ -272,8 +261,10 @@ fn shell_open(url: &str) -> Result<(), String> {
 }
 
 /// Opens a webview over rect of the window (the part of the notes area that shows; none: hidden),
-/// showing product's release notes on the current channel, and returns its label.
-#[tauri::command]
+/// showing product's release notes on the current channel, and returns its label. On the main
+/// thread on Linux only, as `page_open` is: on Windows, making a webview there deadlocks.
+#[cfg_attr(target_os = "linux", tauri::command)]
+#[cfg_attr(not(target_os = "linux"), tauri::command(async))]
 pub fn release_notes_open(
     webview: Webview,
     state: tauri::State<App>,
@@ -407,7 +398,12 @@ pub fn release_notes_place(
     )
 }
 
-#[tauri::command]
+/// Closes a notes webview. Off Linux it runs as an async command, off the main thread: there a
+/// close while another webview is being made waits for good (`close_webviews` in lib.rs says
+/// why), and from another thread the close is posted until that webview is made. On Linux it
+/// stays on the main thread.
+#[cfg_attr(target_os = "linux", tauri::command)]
+#[cfg_attr(not(target_os = "linux"), tauri::command(async))]
 pub fn release_notes_close(
     webview: Webview,
     state: tauri::State<App>,
@@ -462,4 +458,135 @@ pub fn notes_scheme(
         .header("Referrer-Policy", "no-referrer")
         .body(served.body)
         .expect("a response")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::Path;
+
+    /// What creates a webview or a window: on Windows each deadlocks on the main thread, where
+    /// Tauri runs a command that is not async (`Window::add_child`'s "Known issues").
+    const CREATES: &[&str] = &[
+        ".add_child(",
+        "WebviewWindowBuilder::new(",
+        "WindowBuilder::new(",
+    ];
+
+    /// What closes a webview: on Windows a close on the main thread while another webview is
+    /// being made there waits for good (`close_webviews` in lib.rs says why).
+    const CLOSES: &[&str] = &["w.close()", "w?.close()", "webview.close()"];
+
+    /// The top-level functions of a file: name, the attributes just above it, and its text up to
+    /// the next top-level item.
+    fn functions(text: &str) -> Vec<(String, String, String)> {
+        let mut out = Vec::new();
+        let mut attrs = String::new();
+        let mut current: Option<(String, String, String)> = None;
+        for line in text.lines() {
+            // An item starts at the left margin; a signature's closing `)` and a body's `}` do not.
+            let top = line.starts_with(|c: char| c.is_ascii_alphabetic() || c == '#' || c == '/');
+            if top {
+                let name = ["fn ", "pub fn ", "pub(crate) fn ", "pub(super) fn "]
+                    .iter()
+                    .find_map(|p| line.strip_prefix(p))
+                    .map(|r| r.split(['(', '<']).next().unwrap_or("").to_string());
+                if line.starts_with("#[") {
+                    if let Some(f) = current.take() {
+                        out.push(f);
+                    }
+                    attrs.push_str(line);
+                    attrs.push('\n');
+                    continue;
+                }
+                if let Some(f) = current.take() {
+                    out.push(f);
+                }
+                if let Some(name) = name {
+                    current = Some((name, std::mem::take(&mut attrs), String::new()));
+                } else {
+                    attrs.clear();
+                }
+            }
+            if let Some(f) = current.as_mut() {
+                f.2.push_str(line);
+                f.2.push('\n');
+            }
+        }
+        out.extend(current);
+        out
+    }
+
+    // A command that creates a webview or a window, or closes a webview, itself or through the
+    // functions it calls, runs off the main thread on Windows and macOS
+    // (`tauri::command(async)`), as `page_open` and `page_close` do: on Windows a synchronous
+    // one can hang the window (its webview answers nothing more).
+    #[test]
+    fn a_command_that_creates_or_closes_a_webview_is_async_off_linux() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut all: BTreeMap<String, (String, String)> = BTreeMap::new();
+        for e in std::fs::read_dir(&src).unwrap().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !name.ends_with(".rs") || name.ends_with("_native.rs") || name.contains("test") {
+                continue;
+            }
+            let text = std::fs::read_to_string(e.path()).unwrap();
+            // Only the code before the file's inline tests.
+            let code = text.split("\n#[cfg(test)]\nmod tests").next().unwrap_or("");
+            for (f, attrs, body) in functions(code) {
+                all.insert(f, (attrs, body));
+            }
+        }
+        assert!(
+            [
+                "release_notes_open",
+                "release_notes_close",
+                "page_open",
+                "add_page"
+            ]
+            .iter()
+            .all(|f| all.contains_key(*f)),
+            "the scan did not find the functions it checks"
+        );
+        // The functions that create one, then every function that calls one of those.
+        let mut reach: BTreeSet<String> = all
+            .iter()
+            .filter(|(_, (_, body))| CREATES.iter().chain(CLOSES).any(|c| body.contains(c)))
+            .map(|(f, _)| f.clone())
+            .collect();
+        loop {
+            let more: Vec<String> = all
+                .iter()
+                .filter(|(f, (_, body))| {
+                    !reach.contains(*f)
+                        && reach.iter().any(|r| {
+                            body.match_indices(&format!("{r}(")).any(|(i, _)| {
+                                !body[..i].ends_with(|c: char| c.is_alphanumeric() || c == '_')
+                            })
+                        })
+                })
+                .map(|(f, _)| f.clone())
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            reach.extend(more);
+        }
+        let sync: Vec<&String> = reach
+            .iter()
+            .filter(|f| {
+                let attrs = &all[*f].0;
+                attrs.contains("tauri::command")
+                    && !attrs
+                        .contains("#[cfg_attr(not(target_os = \"linux\"), tauri::command(async))]")
+                    && !attrs.contains("#[tauri::command(async)]")
+            })
+            .collect();
+        assert!(
+            sync.is_empty(),
+            "commands that create a webview or a window, or close a webview, but run on the main \
+             thread on Windows: \
+             {sync:?} (reached from {reach:?})"
+        );
+    }
 }

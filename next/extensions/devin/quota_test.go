@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"runtime"
 	"strings"
@@ -184,6 +187,40 @@ func TestQuotaErrors(t *testing.T) {
 			t.Errorf("err = %+v, want a retryable unavailable error", e)
 		}
 	})
+}
+
+// A refused quota read's text body becomes the error's message only when it was read whole. A body
+// longer than the 1 MiB read is cut, and the cut may fall inside a credential the upstream echoed,
+// which core's whole-copy redaction would pass on: then the message is the status alone.
+func TestQuotaErrorTextBody(t *testing.T) {
+	const secret = "devin-quota-cut-secret-0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+	const read = 30 // bytes of secret the 1 MiB read takes
+	head := "refused Basic "
+	cut := strings.Repeat("x", 1<<20-read-len(head)) + head + secret + " more"
+	for _, tc := range []struct {
+		name, body, want, notWant string
+	}{
+		{"short text", "  service overloaded\n", "service overloaded", ""},
+		{"cut text", cut, "Devin answered 500 Internal Server Error", secret[:read-6]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			settings, _ := json.Marshal(map[string]string{"base_url": srv.URL})
+			_, err := readQuota(protocol.Account{ID: "devin", Settings: settings, Credential: tokenCredential(secret)})
+			e := llmErr(t, err)
+			if e.Message != tc.want {
+				t.Errorf("message %.200q, want %q", e.Message, tc.want)
+			}
+			if tc.notWant != "" && strings.Contains(e.Message, tc.notWant) {
+				t.Errorf("the message carries the token's start")
+			}
+		})
+	}
 }
 
 // A login reports the account's user ID, not its name, as the identity.

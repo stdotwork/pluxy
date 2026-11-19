@@ -10,8 +10,13 @@ import (
 const captureMinor = 13
 
 // CaptureFunc receives a captured call's upstream exchanges, with the call's account ID. Every
-// string in d has had the call's credentials removed (protocol.Redactor); a body's BodySize is
-// the length of what is left of it plus what was cut out (see redactDiagnostic).
+// string in d has had the call's credentials removed in the spellings protocol.Redactor knows,
+// and the bytes beside a cut or a stopped read that start a form of a credential, of 4 bytes or
+// more, are left out. A start of a secret spelled another way (JSON or percent escapes, a
+// carriage return before a line break) can still be where a body was cut or its read stopped: the
+// caller that writes a body trims what else could be one, as the request log does (the window
+// and run of key characters in server/upstreamlog.go). A body's BodySize is the length of what is
+// left of it plus what was cut out (see redactDiagnostic).
 type CaptureFunc func(account string, d protocol.Diagnostic)
 
 type captureKey struct{}
@@ -34,10 +39,14 @@ func capture(ctx context.Context, info protocol.Info) CaptureFunc {
 }
 
 // redactDiagnostic removes r's credentials from every string of d. In a body it also removes the
-// bytes beside a cut that could be a secret cut in two (Redactor.TrimCut), redacts a start and an
-// end with nothing between them as one text and joins them (Redactor.Body), and it sets BodySize
-// to the length of what is left of the pieces plus the bytes left out between them, so a body
-// that was cut is told from one that only got shorter because a credential was replaced.
+// bytes beside a cut that could be a secret cut in two (Redactor.TrimCut), and, where the body was
+// not read to its end (BodyStopped), the run at its end that starts a form of a credential
+// (Redactor.TrimCut again, so a start spelled with escapes is not recognised: see CaptureFunc);
+// it redacts a start and an end with nothing between them as one text and joins them
+// (Redactor.Body), and it sets BodySize to the length of what is left of the pieces plus the bytes
+// left out between them, so a body that was cut is told from one that only got shorter because a
+// credential was replaced. The bytes removed where the read stopped are not counted: nothing
+// after them is either.
 func redactDiagnostic(r *protocol.Redactor, d protocol.Diagnostic) protocol.Diagnostic {
 	out := protocol.Diagnostic{UpstreamLeftOut: d.UpstreamLeftOut}
 	for _, x := range d.Upstream {
@@ -57,6 +66,9 @@ func redactDiagnostic(r *protocol.Redactor, d protocol.Diagnostic) protocol.Diag
 func redactBody(r *protocol.Redactor, b protocol.CapturedBody) protocol.CapturedBody {
 	head, end := b.Body, b.BodyEnd
 	left := max(0, b.BodySize-int64(len(head)+len(end))) // what the extension cut out between
+	if b.BodyStopped {
+		head, end = trimStop(r, head, end, left > 0)
+	}
 	if left > 0 {
 		h, e := r.TrimCut(head, end)
 		left += int64(len(head) - len(h) + len(end) - len(e))
@@ -75,7 +87,23 @@ func redactBody(r *protocol.Redactor, b protocol.CapturedBody) protocol.Captured
 		head = br.Write(head) + br.Write(end) + br.Flush()
 		end = ""
 	}
-	return protocol.CapturedBody{Body: head, BodyEnd: end, BodySize: int64(len(head)+len(end)) + left}
+	return protocol.CapturedBody{Body: head, BodyEnd: end, BodySize: int64(len(head)+len(end)) + left, BodyStopped: b.BodyStopped}
+}
+
+// trimStop returns head and end, the pieces of a body whose read stopped, without the run at the
+// body's end that is the start of a form of r's credential, of at least 4 bytes (TrimCut, on one
+// side): the redaction cannot recognise it. A start and an end with nothing between them (gap
+// false) are one text, so the run can reach back into the start.
+func trimStop(r *protocol.Redactor, head, end string, gap bool) (string, string) {
+	if gap && end != "" {
+		end, _ = r.TrimCut(end, "")
+		return head, end
+	}
+	text, _ := r.TrimCut(head+end, "")
+	if len(text) >= len(head) {
+		return head, text[len(head):]
+	}
+	return text, ""
 }
 
 func redactHeaders(r *protocol.Redactor, h map[string][]string) map[string][]string {

@@ -80,6 +80,9 @@ mod admission;
 #[path = "backups_native.rs"]
 mod backups;
 #[cfg(target_os = "linux")]
+#[path = "chooser_native.rs"]
+mod chooser;
+#[cfg(target_os = "linux")]
 #[path = "claude_code_native.rs"]
 mod claude_code;
 #[cfg(target_os = "linux")]
@@ -91,7 +94,6 @@ mod client_key;
 #[cfg(target_os = "linux")]
 #[path = "codex_native.rs"]
 mod codex;
-#[cfg(target_os = "linux")]
 #[path = "native_core.rs"]
 mod core_updates;
 #[path = "device_native.rs"]
@@ -739,7 +741,6 @@ fn run(app: &AppHandle) -> Result<(), String> {
     let main = wait_for("the window", || app.get_webview(MAIN))?;
     // The core steps (native_core.rs), in a session of their own. They come before the window's
     // shell: until a core is installed the window shows only the Connection page.
-    #[cfg(target_os = "linux")]
     if std::env::var_os("PLUXY_APP_TEST_CORE_SOURCE").is_some() {
         wait_for("the window's IPC", || {
             eval(
@@ -757,7 +758,6 @@ fn run(app: &AppHandle) -> Result<(), String> {
         eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
     })?;
     // The signed application update (update_native.rs), in a session of its own.
-    #[cfg(target_os = "linux")]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_UPDATE") {
         return crate::update_native::run(app, &main, dir.into());
     }
@@ -1349,6 +1349,11 @@ pub fn start(app: AppHandle) {
                     json!({"label": l, "shown": eval(&w, "({href: location.href, html: document.documentElement.outerHTML.slice(0, 1000)})")})
                 })
                 .collect();
+            // No answer at all: the window's webview runs no script (a hung webview), which a
+            // null here would hide.
+            let shown = shown.unwrap_or_else(
+                || json!({"no_answer": "the window's webview answered no script within 5 s"}),
+            );
             log(
                 "failed",
                 json!({"error": e, "window": shown, "pages": pages}),

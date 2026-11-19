@@ -56,7 +56,7 @@ const MODE: &str = if cfg!(target_os = "linux") {
 };
 
 /// The client keys in the core config at path, its `client_keys` (the app writes that config as
-/// JSON, and core keeps a JSON config JSON when it changes it).
+/// JSON, and core keeps a JSON config when it changes it).
 pub(super) fn core_keys(path: &Path) -> Result<BTreeSet<String>, String> {
     let text = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let cfg: Value = serde_json::from_slice(&text)
@@ -335,6 +335,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )?;
     watch(main)?;
     let mut keys: Vec<String> = Vec::new();
+    let mut mgmt_key: Option<String> = None;
     let mut out = json!({});
     let step =
         |name: &str, r: Result<(), String>| r.map_err(|e| format!("client keys {name}: {e}"));
@@ -534,6 +535,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     json!({"change": {"mode": "local", "url": base}}),
                 )?;
                 let key = saved["key"].as_str().ok_or("no kept management key")?;
+                mgmt_key = Some(key.to_string());
                 let r = super::key_entry_test::enter(app, main, key, true, false)?;
                 require(r["status"] == "signed_in", format!("signing in again: {r}"))?;
                 ok(main, "connection_get", json!({}))?
@@ -593,7 +595,10 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )?;
 
     // ---- audit
-    let canaries: Vec<&str> = keys.iter().map(String::as_str).collect();
+    let mut canaries: Vec<&str> = keys.iter().map(String::as_str).collect();
+    if let Some(k) = mgmt_key.as_deref() {
+        canaries.push(k);
+    }
     step("audit", clean_webview(main, &canaries))?;
 
     out["passed"] = json!(true);

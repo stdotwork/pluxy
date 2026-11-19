@@ -172,6 +172,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	if err != nil {
 		return err
 	}
+	body = cleanToolSchemas(body)
 	body = fixTurns(body, s.Vertex != nil, call.Request.Stream, !tr.Passthrough)
 	send := &reporting{Stream: out, tr: tr}
 	t, err := resolve(ctx, s, call.Account.Credential, call.Request.Model, call.Request.Stream)
@@ -303,13 +304,8 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	}
 	tr.Losses = losses
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
-		var paths []string
-		for _, l := range losses {
-			if l.Kind == llm.LossDropped {
-				paths = append(paths, l.Path)
-			}
-		}
-		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+		paths := tr.DroppedPaths()
+		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
 			Message: "Gemini GenerateContent cannot carry parts of this request: " + strings.Join(paths, ", ")}
 	}
 	return body, tr, nil

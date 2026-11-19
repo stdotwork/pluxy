@@ -39,7 +39,8 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use windows_sys::Win32::Foundation::{
-    SetHandleInformation, ERROR_ACCESS_DENIED, HANDLE, HANDLE_FLAG_INHERIT, WAIT_OBJECT_0,
+    DuplicateHandle, SetHandleInformation, DUPLICATE_SAME_ACCESS, ERROR_ACCESS_DENIED, HANDLE,
+    HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     FileBasicInfo, FileIdInfo, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
@@ -47,7 +48,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_READ, FILE_SHARE_WRITE, VOLUME_NAME_DOS,
 };
 use windows_sys::Win32::System::Console::{
-    AttachConsole, FreeConsole, GenerateConsoleCtrlEvent, CTRL_BREAK_EVENT,
+    AttachConsole, FreeConsole, GenerateConsoleCtrlEvent, GetStdHandle, CTRL_BREAK_EVENT,
+    STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation,
@@ -63,7 +65,8 @@ use windows_sys::Win32::System::Threading::{
     WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB, CREATE_DEFAULT_ERROR_MODE, CREATE_NEW_CONSOLE,
     CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
     EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
-    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
 };
 
 pub(crate) type ChildStdin = File;
@@ -99,6 +102,10 @@ pub(crate) enum Kind {
     /// program opens its window, a desktop program ignores it); with one (a credential bridge)
     /// it runs headless.
     Detached,
+    /// The app's next run, started by an update (`Successor`): in no job of the app's (it stays
+    /// in whatever job the app itself runs in), held by its process handle until it accepts
+    /// itself, then let go to outlive the app.
+    Successor,
 }
 
 /// What one of a process's standard handles is.
@@ -106,6 +113,8 @@ pub(crate) enum Kind {
 pub(crate) enum Io {
     Null,
     Piped,
+    /// The app's own standard handle of that number, when it has one (else as `Null`).
+    Inherit,
 }
 
 /// A file opened again by the path it has now, which no process can write, rename or delete while
@@ -164,7 +173,7 @@ pub(crate) fn final_path(f: &File) -> Result<PathBuf, String> {
 }
 
 /// Volume serial number and file ID.
-fn file_id(f: &File) -> io::Result<[u8; 24]> {
+pub(crate) fn file_id(f: &File) -> io::Result<[u8; 24]> {
     let mut info: FILE_ID_INFO = unsafe { std::mem::zeroed() };
     if unsafe {
         GetFileInformationByHandleEx(
@@ -408,8 +417,10 @@ impl Command {
 
     /// Starts a tool or a managed process, in a job of its own, held by the returned child.
     pub(crate) fn spawn(&mut self) -> io::Result<Child> {
-        if self.kind == Kind::Detached {
-            return Err(io::Error::other("a detached launch is not held"));
+        if matches!(self.kind, Kind::Detached | Kind::Successor) {
+            return Err(io::Error::other(
+                "only a tool or a managed process is held in a job",
+            ));
         }
         let c = self.create(0)?;
         let job = match job(self.secrets).and_then(|j| {
@@ -524,6 +535,37 @@ impl Command {
                             null = Some(OpenOptions::new().read(true).write(true).open("NUL")?);
                         }
                         std_handles[i] = null.as_ref().unwrap().as_raw_handle() as HANDLE;
+                    }
+                    Io::Inherit => {
+                        // A copy of the app's own handle, which the lines below make
+                        // inheritable for this one child; the app's own stays as it is.
+                        let own = unsafe {
+                            GetStdHandle([STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE][i])
+                        };
+                        let mut copy: HANDLE = ptr::null_mut();
+                        let copied = !own.is_null()
+                            && own != INVALID_HANDLE_VALUE
+                            && unsafe {
+                                DuplicateHandle(
+                                    GetCurrentProcess(),
+                                    own,
+                                    GetCurrentProcess(),
+                                    &mut copy,
+                                    0,
+                                    0,
+                                    DUPLICATE_SAME_ACCESS,
+                                )
+                            } != 0;
+                        if copied {
+                            let f = unsafe { File::from_raw_handle(copy as _) };
+                            std_handles[i] = f.as_raw_handle() as HANDLE;
+                            child.push(f);
+                        } else {
+                            if null.is_none() {
+                                null = Some(OpenOptions::new().read(true).write(true).open("NUL")?);
+                            }
+                            std_handles[i] = null.as_ref().unwrap().as_raw_handle() as HANDLE;
+                        }
                     }
                     Io::Piped => {
                         let (r, w) = pipe(if i == 0 { 64 << 10 } else { 0 })?;
@@ -848,6 +890,42 @@ pub(crate) fn environment_block(vars: &[(OsString, OsString)]) -> io::Result<Vec
     Ok(out)
 }
 
+/// A handle on a process the host started that only waits for it or asks about it
+/// (`Child::pin`): while it is held, the process's ID is not another process's.
+#[derive(Debug)]
+pub(crate) struct Pin {
+    _process: OwnedHandle,
+    pid: u32,
+}
+
+impl Pin {
+    pub(crate) fn id(&self) -> u32 {
+        self.pid
+    }
+
+    /// For tests: a pin holding this process, said to be process pid.
+    #[cfg(test)]
+    pub(crate) fn this_process_as(pid: u32) -> Pin {
+        let mut out: HANDLE = ptr::null_mut();
+        let ok = unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                GetCurrentProcess(),
+                GetCurrentProcess(),
+                &mut out,
+                PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                0,
+            )
+        };
+        assert_ne!(ok, 0, "{}", io::Error::last_os_error());
+        Pin {
+            _process: unsafe { OwnedHandle::from_raw_handle(out as _) },
+            pid,
+        }
+    }
+}
+
 /// A process the host started and holds: its process handle (its process ID is never another
 /// process's while this is held) and its job.
 pub(crate) struct Child {
@@ -865,6 +943,31 @@ pub(crate) struct Child {
 impl Child {
     pub(crate) fn id(&self) -> u32 {
         self.pid
+    }
+
+    /// A second handle on this process that can only wait for it and ask about it, never end
+    /// it: while any copy is held, its process ID is not another process's, even after this
+    /// `Child` is gone. Its job stays this `Child`'s alone.
+    pub(crate) fn pin(&self) -> io::Result<Pin> {
+        let mut out: HANDLE = ptr::null_mut();
+        let ok = unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                self.process.as_raw_handle() as HANDLE,
+                GetCurrentProcess(),
+                &mut out,
+                PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                0,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Pin {
+            _process: unsafe { OwnedHandle::from_raw_handle(out as _) },
+            pid: self.pid,
+        })
     }
 
     fn exit_code(&mut self) -> io::Result<ExitStatus> {
@@ -960,5 +1063,71 @@ pub(crate) fn read_some(closed: &AtomicBool, r: &mut File, buf: &mut [u8]) -> Op
     match r.read(buf) {
         Ok(0) | Err(_) => None,
         Ok(n) => Some(n),
+    }
+}
+
+/// The app's next run, started by an update or a rollback (`updater/`): a process the app starts
+/// itself and holds by its process handle (its process ID is never another's while held), in no
+/// job of the app's, so it outlives the app once let go. Until then the app may end it, and only
+/// it: by that handle. Its own tools and core are in jobs of its own, which end with it.
+pub(crate) struct Successor {
+    process: OwnedHandle,
+    status: Option<ExitStatus>,
+}
+
+impl Successor {
+    /// Starts program (an `.exe`, opened and pinned until it runs) with args, the app's own
+    /// standard output and error, and exactly the environment env.
+    pub(crate) fn start(
+        program: &Path,
+        args: &[OsString],
+        env: &[(OsString, OsString)],
+    ) -> io::Result<Successor> {
+        let held = open_pinned(program)?;
+        let pin = pin_file(&held).map_err(io::Error::other)?;
+        let mut cmd = Command::new(pin, Kind::Successor);
+        cmd.args(args)
+            .envs(env.iter().map(|(k, v)| (k, v)))
+            .stdin(Io::Null)
+            .stdout(Io::Inherit)
+            .stderr(Io::Inherit);
+        let c = cmd.create(0)?.resume()?;
+        Ok(Successor {
+            process: c.process,
+            status: None,
+        })
+    }
+
+    pub(crate) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        if let Some(s) = self.status {
+            return Ok(Some(s));
+        }
+        let h = self.process.as_raw_handle() as HANDLE;
+        if unsafe { WaitForSingleObject(h, 0) } != WAIT_OBJECT_0 {
+            return Ok(None);
+        }
+        let mut code = 0u32;
+        if unsafe { GetExitCodeProcess(h, &mut code) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let s = ExitStatus::from_raw(code);
+        self.status = Some(s);
+        Ok(Some(s))
+    }
+
+    /// Ends it, by the handle held, and waits until it has ended.
+    pub(crate) fn end(mut self) {
+        if matches!(self.try_wait(), Ok(None)) {
+            let h = self.process.as_raw_handle() as HANDLE;
+            unsafe {
+                TerminateProcess(h, 1);
+                WaitForSingleObject(h, INFINITE);
+            }
+        }
+    }
+
+    /// Lets it go: its handle closes, it runs on, and nothing here can reach it again.
+    pub(crate) fn release(self) {
+        drop(self.process);
     }
 }

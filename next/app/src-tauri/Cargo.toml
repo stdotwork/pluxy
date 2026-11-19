@@ -46,7 +46,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 ed25519-dalek = { version = "=2.2.0", default-features = false }
 url = "2"
-ureq = { version = "3.5", default-features = false, features = ["rustls"] }
+# ~3.5: the Windows client for the app's core (client.rs, `core_tcp::CoreConnector`, which checks
+# the core's own process accepted each connection) is written against ureq's unversioned transport
+# API, which changes in minor releases.
+ureq = { version = "~3.5", default-features = false, features = ["rustls"] }
 getrandom = "0.3"
 sha2 = "=0.10.9"
 # Release versions compare by semantic version precedence (src/release.rs).
@@ -61,6 +64,10 @@ tar = { version = "=0.4.46", default-features = false }
 # The macOS login item, a LaunchAgent property list (src/startup.rs). Already in the tree through
 # tauri-utils.
 plist = "1"
+# The app's own update (src/updater/): the signature check only; the app installs the update
+# itself and never calls the plugin's install. No default features: no gzip/zip payloads; its
+# HTTP client is never used (the app downloads natively).
+tauri-plugin-updater = { version = "=2.14.1", default-features = false, features = ["rustls-tls"] }
 # Access (src/access.rs): reads relative to a folder the person granted, never leaving it.
 cap-std = "=4.0.3"
 # Bytes a page reads through Access travel as base64 in its channel's JSON.
@@ -91,6 +98,8 @@ windows-sys = { version = "=0.61.2", features = [
     "Win32_System_IO",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
+    # The native test's core steps list processes (src/native_core.rs).
+    "Win32_System_ProcessStatus",
     "Win32_System_Registry",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
@@ -123,9 +132,6 @@ webview2-com = "=0.39.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-# The app's own update (src/updater.rs): signature check and AppImage install only. No default
-# features: no gzip/zip payloads; its HTTP client is never used (the app downloads natively).
-tauri-plugin-updater = { version = "=2.14.1", default-features = false, features = ["rustls-tls"] }
 
 # Native key entry and confirmations on macOS (src/key_entry_macos.rs,
 # src/confirmation_ui_macos.rs, src/dialog_macos.rs) and opening an address in the browser

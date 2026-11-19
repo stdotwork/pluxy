@@ -51,6 +51,8 @@ mod page_frames;
 pub mod pages;
 mod place;
 mod privacy;
+#[cfg(target_os = "macos")]
+mod private_macos;
 #[cfg(windows)]
 mod private_windows;
 // Built and tested on every platform; the app starts tools where `native_stack` is set
@@ -61,7 +63,7 @@ pub mod recovery;
 pub mod release;
 #[cfg(debug_assertions)]
 pub mod release_config;
-#[cfg(all(target_os = "linux", feature = "native-test"))]
+#[cfg(feature = "native-test")]
 mod release_native;
 #[cfg(native_stack)]
 pub mod route;
@@ -71,9 +73,8 @@ pub mod savefile;
 pub mod spawn;
 mod startup;
 pub mod trust;
-#[cfg(all(target_os = "linux", feature = "native-test"))]
+#[cfg(feature = "native-test")]
 mod update_native;
-#[cfg(unix)]
 mod updater;
 mod updates;
 pub mod vault;
@@ -110,7 +111,6 @@ struct App {
     startup: Mutex<(startup::Store, startup::Preferences)>,
     conn: Mutex<Connection>,
     /// A change of the app's own core waiting for its native confirmation (`core_updates.rs`).
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     core_change: Mutex<Option<core_updates::Pending>>,
     #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     confirmations: Mutex<confirmation::Confirmations>,
@@ -164,8 +164,7 @@ struct App {
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
     rotation_open: AtomicBool,
-    /// The app's own update (`updater.rs`).
-    #[cfg(unix)]
+    /// The app's own update (`updater/`).
     updater: updater::State,
 }
 
@@ -904,7 +903,7 @@ async fn core_restart(webview: Webview) -> Result<View, String> {
     with_conn(&webview, |c| c.restart_core()).await
 }
 
-/// This command accepts connection metadata only; GTK supplies the secret on the native side.
+/// This command accepts connection metadata only; native key entry supplies the secret on the native side.
 #[derive(serde::Serialize)]
 struct KeyEntryResult {
     status: &'static str,
@@ -949,7 +948,7 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
         if let Some(after) = *st.key_entry_after.lock().unwrap() {
             std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
         }
-        // GTK must remain free to handle IPC/window close while the dialog is open.
+        // Run off the main thread so the app keeps handling IPC and window close while the dialog is open.
         let input = key_entry::request(&app, target.summary.clone());
         let mut error = None;
         // The key's check is a network call: `finish_key_unlocked` makes it without the lock.
@@ -2573,6 +2572,13 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
         }
         tauri::async_runtime::spawn_blocking(move || {
             let st = app.state::<App>();
+            struct Open<'a>(&'a std::sync::atomic::AtomicBool);
+            impl Drop for Open<'_> {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::SeqCst);
+                }
+            }
+            let open = Open(&st.key_entry_open);
             let input = key_entry::request_as(
                 &app,
                 "pluxy secret",
@@ -2581,7 +2587,7 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
                 ),
                 false,
             );
-            st.key_entry_open.store(false, Ordering::SeqCst);
+            drop(open);
             match input {
                 Ok(Some(input)) => st
                     .vault
@@ -2790,13 +2796,19 @@ fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static st
     );
     #[cfg(not(feature = "native-test"))]
     let _ = (&job.label, &job.path);
+    job.responder.respond(asset_response(status, found));
+}
+
+/// The asset scheme's answer: found's bytes and type with status, under the asset CSP for this
+/// system's asset scheme (`asset_csp`) when found.
+fn asset_response(status: u16, found: Option<(Vec<u8>, &'static str)>) -> Response<Vec<u8>> {
     let (body, kind) = found.unwrap_or((Vec::new(), "text/plain"));
     let csp = if status == 200 {
         asset_csp(&pages::asset_source(&device::asset_base()))
     } else {
         "sandbox; default-src 'none'".to_string()
     };
-    let resp = Response::builder()
+    Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, kind)
         .header("Content-Security-Policy", csp)
@@ -2806,8 +2818,7 @@ fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static st
         .header("X-Content-Type-Options", "nosniff")
         .header("Referrer-Policy", "no-referrer")
         .body(body)
-        .expect("a response");
-    job.responder.respond(resp);
+        .expect("a response")
 }
 
 /// The `pluxy-page:` scheme: the page webviews' app document and their way to the window.
@@ -2930,18 +2941,15 @@ pub fn run() {
     let context = tauri::generate_context!();
     // The updater plugin exists only when the updater gate passes, before anything else runs: a
     // build without updater trust never loads it.
-    #[cfg(unix)]
     let gate = trust::updater_gate(
         context.config(),
         std::path::Path::new(&std::env::var_os("HOME").unwrap_or_default()),
     );
     let builder = tauri::Builder::default();
-    #[cfg(unix)]
     let builder = match &gate {
         Ok(key) => builder.plugin(tauri_plugin_updater::Builder::new().pubkey(key).build()),
         Err(_) => builder,
     };
-    #[cfg(unix)]
     let updater_plugin = gate.map(|_| ());
     let app = builder
         .invoke_handler(tauri::generate_handler![
@@ -3006,13 +3014,9 @@ pub fn run() {
             window_close,
             privacy_get,
             privacy_set,
-            #[cfg(unix)]
             updater::app_update_get,
-            #[cfg(unix)]
             updater::app_update_start,
-            #[cfg(unix)]
             updater::app_update_cancel,
-            #[cfg(unix)]
             updater::app_update_rollback,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
@@ -3096,6 +3100,7 @@ pub fn run() {
             if let Some(w) = &access_store.warning {
                 eprintln!("pluxy-app: {w}");
             }
+            #[cfg(not(windows))]
             let data = app.path().app_data_dir()?;
             // The files that hold secrets: connection.json (a kept management key) and the app's
             // own core's folder (its config holds the core's management key, and the core keeps
@@ -3110,6 +3115,13 @@ pub fn run() {
             let core = secrets.join("core");
             #[cfg(not(windows))]
             let core = data.join("core");
+            // The app's own core versions: on Windows in the local application data too, so the
+            // programs (a core and its packages per version) stay on this machine and are not
+            // copied to the roaming profile's server; `cores.rs` refuses a store off a fixed
+            // local drive.
+            #[cfg(windows)]
+            let cores = secrets.join("cores");
+            #[cfg(not(windows))]
             let cores = data.join("cores");
             // When the app's core exits, the tray and the window show it. Off this thread: the
             // exit may come while a connection change holds the connection.
@@ -3204,7 +3216,6 @@ pub fn run() {
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
                 rotation_open: AtomicBool::new(false),
-                #[cfg(unix)]
                 updater: updater::State::new(updater_plugin.clone()),
             });
             let handle = app.handle().clone();
@@ -3298,9 +3309,7 @@ pub fn run() {
                 show_in_dock(&handle, false);
             }
             // A version an update installed accepts itself, which the earlier one waits for.
-            #[cfg(unix)]
             updater::accept(&handle);
-            #[cfg(unix)]
             updater::record_started_from(&handle);
             #[cfg(feature = "native-test")]
             native_test::start(handle);
@@ -3380,12 +3389,27 @@ mod tests {
 
     #[test]
     fn a_device_page_loads_its_files_from_the_asset_scheme_as_served() {
-        // Linux and macOS serve the asset scheme by its name; Windows as an http origin.
+        // Linux and macOS serve the asset scheme by its name; Windows as an http origin. The
+        // answer the scheme gives here is held to this system's.
+        let here = if cfg!(any(windows, target_os = "android")) {
+            "http://pluxy-app.localhost/"
+        } else {
+            "pluxy-app://localhost/"
+        };
+        assert_eq!(device::asset_base(), here);
+        let served = asset_response(200, Some((b"<p>".to_vec(), "text/html")));
+        let served = served.headers()["Content-Security-Policy"]
+            .to_str()
+            .unwrap();
         for (base, source) in [
             ("pluxy-app://localhost/", "pluxy-app:"),
             ("http://pluxy-app.localhost/", "http://pluxy-app.localhost"),
         ] {
-            let csp = asset_csp(&pages::asset_source(base));
+            let csp = if base == here {
+                served.to_string()
+            } else {
+                asset_csp(&pages::asset_source(base))
+            };
             for directive in [
                 "script-src",
                 "style-src",
@@ -3547,7 +3571,6 @@ mod tests {
         ] {
             assert!(all.iter().any(|a| a == c), "{c} missing from {all:?}");
         }
-        #[cfg(unix)]
         assert!(all.iter().any(|a| a == "plugin:updater|check"));
         assert!(all.iter().all(|c| !c.contains("__app-acl__")));
         assert!(all.len() > 100, "{} plugin commands", all.len());
