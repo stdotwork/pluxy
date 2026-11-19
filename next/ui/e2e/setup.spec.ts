@@ -28,7 +28,9 @@ test("a first run opens Setup, installs the suggested provider, adds an account,
   await page.getByRole("button", { name: "Start", exact: true }).click();
   await expect(pick.locator('[data-part="badge"]')).toHaveText("Installed");
   const packages = await core.mgmt<{ packages: { id: string; enabled: boolean }[] }>("GET", "/packages");
-  expect(packages.body.packages).toContainEqual(expect.objectContaining({ id: "pluxy/claude", enabled: true }));
+  expect(packages.body.packages).toContainEqual(
+    expect.objectContaining({ id: "pluxy/claude", enabled: true }),
+  );
 
   // The sign-in of the Add Account page, on this page: an API key adds an account.
   const account = page.getByRole("region", { name: "Connect an account" });
@@ -49,7 +51,7 @@ test("a first run opens Setup, installs the suggested provider, adds an account,
   await expect(paste.locator("pre")).toContainText(`"ANTHROPIC_BASE_URL": "${core.base}"`);
   await expect(paste.locator("pre")).toContainText("<client-key>");
   await client.getByRole("button", { name: "Make a client key" }).click();
-  const value = await client.locator('[data-part="key-value"]').innerText();
+  const value = (await client.locator('[data-part="key-value"]').textContent()) ?? "";
   expect(value.length).toBeGreaterThan(20);
   await expect(paste.locator("pre")).toContainText(`"ANTHROPIC_AUTH_TOKEN": "${value}"`);
   const reply = await fetch(`${core.base}/v1/models`, { headers: { Authorization: `Bearer ${value}` } });

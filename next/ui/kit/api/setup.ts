@@ -91,8 +91,5 @@ export const setupApi = (host: Host) => ({
   finishSetup: () => host.call<{ first_run: boolean }>("POST", "/setup/done"),
   /** keyId names a client key from clientKeys(); the placeholder then names it. */
   clientPaste: (id: string, keyId?: string) =>
-    host.call<ClientPaste>(
-      "GET",
-      `/setup/clients/${one(id)}/paste${keyId ? `?key_id=${one(keyId)}` : ""}`,
-    ),
+    host.call<ClientPaste>("GET", `/setup/clients/${one(id)}/paste${keyId ? `?key_id=${one(keyId)}` : ""}`),
 });

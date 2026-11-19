@@ -138,6 +138,10 @@ export const PARTS = [
   "account-edit-discard",
   "subscription-end",
   "privacy-toggle",
+  "setup-found",
+  "setup-pick",
+  "setup-client",
+  "setup-paste",
 ] as const;
 
 export type Part = (typeof PARTS)[number];
