@@ -36,6 +36,12 @@ fn mtm() -> Result<MainThreadMarker, String> {
 
 pub(crate) fn press(app: &AppHandle, title: &str, key: Key) -> Result<(), String> {
     let d = one(app, title)?;
+    if let Key::Access(c) = key {
+        super::until_enabled(title, c, || {
+            on_main(app, move || inspect::access_enabled(d, c))
+                .ok_or_else(|| "the main thread did not answer".to_string())
+        })?;
+    }
     let way = on_main(app, move || -> Result<&'static str, String> {
         let mtm = mtm()?;
         let way = match key {

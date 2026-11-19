@@ -659,6 +659,33 @@ fn a_tool_that_ignores_the_end_of_its_input_is_killed_after_the_grace() {
     until("the reap", 5, || h.status(ID).state == "stopped");
 }
 
+/// On macOS a native tool never runs below a folder the `admin` group may write
+/// (`owned::Writers::Nobody`). The program is a copy of this test program (a link would resolve
+/// to it outside the folder), which would otherwise start and answer.
+#[cfg(target_os = "macos")]
+#[test]
+fn on_macos_a_tool_below_a_folder_the_admin_group_may_write_does_not_start() {
+    use std::os::unix::fs::PermissionsExt;
+    let spec = package(Value::Null);
+    let bin = spec.dir.join("bin");
+    std::fs::remove_file(&spec.program).unwrap();
+    std::fs::copy(std::env::current_exe().unwrap(), &spec.program).unwrap();
+    let out = std::process::Command::new("/usr/bin/chgrp")
+        .arg("admin")
+        .arg(&bin)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "chgrp admin (the test's user must be in admin): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o775)).unwrap();
+    let h = host_for(spec, fast());
+    let e = summary(&h, &["a"]).unwrap_err();
+    assert!(e.message.contains("may be changed by other users"), "{e}");
+}
+
 #[test]
 fn stopping_a_tool_that_does_not_run_leaves_it_as_it_was() {
     let h = host_for(package(Value::Null), fast());
@@ -1671,7 +1698,16 @@ fn after_stop_all_no_candidate_starts_and_a_prepared_one_is_reaped() {
 
 #[test]
 fn cancel_all_reaches_a_call_on_a_draining_release() {
-    let h = Arc::new(host(Value::Null));
+    // The new release is not stopped for idleness: the swap starts its idle time, and fast()'s
+    // idle delay is shorter than a loaded machine can take to reap the old release. Stopped idle,
+    // the package would start again from the record, which names the first release.
+    let h = Arc::new(host_for(
+        package(Value::Null),
+        Limits {
+            idle: Duration::from_secs(60),
+            ..fast()
+        },
+    ));
     let (old, _) = pids(&summary(&h, &[]).unwrap());
     let waiting = call_in_thread(&h, "wait", json!({}));
     until("the wait call", 5, || h.status(ID).state == "active");
@@ -2382,8 +2418,9 @@ impl Drop for Lab {
         let running = || -> Vec<u64> {
             beats
                 .iter()
-                .filter_map(|f| pid_of(f))
-                .filter(|p| alive(*p))
+                .filter_map(|f| wrote(f))
+                .filter(runs)
+                .filter_map(|v| v["pid"].as_u64())
                 .collect()
         };
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -2403,22 +2440,23 @@ impl Drop for Lab {
     }
 }
 
-/// The process ID heartbeat f wrote, once it has.
-fn pid_of(f: &Path) -> Option<u64> {
+/// What heartbeat f wrote of itself as it started (`<f>.json`), once it has.
+fn wrote(f: &Path) -> Option<Value> {
     std::fs::read(with(f, "json"))
         .ok()
-        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-        .and_then(|v| v["pid"].as_u64())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+}
+
+/// The process ID heartbeat f wrote, once it has.
+fn pid_of(f: &Path) -> Option<u64> {
+    wrote(f).and_then(|v| v["pid"].as_u64())
 }
 
 /// What heartbeat f wrote of itself as it started (`<f>.json`), waiting for it.
 fn seen(f: &Path) -> Value {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        if let Some(v) = std::fs::read(with(f, "json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-        {
+        if let Some(v) = wrote(f) {
             return v;
         }
         assert!(Instant::now() < deadline, "{} never started", f.display());
@@ -2442,12 +2480,46 @@ fn beating(f: &Path) -> bool {
     false
 }
 
+/// Whether the heartbeat that wrote seen (its `<f>.json`) runs. On Windows the process at its ID
+/// must also have been created when the heartbeat was: Windows may give the ID of an ended process
+/// to the next one it starts, here another check's process, as soon as the last handle to the
+/// ended one has closed.
+fn runs(seen: &Value) -> bool {
+    let pid = seen["pid"].as_u64().unwrap();
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+        use windows_sys::Win32::System::Threading::{
+            WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+        };
+        let created = seen["created"].as_u64();
+        assert!(created.is_some(), "the heartbeat wrote no creation time");
+        look_at(pid, PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION).is_some_and(|h| {
+            fixture::created(h.as_raw_handle()) == created
+                && unsafe { WaitForSingleObject(h.as_raw_handle(), 0) } == WAIT_TIMEOUT
+        })
+    }
+    #[cfg(not(windows))]
+    alive(pid)
+}
+
 /// Whether heartbeat f's process has exited, within ten seconds.
 fn ends(f: &Path) -> bool {
-    let pid = seen(f)["pid"].as_u64().unwrap();
+    let seen = seen(f);
     let deadline = Instant::now() + Duration::from_secs(10);
-    while alive(pid) {
+    while runs(&seen) {
         if Instant::now() >= deadline {
+            eprintln!(
+                "heartbeat {} (process {}) still runs after 10 s; its count {}",
+                f.display(),
+                seen["pid"],
+                if beating(f) {
+                    "advances"
+                } else {
+                    "stands still"
+                }
+            );
             return false;
         }
         std::thread::sleep(Duration::from_millis(50));

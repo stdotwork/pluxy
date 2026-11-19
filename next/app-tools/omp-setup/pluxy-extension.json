@@ -9,8 +9,11 @@
       0
     ],
     "programs": {
+      "darwin/amd64": "bin/omp-setup",
+      "darwin/arm64": "bin/omp-setup",
       "linux/amd64": "bin/omp-setup",
-      "linux/arm64": "bin/omp-setup"
+      "linux/arm64": "bin/omp-setup",
+      "windows/amd64": "bin/omp-setup.exe"
     },
     "operations": [
       {

@@ -1,17 +1,28 @@
-//! The app's own update, through the stock Tauri updater plugin: only for an AppImage this user
-//! keeps, only with updater trust, and only to a newer version the release feed (`release.rs`)
-//! offers with a signed artifact for this system. README.md ("Application update") has the rules.
+//! The app's own update, through the stock Tauri updater plugin: only for a copy of the app this
+//! user keeps, only with updater trust, and only to a newer version the release feed
+//! (`release.rs`) offers with a signed artifact for this system. README.md ("Application update")
+//! has the rules.
 //!
 //! Before any updater plugin call the updater gate (`trust::updater_gate`) passes; the plugin is
 //! registered at all only when it passed at startup (`lib.rs`). Before any download the
-//! installation's provenance is checked: a .deb, an .rpm or an unknown format is refused, with
-//! how to update instead, even when the feed has a signed update. The artifact is downloaded
-//! here, read as the feed is, then the plugin checks its signature (bound to the announced
-//! version) and installs it over the AppImage. Before that, the running version's AppImage is
-//! kept, pinned by its digest: rolling back restores only such a copy, after a native
-//! confirmation. Installing ends with the app quitting as it always does (its tools and its own
-//! core stop), starting the new version and waiting for it to accept itself; without that, the
-//! kept copy is put back and started again.
+//! installation's provenance is checked: a copy a package manager or an installer keeps, or one in
+//! an unknown format, is refused, with how to update instead, even when the feed has a signed
+//! update. The artifact is downloaded here, read as the feed is, then the plugin checks its
+//! signature (bound to the announced version); the plugin never installs anything. This module
+//! checks the artifact's format and puts it in place itself, one installer per format:
+//!
+//! - Linux (`appimage.rs`): the AppImage, one file, replaced in one rename;
+//! - Windows (`exe.rs`): the program of a folder bundle, one self-contained `.exe`, renamed aside
+//!   (a running program can be renamed, not replaced) and the new one renamed into its place;
+//! - macOS (`app.rs`): the `.app` bundle, unpacked from its `.app.tar.gz` next to it and swapped
+//!   with it in one step.
+//!
+//! Before that, the running version's copy is kept, pinned by its digest: rolling back restores
+//! only such a copy, after a native confirmation. Installing ends with the app stopping as Quit
+//! stops it (its tools, its managed runtimes and its own core), starting the new version as its
+//! successor (`owned::Successor`) and waiting for it to accept itself; without that, the app ends
+//! that successor, puts the kept copy back and starts it again.
+use crate::owned::Successor;
 use crate::release::{self, Product, Release, UpdateArtifact};
 use crate::{trusted, App, MAIN};
 use serde::{Deserialize, Serialize};
@@ -24,8 +35,23 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Webview};
 
-/// The updater's name for this system's artifact: Linux, x86_64, AppImage.
-pub const TARGET: &str = "linux-x86_64-appimage";
+#[cfg(target_os = "macos")]
+mod app;
+#[cfg(target_os = "linux")]
+mod appimage;
+#[cfg(any(target_os = "macos", all(test, unix)))]
+mod bundle;
+#[cfg(windows)]
+mod exe;
+#[cfg(target_os = "macos")]
+use app as format;
+#[cfg(target_os = "linux")]
+use appimage as format;
+#[cfg(windows)]
+use exe as format;
+
+/// The updater's name for this system's artifact.
+use format::TARGET;
 /// How long a new version has to accept itself.
 const ACCEPT_WITHIN: Duration = Duration::from_secs(90);
 /// Kept copies of earlier versions, newest first; older ones are deleted.
@@ -53,7 +79,8 @@ impl Task {
     }
 }
 
-/// A version of the app and the SHA-256 of its AppImage.
+/// A version of the app and the digest of its installed copy: the SHA-256 of the AppImage or the
+/// program, or of an app bundle's tree (`app.rs`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pinned {
     pub version: String,
@@ -68,7 +95,10 @@ pub struct Pending {
     kind: String,
     from: Pinned,
     to: Pinned,
-    appimage: PathBuf,
+    /// The installed copy: the AppImage, the program or the app bundle. Its name on disk is the
+    /// one format 1 gave it on Linux.
+    #[serde(rename = "appimage")]
+    installed: PathBuf,
     nonce: String,
 }
 
@@ -104,8 +134,8 @@ pub struct State {
     plugin: Result<(), String>,
     task: Mutex<Task>,
     cancel: AtomicBool,
-    /// The SHA-256 of the AppImage this process started from, hashed once at startup
-    /// (`record_started_from`): only those bytes are kept as this version.
+    /// The digest of the installed copy this process started from, taken once at startup
+    /// (`record_started_from`): only that copy is kept as this version.
     started_from: std::sync::OnceLock<Result<String, String>>,
 }
 
@@ -146,9 +176,23 @@ fn dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| e.to_string())
 }
 
-fn kept_path(dir: &Path, p: &Pinned) -> PathBuf {
+/// Where the kept copy of p is: `updates/kept/<version>-<digest>` and the format's ending.
+pub(crate) fn kept_path(dir: &Path, p: &Pinned) -> PathBuf {
     dir.join("kept")
-        .join(format!("{}-{}.AppImage", p.version, p.sha256))
+        .join(format!("{}-{}{}", p.version, p.sha256, format::SUFFIX))
+}
+
+/// The installed copy this process runs from, as the updater sees it (the AppImage, the program
+/// or the app bundle), if it can tell. For the native test.
+#[cfg_attr(not(feature = "native-test"), allow(dead_code))]
+pub(crate) fn installed_here(app: &AppHandle) -> Option<PathBuf> {
+    format::here(app)
+}
+
+/// The digest an installed copy is pinned by (see `Pinned`). For the native test.
+#[cfg_attr(not(feature = "native-test"), allow(dead_code))]
+pub(crate) fn digest(path: &Path) -> Result<String, String> {
+    format::digest(path)
 }
 
 fn read_json<T: for<'a> Deserialize<'a>>(path: &Path) -> Option<T> {
@@ -164,6 +208,7 @@ fn write_json<T: Serialize>(path: &Path, v: &T) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
+#[cfg(unix)]
 fn private_dir(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::DirBuilderExt;
     fs::DirBuilder::new()
@@ -173,91 +218,15 @@ fn private_dir(path: &Path) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// Whether bytes start as a type-2 AppImage: an ELF file with `AI\x02` at offset 8.
-pub fn is_appimage(bytes: &[u8]) -> bool {
-    bytes.len() >= 11 && bytes[..4] == *b"\x7fELF" && bytes[8..11] == *b"AI\x02"
-}
-
-/// Why this build has no updater, if it has none: the plugin was not registered at startup, or
-/// the updater gate refuses now. Run before every use of the plugin.
-fn gate(app: &AppHandle) -> Result<(), String> {
-    let not = |e: String| format!("The updater is not configured: {e}");
-    app.state::<App>().updater.plugin.clone().map_err(not)?;
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    crate::trust::updater_gate(app.config(), Path::new(&home))
-        .map(|_| ())
-        .map_err(not)
-}
-
-/// How this copy of the app was installed, as far as updating it goes: the AppImage this user
-/// keeps, or why it cannot be updated from here.
-pub fn provenance(app: &AppHandle) -> Result<PathBuf, String> {
-    use tauri::utils::config::BundleType;
-    match tauri::utils::platform::bundle_type() {
-        Some(BundleType::AppImage) => {}
-        Some(BundleType::Deb) => {
-            return Err("This copy of pluxy was installed from a .deb package. Update it with your \
-                 package manager (for example `sudo apt install ./<new package>.deb`), not from here."
-                .into())
-        }
-        Some(BundleType::Rpm) => {
-            return Err("This copy of pluxy was installed from an .rpm package. Update it with your \
-                 package manager (for example `sudo dnf upgrade` or `sudo rpm -U <new package>.rpm`), \
-                 not from here."
-                .into())
-        }
-        _ => {
-            return Err("This copy of pluxy is not an AppImage, the only kind this updater can \
-                 replace (its install format is unknown). Install the new version the way you \
-                 installed this one."
-                .into())
-        }
-    }
-    let appimage = env_appimage(app)
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .ok_or("This AppImage does not say where it is (APPIMAGE is not set). Install the new version by hand.")?;
-    check_owned(&appimage, false)?;
-    let parent = appimage.parent().ok_or("The AppImage has no folder.")?;
-    // shortcut: only the AppImage and its folder are checked, and `replace` renames by path; a
-    // group- or world-writable, non-sticky folder further up could be swapped by another user of
-    // a shared machine. Upgrade by checking the ancestors and renaming through an open folder
-    // handle, if updating on shared machines is wanted.
-    check_owned(parent, true)?;
-    let mut head = [0u8; 16];
-    {
-        use std::io::Read;
-        fs::File::open(&appimage)
-            .and_then(|mut f| f.read_exact(&mut head))
-            .map_err(|e| format!("{}: {e}", appimage.display()))?;
-    }
-    if !is_appimage(&head) {
-        return Err(format!(
-            "{} is not a type-2 AppImage; install the new version by hand.",
-            appimage.display()
-        ));
-    }
-    // The program that runs is the one inside that AppImage.
-    let inside = env_appdir(app)
-        .map(PathBuf::from)
-        .and_then(|d| d.canonicalize().ok())
-        .zip(
-            std::env::current_exe()
-                .ok()
-                .and_then(|e| e.canonicalize().ok()),
-        )
-        .is_some_and(|(d, exe)| exe.starts_with(d));
-    if !inside {
-        return Err(
-            "This program is not running from its AppImage; install the new version by hand."
-                .into(),
-        );
-    }
-    Ok(appimage)
+#[cfg(windows)]
+fn private_dir(path: &Path) -> Result<(), String> {
+    crate::private_windows::create_private_dir_all(path)
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// A file (or folder) this user owns, not a link, that no one else can write to: one a package
 /// manager or another user keeps is not this updater's to replace.
+#[cfg(unix)]
 fn check_owned(path: &Path, folder: bool) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let m = fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -273,6 +242,23 @@ fn check_owned(path: &Path, folder: bool) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Why this build has no updater, if it has none: the plugin was not registered at startup, or
+/// the updater gate refuses now. Run before every use of the plugin.
+fn gate(app: &AppHandle) -> Result<(), String> {
+    let not = |e: String| format!("The updater is not configured: {e}");
+    app.state::<App>().updater.plugin.clone().map_err(not)?;
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    crate::trust::updater_gate(app.config(), Path::new(&home))
+        .map(|_| ())
+        .map_err(not)
+}
+
+/// How this copy of the app was installed, as far as updating it goes: the copy this user keeps
+/// (the AppImage, the program or the app bundle), or why it cannot be updated from here.
+pub fn provenance(app: &AppHandle) -> Result<PathBuf, String> {
+    format::provenance(app)
 }
 
 /// The newer app release the feed offers on the current channel, with this system's artifact.
@@ -377,38 +363,14 @@ fn claim(task: &Mutex<Task>, cancel: &AtomicBool, t: Task) -> Result<(), String>
     Ok(())
 }
 
-/// The AppImage this process runs from, if it does: Tauri's `Env` knows it on Linux only, so
-/// elsewhere nothing is an AppImage and every check that needs one refuses.
-#[cfg(target_os = "linux")]
-fn env_appimage(app: &AppHandle) -> Option<OsString> {
-    app.env().appimage
-}
-
-#[cfg(not(target_os = "linux"))]
-fn env_appimage(_: &AppHandle) -> Option<OsString> {
-    None
-}
-
-/// The folder the AppImage is mounted at, under the same rule as `env_appimage`.
-#[cfg(target_os = "linux")]
-fn env_appdir(app: &AppHandle) -> Option<OsString> {
-    app.env().appdir
-}
-
-#[cfg(not(target_os = "linux"))]
-fn env_appdir(_: &AppHandle) -> Option<OsString> {
-    None
-}
-
-/// Hashes, once, the AppImage this process started from. Call after the app state exists.
+/// Takes, once, the digest of the installed copy this process started from. Call after the app
+/// state exists.
 pub fn record_started_from(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
-        let digest = match env_appimage(&app) {
-            Some(p) => fs::read(&p)
-                .map(|b| sha256(&b))
-                .map_err(|e| format!("{}: {e}", Path::new(&p).display())),
-            None => Err("this program is not an AppImage".into()),
+        let digest = match format::here(&app) {
+            Some(p) => format::digest(&p),
+            None => Err(format!("this program is not an {}", format::WHAT)),
         };
         let _ = app.state::<App>().updater.started_from.set(digest);
     });
@@ -422,7 +384,10 @@ fn started_from(app: &AppHandle) -> Result<String, String> {
             return d.clone();
         }
         if Instant::now() > deadline {
-            return Err("the AppImage this version started from is not hashed yet".into());
+            return Err(format!(
+                "the {} this version started from is not hashed yet",
+                format::WHAT
+            ));
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -441,7 +406,7 @@ pub fn app_update_start(webview: Webview) -> Result<(), String> {
     trusted(&webview)?;
     let app = webview.app_handle().clone();
     gate(&app)?;
-    let appimage = provenance(&app)?;
+    let installed = provenance(&app)?;
     let (release, artifact) =
         offered(&app)?.ok_or("There is no newer version of the app on this channel.")?;
     let st = app.state::<App>();
@@ -458,7 +423,7 @@ pub fn app_update_start(webview: Webview) -> Result<(), String> {
     )?;
     emit_task(&app);
     std::thread::spawn(
-        move || match install(&app, &appimage, &release, &artifact) {
+        move || match install(&app, &installed, &release, &artifact) {
             Ok(restart) => restart_into(&app, restart),
             Err(e) if e == "cancelled" => set_task(&app, |t| {
                 t.phase = "cancelled";
@@ -490,7 +455,7 @@ pub fn app_update_cancel(webview: Webview) -> Result<(), String> {
 
 fn install(
     app: &AppHandle,
-    appimage: &Path,
+    installed: &Path,
     release: &Release,
     artifact: &UpdateArtifact,
 ) -> Result<Restart, String> {
@@ -542,26 +507,29 @@ fn install(
     update
         .verify(&bytes)
         .map_err(|e| format!("The update failed its signature check: {e}"))?;
-    if !is_appimage(&bytes) {
-        return Err("The update is not a type-2 AppImage.".into());
+    if st.updater.cancel.load(Ordering::SeqCst) {
+        return Err("cancelled".into());
     }
+    // The verified bytes, checked as this format's and made ready to put in place (on macOS,
+    // unpacked next to the bundle).
+    let staged = format::stage(installed, bytes, &release.version)?;
     if st.updater.cancel.load(Ordering::SeqCst) {
         return Err("cancelled".into());
     }
     set_task(app, |t| t.phase = "installing");
     let dir = dir(app)?;
     let running = app.package_info().version.to_string();
-    let from = keep(&dir, appimage, &running, &started_from(app)?)?;
+    let from = keep(&dir, installed, &running, &started_from(app)?)?;
     let to = Pinned {
         version: release.version.clone(),
-        sha256: sha256(&bytes),
+        sha256: staged.digest().to_string(),
     };
     // Checked before the pending record is written, so a refusal leaves none behind.
     provenance(app)?;
-    let pending = pending(&dir, "update", from, to.clone(), appimage)?;
-    // The app's own replace, in one step, of the bytes the plugin just verified: the AppImage
-    // is the old one or the new one, never missing or cut short.
-    if let Err(e) = replace(appimage, &bytes) {
+    let pending = pending(&dir, "update", from, to.clone(), installed)?;
+    // The app's own replace of what the plugin just verified: the installed copy is the old one
+    // or the new one (on Windows, see `exe.rs` for the one moment it is neither).
+    if let Err(e) = format::swap_in(installed, staged) {
         let _ = fs::remove_file(dir.join("pending.json"));
         return Err(format!("The update could not be installed: {e}"));
     }
@@ -574,42 +542,54 @@ fn pending(
     kind: &str,
     from: Pinned,
     to: Pinned,
-    appimage: &Path,
+    installed: &Path,
 ) -> Result<Pending, String> {
-    let mut nonce = [0u8; 16];
-    getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
     let p = Pending {
         format: 1,
         kind: kind.into(),
         from,
         to,
-        appimage: appimage.to_path_buf(),
-        nonce: crate::artifact::hex(&nonce),
+        installed: installed.to_path_buf(),
+        nonce: nonce()?,
     };
     write_json(&dir.join("pending.json"), &p)?;
     Ok(p)
 }
 
-/// Keeps a copy of the AppImage this version started from, pinned by its digest, as the
-/// version to go back to; returns that pin. started is the digest hashed when this version
-/// started: an AppImage replaced since is not this version and is not kept under its name.
-fn keep(dir: &Path, appimage: &Path, version: &str, started: &str) -> Result<Pinned, String> {
-    let bytes = fs::read(appimage).map_err(|e| format!("{}: {e}", appimage.display()))?;
+fn nonce() -> Result<String, String> {
+    let mut nonce = [0u8; 16];
+    getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
+    Ok(crate::artifact::hex(&nonce))
+}
+
+/// Keeps a copy of the installed copy this version started from, pinned by its digest, as the
+/// version to go back to; returns that pin. started is the digest taken when this version
+/// started: a copy replaced since is not this version and is not kept under its name. The kept
+/// copy is checked against the pin once made.
+fn keep(dir: &Path, installed: &Path, version: &str, started: &str) -> Result<Pinned, String> {
     let pin = Pinned {
         version: version.into(),
-        sha256: sha256(&bytes),
+        sha256: format::digest(installed)?,
     };
     if pin.sha256 != started {
         return Err(format!(
-            "{} is not the AppImage this version ({version}) started from; restart the app before updating.",
-            appimage.display()
+            "{} is not the {} this version ({version}) started from; restart the app before updating.",
+            installed.display(),
+            format::WHAT
         ));
     }
     let path = kept_path(dir, &pin);
     private_dir(&dir.join("kept"))?;
-    if fs::read(&path).map(|b| sha256(&b)).ok().as_deref() != Some(pin.sha256.as_str()) {
-        crate::managed::write_private(&path, &bytes)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+    if format::digest(&path).ok().as_deref() != Some(pin.sha256.as_str()) {
+        format::remove(&path);
+        format::copy_new(installed, &path)?;
+        if format::digest(&path).ok().as_deref() != Some(pin.sha256.as_str()) {
+            format::remove(&path);
+            return Err(format!(
+                "{} changed while it was kept; restart the app before updating.",
+                installed.display()
+            ));
+        }
     }
     let mut h = history(dir);
     h.kept.retain(|p| p != &pin);
@@ -619,8 +599,8 @@ fn keep(dir: &Path, appimage: &Path, version: &str, started: &str) -> Result<Pin
 }
 
 /// Drops the oldest kept versions beyond `KEEP`, history entry and copy. Run only once the
-/// install they were kept for has replaced the AppImage: until then a failed replace must leave
-/// every earlier version it could roll back to.
+/// install they were kept for has replaced the installed copy: until then a failed replace must
+/// leave every earlier version it could roll back to.
 fn evict(dir: &Path) {
     let mut h = history(dir);
     let old = h.kept.split_off(KEEP.min(h.kept.len()));
@@ -630,60 +610,25 @@ fn evict(dir: &Path) {
     // History first: a copy without an entry is harmless, an entry without its copy is not.
     if write_json(&dir.join("history.json"), &h).is_ok() {
         for p in old {
-            let _ = fs::remove_file(kept_path(dir, &p));
+            format::remove(&kept_path(dir, &p));
         }
     }
-}
-
-/// Replaces the AppImage with bytes in one step: a new file in the same folder, written and
-/// synced, with the AppImage's permissions, renamed over it, then the folder synced.
-fn replace(appimage: &Path, bytes: &[u8]) -> Result<(), String> {
-    use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let parent = appimage.parent().ok_or("The AppImage has no folder.")?;
-    let mode = fs::metadata(appimage).map_or(0o755, |m| m.permissions().mode() & 0o755);
-    let mut nonce = [0u8; 8];
-    getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
-    let tmp = parent.join(format!(".pluxy-update-{}", crate::artifact::hex(&nonce)));
-    let written = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o700)
-        .open(&tmp)
-        .and_then(|mut f| {
-            f.write_all(bytes)?;
-            f.set_permissions(fs::Permissions::from_mode(mode | 0o700))?;
-            f.sync_all()
-        })
-        .and_then(|_| fs::rename(&tmp, appimage));
-    if let Err(e) = written {
-        let _ = fs::remove_file(&tmp);
-        return Err(format!("{}: {e}", appimage.display()));
-    }
-    // Best effort once renamed: the new AppImage is in place, so a failed folder sync must not
-    // report the install as failed (the caller would drop its pending record and the new version
-    // would run untracked).
-    let _ = fs::File::open(parent).and_then(|d| d.sync_all());
-    Ok(())
 }
 
 /// Puts the kept copy of the version an install came from back, if it still has its digest.
 /// The pending install is over either way.
 fn restore(dir: &Path, p: &Pending) -> Result<(), String> {
     let kept = kept_path(dir, &p.from);
-    let outcome = match fs::read(&kept) {
-        Ok(b) if sha256(&b) == p.from.sha256 => replace(&p.appimage, &b),
-        Ok(_) => Err(format!("the kept copy {} changed", kept.display())),
-        Err(e) => Err(format!("the kept copy {}: {e}", kept.display())),
-    };
+    let outcome = format::stage_kept(&p.installed, &kept, &p.from)
+        .and_then(|s| format::swap_in(&p.installed, s));
     let _ = fs::remove_file(dir.join("pending.json"));
     outcome
 }
 
 /// After an install: the app stops as Quit stops it (its tools, its managed runtimes and its own
 /// core, in that order; detached launches run on), keeping its profile lock and its tray; a
-/// thread of its own then starts the new version, hands it the lock, and waits for it to accept
-/// itself (`supervise`) before the app exits.
+/// thread of its own then starts the new version, hands the profile to it, and waits for it to
+/// accept itself (`supervise`) before the app exits.
 fn restart_into(app: &AppHandle, restart: Restart) {
     set_task(app, |t| t.phase = "restarting");
     let app = app.clone();
@@ -694,100 +639,95 @@ fn restart_into(app: &AppHandle, restart: Restart) {
         // keeps the app.
         st.quitting.store(true, Ordering::SeqCst);
         crate::remember_window(&app);
-        #[cfg(target_os = "linux")]
         st.confirmations.lock().unwrap().invalidate();
         crate::stop_owned(&st);
         // Hidden, not closed: closing the last window would end the app before the wait does.
         if let Some(w) = app.get_window(crate::WINDOW) {
             let _ = w.hide();
         }
-        let lock = app.try_state::<crate::instance::Instance>().and_then(|i| {
-            // No later launch is raised by this app any more; the lock stays held.
+        // No later launch is raised by this app any more; the lock stays held.
+        if let Some(i) = app.try_state::<crate::instance::Instance>() {
             i.release();
-            i.lock_fd()
-        });
-        supervise(&restart, lock);
+        }
+        supervise(&app, &restart);
         app.exit(0);
     });
 }
 
-/// Starts program with args, in a process group of its own, handing it the profile lock (the
-/// file descriptor stays open across exec, and `instance` adopts it). With after set, it starts
-/// once that process has ended.
-fn spawn_holding(
-    lock: Option<std::os::fd::RawFd>,
-    program: &Path,
-    args: &[OsString],
-    after: Option<i32>,
-) -> std::io::Result<std::process::Child> {
-    use std::os::unix::process::CommandExt;
-    let mut c = match after {
-        Some(pid) => {
-            let mut c = std::process::Command::new("/bin/sh");
-            c.arg("-c")
-                .arg(r#"p=$1; a=$2; shift 2; while kill -0 "$p" 2>/dev/null; do sleep 0.2; done; exec "$a" "$@""#)
-                .arg("sh")
-                .arg(pid.to_string())
-                .arg(program)
-                .args(args);
-            c
-        }
-        None => {
-            let mut c = std::process::Command::new(program);
-            c.args(args);
-            c
-        }
-    };
-    c.process_group(0);
-    match lock {
-        Some(fd) => {
-            c.env(crate::instance::LOCK_FD_ENV, fd.to_string());
-            // SAFETY: fcntl is async-signal-safe; it only clears close-on-exec on the lock.
-            unsafe {
-                c.pre_exec(move || {
-                    let flags = libc::fcntl(fd, libc::F_GETFD);
-                    if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
-        }
-        None => {
-            c.env_remove(crate::instance::LOCK_FD_ENV);
-        }
+/// Starts the installed copy as this app's successor, with this process's arguments. The profile
+/// passes to it without ever being free: on Linux and macOS this process hands it the profile
+/// lock's descriptor; on Windows (where a lock cannot be handed on) this process names it in a
+/// successor record by nonce and digest, and it takes the lock once this process has ended
+/// (`instance`). With after, on Linux and macOS it starts once this process has ended.
+fn start_successor(
+    app: &AppHandle,
+    installed: &Path,
+    nonce: &str,
+    digest: &str,
+    after: bool,
+) -> std::io::Result<Successor> {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let program = format::program(installed);
+    #[cfg(unix)]
+    {
+        let _ = (nonce, digest);
+        let lock = app
+            .try_state::<crate::instance::Instance>()
+            .and_then(|i| i.lock_fd());
+        Successor::start(
+            &program,
+            &args,
+            lock.map(|fd| (fd, crate::instance::LOCK_FD_ENV)),
+            after.then(format::restart_after),
+        )
     }
-    c.spawn()
+    #[cfg(windows)]
+    {
+        let _ = after;
+        let i = app
+            .try_state::<crate::instance::Instance>()
+            .ok_or_else(|| std::io::Error::other("the app holds no profile"))?;
+        i.name_successor(nonce, &program, digest)?;
+        let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
+            .filter(|(k, _)| {
+                !k.to_string_lossy()
+                    .eq_ignore_ascii_case(crate::instance::SUCCESSOR_ENV)
+            })
+            .collect();
+        env.push((crate::instance::SUCCESSOR_ENV.into(), nonce.into()));
+        Successor::start(&program, &args, &env)
+    }
 }
 
-/// Waits until the started version accepts itself, ends, or the deadline passes (then its
-/// process group is killed). A receipt that arrives as it ends, or in the last wait before the
+/// Waits until the started version accepts itself (then lets it go), ends, or the deadline
+/// passes (then ends it). A receipt that arrives as it ends, or in the last wait before the
 /// deadline, still counts.
 fn await_acceptance(
-    child: &mut std::process::Child,
+    mut next: Successor,
     deadline: Instant,
     accepted: impl Fn() -> bool,
 ) -> Result<(), String> {
     loop {
         if accepted() {
+            next.release();
             return Ok(());
         }
-        if let Ok(Some(status)) = child.try_wait() {
+        if let Ok(Some(status)) = next.try_wait() {
             return if accepted() {
+                next.release();
                 Ok(())
             } else {
                 Err(format!("it ended ({status}) before accepting the update"))
             };
         }
         if Instant::now() > deadline {
-            // One last look before the kill: a receipt written during the last wait counts, and
-            // a version killed after accepting would leave nothing running.
+            // One last look before ending it: a receipt written during the last wait counts, and
+            // a version ended after accepting would leave nothing running.
             if accepted() {
+                next.release();
                 return Ok(());
             }
-            // SAFETY: kill has no memory preconditions; the group is the child's own.
-            unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-            let _ = child.wait();
+            next.end();
             return Err(format!(
                 "it did not accept the update within {} seconds",
                 ACCEPT_WITHIN.as_secs()
@@ -797,20 +737,19 @@ fn await_acceptance(
     }
 }
 
-/// Starts the installed AppImage, holding the profile lock for it, and waits for it to accept
-/// itself; if it ends or does not accept in time, puts the earlier version back and starts that
-/// (or, if it cannot be put back, starts nothing and says where the kept copy is).
-fn supervise(r: &Restart, lock: Option<std::os::fd::RawFd>) {
+/// Starts the installed version as this app's successor and waits for it to accept itself; if it
+/// ends or does not accept in time, puts the earlier version back and starts that (or, if it
+/// cannot be put back, starts nothing and says where the kept copy is).
+fn supervise(app: &AppHandle, r: &Restart) {
     let receipt = r.dir.join("accepted.json");
     let _ = fs::remove_file(&receipt);
-    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let p = &r.pending;
     let accepted = || {
         read_json::<Accepted>(&receipt)
             .is_some_and(|a| a.nonce == p.nonce && a.version == p.to.version)
     };
-    let outcome = match spawn_holding(lock, &p.appimage, &args, None) {
-        Ok(mut child) => await_acceptance(&mut child, Instant::now() + ACCEPT_WITHIN, accepted),
+    let outcome = match start_successor(app, &p.installed, &p.nonce, &p.to.sha256, false) {
+        Ok(next) => await_acceptance(next, Instant::now() + ACCEPT_WITHIN, accepted),
         Err(e) => Err(format!("it could not be started: {e}")),
     };
     let _ = fs::remove_file(&receipt);
@@ -833,7 +772,7 @@ fn supervise(r: &Restart, lock: Option<std::os::fd::RawFd>) {
                 p.to.version,
                 p.from.version,
                 kept_path(&r.dir, &p.from).display(),
-                p.appimage.display(),
+                p.installed.display(),
                 p.from.version
             ),
             false,
@@ -849,37 +788,37 @@ fn supervise(r: &Restart, lock: Option<std::os::fd::RawFd>) {
     if !restored {
         return;
     }
-    // The earlier version's AppImage has the same contents as this one's: run without FUSE
-    // (APPIMAGE_EXTRACT_AND_RUN) it would unpack into the folder this one's runtime, its parent,
-    // deletes once this process ends. So it starts once that runtime has ended.
-    let extracted = std::env::var_os("APPDIR")
-        .map(PathBuf::from)
-        .and_then(|d| {
-            d.file_name()
-                .map(|n| n.to_string_lossy().starts_with("appimage_extracted_"))
-        })
-        .unwrap_or(false);
-    let after = if extracted {
-        // SAFETY: getppid has no preconditions.
-        unsafe { libc::getppid() }
-    } else {
-        std::process::id() as i32
-    };
-    let _ = spawn_holding(lock, &p.appimage, &args, Some(after));
+    // The version put back takes the profile once this process has ended; nothing waits for it.
+    if let Ok(n) = nonce() {
+        if let Ok(next) = start_successor(app, &p.installed, &n, &p.from.sha256, true) {
+            next.release();
+        }
+    }
 }
 
 /// At startup, after the profile lock: the version an install started accepts itself once the
-/// installed AppImage is the one it pinned, which the waiting earlier version reads.
+/// installed copy is the one it pinned, which the waiting earlier version reads. What an earlier
+/// install left beside the installed copy is removed once the earlier version has ended.
 pub fn accept(app: &AppHandle) {
+    // An AppImage's replace leaves nothing beside it.
+    #[cfg(not(target_os = "linux"))]
+    if gate(app).is_ok() {
+        if let Some(here) = format::here(app) {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                earlier_ended(&app);
+                format::cleanup(&here);
+            });
+        }
+    }
     let Ok(dir) = dir(app) else { return };
     let Some(p) = read_json::<Pending>(&dir.join("pending.json")) else {
         return;
     };
     let running = app.package_info().version.to_string();
-    let here = env_appimage(app).map(PathBuf::from);
     if running != p.to.version
-        || here.as_deref() != Some(p.appimage.as_path())
-        || fs::read(&p.appimage).map(|b| sha256(&b)).ok().as_deref() != Some(p.to.sha256.as_str())
+        || format::here(app).as_deref() != Some(p.installed.as_path())
+        || format::digest(&p.installed).ok().as_deref() != Some(p.to.sha256.as_str())
     {
         return;
     }
@@ -893,32 +832,92 @@ pub fn accept(app: &AppHandle) {
         eprintln!("native-test: update_not_accepting {{}}");
         std::process::exit(3);
     }
-    let (result, detail) = if p.kind == "rollback" {
-        (
-            "rolled-back",
-            format!("Rolled back from {} to {}.", p.from.version, p.to.version),
-        )
-    } else {
-        (
-            "installed",
-            format!("Updated from {} to {}.", p.from.version, p.to.version),
-        )
+    let finish = move || {
+        let (result, detail) = if p.kind == "rollback" {
+            (
+                "rolled-back",
+                format!("Rolled back from {} to {}.", p.from.version, p.to.version),
+            )
+        } else {
+            (
+                "installed",
+                format!("Updated from {} to {}.", p.from.version, p.to.version),
+            )
+        };
+        let _ = write_json(
+            &dir.join("last.json"),
+            &Last {
+                result: result.into(),
+                detail,
+            },
+        );
+        let _ = fs::remove_file(dir.join("pending.json"));
+        let _ = write_json(
+            &dir.join("accepted.json"),
+            &Accepted {
+                nonce: p.nonce,
+                version: running,
+            },
+        );
     };
-    let _ = write_json(
-        &dir.join("last.json"),
-        &Last {
-            result: result.into(),
-            detail,
-        },
-    );
-    let _ = fs::remove_file(dir.join("pending.json"));
-    let _ = write_json(
-        &dir.join("accepted.json"),
-        &Accepted {
-            nonce: p.nonce,
-            version: running,
-        },
-    );
+    // The native test holds the moment before acceptance open (`<dir>/hold-gap`), while the
+    // earlier version still waits and this one already answers later launches, to launch the
+    // app a third time in it.
+    #[cfg(feature = "native-test")]
+    if let Some(d) = std::env::var_os("PLUXY_APP_TEST_UPDATE")
+        .map(PathBuf::from)
+        .filter(|d| d.join("hold-gap").exists())
+    {
+        std::thread::spawn(move || {
+            let _ = fs::write(d.join("gap"), std::process::id().to_string());
+            eprintln!("native-test: update_gap {{\"pid\":{}}}", std::process::id());
+            let until = Instant::now() + Duration::from_secs(60);
+            while d.join("hold-gap").exists() && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            finish();
+        });
+        return;
+    }
+    finish();
+}
+
+/// Returns once the version this one took over from has ended (or after two minutes): on Windows
+/// once this app holds the profile lock, which that version held to its end; on macOS once this
+/// process is no longer that version's child (`still_its_child`).
+#[cfg(not(target_os = "linux"))]
+fn earlier_ended(app: &AppHandle) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    #[cfg(windows)]
+    while !app
+        .try_state::<crate::instance::Instance>()
+        .is_some_and(|i| i.holds_lock())
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app;
+        let started_by = std::env::var_os(crate::instance::LOCK_FD_ENV).is_some();
+        // SAFETY: getppid has no preconditions.
+        let parent = unsafe { libc::getppid() };
+        while still_its_child(started_by, parent, unsafe { libc::getppid() })
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+}
+
+/// macOS: whether this process, started by an update or a rollback (`started_by`), is still the
+/// child of the version that started it: its parent now (`now`) is the one it read first
+/// (`first`), and is not launchd (process 1). macOS has no subreapers, so a process whose parent
+/// has ended is launchd's: so is one a restore's wait loop starts once the earlier version has
+/// ended, or one whose parent ended before it first looked.
+#[cfg(any(target_os = "macos", test))]
+fn still_its_child(started_by: bool, first: i32, now: i32) -> bool {
+    started_by && now != 1 && now == first
 }
 
 /// Rolls back to a version that ran here and was kept, by its digest, after a native
@@ -933,7 +932,7 @@ pub fn app_update_rollback(
     trusted(&webview)?;
     let app = webview.app_handle().clone();
     gate(&app)?;
-    let appimage = provenance(&app)?;
+    let installed = provenance(&app)?;
     let dir = dir(&app)?;
     let target = Pinned { version, sha256 };
     if !history(&dir).kept.contains(&target) {
@@ -946,8 +945,7 @@ pub fn app_update_rollback(
     if target.version == running {
         return Err("That is the version running now.".into());
     }
-    let bytes = fs::read(kept_path(&dir, &target)).unwrap_or_default();
-    if self::sha256(&bytes) != target.sha256 {
+    if format::digest(&kept_path(&dir, &target)).ok().as_deref() != Some(target.sha256.as_str()) {
         return Err(format!(
             "The kept copy of {} no longer has its pinned digest; it is not used.",
             target.version
@@ -964,17 +962,16 @@ pub fn app_update_rollback(
         },
     )?;
     emit_task(&app);
-    let asked = confirm_rollback(app.clone(), appimage, dir, running, target);
+    let asked = confirm_rollback(app.clone(), installed, dir, running, target);
     if asked.is_err() {
         set_task(&app, |t| *t = idle());
     }
     asked
 }
 
-#[cfg(target_os = "linux")]
 fn confirm_rollback(
     app: AppHandle,
-    appimage: PathBuf,
+    installed: PathBuf,
     dir: PathBuf,
     running: String,
     target: Pinned,
@@ -992,10 +989,11 @@ fn confirm_rollback(
     let action = Action {
         what: format!(
             "Roll the app back from {running} to {}, the version that ran here before.\n\
-             It replaces {} with the kept copy of {} (SHA-256 {}), then restarts the app.",
+             It replaces {} with the kept copy of {} ({} {}), then restarts the app.",
             target.version,
-            appimage.display(),
+            installed.display(),
             target.version,
+            format::DIGEST,
             target.sha256
         ),
         chain: vec![package.clone()],
@@ -1035,7 +1033,7 @@ fn confirm_rollback(
             set_task(&app, |t| *t = idle());
             return;
         }
-        match roll_back(&app, &appimage, &dir, &running, &target) {
+        match roll_back(&app, &installed, &dir, &running, &target) {
             Ok(restart) => restart_into(&app, restart),
             Err(e) => set_task(&app, |t| {
                 t.phase = "failed";
@@ -1046,21 +1044,9 @@ fn confirm_rollback(
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
-fn confirm_rollback(
-    _: AppHandle,
-    _: PathBuf,
-    _: PathBuf,
-    _: String,
-    _: Pinned,
-) -> Result<(), String> {
-    Err("Rolling back needs a native confirmation, on Linux only for now.".into())
-}
-
-#[cfg(target_os = "linux")]
 fn roll_back(
     app: &AppHandle,
-    appimage: &Path,
+    installed: &Path,
     dir: &Path,
     running: &str,
     target: &Pinned,
@@ -1072,20 +1058,19 @@ fn roll_back(
     }
     gate(app)?;
     provenance(app)?;
-    let bytes = fs::read(kept_path(dir, target)).map_err(|e| e.to_string())?;
-    if sha256(&bytes) != target.sha256 || !is_appimage(&bytes) {
-        return Err(format!(
+    let staged = format::stage_kept(installed, &kept_path(dir, target), target).map_err(|_| {
+        format!(
             "The kept copy of {} no longer has its pinned digest; it is not used.",
             target.version
-        ));
-    }
+        )
+    })?;
     set_task(app, |t| {
         t.phase = "installing";
         t.error = None;
     });
-    let from = keep(dir, appimage, running, &started_from(app)?)?;
-    let pending = pending(dir, "rollback", from, target.clone(), appimage)?;
-    if let Err(e) = replace(appimage, &bytes) {
+    let from = keep(dir, installed, running, &started_from(app)?)?;
+    let pending = pending(dir, "rollback", from, target.clone(), installed)?;
+    if let Err(e) = format::swap_in(installed, staged) {
         let _ = fs::remove_file(dir.join("pending.json"));
         return Err(format!("The rollback could not be installed: {e}"));
     }
@@ -1097,59 +1082,50 @@ fn roll_back(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
-    fn temp(name: &str) -> PathBuf {
+    pub(crate) fn temp(name: &str) -> PathBuf {
         let tmp = std::env::temp_dir().join(format!("pluxy-updater-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         tmp
     }
 
-    #[test]
-    fn only_a_type_2_appimage_header_counts() {
-        assert!(is_appimage(
-            b"\x7fELF\x02\x01\x01\x00AI\x02\x00\x00\x00\x00\x00"
-        ));
-        assert!(!is_appimage(
-            b"\x7fELF\x02\x01\x01\x00AI\x01\x00\x00\x00\x00\x00"
-        ));
-        assert!(!is_appimage(
-            b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-        ));
-        assert!(!is_appimage(b"\x1f\x8b\x08\x00"));
+    /// Writes an installed copy of this format that is version v: different contents per v.
+    pub(crate) fn installed(tmp: &Path, v: &str) -> PathBuf {
+        format::tests::fixture(tmp, v)
     }
 
     #[test]
-    fn keeping_pins_the_running_appimage_and_keeps_three() {
+    fn keeping_pins_the_running_copy_and_keeps_three() {
         let tmp = temp("keep");
-        let image = tmp.join("app.AppImage");
         let mut pins = vec![];
+        let mut last = PathBuf::new();
         for v in ["0.1.0", "0.2.0", "0.3.0", "0.4.0"] {
-            let b = format!("AppImage {v}");
-            fs::write(&image, &b).unwrap();
-            pins.push(keep(&tmp.join("updates"), &image, v, &sha256(b.as_bytes())).unwrap());
+            let image = installed(&tmp, v);
+            let d = format::digest(&image).unwrap();
+            pins.push(keep(&tmp.join("updates"), &image, v, &d).unwrap());
             evict(&tmp.join("updates"));
+            last = image;
         }
         let h = history(&tmp.join("updates"));
         assert_eq!(h.kept, pins[1..].iter().rev().cloned().collect::<Vec<_>>());
         assert!(!kept_path(&tmp.join("updates"), &pins[0]).exists());
-        let last = &pins[3];
-        assert_eq!(last.sha256, sha256(b"AppImage 0.4.0"));
+        let newest = &pins[3];
+        assert_eq!(newest.sha256, format::digest(&last).unwrap());
         assert_eq!(
-            fs::read(kept_path(&tmp.join("updates"), last)).unwrap(),
-            b"AppImage 0.4.0"
+            format::digest(&kept_path(&tmp.join("updates"), newest)).unwrap(),
+            newest.sha256
         );
         fs::remove_dir_all(&tmp).unwrap();
     }
 
-    // An AppImage replaced after this version started is not kept under this version's name.
+    // A copy replaced after this version started is not kept under this version's name.
     #[test]
-    fn keeping_refuses_an_appimage_this_version_did_not_start_from() {
+    fn keeping_refuses_a_copy_this_version_did_not_start_from() {
         let tmp = temp("keep-other");
-        let image = tmp.join("app.AppImage");
-        fs::write(&image, b"replaced since").unwrap();
+        let image = installed(&tmp, "replaced since");
         let e = keep(
             &tmp.join("updates"),
             &image,
@@ -1157,7 +1133,10 @@ mod tests {
             &sha256(b"started from"),
         )
         .unwrap_err();
-        assert!(e.contains("not the AppImage this version"), "{e}");
+        assert!(
+            e.contains(&format!("not the {} this version", format::WHAT)),
+            "{e}"
+        );
         assert!(history(&tmp.join("updates")).kept.is_empty());
         fs::remove_dir_all(&tmp).unwrap();
     }
@@ -1166,45 +1145,27 @@ mod tests {
     fn restore_puts_back_only_a_copy_with_its_pinned_digest() {
         let tmp = temp("restore");
         let dir = tmp.join("updates");
-        let image = tmp.join("app.AppImage");
-        fs::write(&image, b"old").unwrap();
-        let from = keep(&dir, &image, "0.1.0", &sha256(b"old")).unwrap();
+        let image = installed(&tmp, "old");
+        let old = format::digest(&image).unwrap();
+        let from = keep(&dir, &image, "0.1.0", &old).unwrap();
         let to = Pinned {
             version: "0.2.0".into(),
-            sha256: sha256(b"new"),
+            sha256: "new".into(),
         };
         let p = pending(&dir, "update", from.clone(), to.clone(), &image).unwrap();
-        fs::write(&image, b"new").unwrap();
+        installed(&tmp, "new");
         restore(&dir, &p).unwrap();
-        assert_eq!(fs::read(&image).unwrap(), b"old");
+        assert_eq!(format::digest(&image).unwrap(), old);
         assert!(!dir.join("pending.json").exists());
         // A changed kept copy is not put back, and the message names it.
-        fs::write(&image, b"new").unwrap();
-        fs::write(kept_path(&dir, &from), b"changed").unwrap();
+        let new = format::digest(&installed(&tmp, "new")).unwrap();
+        format::tests::tamper(&kept_path(&dir, &from));
         let e = restore(&dir, &p).unwrap_err();
         assert!(
             e.contains(&kept_path(&dir, &from).display().to_string()),
             "{e}"
         );
-        assert_eq!(fs::read(&image).unwrap(), b"new");
-        fs::remove_dir_all(&tmp).unwrap();
-    }
-
-    // The replace keeps the AppImage's permissions and leaves no temporary file.
-    #[test]
-    fn replace_is_one_rename_with_the_old_permissions() {
-        use std::os::unix::fs::PermissionsExt;
-        let tmp = temp("replace");
-        let image = tmp.join("app.AppImage");
-        fs::write(&image, b"old").unwrap();
-        fs::set_permissions(&image, fs::Permissions::from_mode(0o750)).unwrap();
-        replace(&image, b"new").unwrap();
-        assert_eq!(fs::read(&image).unwrap(), b"new");
-        assert_eq!(
-            fs::metadata(&image).unwrap().permissions().mode() & 0o777,
-            0o750
-        );
-        assert_eq!(fs::read_dir(&tmp).unwrap().count(), 1);
+        assert_eq!(format::digest(&image).unwrap(), new);
         fs::remove_dir_all(&tmp).unwrap();
     }
 
@@ -1268,17 +1229,16 @@ mod tests {
     }
 
     // A failed replace must not cost the oldest kept version: the history and the copies change
-    // only in `evict`, which runs after the AppImage was replaced.
+    // only in `evict`, which runs after the installed copy was replaced.
     #[test]
     fn keeping_deletes_nothing_until_the_replace_has_worked() {
         let tmp = temp("keep-evict");
         let dir = tmp.join("updates");
-        let image = tmp.join("app.AppImage");
         let mut pins = vec![];
         for v in ["0.1.0", "0.2.0", "0.3.0", "0.4.0"] {
-            let b = format!("AppImage {v}");
-            fs::write(&image, &b).unwrap();
-            pins.push(keep(&dir, &image, v, &sha256(b.as_bytes())).unwrap());
+            let image = installed(&tmp, v);
+            let d = format::digest(&image).unwrap();
+            pins.push(keep(&dir, &image, v, &d).unwrap());
         }
         // The install of 0.5.0 failed at replace: no evict ran.
         assert_eq!(history(&dir).kept.len(), 4);
@@ -1290,40 +1250,70 @@ mod tests {
         fs::remove_dir_all(&tmp).unwrap();
     }
 
-    fn sleeper() -> std::process::Child {
-        use std::os::unix::process::CommandExt;
-        std::process::Command::new("sleep")
-            .arg("30")
-            .process_group(0)
-            .spawn()
-            .unwrap()
+    /// A successor that runs for 30 seconds and never accepts. On Windows a copy of PING.EXE in a
+    /// folder of the test's own (name): tests run in parallel, and a running copy cannot be
+    /// replaced by another test's.
+    fn sleeper(name: &str) -> (Successor, PathBuf) {
+        #[cfg(unix)]
+        {
+            let _ = name;
+            let s = Successor::start(Path::new("/bin/sleep"), &["30".into()], None, None).unwrap();
+            (s, PathBuf::new())
+        }
+        #[cfg(windows)]
+        {
+            let tmp = temp(&format!("sleeper-{name}"));
+            let exe = tmp.join("ping.exe");
+            fs::copy(r"C:\Windows\System32\PING.EXE", &exe).unwrap();
+            let env: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+            let s = Successor::start(&exe, &["-n".into(), "30".into(), "127.0.0.1".into()], &env)
+                .unwrap();
+            (s, tmp)
+        }
     }
 
     // A receipt that arrives in the last wait before the deadline counts: the new version is not
-    // killed and the earlier one is not put back over it.
+    // ended and the earlier one is not put back over it.
     #[test]
-    fn a_receipt_at_the_deadline_is_accepted_and_the_child_not_killed() {
-        let mut child = sleeper();
+    fn a_receipt_at_the_deadline_is_accepted_and_the_successor_not_ended() {
+        let (next, _tmp) = sleeper("receipt");
         let calls = std::cell::Cell::new(0);
         let accepted = || {
             calls.set(calls.get() + 1);
             calls.get() >= 2
         };
         let past = Instant::now() - Duration::from_secs(1);
-        let r = await_acceptance(&mut child, past, accepted);
-        let alive = child.try_wait().unwrap().is_none();
-        let _ = child.kill();
-        let _ = child.wait();
+        let r = await_acceptance(next, past, accepted);
         assert_eq!(r, Ok(()));
-        assert!(alive, "the new version was killed after it accepted");
+        assert_eq!(calls.get(), 2, "it was let go at the deadline's last look");
+    }
+
+    // macOS: the version started by an update or a rollback waits only while the earlier version
+    // is its parent. A successor started after the earlier version ended (a restore's wait loop
+    // runs it once that version has ended) or one whose parent ended before it first looked has
+    // launchd, process 1, as its parent from the start, and does not wait.
+    #[test]
+    fn a_successor_whose_parent_is_already_launchd_does_not_wait() {
+        assert!(still_its_child(true, 4242, 4242), "its parent still runs");
+        assert!(!still_its_child(true, 4242, 1), "its parent ended");
+        assert!(
+            !still_its_child(false, 4242, 4242),
+            "not started by an update"
+        );
+        assert!(
+            !still_its_child(true, 1, 1),
+            "orphaned before it first looked"
+        );
     }
 
     #[test]
-    fn a_version_that_never_accepts_is_killed_at_the_deadline() {
-        let mut child = sleeper();
+    fn a_version_that_never_accepts_is_ended_at_the_deadline() {
+        let (next, _tmp) = sleeper("never");
         let past = Instant::now() - Duration::from_secs(1);
-        let r = await_acceptance(&mut child, past, || false);
+        let started = Instant::now();
+        let r = await_acceptance(next, past, || false);
         assert!(r.unwrap_err().contains("did not accept"));
-        assert!(child.try_wait().unwrap().is_some(), "the child was killed");
+        // `end` waits for it to have ended: well before its 30 seconds.
+        assert!(started.elapsed() < Duration::from_secs(20));
     }
 }

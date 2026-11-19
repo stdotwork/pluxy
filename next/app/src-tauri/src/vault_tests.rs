@@ -34,8 +34,8 @@ fn package_dir(d: &Dir, id: &str) -> PathBuf {
         .join(Vault::package_name(id))
 }
 
-/// Asserts p is private to this user: 0700 (a folder) or 0600 (a file) on Unix; on Windows by
-/// the rule of `private_windows.rs`.
+/// Asserts p is private to this user: 0700 (a folder) or 0600 (a file) on Unix, and on macOS
+/// with no extended access list entry; on Windows by the rule of `private_windows.rs`.
 fn assert_private(p: &Path) {
     #[cfg(unix)]
     {
@@ -43,6 +43,12 @@ fn assert_private(p: &Path) {
         let want = if m.is_dir() { 0o700 } else { 0o600 };
         assert_eq!(m.permissions().mode() & 0o777, want, "{}", p.display());
     }
+    #[cfg(target_os = "macos")]
+    assert!(
+        !crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap(),
+        "{} has an access list entry",
+        p.display()
+    );
     #[cfg(windows)]
     assert!(crate::private_windows::tests::private(p), "{}", p.display());
 }
@@ -181,6 +187,53 @@ fn a_vault_folder_others_may_use_is_made_private_again() {
     let again = Vault::open(root.clone());
     assert_eq!(again.value(&id).as_deref(), Some(KEY));
     assert_private(&root);
+}
+
+/// macOS: a 0600 secrets file that an extended access list lets others read is refused like a
+/// 0644 one, and left as it is.
+#[cfg(target_os = "macos")]
+#[test]
+fn secrets_an_access_list_lets_others_read_are_refused() {
+    let (d, v) = vault();
+    v.add_secret("client key", KEY).unwrap();
+    let file = d.0.join("vault").join("secrets.json");
+    let before = fs::read(&file).unwrap();
+    crate::private_macos::add_entry(&file, "everyone allow read");
+    assert_eq!(
+        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let refused = Vault::open(d.0.join("vault"));
+    assert!(
+        refused.broken().unwrap().contains("no one else may read"),
+        "{:?}",
+        refused.broken()
+    );
+    assert!(refused.secrets().is_empty());
+    assert_eq!(fs::read(&file).unwrap(), before);
+}
+
+/// macOS: a vault folder whose access list others may use, and would pass on to new files, is
+/// emptied when the vault opens it, as a too-open mode is tightened; what is written after has
+/// no entry.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_vault_folder_with_an_access_list_is_emptied_and_passes_nothing_on() {
+    let (d, v) = vault();
+    let id = v.add_secret("client key", KEY).unwrap();
+    let root = d.0.join("vault");
+    crate::private_macos::add_entry(&root, "everyone allow list,file_inherit,directory_inherit");
+    let again = Vault::open(root.clone());
+    assert_eq!(again.value(&id).as_deref(), Some(KEY));
+    assert_private(&root);
+    // A save checks the folder again: an entry added since the open is emptied before the new
+    // secrets file is made in it, so the file takes none.
+    crate::private_macos::add_entry(&root, "everyone allow list,file_inherit,directory_inherit");
+    again
+        .add_secret("another", "sk-vault-test-other-0123456789")
+        .unwrap();
+    assert_private(&root);
+    assert_private(&root.join("secrets.json"));
 }
 
 #[test]
