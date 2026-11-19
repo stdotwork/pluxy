@@ -455,7 +455,7 @@ const (
 	CodeExtensionProtocol    = "extension_protocol"
 	CodeExtensionUnavailable = "extension_unavailable"
 	// CodeExtensionTimeout: the extension sent core nothing at all on a call for longer than
-	// it promised to (the account's idle limit plus a minute).
+	// it promised to (as long as the account's timeouts let the upstream stay quiet, plus a minute).
 	CodeExtensionTimeout = "extension_timeout"
 )
 

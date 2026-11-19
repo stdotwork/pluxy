@@ -102,14 +102,14 @@ func watchFake(minor int) {
 	}
 }
 
-// shortWatchdog makes the watchdog wait about 200ms past a 1ms idle limit for the test.
+// shortWatchdog makes the watchdog wait about 200ms past 1ms limits for the test.
 func shortWatchdog(t *testing.T) Options {
 	t.Helper()
 	old := watchdogGrace
 	watchdogGrace = 200 * time.Millisecond
 	t.Cleanup(func() { watchdogGrace = old })
 	ms := func(v int64) *int64 { return &v }
-	return Options{Log: &syncBuffer{}, Timeouts: func() *protocol.Timeouts { return &protocol.Timeouts{IdleMS: ms(1), TotalMS: ms(1)} }}
+	return Options{Log: &syncBuffer{}, Timeouts: func() *protocol.Timeouts { return &protocol.Timeouts{HeaderMS: ms(1), IdleMS: ms(1), TotalMS: ms(1)} }}
 }
 
 func startWatchFake(t *testing.T, minor int, opts Options) *Extension {
@@ -145,7 +145,7 @@ func drain(t *testing.T, next func() llm.Event, d time.Duration) (llm.Event, tim
 }
 
 // For an extension that reports protocol 0.19, core ends a call that sends nothing for the
-// idle limit plus the grace with extension_timeout: retry-safe before response.start, not after;
+// limits plus the grace with extension_timeout: retry-safe before response.start, not after;
 // and it logs a line naming the code and the account.
 func TestWatchdogEndsSilentCall(t *testing.T) {
 	opts := shortWatchdog(t)
@@ -257,5 +257,41 @@ func TestWatchdogSessionTurn(t *testing.T) {
 	case <-s.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("the session did not end after the turn timed out")
+	}
+}
+
+// The watchdog waits as long as the SDK may still wait on the upstream, and a minute more. Nothing
+// reaches core before the upstream's headers, so a streamed call may be silent for the header limit
+// as well as the idle limit; a request that is not streamed may run to its total limit too. With a
+// limit the SDK waits on turned off (0), core cannot tell a quiet call from a stuck one: no watchdog.
+func TestWatchdogLimit(t *testing.T) {
+	ms := func(v int64) *int64 { return &v }
+	tm := func(header, idle, total int64) *protocol.Timeouts {
+		return &protocol.Timeouts{HeaderMS: ms(header), IdleMS: ms(idle), TotalMS: ms(total)}
+	}
+	s := time.Second
+	for _, tc := range []struct {
+		name   string
+		t      *protocol.Timeouts
+		stream bool
+		want   time.Duration
+	}{
+		{"streamed defaults", tm(60_000, 300_000, 600_000), true, 5*time.Minute + time.Minute},
+		{"streamed header over idle", tm(600_000, 300_000, 0), true, 10*time.Minute + time.Minute},
+		{"streamed header off", tm(0, 300_000, 600_000), true, 0},
+		{"streamed idle off", tm(60_000, 0, 600_000), true, 0},
+		{"streamed total is not waited on", tm(1_000, 2_000, 0), true, 2*s + time.Minute},
+		{"not streamed defaults", tm(60_000, 300_000, 600_000), false, 10*time.Minute + time.Minute},
+		{"not streamed header longest", tm(900_000, 300_000, 600_000), false, 15*time.Minute + time.Minute},
+		{"not streamed idle longest", tm(1_000, 700_000, 600_000), false, 700*s + time.Minute},
+		{"not streamed header off", tm(0, 300_000, 600_000), false, 0},
+		{"not streamed idle off", tm(60_000, 0, 600_000), false, 0},
+		{"not streamed total off", tm(60_000, 300_000, 0), false, 0},
+		{"no timeouts", nil, true, 0},
+		{"a limit unset", &protocol.Timeouts{IdleMS: ms(1_000)}, true, 0},
+	} {
+		if got := watchdog(tc.t, tc.stream); got != tc.want {
+			t.Errorf("%s: watchdog = %s, want %s", tc.name, got, tc.want)
+		}
 	}
 }

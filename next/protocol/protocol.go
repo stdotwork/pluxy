@@ -151,7 +151,7 @@ type Call struct {
 	Payload *payload.Rules `json:"payload,omitempty"`
 	// Alive says core takes alive frames (TypeAlive) on a generate, count_tokens or endpoint
 	// call or a session.turn (minor version 19), and ends one on which it has received nothing
-	// at all for the account's idle limit plus a minute.
+	// at all for as long as the account's timeouts let the upstream stay quiet, plus a minute.
 	Alive bool `json:"alive,omitempty"`
 }
 

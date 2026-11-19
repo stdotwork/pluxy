@@ -109,13 +109,13 @@ func TestKeepAliveOnQuietStreams(t *testing.T) {
 	}
 }
 
-// An extension that stops sending anything is ended with extension_timeout within the idle limit
+// An extension that stops sending anything is ended with extension_timeout within its limits
 // plus a minute: before its reply starts as a failed request, after as a stream that ends with
 // the error. Core logs a line that names it.
 func TestWatchdogEndsSilentExtension(t *testing.T) {
 	g := newGate(t)
 	cfg := lifecycleConfig(testPackage(t, "0.1.0"), g, nil)
-	cfg["routing"] = map[string]any{"timeouts": map[string]any{"idle_ms": 1000, "total_ms": 1000}}
+	cfg["routing"] = map[string]any{"timeouts": map[string]any{"header_ms": 1000, "idle_ms": 1000, "total_ms": 1000}}
 	base, logs := runCoreLogged(t, cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -141,7 +141,7 @@ func TestWatchdogEndsSilentExtension(t *testing.T) {
 	for range 2 {
 		res := <-results
 		if res.took < 61*time.Second || res.took > 75*time.Second {
-			t.Errorf("%s: ended after %s, want just after 61s (1s idle limit plus a minute)", res.model, res.took)
+			t.Errorf("%s: ended after %s, want just after 61s (1s limits plus a minute)", res.model, res.took)
 		}
 		if !strings.Contains(res.body, "extension_timeout") {
 			t.Errorf("%s: reply does not name extension_timeout: %d %q", res.model, res.status, res.body)

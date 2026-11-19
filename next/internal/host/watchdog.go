@@ -16,26 +16,33 @@ const aliveMinor = 19
 
 // watchdogGrace is what the watchdog adds to the account's limit: the SDK sends an alive frame
 // at most every 10 seconds while upstream bytes arrive, and ends the upstream request itself
-// once the limit passes, so a call still silent a minute after that has stopped answering.
+// once its limit passes, so a call still silent a minute after that has stopped answering.
 // Tests shorten it.
 var watchdogGrace = time.Minute
 
 // watchdog returns how long core waits for the next frame of a call or turn whose account has the
-// resolved timeouts t (resolveTimeouts): the idle limit plus watchdogGrace for a streamed request,
-// and the longer of the idle and total limits plus watchdogGrace for one that is not (its
-// upstream request may be streamed or not). 0, no watchdog, when a limit it needs is off.
+// resolved timeouts t (resolveTimeouts): as long as the SDK may still wait on the upstream, plus
+// watchdogGrace. Nothing reaches core before the upstream's response headers, so a streamed
+// request may be silent for the header limit or the idle limit, whichever is longer, and a request
+// that is not streamed (its upstream request may be either) for the longest of the header, idle and
+// total limits. 0, no watchdog, when a limit it needs is off or unset: the SDK then waits without
+// end, and core cannot tell a quiet call from a stuck one.
 func watchdog(t *protocol.Timeouts, stream bool) time.Duration {
-	if t == nil || t.IdleMS == nil || *t.IdleMS <= 0 {
+	if t == nil {
 		return 0
 	}
-	limit := time.Duration(*t.IdleMS) * time.Millisecond
+	limits := []*int64{t.HeaderMS, t.IdleMS}
 	if !stream {
-		if t.TotalMS == nil || *t.TotalMS <= 0 {
+		limits = append(limits, t.TotalMS)
+	}
+	var longest time.Duration
+	for _, ms := range limits {
+		if ms == nil || *ms <= 0 {
 			return 0
 		}
-		limit = max(limit, time.Duration(*t.TotalMS)*time.Millisecond)
+		longest = max(longest, time.Duration(*ms)*time.Millisecond)
 	}
-	return limit + watchdogGrace
+	return longest + watchdogGrace
 }
 
 // timedOut logs and returns the error of a call or turn on account that the watchdog ended

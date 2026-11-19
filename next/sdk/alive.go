@@ -13,7 +13,7 @@ import (
 
 // aliveAfter is how long a call that asked for alive frames (protocol.Call.Alive) may go without
 // a frame to core before upstream bytes make the SDK send one: core ends an attempt that has sent
-// it nothing at all for the account's idle limit plus a minute, and an upstream that is still
+// it nothing at all for as long as the account's timeouts let the upstream stay quiet, plus a minute, and an upstream that is still
 // sending, only nothing the extension passes on (a model thinking, keep-alive comments), must not
 // look dead to it.
 const aliveAfter = 10 * time.Second
