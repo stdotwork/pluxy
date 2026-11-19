@@ -413,10 +413,26 @@ mod tests {
             "/themes/t3/",
             "/themes//night",
             "/themes/t3/..",
+            "/themes/t3/a.b",
+            "/themes/t3/a_b",
+            "/themes/t3/a%2fb",
+            "/themes/t3/%2e%2e",
+            "/themes/t3/night?x=1",
+            "/themes/t3/n\u{e9}",
             "/theme/x",
+            "/theme?x=1",
+            "/config?x=1",
         ] {
             assert!(!put_allowed(path), "{path}");
+            assert_eq!(c.call("k", "PUT", path, None).status, 400, "{path}");
         }
+        let long = "a".repeat(65);
+        assert!(!put_allowed(&format!("/themes/{long}/night")));
+        assert!(!put_allowed(&format!("/themes/t3/{long}")));
+        assert!(put_allowed(&format!("/themes/t3/{}", "a".repeat(64))));
+        // The theme calls are sent: nothing listens there, so the reply is status 0, not a refusal.
+        assert_eq!(c.call("k", "PUT", "/theme", None).status, 0);
+        assert_eq!(c.call("k", "PUT", "/themes/t3/nightfall", None).status, 0);
         for path in [
             "/config",
             "/theme",
