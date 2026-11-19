@@ -441,13 +441,15 @@ func isAnthropicBase(baseURL string) bool {
 }
 
 // buildBody returns the Messages request body for req and how it was built. A Messages request
-// is sent unchanged but for the repairs every body gets (fixBody) and the conversation repairs
-// (anthropicmessages.RepairTurns), each reported; any other is rebuilt from the model, with the
-// same conversation repairs, its reasoning effort as thinking settings, the model's own output
-// limit when the client set none (maxOutputTokens), and without the sampling settings the model
-// refuses (anthropicmessages.DropRefusedSampling). A thinking suffix on the model name sets the
-// thinking settings either way, in place of the request's own. Under the reject drop policy a
-// request that drops anything is refused.
+// is sent unchanged but for the repairs every body gets (fixBody), the conversation repairs
+// (anthropicmessages.RepairTurns) and the thinking settings made ones the model takes
+// (anthropicmessages.FitThinking), each reported; any other is rebuilt from the model, with the
+// same repairs, its reasoning effort as thinking settings, a Responses client's reasoning summary
+// as thinking display (anthropicmessages.ApplySummary), the model's own output limit when the
+// client set none (maxOutputTokens), and without the sampling settings the model refuses
+// (anthropicmessages.DropRefusedSampling). A thinking suffix on the model name sets the thinking
+// settings either way, in place of the request's own. Under the reject drop policy a request
+// that drops anything is refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatAnthropicMessages}
 	if n := req.Native; n != nil {
@@ -455,9 +457,10 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 		if n.Format == llm.FormatAnthropicMessages {
 			tr.Passthrough = true
 			body := n.Body
+			var losses []llm.Loss
 			if s := req.Options.ThinkingSuffix; s != "" {
 				var err error
-				if body, _, err = anthropicmessages.ApplyEffort(body, req.Model, s); err != nil {
+				if body, losses, _, err = anthropicmessages.ApplyEffortReport(body, req.Model, s); err != nil {
 					return nil, nil, err
 				}
 			}
@@ -465,8 +468,15 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 			if err != nil {
 				return nil, nil, err
 			}
-			if body, tr.Losses, err = anthropicmessages.RepairTurns(body, req.Model); err != nil {
+			var repaired, fitted []llm.Loss
+			if body, repaired, err = anthropicmessages.RepairTurns(body, req.Model); err != nil {
 				return nil, nil, err
+			}
+			if body, fitted, err = anthropicmessages.FitThinking(body, req.Model); err != nil {
+				return nil, nil, err
+			}
+			for _, l := range append(append(losses, repaired...), fitted...) {
+				tr.Losses = llm.AddLoss(tr.Losses, l)
 			}
 			if err := refuseDrops(req, tr); err != nil {
 				return nil, nil, err
@@ -498,9 +508,10 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	if s := req.Options.ThinkingSuffix; s != "" {
 		effort = s
 	}
+	var more []llm.Loss
 	if effort != "" {
 		var applied bool
-		body, applied, err = anthropicmessages.ApplyEffort(body, req.Model, effort)
+		body, more, applied, err = anthropicmessages.ApplyEffortReport(body, req.Model, effort)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -509,11 +520,22 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 			losses = slices.DeleteFunc(losses, func(l llm.Loss) bool { return l.Path == "reasoning_effort" })
 		}
 	}
-	var dropped []llm.Loss
+	var summary, fitted, dropped []llm.Loss
+	var carried bool
+	if body, summary, carried, err = anthropicmessages.ApplySummary(body, req.Model, req); err != nil {
+		return nil, nil, err
+	}
+	if carried {
+		// EncodeRequest reports a Responses client's reasoning summary as dropped.
+		losses = slices.DeleteFunc(losses, func(l llm.Loss) bool { return l.Path == "reasoning" })
+	}
+	if body, fitted, err = anthropicmessages.FitThinking(body, req.Model); err != nil {
+		return nil, nil, err
+	}
 	if body, dropped, err = anthropicmessages.DropRefusedSampling(body, req.Model); err != nil {
 		return nil, nil, err
 	}
-	for _, l := range dropped {
+	for _, l := range slices.Concat(more, summary, fitted, dropped) {
 		losses = llm.AddLoss(losses, l)
 	}
 	tr.Losses = losses
