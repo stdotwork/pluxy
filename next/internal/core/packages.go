@@ -12,6 +12,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/server"
+	"github.com/stdotwork/pluxy/next/management"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -79,21 +80,10 @@ func (c *Core) installer(cfg *server.Config) *packages.Installer {
 }
 
 // InstallRequest is what POST /packages asks for.
-type InstallRequest struct {
-	ID       string `json:"id"`
-	Version  string `json:"version,omitempty"`
-	Registry string `json:"registry,omitempty"`
-	Enable   bool   `json:"enable,omitempty"`
-}
+type InstallRequest = management.InstallRequest
 
 // PackageView is an installed package as management shows it.
-type PackageView struct {
-	packages.Installed
-	// State is "disabled", the running extension's state, "failed" (enabled but it could not
-	// start; Error says why) or "stopped" (enabled, in safe mode).
-	State string `json:"state"`
-	Error string `json:"error,omitempty"`
-}
+type PackageView = management.Package
 
 // Packages returns the installed packages.
 func (c *Core) Packages() []PackageView {
@@ -290,24 +280,13 @@ func (c *Core) inUseLocked(dir string) bool {
 }
 
 // RegistryView is what one registry offers, as management shows it.
-type RegistryView struct {
-	packages.Registry
-	Packages []RegistryPackage `json:"packages,omitempty"`
-	Error    string            `json:"error,omitempty"`
-}
+type RegistryView = management.Registry
 
 // RegistryPackage is one package a registry offers.
-type RegistryPackage struct {
-	ID       string            `json:"id"`
-	Releases []RegistryRelease `json:"releases"`
-}
+type RegistryPackage = management.RegistryPackage
 
 // RegistryRelease is one release a registry offers.
-type RegistryRelease struct {
-	Version   string   `json:"version"`
-	Protocol  []int    `json:"protocol"`
-	Platforms []string `json:"platforms"`
-}
+type RegistryRelease = management.RegistryRelease
 
 // Registries reads every registry core installs from.
 func (c *Core) Registries(ctx context.Context) []RegistryView {

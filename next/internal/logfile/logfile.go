@@ -53,6 +53,7 @@ type Files struct {
 	maxTotal int64 // bytes; 0 is no cap
 	f        *os.File
 	size     int64
+	lastMs   int64 // the time of the last write, in Unix milliseconds
 }
 
 // New returns the logs folder at dir, with logging to file off.
@@ -163,7 +164,12 @@ func (l *Files) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	var b bytes.Buffer
-	stamp := l.now().Format(timeLayout)
+	// Each write gets a time of its own, later than the write before it, even in the same
+	// millisecond or after the clock went back: a reader that pages forward with the newest
+	// time it read (after) must never skip a line written later.
+	ms := max(l.now().UnixMilli(), l.lastMs+1)
+	l.lastMs = ms
+	stamp := time.UnixMilli(ms).Format(timeLayout)
 	for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
 		line = strings.TrimPrefix(line, "pluxy: ")
 		level := "info "
@@ -311,9 +317,11 @@ type line struct {
 }
 
 // Read returns log lines, oldest first: with after (Unix seconds) above 0, the oldest limit
-// lines written after it, so a reader can page forward with Latest; with after 0, the newest
-// limit lines. A line with no time of its own (a message that spans lines) counts as written
-// with the line before it.
+// lines written after it, so a reader can page forward with Latest and miss none; with after 0,
+// the newest limit lines. A line with no time of its own (a message that spans lines) counts as
+// written with the line before it. Every write has a time of its own (see Write), so a page
+// that ends inside one write's lines is extended to the write's last line: it can hold a few
+// more than limit.
 func (l *Files) Read(after float64, limit int) (Lines, error) {
 	l.mu.Lock()
 	if !l.on {
@@ -344,6 +352,11 @@ func (l *Files) Read(after float64, limit int) (Lines, error) {
 	}
 	if len(all) > limit {
 		if after > 0 {
+			// Lines of one write share a time, and the reader continues after the newest time it
+			// got: keep the lines of that write that the limit cut off.
+			for limit < len(all) && all[limit].at == all[limit-1].at {
+				limit++
+			}
 			all = all[:limit]
 		} else {
 			all = all[len(all)-limit:]

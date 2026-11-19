@@ -583,6 +583,56 @@ unrelated text; the management API still shows it as a placeholder. When the set
 core keeps removing the secrets of every earlier settings from the extension's stderr and stdout
 until the program exits, for calls that still run with them.
 
+A secret made of parts (in the credential, the settings, the proxy or the headers) counts part by
+part too, since an upstream may echo only one part: core also removes each part of 8 bytes or
+more, in the same forms, but never the public prefix, scheme or name around it. It splits these
+structures, and each part again, up to 4 times:
+
+- an authorization value, `Bearer <token>` or `Basic <base64>` (the scheme in any letter case):
+  the token, or the base64 text, what it decodes to (`user:password`) and the password;
+- a token behind a public prefix, `<prefix>$<token>` or `<prefix>:<token>`, such as Devin's
+  `devin-session-token$<jwt>`, Meta's `dca:<token>` or `Name: value`, where the prefix is a letter
+  and up to 31 more letters, digits, `-`, `_` or `.`, and the token (spaces and tabs after the `$`
+  or `:` aside) does not start with `/`, so a URL's `scheme://` is not one: the token;
+- a cookie list, `name=value; name=value` (or one pair): each value, its double quotes aside,
+  where the name is an HTTP token and the value holds only cookie characters.
+
+In Go, `protocol.SecretParts(s, 8)` returns a secret's parts. With a smaller minimum it also
+returns shorter parts, so that a secret whose parts are all short, which has some, can be told
+from one with none of these structures, which has none.
+
+An upstream that refuses a credential often echoes a piece of it, such as its first 24
+characters and `...`, which none of the forms above is. So from an upstream's error text core also
+removes every run of token characters (letters, digits and `_-.+/=~`) that holds 4 or more
+consecutive characters of one of the account's secrets, reading a run as written and with its
+escapes decoded (JSON's `\/`, `\\` and `\uXXXX` and percent-encoding's `%XX`, nested up to 8
+times); a `[redacted]` already there stays as it is. It does so in an [error](#errors)'s `message`
+and in each string value of its `raw` (object keys are names, and stay), on every call on an
+account and on a [login](#login), and in a [captured](#upstream-capture) upstream reply's body
+whose status is 400 or more, or of every reply when the call or turn ended in an error, such as a
+200 stream that ends in an error event.
+
+The account's secrets for this rule are the credential's `api_key`, `access_token` and
+`refresh_token`, the value of each header named like a secret, the proxy's user name and
+password, and the secrets core's own rules find in `settings` (those `GET /accounts` hides), a
+URL counting by its user name, password and the values of its query parameters named like a
+secret only; on a login, also each input the login method or prompt marks `secret`, and the user
+name, password and secret query values of an input that is a URL. A secret made of parts counts
+by its parts, and one other than the credential's or an input's under 8 bytes adds nothing. A
+known vendor's public key prefix (`sk-proj-`, `sk-svcacct-`, `sk-admin-`, `sk-ant-api03-`,
+`sk-ant-admin01-`, `sk-ant-oat01-`, `sk-ant-ort01-`, `sk-ant-`, `sk-kimi-`, `sk-or-v1-`, `sk-`,
+`xai-` or `gsk_`, the longest that fits) gives no piece: a piece counts only when it holds a byte
+after the prefix, and only when 16 bytes or more of the secret follow the prefix, so a short
+secret keeps every piece. The rule still replaces any other word of the error that shares 4
+characters with a secret, so core never applies it to a reply that succeeded.
+
+In Go, `protocol.RemovePieces(s, secrets...)` applies the rule. `protocol.AccountSecretsWith`
+returns an account's secrets with the settings secrets given, as core passes them;
+`protocol.AccountSecrets(account)` finds those in `settings` itself, by rules close to core's (a
+key named like a secret by `protocol.SecretName`, which also takes names core's rules do not,
+such as `monkey`, and query parameter names without core's letter folding), for an extension:
+`sdk.UpstreamText` applies the rule with the other cleaning an extension's error text needs.
+
 ### Proxy
 
 From version 0.11 an account may carry `proxy_url`, an `http://`, `https://`, `socks5://` or
@@ -631,8 +681,9 @@ secret: an extension never logs or shows it, and core removes it from everything
 back, as it does a credential's strings; a value shorter than 8 bytes is removed only next to
 its name, as text shows a header (`Name: value`, `Name:value`, `Name=value`, JSON's
 `"Name":"value"`, with the name as configured, in canonical form, in lower case or in upper case),
-so it does not scrub unrelated text; in another spelling a value that short stays.
-Other values are not removed.
+so it does not scrub unrelated text; in another spelling a value that short stays. A value made
+of parts, such as `Bearer <token>` or a list of cookies, has each part removed on its own too
+(see [Accounts](#accounts)). Other values are not removed.
 
 Core sends a call that has headers only to an extension whose describe reports
 `protocol_minor` 12 or more; for any other it fails the call itself with `unsupported` (scope
@@ -828,13 +879,13 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | Field | Meaning |
 | --- | --- |
 | `code` | One of the codes below. |
-| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, `dropped`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
+| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, `dropped`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it, and from `message` and `raw` the pieces of the account's secrets too (see [Accounts](#accounts)). In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
 | `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. For `login` and `refresh` calls, see [Errors in login and refresh calls](#errors-in-login-and-refresh-calls). |
 | `scope` | What the failure is about: `request` (this request is bad), `credential` (this account), `model` (this model on this account), `endpoint` (the upstream endpoint). A rate limit or quota is `model` unless the provider says it covers the whole account, such as a subscription's used-up usage window; today's core also holds back only the model for a plain 429. When `scope` is absent, core takes `model` for `rate_limit`, `quota` and `not_found`, `credential` for `auth` and `permission`, and `endpoint` for `upstream` and `unavailable`. |
 | `retry_after_ms` | When the upstream said to try again, in milliseconds from now. |
-| `raw` | The upstream's error body, unchanged. |
+| `raw` | The upstream's error body, as the extension got it. Core removes the account's secrets from it before passing it on, as from `message`. |
 | `usage` | Usage the upstream reported before the failure, in the same form as `finish.usage`; absent when it reported none. A reply that fails partway may still have cost tokens. |
 | `quota_window_minutes` | Version 0.6. For code `quota`: the length, in minutes, of the usage window that is used up, when the upstream said (such as 300 for a five-hour window). Core passes it on in its [usage-limit reply](../README.md#accounts-and-routing). |
 | `dropped` | Version 0.16. Only on a refusal under the request's `drop_policy` `reject`: the paths of the request's parts the upstream's format cannot carry, as the translation's losses name them. Core tells such a refusal from an account that cannot serve the call by it (see [`count_tokens`](#count_tokens)). |
@@ -1260,6 +1311,9 @@ Rules:
   closes early cannot be told from one that ended there (Go reads it as the end, also over TLS
   closed without its closing alert between two records): don't mark it, which would mark
   complete ones too.
+- Leave out credential traffic the call makes for itself whose secrets core does not know, such
+  as trading a key for an access token: core removes only the account's own secrets, so the token
+  and what was sent for it would reach the request log.
 - A WebSocket handshake is an exchange: the `GET` request and the `101` response's status and
   headers, with no body. The messages on the socket are not captured. A turn that uses a socket an
   earlier turn opened makes no exchange, and a socket opened by the `session` call itself, before
@@ -1282,10 +1336,14 @@ out what could be the start of a secret of its config as on the start's side of 
 window reaching back no further than the last line break, and ends the body with a line saying it
 was not read past there. An extension older
 than 0.17 never sets `body_stopped`, so its bodies are logged as before: one whose read stopped
-can keep the start of a secret at its end.
+can keep the start of a secret at its end. From the body of a reply whose status is 400 or more,
+or of every reply when the call or turn ended in an error, core also removes the pieces of the
+account's secrets (see [Accounts](#accounts)); it holds the `diagnostic` frame until the terminal
+event says which.
 
 In Go, `sdk.Upstream` does all of this for each client it wraps, for requests made with the
-handler's context.
+handler's context; a request made with `sdk.Uncaptured(ctx)` is sent the same way but not
+recorded.
 
 ## Versioning
 

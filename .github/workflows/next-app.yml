@@ -53,12 +53,14 @@ jobs:
             exit 1
           fi
           echo "$PRETTY_NAME"
-      # The same packages as the native job below, which says what each is for.
+      # The same packages as the native job below, which says what each is for, from its cache
+      # (a superset of these) and saved only by it.
       - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools and xdotool
-        working-directory: .
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
+        uses: ./.github/actions/apt-install
+        with:
+          cache: native
+          packages: >-
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon
             xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -116,6 +118,9 @@ jobs:
           export HOME="$test_env/home" XDG_CONFIG_HOME="$test_env/config" XDG_DATA_HOME="$test_env/data" XDG_CACHE_HOME="$test_env/cache"
           mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
           cargo test --locked
+          # The native test's own unit tests (in src/native_test.rs and the checks it holds), which
+          # build only with the native-test feature.
+          cargo test --locked --features native-test --lib native_test::
       - name: Artifact signature and test trust controls
         working-directory: next/app/src-tauri
         run: cargo test --locked --features artifact-test-trust --test artifact_trust --test release_config
@@ -134,9 +139,10 @@ jobs:
   # keeps the programs executable, which upload-artifact does not.
   native-build:
     if: inputs.skip-native != true
-    # The same runner as the shards, which run what it builds, so never PLUXY_LINUX_RUNNER either:
-    # GitHub's, or PLUXY_LINUX_CLOUD_RUNNER's (AGENTS.md, "Where jobs run"). Pinned: the package
-    # names below are Ubuntu 24.04's.
+    # PLUXY_LINUX_CLOUD_RUNNER's, else GitHub's, never PLUXY_LINUX_RUNNER (AGENTS.md, "Where jobs
+    # run"). The shards run what it builds on GitHub's runners: both are Ubuntu 24.04 with the same
+    # packages, and the test moves the prebuilt folder's paths to where it is unpacked. Pinned: the
+    # package names below are Ubuntu 24.04's.
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
@@ -153,12 +159,14 @@ jobs:
           fi
           echo "$PRETTY_NAME"
       # The same packages as the checks job: the build's libraries, and the services and tools
-      # run.ts checks for before it builds (the native job below says what each is for).
+      # run.ts checks for before it builds (the native job below says what each is for), from the
+      # native job's cache, which only that job saves.
       - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools and xdotool
-        working-directory: .
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
+        uses: ./.github/actions/apt-install
+        with:
+          cache: native
+          packages: >-
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon
             xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -222,11 +230,12 @@ jobs:
     if: inputs.skip-native != true
     needs: native-build
     # Pinned: the package names below are Ubuntu 24.04's, and so are the file paths the native
-    # test starts services from (next/app/native/services.ts). On GitHub's runners or
-    # PLUXY_LINUX_CLOUD_RUNNER's (Namespace's have /dev/fuse), never PLUXY_LINUX_RUNNER: the
-    # document portal needs /dev/fuse, which the maintainers' runner containers don't get (FUSE in a
-    # container needs extra privilege).
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || 'ubuntu-24.04' }}
+    # test starts services from (next/app/native/services.ts). Always GitHub's runners, which are
+    # free for this repository and seldom queue: on PLUXY_LINUX_CLOUD_RUNNER's the shards waited
+    # for its vCPU limit longer than they ran (AGENTS.md, "Where jobs run"). Never
+    # PLUXY_LINUX_RUNNER: the document portal needs /dev/fuse, which the maintainers' runner
+    # containers don't get (FUSE in a container needs extra privilege).
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -251,11 +260,16 @@ jobs:
       # service owns org.kde.StatusNotifierWatcher. squashfs-tools builds the smoke AppImage.
       # xdotool sends real input through the X server (XTEST), for native dialog checks.
       # ImageMagick's import takes the screenshots each session keeps (native/shots.ts).
+      #
+      # The packages come from a cache, which this job saves from pushes to main and manual runs
+      # (.github/actions/apt-install says how, and what happens when a mirror fails).
       - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools, xdotool and ImageMagick
-        working-directory: .
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
+        uses: ./.github/actions/apt-install
+        with:
+          cache: native
+          save: 'true'
+          packages: >-
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon
             xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool imagemagick
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -332,8 +346,9 @@ jobs:
   app:
     if: ${{ !cancelled() }}
     needs: [checks, native-build, native]
-    # Like checks: PLUXY_LINUX_CLOUD_RUNNER first, then PLUXY_LINUX_RUNNER.
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    # GitHub's runners: it only compares results, and on PLUXY_LINUX_CLOUD_RUNNER it waited up to
+    # 28 minutes for a runner (AGENTS.md, "Where jobs run").
+    runs-on: ubuntu-latest
     steps:
       - name: Every job passed
         working-directory: .

@@ -75,6 +75,27 @@ const ALLOWED: &[(&str, Part, &str, usize, &str)] = &[
         "test: kills the core the test started and holds, to see its exit before it is reaped",
     ),
     (
+        "native_core.rs",
+        Part::Code,
+        "OpenProcess",
+        4,
+        "native test (Windows): opens a process with QUERY_LIMITED_INFORMATION only, to ask whether it runs and which program it runs; that right cannot end it",
+    ),
+    (
+        "native_core.rs",
+        Part::Code,
+        "libc::kill",
+        1,
+        "native test (macOS): signal 0, which only asks whether a process exists",
+    ),
+    (
+        "proc_native.rs",
+        Part::Code,
+        "OpenProcess",
+        2,
+        "native test (Windows, feature native-test): opens a process with QUERY_LIMITED_INFORMATION only, to read its program file and whether it has exited; that right cannot end it",
+    ),
+    (
         "program_tests.rs",
         Part::Code,
         "OpenProcess",
@@ -101,20 +122,6 @@ const ALLOWED: &[(&str, Part, &str, usize, &str)] = &[
         "libc::kill",
         2,
         "test: signal 0 to see whether a process runs, and the cleanup of processes /proc shows run as this test's",
-    ),
-    (
-        "updater.rs",
-        Part::Code,
-        "kill -",
-        1,
-        "`kill -0` in the shell that waits for the old version to end: signal 0 only asks whether it exists",
-    ),
-    (
-        "updater.rs",
-        Part::Code,
-        "libc::kill",
-        1,
-        "ends the process group of the new version it started and holds unreaped, when that does not accept the update in time",
     ),
 ];
 
@@ -281,10 +288,8 @@ fn c() { TerminateJobObject(j, 1); }
 
 /// A fresh folder under the system's temporary folder (private to this user on unix), removed
 /// when dropped.
-#[cfg(any(windows, target_os = "macos"))]
 struct Temp(std::path::PathBuf);
 
-#[cfg(any(windows, target_os = "macos"))]
 impl Temp {
     fn new(name: &str) -> Temp {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -304,7 +309,6 @@ impl Temp {
     }
 }
 
-#[cfg(any(windows, target_os = "macos"))]
 impl Drop for Temp {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
@@ -527,6 +531,338 @@ mod unix {
             !keeps_descriptor(true),
             "a descriptor above 2 reached the executed program"
         );
+    }
+}
+
+/// The program a terminal runs on Linux, checked by the path the terminal follows
+/// (`path_target`).
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::Temp;
+    use crate::owned::{chmod_hint, path_target, path_target_by, private, private_group, Group};
+    use std::fs::{self, File};
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::path::{Path, PathBuf};
+
+    /// t's folder by its real path.
+    fn real(t: &Temp) -> PathBuf {
+        fs::canonicalize(&t.0).unwrap()
+    }
+    fn chmod(p: &Path, mode: u32) {
+        fs::set_permissions(p, fs::Permissions::from_mode(mode)).unwrap();
+    }
+    fn folder(p: &Path, mode: u32) {
+        fs::create_dir(p).unwrap();
+        chmod(p, mode);
+    }
+    fn prog(p: &Path, mode: u32) {
+        fs::write(p, "#!/bin/sh\n").unwrap();
+        chmod(p, mode);
+    }
+    /// path_target of the file at p, opened now, with private saying which group is private.
+    fn by(p: &Path, private: &dyn Fn(u32) -> bool) -> Result<(), String> {
+        path_target_by(&File::open(p).unwrap(), p, private)
+    }
+    /// A refusal for part, saying why.
+    fn refused(r: Result<(), String>, part: &Path, why: &str) {
+        let e = r.expect_err(&part.display().to_string());
+        assert!(
+            e.starts_with(&format!("{} {why}", part.display())),
+            "refused for {e}, not as {} {why}",
+            part.display()
+        );
+    }
+    fn gid() -> u32 {
+        // SAFETY: getegid has no preconditions.
+        unsafe { libc::getegid() }
+    }
+    /// What `id` says, in words.
+    fn id(arg: &str) -> String {
+        let out = std::process::Command::new("id").arg(arg).output().unwrap();
+        assert!(out.status.success(), "id {arg}");
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+    /// The name and members of group g, as `getent` gives them.
+    fn group(g: u32) -> Option<(String, Vec<String>)> {
+        let out = std::process::Command::new("getent")
+            .args(["group", &g.to_string()])
+            .output()
+            .unwrap();
+        let line = String::from_utf8(out.stdout).ok()?;
+        let fields: Vec<&str> = line.trim().split(':').collect();
+        let members = fields.get(3)?.split(',').filter(|m| !m.is_empty());
+        Some((fields[0].to_string(), members.map(String::from).collect()))
+    }
+    /// Gives p the group g, which its owner may do as a member of g.
+    fn set_group(p: &Path, g: u32) {
+        let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: c is NUL-terminated.
+        assert_eq!(
+            unsafe { libc::chown(c.as_ptr(), u32::MAX, g) },
+            0,
+            "{}",
+            p.display()
+        );
+    }
+
+    /// Group write, by the person's own private group only (Homebrew on Linux, a umask of 002):
+    /// a folder and a program 0775 in that group pass; the same in any other group, or writable
+    /// by others, are refused, with the command that fixes it.
+    #[test]
+    fn group_write_is_taken_from_the_persons_private_group_only() {
+        let t = Temp::new("group");
+        let d = real(&t);
+        let bin = d.join("bin");
+        folder(&bin, 0o775);
+        let p = bin.join("agent");
+        prog(&p, 0o775);
+        let mine = |g: u32| g == gid();
+        let other = |_: u32| false;
+        assert_eq!(by(&p, &mine), Ok(()));
+        refused(by(&p, &other), &bin, "may be changed by other users");
+        chmod(&bin, 0o755);
+        refused(by(&p, &other), &p, "may be written by other users");
+        let e = by(&p, &other).unwrap_err();
+        assert!(
+            e.contains(&format!("`chmod g-w,o-w '{}'`", p.display())),
+            "{e}"
+        );
+        // Others may write: refused whatever the group.
+        chmod(&p, 0o757);
+        refused(by(&p, &mine), &p, "may be written by other users");
+        chmod(&p, 0o755);
+        chmod(&bin, 0o777);
+        refused(by(&p, &mine), &bin, "may be changed by other users");
+        // A sticky folder anyone may write, with the person's own entry (as /tmp).
+        chmod(&bin, 0o1777);
+        assert_eq!(by(&p, &other), Ok(()));
+    }
+
+    /// A group is private only when it is this user's alone, by each of five conditions: each
+    /// one broken alone says no.
+    #[test]
+    fn a_group_is_private_only_when_each_condition_holds() {
+        let me = vec!["me".to_string()];
+        let bob = vec!["me".to_string(), "bob".to_string()];
+        let base = Group {
+            user: "me",
+            primary: 1000,
+            name: "me",
+            gid: 1000,
+            members: &me,
+            others_primary: &[100, 1001],
+            other_lines: &[0, 100, 1001],
+        };
+        assert!(private(&base));
+        assert!(
+            private(&Group {
+                members: &[],
+                ..base
+            }),
+            "no member listed"
+        );
+        assert!(
+            !private(&Group {
+                primary: 100,
+                ..base
+            }),
+            "not the primary group"
+        );
+        assert!(
+            !private(&Group {
+                name: "devs",
+                ..base
+            }),
+            "named otherwise"
+        );
+        assert!(
+            !private(&Group {
+                members: &bob,
+                ..base
+            }),
+            "another member"
+        );
+        assert!(
+            !private(&Group {
+                others_primary: &[100, 1000],
+                ..base
+            }),
+            "another user's primary group (useradd -g)"
+        );
+        assert!(
+            !private(&Group {
+                other_lines: &[0, 1000],
+                ..base
+            }),
+            "another group line with its number (devs:x:1000:bob)"
+        );
+    }
+
+    /// The hint quotes the path for a shell, a `'` in it too, and says when root must run it.
+    #[test]
+    fn the_chmod_hint_quotes_the_path_for_a_shell() {
+        let p = Path::new("/home/me/it's here");
+        assert_eq!(
+            chmod_hint(p, false),
+            r"`chmod g-w,o-w '/home/me/it'\''s here'` makes it yours alone"
+        );
+        assert_eq!(
+            chmod_hint(p, true),
+            r"as root, `chmod g-w,o-w '/home/me/it'\''s here'` makes it root's alone"
+        );
+        // What a shell makes of the quoted path is the path.
+        let quoted = chmod_hint(p, false);
+        let arg = quoted
+            .strip_prefix("`chmod g-w,o-w ")
+            .and_then(|q| q.split_once("` "))
+            .unwrap()
+            .0;
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", &format!("printf %s {arg}")])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), p.to_str().unwrap());
+    }
+
+    /// The person's private group as `id` and `getent` tell: their primary group, named as they
+    /// are, with no other member, no other user's primary group and no other group with its
+    /// number; and the real check takes group write from it alone.
+    #[test]
+    fn the_private_group_is_the_persons_own_and_no_other() {
+        let user = id("-un");
+        let primary: u32 = id("-g").parse().unwrap();
+        let groups: Vec<u32> = id("-G")
+            .split_whitespace()
+            .map(|g| g.parse().unwrap())
+            .collect();
+        // Every user's (name, primary group) and every group's (name, number), from getent.
+        let table = |db: &str, at: usize| -> Vec<(String, u32)> {
+            let out = std::process::Command::new("getent")
+                .arg(db)
+                .output()
+                .unwrap();
+            String::from_utf8(out.stdout)
+                .unwrap()
+                .lines()
+                .filter_map(|l| {
+                    let f: Vec<&str> = l.split(':').collect();
+                    Some((f.first()?.to_string(), f.get(at)?.parse().ok()?))
+                })
+                .collect()
+        };
+        let (users, lines) = (table("passwd", 3), table("group", 2));
+        let expected = |g: u32| {
+            g == primary
+                && group(g).is_some_and(|(name, members)| {
+                    name == user
+                        && members.iter().all(|m| *m == user)
+                        && !users.iter().any(|(u, p)| *u != user && *p == g)
+                        && lines.iter().filter(|(_, n)| *n == g).count() == 1
+                })
+        };
+        for &g in groups.iter().chain([0, 65534].iter()) {
+            assert_eq!(private_group(g), expected(g), "group {g}");
+        }
+        let t = Temp::new("real-group");
+        let d = real(&t);
+        if expected(primary) {
+            let bin = d.join("bin");
+            folder(&bin, 0o775);
+            set_group(&bin, primary);
+            prog(&bin.join("agent"), 0o775);
+            set_group(&bin.join("agent"), primary);
+            let p = bin.join("agent");
+            assert_eq!(path_target(&File::open(&p).unwrap(), &p), Ok(()));
+        } else {
+            println!("skipped: {user}'s primary group {primary} is not a private group");
+        }
+        match groups.iter().find(|g| !expected(**g)) {
+            Some(&g) => {
+                let shared = d.join("shared");
+                folder(&shared, 0o775);
+                set_group(&shared, g);
+                let p = shared.join("agent");
+                prog(&p, 0o755);
+                refused(
+                    path_target(&File::open(&p).unwrap(), &p),
+                    &shared,
+                    "may be changed by other users",
+                );
+            }
+            None => println!("skipped: {user} is in no group but a private one"),
+        }
+    }
+
+    /// The file the path leads to must be the one opened: another renamed over it is refused.
+    #[test]
+    fn a_file_renamed_over_the_path_after_it_was_opened_is_refused() {
+        let t = Temp::new("same");
+        let d = real(&t);
+        let p = d.join("agent");
+        prog(&p, 0o755);
+        let f = File::open(&p).unwrap();
+        prog(&d.join("new"), 0o755);
+        fs::rename(d.join("new"), &p).unwrap();
+        let e = path_target(&f, &p).unwrap_err();
+        assert!(e.contains("no longer the file"), "{e}");
+    }
+
+    /// `..` after an absolute link resolves from the link's target, as the kernel does; a link
+    /// loop ends in a refusal; relative and missing paths are refused; a name that is not UTF-8
+    /// is fine.
+    #[test]
+    fn links_and_dot_dot_resolve_as_the_kernel_resolves_them() {
+        use std::os::unix::ffi::OsStrExt;
+        let t = Temp::new("links");
+        let d = real(&t);
+        let real_dir = d.join("real");
+        fs::create_dir_all(real_dir.join("sub")).unwrap();
+        prog(&real_dir.join("agent"), 0o755);
+        let bin = d.join("bin");
+        folder(&bin, 0o755);
+        prog(&bin.join("agent"), 0o755);
+        symlink(real_dir.join("sub"), bin.join("l")).unwrap();
+        let named = bin.join("l").join("..").join("agent");
+        assert_eq!(path_target(&File::open(&named).unwrap(), &named), Ok(()));
+        let lexical = File::open(bin.join("agent")).unwrap();
+        assert!(
+            path_target(&lexical, &named).is_err(),
+            "the lexical file passed"
+        );
+
+        symlink("a", d.join("b")).unwrap();
+        symlink("b", d.join("a")).unwrap();
+        let e = path_target(&lexical, &d.join("a")).unwrap_err();
+        assert!(e.contains("too many links"), "{e}");
+
+        assert!(path_target(&lexical, Path::new("agent")).is_err());
+        assert!(path_target(&lexical, &d.join("missing")).is_err());
+        let odd = d.join(std::ffi::OsStr::from_bytes(b"\xff"));
+        folder(&odd, 0o755);
+        prog(&odd.join("agent"), 0o755);
+        let p = odd.join("agent");
+        assert_eq!(path_target(&File::open(&p).unwrap(), &p), Ok(()));
+    }
+
+    /// A path through the process file system leads elsewhere for the terminal than for the app
+    /// (`/proc/self` is each process's own): refused, and `/dev/fd` and `/dev/stdin` with it.
+    #[test]
+    fn a_path_through_the_process_file_system_is_refused() {
+        let t = Temp::new("proc");
+        let d = real(&t);
+        let p = d.join("agent");
+        prog(&p, 0o755);
+        let f = File::open(&p).unwrap();
+        let root = PathBuf::from("/proc/self/root").join(p.strip_prefix("/").unwrap());
+        let fd = PathBuf::from(format!("/dev/fd/{}", std::os::fd::AsRawFd::as_raw_fd(&f)));
+        for path in [root, fd, PathBuf::from("/dev/stdin")] {
+            let e = path_target(&f, &path).unwrap_err();
+            assert!(
+                e.contains("is in the process file system"),
+                "{}: {e}",
+                path.display()
+            );
+        }
     }
 }
 

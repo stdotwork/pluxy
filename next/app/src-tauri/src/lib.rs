@@ -66,7 +66,7 @@ pub mod recovery;
 pub mod release;
 #[cfg(debug_assertions)]
 pub mod release_config;
-#[cfg(all(target_os = "linux", feature = "native-test"))]
+#[cfg(feature = "native-test")]
 mod release_native;
 #[cfg(native_stack)]
 pub mod route;
@@ -76,13 +76,12 @@ pub mod savefile;
 pub mod spawn;
 mod startup;
 pub mod trust;
-#[cfg(all(target_os = "linux", feature = "native-test"))]
+#[cfg(feature = "native-test")]
 mod update_native;
-#[cfg(unix)]
 mod updater;
 mod updates;
 pub mod vault;
-#[cfg(all(windows, feature = "artifact-test-trust"))]
+#[cfg(windows)]
 mod win_acl;
 pub mod window;
 
@@ -114,7 +113,6 @@ struct App {
     startup: Mutex<(startup::Store, startup::Preferences)>,
     conn: Mutex<Connection>,
     /// A change of the app's own core waiting for its native confirmation (`core_updates.rs`).
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     core_change: Mutex<Option<core_updates::Pending>>,
     #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     confirmations: Mutex<confirmation::Confirmations>,
@@ -168,8 +166,7 @@ struct App {
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
     rotation_open: AtomicBool,
-    /// The app's own update (`updater.rs`).
-    #[cfg(unix)]
+    /// The app's own update (`updater/`).
     updater: updater::State,
 }
 
@@ -676,14 +673,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let mut tray = TrayIconBuilder::with_id("pluxy")
         .tooltip("pluxy")
         .menu(&menu)
-        .on_menu_event(|app, e| {
-            if tray_item_acts(
-                e.id().as_ref(),
-                app.state::<App>().quitting.load(Ordering::SeqCst),
-            ) {
-                tray_menu(app, e.id().as_ref());
-            }
-        })
+        .on_menu_event(|app, e| tray_menu_event(app, e.id().as_ref()))
         .on_tray_icon_event(|tray, e| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -704,6 +694,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     *app.state::<App>().status.lock().unwrap() = Some(status);
     *app.state::<App>().core_actions.lock().unwrap() = vec![start, stop, restart];
     Ok(())
+}
+
+/// The tray menu's event: a click on its item id.
+pub(crate) fn tray_menu_event(app: &AppHandle, id: &str) {
+    if tray_item_acts(id, app.state::<App>().quitting.load(Ordering::SeqCst)) {
+        tray_menu(app, id);
+    }
 }
 
 fn tray_menu(app: &AppHandle, id: &str) {
@@ -2939,18 +2936,15 @@ pub fn run() {
     let context = tauri::generate_context!();
     // The updater plugin exists only when the updater gate passes, before anything else runs: a
     // build without updater trust never loads it.
-    #[cfg(unix)]
     let gate = trust::updater_gate(
         context.config(),
         std::path::Path::new(&std::env::var_os("HOME").unwrap_or_default()),
     );
     let builder = tauri::Builder::default();
-    #[cfg(unix)]
     let builder = match &gate {
         Ok(key) => builder.plugin(tauri_plugin_updater::Builder::new().pubkey(key).build()),
         Err(_) => builder,
     };
-    #[cfg(unix)]
     let updater_plugin = gate.map(|_| ());
     let app = builder
         .invoke_handler(tauri::generate_handler![
@@ -3015,13 +3009,9 @@ pub fn run() {
             window_close,
             privacy_get,
             privacy_set,
-            #[cfg(unix)]
             updater::app_update_get,
-            #[cfg(unix)]
             updater::app_update_start,
-            #[cfg(unix)]
             updater::app_update_cancel,
-            #[cfg(unix)]
             updater::app_update_rollback,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
@@ -3221,7 +3211,6 @@ pub fn run() {
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
                 rotation_open: AtomicBool::new(false),
-                #[cfg(unix)]
                 updater: updater::State::new(updater_plugin.clone()),
             });
             let handle = app.handle().clone();
@@ -3315,9 +3304,7 @@ pub fn run() {
                 show_in_dock(&handle, false);
             }
             // A version an update installed accepts itself, which the earlier one waits for.
-            #[cfg(unix)]
             updater::accept(&handle);
-            #[cfg(unix)]
             updater::record_started_from(&handle);
             #[cfg(feature = "native-test")]
             native_test::start(handle);
@@ -3579,7 +3566,6 @@ mod tests {
         ] {
             assert!(all.iter().any(|a| a == c), "{c} missing from {all:?}");
         }
-        #[cfg(unix)]
         assert!(all.iter().any(|a| a == "plugin:updater|check"));
         assert!(all.iter().all(|c| !c.contains("__app-acl__")));
         assert!(all.len() > 100, "{} plugin commands", all.len());

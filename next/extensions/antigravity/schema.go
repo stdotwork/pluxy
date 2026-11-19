@@ -20,15 +20,21 @@ import (
 //   - a function's parameters lose their enums (Cloud Code does not enforce them) and
 //     additionalProperties (hinted when false); a response schema keeps both, as Cloud Code
 //     enforces them there, but loses a boolean's enum;
+//   - if, then and else, which it lacks too, are removed after the properties of each then and else
+//     move into the schema that holds them (a property the schema has stays as it is), so a model
+//     sees them as plain optional properties, as in today's core; a branch's required names do not
+//     move;
 //   - allOf, which Cloud Code's schema lacks, merges into the schema that holds it: the branches'
 //     required names join its required, and their other keys fill the keys it lacks, recursively
-//     (its own values win). As in today's core this comes after the hints, deepest first, and
-//     before unions and type lists are flattened;
+//     (its own values win). As in today's core this comes after the hints and the conditionals,
+//     deepest first, and before unions and type lists are flattened;
 //   - a type list such as ["string","null"] becomes the one type with nullable true;
 //   - a union with one non-null branch becomes that branch, nullable; for Claude models, whose
 //     backend rejects unions in function declarations, every union becomes its strongest branch
 //     (object over array over scalar) with the other types hinted ("Accepts: a | b");
-//   - other JSON Schema keywords are removed;
+//   - other JSON Schema keywords are removed, and so is title, except in a response schema (Google's
+//     Schema type has a title field, and today's core keeps it there) and, for Claude and Gemini 3 Pro,
+//     in a function's parameters and response;
 //   - for Claude and Gemini 3 Pro (the models today's core marks this way), a function's
 //     parameters get a required placeholder in every object that requires nothing: "reason" (a
 //     string) in one with no properties, "_" (a boolean) in one with properties and none
@@ -40,7 +46,7 @@ import (
 type schemaMode struct {
 	response     bool // a response schema, not a function's parameters
 	claude       bool // a function declaration for a Claude model
-	keepTitle    bool
+	keepTitle    bool // keep title: Google's Schema has the field; a function's parameters and response lose it for other models
 	placeholders bool // add the placeholders to a function's parameters
 }
 
@@ -74,7 +80,7 @@ var hintedConstraints = []string{
 var removedKeywords = []string{
 	"$schema", "$defs", "definitions", "$id", "id", "$anchor", "$vocabulary", "$dynamicRef", "$dynamicAnchor", "$comment",
 	"propertyNames", "patternProperties", "dependentRequired", "dependentSchemas", "dependencies",
-	"if", "then", "else", "not", "unevaluatedProperties", "unevaluatedItems", "additionalItems", "contentSchema",
+	"not", "unevaluatedProperties", "unevaluatedItems", "additionalItems", "contentSchema",
 	"contentMediaType", "contentEncoding", "readOnly", "writeOnly", "deprecated", "discriminator",
 	"enumDescriptions", "enumTitles", "prefill", "encrypted",
 }
@@ -84,8 +90,9 @@ const maxRefDepth = 16
 
 // cleanTools returns a request's tools with every function declaration's schemas cleaned: its
 // parameters (parametersJsonSchema renamed to parameters) and its response. group is true for
-// Claude and Gemini 3 Pro, which keep titles and get placeholders in their parameters; the second
-// result says where the placeholders went, leaving out any that a client schema at the same path
+// Claude and Gemini 3 Pro, which keep titles (also in a function's response) and get placeholders
+// in their parameters; the second result says where the placeholders went, leaving out any that
+// a client schema at the same path
 // (another union branch, whole as the client wrote it even where Claude's cleaning keeps one; a
 // tuple item; a function declared again under the same name) declares a name the placeholder
 // has, as a property or in required: stripping would take the client's key, so that placeholder
@@ -136,7 +143,7 @@ func cleanTools(raw json.RawMessage, claude, group bool) (json.RawMessage, place
 					}
 				}
 				if r, ok := d["response"]; ok {
-					d["response"] = cleanSchema(r, schemaMode{response: true})
+					d["response"] = cleanSchema(r, schemaMode{response: true, keepTitle: group})
 				}
 			}
 			t[key], _ = json.Marshal(decls)
@@ -171,7 +178,7 @@ func cleanResponseSchema(gen map[string]json.RawMessage) bool {
 		}
 	}
 	if v, ok := gen["responseSchema"]; ok {
-		gen["responseSchema"] = cleanSchema(v, schemaMode{response: true})
+		gen["responseSchema"] = cleanSchema(v, schemaMode{response: true, keepTitle: true})
 		changed = true
 	}
 	return changed
@@ -500,10 +507,11 @@ func marshalPlain(v any) ([]byte, error) {
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
-// cleanTree cleans a whole schema in today's core's order: keywords and hints (clean), then allOf
-// merged (mergeAllOf), then unions and type lists flattened (flatten).
+// cleanTree cleans a whole schema in today's core's order: keywords and hints (clean), then the
+// properties of if/then/else merged (mergeConditionals), then allOf merged (mergeAllOf), then
+// unions and type lists flattened (flatten).
 func cleanTree(root any, defs map[string]any, mode schemaMode) any {
-	return flatten(mergeAllOf(clean(root, defs, mode, 0)), mode)
+	return flatten(mergeAllOf(mergeConditionals(clean(root, defs, mode, 0))), mode)
 }
 
 // walkSchema calls fn on every schema under v, children first, as clean reaches them: a
@@ -530,6 +538,41 @@ func walkSchema(v any, fn func(map[string]any) any) any {
 		return fn(x)
 	}
 	return v
+}
+
+// mergeConditionals removes every if, then and else, deepest first, after merging the properties
+// of each then and else into the schema that holds it, as today's core does (mergeConditionals in
+// core/internal/util/gemini_schema.go): then first, and a property the schema already has stays as
+// it is. Cloud Code's schema has no conditionals, but a property only a branch declares is one the
+// client accepts, and the model sees it here as a plain optional one. Nothing but properties
+// moves: a branch's required names and its other keys are dropped with the keywords.
+func mergeConditionals(v any) any {
+	return walkSchema(v, func(m map[string]any) any {
+		for _, k := range []string{"then", "else"} {
+			branch, _ := m[k].(map[string]any)
+			props, _ := branch["properties"].(map[string]any)
+			if len(props) == 0 {
+				continue
+			}
+			dest, ok := m["properties"].(map[string]any)
+			if !ok {
+				if _, has := m["properties"]; has {
+					continue // not a properties map: nothing to merge into
+				}
+				dest = map[string]any{}
+			}
+			for name, p := range props {
+				if _, has := dest[name]; !has {
+					dest[name] = p
+				}
+			}
+			m["properties"] = dest
+		}
+		delete(m, "if")
+		delete(m, "then")
+		delete(m, "else")
+		return m
+	})
 }
 
 // mergeAllOf merges every allOf into the schema that holds it, deepest first, as today's core
@@ -567,8 +610,8 @@ func mergeAllOf(v any) any {
 						m["required"] = req
 					}
 				case "allOf":
-					// Merged into the branch already; a conditional (if, then, else) is removed
-					// by clean.
+					// Merged into the branch already; a conditional (if, then, else) is gone
+					// after mergeConditionals.
 				default:
 					fillMissing(m, k, bm[k])
 				}

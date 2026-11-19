@@ -33,8 +33,9 @@ defaults:
 
 jobs:
   next:
-    # PLUXY_LINUX_CLOUD_RUNNER, when set (AGENTS.md, "Where jobs run").
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || 'ubuntu-latest' }}
+    # GitHub's runners, never PLUXY_LINUX_CLOUD_RUNNER: this job is shorter than the native test, so
+    # Namespace's vCPUs are kept for that (AGENTS.md, "Where jobs run").
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -193,3 +194,21 @@ jobs:
         run: go test -count=1 -v ./internal/cred/
       - name: Test the config file and the settings and logs folders
         run: go test -count=1 -v -run Windows ./internal/core/ ./internal/extconfig/ ./internal/logfile/ ./internal/server/
+
+  bench:
+    name: Benchmark check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Benchmark regression check
+        working-directory: next
+        run: go run ./cmd/pluxy-bench -check

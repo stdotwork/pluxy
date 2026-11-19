@@ -19,6 +19,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | --- | --- |
 | `cmd/pluxy` | The core program. |
 | `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index; packs the desktop app's native tools with `-app-tools`. |
+| `cmd/pluxy-bench` | Measures the time and memory pluxy adds between a client and its upstream, against a mock upstream, and checks them against budgets in CI ([docs/perf.md](../docs/perf.md)). |
 | `protocol/` | The extension protocol: [README](protocol/README.md), [tutorial](protocol/TUTORIAL.md), wire types and framing. |
 | `llm/` | The internal model of a request and its streamed reply, shared by core and extensions. |
 | `sdk/` | Go SDK for writing extensions. |
@@ -35,6 +36,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `extensions/devin` | Provider extension for Devin: the models a Devin account gets, signed in as Devin's CLI signs in or with a session token, over Devin's protobuf API; `devintest` is a fake Devin for its tests. |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
+| `management` | The management API's contract ([README](management/README.md)), its request and reply types, and a client; the `pluxy` command's subcommands use it. |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
 | `internal/cred` | Core's credential store and renewal of accounts added by login. |
 | `internal/private` | Core's private folders and files (credentials, extensions' settings, logs): 0700 and 0600 on Linux and macOS, an owner-only access list on Windows. |
@@ -89,10 +91,10 @@ go build -o extensions/claude/claude ./extensions/claude
 ```
 
 ```bash
-./pluxy -config config.json
+./pluxy serve -config config.json
 ```
 
-Flags:
+`pluxy -config config.json`, with no subcommand, serves too. Flags:
 
 - `-config`: the config file (default `config.json`).
 - `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
@@ -1133,14 +1135,20 @@ core cleans them: local `$ref`s inlined, `const` as an enum, constraints and sho
 the description as hints (`minLength: 1`, `Allowed: a, b`), a type list such as
 `["string","null"]` as one nullable type, each `allOf` merged into the schema that holds it
 (Cloud Code's schema has no `allOf`: the branches' required names join the schema's, and their
-other keys fill the ones it lacks, its own winning), and other JSON Schema keywords removed; for a
+other keys fill the ones it lacks, its own winning), `if`, `then` and `else` removed after the
+properties of each `then` and `else` move into the schema that holds it (the model sees them as plain
+optional properties, as in today's core; the schema's own property wins, and a branch's `required`
+is dropped), and other JSON Schema keywords removed; for a
 Claude model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
 object in a function's parameters that requires nothing gets a required placeholder property:
 `reason` (a string) where it has no properties, `_` (a boolean) where it has some and none is
 required. An object is a schema of type `object`; a union object (with `anyOf` or `oneOf`) gets
 none. Every schema with `properties` and no type gets type `object`, whatever the model, as in
 today's core. A function's response schema gets no placeholder: today's core adds one there, but the schema
-describes what the client returns, and nothing would remove the placeholder. The extension removes
+describes what the client returns, and nothing would remove the placeholder. A response format's schema keeps
+the `title` of every schema in it, as today's core does: Google's Schema type has a `title` field. A
+function's parameters and response schema lose their titles except for Claude and Gemini 3 Pro, also
+as in today's core. The extension removes
 the placeholders from the model's calls before any client format sees them; today's core does that
 only for Messages clients. It leaves a placeholder in a call where a client schema at the same path
 declares the name, as a property or in `required`: the other branches of a union (also those
@@ -1247,18 +1255,27 @@ account. A monthly or unnamed quota holds back only the model. Devin's `canceled
 request (499), as in today's core. An error after Devin sent any frame (output, usage or a
 signature) is not retry-safe, and a reply that ends without its end frame is an error.
 
-A refusal with an HTTP error status takes its message from a Connect error body's `message`,
-and keeps that body as the error's raw body. Unlike today's core, which passes any other body on
-as it is, the extension passes such a body on only as the message, only when it read the body
+A refusal with an HTTP error status takes its message from a Connect error body's `message`, and
+an error in the end frame takes the frame's. Both are cleaned, as is the code when it is not one
+of Connect's, and the error's raw body is the body or frame rebuilt from the cleaned code and
+message only, so its other fields are dropped. Unlike today's core, which passes any other body
+on as it is, the extension passes such a body on only as the message, only when it read the body
 whole (under 1 MiB, and not broken off), and cleaned. The cleaned text is one line, cut after
 1000 characters with an ellipsis. Replaced by `[redacted]` are: every run of token characters
-(letters, digits and `_-.+/=~`) holding 4 or more consecutive characters of the account's session
-token after its public `devin-session-token$` prefix; `Bearer` and `Basic` values; the values of
-fields named like `access_token` or `api_key`; and any other run of 24 or more token characters.
-Core removes only whole copies of an account's credential, and such a body can hold part of one
-the upstream echoed, split across lines or cut short. Otherwise the message names only the status
-(`Devin answered 500 Internal Server Error`), or, for a quota read whose reply broke off, says
-that it broke off.
+(letters, digits and `_-.+/=~`) holding 4 or more consecutive characters of one of the account's
+secrets: its session token after the public `devin-session-token$` prefix, the values of its
+secret headers, its proxy's user name and password and the secrets in its settings (4
+characters all within a secret's public vendor prefix, such as `sk-proj-`, do not count; see
+[Account checks](#account-checks)); `Bearer` and
+`Basic` values; the values of fields named like `access_token`, `token` or `api_key`; and any
+other run of 24 or more token characters. A run is also read with its escapes decoded (JSON's
+`\/` and `\uXXXX`, `%XX`), so a piece written with escapes between its characters is replaced
+too. Core removes whole copies of an account's secrets everywhere, and pieces of them by the same
+4-character rule from every extension's errors (see [Account checks](#account-checks)), but not
+the other rules or the bound, so the extension keeps its own cleaning. Otherwise the message
+names only the status (`Devin answered 500 Internal Server Error`), or, for a quota read whose
+reply broke off, says that it broke off. The 4-character rule can also replace a word that shares
+4 characters with one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
@@ -1510,7 +1527,22 @@ extension's own output, show `[redacted]` in place of the account's credential a
 secret in its settings (the values `GET /config` and `GET /accounts` show as placeholders), such
 as a `base_url` with a token in its query that an unreachable upstream's error quotes. A
 settings secret shorter than 8 bytes is left in text, since removing every occurrence of so
-short a string would mangle unrelated text. Each
+short a string would mangle unrelated text. An error's message and the string values of its raw
+body, from every extension and for every call (requests, checks, quota and model reads,
+refreshes, sessions and logins), also lose every run of token characters (letters, digits and
+`_-.+/=~`, read as written and with JSON and percent escapes decoded) that holds 4 or more
+consecutive characters of one of the account's secrets: an upstream that refuses a key often
+echoes its start (`invalid x-api-key: sk-ant-api03-AbCdEf...`), which whole-secret redaction
+misses. The secrets are the credential's key and tokens, secret header values, the proxy's user
+name and password and the secrets core finds in the settings (a URL by its user name, password
+and secret query values only), by their parts, and on a login the inputs it marks secret (the
+extension protocol's [Accounts](protocol/README.md#accounts) says which). A known vendor's
+public key prefix (`sk-proj-`, `sk-kimi-`, `xai-` and the others listed there) gives no piece,
+so `project` or `kimi` stays in an error for such a key; a secret of under 16 bytes after its
+prefix keeps every piece. Any other word of the error that shares 4 characters with a secret
+goes too, such as `token` for a header `Bearer gw-token-12345`; a reply that succeeded is never
+changed by the rule.
+Each
 extension checks with its upstream's model list, and only accounts with an API key:
 
 | Extension | Check |
@@ -1547,9 +1579,9 @@ for it. The same list decides which models such an account serves: a request for
 account serves is refused without calling an upstream, as today's core refuses it (404
 `model_not_found`; today's core answers 400). An account whose extension has no list, an empty
 one, or one it could not read within 15 seconds serves any model, and core asks again a minute
-later. Core asks an
-extension once per account and keeps the answer until the accounts change: a reload, or an
-account added, removed or signed in again.
+later. Core asks again for each known list every 30 minutes with jitter, when an account's
+credential is renewed or it signs in again, and on `POST /v0/management/models/refresh`; a
+refresh that fails, times out or comes back empty keeps the last good list.
 
 ### Codex client catalog
 
@@ -1758,6 +1790,10 @@ config can still be checked and reloaded through management.
 
 ### Management API
 
+[`management/README.md`](management/README.md) is the API's contract and describes the `pluxy`
+command, its client: `pluxy serve` runs core, and the other subcommands (`pluxy status`,
+`pluxy account list`, `pluxy help` for the rest) call a running core's management API.
+
 Beside the account calls [above](#accounts-added-by-login), management serves these. Every call
 needs `Authorization: Bearer <management_key>`.
 
@@ -1776,13 +1812,15 @@ page are not gated; the panel's calls are.
 {"management_key": "choose-a-management-key", "management_allow_remote": true}
 ```
 
-A client that sends a missing or wrong management key 5 times in a row is refused for 30 minutes,
-with a 403 and `Retry-After`, even when it then sends the right key; core logs a line naming it.
+A client on another machine that sends a wrong management key 5 times in a row is refused for 30
+minutes, with a 403 `blocked` and `Retry-After`, even when it then sends the right key; core logs a
+line naming it. A call with no key at all is a 401 that does not count, and a call from this machine
+is never counted or blocked, so the person at the keyboard can always get back in.
 A right key clears its count, and a count is forgotten after 2 hours without a failure. These are
 today's core's numbers. The client is the address [`trusted_proxies`](#run-it) gives, and an
 IPv6 client is counted by its /64, so it cannot start again by moving to another address in the
-block it was given; today's core counts each address. Behind a proxy that is not in
-`trusted_proxies`, every client has the proxy's address, so one client's wrong keys block them all.
+block it was given; today's core counts each address. Behind a proxy on another machine that is not
+in `trusted_proxies`, every client has the proxy's address, so one client's wrong keys block them all.
 
 | Call | What it does |
 | --- | --- |
@@ -1818,6 +1856,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
 | `GET /v0/management/models` | The models `GET /v1/models` lists, as one list in the same order: `models`, each with `id` (the name clients use), what the extension says about the model (`owned_by`, `display_name`, limits, ...), `upstream` (its name upstream), `extension` (the extension of the account whose entry the list shows) and `accounts` (the IDs of every account that serves the name, in routing order). An account that serves any model because its list is not known lists none. Never a credential. |
+| `POST /v0/management/models/refresh` | Ask providers for their model lists again now; optional JSON body `{"account": "<id>"}` for one account. Returns the updated `models` list and per-account `accounts` results (`models`, `kept`, `error`). A read that fails, times out or comes back empty keeps the last good list. |
 | `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate`, this core's own, under its own name (below). |
 | `PATCH /v0/management/settings` | Changes the settings the body names (`{"routing": {"strategy": "fill-first"}}`) and replies with them all. 400 for a name or value it does not take. |
 
@@ -1987,7 +2026,7 @@ it `[warn ]`; every other line is `[info ]`.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/logs` | Lines of `main.log` and its rotated files (not the request logs), oldest first: with `after` (a time in Unix seconds, such as a reply's `latest-timestamp`), the oldest `limit` lines written after it, so a reader can page forward; without it, the newest `limit` lines. `limit` defaults to 1000, at most 10000. The reply holds `lines`, `line-count` and `latest-timestamp` (the newest returned line's time, in seconds with milliseconds; `after` itself when there is none). A line with no time of its own counts as written with the line before it. |
+| `GET /v0/management/logs` | Lines of `main.log` and its rotated files (not the request logs), oldest first: with `after` (a time in Unix seconds, such as a reply's `latest-timestamp`), the oldest `limit` lines written after it, so a reader can page forward and miss none (every write has a time later than the write before it, and a page that ends inside one write's lines holds the rest of them, so it can have a few more than `limit`); without it, the newest `limit` lines. `limit` defaults to 1000, at most 10000. The reply holds `lines`, `line-count` and `latest-timestamp` (the newest returned line's time, in seconds with milliseconds; `after` itself when there is none). A line with no time of its own counts as written with the line before it. |
 | `DELETE /v0/management/logs` | Empties `main.log` and deletes its rotated files; replies with `removed`, how many files it deleted. Request logs stay. |
 
 Both answer 400 while logging to file is off, as today's core does. Today's core also takes a
@@ -2017,7 +2056,8 @@ too, and counted with the rest. On each side that is, first, a window of 12 byte
 of the longest form of a secret the log removes that holds a character other than a key's (the
 secret as it is, or escaped, whichever is longest). That holds every part of such a secret the
 line cut in a spelling of up to 11 bytes for each of its bytes; the log also removes spellings
-with deeper escapes, and a part of one of those cut at the line can stay. Secrets made only of
+with deeper escapes (such as a percent escape nested 6 times, `%252525252573` for `s`, 13 bytes
+for each byte), and a part of one of those cut at the line can stay. Secrets made only of
 letters, digits and `-_.~+/=%\`, as API keys and tokens are, need no window: the run of those
 characters that goes on from the edge is left out in any case, and it holds any part of such a
 secret, whatever its length. Where the edge then cuts through a secret in one of its forms, 4
@@ -2084,13 +2124,20 @@ Secrets are left out of every request log: values of headers and query parameter
 hold `authorization`, `api-key`, `apikey`, `api_key`, `token`, `secret`, `cookie` or `password`,
 and `key` (an authorization header keeps its scheme, as in `Bearer [redacted]`), and, anywhere in
 the file, every client key, the management key, every config account's credential and the
-secrets in its settings (as `GET /config` finds them, those of 8 bytes or more), and the user
-info of the global `proxy_url` and of each account's (the forms the extension removes from its
-replies: the user info as written and decoded, its base64 `Proxy-Authorization` login, and the
-user name and password alone when each is 8 bytes or more), in the forms the
-credential redaction finds (JSON escapes, percent-encoding and the rest). Replies and upstream
+secrets in its settings (as `GET /config` finds them, those of 8 bytes or more), and the user info of
+the global `proxy_url` and of each account's (the forms the extension removes from its replies: the
+user info as written and decoded, its base64 `Proxy-Authorization` login, and the user name and
+password alone when each is 8 bytes or more), in the forms the credential redaction finds (JSON
+escapes, percent-encoding and the rest). A secret made of parts, such as a session token behind a
+public prefix (`devin-session-token$<jwt>`), the token of a `Bearer` value or a cookie's value, has
+each part of 8 bytes or more removed on its own too (the extension protocol's
+[Accounts](protocol/README.md#accounts) lists the structures). Replies and upstream
 sections come from the extension with the account's own credential, the secrets in its settings,
-its proxy's password and its secret header values already removed; in the upstream sections the
+its proxy's password and its secret header values already removed, and an error's text and the
+body of an upstream reply with an error status (400 or more), or of every reply of a request
+that failed, without the pieces of the account's secrets (see [Account checks](#account-checks)):
+a failed request's log can lose words of the model's text that share 4 characters with a secret;
+in the upstream sections the
 values of headers and query parameters whose names hold `auth`, `key`, `token`, `secret`,
 `cookie`, `session`, `password`, `passphrase` or `signature` are masked too, the URL's user name and password
 are left out, and the characters a secret could be made of on each side of a body's left-out

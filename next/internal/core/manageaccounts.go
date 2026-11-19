@@ -14,6 +14,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/management"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -36,20 +37,7 @@ type AccountModel struct {
 }
 
 // TestResult is the outcome of POST /accounts/{id}/test.
-type TestResult struct {
-	OK bool `json:"ok"`
-	// Model is the model the request named; Served is the one that answered, when the
-	// upstream said.
-	Model  string `json:"model"`
-	Served string `json:"served_model,omitempty"`
-	// LatencyMS is the time from sending the request to its last event.
-	LatencyMS int64 `json:"latency_ms"`
-	// Reply is the start of the model's text reply.
-	Reply        string     `json:"reply,omitempty"`
-	FinishReason string     `json:"finish_reason,omitempty"`
-	Usage        *llm.Usage `json:"usage,omitempty"`
-	Error        *llm.Error `json:"error,omitempty"`
-}
+type TestResult = management.TestResult
 
 // testPrompt is what an account test sends, and testMaxTokens the longest reply it asks for:
 // a request as small as the old panels' connection test.
@@ -89,7 +77,7 @@ func (c *Core) handleAccounts(m *server.Management) {
 		}
 		cleared := c.state.Reset(a, time.Now())
 		v, _ := m.View(a.ID)
-		writeJSON(w, http.StatusOK, map[string]any{"cleared": cleared, "account": v})
+		writeJSON(w, http.StatusOK, management.CooldownResetReply{Account: v, Cleared: cleared})
 	})
 	m.Handle("GET /accounts/{id}/models", func(w http.ResponseWriter, r *http.Request) {
 		s, release := c.acquire()
@@ -109,12 +97,10 @@ func (c *Core) handleAccounts(m *server.Management) {
 			writeAccountError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"quota": q, "fetched_at": time.Now().UTC()})
+		writeJSON(w, http.StatusOK, management.QuotaReply{FetchedAt: time.Now().UTC(), Quota: q})
 	})
 	m.Handle("POST /accounts/{id}/test", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Model string `json:"model"`
-		}
+		var req management.TestRequest
 		if r.ContentLength != 0 && !readJSON(w, r, &req) {
 			return
 		}
@@ -125,7 +111,7 @@ func (c *Core) handleAccounts(m *server.Management) {
 			writeAccountError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"result": res})
+		writeJSON(w, http.StatusOK, management.TestReply{Result: res})
 	})
 }
 
@@ -240,9 +226,14 @@ func (c *Core) accountModels(ctx context.Context, s *snapshot, id string) ([]Acc
 	return out, nil
 }
 
-// listModels asks account a's extension for its model list now (the protocol's models call),
-// rather than reading the list routing keeps, so the management view is current.
+// listModels returns account a's model list from the list routing keeps when a is routed
+// and has one, else asks its extension directly.
 func (c *Core) listModels(ctx context.Context, s *snapshot, a route.Account) (*protocol.ModelList, error) {
+	if s.Router != nil {
+		if list := s.Router.AccountList(ctx, a.ID); list != nil {
+			return list, nil
+		}
+	}
 	cr, _, err := c.credential(ctx, a)
 	if err != nil {
 		return nil, err

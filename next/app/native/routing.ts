@@ -1,6 +1,7 @@
 // Fixtures for the native test's check of cross-package routing and import authorization
 // (src-tauri/src/routing_native.rs). Every native tool is the disposable fixture tool
-// (src-tauri/examples/program_fixture, which run.ts builds) in its own signed package; the
+// (src-tauri/examples/program_fixture, which run.ts builds, and off Linux the workflow) in its own
+// signed package; the
 // manifests differ only in what they declare:
 //
 // - pluxy/target, releases 1.0.0 and 2.0.0: exports summary and wait (read), store (write) and
@@ -24,11 +25,10 @@
 // with, worked out here and not by the app: each archive's SHA-256, the summary's input and answer,
 // and the launch the launch-class calls name.
 
-import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, type KeyObject } from "node:crypto";
 import { chmodSync, copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { artifact, type Fixture, platform, writeTrustProfile } from "./admission";
+import { dirname, join } from "node:path";
+import { artifact, EXE, type Fixture, PROGRAM, platform, TOOL, tarGz, writeTrustProfile } from "./admission";
 
 const ITEMS = ["alpha", "be", "gamma-delta"];
 const object = { type: "object" };
@@ -174,7 +174,7 @@ export function native(id: string, version: string, app: Record<string, unknown>
       version: 0,
       tier: "native",
       host_versions: [0],
-      programs: { [platform()]: "bin/tool" },
+      programs: { [platform()]: TOOL },
       state: { version: 0, readable_versions: [0] },
       ...app,
     },
@@ -254,7 +254,8 @@ const PACKAGES: Package[] = [
   web("example/hub-viewer", [targetImport(["summary"])]),
 ];
 
-/** Packs p into root, with program as a native package's program; returns its archive's name. */
+/** Packs p into root, with program as a native package's program, at the path its manifest names
+ * for this platform (TOOL when it names none); returns its archive's name. */
 export function pack(root: string, p: Package, program: string): string {
   const file = `${p.id.replace("/", "-")}-${p.version}.tar.gz`;
   const dir = join(root, `pkg-${file}`);
@@ -274,16 +275,16 @@ export function pack(root: string, p: Package, program: string): string {
     writeFileSync(join(dir, "pages", "page.js"), PAGE_SCRIPT);
   }
   if (p.tier === "native") {
-    mkdirSync(join(dir, "bin"));
-    copyFileSync(program, join(dir, "bin", "tool"));
-    chmodSync(join(dir, "bin", "tool"), 0o755);
+    const named = (app.programs as Record<string, string> | undefined)?.[platform()] ?? TOOL;
+    mkdirSync(dirname(join(dir, named)), { recursive: true });
+    copyFileSync(program, join(dir, named));
+    chmodSync(join(dir, named), 0o755);
   }
   writeFileSync(
     join(dir, "pluxy-extension.json"),
     JSON.stringify({ manifest_version: 1, id: p.id, version: p.version, app }),
   );
-  const r = spawnSync("tar", ["-czf", join(root, file), "-C", dir, "."], { stdio: "inherit" });
-  if (r.status !== 0) throw new Error(`tar exited with ${r.status}`);
+  tarGz(join(root, file), dir);
   rmSync(dir, { recursive: true, force: true });
   return file;
 }
@@ -324,9 +325,11 @@ export function buildRoutingFixtures(root: string, home: string, program: string
   const untrustedFile = join(root, "untrusted.json");
   writeFileSync(curatedFile, JSON.stringify(index(curated)));
   writeFileSync(untrustedFile, JSON.stringify(index(untrusted)));
-  // What the launch-class calls name: a regular file to run, its arguments and folder.
-  const executable = join(root, "launch-me");
-  writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  // What the launch-class calls name: a program to run, its arguments and folder. Never run. On
+  // Windows the app reviews only a file named as a program (`.exe`), so it is one, as the native
+  // fixtures' tool is (PROGRAM).
+  const executable = join(root, `launch-me${EXE}`);
+  writeFileSync(executable, PROGRAM, { mode: 0o755 });
   const longest = ITEMS.reduce((a, b) => (b.length > a.length ? b : a), "");
   writeFileSync(
     join(root, "expect.json"),
