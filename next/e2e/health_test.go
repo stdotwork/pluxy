@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -305,4 +306,211 @@ func TestRoutingFileIsLeftAloneUntilABlockMustBeSaved(t *testing.T) {
 	if err := json.Unmarshal([]byte(read(file)), &doc); err != nil || doc.V != 1 || len(doc.Blocks) != 1 || doc.Blocks[0].Account != "a" {
 		t.Errorf("%s = %s (%v), want version 1 with a's block", file, read(file), err)
 	}
+}
+
+// A fake upstream that answers "account suspended" bans the account with the provider's words,
+// survives a core restart as banned (getting zero requests, including startup checks), and
+// serves again after pluxy account enable.
+func TestBannedAccountSurvivesRestartAndRecoversOnEnable(t *testing.T) {
+	var aCalls, bCalls atomic.Int32
+	var aSuspended atomic.Bool
+	aSuspended.Store(true)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get("X-Api-Key")
+		if key == "sk-ant-api-a" {
+			aCalls.Add(1)
+		} else if key == "sk-ant-api-b" {
+			bCalls.Add(1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/models" && r.Method == http.MethodGet {
+			io.WriteString(w, `{"data":[{"type":"model","id":"claude-sonnet-4-5-20250929","display_name":"Claude Sonnet 4.5"}],"has_more":false}`)
+			return
+		}
+		if r.URL.Path == "/v1/messages" && r.Method == http.MethodPost {
+			if key == "sk-ant-api-a" && aSuspended.Load() {
+				w.WriteHeader(http.StatusForbidden)
+				io.WriteString(w, `{"type":"error","error":{"type":"permission_error","message":"Your account has been suspended."}}`)
+				return
+			}
+			io.WriteString(w, `{"id":"msg_ok","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929","content":[{"type":"text","text":"ok from `+key+`"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":5,"output_tokens":3}}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(up.Close)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	writeConfig(t, path, map[string]any{
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"credentials_dir": filepath.Join(dir, "credentials"),
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "claude", "pluxy-extension.json"),
+			"accounts": []any{},
+		},
+	})
+	bin := filepath.Join(binDir, "pluxy")
+	base, logs, stop, err := startCoreStoppable(t, bin, "-config", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addAcct := func(id, apiKey string, priority int) {
+		t.Helper()
+		var l loginReply
+		if code := manage(t, base, http.MethodPost, "/accounts", map[string]any{
+			"id":       id,
+			"method":   "api_key",
+			"priority": priority,
+			"settings": map[string]any{"base_url": up.URL},
+			"input":    map[string]string{"api_key": apiKey},
+		}, &l); code != http.StatusAccepted {
+			t.Fatalf("add %s: %d", id, code)
+		}
+		for deadline := time.Now().Add(10 * time.Second); l.Login.State == "pending" && time.Now().Before(deadline); {
+			time.Sleep(20 * time.Millisecond)
+			manage(t, base, http.MethodGet, "/logins/"+l.Login.ID, nil, &l)
+		}
+		if l.Login.State != "done" {
+			t.Fatalf("login %s: %+v", id, l.Login)
+		}
+	}
+	addAcct("a", "sk-ant-api-a", 2)
+	addAcct("b", "sk-ant-api-b", 1)
+
+	const chatBody = `{"model":"claude-sonnet-4-5-20250929","messages":[{"role":"user","content":"hi"}]}`
+	postOK(t, base, chatBody) // tries a (highest priority) -> suspended -> rotates to b -> 200
+
+	h := accountHealth(t, base, "a")
+	if h.State != mgmt.HealthBanned || h.Why != "Your account has been suspended." || h.Source != mgmt.SourceProvider {
+		t.Fatalf("a after suspension: %+v, want banned with provider words", h)
+	}
+	logs.waitFor(t, `account "a" banned: Your account has been suspended.`)
+	stop()
+
+	routingFile := filepath.Join(dir, "state", "routing.json")
+	if b, err := os.ReadFile(routingFile); err != nil || !strings.Contains(string(b), `"account": "a"`) {
+		t.Fatalf("routing.json = %s (%v), want ban for a", b, err)
+	}
+
+	// Restart core and verify a stays banned and gets ZERO requests (not even startup check).
+	aBefore := aCalls.Load()
+	bBefore := bCalls.Load()
+	base, _, stop, err = startCoreStoppable(t, bin, "-config", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stop)
+	if h := accountHealth(t, base, "a"); h.State != mgmt.HealthBanned || h.Why != "Your account has been suspended." {
+		t.Fatalf("a after restart: %+v, want banned", h)
+	}
+	if r := runCLI(t, nil, "account", "list", "--url", base, "--key", managementKey); r.code != 0 || !strings.Contains(r.stdout, "banned") || !strings.Contains(r.stdout, "Your account has been suspended.") {
+		t.Fatalf("account list while banned: %s", r)
+	}
+	// Clearing cooldowns must not clear a ban.
+	if r := runCLI(t, nil, "account", "clear", "a", "--url", base, "--key", managementKey); r.code != 0 {
+		t.Fatalf("account clear while banned: %s", r)
+	}
+	if h := accountHealth(t, base, "a"); h.State != mgmt.HealthBanned {
+		t.Fatalf("a after account clear: %+v, want still banned", h)
+	}
+	for range 3 {
+		postOK(t, base, chatBody)
+	}
+	if aCalls.Load() != aBefore {
+		t.Errorf("a received %d requests after restart while banned, want 0", aCalls.Load()-aBefore)
+	}
+	if bCalls.Load() < bBefore+3 {
+		t.Errorf("b calls = %d -> %d, want at least +3", bBefore, bCalls.Load())
+	}
+
+	// pluxy account enable unbans a and lets it serve again.
+	aSuspended.Store(false)
+	r := runCLI(t, nil, "account", "enable", "a", "--url", base, "--key", managementKey)
+	if r.code != 0 {
+		t.Fatalf("pluxy account enable a: %s", r)
+	}
+	if h := accountHealth(t, base, "a"); h.State != mgmt.HealthOK {
+		t.Fatalf("a after pluxy account enable: %+v, want ok", h)
+	}
+	aBeforeEnableServe := aCalls.Load()
+	postOK(t, base, chatBody) // a has priority 2 > b's priority 1, so a serves
+	if aCalls.Load() <= aBeforeEnableServe {
+		t.Errorf("a did not serve after pluxy account enable (calls stayed %d)", aCalls.Load())
+	}
+}
+
+// Signing in to a banned account again unbans it without restarting core.
+func TestBannedAccountReauthUnbans(t *testing.T) {
+	var suspended atomic.Bool
+	suspended.Store(true)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/models" && r.Method == http.MethodGet {
+			io.WriteString(w, `{"data":[{"type":"model","id":"claude-sonnet-4-5-20250929","display_name":"Claude 4.5 Sonnet"}],"has_more":false}`)
+			return
+		}
+		if r.URL.Path == "/v1/messages" && r.Method == http.MethodPost {
+			if suspended.Load() {
+				w.WriteHeader(http.StatusBadRequest)
+				io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"This organization has been disabled."}}`)
+				return
+			}
+			io.WriteString(w, `{"id":"msg_ok","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":5,"output_tokens":3}}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(up.Close)
+
+	base := runCore(t, map[string]any{
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "claude", "pluxy-extension.json"),
+			"accounts": []any{},
+		},
+	})
+	login := func(path string, body map[string]any) {
+		t.Helper()
+		var l loginReply
+		if code := manage(t, base, http.MethodPost, path, body, &l); code != http.StatusAccepted {
+			t.Fatalf("POST %s: %d", path, code)
+		}
+		for deadline := time.Now().Add(10 * time.Second); l.Login.State == "pending" && time.Now().Before(deadline); {
+			time.Sleep(20 * time.Millisecond)
+			manage(t, base, http.MethodGet, "/logins/"+l.Login.ID, nil, &l)
+		}
+		if l.Login.State != "done" {
+			t.Fatalf("POST %s login: %+v", path, l.Login)
+		}
+	}
+	login("/accounts", map[string]any{
+		"id": "a", "method": "api_key",
+		"settings": map[string]any{"base_url": up.URL},
+		"input":    map[string]string{"api_key": "sk-ant-api-old"},
+	})
+	const chatBody = `{"model":"claude-sonnet-4-5-20250929","messages":[{"role":"user","content":"hi"}]}`
+	resp := post(t, context.Background(), base, clientKey, chatBody)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("first request: %d, want 400", resp.StatusCode)
+	}
+	if h := accountHealth(t, base, "a"); h.State != mgmt.HealthBanned || h.Why != "This organization has been disabled." {
+		t.Fatalf("a after ban: %+v", h)
+	}
+
+	suspended.Store(false)
+	login("/accounts/a/login", map[string]any{
+		"method": "api_key",
+		"input":  map[string]string{"api_key": "sk-ant-api-new"},
+	})
+	if h := accountHealth(t, base, "a"); h.State != mgmt.HealthOK {
+		t.Fatalf("a after reauth: %+v, want ok", h)
+	}
+	postOK(t, base, chatBody)
 }
