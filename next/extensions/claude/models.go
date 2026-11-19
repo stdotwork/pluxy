@@ -4,14 +4,27 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// modelsJSON is the model list for every Claude account, with an API key or a subscription login.
-// It holds the models today's core lists for the "claude" provider when an account's config
-// names no models: core/sdk/cliproxy/service_models.go, case "claude", takes
+const (
+	modelsTimeout  = 15 * time.Second
+	modelsPageSize = 1000
+	modelsMaxPages = 100
+	modelsMaxBody  = 8 << 20
+)
+
+// modelsJSON is the built-in fallback model list for Claude accounts when querying /v1/models is
+// not possible or fails. It holds the models today's core lists for the "claude" provider when an
+// account's config names no models: core/sdk/cliproxy/service_models.go, case "claude", takes
 // registry.GetClaudeModels for both kinds (the claude section of
 // core/internal/registry/models/models.json) and owned_by "anthropic". Generated once from that
 // catalog, without the fields protocol.Model does not carry. To refresh it by hand, take the claude
@@ -20,11 +33,127 @@ import (
 //go:embed models.json
 var modelsJSON []byte
 
-// listModels answers a models call. The list does not depend on the account's credential.
+// listModels answers a models call by reading GET {base_url}/v1/models with the account's
+// credential and falling back to the built-in catalog when the read fails or returns nothing.
 func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, error) {
+	if models, ok := fetchModels(ctx, call); ok {
+		return &protocol.ModelList{
+			OwnedBy: "anthropic",
+			From:    protocol.ModelListFromAccount,
+			Models:  models,
+		}, nil
+	}
+	return builtinModels()
+}
+
+func builtinModels() (*protocol.ModelList, error) {
 	var list protocol.ModelList
 	if err := json.Unmarshal(modelsJSON, &list); err != nil {
 		return nil, err
 	}
+	list.From = protocol.ModelListFromExtension
 	return &list, nil
+}
+
+func fetchModels(ctx context.Context, call sdk.ModelsCall) ([]protocol.Model, bool) {
+	if authorize(make(http.Header), call.Account.Credential) != nil {
+		return nil, false
+	}
+	s, err := readSettings(call.Account.Settings)
+	if err != nil {
+		return nil, false
+	}
+	base, err := url.Parse(s.BaseURL + "/v1/models")
+	if err != nil {
+		return nil, false
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, modelsTimeout)
+	defer cancel()
+
+	var (
+		models  []protocol.Model
+		seen    = make(map[string]bool)
+		afterID string
+	)
+	for range modelsMaxPages {
+		u := *base
+		q := u.Query()
+		q.Set("limit", strconv.Itoa(modelsPageSize))
+		if afterID != "" {
+			q.Set("after_id", afterID)
+		}
+		u.RawQuery = q.Encode()
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		if err != nil {
+			return nil, false
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Anthropic-Version", anthropicVersion)
+		if err := authorize(req.Header, call.Account.Credential); err != nil {
+			return nil, false
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, false
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
+		resp.Body.Close()
+		if readErr != nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
+			return nil, false
+		}
+
+		var page struct {
+			Data []struct {
+				ID             string `json:"id"`
+				DisplayName    string `json:"display_name"`
+				CreatedAt      string `json:"created_at"`
+				MaxInputTokens int    `json:"max_input_tokens"`
+				MaxTokens      int    `json:"max_tokens"`
+			} `json:"data"`
+			HasMore bool   `json:"has_more"`
+			LastID  string `json:"last_id"`
+		}
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return nil, false
+		}
+		for _, item := range page.Data {
+			id := strings.TrimSpace(item.ID)
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			var created int64
+			if item.CreatedAt != "" {
+				if t, err := time.Parse(time.RFC3339Nano, item.CreatedAt); err == nil {
+					created = t.Unix()
+				}
+			}
+			models = append(models, protocol.Model{
+				ID:                  id,
+				DisplayName:         strings.TrimSpace(item.DisplayName),
+				Created:             created,
+				OwnedBy:             "anthropic",
+				ContextLength:       max(item.MaxInputTokens, 0),
+				MaxCompletionTokens: max(item.MaxTokens, 0),
+			})
+		}
+		if !page.HasMore {
+			break
+		}
+		next := strings.TrimSpace(page.LastID)
+		if next == "" && len(page.Data) > 0 {
+			next = strings.TrimSpace(page.Data[len(page.Data)-1].ID)
+		}
+		if next == "" || next == afterID {
+			break
+		}
+		afterID = next
+	}
+	if len(models) == 0 {
+		return nil, false
+	}
+	return models, true
 }
