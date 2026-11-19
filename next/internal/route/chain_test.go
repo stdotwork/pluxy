@@ -399,3 +399,148 @@ func TestCheckSteps(t *testing.T) {
 		}
 	}
 }
+
+// The model lists name the provider and accounts routing uses: a same-provider account of higher
+// priority than another provider's top account keeps the name on its provider, and the entry
+// lists that provider's accounts, the one routing tries first leading.
+func TestModelListAgreesWithRouting(t *testing.T) {
+	m := []ModelEntry{{Name: "m"}}
+	h := newChainHarness(t, Config{}, Account{ID: "p1", Extension: "P", Models: m}, Account{ID: "p2", Extension: "P", Models: m, Priority: 5},
+		Account{ID: "q1", Extension: "Q", Models: m, Priority: 3})
+	a := h.served("m", "")
+	if a.Account != "p2" || a.Extension != "P" {
+		t.Fatalf("served by %+v, want p2 on P", a)
+	}
+	models := h.r.ServedModels(context.Background())
+	if len(models) != 1 || models[0].Extension != "P" || !slices.Equal(models[0].Accounts, []string{"p2", "p1"}) {
+		t.Errorf("models = %+v, want m on P with p2 and p1", models)
+	}
+}
+
+// heldCase is an account that serves no requests, of the higher-priority provider P, beside a
+// usable account of Q that also lists m.
+func heldHarness(t *testing.T, state string) *chainHarness {
+	m := []ModelEntry{{Name: "m"}}
+	h := newChainHarness(t, Config{}, Account{ID: "q1", Extension: "Q", Models: m})
+	h.r.SetHeld(func() []Held {
+		return []Held{{Account: Account{ID: "p1", Extension: "P", Models: m, Priority: 1}, State: state}}
+	})
+	return h
+}
+
+// An account that is out of service keeps its name on its provider: the request fails and names
+// it, rather than going to another provider that lists the name. Each held kind alike.
+func TestHeldAccountKeepsTheProvider(t *testing.T) {
+	for _, state := range []string{HealthNeedsLogin, HealthDisabled} {
+		h := heldHarness(t, state)
+		evs := h.run(h.req("m", ""))
+		e := evs[len(evs)-1].Error
+		if e == nil || e.Explain == nil {
+			t.Errorf("%s: got %+v, want an error that explains", state, evs[len(evs)-1])
+			continue
+		}
+		if len(h.attempts) != 0 {
+			t.Errorf("%s: attempts %v, want none: Q is another provider", state, h.attempts)
+		}
+		if l := e.Explain.LeftOut; len(l) != 1 || l[0].Account != h.r.state.PublicID("p1") || l[0].State != state {
+			t.Errorf("%s: left_out = %+v, want p1 %s", state, l, state)
+		}
+		for _, sm := range h.r.ServedModels(context.Background()) {
+			if sm.ID == "m" {
+				t.Errorf("%s: model list has m as %+v; requests for it go to P, which cannot serve now", state, sm)
+			}
+		}
+	}
+}
+
+// A banned account keeps its name on its provider too.
+func TestBannedAccountKeepsTheProvider(t *testing.T) {
+	m := []ModelEntry{{Name: "m"}}
+	h := newChainHarness(t, Config{}, Account{ID: "p1", Extension: "P", Models: m, Priority: 1}, Account{ID: "q1", Extension: "Q", Models: m})
+	h.on("p1", fail(llm.Error{Code: llm.CodeAccountClosed, Status: 403, Retryable: true, Scope: llm.ScopeCredential}))
+	h.run(h.req("m", ""))
+	evs := h.run(h.req("m", ""))
+	e := evs[len(evs)-1].Error
+	if e == nil || e.Explain == nil {
+		t.Fatalf("got %+v, want an error that explains", evs[len(evs)-1])
+	}
+	if !slices.Equal(h.attempts, []string{"p1"}) {
+		t.Errorf("attempts %v, want p1 once and never q1", h.attempts)
+	}
+	if l := e.Explain.LeftOut; len(l) != 1 || l[0].State != HealthBanned {
+		t.Errorf("left_out = %+v, want p1 banned", l)
+	}
+}
+
+// Two steps that resolve to the same account and model try it once, even when its refusal set no
+// block.
+func TestOverlappingStepsTryAnAccountOnce(t *testing.T) {
+	h := newChainHarness(t, Config{DisableCooling: true, Chains: map[string][]Step{"m": {{Model: "m", Provider: "A"}, {Model: "m"}}}},
+		Account{ID: "a1", Extension: "A", Models: []ModelEntry{{Name: "m"}}})
+	h.on("a1", rateLimited(time.Minute))
+	h.run(h.req("m", ""))
+	h.wantAttempts("a1")
+}
+
+// A chain may not repeat a step.
+func TestChainRefusesIdenticalSteps(t *testing.T) {
+	for _, steps := range [][]Step{
+		{{Model: "m"}, {Model: "m"}},
+		{{Model: "m", Provider: "A", Accounts: []string{"a", "b"}}, {Model: "s"}, {Model: "m", Provider: "A", Accounts: []string{"b", "a"}}},
+	} {
+		if err := ValidateChain("c", steps, nil); err == nil || !strings.Contains(err.Error(), "step") {
+			t.Errorf("ValidateChain(%+v) = %v, want an error", steps, err)
+		}
+	}
+	if err := ValidateChain("c", []Step{{Model: "m", Provider: "A"}, {Model: "m"}}, nil); err != nil {
+		t.Errorf("steps that differ: %v", err)
+	}
+}
+
+// A chain's entry in the model lists has the accounts of each step as routing finds them.
+func TestChainModelListFollowsTheSteps(t *testing.T) {
+	accounts := []Account{{ID: "p1", Extension: "P", Models: []ModelEntry{{Name: "m"}}, Priority: 1},
+		{ID: "q1", Extension: "Q", Models: []ModelEntry{{Name: "m"}, {Name: "s"}}}}
+	list := func(chains map[string][]Step) map[string]ServedModel {
+		h := newChainHarness(t, Config{Chains: chains}, accounts...)
+		got := map[string]ServedModel{}
+		for _, sm := range h.r.ServedModels(context.Background()) {
+			got[sm.ID] = sm
+		}
+		return got
+	}
+	// A new name whose step names a provider other than the model's default one.
+	if my := list(map[string][]Step{"my": {{Model: "m", Provider: "Q"}}})["my"]; my.Extension != "Q" || !slices.Equal(my.Accounts, []string{"q1"}) {
+		t.Errorf("my = %+v, want Q with q1", my)
+	}
+	// A chain named like a model it serves.
+	if m := list(map[string][]Step{"m": {{Model: "m"}, {Model: "s"}}})["m"]; m.Extension != "P" || !slices.Equal(m.Accounts, []string{"p1", "q1"}) {
+		t.Errorf("m = %+v, want P with p1 and q1 (step 2, s)", m)
+	}
+}
+
+// The Codex client's catalogue marks a chain that can reach another provider non_codex, and has
+// a new chain name whose steps Codex serves.
+func TestCodexNamesKnowChains(t *testing.T) {
+	names := func(chains map[string][]Step) map[string]Name {
+		h := newChainHarness(t, Config{Chains: chains}, chainAccounts()...)
+		got := map[string]Name{}
+		for _, n := range h.r.ModelNames(context.Background(), codexExt) {
+			got[n.Public] = n
+		}
+		return got
+	}
+	if n, ok := names(map[string][]Step{"sol": {{Model: "sol"}, {Model: "opus"}}})["sol"]; !ok || !n.NonCodex {
+		t.Errorf("sol = %+v, %v; want non_codex: its chain goes on to Claude", n, ok)
+	}
+	got := names(map[string][]Step{"my-sol": {{Model: "sol"}}, "my-mix": {{Model: "opus"}, {Model: "sol"}}, "my-opus": {{Model: "opus"}}})
+	if n, ok := got["my-sol"]; !ok || n.NonCodex || n.Upstream != "sol" {
+		t.Errorf("my-sol = %+v, %v; want listed, as sol, and not non_codex", n, ok)
+	}
+	if n, ok := got["my-mix"]; !ok || !n.NonCodex || n.Upstream != "sol" {
+		t.Errorf("my-mix = %+v, %v; want listed, as sol, and non_codex", n, ok)
+	}
+	if n, ok := got["my-opus"]; ok {
+		t.Errorf("my-opus = %+v; Codex serves no step of it", n)
+	}
+}
