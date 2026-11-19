@@ -9,18 +9,24 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// maxErrorRaw limits the upstream bytes an error keeps for diagnostics.
+// maxErrorRaw limits the upstream bytes an error keeps for diagnostics. Longer data is not kept:
+// a cut of it could fall inside a credential, whose start core's redaction cannot recognise.
 const maxErrorRaw = 1 << 20
 
 func malformed(msg string, data []byte) *llm.Error {
-	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Raw: llm.RawJSON(data[:min(len(data), maxErrorRaw)])}
+	e := &llm.Error{Code: llm.CodeUpstream, Message: msg}
+	if len(data) <= maxErrorRaw {
+		e.Raw = llm.RawJSON(data)
+	}
+	return e
 }
 
 type usage struct {
 	InputTokens        *int64 `json:"input_tokens"`
 	OutputTokens       *int64 `json:"output_tokens"`
 	InputTokensDetails *struct {
-		CachedTokens *int64 `json:"cached_tokens"`
+		CachedTokens     *int64 `json:"cached_tokens"`
+		CacheWriteTokens *int64 `json:"cache_write_tokens"`
 	} `json:"input_tokens_details"`
 	OutputTokensDetails *struct {
 		ReasoningTokens *int64 `json:"reasoning_tokens"`
@@ -38,6 +44,7 @@ func decodeUsage(raw json.RawMessage) *llm.Usage {
 	out := &llm.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, Raw: append(json.RawMessage(nil), raw...)}
 	if u.InputTokensDetails != nil {
 		out.CachedInputTokens = u.InputTokensDetails.CachedTokens
+		out.CacheWriteInputTokens = u.InputTokensDetails.CacheWriteTokens
 	}
 	if u.OutputTokensDetails != nil {
 		out.ReasoningTokens = u.OutputTokensDetails.ReasoningTokens

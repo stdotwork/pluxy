@@ -12,7 +12,6 @@ use config::{Checked, Model, Settings};
 use pluxy_program::{run, Call, Error, Handler};
 use pluxy_transactions::{backup_call, data_dir, sha256_of, Pin, Selection, Target, Transactions};
 use serde_json::{json, Value};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// The one set this tool applies: Grok Build's config.toml.
@@ -159,17 +158,13 @@ fn settings(input: &Value, key: &str) -> Result<Settings, Error> {
 
 /// How the launcher starts Grok Build: in a terminal, with no arguments (its interactive session,
 /// in the launcher's working directory). The program is the copy Grok Build's install script puts
-/// in `~/.grok/bin` (often not on a desktop session's PATH), when home has one, else `grok` from
-/// PATH.
-fn recipe(home: Option<&Path>) -> Value {
-    let installed = home.map(|h| h.join(".grok").join("bin").join("grok"));
+/// in `~/.grok/bin` (often not on a desktop session's PATH; `grok`, or `grok.exe` from
+/// `install.ps1` on Windows), when home has one there that this system runs, else `grok` from PATH.
+fn recipe(os: &str, home: Option<&Path>) -> Value {
+    let name = if os == "windows" { "grok.exe" } else { "grok" };
+    let installed = home.map(|h| h.join(".grok").join("bin").join(name));
     let program = match installed {
-        Some(p)
-            if std::fs::metadata(&p)
-                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0) =>
-        {
-            p.to_string_lossy().into_owned()
-        }
+        Some(p) if pluxy_files::executable(&p) => p.to_string_lossy().into_owned(),
         _ => "grok".to_string(),
     };
     json!({"client": "Grok Build", "kind": "terminal", "program": program, "args": []})
@@ -230,6 +225,7 @@ impl Handler for Grok {
             ),
             "status" => Transactions::new(call, data_dir()?).status(),
             "recipe" => Ok(recipe(
+                std::env::consts::OS,
                 std::env::var_os("HOME")
                     .filter(|h| !h.is_empty())
                     .map(PathBuf::from)

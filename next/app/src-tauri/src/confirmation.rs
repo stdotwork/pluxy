@@ -527,25 +527,35 @@ fn open_file_rules(f: &OpenTarget, w: &OpenTarget) -> Result<String, String> {
     }
     Ok(t)
 }
+/// The home-folder rule for a launch's within folder, given its resolved path and the home folder
+/// as resolved (`None` when it could not be): the folder is neither `/`, the home folder nor a
+/// folder above it. With no home folder to check against, the rule refuses rather than passes.
+#[cfg(target_os = "linux")]
+fn within_home_rule(within: &Path, home: Option<&Path>) -> Result<(), String> {
+    let Some(home) = home else {
+        return Err(
+            "the home folder could not be found, so a launch's within folder cannot be checked against it"
+                .into(),
+        );
+    };
+    if within == Path::new("/") || home.starts_with(within) {
+        return Err(
+            "a launch's within folder cannot be /, the home folder or a folder above it".into(),
+        );
+    }
+    Ok(())
+}
 /// A launch's file to open and the folder it must be inside, both opened and resolved, each named
-/// by its resolved path: the folder neither `/`, the home folder nor a folder above it, the file
-/// as `open_file_rules` says.
+/// by its resolved path: the folder neither `/`, the home folder nor a folder above it (refused
+/// too when the home folder cannot be found), the file as `open_file_rules` says.
 #[cfg(target_os = "linux")]
 fn open_within(file: &Path, within: &Path) -> Result<(OpenTarget, OpenTarget, String), String> {
     let w = OpenTarget::open(within)?;
     if !w.file.metadata().map_err(|e| e.to_string())?.is_dir() {
         return Err("a launch's within folder is not a folder".into());
     }
-    let home = std::env::var_os("HOME").and_then(|h| fs::canonicalize(h).ok());
-    if w.identity.canonical == Path::new("/")
-        || home
-            .as_ref()
-            .is_some_and(|h| h.starts_with(&w.identity.canonical))
-    {
-        return Err(
-            "a launch's within folder cannot be /, the home folder or a folder above it".into(),
-        );
-    }
+    let home = std::env::home_dir().and_then(|h| fs::canonicalize(h).ok());
+    within_home_rule(&w.identity.canonical, home.as_deref())?;
     let f = OpenTarget::open(file)?;
     let t = open_file_rules(&f, &w)?;
     if f.identity.selected != f.identity.canonical || w.identity.selected != w.identity.canonical {
@@ -667,6 +677,14 @@ impl Authorized {
     pub fn cwd(&self) -> Option<&File> {
         self.prepared.cwd.as_ref().map(|e| &e.file)
     }
+    /// The program a terminal runs, as opened and as the launch names it.
+    #[cfg_attr(not(native_stack), allow(dead_code))]
+    pub fn program(&self) -> Option<(&File, &Path)> {
+        self.prepared
+            .program
+            .as_ref()
+            .map(|p| (&p.file, p.identity.selected.as_path()))
+    }
     /// Refused once a reviewed target changed since it was confirmed: the executable replaced or
     /// written in place (its metadata), or the cwd replaced.
     #[cfg_attr(not(native_stack), allow(dead_code))]
@@ -731,6 +749,12 @@ fn private_file(file: &File) -> Result<(), String> {
             "settings must be a regular file owned by this user and not group/world-writable"
                 .into(),
         );
+    }
+    // macOS: an extended access list entry could let another user change it whatever the mode
+    // (`private_macos.rs`).
+    #[cfg(target_os = "macos")]
+    if crate::private_macos::has_entries(file).map_err(|e| e.to_string())? {
+        return Err("settings must have no extended access list".into());
     }
     Ok(())
 }
@@ -811,6 +835,10 @@ fn secure_parent(path: &Path, create: bool) -> Result<(), String> {
         f.set_permissions(fs::Permissions::from_mode(0o700))
             .map_err(|e| e.to_string())?;
     }
+    // macOS: no extended access list entry either, so no one else may change it through one and
+    // the settings file inherits none (`private_macos.rs`).
+    #[cfg(target_os = "macos")]
+    crate::private_macos::clear_entries(&f).map_err(|e| format!("settings folder: {e}"))?;
     Ok(())
 }
 /// Windows: the folder and any folders missing above it made private as they are made, and the
@@ -1014,7 +1042,6 @@ impl Confirmations {
     /// direct call of a launch. Never page data, and never a call with a tool hop
     /// (`prepare_import`). Those actions have no launch, except the router's, which may use a
     /// remembered approval after a native gesture.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Main)
     }

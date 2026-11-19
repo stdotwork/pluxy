@@ -12,7 +12,7 @@
   },
   "account_models": ["gemini-2.5-pro"],
   "upstream": [
-    {"body":{"access_token":"ya29.corpus-token","expires_in":3599,"token_type":"Bearer"}}
+    {"body":{"access_token":"ya29.Hk3Rt8Bw2Mz5","expires_in":3599,"token_type":"Bearer"}}
   ],
   "volatile": ["upstream[0].body","client.body.auth-file"],
   "exceptions": [

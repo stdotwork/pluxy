@@ -80,7 +80,9 @@ address or key can always be fixed there.
 ## The app's own core
 
 In managed mode the app runs only core versions it installed itself, each in a folder of its own
-under `cores/versions/` in the app's data folder. Until one is installed, the app runs no core
+under `cores/versions/` in the app's data folder (on Windows the local application data folder,
+which stays on this computer; a store there that is not on a fixed local drive, such as a network
+share, is refused). Until one is installed, the app runs no core
 and the window shows only the Connection page, with **Core versions**. There, the app lists
 what is installed, which version runs and which ran before it, and what the core source offers.
 
@@ -103,12 +105,16 @@ app reads only releases with `product` `core`, their `version`, and their `artif
 | `signature` | The detached Ed25519 signature of those bytes |
 | `key_id` | The publisher key that signed it |
 
-The archive is a gzip tar file of the core's folder, as provider releases are packed: `pluxy` at
-the top, and anything beside it, such as `bundled/`. It may hold only regular files and folders,
-no links, devices or names that leave the folder, at most 10,000 entries, and at most 512 MiB
-decompressed in all (headers and the data of folder entries count too). Each file is made from
-the folder before it, following no links. Release versions may not start with `custom-`, which
-adopted programs use.
+The archive is a gzip tar file of the core's folder, as provider releases are packed: `pluxy` (on
+Windows `pluxy.exe`) at the top, and anything beside it, such as `bundled/`. It may hold only
+regular files and folders, no links, devices or names that leave the folder, at most 10,000
+entries, and at most 512 MiB decompressed in all (headers and the data of folder entries count
+too). On Windows it may also hold no two names that differ only in case, compared as Windows
+compares them (`σ` and `ς` too), and no name Windows cannot hold plainly (a `:` stream, a device
+name such as `CON`, a trailing dot or space). The folder it is unpacked into is opened by its path, refusing a
+link there; below it each folder and file is made from the folder held open before it, following
+no links (on Windows relative to the folder's handle, which is held so no one can rename that
+folder meanwhile). Release versions may not start with `custom-`, which adopted programs use.
 
 **Install** (or **Update to** a newer version): the app copies the archive into its own folder and
 checks it with the shared verifier (`src-tauri/src/artifact.rs`) and the app's trust
@@ -120,20 +126,31 @@ dialog, and nothing is installed. Release builds have no publisher keys yet, so 
 every release; test builds trust only a test runner's temporary roots (below).
 
 Once confirmed, the app unpacks the archive into a new version folder, records each file's
-SHA-256 (in `cores/records/`, apart from the folders), and makes the files read-only. Before
-every start it opens every file beneath the version's folder without following links, checks
-that it is a regular file of the recorded size, then its digest, and runs the core from the
-program file it just checked, not from its path again. A changed version does not start:
+SHA-256 (in `cores/records/`, apart from the folders), and makes the files read-only (on Windows
+by their access lists: this user and SYSTEM may read them, no one may write; the folders are
+private to this user and SYSTEM). Before every start it opens the version's folder by its path
+(refusing a link there) and every file beneath it without following links, checks that it is a
+regular file of the recorded size and still read-only, then its digest, and starts the core from
+the program file it just checked: on Linux from the open file itself; on macOS and Windows from
+the path that file has now, after checking that the path still names that same file
+(`src-tauri/src/owned/`). A changed version does not start:
 **Install … again** installs the same release over it, through the same checks and confirmation;
-a changed adopted copy is copied in again by adopting the same program again.
+a changed adopted copy is copied in again by adopting the same program again. Writing a
+version again moves its old folder aside first, which Windows refuses while a program in it runs,
+so there the app stops the core first when it runs that version, and starts it again if the
+install fails.
 
 **Switching** to a version (an install, **Roll back to** an installed version, or an adoption)
 stops the running core, keeps a copy of `core/config.json` (or a mark that there was none) and
-records the new version as the candidate, then starts it. The app binds the `listen` address in
-`core/config.json` itself (an IP address and port, or `localhost` and a port) and hands the
-listening socket to the core (`-listen-fd`). It counts as started once it says it listens on that
-socket, on this computer, every socket listening on that port belongs to the process the app
-started (read from `/proc` on Linux, before the app sends anything there), it answers
+records the new version as the candidate, then starts it. On Linux and macOS the app binds the
+`listen` address in `core/config.json` itself (an IP address and port, or `localhost` and a port)
+and hands the listening socket to the core (`-listen-fd`); on Windows the core binds it. It counts
+as started once it says it listens there, on this computer, every socket listening on that port
+belongs to the process the app started (read from `/proc` on Linux and from the system's TCP
+table on Windows; on macOS the core still runs and the address is the loopback socket the app
+bound and handed over, which it still holds and no other user can bind over, while other
+processes of your own user are not looked at, as they can read the core's config and its key
+anyway), before the app sends anything there, it answers
 `GET /v0/management/status` with the app's management key and, for a release, reports the
 version it was signed as, and the app has saved the new selection. If not, the app puts the
 config back as it was, removes a version it installed for this switch, and runs the version that
@@ -147,8 +164,21 @@ mark: then the next start puts the same config back once more. If the app stops 
 starts, it does the same at its next start, also when that was a reinstall or rollback of the
 selected version; a copy it cannot read is an error, and the config is left as it is. From the
 moment the app begins to stop its core, or sees it exit, it sends nothing more to that address.
-The app keeps its own copy of the core's listening socket for as long as anything in the app could
-still send there, so no other program can listen on that address in between: not while a crashed
+On Windows the core binds the address itself and the app keeps no copy of the socket. Another
+user's program can then get the core's connections: one that starts listening on that address
+between a crash of the core and the moment the app sees it exit (up to a tenth of a second: it
+checks every 100 ms), or one that stays bound to the wildcard address `0.0.0.0` on that port the
+whole time the core holds its loopback address, which Windows allows another account, and which
+receives the connections as soon as the core's socket closes. So before the app sends anything
+on a new connection to its core, it reads the system's TCP table: the other end of that very
+connection (its own addresses and ports) must belong to the core's own process. If it does not,
+or the table does not show it for at least a second, the app sends nothing on it, and the call
+fails with the reason (addresses and process IDs only): which process accepted the connection, or
+that the connection is not in this computer's table. Each client of the core holds its own
+handle on the core's process for as long as it lives, so the core's process ID cannot pass to
+another process meanwhile, even after the core has ended. On Linux and macOS the app keeps its
+own copy of the core's listening socket for as long as anything in the app could still send
+there, so no other program can listen on that address in between: not while a crashed
 core's exit is being noticed, and not while the core drains after a stop, the app's or a SIGTERM
 from elsewhere (the core closes its listener as it starts draining). A call made in that time
 reaches the core or waits in the app's socket, and fails once the core has exited. This holds
@@ -163,12 +193,15 @@ A **core program** you name on the Connection page (or `pluxy` beside the app) i
 place. **Adopt this core program** shows its path, size and SHA-256 in the native confirmation;
 once confirmed, the app copies it into a version of its own, `custom-<its SHA-256>`, if it is
 still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
-without being read), and runs the copy. Only the program is copied, nothing beside it (such as
+without being read; on Unix it must be executable, on Windows a program image named `.exe` or
+`.com`), and runs the copy. Only the program is copied, nothing beside it (such as
 `bundled/`), so an adopted core starts without the bundled packages a release brings. An adopted
 program has no signature.
 
 The app only ever stops the core process it started. A core it did not start, such as a system
-service or another core of yours on this computer, is never stopped or signalled.
+service or another core of yours on this computer, is never stopped or signalled. The native
+test checks it on Linux, Windows and macOS: a core the runner started before the app still
+answers afterwards, with its config and program unchanged.
 
 Each change works once: while one waits for its confirmation, another is refused. The window
 hears `pluxy-connection` when it has ended, and `core_versions` says whether it was done,
@@ -247,6 +280,17 @@ not answer within 20 seconds, or at once if the first could not listen. A socket
 behind is removed by the next app, which holds the lock.
 The lock is not inherited by the app's core.
 
+An update or rollback ([Application update](#application-update)) hands the profile to the
+version it starts without the profile ever being free. On Linux and macOS the app hands that
+version the lock itself (its open file, which the new version adopts). On Windows a lock cannot be
+handed on, so the app stops listening, writes `instance/successor.json` (a random nonce, the
+program's path and its SHA-256) and starts the new version with that nonce in
+`PLUXY_APP_SUCCESSOR`. A launch that finds the lock held, its nonce in that record (at most five
+minutes old), and itself the program the record names, byte for byte, removes the record and is
+the app at once: it listens, so a later launch raises its window, while it waits for the lock,
+which the earlier version holds until it ends. Without the lock within 120 seconds it exits. Any
+other launch is an ordinary later launch.
+
 ## Privacy mode
 
 The navigation's **Privacy mode** toggle masks account e-mail addresses and identifiers where
@@ -306,7 +350,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `core_start` | Starts the app's own core only if it is not running (managed mode) |
 | `core_restart` | Starts the app's own core again (managed mode) |
 | `core_versions` | The app's own core versions, what the core source offers, and how the last change ended |
-| `core_install`, `core_rollback`, `core_adopt` | Asks to install a release from the core source, to run an installed version again, or to adopt the chosen core program; each opens a native confirmation (Linux) and applies nothing itself |
+| `core_install`, `core_rollback`, `core_adopt` | Asks to install a release from the core source, to run an installed version again, or to adopt the chosen core program; each opens a native confirmation and applies nothing itself |
 | `core_call` | One management API call to the connected core; refuses the management key's own routes |
 | `management_key_rotate` | Rotates the management key natively after the native confirmation, keeps and shows the new key natively, and returns only how it went (200 with how the key is kept, 204 when cancelled) |
 | `sign_out` | Forgets the key (local and remote modes) |
@@ -316,7 +360,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches |
 | `release_get`, `release_check` | The release feed's view (versions, dates, status); `release_check` reads the feed first ("Check for Updates") |
 | `release_channel_set` | Picks the Stable or the Preview (latest) channel |
-| `release_source_set` | Asks to change or remove the feed's address; opens a native confirmation (Linux) and applies nothing itself |
+| `release_source_set` | Asks to change or remove the feed's address; opens a native confirmation and applies nothing itself |
 | `release_notes_open`, `release_notes_place`, `release_notes_close` | Opens a release's notes in a webview of their own over part of the window, moves it, closes it |
 | `release_notes_full` | Opens the release's notes address from the feed in the browser ("View full release notes") |
 | `device_list` | This device's extension catalog |
@@ -478,7 +522,7 @@ takes a new format number, which this app refuses.
 | `published` | RFC 3339 in UTC, ending in `Z`, on a day its month has; second 60 (a leap second) is refused |
 | `notes` | Optional Markdown, at most 64 KiB |
 | `notes_url` | Optional `https://` address with a host and no user name or password, at most 2048 bytes as given and once normalised (percent-encoded) |
-| `update` | Optional, app releases only: signed update artifacts by the updater's target name; the app reads `linux-x86_64-appimage`. Each is `{"url": <https address, as notes_url>, "signature": <Tauri updater signature, base64, at most 4096 characters>, "size": <exact bytes, 1 to 1 GiB>}` |
+| `update` | Optional, app releases only: signed update artifacts by the updater's target name; the app reads `linux-x86_64-appimage` (an AppImage), `windows-x86_64-exe` (the program) and `darwin-aarch64-app` or `darwin-x86_64-app` (the app bundle as a `.app.tar.gz`). Each is `{"url": <https address, as notes_url>, "signature": <Tauri updater signature, base64, at most 4096 characters>, "size": <exact bytes, 1 to 1 GiB>}` |
 
 The whole feed is at most 1 MiB. The feed is not signed: https is its only protection, and
 nothing in it is trusted as markup. Signed update artifacts have their own signatures. Production
@@ -489,19 +533,46 @@ feed addresses, keys and formats are decided at release; until then there is no 
 Version Management's Application Update card offers **Update Now** when the feed's latest app
 release on the chosen channel is newer than the running version and has an artifact for this
 system, and says why not otherwise. It uses the stock Tauri updater plugin
-(`tauri-plugin-updater` 2.14.1) for its release check and signature check only, and replaces the
-AppImage itself, in this order (`src-tauri/src/updater.rs`):
+(`tauri-plugin-updater` 2.14.1) for its release check and signature check only, never for
+installing, and puts the new version in place itself (`src-tauri/src/updater/`). What it replaces
+is the installed copy:
+
+- Linux: the AppImage (`updater/appimage.rs`);
+- Windows: the program of a folder bundle, a folder of yours holding the one self-contained
+  `.exe` (`updater/exe.rs`);
+- macOS: the `.app` bundle (`updater/app.rs`).
+
+In this order:
 
 1. The updater gate ([below](#the-updater-gate)) must pass. The plugin is registered only when
    the gate passes as the app starts, and the gate runs again before each use: a build without
    updater trust never loads it and says the updater is not configured.
-2. The installation must be an AppImage this updater can replace: the bundle type Tauri's bundler
-   compiles into the program is AppImage, `APPIMAGE` names an absolute regular file (not a link)
-   of this user's that no one else can write to, in such a folder, with a type-2 AppImage header,
-   and the program runs from inside it (`APPDIR`). A .deb or .rpm install is refused with how to
-   update through the package manager, and anything else as an unknown format, before anything is
-   downloaded, even when the feed has a signed update. The stock plugin would itself run
-   `pkexec dpkg -i` or `rpm -U` for those.
+2. The installation must be one this updater can replace, or nothing is downloaded, even when the
+   feed has a signed update:
+   - Linux: the bundle type Tauri's bundler compiles into the program is AppImage, `APPIMAGE`
+     names an absolute regular file (not a link) of this user's that no one else can write to, in
+     such a folder, with a type-2 AppImage header, and the program runs from inside it (`APPDIR`).
+     A .deb or .rpm install is refused with how to update through the package manager, and
+     anything else as an unknown format. The stock plugin would itself run `pkexec dpkg -i` or
+     `rpm -U` for those.
+   - Windows: the program carries no bundle type (an MSI or NSIS setup patches one in: such a copy
+     is refused with how to update through its installer), is on a fixed local drive (not a
+     network share or a mapped drive), and it and its folder are plain (no link or junction),
+     yours, and writable by no one else (SYSTEM and Administrators aside). The stock plugin would
+     run the installer for those, and nothing here does: no installer, `msiexec`, elevation,
+     scheduled task or service.
+   - macOS: the program runs as `<name>.app/Contents/MacOS/<program>` of a bundle whose
+     `Info.plist` names this app's identifier and that program; it was started by a path with no
+     link in it, neither the program nor any folder above it (Tauri refuses such a path on macOS,
+     and the plugin needs it: start the app from its real location, for example from Finder); the
+     bundle is not running from a translocated copy (macOS runs an app opened from Downloads or a
+     disk image from a read-only copy: move it into a folder of your own such as `~/Applications`
+     first); the bundle and its folder are yours and writable by no one else, so a bundle in
+     `/Applications` is refused, because other administrators can change that folder; and the
+     volume is APFS, which swaps two folders in one step. The stock plugin would ask for an
+     administrator's password when it cannot write the bundle; nothing here does (no
+     `osascript`, `sudo`, `installer` or `authopen`), and the quarantine attribute is neither
+     added nor removed.
 3. The plugin restores the release from the feed (`restore_update`): its default comparison
    allows only a version newer than the running one, and the signature must carry the announced
    version. No custom comparison is set, so the feed can never offer a downgrade.
@@ -509,27 +580,68 @@ AppImage itself, in this order (`src-tauri/src/updater.rs`):
    certificate roots), exactly the announced size, showing progress. A server that sends nothing
    for 30 seconds fails the download; **Cancel Download** stops it within that time and changes
    nothing.
-5. The plugin checks the signature against the compiled updater key; the bytes must be a type-2
-   AppImage.
-6. The running version's AppImage is kept in the app's data folder (`updates/kept/`, the last
-   three versions), pinned by its SHA-256 in `updates/history.json`, and `updates/pending.json`
-   records the install. The app records the AppImage's digest as it starts; if the file has
-   changed since, nothing is kept or installed and the page asks for a restart first. Then the app
-   writes the new AppImage over the old one in one step: a temporary file in the same folder,
-   flushed to disk, renamed over it, and the folder flushed.
+5. The plugin checks the signature against the compiled updater key. Then the bytes must be this
+   system's: a type-2 AppImage; a 64-bit Windows program (not a library) for this processor; or,
+   on macOS, a `.app.tar.gz` holding one `<name>.app` folder of folders and regular files only (no
+   links, devices, `..`, absolute paths, or setuid, setgid or sticky bits; at most 4096 entries
+   and 1 GiB), unpacked into a new folder of yours next to the bundle (`.pluxy-update-<hex>`),
+   whose `Info.plist` names this app's identifier and program and the announced version
+   (`CFBundleShortVersionString`), with a program for this Mac.
+6. The running version's copy is kept in the app's data folder (`updates/kept/`, the last three
+   versions), pinned in `updates/history.json` by its SHA-256 (on macOS, a digest of the bundle's
+   whole tree: every folder, file, size, content digest and execute bit), and
+   `updates/pending.json` records the install. The app records that digest as it starts; if the
+   installed copy has changed since, nothing is kept or installed and the page asks for a restart
+   first. Then the new version goes in place:
+   - Linux: a temporary file in the same folder, flushed to disk, renamed over the AppImage, and
+     the folder flushed: the AppImage is the old one or the new one.
+   - Windows: a running program can be renamed but not replaced, so the new program is written
+     next to it and flushed, the running one is renamed aside (`.pluxy-old-<hex>.exe`) and the new
+     one renamed into its place, each rename written through to disk (a file a virus scanner holds
+     is waited out for 5 seconds); if the second rename fails, the first is undone. Between the
+     two renames the folder has no program under its name: should the computer lose power right
+     then, rename the `.pluxy-old-<hex>.exe` beside it back (or copy the kept copy from
+     `updates/kept/`). What is left aside is removed once the new version runs and the old one has
+     ended.
+   - macOS: the unpacked bundle and the installed one swap places in one step (`renamex_np` with
+     `RENAME_SWAP`): the bundle is the old one or the new one. The old one, now in the
+     `.pluxy-update-<hex>` folder, is removed once the new version runs and the old one has ended.
+
+   What an install leaves beside the installed copy is recorded in `updates/leftovers.json` before
+   the install goes on, with what identifies it beyond its name: on Windows the new program right
+   after it is created and the aside copy just before the rename (each by its volume serial number
+   and file ID), on macOS the `.pluxy-update-<hex>` folder right after it is created (by its device
+   and inode, read through the open folder, which must be empty and yours alone). When the record
+   cannot be written, the install deletes what it just made and stops. Should the app stop in the
+   moment between making one and recording it, that empty folder or file stays unrecorded, and no
+   later start removes it. Removal at a later start goes through the record only. An entry that is
+   still the recorded file or folder (and, on macOS, a folder of yours) is removed without
+   following a link: on Windows through its open handle; on macOS what is in it through the open
+   folder, never entering a folder in it whose device differs from its own (a file system mounted
+   there; a mount that keeps the device, as a bind mount from the same file system does, is not
+   seen), then the emptied folder by its name only while that name still holds it. An entry whose
+   name is gone or now holds something else (on Windows a folder too) is dropped from the record
+   and nothing at that name is deleted; one still in use, or with a file system mounted in it,
+   stays recorded for the next start. A failed or cancelled install removes what it made the same
+   way, only while it is still what it made. The folder the installed copy is in is never listed,
+   so whatever someone else put there, even under one of these names, stays.
 7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
-   that order; detached launches run on) and hides its window, but keeps its profile lock and
-   hands it to the new AppImage it starts, so no other launch takes the profile meanwhile; the
-   tray stays responsive while it waits. It waits up to 90 seconds for the new version to accept
-   itself: once it has started, with the installed file's digest the one
-   pinned, it writes `updates/accepted.json`. If it ends first or does not accept in time, the kept
-   copy (checked against its digest) is put back the same way, the page later says the update
-   failed, and the earlier version starts again with the lock. If the kept copy cannot be put back,
-   nothing is started, and the page says which file in `updates/kept/` to copy over the AppImage.
+   that order; detached launches run on) and hides its window, but keeps its profile and starts the
+   new version as its successor, handing the profile over so no other launch takes it meanwhile
+   ([One app per profile](#one-app-per-profile)); the tray stays responsive while it waits. On
+   macOS the new version's program is started directly, not through Launch Services. The app
+   holds that process (on Linux and macOS in a process group of its own, on Windows by its process
+   handle, outside the app's own jobs) and waits up to 90 seconds for it to accept itself: once it
+   has started, with the installed copy's digest the one pinned, it writes
+   `updates/accepted.json`, and the app lets it go and exits. If it ends first or does not accept
+   in time, the app ends that process (and only it, with what it started), puts the kept copy
+   (checked against its digest) back the same way, the page later says the update failed, and the
+   earlier version starts again with the profile. If the kept copy cannot be put back, nothing is
+   started, and the page says which copy in `updates/kept/` to put in place of the installed one.
 
 **Roll back to <version>…** lists versions that ran here and were kept. It restores only such a
 copy, only while it still has its pinned digest, and only after the native confirmation (with
-the version, digest and file); then the same restart and acceptance follow. It passes the
+the version, digest and installed copy); then the same restart and acceptance follow. It passes the
 updater gate first, as Update Now does, so a build without updater trust refuses it. A version
 never installed here, or a kept copy that changed, is refused without a dialog. While its
 confirmation is open, Update Now and other rollbacks wait.
@@ -673,7 +785,10 @@ frame loads from the `pluxy-app:` scheme. That scheme serves a page webview only
 release folder it was opened for, only while that release is active and enabled, and only while
 each file still has the SHA-256 recorded at install. Each file is served sandboxed, as core's
 pages site does: scripts, styles, images and fonts from the scheme only, no requests from script,
-no frames or forms. The webview may not navigate its frame out of that folder. Installing,
+no frames or forms. On Windows WebView2 serves the scheme as `http://pluxy-app.localhost`, so the
+policy names that origin, which also lets the page ask for `https://pluxy-app.localhost`; the
+app serves nothing there, so a page webview answers every `https://pluxy-app.` request with 403
+itself, before it leaves the app. The webview may not navigate its frame out of that folder. Installing,
 rolling back, disabling or removing a package closes its open page webviews at once; the window
 then opens the new release's page, if the page is still listed.
 
@@ -744,7 +859,8 @@ a flag when a file is added and has no call that reports it, so no portal grant 
 the broker never reads the file behind it.
 
 Grants and approved signers are in `access.json` beside `connection.json`, readable only by your
-user (mode 0600, folder 0700), written by an exclusive temporary file, sync and rename. A damaged
+user (mode 0600, folder 0700, and on macOS no extended access list entry on the folder, so the
+file inherits none), written by an exclusive temporary file, sync and rename. A damaged
 or unsupported file is moved to `access.json.corrupt-<time>` and Access starts with no grants; if
 it cannot be moved, Access refuses grants and reads until it is fixed. Handles opened for reads
 are kept while the app runs; after a restart each target is opened again and its identity
@@ -775,8 +891,9 @@ a native notice and a log message. Symlinks, files owned by another user and
 group/world-writable files are refused; remembering stays disabled if the unsafe file cannot be
 safely preserved. Newly created settings folders use mode 0700 and files use 0600. On open and
 save, an existing folder owned by this user is tightened to 0700 if group/world-writable; a folder
-owned by another user is refused. Disabled persistence hides Remember. If saving fails after
-confirmation, the one-time token is still issued and a native notice/log reports the failure.
+owned by another user is refused. On macOS the folder is also emptied of extended access list
+entries, and a settings file with any entry is refused like a group/world-writable one. Disabled
+persistence hides Remember. If saving fails after confirmation, the one-time token is still issued and a native notice/log reports the failure.
 On Windows the same checks read the owner and access list instead of the mode: the file and
 folder must be owned by this user, by the owner this process gives what it makes (for an elevated
 administrator, the Administrators group) or by SYSTEM, and have a protected access list (one that
@@ -1354,7 +1471,8 @@ the next launch becomes the app, starts its core and is the one a later launch r
 the socket and its address are gone when the app quits. The other profile's data folder is too long
 for a socket path, and a second launch of it still raises it.
 
-Then, in another session (`native/update.ts`, `native/update-session.ts`, `update_native.rs`),
+Then, in another session (`native/update.ts`, `native/update-session.ts`, with the cases in
+`native/update-cases.ts` that the platform runner's update session shares, and `update_native.rs`),
 the [application update](#application-update) on one profile with a test trust profile, against
 a fake https feed whose releases the check switches: the test package refuses Update Now without
 its trust profile's nonce, and as its own program with the bundle type a .deb, an .rpm or no
@@ -1364,10 +1482,11 @@ the AppImage), with a rollback refused for the same reason each time, before any
 signature by an untrusted key (with the trusted key's ID), a signed version other than the
 announced one and the window's direct call of the plugin, cancels a slow download, undoes an
 update whose new version exits instead of accepting itself, updates 0.1.0 to 0.2.0 with its core
-stopped and started again, refuses rollbacks to a version never installed and to a changed kept
+stopped and started again (while 0.2.0 holds its acceptance open, a third launch raises its window
+and exits, and 0.1.0's process has ended once 0.2.0 runs), refuses rollbacks to a version never installed and to a changed kept
 copy without a dialog, cancels one in the native confirmation, and rolls back to 0.1.0. The
-session checks the installed AppImage's digest after each step, its feed's downloads and the
-versions that ran itself.
+session checks the installed AppImage's digest after each step, that nothing is left beside it,
+its feed's downloads and the versions that ran itself.
 The `native-test` feature is for that test alone; release builds never have it.
 
 In local and remote modes, the test also drives the real GTK dialog with `xdotool`: good keys
@@ -1388,8 +1507,11 @@ same install with the run's root, confirmed, runs 1.0.0 from the app's folder an
 the bad signature is refused before any dialog; that 2.0.0 replaces 1.0.0 (whose process is gone)
 with the config unchanged; that after 3.0.0 the config is restored and 2.0.0 runs again; that an
 unknown rollback target is refused, a cancelled rollback changes nothing and a confirmed one runs
-1.0.0; and that a core program does not run until it is adopted, after which the app's copy runs
-and the program itself does not. A sentinel core the runner started before the app must still
+1.0.0; that a core program does not run until it is adopted, after which the app's copy runs
+and the program itself does not; that with a file of the installed 1.0.0 changed, rolling back to
+it is refused before any dialog, by the same check of every installed file (`Store::program`)
+that runs before every start, and installing it again, confirmed, repairs it and runs it; and
+that installing the running version again runs it in a new process. A sentinel core the runner started before the app must still
 answer, with its config and program unchanged, after the app has quit. `cargo test` covers a
 crash while a version starts,
 changed installed files, hostile archives and a version that is not what it was signed as
@@ -1535,7 +1657,7 @@ Linux is the only platform the app supports now: what this README describes is L
 passage names another system (as the management key's dialogs, [Native
 confirmations](#native-confirmations) and [Packages](#packages) do), and so is every check in
 [Build and check](#build-and-check). Windows, macOS and WSL are later work, and the Linux checks
-say nothing about them. Some groundwork for them is merged, and CI runs it on GitHub-hosted
+say nothing about them. Some groundwork for them is merged, and CI runs it on disposable
 Windows and macOS runners (`.github/workflows/next-app-platforms.yml`), but it does not make the
 app supported there:
 
@@ -1543,7 +1665,7 @@ app supported there:
 - The management key's native entry and rotation, and the native confirmations, have Win32
   dialogs on Windows and AppKit dialogs on macOS ([How the app reaches core](#how-the-app-reaches-core),
   [Native confirmations](#native-confirmations)).
-- Four parts of the native test run there:
+- Five parts of the native test run there:
   - the platform session (`native/platform.ts`, `PLATFORM_SHARDS` in `native/shards.ts`): one app
     per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
     Windows, a LaunchAgent on macOS), the tray and the close preference;
@@ -1560,16 +1682,25 @@ app supported there:
     for their own slices; on macOS its tray step calls the menu's event handler with the item's ID,
     as no menu shows without a person holding it open (on Windows it sends the menu's own command
     message);
+  - the update session: the test package (a folder bundle on Windows, an app bundle on macOS)
+    updates itself to its signed newer version and rolls back, and crafted installs are refused
+    ([Application update](#application-update));
   - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
     test core, with the window's and page's command probes, the native confirmations, key entry and
-    key rotation. [Limits](#limits) says how its input is made.
+    key rotation; then a second run in managed mode, against signed test core releases, with the
+    app's own core steps as Linux's core steps session runs them (install, a bad signature
+    refused, update, a failed start put back, rollback, adopt, a changed version refused and
+    repaired, the running version installed again), each change through the native confirmation,
+    whose text is checked to show what will run; a core the runner started before the app must
+    still answer afterwards, untouched. [Limits](#limits) says how its input is made.
 - The vault's private storage is built there, and its unit tests and the tools shard's vault
   session check it ([Limits](#limits)).
 - How the app starts, holds and stops processes is built there (`src-tauri/src/owned/`: a job
   object on Windows, a process group on macOS), and CI checks that each of its lifetime tests ran
   and passed ([Windows and macOS](app-host/README.md#windows-and-macos)). Native tools, their
-  managed runtimes and confirmed launches reach it at run time there; the app's own core, which
-  would too, is refused (below).
+  managed runtimes, confirmed launches and the app's own update (`owned::Successor`: the new
+  version, held until it accepts itself) reach it at run time there, and so does the app's own
+  core ([The app's own core](#the-apps-own-core)), its changes confirmed natively.
 - Native tools run there as on Linux: enabling a package and its native imports, the router, the
   program host, the launch service and the launcher, and the vault for tools' backups and journals,
   secret entry and client keys, with the differences
@@ -1588,12 +1719,10 @@ signer or grant can be made. On Windows its commands and a page's Access calls a
 macOS its list, revocation and a page's calls answer, with nothing granted.
 
 Still refused at run time there: a native tool's `files` frames (saving a file), core aliases,
-the app's own core
-(on Windows the store of its versions does not open, so nothing installs or starts; on macOS the
-store opens, but installing, adopting and rolling back a version need the native confirmation,
-which core changes have on Linux only, so no version is installed and none starts), installing a
-package from a file, a launch that opens a file, changing the release feed and opening an address
-in the browser. The app updates itself only as a Linux AppImage.
+installing a package from a file, a launch that opens a file and opening an address in the browser.
+Changing the release feed works there through the native confirmation. The app updates itself, with
+test updater trust only, as an AppImage on Linux, as a folder bundle's program on Windows and as an
+app bundle on macOS ([Application update](#application-update)).
 
 ## Limits
 
@@ -1604,47 +1733,94 @@ in the browser. The app updates itself only as a Linux AppImage.
   when the tool serving that call asks ([Launches and managed runtimes](app-host/README.md#launches-and-managed-runtimes));
   installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
-- Vault: on Windows it is in the local data folder, private by its access list. Secrets are kept in
-  a file only the user may read (0600 on Linux and macOS) in the app's data folder, not in the
-  system keyring, and only exact values are redacted. On macOS the modes are checked, not extended
-  access lists. The window has no vault page yet. Secrets reach native tools' pipes and the
-  environment of a process a confirmed launch starts (the launching tool holds only a reference); a
-  client key is checked at each use, also at a launch's spawn and each restart. Backups have no
-  retention: a package keeps at most 256.
+- On macOS a launch you confirm, in a terminal or not, may run a program from a folder that every
+  administrator of the Mac can change, such as `/Applications` or Homebrew's folders. Another
+  administrator account can swap that program in the moment between the last check and its
+  start, or, for a program inside an app, what it later starts from that app. For any program
+  that uses those folders, wherever it is, that account can also change at any time what it loads
+  from them (Homebrew's libraries, a script's interpreter). A script's interpreter opens the
+  checked script again by its path, as for a direct launch. The app's
+  own core and native tools never run from such a folder: the app refuses them there.
+- On Linux a terminal finds a launch's program by its path as it starts, so the app refuses a
+  terminal launch whose program another user could change or redirect by then: a program below a
+  folder that others, or a group other than your own private group, may write, one reached
+  through a link such a user could change, or one such a group may write. Your private group
+  (your primary group, named as you are, with no other member, no other user's primary group,
+  and no other group with its number) may write them: Homebrew on Linux makes its folders
+  writable by it, and so does a umask of 002. Users and groups are read from `/etc/passwd` and
+  `/etc/group`: ones from LDAP, sssd or systemd-userdb are not seen. The refusal names the path and a
+  `chmod g-w,o-w` that fixes it. Nothing stops your own processes from swapping the program
+  before the terminal starts it. A direct launch runs the file the app checked, wherever it is.
+- On Windows the terminal (the execution program) runs a launch's program by its path, so it
+  refuses a program that another account may change, or whose folder it may change, or that it
+  could swap by removing or renaming what a folder above holds: only you, SYSTEM,
+  Administrators and TrustedInstaller may. The app does not check this before the launch, so the
+  refusal shows in the terminal's window, naming the path and why. A folder whose access list
+  has an entry of a kind the terminal does not read (such as a conditional entry) is refused
+  too. Nothing stops your own processes, or an
+  administrator's, from swapping the program before the terminal holds it.
+- Vault: on Windows it is in the
+  local data folder, private by its access list. Secrets are kept in a file only the user may read
+  (0600 on Linux and macOS) in the app's data folder, not in the system keyring, and only exact
+  values are redacted. On macOS, where an extended access list can let others in whatever the mode,
+  a vault folder with any entry is given an empty list (as a too-open one is tightened to 0700, so
+  nothing made in it inherits an entry) and a vault file with any is refused. The app's other
+  private folders (Access's store, remembered launches, cores, extensions, the instance folder and
+  the app's core's folder) are emptied the same way; files written privately are made, where the
+  volume supports access lists, with an empty list that takes nothing from their folder; and the
+  remembered launches file, the instance folder's lock and address and an installed core's files are
+  refused with any entry. In the core's folder its config, its `credentials` and `packages` folders
+  and each credential file (not one that is a link) are emptied of entries before the core starts,
+  not refused: the core owns them. Other files and folders already inside these folders keep any
+  entry they had from before. The window has no vault page yet. Secrets reach native tools' pipes
+  and the environment of a process a confirmed launch starts (the launching tool holds only a
+  reference); a client key is checked at each use, also at a launch's spawn and each restart.
+  Backups have no retention: a package keeps at most 256.
 - Access: signers and grants can be made on Linux only (5.8 or later: grants record the `statx`
   mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test runs on Linux, except its platform, package, tools and dialogs sessions, which
-  CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
+- The native test runs on Linux, except its platform, package, tools, update and dialogs sessions,
+  which CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
   refuses there).
 - On Windows the program session does not check which processes hold the tool's pipes, as it
   does on Linux and macOS: Windows lists no process's handles to an unprivileged one. It checks
   instead that the tool's three standard handles are pipes and that a file the app holds through
   an inheritable handle is not open in the tool.
-- The dialogs session runs only on GitHub-hosted runners: on Windows the app's folders are the
-  account's known folders, which no environment variable redirects, so it refuses to start when
-  they exist and removes only the ones it made. Its input, and the keys the tools shard's vault
-  session types into native key entry, do not come from a keyboard: on Windows they are
+- The dialogs session runs only on disposable CI runners (`native/runner.ts`): on Windows the app's
+  folders are the account's known folders, which no environment variable redirects, so it refuses to
+  start when they exist and removes only the ones it made. Its input, and the keys the tools shard's
+  vault session types into native key entry, do not come from a keyboard: on Windows they are
   `SendInput` when the dialog has the foreground, otherwise the same key messages posted to the
-  focused control; on macOS key and mouse events made in the app and given to AppKit. Both go through the app's real message handling and the dialogs' controls, but miss
-  what only a person at the machine would hit, such as another app taking the keyboard. The
-  dialogs session's summary counts which way each input went.
+  focused control; on macOS key and mouse events made in the app and given to AppKit. Both go
+  through the app's real message handling and the dialogs' controls, but miss what only a person at
+  the machine would hit, such as another app taking the keyboard. The dialogs session's summary
+  counts which way each input went.
 - No installer or bundled core yet: the only packages are the test AppImage, the test folder
   bundle (Windows) and the test app bundle (macOS), which are not for release.
-  The app updates only itself, only as an AppImage, on Linux x86_64, and only with test updater
-  trust until release keys exist. Rollback keeps the last three versions that ran on this
-  profile; a new version that hangs is stopped after 90 seconds and the earlier one put back, but
-  one that crashes later, after accepting itself, is not. If the old app itself is killed during
-  those 90 seconds, nothing puts the earlier version back: copy the newest file in
-  `updates/kept/` in the app's data folder over the AppImage to run it again.
-- Changing the release feed needs the native confirmation, so it works on Linux only, and so
-  does opening an address in the browser.
+  The app updates only itself: as an AppImage on Linux x86_64, as a folder bundle's program on
+  Windows x86_64 and as an app bundle on macOS, and only with test updater trust until release
+  keys exist. The native test updates it on Linux, on Windows and on Apple silicon Macs; Intel
+  Macs and Windows on ARM are built for but not run, and how a stock Mac's Gatekeeper and privacy
+  prompts or Windows SmartScreen treat an updated copy is not tested (the app's own download
+  carries no quarantine or Mark of the Web). Rollback keeps the last three versions that ran on
+  this profile; a new version that hangs is stopped after 90 seconds and the earlier one put back,
+  but one that crashes later, after accepting itself, is not. If the old app itself is killed
+  during those 90 seconds, nothing puts the earlier version back: put the newest copy in
+  `updates/kept/` in the app's data folder in place of the installed one to run it again. On
+  Windows a new version waits at most 120 seconds for the old one to end and free the profile,
+  then exits.
+- Opening an address in the browser works on Linux only.
 - Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
   the renderer writes alignment as inline style, which the notes' policy refuses.
 - The app's own core comes only from a local index file for now; an https source joins with the
-  release feed. Installing, rolling back and adopting need the native confirmation, so they work
-  on Linux only, and the core store builds on Unix only.
+  release feed. On Windows and macOS its steps run in the dialogs session's core run; the
+  managed-core client-key check runs on Linux only. The store's Windows rules are checked by its
+  unit tests on the Windows CI runner.
+- On Windows, other programs that call the app's core, such as agents with client keys, are not
+  covered by the app's check: after a crash of the core, another user's program listening on
+  the core's port (on its address, or on the wildcard address all along) gets their calls and
+  the client keys in them. Only the app's own calls are checked.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.
@@ -1723,7 +1899,14 @@ cargo run --locked --example validate-release-config -- \
 `build.rs` writes the config using tauri-utils' base/platform merge followed by `TAURI_CONFIG`,
 plus the trust and feature snapshots, in Cargo's `OUT_DIR`. A digest of all three is embedded in
 the app. The validator compares its own compiled inputs and requires the matching receipt in an
-artifact. Supply the actual app executable along with every package. The validator streams each
+artifact. It also merges the config files in `src-tauri` again as `build.rs` does (with
+`TAURI_CONFIG` from its own environment) and refuses a config snapshot that differs: Cargo reruns
+`build.rs` only when a config file it read changes, so a build from before a new platform file
+keeps the old snapshot. For the same reason `src-tauri` keeps a platform config file for each
+desktop system, `tauri.linux.conf.json`, `tauri.macos.conf.json` and `tauri.windows.conf.json`,
+even when it is empty (`{}`): `build.rs` watches the files it read, and Cargo cannot watch for a
+file being added, so a platform file added later would not rerun `build.rs`. Keep them.
+Supply the actual app executable along with every package. The validator streams each
 regular file for test markers, test identifiers and Tauri updater keys or signatures. Each
 artifact must be a well-formed executable, ELF (type, machine and program headers inside the
 file), PE (an executable image for x86, x86-64 or arm64, its optional header inside the file) or

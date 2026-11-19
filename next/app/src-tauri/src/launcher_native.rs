@@ -693,26 +693,38 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 r["argv"] == json!([s(&agent), AGENT, rec]),
                 format!("the page's launch's argv: {}", r["argv"]),
             )?;
-            // A flood: one confirmation, the rest refused.
+            // A flood: one confirmation, the rest refused at once. Each Start runs on a thread
+            // of its own, so any of the four may be the one that waits for the confirmation.
             std::thread::sleep(Duration::from_millis(1100));
             let ids: Vec<String> = (0..4)
                 .map(|_| page.send(EXECUTION, "launch", same.clone()))
                 .collect::<Result<_, _>>()?;
             dialog_with(app, &[PAGE])?;
-            let mut refused = 0;
-            for id in &ids[1..] {
-                if page.reply(id)?["error"]["code"] == "forbidden" {
-                    refused += 1;
-                }
-            }
+            let replies = wait_for("3 of a flood's 4 Starts answered", || {
+                let r: Vec<Option<Value>> = ids.iter().map(|id| page.replied(id)).collect();
+                (r.iter().flatten().count() >= 3).then_some(r)
+            })?;
+            let refused = replies
+                .iter()
+                .flatten()
+                .filter(|r| r["error"]["code"] == "forbidden")
+                .count();
+            let waiting: Vec<&String> = ids
+                .iter()
+                .zip(&replies)
+                .filter_map(|(id, r)| r.is_none().then_some(id))
+                .collect();
             require(
-                refused == 3,
-                format!("{refused} of a flood's 3 extra Starts refused"),
+                refused == 3 && waiting.len() == 1,
+                format!(
+                    "{refused} of a flood's 4 Starts refused, {} waiting",
+                    waiting.len()
+                ),
             )?;
             std::thread::sleep(Duration::from_millis(1100));
             press("alt+c")?;
             require(
-                page.reply(&ids[0])?["error"]["code"] == "forbidden",
+                page.reply(waiting[0])?["error"]["code"] == "forbidden",
                 "the flood's Start",
             )?;
             // Revoked: refused before any confirmation.

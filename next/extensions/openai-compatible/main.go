@@ -56,7 +56,7 @@ const (
 )
 
 func main() {
-	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Check: check}); err != nil {
+	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check}); err != nil {
 		fmt.Fprintln(os.Stderr, "openai-compatible:", err)
 		os.Exit(1)
 	}
@@ -198,6 +198,67 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 	}
 	return nil
+}
+
+// listModels reads the account's model list from GET {base_url}/models (OpenAI's list shape)
+// with the account's key. An error lets core fall back to the models the account's config
+// names, or to serving any model when the config names none.
+func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, error) {
+	s, wire, key, err := account(sdk.Call{ID: call.ID, Account: call.Account})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.BaseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	setKey(req, wire, key, nil)
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, upstreamError(resp, "")
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream model list: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	var payload struct {
+		Data []struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+			Created     int64  `json:"created"`
+			OwnedBy     string `json:"owned_by"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.Data == nil {
+		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "upstream model list is not an OpenAI list", Scope: llm.ScopeEndpoint}
+	}
+	models := make([]protocol.Model, 0, len(payload.Data))
+	seen := map[string]bool{}
+	for _, item := range payload.Data {
+		id := strings.TrimSpace(item.ID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		models = append(models, protocol.Model{
+			ID:          id,
+			DisplayName: strings.TrimSpace(item.DisplayName),
+			Created:     item.Created,
+			OwnedBy:     strings.TrimSpace(item.OwnedBy),
+		})
+	}
+	return &protocol.ModelList{Models: models}, nil
 }
 
 // check reads the upstream's model list, GET {base_url}/models: free for the account, and refused
@@ -408,14 +469,9 @@ func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error)
 	}
 	tr.Losses = losses
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
-		var paths []string
-		for _, l := range losses {
-			if l.Kind == llm.LossDropped {
-				paths = append(paths, l.Path)
-			}
-		}
+		paths := tr.DroppedPaths()
 		// Another account may speak the client's format and carry it whole.
-		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
 			Message: formatNames[target] + " cannot carry parts of this request: " + strings.Join(paths, ", ")}
 	}
 	return body, tr, nil

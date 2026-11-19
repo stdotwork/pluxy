@@ -43,6 +43,17 @@
 //! that only this user can open: the pipe is made as the first of its name, refuses remote
 //! clients, and grants access to this user's SID alone. A later launch checks that the pipe's
 //! server is a process of its own user before it sends the message.
+//!
+//! An update hands the profile to the version it starts (`updater/`) without it ever being free.
+//! On Linux and macOS the updating app hands that version the lock's descriptor
+//! ([`LOCK_FD_ENV`]). A Windows lock cannot be handed on (a child given the handle is not given
+//! the lock), so there the updating app stops listening, writes a successor record
+//! (`instance/successor.json`: a nonce, the program and its SHA-256) and starts the new version
+//! with that nonce ([`SUCCESSOR_ENV`]). A launch that finds the lock held, its nonce in the
+//! record, and itself the program the record names, byte for byte, takes the record (it is used
+//! once) and is the app at once: it listens, so a later launch raises it, while a thread of its
+//! own waits for the lock, which the updating app holds until it ends. Without the lock within
+//! [`SUCCESSOR_WAIT`] it exits. Any other launch is an ordinary later launch.
 
 use std::fs::File;
 use std::io;
@@ -52,10 +63,24 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const LOCK: &str = "lock";
-/// Names the file descriptor of the profile lock an updating app hands the version it starts
-/// (`updater.rs`), which adopts it instead of taking the lock: the lock is never free between
-/// the two, so no other launch becomes the app meanwhile.
+/// Names the file descriptor of the profile lock an updating app hands the version it starts on
+/// Linux and macOS (`updater`), which adopts it instead of taking the lock: the lock is never free
+/// between the two, so no other launch becomes the app meanwhile.
 pub const LOCK_FD_ENV: &str = "PLUXY_APP_INSTANCE_LOCK_FD";
+/// Names the nonce of the successor record a version started by an update finds (Windows; see
+/// the module).
+#[cfg(windows)]
+pub const SUCCESSOR_ENV: &str = "PLUXY_APP_SUCCESSOR";
+/// The successor record, in the instance folder.
+#[cfg(windows)]
+const SUCCESSOR: &str = "successor.json";
+/// How old a successor record may be: the updating app writes it just before it starts the new
+/// version.
+#[cfg(windows)]
+const SUCCESSOR_FRESH: Duration = Duration::from_secs(300);
+/// How long a successor waits for the updating app to end and free the lock.
+#[cfg(windows)]
+pub const SUCCESSOR_WAIT: Duration = Duration::from_secs(120);
 /// Where the first app says its socket is.
 const ADDRESS: &str = "address";
 /// What a launch sends to raise the first app, and nothing else is acted on.
@@ -82,9 +107,13 @@ pub enum Start {
 
 /// The first app's hold on its profile, until it is dropped or the process ends.
 pub struct Instance {
-    /// Held until this value is dropped or the process ends.
-    #[cfg_attr(not(unix), allow(dead_code))]
-    lock: std::sync::Mutex<Option<File>>,
+    /// Held until this value is dropped or the process ends. A successor (Windows) has it once
+    /// the app it took over from has ended.
+    lock: std::sync::Arc<std::sync::Mutex<Option<File>>>,
+    /// A successor (Windows): listening may have to wait for the app it took over from to have
+    /// stopped.
+    #[cfg(windows)]
+    successor: bool,
     dir: fsx::Dir,
     /// Names this profile's socket: a digest of its instance folder.
     key: String,
@@ -153,6 +182,9 @@ fn start_with(dir: &Path, deadline: Instant, inherited: Option<i32>) -> Result<S
         .unwrap_or(lock);
     #[cfg(not(unix))]
     let _ = inherited;
+    // A successor's nonce, used once whatever happens to it.
+    #[cfg(windows)]
+    let nonce = std::env::var(SUCCESSOR_ENV).ok().filter(|n| !n.is_empty());
     let key = {
         use sha2::{Digest, Sha256};
         let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
@@ -165,8 +197,12 @@ fn start_with(dir: &Path, deadline: Instant, inherited: Option<i32>) -> Result<S
                 // Holding the lock: an address still here is a dead app's.
                 fsx::remove(&d, ADDRESS)
                     .map_err(|e| format!("cannot remove the stale address: {e}"))?;
+                #[cfg(windows)]
+                let _ = fsx::remove(&d, SUCCESSOR);
                 return Ok(Start::First(Instance {
-                    lock: std::sync::Mutex::new(Some(lock)),
+                    lock: std::sync::Arc::new(std::sync::Mutex::new(Some(lock))),
+                    #[cfg(windows)]
+                    successor: false,
                     dir: d,
                     key,
                     listening: OnceLock::new(),
@@ -174,6 +210,21 @@ fn start_with(dir: &Path, deadline: Instant, inherited: Option<i32>) -> Result<S
                 }));
             }
             Err(std::fs::TryLockError::WouldBlock) => {
+                #[cfg(windows)]
+                if let Some(n) = &nonce {
+                    if take_successor(&d, n) {
+                        let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+                        wait_for_lock(lock, slot.clone());
+                        return Ok(Start::First(Instance {
+                            lock: slot,
+                            successor: true,
+                            dir: d,
+                            key,
+                            listening: OnceLock::new(),
+                            released: AtomicBool::new(false),
+                        }));
+                    }
+                }
                 // One deadline for the whole launch: `activate` checks it after the address is
                 // read and before each step, and it is checked again before another try.
                 let tried = fsx::read_address(&d).and_then(|socket| match socket {
@@ -209,6 +260,72 @@ fn start_with(dir: &Path, deadline: Instant, inherited: Option<i32>) -> Result<S
     }
 }
 
+/// Whether this launch is the successor the record in the instance folder names (Windows; see
+/// the module): the record holds nonce, is fresh, and names this program, whose bytes have the
+/// record's SHA-256. The record is removed when it holds nonce, so it names one launch at most.
+#[cfg(windows)]
+fn take_successor(d: &fsx::Dir, nonce: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    let Ok(Some(bytes)) = fsx::read_file(d, SUCCESSOR) else {
+        return false;
+    };
+    let Ok(r) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    if r["nonce"].as_str() != Some(nonce) {
+        return false;
+    }
+    let _ = fsx::remove(d, SUCCESSOR);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let fresh = r["written"]
+        .as_u64()
+        .is_some_and(|w| w <= now && now - w <= SUCCESSOR_FRESH.as_secs());
+    let me = std::env::current_exe().and_then(std::fs::canonicalize);
+    let named = r["program"].as_str().map(std::fs::canonicalize);
+    let same_program = matches!((&me, &named), (Ok(a), Some(Ok(b))) if a == b);
+    let same_bytes = me
+        .as_ref()
+        .ok()
+        .and_then(|p| std::fs::read(p).ok())
+        .is_some_and(|b| {
+            let digest: String = Sha256::digest(&b)
+                .iter()
+                .map(|x| format!("{x:02x}"))
+                .collect();
+            r["sha256"].as_str() == Some(digest.as_str())
+        });
+    fresh && same_program && same_bytes
+}
+
+/// A successor's wait for the profile lock (Windows): a thread that takes it into slot once the
+/// app it took over from has ended, or ends this app if that has not happened within
+/// [`SUCCESSOR_WAIT`]: two apps on one profile must not run on.
+#[cfg(windows)]
+fn wait_for_lock(lock: File, slot: std::sync::Arc<std::sync::Mutex<Option<File>>>) {
+    std::thread::spawn(move || {
+        let until = Instant::now() + SUCCESSOR_WAIT;
+        loop {
+            match lock.try_lock() {
+                Ok(()) => {
+                    *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(lock);
+                    return;
+                }
+                Err(std::fs::TryLockError::WouldBlock) if Instant::now() < until => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => {
+                    eprintln!(
+                        "pluxy-app: the version this one took over from still holds the profile ({e:?}); exiting"
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+    });
+}
+
 impl Instance {
     /// Listens for later launches on a socket in the first of `dirs` that works (see
     /// [`socket_dirs`]); `on_activate` shows the window and says whether it did. If none works,
@@ -229,7 +346,23 @@ impl Instance {
                     io::Error::other(format!("the socket path {} is too long", socket.display()));
                 continue;
             }
-            match ipc::listen(dir, &socket) {
+            // A successor (Windows): the app it took over from stopped listening just before it
+            // started it, and its pipe may take a moment to close.
+            #[cfg(windows)]
+            let listened = {
+                let until = Instant::now() + Duration::from_secs(5);
+                loop {
+                    match ipc::listen(dir, &socket) {
+                        Err(_) if self.successor && Instant::now() < until => {
+                            std::thread::sleep(Duration::from_millis(100))
+                        }
+                        r => break r,
+                    }
+                }
+            };
+            #[cfg(not(windows))]
+            let listened = ipc::listen(dir, &socket);
+            match listened {
                 Ok(listener) => {
                     fsx::write_address(&self.dir, socket.as_os_str().as_encoded_bytes())?;
                     let listening = listener.serve(socket, on_activate)?;
@@ -262,6 +395,32 @@ impl Instance {
 }
 
 impl Instance {
+    /// Whether this app holds the profile lock: always, except a successor (Windows) until the
+    /// app it took over from has ended.
+    #[cfg_attr(unix, allow(dead_code))]
+    pub fn holds_lock(&self) -> bool {
+        self.lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+    }
+
+    /// Names the version an update starts next as this app's successor (Windows; see the
+    /// module): its nonce, its program and the program's SHA-256.
+    #[cfg(windows)]
+    pub fn name_successor(&self, nonce: &str, program: &Path, sha256: &str) -> io::Result<()> {
+        let written = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let record = serde_json::json!({
+            "nonce": nonce,
+            "program": program,
+            "sha256": sha256,
+            "written": written,
+        });
+        fsx::write_file(&self.dir, SUCCESSOR, record.to_string().as_bytes())
+    }
+
     /// The profile lock's file descriptor, to hand to the version an update starts.
     #[cfg(unix)]
     pub fn lock_fd(&self) -> Option<std::os::fd::RawFd> {
@@ -342,6 +501,10 @@ mod fsx {
         if st.st_mode & 0o077 != 0 && unsafe { libc::fchmod(fd.as_raw_fd(), 0o700) } != 0 {
             return Err(io::Error::last_os_error());
         }
+        // macOS: no extended access list entry either, the 0700 mode's twin
+        // (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        crate::private_macos::clear_entries(&fd)?;
         Ok(fd)
     }
 
@@ -378,6 +541,14 @@ mod fsx {
             return Err(io::Error::other(format!(
                 "{name} is mode {:o}, not 600: remove it and start again",
                 st.st_mode & 0o777
+            )));
+        }
+        // macOS: an extended access list entry could let another user in whatever the mode
+        // (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        if crate::private_macos::has_entries(&file)? {
+            return Err(io::Error::other(format!(
+                "{name} has an extended access list entry: remove it and start again"
             )));
         }
         let fl = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
@@ -958,6 +1129,35 @@ mod tests {
         return PathBuf::from("/private/tmp");
         #[cfg(not(target_os = "macos"))]
         std::env::temp_dir()
+    }
+
+    /// macOS: the instance folder keeps no extended access list entry, as it keeps no group or
+    /// other mode bits.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_instance_folder_keeps_no_access_list() {
+        let t = temp();
+        let d = t.0.join("run");
+        fs::create_dir(&d).unwrap();
+        crate::private_macos::add_entry(&d, "everyone allow list,add_file,file_inherit");
+        let open = super::fsx::open_dir(&d).unwrap();
+        assert!(!crate::private_macos::has_entries(&open).unwrap());
+    }
+
+    /// macOS: a 0600 lock an extended access list entry lets others write is refused, as a 0644
+    /// one is.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_lock_with_an_access_list_entry_is_refused() {
+        let t = temp();
+        let dir = t.0.join("instance");
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(dir.join(LOCK), b"").unwrap();
+        fs::set_permissions(dir.join(LOCK), fs::Permissions::from_mode(0o600)).unwrap();
+        crate::private_macos::add_entry(&dir.join(LOCK), "everyone allow write");
+        let e = start(&dir, Duration::from_millis(100)).err().unwrap();
+        assert!(e.contains("extended access list"), "{e}");
     }
 
     fn temp() -> Temp {

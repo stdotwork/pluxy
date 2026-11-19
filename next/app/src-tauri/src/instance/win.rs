@@ -86,13 +86,29 @@ pub mod fsx {
 
     /// Writes the address in one step: a later launch reads all of it or none.
     pub fn write_address(dir: &Dir, pipe: &[u8]) -> io::Result<()> {
-        const NEW: &str = "address.new";
-        remove(dir, NEW)?;
-        let new = dir.0.join(NEW);
+        write_file(dir, ADDRESS, pipe)
+    }
+
+    /// Writes name in dir in one step: a reader reads all of it or none.
+    pub fn write_file(dir: &Dir, name: &str, bytes: &[u8]) -> io::Result<()> {
+        let tmp = format!("{name}.new");
+        remove(dir, &tmp)?;
+        let new = dir.0.join(&tmp);
         let mut f = OpenOptions::new().write(true).create_new(true).open(&new)?;
-        f.write_all(pipe)?;
+        f.write_all(bytes)?;
         drop(f);
-        std::fs::rename(&new, dir.0.join(ADDRESS))
+        std::fs::rename(&new, dir.0.join(name))
+    }
+
+    /// Up to 64 KiB of name in dir, opened as itself (not through a link); None if it is not there.
+    pub fn read_file(dir: &Dir, name: &str) -> io::Result<Option<Vec<u8>>> {
+        let mut f = match open_in(dir, name, false, false) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            r => r?,
+        };
+        let mut b = Vec::new();
+        (&mut f).take(64 << 10).read_to_end(&mut b)?;
+        Ok(Some(b))
     }
 
     /// Removes `name` from `dir`. Gone already is fine.

@@ -5,7 +5,9 @@
 //
 //	{"base_url": "https://api.anthropic.com", "model_level_cooling": false}
 //
-// base_url is where the Messages API lives; requests go to {base_url}/v1/messages.
+// base_url is where the Messages API lives; requests go to {base_url}/v1/messages. A base_url
+// that ends in /v1 or /v1/messages, as one copied from a client's settings may, has that taken off
+// first, so the path is not doubled.
 // rebuild_mid_system_message (default false) moves the text of system messages in a Messages
 // client's conversation into the top-level system prompt, for a Claude-compatible upstream that
 // refuses them there; it is today's per-key setting of the same name.
@@ -25,7 +27,11 @@
 // Requests in other formats (Chat Completions, Responses, Gemini) are translated to Messages,
 // with the client's reasoning effort turned into Claude's thinking settings (thinking.go). Every
 // body, the client's own Messages body included, has two parts Anthropic refuses repaired: empty
-// web search domain lists and tool call IDs with characters it does not take (tools.go).
+// web search domain lists and tool call IDs with characters it does not take (tools.go). Its
+// conversation is repaired too, each change reported in the translation: a tool call with no
+// result, a result with no call, an empty user turn, and for models that refuse prefill (Claude 4.6
+// and later) trailing assistant turns (anthropicmessages.RepairTurns). A request in another format
+// that names no output limit gets the model's own (maxOutputTokens).
 //
 // Token counts (core's count_tokens call) go to Anthropic's count_tokens endpoint only when
 // base_url is Anthropic's own origin (https://api.anthropic.com). For any other base_url the
@@ -122,6 +128,12 @@ func readSettings(raw json.RawMessage) (settings, error) {
 		s.BaseURL = defaultBaseURL
 	}
 	s.BaseURL = strings.TrimRight(s.BaseURL, "/")
+	for _, suffix := range []string{"/v1/messages", "/v1"} {
+		if base, ok := strings.CutSuffix(s.BaseURL, suffix); ok {
+			s.BaseURL = base
+			break
+		}
+	}
 	if s.AuthorizeURL = sdk.TestLoginHost(s.AuthorizeURL); s.AuthorizeURL == "" {
 		s.AuthorizeURL = defaultAuthorizeURL
 	}
@@ -429,11 +441,13 @@ func isAnthropicBase(baseURL string) bool {
 }
 
 // buildBody returns the Messages request body for req and how it was built. A Messages request
-// is sent unchanged but for the repairs every body gets (fixBody); any other is rebuilt from the
-// model, with its reasoning effort as thinking settings and without the sampling settings the
-// model refuses (anthropicmessages.DropRefusedSampling). A thinking suffix on the model name sets
-// the thinking settings either way, in place of the request's own. Under the reject drop policy a
-// translation that drops anything is refused.
+// is sent unchanged but for the repairs every body gets (fixBody) and the conversation repairs
+// (anthropicmessages.RepairTurns), each reported; any other is rebuilt from the model, with the
+// same conversation repairs, its reasoning effort as thinking settings, the model's own output
+// limit when the client set none (maxOutputTokens), and without the sampling settings the model
+// refuses (anthropicmessages.DropRefusedSampling). A thinking suffix on the model name sets the
+// thinking settings either way, in place of the request's own. Under the reject drop policy a
+// request that drops anything is refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatAnthropicMessages}
 	if n := req.Native; n != nil {
@@ -451,12 +465,23 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 			if err != nil {
 				return nil, nil, err
 			}
+			if body, tr.Losses, err = anthropicmessages.RepairTurns(body, req.Model); err != nil {
+				return nil, nil, err
+			}
+			if err := refuseDrops(req, tr); err != nil {
+				return nil, nil, err
+			}
 			return body, tr, nil
 		}
 	}
 	body, losses, err := anthropicmessages.EncodeRequest(req)
 	if err != nil {
 		return nil, nil, err
+	}
+	if n, ok := maxOutputTokens(req.Model); ok && req.Options.MaxOutputTokens == nil {
+		if body, err = setField(body, "max_tokens", n); err != nil {
+			return nil, nil, err
+		}
 	}
 	if body, err = addCacheBreakpoints(body); err != nil {
 		return nil, nil, err
@@ -492,17 +517,34 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 		losses = llm.AddLoss(losses, l)
 	}
 	tr.Losses = losses
-	if req.DropPolicy == llm.DropReject && tr.Dropped() {
-		var paths []string
-		for _, l := range losses {
-			if l.Kind == llm.LossDropped {
-				paths = append(paths, l.Path)
-			}
-		}
-		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
-			Message: "Anthropic Messages cannot carry parts of this request: " + strings.Join(paths, ", ")}
+	if err := refuseDrops(req, tr); err != nil {
+		return nil, nil, err
 	}
 	return body, tr, nil
+}
+
+// refuseDrops refuses a request that lost parts on the way under the reject drop policy.
+func refuseDrops(req llm.Request, tr *llm.Translation) error {
+	if req.DropPolicy == llm.DropReject && tr.Dropped() {
+		paths := tr.DroppedPaths()
+		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
+			Message: "Anthropic Messages cannot carry parts of this request: " + strings.Join(paths, ", ")}
+	}
+	return nil
+}
+
+// setField sets one top-level field of a JSON body.
+func setField(body []byte, key string, v any) ([]byte, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	m[key] = raw
+	return json.Marshal(m)
 }
 
 // reporting adds the translation report to the reply's response.start event, and gives each tool

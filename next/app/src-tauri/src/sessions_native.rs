@@ -43,7 +43,7 @@ use super::admission::{dialog_text, ok, press, require, x};
 use super::key_entry_test::{clean_webview, watch};
 use super::program::processes;
 use super::routing::{call, enable, install, showing, Page};
-use super::{eval, log, wait_for};
+use super::{chooser, eval, log, wait_for};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -344,22 +344,10 @@ fn suggested(app: &AppHandle) -> Result<String, String> {
     })
 }
 
-/// Types path into the save dialog's name field and presses Return.
-fn choose(path: &Path) -> Result<(), String> {
+/// Enters path in the save dialog's name field and presses Return (`chooser::enter` pastes it).
+fn choose(app: &AppHandle, path: &Path) -> Result<(), String> {
     let id = chooser()?;
-    x(&["windowfocus", "--sync", &id])?;
-    x(&["key", "--clearmodifiers", "ctrl+a"])?;
-    std::thread::sleep(Duration::from_millis(300));
-    x(&[
-        "type",
-        "--clearmodifiers",
-        "--delay",
-        "20",
-        &path.to_string_lossy(),
-    ])?;
-    std::thread::sleep(Duration::from_millis(300));
-    x(&["key", "--clearmodifiers", "Return"])?;
-    Ok(())
+    chooser::enter(app, &id, "ctrl+a", path.to_string_lossy().into_owned())
 }
 
 fn chooser_key(keys: &str) -> Result<(), String> {
@@ -476,7 +464,7 @@ fn exported(
     let (_, call) = export_asked(page, app, id, session, true)?;
     let path = folder.join("exported.jsonl");
     suggested(app)?;
-    choose(&path)?;
+    choose(app, &path)?;
     let r = page.reply(&call)?;
     require(
         r["result"] == json!({"outcome": "saved", "size": want.len()}),

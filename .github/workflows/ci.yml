@@ -9,6 +9,8 @@ name: CI
 
 on:
   pull_request:
+    # labeled: adding the full-ci label runs the heavy jobs (see the changes job).
+    types: [opened, synchronize, reopened, labeled]
   merge_group:
     types: [checks_requested]
 
@@ -44,7 +46,9 @@ jobs:
   # next-app-tools-wsl is not a workflow: it says whether next-app-tools-platforms.yml runs its WSL
   # jobs.
   changes:
-    runs-on: ubuntu-latest
+    # In a merge group, the runner PLUXY_GATE_RUNNER names when it is set (AGENTS.md, "Where jobs
+    # run"): this job and gate take seconds but every group waits on both.
+    runs-on: ${{ github.event_name == 'merge_group' && vars.PLUXY_GATE_RUNNER && fromJSON(vars.PLUXY_GATE_RUNNER) || 'ubuntu-latest' }}
     outputs:
       app: ${{ steps.paths.outputs.app }}
       next-ci: ${{ steps.paths.outputs.next-ci }}
@@ -56,6 +60,8 @@ jobs:
       next-app-tools-platforms: ${{ steps.paths.outputs.next-app-tools-platforms }}
       next-app-tools-wsl: ${{ steps.paths.outputs.next-app-tools-wsl }}
       next-app-tools-pack: ${{ steps.paths.outputs.next-app-tools-pack }}
+      # Whether next-app.yml runs its native shards: see FULL below.
+      next-app-native: ${{ steps.paths.outputs.full }}
     steps:
       # Full history for the merge base, without file contents: the diff needs only trees.
       - name: Checkout
@@ -73,6 +79,11 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           GROUP_BASE: ${{ github.event.merge_group.base_sha }}
           GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
+          # The heavy jobs, next-app.yml's Linux native build and shards and all of next-app-platforms.yml
+          # (Windows and macOS), are half of the hosted runner minutes. A merge group always runs
+          # them; a pull request only with the full-ci label (adding it reruns this workflow), so
+          # the queue gets those minutes. Nothing merges unchecked: every group runs them.
+          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = merge_group ]; then
@@ -99,9 +110,9 @@ jobs:
                 next/app-tools/lib/files/* | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock)
                 native=true ;;
             esac
-            case $path in extensions/app/* | .github/workflows/app-ci.yml) run[app]=true ;; esac
+            case $path in extensions/app/* | .github/workflows/app-ci.yml | .github/actions/apt-install/*) run[app]=true ;; esac
             case $path in next/* | .github/workflows/next-ci.yml) run[next-ci]=true ;; esac
-            case $path in next/* | .github/workflows/next-app.yml) run[next-app]=true ;; esac
+            case $path in next/* | .github/workflows/next-app.yml | .github/actions/apt-install/*) run[next-app]=true ;; esac
             case $path in
               next/app/* | next/ui/* | next/protocol/testdata/app-manifests/* | next/go.mod | next/go.sum | \
                 .github/workflows/next-app-platforms.yml | next/app-tools/execution/* | \
@@ -130,7 +141,13 @@ jobs:
                 run[next-app-tools-pack]=true ;;
             esac
           done < "$RUNNER_TEMP/changed"
-          if [ "${run[next-app-platforms]}" = false ] && [ -s "$RUNNER_TEMP/next-other" ]; then
+          if [ "$FULL" != true ]; then
+            run[next-app-platforms]=false
+            native=false
+            echo "heavy jobs left to the merge queue (no full-ci label)"
+          fi
+          echo "full=$FULL" | tee -a "$GITHUB_OUTPUT"
+          if [ "$FULL" = true ] && [ "${run[next-app-platforms]}" = false ] && [ -s "$RUNNER_TEMP/next-other" ]; then
             unset 'run[next-app-platforms]'
             echo "next-app-platforms: left to the go-packages step"
           fi
@@ -201,6 +218,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.next-app == 'true'
     uses: ./.github/workflows/next-app.yml
+    with:
+      skip-native: ${{ needs.changes.outputs.next-app-native != 'true' }}
 
   next-app-platforms:
     name: Next app platforms
@@ -240,7 +259,8 @@ jobs:
       - next-app-platforms
       - next-app-tools-platforms
       - next-app-tools-pack
-    runs-on: ubuntu-latest
+    # As changes: PLUXY_GATE_RUNNER in a merge group.
+    runs-on: ${{ github.event_name == 'merge_group' && vars.PLUXY_GATE_RUNNER && fromJSON(vars.PLUXY_GATE_RUNNER) || 'ubuntu-latest' }}
     steps:
       - name: Every chosen workflow passed
         env:

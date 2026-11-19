@@ -12,6 +12,7 @@ use pluxy_program::Error;
 use serde_json::Value;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -145,9 +146,11 @@ fn sibling(agent: &Path, what: &str) -> PathBuf {
     agent.join(format!(".{FOLDER}.{what}-{}-{nanos}", std::process::id()))
 }
 
-/// Writes the carried files into the new folder dir.
+/// Writes the carried files into the new folder dir: on Linux and macOS folders 0755 and files
+/// 0644 (code anyone may read, as npm installs it); on Windows each takes its folder's access list.
 fn write_all(dir: &Path) -> Result<(), Error> {
     let mut builder = DirBuilder::new();
+    #[cfg(unix)]
     builder.mode(0o755);
     builder.create(dir).map_err(|e| io("create", dir, e))?;
     builder.recursive(true);
@@ -162,19 +165,16 @@ fn write_all(dir: &Path) -> Result<(), Error> {
                 .create(parent)
                 .map_err(|e| io("create", parent, e))?;
         }
-        let mut f: File = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o644)
-            .open(&path)
-            .map_err(|e| io("create", &path, e))?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o644);
+        let mut f: File = options.open(&path).map_err(|e| io("create", &path, e))?;
         f.write_all(bytes)
             .and_then(|_| f.sync_all())
             .map_err(|e| io("write", &path, e))?;
     }
-    File::open(dir)
-        .and_then(|d| d.sync_all())
-        .map_err(|e| io("sync", dir, e))
+    pluxy_files::sync_dir(dir).map_err(|e| io("sync", dir, e))
 }
 
 /// Puts the carried copy in place: a new folder written beside it, then renamed over pluxy's
@@ -208,9 +208,7 @@ fn put(agent: &Path) -> Result<(), Error> {
     if let Some(old) = old {
         fs::remove_dir_all(&old).map_err(|e| io("remove", &old, e))?;
     }
-    File::open(agent)
-        .and_then(|d| d.sync_all())
-        .map_err(|e| io("sync", agent, e))
+    pluxy_files::sync_dir(agent).map_err(|e| io("sync", agent, e))
 }
 
 /// Install Pi Plugin: puts the carried copy in agent unless pluxy's copy is there already (an
@@ -246,9 +244,7 @@ pub fn remove(agent: &Path) -> Result<bool, Error> {
     let dest = folder(agent);
     let old = sibling(agent, "old");
     fs::rename(&dest, &old).map_err(|e| io("move aside", &dest, e))?;
-    File::open(agent)
-        .and_then(|d| d.sync_all())
-        .map_err(|e| io("sync", agent, e))?;
+    pluxy_files::sync_dir(agent).map_err(|e| io("sync", agent, e))?;
     fs::remove_dir_all(&old).map_err(|e| io("remove", &old, e))?;
     Ok(true)
 }

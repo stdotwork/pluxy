@@ -73,8 +73,20 @@ func fakeExtension(mode string) {
 		captureSettings()
 		return
 	}
+	if mode == "capture-stop" {
+		captureStop()
+		return
+	}
 	if mode == "mint-credential" {
 		mintCredential()
+		return
+	}
+	if mode == "echo-parts" {
+		echoParts()
+		return
+	}
+	if mode == "echo-pieces" {
+		echoPieces()
 		return
 	}
 	if mode != "sleep-child" { // the child shares its parent's folder

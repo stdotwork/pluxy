@@ -200,7 +200,7 @@
         "headers": {
           "Accept": "*/*",
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "User-Agent": "grok-pager/1.0.46 grok-shell/1.0.46 (macos; aarch64)",
           "X-Grok-Client-Version": "1.0.46",
           "X-Xai-Token-Auth": "xai-grok-cli"
@@ -213,7 +213,7 @@
         "headers": {
           "Accept": "*/*",
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "User-Agent": "grok-pager/1.0.46 grok-shell/1.0.46 (macos; aarch64)",
           "X-Grok-Client-Version": "1.0.46",
           "X-Xai-Token-Auth": "xai-grok-cli"
@@ -226,7 +226,7 @@
         "headers": {
           "Accept": "*/*",
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "User-Agent": "grok-pager/1.0.46 grok-shell/1.0.46 (macos; aarch64)",
           "X-Grok-Client-Version": "1.0.46",
           "X-Xai-Token-Auth": "xai-grok-cli"
@@ -239,7 +239,7 @@
         "headers": {
           "Accept": "*/*",
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "User-Agent": "grok-pager/1.0.46 grok-shell/1.0.46 (macos; aarch64)",
           "X-Grok-Client-Version": "1.0.46",
           "X-Xai-Token-Auth": "xai-grok-cli"
