@@ -28,6 +28,11 @@
 // exists: OpenRouter's GET /api/v1/key ("quota": "openrouter") or DeepSeek's GET /user/balance
 // ("quota": "deepseek"). When "quota" is unset, it is chosen from base_url's host (openrouter.ai
 // or api.deepseek.com), and any other host (or "quota": "none") answers unsupported.
+//
+// Responses compaction (core's endpoint call for POST /v1/responses/compact) passes the client's
+// body through to POST {base_url}/responses/compact on a Responses account, summarizes through
+// POST {base_url}/chat/completions on a Chat account, and answers unsupported on a Messages or
+// Gemini account (compact.go).
 package main
 
 import (
@@ -61,7 +66,7 @@ const (
 )
 
 func main() {
-	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check, Quota: quota}); err != nil {
+	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check, Quota: quota, Endpoint: compact}); err != nil {
 		fmt.Fprintln(os.Stderr, "openai-compatible:", err)
 		os.Exit(1)
 	}

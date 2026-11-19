@@ -159,6 +159,17 @@ or `unavailable` from `is_available` and each currency's `total_balance` from `b
 (`openrouter.ai` for OpenRouter, `api.deepseek.com` for DeepSeek) and answers unsupported for any
 other host.
 
+Responses compaction (`POST /v1/responses/compact` and `POST /backend-api/codex/responses/compact`)
+is served on OpenAI-compatible accounts by `wire_api`: a `"responses"` account passes the client's
+body through to `POST {base_url}/responses/compact` unchanged with the account's key header and
+returns the upstream's reply as it came; a `"chat"` account translates the Responses conversation to
+one non-streamed `POST {base_url}/chat/completions` request with `tool_choice` set to `"none"`,
+structured output and stop sequences cleared, and the Codex CLI's compaction prompt (`prompt.md`)
+appended as a last user message, and returns OpenAI's `response.compaction` object carrying one user
+message with the Codex CLI's `summary_prefix.md` followed by a newline and the summary (`reasoning_content`
+is excluded, and an empty or cut-off summary is an error on the request); a `"messages"` or
+`"gemini"` account answers unsupported so core tries another account.
+
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
 (a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.
 
