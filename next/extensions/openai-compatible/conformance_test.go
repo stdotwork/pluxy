@@ -22,6 +22,7 @@ func TestConformance(t *testing.T) {
 	up := newScenarioUpstream(t)
 	conformance.Run(t, conformance.Target{
 		Manifest: manifest,
+		Quiet:    true,
 		PrepareLogin: func(t *testing.T, s conformance.LoginScenario, method string) conformance.LoginSetup {
 			key := "sk-conformance"
 			if s == conformance.LoginDenied {
@@ -133,6 +134,23 @@ func (u *scenarioUpstream) serve(w http.ResponseWriter, r *http.Request) {
 			}
 			u.mu.Unlock()
 		case <-time.After(30 * time.Second):
+		}
+	case conformance.ScenarioQuiet:
+		// Some text, then SSE comments, which the extension passes on as nothing, until the
+		// request is cancelled.
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\n", textChunk("Thinking"))
+		w.(http.Flusher).Flush()
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-tick.C:
+				fmt.Fprint(w, ": ping\n\n")
+				w.(http.Flusher).Flush()
+			}
 		}
 	default:
 		http.NotFound(w, r)

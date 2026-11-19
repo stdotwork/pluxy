@@ -771,8 +771,9 @@ func (k *kit) quota(t *testing.T) {
 // call has sent core nothing for 10 seconds.
 const aliveWait = 20 * time.Second
 
-// alive checks that an extension that reports protocol 0.19 sends alive frames while its
-// upstream sends bytes it passes nothing on for, and nothing else in their place.
+// alive checks that an extension that reports protocol 0.19 sends an alive frame while its upstream
+// sends bytes the extension passes nothing on for, and that cancelling the call then ends the reply
+// with the cancelled error. It does not check what else the extension sends in the quiet.
 func (k *kit) alive(t *testing.T) {
 	ext := k.start(t)
 	if ext.Info().ProtocolMinor < 19 {
