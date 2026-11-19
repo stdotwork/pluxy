@@ -167,8 +167,9 @@ func Start(opts Options) (*Core, error) {
 		return nil, err
 	}
 	c.creds.OnChange(c.accountsChanged)
-	c.setup = newSetupManager(filepath.Join(StateDir(opts.ConfigPath), setupFileName), c.setupCoreTarget)
-	c.setup.triggerScan()
+	snap := c.cur.Load()
+	inUse := len(snap.pkgs) > 0 || len(snap.Config.Accounts()) > 0 || len(c.creds.Records()) > 0
+	c.setup = newSetupManager(filepath.Join(StateDir(opts.ConfigPath), setupFileName), c.setupCoreTarget, inUse)
 	return c, nil
 }
 

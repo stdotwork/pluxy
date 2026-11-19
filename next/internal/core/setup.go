@@ -6,13 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
-	"net/netip"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,8 +19,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/packages"
@@ -71,18 +66,19 @@ type setupStateFile struct {
 	Found     management.SetupFound `json:"found"`
 }
 
-// setupManager keeps the kept scan and first-run flag in memory and in state/setup.json, and
-// runs probes in the background.
+// setupManager keeps the kept scan and the first-run flag in memory and in state/setup.json,
+// and runs the scan in the background.
 type setupManager struct {
-	statePath string
-	coreInfo  func() (listen string, tlsEnable bool)
-	timeout   time.Duration
+	statePath  string
+	coreTarget func() (listen string, tlsEnable bool)
+	timeout    time.Duration
 
 	mu        sync.Mutex
+	stopped   bool // stop has run: no scan starts any more
 	firstRun  bool
 	scanning  bool
 	rescan    bool
-	scannedAt *time.Time
+	scannedAt *time.Time // nil until the first scan ends: there is no kept scan
 	found     management.SetupFound
 
 	ctx    context.Context
@@ -90,13 +86,15 @@ type setupManager struct {
 	wg     sync.WaitGroup
 }
 
-func newSetupManager(statePath string, coreInfo func() (string, bool)) *setupManager {
+// newSetupManager reads the kept scan at statePath. With no state/setup.json, setup is on its
+// first run unless core already has packages or accounts (an install from before setup existed).
+func newSetupManager(statePath string, coreTarget func() (string, bool), inUse bool) *setupManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &setupManager{
-		statePath: statePath,
-		coreInfo:  coreInfo,
-		timeout:   setupProbeTimeout,
-		firstRun:  true,
+		statePath:  statePath,
+		coreTarget: coreTarget,
+		timeout:    setupProbeTimeout,
+		firstRun:   !inUse,
 		found: management.SetupFound{
 			Clients: []management.SetupClient{},
 			SignIns: []management.SetupSignIn{},
@@ -111,7 +109,7 @@ func newSetupManager(statePath string, coreInfo func() (string, bool)) *setupMan
 
 func (m *setupManager) load() {
 	b, err := os.ReadFile(m.statePath)
-	if errors.Is(err, fs.ErrNotExist) {
+	if errors.Is(err, fs.ErrNotExist) || err == nil && len(bytes.TrimSpace(b)) == 0 {
 		return
 	}
 	if err != nil {
@@ -129,60 +127,42 @@ func (m *setupManager) load() {
 	}
 	m.firstRun = f.FirstRun
 	m.scannedAt = f.ScannedAt
-	m.found = normalizeFound(f.Found)
+	if f.Found.Clients != nil {
+		m.found.Clients = f.Found.Clients
+	}
+	if f.Found.SignIns != nil {
+		m.found.SignIns = f.Found.SignIns
+	}
+	if f.Found.Imports != nil {
+		m.found.Imports = f.Found.Imports
+	}
+	m.found.Core = f.Found.Core
 }
 
-func normalizeFound(f management.SetupFound) management.SetupFound {
-	if f.Clients == nil {
-		f.Clients = []management.SetupClient{}
-	}
-	if f.SignIns == nil {
-		f.SignIns = []management.SetupSignIn{}
-	}
-	if f.Imports == nil {
-		f.Imports = []management.SetupImport{}
-	}
-	return f
-}
-
+// saveLocked writes state/setup.json, made with mode 0600 the first time.
 func (m *setupManager) saveLocked() error {
-	dir := filepath.Dir(m.statePath)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(m.statePath), 0o700); err != nil {
 		return err
 	}
-	data := setupStateFile{
+	b, err := json.MarshalIndent(setupStateFile{
 		Format:    setupFileFormat,
 		FirstRun:  m.firstRun,
 		ScannedAt: m.scannedAt,
-		Found:     normalizeFound(m.found),
-	}
-	b, err := json.MarshalIndent(data, "", "  ")
+		Found:     m.found,
+	}, "", "  ")
 	if err != nil {
 		return err
 	}
-	b = append(b, '\n')
-	tmp, err := os.CreateTemp(dir, ".setup-*.tmp")
+	f, err := os.OpenFile(m.statePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err == nil {
+		err = f.Close()
+	} else if errors.Is(err, fs.ErrExist) {
+		err = nil
+	}
 	if err != nil {
 		return err
 	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(name, m.statePath)
+	return writeFileAtomic(m.statePath, append(b, '\n'))
 }
 
 func (m *setupManager) isFirstRun() bool {
@@ -198,74 +178,69 @@ func (m *setupManager) markDone() error {
 	return m.saveLocked()
 }
 
+// listening is told the address core listens on once it does. A first run with no kept scan
+// starts its first scan; otherwise the kept scan's client states are read again against that
+// address, which a restart may have changed (a config listening on port 0).
+func (m *setupManager) listening(listen string, tlsEnable bool) {
+	m.mu.Lock()
+	if m.scannedAt == nil {
+		first := m.firstRun
+		m.mu.Unlock()
+		if first {
+			m.triggerScan()
+		}
+		return
+	}
+	defer m.mu.Unlock()
+	if m.found.Core.Listen == listen {
+		return
+	}
+	m.found = refreshCoreState(m.found, listen, tlsEnable)
+	if err := m.saveLocked(); err != nil {
+		log.Printf("setup: saving %s: %v", m.statePath, err)
+	}
+}
+
 func (m *setupManager) triggerScan() {
 	m.mu.Lock()
-	if m.ctx.Err() != nil {
-		m.mu.Unlock()
+	defer m.mu.Unlock()
+	if m.stopped {
 		return
 	}
 	if m.scanning {
 		m.rescan = true
-		m.mu.Unlock()
 		return
 	}
 	m.scanning = true
 	m.wg.Add(1)
-	m.mu.Unlock()
 	go m.runLoop()
 }
 
 func (m *setupManager) runLoop() {
 	defer m.wg.Done()
 	for {
+		listen, tlsEnable := m.coreTarget()
+		found := scanMachine(m.ctx, filepath.Dir(m.statePath), listen, tlsEnable, m.timeout)
+		m.mu.Lock()
 		if m.ctx.Err() != nil {
-			m.mu.Lock()
-			m.scanning = false
-			m.rescan = false
-			m.mu.Unlock()
-			return
-		}
-		listen, tlsEnable := m.coreInfo()
-		found := scanMachine(m.ctx, listen, tlsEnable, m.timeout)
-		if m.ctx.Err() != nil {
-			m.mu.Lock()
-			m.scanning = false
-			m.rescan = false
+			m.scanning, m.rescan = false, false
 			m.mu.Unlock()
 			return
 		}
 		now := time.Now().UTC()
-		m.mu.Lock()
-		// Re-read coreInfo in case SetListenAddr ran while the probes were running.
-		curListen, curTLS := m.coreInfo()
-		if curListen != "" && curListen != listen {
-			found = refreshCoreState(found, curListen, curTLS)
-		}
 		m.found = found
 		m.scannedAt = &now
 		if err := m.saveLocked(); err != nil {
 			log.Printf("setup: saving %s: %v", m.statePath, err)
 		}
-		again := m.rescan
-		m.rescan = false
-		if !again {
+		if !m.rescan {
 			m.scanning = false
 			m.mu.Unlock()
 			return
 		}
+		m.rescan = false
 		m.mu.Unlock()
 	}
-}
-
-func (m *setupManager) updateCore(listen string, tlsEnable bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.scannedAt == nil {
-		m.found.Core = setupCoreInfo(listen)
-		return
-	}
-	m.found = refreshCoreState(m.found, listen, tlsEnable)
-	_ = m.saveLocked()
 }
 
 func (m *setupManager) snapshot() (firstRun, scanning bool, scannedAt *time.Time, found management.SetupFound) {
@@ -276,7 +251,7 @@ func (m *setupManager) snapshot() (firstRun, scanning bool, scannedAt *time.Time
 		t := *m.scannedAt
 		at = &t
 	}
-	f := normalizeFound(m.found)
+	f := m.found
 	f.Clients = slices.Clone(f.Clients)
 	f.SignIns = slices.Clone(f.SignIns)
 	f.Imports = slices.Clone(f.Imports)
@@ -284,20 +259,22 @@ func (m *setupManager) snapshot() (firstRun, scanning bool, scannedAt *time.Time
 }
 
 func (m *setupManager) stop() {
+	m.mu.Lock()
+	m.stopped = true
+	m.mu.Unlock()
 	m.cancel()
 	m.wg.Wait()
 }
 
-// SetListenAddr records the actual listen address once the listener is bound (when config
-// listen used port 0) and updates setup's core view.
+// SetListenAddr records the address the listener is bound to (the port core picked when the
+// config listens on port 0), and tells setup core is listening.
 func (c *Core) SetListenAddr(addr string) {
 	if addr == "" {
 		return
 	}
 	c.listenAddr.Store(addr)
 	if c.setup != nil {
-		listen, tlsEnable := c.setupCoreTarget()
-		c.setup.updateCore(listen, tlsEnable)
+		c.setup.listening(c.setupCoreTarget())
 	}
 }
 
@@ -389,9 +366,7 @@ func (c *Core) handleSetup(m *server.Management) {
 			return
 		}
 		if len(req.Picks) == 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": map[string]string{"code": "invalid_request", "message": "picks must name at least one package"},
-			})
+			writeError(w, http.StatusBadRequest, "invalid_request", "picks must name at least one package")
 			return
 		}
 		writeJSON(w, http.StatusOK, c.ApplySetup(r.Context(), req.Picks))
@@ -399,9 +374,7 @@ func (c *Core) handleSetup(m *server.Management) {
 	m.Handle("POST /setup/done", func(w http.ResponseWriter, r *http.Request) {
 		reply, err := c.DoneSetup()
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{
-				"error": map[string]string{"code": "internal", "message": err.Error()},
-			})
+			writeError(w, http.StatusInternalServerError, "internal", err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, reply)
@@ -451,10 +424,10 @@ func buildSetupPicks(regs []management.Registry, installed packages.State, found
 		return strings.Compare(a, b)
 	})
 
-	clientInstalled := map[string]bool{}
+	clientInstalled := map[string]string{}
 	for _, c := range found.Clients {
 		if c.Installed {
-			clientInstalled[c.ID] = true
+			clientInstalled[c.ID] = c.State
 		}
 	}
 	signInProviders := map[string]bool{}
@@ -480,46 +453,40 @@ func buildSetupPicks(regs []management.Registry, installed packages.State, found
 	return picks
 }
 
-func suggestPick(id string, clients, signIns map[string]bool) (bool, string) {
-	switch id {
-	case "pluxy/claude":
-		switch {
-		case clients["claude-code"] && signIns["pluxy/claude"]:
-			return true, "Claude Code is installed and signed in on this machine"
-		case clients["claude-code"]:
-			return true, "Claude Code is installed on this machine"
-		case signIns["pluxy/claude"]:
-			return true, "Claude Code is signed in on this machine"
+// setupSuggestions says which pick each find points to, and why: a client tool installed on
+// the machine (by its SetupClient ID) or a sign-in found there (by its provider). A pick is
+// suggested by its first row that holds.
+var setupSuggestions = []struct {
+	pick, client, signIn, because string
+	// setsUp marks a pick that writes the client tool's config: not suggested while that
+	// config is one its writer refuses.
+	setsUp bool
+}{
+	{pick: "pluxy/claude", client: "claude-code", signIn: "pluxy/claude", because: "Claude Code is installed and signed in on this machine"},
+	{pick: "pluxy/claude", client: "claude-code", because: "Claude Code is installed on this machine"},
+	{pick: "pluxy/claude", signIn: "pluxy/claude", because: "Claude Code is signed in on this machine"},
+	{pick: "pluxy/claude-code", client: "claude-code", because: "Claude Code is installed on this machine", setsUp: true},
+	{pick: "pluxy/codex", client: "codex", signIn: "pluxy/codex", because: "Codex CLI is installed and Codex is signed in on this machine"},
+	{pick: "pluxy/codex", client: "codex", because: "Codex CLI is installed on this machine"},
+	{pick: "pluxy/codex", signIn: "pluxy/codex", because: "Codex is signed in on this machine"},
+	{pick: "pluxy/codex-setup", client: "codex", because: "Codex CLI is installed on this machine", setsUp: true},
+	{pick: "pluxy/opencode", client: "opencode", because: "OpenCode is installed on this machine", setsUp: true},
+	{pick: "pluxy/pi-setup", client: "pi", because: "Pi is installed on this machine", setsUp: true},
+	{pick: "pluxy/omp-setup", client: "omp", because: "Oh My Pi is installed on this machine", setsUp: true},
+}
+
+// suggestPick says whether pick id is suggested and why. clients holds the client tools found
+// installed, with their config state; signIns the providers with a sign-in.
+func suggestPick(id string, clients map[string]string, signIns map[string]bool) (bool, string) {
+	for _, r := range setupSuggestions {
+		state, installed := clients[r.client]
+		if r.pick != id || r.client != "" && !installed || r.signIn != "" && !signIns[r.signIn] {
+			continue
 		}
-	case "pluxy/claude-code":
-		if clients["claude-code"] {
-			return true, "Claude Code is installed on this machine"
+		if r.setsUp && state == management.ClientStateRefused {
+			continue
 		}
-	case "pluxy/codex":
-		switch {
-		case clients["codex"] && signIns["pluxy/codex"]:
-			return true, "Codex CLI is installed and Codex is signed in on this machine"
-		case clients["codex"]:
-			return true, "Codex CLI is installed on this machine"
-		case signIns["pluxy/codex"]:
-			return true, "Codex is signed in on this machine"
-		}
-	case "pluxy/codex-setup":
-		if clients["codex"] {
-			return true, "Codex CLI is installed on this machine"
-		}
-	case "pluxy/opencode":
-		if clients["opencode"] {
-			return true, "OpenCode is installed on this machine"
-		}
-	case "pluxy/pi-setup":
-		if clients["pi"] {
-			return true, "Pi is installed on this machine"
-		}
-	case "pluxy/omp-setup":
-		if clients["omp"] {
-			return true, "Oh My Pi is installed on this machine"
-		}
+		return true, r.because
 	}
 	return false, ""
 }
@@ -539,6 +506,8 @@ func setupCoreInfo(listen string) management.SetupCore {
 	}
 }
 
+// isReachableFromNetwork reports whether a core listening on listen takes connections from
+// other machines: any host but localhost or a loopback address, every interface included.
 func isReachableFromNetwork(listen string) bool {
 	if listen == "" {
 		return false
@@ -547,66 +516,30 @@ func isReachableFromNetwork(listen string) bool {
 	if err != nil {
 		host = listen
 	}
-	host = strings.TrimSpace(host)
-	if host == "" {
-		return true
-	}
-	if strings.EqualFold(host, "localhost") {
-		return false
-	}
-	if ip, err := netip.ParseAddr(host); err == nil {
-		return !ip.IsLoopback()
-	}
-	return true
+	return !server.IsLoopbackHost(strings.TrimSpace(host))
 }
 
-func coreClientURL(listen string, tlsEnable bool) string {
-	if listen == "" {
-		return ""
-	}
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil {
-		return ""
-	}
-	if host == "" {
-		host = "127.0.0.1"
-	} else if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
-		if ip.To4() == nil {
-			host = "::1"
-		} else {
-			host = "127.0.0.1"
-		}
-	}
-	scheme := "http"
-	if tlsEnable {
-		scheme = "https"
-	}
-	return scheme + "://" + net.JoinHostPort(host, port)
-}
-
+// refreshCoreState reads each client tool's config again against the core listening on listen.
 func refreshCoreState(found management.SetupFound, listen string, tlsEnable bool) management.SetupFound {
 	found.Core = setupCoreInfo(listen)
 	home := userHomeDir()
-	coreURL := coreClientURL(listen, tlsEnable)
-	if home == "" {
-		return found
-	}
+	coreURL, _ := server.LocalURL(listen, tlsEnable)
+	found.Clients = slices.Clone(found.Clients)
 	for i := range found.Clients {
 		c := &found.Clients[i]
-		switch c.ID {
-		case "claude-code":
-			c.Config, c.State = inspectClaudeCode(home, coreURL)
-		case "codex":
-			c.Config, c.State = inspectCodex(home, coreURL)
-		case "opencode":
-			c.Config, c.State = inspectOpenCode(home, coreURL)
-		case "pi":
-			c.Config, c.State = inspectPi(home, coreURL)
-		case "omp":
-			c.Config, c.State = inspectOMP(home, coreURL)
+		if spec, ok := clientSpecByID(c.ID); ok {
+			c.Config, c.State = spec.inspect(home, coreURL)
 		}
 	}
 	return found
+}
+
+func clientSpecByID(id string) (clientProbeSpec, bool) {
+	i := slices.IndexFunc(clientSpecs, func(s clientProbeSpec) bool { return s.id == id })
+	if i < 0 {
+		return clientProbeSpec{}, false
+	}
+	return clientSpecs[i], true
 }
 
 type clientProbeSpec struct {
@@ -689,9 +622,11 @@ func exeName(name string) string {
 	return name
 }
 
-func scanMachine(ctx context.Context, listen string, tlsEnable bool, timeout time.Duration) management.SetupFound {
+// scanMachine looks for each client tool, sign-in and earlier setup on the machine. Version
+// probes run in a fresh folder below scratch (core's state folder), removed after each.
+func scanMachine(ctx context.Context, scratch, listen string, tlsEnable bool, timeout time.Duration) management.SetupFound {
 	home := userHomeDir()
-	coreURL := coreClientURL(listen, tlsEnable)
+	coreURL, _ := server.LocalURL(listen, tlsEnable)
 	clients := make([]management.SetupClient, len(clientSpecs))
 
 	var wg sync.WaitGroup
@@ -701,7 +636,7 @@ func scanMachine(ctx context.Context, listen string, tlsEnable bool, timeout tim
 			var version string
 			if prog := findProgram(spec.program, spec.paths(home)); prog != "" {
 				installed = true
-				version = probeVersion(ctx, prog, timeout)
+				version = probeVersion(ctx, prog, scratch, timeout)
 			}
 			cfg, state := spec.inspect(home, coreURL)
 			clients[i] = management.SetupClient{
@@ -752,15 +687,28 @@ func isExecutableFile(path string) bool {
 
 var versionPattern = regexp.MustCompile(`\bv?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b`)
 
-func probeVersion(ctx context.Context, program string, timeout time.Duration) string {
-	if timeout <= 0 {
-		timeout = setupProbeTimeout
+// probeVersion runs program --version and reads a version from what it prints. The program
+// runs in a fresh folder below scratch that is its home, config, data, state, cache and temporary
+// folder, removed afterwards, so a tool that writes there on start leaves nothing in the
+// person's own folders. A tool that cannot run there (a version manager's shim looking for its
+// own folders) reports no version.
+func probeVersion(ctx context.Context, program, scratch string, timeout time.Duration) string {
+	if err := os.MkdirAll(scratch, 0o700); err != nil {
+		log.Printf("setup: %v", err)
+		return ""
 	}
+	dir, err := os.MkdirTemp(scratch, ".probe-")
+	if err != nil {
+		log.Printf("setup: %v", err)
+		return ""
+	}
+	defer os.RemoveAll(dir)
+
 	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-
 	cmd := exec.CommandContext(pctx, program, "--version")
-	cmd.Env = append(os.Environ(), "MISE_OFFLINE=1")
+	cmd.Dir = dir
+	cmd.Env = probeEnv(os.Environ(), dir)
 	cmd.WaitDelay = 200 * time.Millisecond
 	configureProbeCmd(cmd)
 
@@ -772,6 +720,27 @@ func probeVersion(ctx context.Context, program string, timeout time.Duration) st
 		return ""
 	}
 	return parseVersionOutput(out.String())
+}
+
+// probeEnv is env with every folder a tool keeps its files in pointed at dir: the home folder
+// (HOME, and USERPROFILE, APPDATA and LOCALAPPDATA on Windows), each XDG_*_HOME, CODEX_HOME and
+// the temporary folder.
+func probeEnv(env []string, dir string) []string {
+	set := []string{"HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+		"XDG_STATE_HOME", "XDG_CACHE_HOME", "CODEX_HOME", "TMPDIR", "TMP", "TEMP"}
+	out := make([]string, 0, len(env)+len(set)+1)
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		k = strings.ToUpper(k) // Windows names are not case-sensitive
+		if slices.Contains(set, k) || strings.HasPrefix(k, "XDG_") && strings.HasSuffix(k, "_HOME") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	for _, k := range set {
+		out = append(out, k+"="+dir)
+	}
+	return append(out, "MISE_OFFLINE=1")
 }
 
 type limitedBuffer struct {
@@ -796,578 +765,6 @@ func parseVersionOutput(out string) string {
 		return m[1]
 	}
 	return ""
-}
-
-func readLimitedFile(path string) ([]byte, bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, false
-	}
-	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, maxClientConfig+1))
-	if err != nil || len(b) > maxClientConfig {
-		return nil, false
-	}
-	return b, true
-}
-
-func sameCoreTarget(gotURL, coreURL string, wantV1 bool) bool {
-	if coreURL == "" || gotURL == "" {
-		return false
-	}
-	want, err := url.Parse(coreURL)
-	if err != nil || want.Host == "" {
-		return false
-	}
-	got, err := url.Parse(strings.TrimSpace(gotURL))
-	if err != nil || got.Host == "" {
-		return false
-	}
-	if !strings.EqualFold(got.Scheme, want.Scheme) {
-		return false
-	}
-	gotPath := strings.TrimSuffix(got.Path, "/")
-	if wantV1 {
-		if gotPath != "/v1" {
-			return false
-		}
-	} else {
-		if gotPath != "" {
-			return false
-		}
-	}
-	if urlPort(got) != urlPort(want) {
-		return false
-	}
-	gHost, wHost := got.Hostname(), want.Hostname()
-	if strings.EqualFold(gHost, wHost) {
-		return true
-	}
-	return isLoopbackHost(wHost) && isLoopbackHost(gHost)
-}
-
-func urlPort(u *url.URL) string {
-	if p := u.Port(); p != "" {
-		return p
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "https":
-		return "443"
-	case "http":
-		return "80"
-	default:
-		return ""
-	}
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip, err := netip.ParseAddr(host)
-	return err == nil && ip.IsLoopback()
-}
-
-// inspectClaudeCode checks ~/.claude/settings.json using the rules in
-// next/app-tools/claude-code/src/settings.rs.
-func inspectClaudeCode(home, coreURL string) (string, string) {
-	const display = "~/.claude/settings.json"
-	if home == "" {
-		return display, management.ClientStateNotConfigured
-	}
-	b, ok := readLimitedFile(filepath.Join(home, ".claude", "settings.json"))
-	if !ok || len(bytes.TrimSpace(b)) == 0 {
-		return display, management.ClientStateNotConfigured
-	}
-	var root map[string]any
-	if err := json.Unmarshal(b, &root); err != nil {
-		return display, management.ClientStateNotConfigured
-	}
-	if schema, ok := root["$schema"].(string); ok && schema != "https://json.schemastore.org/claude-code-settings.json" {
-		return display, management.ClientStateNotConfigured
-	}
-	envRaw, ok := root["env"].(map[string]any)
-	if !ok {
-		return display, management.ClientStateNotConfigured
-	}
-	str := func(k string) (string, bool) {
-		s, ok := envRaw[k].(string)
-		return s, ok
-	}
-	baseURL, hasBase := str("ANTHROPIC_BASE_URL")
-	if !hasBase {
-		return display, management.ClientStateNotConfigured
-	}
-	tok, _ := str("ANTHROPIC_AUTH_TOKEN")
-	disc, _ := str("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY")
-	autoSrv, _ := str("CLAUDE_CODE_AUTO_MODE_SERVER")
-	if tok != "" && disc == "1" && autoSrv == "0" && sameCoreTarget(baseURL, coreURL, false) {
-		return display, management.ClientStateConfigured
-	}
-	return display, management.ClientStateNeedsUpdate
-}
-
-// inspectCodex checks ~/.codex/config.toml using a small TOML line reader and the rules in
-// next/app-tools/codex/src/config.rs.
-func inspectCodex(home, coreURL string) (string, string) {
-	const display = "~/.codex/config.toml"
-	if home == "" {
-		return display, management.ClientStateNotConfigured
-	}
-	b, ok := readLimitedFile(filepath.Join(home, ".codex", "config.toml"))
-	if !ok || len(bytes.TrimSpace(b)) == 0 {
-		return display, management.ClientStateNotConfigured
-	}
-	parsed := parseCodexConfigTOML(b)
-	if !parsed.hasBaseURL {
-		return display, management.ClientStateNotConfigured
-	}
-	if parsed.bearerToken != "" &&
-		parsed.modelProvider == "pluxy" &&
-		parsed.hasModelCatalog &&
-		(parsed.wireAPI == "" || parsed.wireAPI == "responses") &&
-		sameCoreTarget(parsed.baseURL, coreURL, true) {
-		return display, management.ClientStateConfigured
-	}
-	return display, management.ClientStateNeedsUpdate
-}
-
-type codexTOMLFields struct {
-	modelProvider   string
-	hasModelCatalog bool
-	hasBaseURL      bool
-	baseURL         string
-	bearerToken     string
-	wireAPI         string
-}
-
-// parseCodexConfigTOML reads only the keys inspectCodex needs without pulling in a TOML dependency.
-func parseCodexConfigTOML(b []byte) codexTOMLFields {
-	var out codexTOMLFields
-	section := ""
-	lines := strings.Split(string(b), "\n")
-	for _, raw := range lines {
-		line := strings.TrimSpace(stripTOMLComment(raw))
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "[[") && strings.HasSuffix(line, "]]") {
-			section = normalizeTOMLPath(strings.TrimSuffix(strings.TrimPrefix(line, "[["), "]]"))
-			continue
-		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = normalizeTOMLPath(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
-			continue
-		}
-		eq := indexUnquoted(line, '=')
-		if eq < 0 {
-			continue
-		}
-		k := normalizeTOMLPath(line[:eq])
-		val := strings.TrimSpace(line[eq+1:])
-		if section != "" && k != "" {
-			k = section + "." + k
-		}
-		switch k {
-		case "model_provider":
-			if s, ok := parseTOMLString(val); ok {
-				out.modelProvider = s
-			}
-		case "model_catalog_json":
-			if val != "" {
-				out.hasModelCatalog = true
-			}
-		case "model_providers.pluxy.base_url":
-			if s, ok := parseTOMLString(val); ok {
-				out.hasBaseURL = true
-				out.baseURL = s
-			}
-		case "model_providers.pluxy.experimental_bearer_token":
-			if s, ok := parseTOMLString(val); ok {
-				out.bearerToken = s
-			}
-		case "model_providers.pluxy.wire_api":
-			if s, ok := parseTOMLString(val); ok {
-				out.wireAPI = s
-			}
-		}
-	}
-	return out
-}
-
-func stripTOMLComment(line string) string {
-	var quote byte
-	escaped := false
-	for i := 0; i < len(line); i++ {
-		c := line[i]
-		if escaped {
-			escaped = false
-			continue
-		}
-		if quote == '"' && c == '\\' {
-			escaped = true
-			continue
-		}
-		if quote != 0 {
-			if c == quote {
-				quote = 0
-			}
-			continue
-		}
-		if c == '"' || c == '\'' {
-			quote = c
-			continue
-		}
-		if c == '#' {
-			return line[:i]
-		}
-	}
-	return line
-}
-
-func indexUnquoted(s string, target byte) int {
-	var quote byte
-	escaped := false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if escaped {
-			escaped = false
-			continue
-		}
-		if quote == '"' && c == '\\' {
-			escaped = true
-			continue
-		}
-		if quote != 0 {
-			if c == quote {
-				quote = 0
-			}
-			continue
-		}
-		if c == '"' || c == '\'' {
-			quote = c
-			continue
-		}
-		if c == target {
-			return i
-		}
-	}
-	return -1
-}
-
-func normalizeTOMLPath(s string) string {
-	var parts []string
-	i := 0
-	for i < len(s) {
-		for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '.') {
-			i++
-		}
-		if i >= len(s) {
-			break
-		}
-		if s[i] == '"' || s[i] == '\'' {
-			q := s[i]
-			i++
-			start := i
-			for i < len(s) && s[i] != q {
-				if q == '"' && s[i] == '\\' && i+1 < len(s) {
-					i++
-				}
-				i++
-			}
-			parts = append(parts, s[start:i])
-			if i < len(s) {
-				i++
-			}
-			continue
-		}
-		start := i
-		for i < len(s) && s[i] != '.' && s[i] != ' ' && s[i] != '\t' {
-			i++
-		}
-		parts = append(parts, s[start:i])
-	}
-	return strings.Join(parts, ".")
-}
-
-func parseTOMLString(val string) (string, bool) {
-	if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
-		var s string
-		if json.Unmarshal([]byte(val), &s) == nil {
-			return s, true
-		}
-		return val[1 : len(val)-1], true
-	}
-	if len(val) >= 2 && val[0] == '\'' && val[len(val)-1] == '\'' {
-		return val[1 : len(val)-1], true
-	}
-	return "", false
-}
-
-// inspectOpenCode checks ~/.config/opencode/opencode.jsonc (or opencode.json) using the rules
-// in next/app-tools/opencode/src/config.rs.
-func inspectOpenCode(home, coreURL string) (string, string) {
-	display := "~/.config/opencode/opencode.jsonc"
-	if home == "" {
-		return display, management.ClientStateNotConfigured
-	}
-	dir := filepath.Join(home, ".config", "opencode")
-	jsoncPath := filepath.Join(dir, "opencode.jsonc")
-	jsonPath := filepath.Join(dir, "opencode.json")
-	target := jsoncPath
-	if _, err := os.Lstat(jsoncPath); err != nil {
-		if _, err2 := os.Lstat(jsonPath); err2 == nil {
-			target = jsonPath
-			display = "~/.config/opencode/opencode.json"
-		}
-	}
-	b, ok := readLimitedFile(target)
-	if !ok || len(bytes.TrimSpace(b)) == 0 {
-		return display, management.ClientStateNotConfigured
-	}
-	b = bytes.TrimPrefix(b, []byte("\xEF\xBB\xBF"))
-	var root map[string]any
-	if err := json.Unmarshal(cleanJSONC(b), &root); err != nil {
-		return display, management.ClientStateNotConfigured
-	}
-	providers, _ := root["provider"].(map[string]any)
-	pluxyProv, hasPluxy := providers["pluxy"].(map[string]any)
-	if !hasPluxy {
-		return display, management.ClientStateNotConfigured
-	}
-	v2Providers, _ := root["providers"].(map[string]any)
-	_, hasV2 := v2Providers["pluxy"]
-	npm, _ := pluxyProv["npm"].(string)
-	options, _ := pluxyProv["options"].(map[string]any)
-	baseURL, _ := options["baseURL"].(string)
-	apiKey, _ := options["apiKey"].(string)
-	models, _ := pluxyProv["models"].(map[string]any)
-
-	var oursModel string
-	switch m := root["model"].(type) {
-	case string:
-		oursModel, _ = strings.CutPrefix(m, "pluxy/")
-	case map[string]any:
-		if pid, _ := m["providerID"].(string); pid == "pluxy" {
-			oursModel, _ = m["model"].(string)
-		}
-	}
-	_, hasOursModel := models[oursModel]
-	if !hasV2 && apiKey != "" && npm == "@ai-sdk/openai-compatible" &&
-		oursModel != "" && hasOursModel && sameCoreTarget(baseURL, coreURL, true) {
-		return display, management.ClientStateConfigured
-	}
-	return display, management.ClientStateNeedsUpdate
-}
-
-// cleanJSONC strips // and /* */ comments and trailing commas from JSONC input.
-func cleanJSONC(in []byte) []byte {
-	var noComments bytes.Buffer
-	noComments.Grow(len(in))
-	inString := false
-	escaped := false
-	for i := 0; i < len(in); i++ {
-		c := in[i]
-		if inString {
-			noComments.WriteByte(c)
-			if escaped {
-				escaped = false
-			} else if c == '\\' {
-				escaped = true
-			} else if c == '"' {
-				inString = false
-			}
-			continue
-		}
-		if c == '"' {
-			inString = true
-			noComments.WriteByte(c)
-			continue
-		}
-		if c == '/' && i+1 < len(in) {
-			if in[i+1] == '/' {
-				i += 2
-				for i < len(in) && in[i] != '\n' {
-					i++
-				}
-				if i < len(in) {
-					noComments.WriteByte('\n')
-				}
-				continue
-			}
-			if in[i+1] == '*' {
-				i += 2
-				for i+1 < len(in) && !(in[i] == '*' && in[i+1] == '/') {
-					i++
-				}
-				i++
-				continue
-			}
-		}
-		noComments.WriteByte(c)
-	}
-
-	b := noComments.Bytes()
-	var out bytes.Buffer
-	out.Grow(len(b))
-	inString = false
-	escaped = false
-	for i := 0; i < len(b); i++ {
-		c := b[i]
-		if inString {
-			out.WriteByte(c)
-			if escaped {
-				escaped = false
-			} else if c == '\\' {
-				escaped = true
-			} else if c == '"' {
-				inString = false
-			}
-			continue
-		}
-		if c == '"' {
-			inString = true
-			out.WriteByte(c)
-			continue
-		}
-		if c == ',' {
-			j := i + 1
-			for j < len(b) && (b[j] == ' ' || b[j] == '\t' || b[j] == '\n' || b[j] == '\r') {
-				j++
-			}
-			if j < len(b) && (b[j] == '}' || b[j] == ']') {
-				continue
-			}
-		}
-		out.WriteByte(c)
-	}
-	return out.Bytes()
-}
-
-// inspectPi checks ~/.pi/agent/settings.json and cliproxyapi.json using the rules in
-// next/app-tools/pi-setup/src/pi.rs.
-func inspectPi(home, coreURL string) (string, string) {
-	const display = "~/.pi/agent/settings.json"
-	if home == "" {
-		return display, management.ClientStateNotConfigured
-	}
-	agentDir := filepath.Join(home, ".pi", "agent")
-	sb, ok := readLimitedFile(filepath.Join(agentDir, "settings.json"))
-	if !ok || len(bytes.TrimSpace(sb)) == 0 {
-		return display, management.ClientStateNotConfigured
-	}
-	var st map[string]any
-	if err := json.Unmarshal(sb, &st); err != nil {
-		return display, management.ClientStateNotConfigured
-	}
-	pkgs, _ := st["packages"].([]any)
-	registered := false
-	for _, item := range pkgs {
-		var src string
-		switch v := item.(type) {
-		case string:
-			src = v
-		case map[string]any:
-			src, _ = v["source"].(string)
-		}
-		src = strings.TrimSuffix(strings.TrimSpace(src), "/")
-		src = strings.TrimPrefix(src, "./")
-		if src == "pluxy-cliproxyapi-provider" {
-			registered = true
-			break
-		}
-	}
-	if !registered {
-		return display, management.ClientStateNotConfigured
-	}
-
-	cb, ok := readLimitedFile(filepath.Join(agentDir, "cliproxyapi.json"))
-	if !ok {
-		return display, management.ClientStateNeedsUpdate
-	}
-	var cfg map[string]any
-	if err := json.Unmarshal(cb, &cfg); err != nil {
-		return display, management.ClientStateNeedsUpdate
-	}
-	baseURL, _ := cfg["baseUrl"].(string)
-	apiKey, _ := cfg["apiKey"].(string)
-	providerID, _ := cfg["providerId"].(string)
-	providerID = cmp.Or(strings.TrimSpace(providerID), "cliproxyapi")
-	defProv, _ := st["defaultProvider"].(string)
-	defModel, _ := st["defaultModel"].(string)
-	_, markerErr := os.Stat(filepath.Join(agentDir, "pluxy-cliproxyapi-provider", ".pluxy-adapter.json"))
-	if markerErr == nil &&
-		apiKey != "" &&
-		defProv == providerID &&
-		defModel != "" &&
-		sameCoreTarget(baseURL, coreURL, false) {
-		return display, management.ClientStateConfigured
-	}
-	return display, management.ClientStateNeedsUpdate
-}
-
-// inspectOMP checks ~/.omp/agent/models.yml (or models.yaml) and config.yml (or config.yaml)
-// using the rules in next/app-tools/omp-setup/src/{main.rs,omp.rs}.
-func inspectOMP(home, coreURL string) (string, string) {
-	display := "~/.omp/agent/models.yml"
-	if home == "" {
-		return display, management.ClientStateNotConfigured
-	}
-	agentDir := filepath.Join(home, ".omp", "agent")
-	modelsName := "models.yml"
-	if _, err := os.Stat(filepath.Join(agentDir, "models.yml")); err != nil {
-		if _, err2 := os.Stat(filepath.Join(agentDir, "models.yaml")); err2 == nil {
-			modelsName = "models.yaml"
-		}
-	}
-	display = "~/.omp/agent/" + modelsName
-
-	configName := "config.yml"
-	if _, err := os.Stat(filepath.Join(agentDir, "config.yml")); err != nil {
-		if _, err2 := os.Stat(filepath.Join(agentDir, "config.yaml")); err2 == nil {
-			configName = "config.yaml"
-		}
-	}
-
-	mb, mok := readLimitedFile(filepath.Join(agentDir, modelsName))
-	cb, cok := readLimitedFile(filepath.Join(agentDir, configName))
-	if !mok && !cok {
-		return display, management.ClientStateNotConfigured
-	}
-
-	var modelsDoc, configDoc map[string]any
-	if mok && len(bytes.TrimSpace(mb)) > 0 {
-		if err := yaml.Unmarshal(mb, &modelsDoc); err != nil {
-			return display, management.ClientStateNotConfigured
-		}
-	}
-	if cok && len(bytes.TrimSpace(cb)) > 0 {
-		if err := yaml.Unmarshal(cb, &configDoc); err != nil {
-			return display, management.ClientStateNotConfigured
-		}
-	}
-
-	providers, _ := modelsDoc["providers"].(map[string]any)
-	pluxyProv, hasPluxy := providers["pluxy"].(map[string]any)
-	roles, _ := configDoc["modelRoles"].(map[string]any)
-	defRole, _ := roles["default"].(string)
-	model, hasModel := strings.CutPrefix(defRole, "pluxy/")
-	if !hasPluxy && (!hasModel || model == "") {
-		return display, management.ClientStateNotConfigured
-	}
-	baseURL, _ := pluxyProv["baseUrl"].(string)
-	apiKey, _ := pluxyProv["apiKey"].(string)
-	api, _ := pluxyProv["api"].(string)
-	discovery, _ := pluxyProv["discovery"].(map[string]any)
-	discType, _ := discovery["type"].(string)
-	if apiKey != "" &&
-		(api == "openai-responses" || api == "openai-completions") &&
-		discType == "openai-models-list" &&
-		hasModel && model != "" &&
-		sameCoreTarget(baseURL, coreURL, true) {
-		return display, management.ClientStateConfigured
-	}
-	return display, management.ClientStateNeedsUpdate
 }
 
 func scanSignIns(home string) []management.SetupSignIn {
@@ -1419,15 +816,14 @@ func scanImports(home string) []management.SetupImport {
 		return out
 	}
 	authDir := cpaDir
-	displayAuthDir := "~/.cli-proxy-api"
-	if b, ok := readLimitedFile(cfgPath); ok {
-		if dir := readCPAAuthDir(b); dir != "" {
-			resolved := expandHome(dir, home)
-			if !filepath.IsAbs(resolved) {
-				resolved = filepath.Join(cpaDir, resolved)
+	if b, err := readClientFile(cfgPath); err == nil {
+		if res, err := legacy.Translate(b); err == nil && res.AuthDir != "" {
+			if dir, err := server.ExpandHome(res.AuthDir); err == nil {
+				if !filepath.IsAbs(dir) {
+					dir = filepath.Join(cpaDir, dir)
+				}
+				authDir = dir
 			}
-			authDir = resolved
-			displayAuthDir = shortenHome(resolved, home)
 		}
 	}
 	accounts := 0
@@ -1437,39 +833,10 @@ func scanImports(home string) []management.SetupImport {
 	out = append(out, management.SetupImport{
 		Kind:     "cliproxyapi",
 		Config:   "~/.cli-proxy-api/config.yaml",
-		AuthDir:  displayAuthDir,
+		AuthDir:  shortenHome(authDir, home),
 		Accounts: accounts,
 	})
 	return out
-}
-
-func readCPAAuthDir(b []byte) string {
-	var doc map[string]any
-	if err := yaml.Unmarshal(b, &doc); err != nil {
-		return ""
-	}
-	if s, ok := doc["auth-dir"].(string); ok && strings.TrimSpace(s) != "" {
-		return strings.TrimSpace(s)
-	}
-	if oauth, ok := doc["oauth"].(map[string]any); ok {
-		if s, ok := oauth["auth-dir"].(string); ok && strings.TrimSpace(s) != "" {
-			return strings.TrimSpace(s)
-		}
-	}
-	return ""
-}
-
-func expandHome(path, home string) string {
-	if path == "~" {
-		return home
-	}
-	if rest, ok := strings.CutPrefix(path, "~/"); ok {
-		return filepath.Join(home, rest)
-	}
-	if rest, ok := strings.CutPrefix(path, `~\`); ok {
-		return filepath.Join(home, rest)
-	}
-	return path
 }
 
 func shortenHome(path, home string) string {

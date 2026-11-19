@@ -7,12 +7,11 @@ import (
 	"syscall"
 )
 
+// configureProbeCmd starts the probe in a process group of its own and makes its cancel kill
+// the whole group: a child the probe started is ended with it.
 func configureProbeCmd(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 }

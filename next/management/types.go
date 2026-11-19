@@ -377,6 +377,8 @@ const (
 	ClientStateNotConfigured = "not-configured"
 	ClientStateConfigured    = "configured"
 	ClientStateNeedsUpdate   = "needs-update"
+	// ClientStateRefused is a config file the tool's writer would refuse to change.
+	ClientStateRefused = "refused"
 )
 
 // Setup apply outcomes (SetupApplyResult.Status).
