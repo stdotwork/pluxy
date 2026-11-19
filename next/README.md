@@ -764,6 +764,7 @@ turn. The request runs once, not streamed; thought parts are excluded, and the s
 as OpenAI's `response.compaction` object carrying one user message with the Codex CLI's
 `summary_prefix.md` followed by a newline and the summary. An incomplete or empty summary fails as
 a non-retryable request error.
+
 **Turn fixes.** Google refuses some conversations that clients send, so the extension changes the
 turns of every GenerateContent request to the Gemini API or Vertex AI, as today's core does, a
 Gemini client's own request included. A first turn from the model gets an empty user turn
