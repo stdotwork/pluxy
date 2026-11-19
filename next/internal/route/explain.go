@@ -132,9 +132,9 @@ func (r *Router) leftOut(targets []target, skip func(target) bool, named bool, n
 // heldFor returns the held accounts step s, the step at index i, would have used: those the step
 // names or whose provider it names, and whose own model list names its model; and those with no
 // list of their own that share an extension with an account in serving, the step's accounts.
-// Nothing says what else an account without a list serves. A step that names no provider and no
-// accounts is served by one provider: the one serving names, when it names one.
-func (r *Router) heldFor(s Step, serving []target) []Held {
+// Nothing says what else an account without a list serves. With oneProvider, a step that names no
+// provider and no accounts is served by one provider: the one serving names, when it names one.
+func (r *Router) heldFor(s Step, serving []target, oneProvider bool) []Held {
 	r.mu.RLock()
 	f := r.held
 	r.mu.RUnlock()
@@ -147,7 +147,7 @@ func (r *Router) heldFor(s Step, serving []target) []Held {
 		switch {
 		case s.Provider != "" && a.Extension != s.Provider,
 			len(s.Accounts) > 0 && !slices.Contains(s.Accounts, a.ID),
-			s.Provider == "" && len(s.Accounts) == 0 && len(serving) > 0 && a.Extension != serving[0].a.Extension:
+			oneProvider && s.Provider == "" && len(s.Accounts) == 0 && len(serving) > 0 && a.Extension != serving[0].a.Extension:
 			continue
 		}
 		if _, ok := a.resolve(s.Model, r.cfg.ForceModelPrefix, nil); !ok {
@@ -199,11 +199,9 @@ func (c *call) explain() *llm.Explain {
 	for _, l := range r.leftOut(c.capable, func(t target) bool { return tried[t.key()] }, c.chain, now) {
 		e.LeftOut = append(e.LeftOut, l.LeftOut)
 	}
-	if c.anyModel() {
-		return e
-	}
+	// A request that names no model is served by every provider.
 	for i, s := range c.steps {
-		for _, h := range r.heldFor(s, stepTargetsOf(c.capable, i)) {
+		for _, h := range r.heldFor(s, stepTargetsOf(c.capable, i), !c.anyModel()) {
 			e.LeftOut = append(e.LeftOut, r.heldLeftOut(h, s, c.chain))
 		}
 	}
@@ -319,7 +317,7 @@ func (r *Router) Plan(ctx context.Context, model string) Plan {
 		p.LeftOut = append(p.LeftOut, PlanLeftOut{ID: l.t.a.ID, Step: number(l.t), LeftOut: l.LeftOut})
 	}
 	for i, s := range steps {
-		for _, h := range r.heldFor(s, stepTargetsOf(capable, i)) {
+		for _, h := range r.heldFor(s, stepTargetsOf(capable, i), true) {
 			p.LeftOut = append(p.LeftOut, PlanLeftOut{ID: h.Account.ID, Step: number(target{step: i}), LeftOut: r.heldLeftOut(h, s, chain)})
 		}
 	}
