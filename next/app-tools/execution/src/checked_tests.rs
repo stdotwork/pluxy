@@ -508,10 +508,10 @@ fn secure_refuses_an_entry_for_the_owner_group() {
     assert!(e.contains("group:owner change it (write)"), "{e}");
 }
 
-/// An entry for an account Directory Services does not know (a removed one) is refused, shown by
-/// the temporary user number macOS gives its UUID.
+/// An entry for a UUID no account has, which macOS cannot turn into a user or group number, is
+/// refused, shown by that UUID.
 #[test]
-fn secure_names_an_entry_for_an_unknown_account_by_its_temporary_number() {
+fn secure_refuses_an_entry_for_an_unknown_account_naming_its_uuid() {
     let t = Temp::new("acl-unknown");
     let p = t.0.join("prog");
     file(&p, 0o700);
@@ -521,16 +521,10 @@ fn secure_names_an_entry_for_an_unknown_account_by_its_temporary_number() {
         0x1d,
     ];
     set_raw_entry(&p, "user:daemon", 1 << 2, Some(uuid));
+    refused(&p, &p);
     let e = secure(&p).unwrap_err();
-    let who = e
-        .split("that lets user:")
-        .nth(1)
-        .and_then(|s| s.split_once(" (no name) change it (write)"))
-        .map(|(n, _)| n)
-        .unwrap_or_else(|| panic!("{e} names no user number"));
-    assert!(who.parse::<u32>().is_ok(), "{e}");
     assert!(
-        e.starts_with(&format!("{} has an access list entry", p.display())),
+        e.contains("lets unknown 5B2E910C-7D43-4A6F-9E18-32C4A755E01D change it (write)"),
         "{e}"
     );
 }

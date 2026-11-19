@@ -218,8 +218,8 @@ fn shell_quoted(path: &Path) -> String {
 }
 
 /// Who an access list entry is for: a user or a group by number (`mbr_uuid_to_id`), or its UUID
-/// when that lookup fails. A UUID Directory Services does not know (a removed account) still gets
-/// a user number, a temporary one, so it shows as `user:<n> (no name)`, not as `Unknown`.
+/// when that lookup fails, as it does for a UUID no account has (`unknown <UUID>`). A user number
+/// with no name shows as `user:<n> (no name)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Subject {
     User(u32),
