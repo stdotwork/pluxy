@@ -47,8 +47,8 @@ const (
 type AccountCheck = management.AccountCheck
 
 // setFields sets v's routing fields from a, with its secret header values replaced by red's
-// placeholders, and its runtime state from state.
-func setFields(v *AccountView, a route.Account, state *route.State, red AccountRedactor) {
+// placeholders, and its runtime state and health from state and hold.
+func setFields(v *AccountView, a route.Account, state *route.State, hold route.Hold, red AccountRedactor) {
 	v.Priority, v.Weight, v.MaxConcurrency, v.Prefix = a.Priority, a.Weight, a.MaxConcurrency, a.Prefix
 	v.DisableCooling, v.RequestRetry = a.DisableCooling, a.RequestRetry
 	v.Models, v.ExcludedModels, v.ModelAlias, v.Endpoint = a.Models, a.ExcludedModels, a.ModelAlias, a.Endpoint
@@ -64,10 +64,13 @@ func setFields(v *AccountView, a route.Account, state *route.State, red AccountR
 			v.Headers[k] = val
 		}
 	}
+	now := time.Now()
 	if state == nil {
+		v.Health = route.NewState().Health(a, now, hold)
 		return
 	}
-	rt := state.Runtime(a, time.Now())
+	v.Health = state.Health(a, now, hold)
+	rt := state.Runtime(a, now)
 	if !rt.CooldownUntil.IsZero() {
 		v.CooldownUntil = &rt.CooldownUntil
 	}
@@ -231,7 +234,7 @@ func (m *Management) view(r cred.Record) AccountView {
 	v.CreatedAt, v.UpdatedAt = &created, &updated
 	a := r.Account
 	a.ID = r.ID
-	setFields(&v, a, m.state, m.Redactor)
+	setFields(&v, a, m.state, route.Hold{Disabled: r.Disabled, NeedsLogin: r.State == cred.StateReauth, Why: r.Reason}, m.Redactor)
 	if len(a.Settings) > 0 && m.Redactor != nil {
 		s, err := m.Redactor.RedactSettings(a.Settings)
 		if err != nil {
@@ -333,7 +336,7 @@ func (m *Management) configView(a route.Account) AccountView {
 	if a.Credential != nil {
 		v.Kind = a.Credential.Kind
 	}
-	setFields(&v, a, m.state, m.Redactor)
+	setFields(&v, a, m.state, route.Hold{}, m.Redactor)
 	v.Check = m.check(a.ID)
 	return v
 }

@@ -102,6 +102,8 @@ type Core struct {
 
 	checks *checks // each account's last check
 
+	routing *routing // routing's checks and saved blocks, from start
+
 	usage *usage.Store   // the usage record, kept across reloads
 	logs  *logfile.Files // the logs folder
 
@@ -165,6 +167,7 @@ func Start(opts Options) (*Core, error) {
 		return nil, err
 	}
 	c.creds.OnChange(c.accountsChanged)
+	c.startRouting()
 	return c, nil
 }
 
@@ -566,6 +569,7 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved})
 	}
 	router.UseCredentials(c.creds)
+	router.UseReadings(readings{c})
 	pp, err := openPprof(cfg, prev)
 	if err != nil {
 		c.discard(next, prev)
@@ -790,6 +794,7 @@ func (c *Core) Stop() {
 	defer c.reloading.Unlock()
 	c.stopped = true
 	c.checks.stop()
+	c.stopRouting()
 	c.mu.Lock()
 	gens := append([]*host.Managed(nil), c.draining...)
 	c.mu.Unlock()
