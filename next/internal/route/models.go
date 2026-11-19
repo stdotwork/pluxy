@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"log"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -503,8 +504,10 @@ type ServedModel struct {
 // name's entry follows routing: its provider is the one a request for it goes to (stepTargets),
 // its accounts are that provider's that serve the name, highest priority first, and its model is
 // as the first of them that lists the name has it. An account that serves any model because its
-// list is not known lists no name, but serves those of its provider. A name whose accounts are all
-// held is not listed: no request for it can be served now.
+// list is not known lists no name, but serves those of its provider. A name with a fallback
+// chain, and a chain's new name, is served by the accounts of each of its steps, step by step, and
+// described as the first of them that lists its step's model has that model. A name whose accounts
+// are all held is not listed: no request for it can be served now.
 func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 	accounts, creds := r.knownSnapshot()
 	catalog := r.catalogFunc()
@@ -539,16 +542,24 @@ func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 		}
 	}
 	out := []ServedModel{}
-	index := map[string]int{} // by name
 	for _, name := range order {
+		if _, ok := r.cfg.Chains[name]; ok {
+			continue // below
+		}
 		steps := []Step{{Model: name}}
 		serving, _ := split(r.targets(steps, accounts, l.served))
 		if e, ok := r.servedEntry(name, steps, serving, accounts, l); ok {
-			index[name] = len(out)
 			out = append(out, e)
 		}
 	}
-	out = r.chainModels(accounts, out, index)
+	// Each chain, under its name, new or a model's, with the accounts of every step.
+	for _, name := range slices.Sorted(maps.Keys(r.cfg.Chains)) {
+		steps := r.cfg.Chains[name]
+		serving, _ := split(r.targets(steps, accounts, l.served))
+		if e, ok := r.servedEntry(name, steps, serving, accounts, l); ok {
+			out = append(out, e)
+		}
+	}
 	slices.SortFunc(out, func(a, b ServedModel) int { return strings.Compare(a.ID, b.ID) })
 	return out
 }
@@ -619,55 +630,6 @@ func (r *Router) listedModel(a *Account, n Name, list *protocol.ModelList, name 
 		m.OwnedBy = owner
 	}
 	return m
-}
-
-// chainModels adds to out, the models the accounts serve with index giving each one's place by
-// name, each chain whose name is not among them: as the model of its first step that an account
-// serves, renamed, served by the accounts of every step. shortcut: the entry describes that
-// model as the first account serving its name lists it, which may be another provider's than
-// the step names; worth a closer match if model details come to differ by provider.
-func (r *Router) chainModels(accounts []*Account, out []ServedModel, index map[string]int) []ServedModel {
-	names := make([]string, 0, len(r.cfg.Chains))
-	for n := range r.cfg.Chains {
-		names = append(names, n)
-	}
-	slices.Sort(names)
-	for _, name := range names {
-		if _, ok := index[name]; ok {
-			continue
-		}
-		var entry *ServedModel
-		for _, s := range r.cfg.Chains[name] {
-			i, ok := index[s.Model]
-			if !ok {
-				continue
-			}
-			if entry == nil {
-				e := out[i]
-				e.GenerationMethods = slices.Clone(e.GenerationMethods)
-				e.InputModalities = slices.Clone(e.InputModalities)
-				e.OutputModalities = slices.Clone(e.OutputModalities)
-				if e.Name != "" {
-					e.Name = renameResource(e.Name, e.ID, name)
-				}
-				e.ID, e.Accounts = name, nil
-				entry = &e
-			}
-			for _, id := range out[i].Accounts {
-				j := slices.IndexFunc(accounts, func(a *Account) bool { return a.ID == id })
-				if j < 0 || s.Provider != "" && accounts[j].Extension != s.Provider || len(s.Accounts) > 0 && !slices.Contains(s.Accounts, id) ||
-					slices.Contains(entry.Accounts, id) {
-					continue
-				}
-				entry.Accounts = append(entry.Accounts, id)
-			}
-		}
-		if entry != nil {
-			index[name] = len(out)
-			out = append(out, *entry)
-		}
-	}
-	return out
 }
 
 // ModelNames returns public and upstream names served by extension's accounts, using
