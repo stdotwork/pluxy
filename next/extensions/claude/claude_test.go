@@ -180,8 +180,8 @@ func TestCacheBreakpoints(t *testing.T) {
 	}
 }
 
-// Real disabled/suspended Claude replies map to account_closed (retryable, credential-scoped)
-// while per-request 403/400/401 refusals keep their own codes.
+// Disabled Claude account/organization replies map to account_closed (retryable,
+// credential-scoped) while per-request 403/400/401 refusals keep their own codes.
 func TestAccountClosedMapping(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -191,14 +191,13 @@ func TestAccountClosedMapping(t *testing.T) {
 		scope     string
 		retryable bool
 	}{
-		// CLIProxyAPI #2442, #3409, PR #3268: 400 invalid_request_error "This organization has been disabled."
-		{"400 org disabled (CLIProxyAPI #2442)", 400, `{"type":"error","error":{"type":"invalid_request_error","message":"This organization has been disabled."},"request_id":"req_011CZam6yhqAXwtsQmHZ4Yuc"}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
-		// OmniRoute anthropic-request-not-allowed-cooldown-escalation.test.ts:259
-		{"403 org disabled (OmniRoute)", 403, `{"type":"error","error":{"type":"permission_error","message":"Your organization has been disabled."}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
-		// CLIProxyAPI PR #3268 patterns
-		{"400 account disabled (CLIProxyAPI PR #3268)", 400, `{"type":"error","error":{"type":"invalid_request_error","message":"Account has been disabled"}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
-		{"403 account suspended", 403, `{"type":"error","error":{"type":"permission_error","message":"Your account has been suspended."}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
-		// Guard: Anthropic OAuth 403 "Request not allowed" (OmniRoute authTerminalStatus.ts) is NOT a ban.
+		// Captured reply: https://github.com/router-for-me/CLIProxyAPI/issues/2442 (also #3409).
+		{"400 org disabled (captured, CLIProxyAPI #2442)", 400, `{"type":"error","error":{"type":"invalid_request_error","message":"This organization has been disabled."},"request_id":"req_011CZam6yhqAXwtsQmHZ4Yuc"}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
+		// From OmniRoute's classifier tests (tests/unit/anthropic-request-not-allowed-cooldown-escalation.test.ts:259), not a captured reply.
+		{"403 org disabled (from OmniRoute's classifier tests)", 403, `{"type":"error","error":{"type":"permission_error","message":"Your organization has been disabled."}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
+		// From CLIProxyAPI PR #3268 tests (https://github.com/router-for-me/CLIProxyAPI/pull/3268), not a captured reply.
+		{"400 account disabled (CLIProxyAPI PR #3268 tests)", 400, `{"type":"error","error":{"type":"invalid_request_error","message":"Account has been disabled"}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
+		// Guard: Anthropic OAuth 403 "Request not allowed" (from OmniRoute's classifier tests, authTerminalStatus.ts) is NOT a ban.
 		{"403 request not allowed guard", 403, `{"type":"error","error":{"type":"permission_error","message":"Request not allowed"}}`, llm.CodePermission, llm.ScopeCredential, true},
 		{"400 plain invalid request guard", 400, `{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}`, llm.CodeInvalidRequest, llm.ScopeRequest, false},
 		{"401 bad key guard", 401, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`, llm.CodeAuth, llm.ScopeCredential, true},

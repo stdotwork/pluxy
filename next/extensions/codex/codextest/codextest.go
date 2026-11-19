@@ -509,6 +509,7 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]string{"type": "rate_limit_error", "code": "rate_limit_exceeded", "message": "Rate limit reached"}})
 		return
 	case "account_closed":
+		// Built from OmniRoute's classifier tests (provider-test-account-deactivated.test.ts, codex-passive-refresh-gate.test.ts), not a captured reply.
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"type": "invalid_request_error", "code": "account_deactivated", "message": "Your account has been deactivated. Please contact support."}})
 		return
 	default:

@@ -67,6 +67,7 @@ func prepare(t *testing.T, s conformance.Scenario, kind string) conformance.Setu
 			w.WriteHeader(http.StatusTooManyRequests)
 			io.WriteString(w, `{"type":"error","error":{"type":"rate_limit_error","message":"Number of requests has exceeded your rate limit"}}`)
 		case conformance.ScenarioAccountClosed:
+			// Captured reply from https://github.com/router-for-me/CLIProxyAPI/issues/2442.
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"This organization has been disabled."}}`)
