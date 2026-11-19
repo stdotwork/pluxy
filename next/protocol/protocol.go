@@ -31,8 +31,9 @@ const Version = 0
 // minor 12 adds the account's headers; minor 13 adds upstream capture (Call.Capture and the
 // diagnostic frame); minor 14 adds payload rules (Call.Payload); minor 15 has a session turn
 // carry them too; minor 16 adds an error's dropped (llm.Error.Dropped); minor 17 adds a
-// captured body's BodyStopped; minor 18 adds the account's timeouts (Account.Timeouts).
-const Minor = 18
+// captured body's BodyStopped; minor 18 adds the account's timeouts (Account.Timeouts); minor 19
+// adds alive frames (Call.Alive and TypeAlive).
+const Minor = 19
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -105,6 +106,10 @@ const (
 	// TypeDiagnostic is a frame an extension sends before a captured call's terminal event: its
 	// upstream exchanges (minor version 13). It is not an event.
 	TypeDiagnostic = "diagnostic"
+	// TypeAlive is a frame an extension sends during a call or turn whose Alive is set (minor
+	// version 19): upstream bytes arrived and the extension had sent core nothing else for a
+	// while. It carries nothing else, and core never passes it on.
+	TypeAlive = "alive"
 )
 
 // Session kinds (SessionInfo.Format).
@@ -144,6 +149,10 @@ type Call struct {
 	// core matched their models to the call already, so each model holds only its body
 	// conditions (payload.Select). Nil: none.
 	Payload *payload.Rules `json:"payload,omitempty"`
+	// Alive says core takes alive frames (TypeAlive) on a generate, count_tokens or endpoint
+	// call or a session.turn (minor version 19), and ends one on which it has received nothing
+	// at all for the account's idle limit plus a minute.
+	Alive bool `json:"alive,omitempty"`
 }
 
 // Login is the subject of a login call.
