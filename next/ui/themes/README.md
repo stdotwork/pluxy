@@ -47,26 +47,34 @@ working as the UI changes. Custom CSS can only rely on the hooks listed under
 
 | Field | Required | What it is |
 | --- | --- | --- |
-| `theme_version` | yes | The contract version the file is written for. This page describes `0`. |
-| `id` | yes | `publisher/name`. Each part is 1 to 64 characters from `a-z`, `0-9` and `-`. |
+| `theme_version` | yes (pluxy files) | The contract version the file is written for. This page describes `0`. Omit for a [T3 Code theme](#t3-code-themes). |
+| `id` | yes (pluxy files) | `publisher/name`. Each part is 1 to 64 characters from `a-z`, `0-9` and `-`. Optional in a T3 Code theme, where the ID becomes `t3/<id>` or is derived from `name`. |
 | `name` | yes | The name people see. 1 to 64 characters. |
 | `description` | no | One line, up to 200 characters. |
-| `appearance` | no | `both` (the default), `light` or `dark`: the appearances the theme offers. See [Appearance](#appearance). |
+| `appearance` | no (yes for T3 Code) | `both` (the default for pluxy files), `light` or `dark`: the appearances the theme offers. See [Appearance](#appearance). |
 | `tokens` | no | Token values, by token name. Missing tokens keep the UI's default value. |
 | `dark` | no | Token values that replace `tokens` while the appearance is dark. |
 | `layout` | no | The theme's layout options. Missing options keep the UI's default. |
 | `css` | no | Custom CSS, up to 128 KiB. |
+
+A `theme_version: 0` file may also include T3 Code's `canvas`, `accent`, `colors` and `variants`
+fields, and a T3 Code file may also include `tokens`, `dark` and `layout`.
 
 A theme file is at most 256 KiB.
 
 ### What the UI does with a file it cannot fully use
 
 - **Refused, and the UI keeps the theme it had:** the file is not a JSON object, is over 256 KiB,
-  has a `theme_version` newer than the UI supports, or has a missing or invalid `id` or `name`.
-- **Used, with a warning shown on the Themes page:** an unknown field, token or layout option is
-  ignored; a token value that breaks the rules below is ignored and the default is kept; a layout
-  value the UI does not offer falls back to that option's default; an unknown `appearance` falls
-  back to `both`; custom CSS containing `@import` is dropped as a whole.
+  has a `theme_version` newer than the UI supports, has an unsupported T3 Code `version`, has
+  neither `theme_version` nor a valid T3 Code shape (`name`, `appearance` of `light` or `dark`, and
+  `colors` or both `canvas` and `accent`), or has a missing or invalid `id` or `name`.
+- **Used, with a warning shown on the Themes page:** an unknown field, token, T3 Code role or layout
+  option is ignored; a token or T3 Code role value that breaks the rules below is ignored and the
+  default is kept; `canvas` or `accent` seeds outside hex, `rgb()`/`rgba()` or `oklch()` skip the
+  generated palette; a `variants` key other than `light` or `dark`, or repeating the file's own
+  appearance, is ignored; a layout value the UI does not offer falls back to that option's default;
+  an unknown `appearance` falls back to `both`; custom CSS containing `@import` is dropped as a
+  whole.
 
 So a theme written for a later version 0 UI, with tokens this UI does not know yet, still loads.
 
@@ -308,6 +316,102 @@ keep working. Use it when custom CSS has hidden or broken the UI.
 - Renaming or removing any of them, or changing what one means, raises `theme_version`. A renamed
   token keeps its old name as an alias for the whole next version.
 - A UI refuses a theme whose `theme_version` is newer than it supports and keeps the theme it had.
+
+## T3 Code themes
+
+Theme files written for [T3 Code](https://github.com/pingdotgg/t3code) load without editing. Both
+of T3 Code's file shapes are accepted when `theme_version` is absent, `name` is present,
+`appearance` is `"light"` or `"dark"`, and either `colors` is an object or both `canvas` and
+`accent` are given:
+
+- **Exported files** (`version: 1`, `id`, `name`, `appearance`, `colors`, and optional `canvas`,
+  `accent`, `variants`, `collection`, `managed`, `css`).
+- **Short files** without `version` or `id`, using `canvas` and `accent`, `colors`, or both.
+
+A T3 Code file may also include pluxy's `tokens`, `dark`, and `layout` fields, and a pluxy
+`theme_version: 0` file may include `canvas`, `accent`, `colors`, and `variants`.
+
+### What each field does
+
+- `id`: in a T3 Code file, becomes `t3/<id>` when `id` matches `^[a-z0-9][a-z0-9-]{0,47}$`, or
+  `t3/<slug>` derived from `name` otherwise.
+- `appearance`: becomes `both` when `variants` holds the other appearance (`dark` for a `light`
+  file, or `light` for a `dark` file); otherwise stays `light` or `dark`.
+- `canvas` and `accent`: when both are given in `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`,
+  `rgb()`/`rgba()`, or `oklch()` form, they generate T3 Code's 61-role palette for the file's own
+  `appearance`. A seed in another CSS colour form skips the generated palette with one warning, and
+  the theme still loads.
+- `colors`: sets roles for the file's own `appearance`, replacing the generated palette role by
+  role.
+- `variants`: `variants.light` or `variants.dark` sets roles for the other appearance.
+- `version`, `collection`, and `managed`: accepted without a warning and ignored.
+
+For one appearance, values apply in order: pluxy's defaults, then the generated palette (only for
+the file's own `appearance`), then `colors` (for the file's own `appearance`) or
+`variants.<appearance>` (for the other appearance) role by role, then `tokens` (and `dark` when the
+appearance is dark).
+
+### Role-to-token map
+
+These 26 T3 Code roles set pluxy tokens:
+
+| T3 Code role | Pluxy token |
+| --- | --- |
+| `canvas` | `color.bg` |
+| `surface` | `color.surface` |
+| `surfaceRaised` | `color.surface-raised` |
+| `surfaceOverlay` | `color.overlay` |
+| `text` | `color.text` |
+| `textMuted` | `color.text-muted` |
+| `border` | `color.border` |
+| `input` | `color.input-border` |
+| `placeholder` | `color.placeholder` |
+| `focus` | `color.focus` |
+| `accent` | `color.accent` |
+| `accentForeground` | `color.accent-text` |
+| `accentSurface` | `color.selected` |
+| `accentSurfaceForeground` | `color.selected-text` |
+| `errorForeground` | `color.danger` |
+| `errorSurface` | `color.danger-surface` |
+| `warningForeground` | `color.warn` |
+| `warningSurface` | `color.warn-surface` |
+| `codeBackground` | `color.code-bg` |
+| `codeForeground` | `color.code-text` |
+| `sidebar` | `color.nav` |
+| `sidebarForeground` | `color.nav-text` |
+| `sidebarMutedForeground` | `color.nav-muted` |
+| `sidebarRowHover` | `color.nav-hover` |
+| `sidebarRowSelected` | `color.nav-selected` |
+| `sidebarBorder` | `color.nav-border` |
+
+### Variables and selectors
+
+While a theme carrying T3 Code fields is active, every role the theme supplies or generates sets
+T3 Code's `--app-theme-<kebab-role>` CSS custom property on `:root` (`terminalSelection` sets
+`--app-theme-terminal-selection-background`) in the same stylesheet as the `--px-*` tokens. A
+theme without T3 Code fields sets none of them.
+
+The remaining 35 roles have no pluxy token and are set only as `--app-theme-*` custom properties:
+`chrome`, `toolbar`, `toolbarForeground`, `toolbarBorder`, `toolbarControl`,
+`toolbarControlForeground`, `toolbarControlHover`, `secondary`, `secondaryForeground`, `muted`,
+`mutedForeground`, `secondaryLabel`, `iconMuted`, `error`, `warning`, `update`, `updateForeground`,
+`updateSurface`, `messageSurface`, `messageForeground`, `messageAction`, `messageActionForeground`,
+`messageActionHover`, `searchMatchBackground`, `searchMatchForeground`,
+`searchMatchActiveBackground`, `searchMatchActiveForeground`, `sidebarControlSurface`,
+`sidebarRowActive`, `terminalBackground`, `terminalForeground`, `terminalCursor`,
+`terminalSelection`, `terminalScrollbar`, and `terminalScrollbarHover`.
+
+For custom CSS written for T3 Code, `class="dark"` on the root element and the six `data-slot`
+attributes listed under [Hooks you can rely on](#hooks-you-can-rely-on) (`button`, `input`,
+`switch`, `select-trigger`, `dialog-popup`, and `sidebar`) match here. Every other T3 Code class
+name or selector matches nothing.
+
+### Departures from T3 Code
+
+- **Missing roles keep pluxy defaults:** a role a file neither gives nor generates keeps pluxy's
+  default token value instead of falling back to T3 Code's built-in default palette.
+- **Custom CSS uses pluxy's rules:** CSS over 128 KiB or containing `@import` is dropped with a
+  warning, and the panel's Content Security Policy blocks remote loads such as `url(https://...)`.
 
 ## Built-in themes
 

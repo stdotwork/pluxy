@@ -180,3 +180,49 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ~~~
+
+## pingdotgg/t3code
+
+The AI coding workspace app T3 Code, from <https://github.com/pingdotgg/t3code>, at commit
+`2a411317d9b7341547e5acb3e9bceb7e6195c5a2`. `next/ui` loads T3 Code theme files unchanged using
+constants and palette logic from it:
+
+- copied: the 61 color role names (`T3_COLOR_ROLES`) and the 61 CSS custom property names
+  (`APP_THEME_VARIABLES`) in `next/ui/kit/theme/t3.ts`, from `packages/shared/src/themePalettes.ts`
+  and `apps/web/src/themePalette.ts`; and the example theme in
+  `next/ui/tests/fixtures/t3-docs-nightfall.json`, from `docs/user/appearance.md`;
+- adapted: `themeIdFromName` and `T3_ID_PATTERN` in `next/ui/kit/theme/t3.ts`, and
+  `createVividThemeColors` with its color and contrast helpers in `next/ui/kit/theme/t3palette.ts`,
+  from `apps/web/src/themePalette.ts` (replacing the `culori` dependency with a local parser for
+  hex, `rgb()`/`rgba()` and `oklch()`, and omitting `getDefaultThemeColors`); and
+  `next/ui/tests/fixtures/t3-grove-exported.json` from `GROVE_THEME` in
+  `packages/shared/src/themePalettes.ts`;
+- follows: the T3 Code theme file dialect and seed/variant rules in
+  `next/ui/kit/theme/validate.ts`, following `parseThemeFile` in `apps/web/src/themePalette.ts`
+  under pluxy's refusal and warning contract.
+
+Licence text, as it is in `LICENSE`:
+
+~~~text
+MIT License
+
+Copyright (c) 2026 T3 Tools Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~
