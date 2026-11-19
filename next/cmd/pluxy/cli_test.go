@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/internal/core"
+	"github.com/stdotwork/pluxy/next/management"
 )
 
 // laterCommands are the management calls whose commands later changes add (the README's
@@ -213,6 +214,26 @@ func TestCLISetupAndClientShow(t *testing.T) {
 			w.Write([]byte(`{"first_run":false}`))
 		case "GET /v0/management/client-keys":
 			w.Write([]byte(`{"keys":[{"id":"k1","masked":"sk******ab"}]}`))
+		case "GET /v0/management/setup/clients/claude-code/paste", "GET /v0/management/setup/clients/codex/paste",
+			"GET /v0/management/setup/clients/opencode/paste", "GET /v0/management/setup/clients/pi/paste",
+			"GET /v0/management/setup/clients/omp/paste":
+			key := "<client-key>"
+			switch r.URL.Query().Get("key_id") {
+			case "":
+			case "k1":
+				key = "<client-key:k1 (sk******ab)>"
+			default:
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte(`{"error":{"code":"not_found","message":"no client key with that id"}}`))
+				return
+			}
+			tool := strings.Split(strings.TrimPrefix(r.URL.Path, "/v0/management/setup/clients/"), "/")[0]
+			snip, _ := core.ClientSnippetFor(tool, "http://"+r.Host, key)
+			reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: "http://" + r.Host, Key: key, Note: snip.Note}
+			for _, f := range snip.Files {
+				reply.Files = append(reply.Files, management.ClientPasteFile{Path: f.Path, Content: f.Content})
+			}
+			json.NewEncoder(w).Encode(reply)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(`{"error":{"code":"not_found","message":"nope"}}`))

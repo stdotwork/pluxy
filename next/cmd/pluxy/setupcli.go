@@ -2,14 +2,13 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/internal/core"
@@ -91,7 +90,7 @@ func setupCommands() []command {
 		{
 			words:   "client show",
 			args:    []string{"tool"},
-			routes:  []string{"GET /setup"},
+			routes:  []string{"GET /setup/clients/{id}/paste"},
 			summary: "print what to paste into a client tool's config to point it at core",
 			flags: func(fs *flag.FlagSet, o *opts) {
 				fs.StringVar(&o.keyID, "key-id", "", "client key ID from pluxy key list to reference")
@@ -260,45 +259,18 @@ func runClientShow(x *invocation) error {
 	if _, ok := core.ClientSnippetFor(x.args[0], "", ""); !ok {
 		return usageError{fmt.Sprintf("unknown client tool %q (supported: %s)", x.args[0], strings.Join(core.ClientSnippetTools, ", "))}
 	}
-	if _, err := x.client.Setup(x.ctx); err != nil {
-		return err
-	}
-	key := "<client-key>"
+	var q url.Values
 	if x.opts.keyID != "" {
-		keys, err := x.client.ClientKeys(x.ctx)
-		if err != nil {
-			return err
+		q = url.Values{"key_id": {x.opts.keyID}}
+	}
+	var p management.ClientPaste
+	return x.call(http.MethodGet, "/setup/clients/"+url.PathEscape(x.args[0])+"/paste", q, nil, &p, func() {
+		x.printf("Client: %s\nAddress: %s\n", p.Name, p.BaseURL)
+		for _, f := range p.Files {
+			x.printf("\n%s:\n%s\n", f.Path, f.Content)
 		}
-		i := slices.IndexFunc(keys, func(k management.ClientKey) bool { return k.ID == x.opts.keyID })
-		if i < 0 {
-			return &management.APIError{
-				Status:  http.StatusNotFound,
-				Code:    "not_found",
-				Message: fmt.Sprintf("no client key with id %q", x.opts.keyID),
-			}
+		if p.Note != "" {
+			x.printf("\n%s\n", p.Note)
 		}
-		key = fmt.Sprintf("<client-key:%s (%s)>", keys[i].ID, keys[i].Masked)
-	}
-	baseURL := strings.TrimRight(x.client.URL, "/")
-	snip, _ := core.ClientSnippetFor(x.args[0], baseURL, key)
-	if x.json {
-		b, err := json.MarshalIndent(struct {
-			core.ClientSnippet
-			BaseURL string `json:"base_url"`
-			Key     string `json:"key"`
-		}{snip, baseURL, key}, "", "  ")
-		if err != nil {
-			return err
-		}
-		x.printf("%s\n", b)
-		return nil
-	}
-	x.printf("Client: %s\nAddress: %s\n", snip.Name, baseURL)
-	for _, f := range snip.Files {
-		x.printf("\n%s:\n%s\n", f.Path, f.Content)
-	}
-	if snip.Note != "" {
-		x.printf("\n%s\n", snip.Note)
-	}
-	return nil
+	})
 }
