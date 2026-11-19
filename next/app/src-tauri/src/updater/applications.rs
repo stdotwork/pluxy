@@ -662,7 +662,10 @@ mod tests {
             "ls -lde: {}\nls -ldO: {}\n/System/Volumes/Data: {}",
             out("/bin/ls", &["-lde", APPLICATIONS]),
             out("/bin/ls", &["-ldO", APPLICATIONS]),
-            out("/usr/bin/stat", &["-f", "%Su %Sg %Lp", "/System/Volumes/Data"]),
+            out(
+                "/usr/bin/stat",
+                &["-f", "%Su %Sg %Lp", "/System/Volumes/Data"]
+            ),
         );
         let dir = std::fs::OpenOptions::new()
             .read(true)
@@ -696,10 +699,13 @@ mod tests {
         );
         assert_eq!(
             ids.admin_gid.to_string(),
-            out("/usr/bin/dscl", &[".", "-read", "/Groups/admin", "PrimaryGroupID"])
-                .rsplit(' ')
-                .next()
-                .unwrap()
+            out(
+                "/usr/bin/dscl",
+                &[".", "-read", "/Groups/admin", "PrimaryGroupID"]
+            )
+            .rsplit(' ')
+            .next()
+            .unwrap()
         );
         let user = out("/usr/bin/id", &["-un"]);
         let member = out(
