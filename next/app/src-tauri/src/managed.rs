@@ -3,7 +3,7 @@
 //! another mode.
 
 use crate::owned::Child;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
@@ -147,11 +147,15 @@ fn create_temp(tmp: &Path) -> io::Result<fs::File> {
     crate::private_windows::create_new_private(tmp)
 }
 
-/// The core config the app keeps, `<dir>/config.json`. The app writes it once, the first time,
-/// with a free loopback port that then stays the core's, fresh keys and folders under dir; after
-/// that it is the person's to edit (core reloads it), and the app only reads the management key.
-/// On macOS dir is first emptied of extended access list entries (`clear_core_folder`).
-pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
+/// The core config the app keeps, `<dir>/config.json`. The core writes it, the first time, with
+/// its `init` (`init(path)` runs it, `init_config`): listening on this computer, on a free port
+/// that then stays the core's, with fresh keys; its folders are beside it. After that it is the person's to edit (core
+/// reloads it), and the app only reads the management key. On macOS dir is first emptied of
+/// extended access list entries (`clear_core_folder`).
+fn prepare_config(
+    dir: &Path,
+    init: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<PathBuf, String> {
     let path = dir.join("config.json");
     #[cfg(target_os = "macos")]
     fs::create_dir_all(dir)
@@ -161,20 +165,110 @@ pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
         return Ok(path);
     }
     fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
-    let port = TcpListener::bind("127.0.0.1:0")
-        .and_then(|l| l.local_addr())
-        .map_err(|e| format!("finding a free port: {e}"))?
-        .port();
-    let cfg = json!({
-        "listen": format!("127.0.0.1:{port}"),
-        "client_keys": [random_key()],
-        "management_key": random_key(),
-        "credentials_dir": dir.join("credentials"),
-        "packages": {"dir": dir.join("packages")},
-    });
-    let text = serde_json::to_vec_pretty(&cfg).expect("a JSON value");
-    write_private(&path, &text).map_err(|e| format!("writing {}: {e}", path.display()))?;
+    init(&path)?;
+    if !path.exists() {
+        return Err(format!("the core wrote no config at {}", path.display()));
+    }
     Ok(path)
+}
+
+/// For tests whose core is a script that writes no config: `prepare_config` with a config like
+/// the one the core's `init` writes, on a free port.
+#[cfg(test)]
+pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
+    prepare_config(dir, |path| {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .map_err(|e| format!("finding a free port: {e}"))?
+            .port();
+        let cfg = serde_json::json!({
+            "listen": format!("127.0.0.1:{port}"),
+            "client_keys": [random_key()],
+            "management_key": random_key(),
+        });
+        let text = serde_json::to_vec_pretty(&cfg).expect("a JSON value");
+        write_private(path, &text).map_err(|e| format!("writing {}: {e}", path.display()))
+    })
+}
+
+/// The core program, opened as `program` and named name in messages, ready to run, before its
+/// arguments: on Unix from that open file (on Linux it keeps the file open across exec, so a #!
+/// script's interpreter can read it); on Windows pinned, in a job of its own, with the app's
+/// environment.
+#[cfg(unix)]
+fn core_command(program: &File, name: &Path) -> Result<Command, String> {
+    use std::os::unix::process::CommandExt;
+    let mut cmd = Command::new(crate::owned::exec_target(
+        program,
+        crate::owned::Writers::Nobody,
+    )?);
+    cmd.arg0(name);
+    // On Linux the child keeps the open program across exec, which a #! script's interpreter
+    // then reads (as /dev/fd/N); the app's own copy closes on exec as usual.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        use std::os::fd::AsRawFd;
+        let fd = program.as_raw_fd();
+        cmd.pre_exec(move || {
+            if libc::fcntl(fd, libc::F_SETFD, 0) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(cmd)
+}
+#[cfg(windows)]
+fn core_command(program: &File, name: &Path) -> Result<crate::owned::windows::Command, String> {
+    use crate::owned::windows::{self as w, Io, Kind};
+    let mut c = w::Command::new(w::pin_file(program)?, Kind::Managed);
+    // Its environment is the app's, as on Unix, where it inherits it.
+    c.arg0(name)
+        .envs(std::env::vars_os())
+        .stdin(Io::Null)
+        .stdout(Io::Null)
+        .stderr(Io::Piped);
+    Ok(c)
+}
+
+/// Runs the core program `init -port 0 -config <path>`, which writes a first config at path and
+/// never replaces one, and waits for it. Its message is the error when it fails. Port 0 is a free
+/// port, as the app's own core has always had: it never takes 8317 from a core the person runs
+/// themselves.
+fn init_config(program: &File, name: &Path, path: &Path) -> Result<(), String> {
+    let mut cmd = core_command(program, name)?;
+    cmd.args(["init", "-port", "0", "-config"].map(std::ffi::OsStr::new))
+        .args([path.as_os_str()]);
+    #[cfg(unix)]
+    let (status, said) = {
+        cmd.stdin(Stdio::null()).stdout(Stdio::null());
+        let out = start_when_free(BUSY_PAUSE, || cmd.output())
+            .map_err(|e| format!("starting {}: {e}", name.display()))?;
+        (
+            out.status,
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    #[cfg(windows)]
+    let (status, said) = {
+        use std::io::Read;
+        let mut child = start_when_free(BUSY_PAUSE, || cmd.spawn())
+            .map_err(|e| format!("starting {}: {e}", name.display()))?;
+        let mut said = String::new();
+        if let Some(mut e) = child.stderr.take() {
+            let _ = e.read_to_string(&mut said);
+        }
+        (child.wait().map_err(|e| e.to_string())?, said)
+    };
+    if status.success() {
+        return Ok(());
+    }
+    let said = said.trim();
+    Err(if said.is_empty() {
+        format!("{} init: {status}", name.display())
+    } else {
+        said.to_string()
+    })
 }
 
 /// macOS: the app's core folder holds the core's keys (config.json) and its credentials, so it
@@ -319,47 +413,13 @@ impl ManagedCore {
         dir: &Path,
         on_exit: Option<OnExit>,
     ) -> Result<ManagedCore, String> {
-        let cfg = ensure_config(dir)?;
+        let cfg = prepare_config(dir, |path| init_config(&program, name, path))?;
         let key = management_key(&cfg)?;
         #[cfg(unix)]
         let hold: Option<Hold> = Some(Arc::new(bind(listen_addr(&cfg)?)?));
         #[cfg(not(unix))]
         let hold: Option<Hold> = None;
-        #[cfg(unix)]
-        let mut cmd = Command::new(crate::owned::exec_target(
-            &program,
-            crate::owned::Writers::Nobody,
-        )?);
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            cmd.arg0(name);
-            // On Linux the child keeps the open program across exec, which a #! script's
-            // interpreter then reads (as /dev/fd/N); the app's own copy closes on exec as usual.
-            #[cfg(target_os = "linux")]
-            unsafe {
-                use std::os::fd::AsRawFd;
-                let fd = program.as_raw_fd();
-                cmd.pre_exec(move || {
-                    if libc::fcntl(fd, libc::F_SETFD, 0) != 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
-        }
-        // Its environment is the app's, as on Unix, where it inherits it.
-        #[cfg(windows)]
-        let mut cmd = {
-            use crate::owned::windows::{self as w, Io, Kind};
-            let mut c = w::Command::new(w::pin_file(&program)?, Kind::Managed);
-            c.arg0(name)
-                .envs(std::env::vars_os())
-                .stdin(Io::Null)
-                .stdout(Io::Null)
-                .stderr(Io::Piped);
-            c
-        };
+        let mut cmd = core_command(&program, name)?;
         cmd.args([std::ffi::OsStr::new("-config"), cfg.as_os_str()]);
         #[cfg(unix)]
         if let Some(l) = &hold {
@@ -982,39 +1042,52 @@ mod tests {
         d
     }
 
+    /// The core writes the first config (`init -port 0 -config <path>`); the app runs it only
+    /// when there is none, and a failed init says why.
+    #[cfg(unix)]
     #[test]
-    fn the_config_is_written_once_and_kept_private() {
+    fn the_core_writes_the_first_config_once() {
         let dir = temp("config");
-        let path = ensure_config(&dir).unwrap();
-        let key = management_key(&path).unwrap();
-        assert_eq!(key.len(), 64);
-        let cfg: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let listen = cfg["listen"].as_str().unwrap();
-        assert!(
-            listen.starts_with("127.0.0.1:") && !listen.ends_with(":0"),
-            "{listen}"
+        let args = dir.join("args");
+        let core = script(
+            &dir,
+            &format!(
+                "echo \"$@\" >> '{}'\n[ \"$1\" = init ] || exit 2\nprintf '{{\"listen\":\"127.0.0.1:1\",\"management_key\":\"from-init\"}}' > \"$5\"",
+                args.display()
+            ),
         );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
-        // A second start keeps the person's config, edits and all.
+        let program = File::open(&core).unwrap();
+        let init = |path: &Path| init_config(&program, Path::new("pluxy"), path);
+        let path = prepare_config(&dir.join("core"), init).unwrap();
+        assert_eq!(management_key(&path).unwrap(), "from-init");
+        assert_eq!(
+            fs::read_to_string(&args).unwrap(),
+            format!("init -port 0 -config {}\n", path.display())
+        );
+        // A second start keeps the person's config, edits and all, and runs no init.
         fs::write(
             &path,
             br#"{"listen":"127.0.0.1:1","management_key":"mine"}"#,
         )
         .unwrap();
-        ensure_config(&dir).unwrap();
+        prepare_config(&dir.join("core"), init).unwrap();
         assert_eq!(management_key(&path).unwrap(), "mine");
+        assert_eq!(fs::read_to_string(&args).unwrap().lines().count(), 1);
         fs::write(&path, br#"{"listen":"127.0.0.1:1"}"#).unwrap();
         assert!(management_key(&path)
             .unwrap_err()
             .contains("no management_key"));
+        // An init that fails: its message is the error.
+        let other = temp("config-fails");
+        let failing = script(&other, "echo 'pluxy: cannot write there' >&2\nexit 1");
+        let program = File::open(&failing).unwrap();
+        let err = prepare_config(&other.join("core"), |path| {
+            init_config(&program, Path::new("pluxy"), path)
+        })
+        .unwrap_err();
+        assert_eq!(err, "pluxy: cannot write there");
         fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(other).unwrap();
     }
 
     #[test]

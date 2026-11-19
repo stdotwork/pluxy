@@ -92,7 +92,14 @@ go build -o extensions/claude/claude ./extensions/claude
 ./pluxy serve -config config.json
 ```
 
-`pluxy -config config.json`, with no subcommand, serves too. Flags:
+`pluxy -config config.json`, with no subcommand, serves too. With no file at the config's path,
+`pluxy serve` writes a first config there and starts on it: it listens on `127.0.0.1` port 8317,
+or a free port when 8317 is taken, with one new client key and a new management key, in a file
+only its user can read. Core logs the file's path and the address, never the keys; read them in
+the file. `pluxy init [-config file] [-port n]` writes the same config without starting core
+(`-port 0`: a free port), and never replaces a file. A config with no management key is refused
+at start, with a message saying how to add one. A first start installs no package: install the
+providers you use from the bundled registry ([Packages](#packages)) or the panel. Flags:
 
 - `-config`: the config file (default `config.json`).
 - `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
@@ -104,7 +111,7 @@ go build -o extensions/claude/claude ./extensions/claude
 
 A running core answers `curl http://127.0.0.1:8400/healthz` with `ok`.
 
-With a `management_key` set, the web panel is at `http://127.0.0.1:8400/panel/`: core's status,
+The web panel is at `http://127.0.0.1:8400/panel/`: core's status,
 accounts, extensions and themes, the pages extensions bring and their settings. Sign in with the
 management key. Extension pages are served from a listener of their own, on another site than
 the panel (`extension_pages` in the config); see [extension pages](ui/extension-pages/README.md).
@@ -317,12 +324,17 @@ publishes these yet; `.github/workflows/next-app-tools-pack.yml` builds and pack
 go run ./cmd/pluxy-pack -out dist -app-tools programs -platforms linux/amd64,windows/amd64
 ```
 
-Core installs and enables every package the bundled index lists on its first start with an
-empty packages folder:
+The index also says what each package is, from its manifest: `title`, `summary`, `kind`
+(`provider`, or `client` for the app's tools that point a coding client at core) and `tier`
+(`pick` for the packages a new install is offered, `verified` for the rest of pluxy's own; the
+list of picks is in `cmd/pluxy-pack`). Core installs none of them by itself: start it with the
+bundled index and install what you use:
 
 ```bash
 go build -trimpath -ldflags "-s -w" -o pluxy ./cmd/pluxy
 ./pluxy -config config.json -bundled dist/bundled/index.json
+pluxy ext available                 # what the bundled registry offers, with titles
+pluxy ext install pluxy/claude      # install and enable one
 ```
 
 `pluxy` itself is a plain `go build` of `./cmd/pluxy`, as above; the `-ldflags` only make it
@@ -334,8 +346,8 @@ relative archive URLs resolve against the index.
 ### Run it in a container
 
 `Dockerfile` (build context: this folder) builds an Alpine image with a static `pluxy`, the web
-panel built in, and every extension packed by `pluxy-pack` as the bundled packages, so the first
-start installs and enables them. It runs as user `65532`, not root.
+panel built in, and every extension packed by `pluxy-pack` as the bundled packages, which it
+installs only when asked (`pluxy ext install`, or the panel). It runs as user `65532`, not root.
 
 ```bash
 docker build -t pluxy .
@@ -1751,7 +1763,7 @@ starts it afresh.
 
 | Field | Meaning |
 | --- | --- |
-| `management_key` | Bearer token for the management API. Without it the management API is off. |
+| `management_key` | Bearer token for the management API and the panel. Required: a config without one is refused at start. |
 | `idle_stop_ms` | Stop the program after this long without requests. Default 10 minutes; 0 keeps it running. |
 | `drain_timeout_ms` | Longest a replaced version may keep finishing its requests. Default 10 minutes. |
 | `restart.backoff_ms` | Wait before the first restart after a crash; doubles per crash in a row. Default 1 second. |
@@ -2195,10 +2207,10 @@ changed. Management never shows a registry or archive URL's user name, password 
 ### Bundled packages
 
 The packages a pluxy install ships with are a registry like any other, named `bundled`: by
-default `bundled/index.json` beside the `pluxy` program, or the index `-bundled` names. On its
-first start with a packages folder that has no `packages.json`, core installs and enables every
-package the bundled registry lists, through the same steps as any install. Bundled packages are
-removed like any other, and stay removed; installing one again takes it from `bundled`.
+default `bundled/index.json` beside the `pluxy` program, or the index `-bundled` names. It needs
+no network. Core installs nothing from it by itself, on a first start or later: a package is
+installed from it like from any registry (`POST /packages` with `"registry": "bundled"`, or
+`pluxy ext install <id>`), and removed like any other.
 
 ### Package management API
 
@@ -2255,15 +2267,15 @@ imports, so a migration sees them before core ever starts.
 
 A migrated config needs its management key set again once. Today's core writes a bcrypt hash over
 `management.secret-key` in the file after it reads the key, and this core cannot use a hash: it
-leaves the management API and the panel off and says why in its log. Replace the hash with the key
-itself, in plain text.
+refuses the config and says so. Replace the hash with the key itself, in plain text. A config with
+no management key at all is refused too, with a message saying how to add one.
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
 `extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir` and `cors`
 (today's core has no CORS setting: it allows every origin). Provider accounts set in
 the file go to the installed package of their provider (`pluxy/codex`, `pluxy/claude`,
 `pluxy/gemini`, `pluxy/xai`, `pluxy/openai-compatible`), so those packages must be installed:
-the bundled ones are, on the first start.
+install them from the bundled registry (`pluxy ext install pluxy/codex`) before they serve.
 
 ### Provider key sections
 
@@ -2309,9 +2321,9 @@ are accepted silently.
 | `config-version` | Must be 8 when present, as in today's core. | Supported |
 | `server.host` (`host`), `server.port` (`port`) | `listen` is `host:port`. An empty host listens on every interface and a port of 0 or none is 8317, as in today's core. | Supported |
 | `access.api-keys` (`api-keys` as a list) | `client_keys`. At least one key is required; today's core serves anyone when the list is empty. | Supported |
-| `management.secret-key` (`remote-management.secret-key`) | `management_key`, exactly as written: turns on the management API and the panel. A key already hashed with bcrypt (today's core can write one) is not supported yet: the management API stays off and the log says why. | Supported; hashed keys later |
+| `management.secret-key` (`remote-management.secret-key`) | `management_key`, exactly as written. Required: a config without one, or with a key already hashed with bcrypt (today's core can write one), is refused, saying what to set. | Supported; hashed keys refused |
 | `management.allow-remote` (`remote-management.allow-remote`) | `management_allow_remote`: without it the management API answers only this machine, as in today's core. | Supported |
-| `management.disable-control-panel` | The panel is on exactly when the management API is. | Dropped: the management key already turns the panel on and off |
+| `management.disable-control-panel` | The panel is always on, with the management API. | Dropped: the panel needs the management key |
 | `management.disable-auto-update-panel`, `management.panel-github-repository`, `server.github-token` (`github-token`) | The panel is built into core; nothing is downloaded. | Dropped: no panel download |
 | `management.base-url` | | Dropped: no terminal UI |
 | `server.max-request-body-bytes` | Request bodies are capped at 24 MiB. | Dropped: core needs a fixed cap for its request frame |

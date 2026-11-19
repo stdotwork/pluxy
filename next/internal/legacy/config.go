@@ -949,7 +949,7 @@ func (x *translator) server() error {
 	// The key is used as written, as today's core uses it: a space in it is part of it.
 	switch {
 	case bcryptHash.MatchString(secret):
-		x.notes = append(x.notes, "config.yaml: management.secret-key is a bcrypt hash, which is not supported yet: the management API stays off; set the key itself")
+		return errors.New("remote-management.secret-key is a bcrypt hash of the key, which pluxy cannot use: set it to the key itself")
 	case secret != "":
 		x.out["management_key"] = secret
 	}

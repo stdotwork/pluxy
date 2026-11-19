@@ -58,7 +58,8 @@ The generated config is the same for every case:
 - the client key `corpus-client-key`;
 - routing that never waits: the new core runs its default routing, which never waits, and still
   moves a request on to another account within one round;
-- the management API off unless the case calls it (see [Management API cases](#management-api-cases));
+- a management key the case never sends, unless the case calls the management API (see
+  [Management API cases](#management-api-cases)): core always has one;
 - the models the account lists: the request's model (`account_models` in a case overrides this).
   A provider marked `CatalogModels` in `cores.go`, one the old core took from auth files, lists
   none, so its extension serves its own catalog.

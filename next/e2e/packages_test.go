@@ -409,9 +409,10 @@ func TestInstallRefusesArchiveWithWrongDigest(t *testing.T) {
 	}
 }
 
-// Bundled packages are installed and enabled through the same path on core's first start, and
-// a removed one stays removed when core starts again.
-func TestBundledPackagesInstallOnFirstStartAndStayRemoved(t *testing.T) {
+// A first start installs nothing from the bundled registry; a package installed from it is
+// installed through the same path as from any registry, and stays installed when core starts
+// again.
+func TestBundledPackagesInstallOnlyWhenAsked(t *testing.T) {
 	u := answeringUpstream(t)
 	srv := codextest.New(t)
 	bundled := writeRegistry(t, codexArchive(t, "0.1.0"), "")
@@ -420,20 +421,18 @@ func TestBundledPackagesInstallOnFirstStartAndStayRemoved(t *testing.T) {
 
 	t.Run("first start", func(t *testing.T) { // core stops when the subtest ends
 		base, _, _ := runCoreArgs(t, cfg, "-bundled", bundled)
-		ps := listPackages(t, base)
-		if len(ps) != 1 || ps[0].ID != "pluxy/codex" || !ps[0].Enabled {
+		if ps := listPackages(t, base); len(ps) != 0 {
 			t.Fatalf("packages on first start: %+v", ps)
 		}
+		installBundled(t, base, "pluxy/codex")
 		if code, body := askCodex(t, base); code != http.StatusOK {
 			t.Fatalf("bundled Codex: status %d: %s", code, body)
-		}
-		if code := manage(t, base, "DELETE", "/packages/pluxy/codex", nil, nil); code != http.StatusNoContent {
-			t.Fatalf("remove: status %d", code)
 		}
 	})
 	t.Run("second start", func(t *testing.T) {
 		base, _, _ := runCoreArgs(t, cfg, "-bundled", bundled)
-		if ps := listPackages(t, base); len(ps) != 0 {
+		ps := listPackages(t, base)
+		if len(ps) != 1 || ps[0].ID != "pluxy/codex" || !ps[0].Enabled {
 			t.Errorf("packages after restart: %+v", ps)
 		}
 	})

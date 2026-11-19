@@ -99,7 +99,15 @@ type Registry struct {
 
 // RegistryPackage is one package a registry offers.
 type RegistryPackage struct {
-	ID       string            `json:"id"`
+	ID string `json:"id"`
+	// Title and Summary say what it is, as the registry describes it; empty when it does not.
+	Title   string `json:"title,omitempty"`
+	Summary string `json:"summary,omitempty"`
+	// Kind is what it adds: "provider", "client", or empty when the registry does not say.
+	Kind string `json:"kind,omitempty"`
+	// Tier is how far the registry vouches for it: "pick" (offered at setup), "verified" or
+	// "unverified" (also when the registry does not say). Core enforces nothing by it.
+	Tier     string            `json:"tier"`
 	Releases []RegistryRelease `json:"releases"`
 }
 

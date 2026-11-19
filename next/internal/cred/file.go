@@ -264,3 +264,39 @@ func syncDir(root *os.Root) error {
 	defer d.Close()
 	return d.Sync()
 }
+
+// CreatePrivate writes b to a new file at path that only core's user can read, made as a
+// record file is: mode 0600, and on Windows the protected access list from the moment it
+// exists. It fails with an error that is fs.ErrExist when something is at path already, and
+// never leaves part of b at path. The folder must exist.
+func CreatePrivate(path string, b []byte) error {
+	dir, name := filepath.Split(path)
+	if dir == "" {
+		dir = "."
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	tmp, tmpName, err := createTemp(root, dir)
+	if err != nil {
+		return err
+	}
+	defer root.Remove(tmpName) // after the link below, path keeps the file
+	_, err = tmp.Write(b)
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	// A link, unlike a rename, never replaces what is at path.
+	if err := root.Link(tmpName, name); err != nil {
+		return err
+	}
+	return syncDir(root)
+}

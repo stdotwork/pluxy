@@ -146,7 +146,7 @@ func Start(opts Options) (*Core, error) {
 	}
 	cfg, err := server.LoadConfig(opts.ConfigPath)
 	if err != nil {
-		return nil, c.scrubbed(err)
+		return nil, &ConfigError{c.scrubbed(err)}
 	}
 	if c.logs = opts.Logs; c.logs == nil {
 		c.logs = logfile.New(LogsDir(opts.ConfigPath))
@@ -154,7 +154,7 @@ func Start(opts Options) (*Core, error) {
 	c.pkgDir = cfg.Packages.Dir
 	// No publisher's folder can be called .settings: IDs start with a letter or digit.
 	c.settings = extconfig.NewStore(filepath.Join(c.pkgDir, ".settings"))
-	if c.initial, err = c.loadPackages(cfg); err != nil {
+	if c.initial, err = c.loadPackages(); err != nil {
 		return nil, err
 	}
 	if err := c.reload(true, "start"); err != nil {

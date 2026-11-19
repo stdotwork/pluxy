@@ -494,3 +494,12 @@ func TestFileBackendWindowsSkipsARecordAnotherAccountOwns(t *testing.T) {
 		t.Errorf("log:\n%s\nwant a line with %q", logged.String(), want)
 	}
 }
+
+// A file CreatePrivate makes has the private access list from the start, as a record has.
+func TestCreatePrivateWindowsAccessList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := CreatePrivate(path, []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	checkPrivate(t, "created file", path, false)
+}

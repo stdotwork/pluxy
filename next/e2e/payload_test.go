@@ -170,8 +170,9 @@ func TestPayloadEveryExtension(t *testing.T) {
 			t.Parallel()
 			up := newPayloadUpstream(t, false)
 			base := runCore(t, map[string]any{
-				"listen":      "127.0.0.1:0",
-				"client_keys": []string{clientKey},
+				"listen":         "127.0.0.1:0",
+				"client_keys":    []string{clientKey},
+				"management_key": managementKey,
 				"payload": map[string]any{"override": []any{
 					map[string]any{"models": []any{map[string]any{"name": "m-pay*", "protocol": ch.channel}}, "params": map[string]any{"pluxy_e2e": "set"}},
 					map[string]any{"models": []any{map[string]any{"name": "m-payload", "protocol": "another-channel"}}, "params": map[string]any{"pluxy_wrong": "set"}},
@@ -284,6 +285,8 @@ port: ` + strconv.Itoa(port) + `
 access:
   api-keys:
     - "` + clientKey + `"
+remote-management:
+  secret-key: "` + managementKey + `"
 api-keys:
   codex:
     - name: cx
@@ -316,6 +319,7 @@ requests:` + strings.ReplaceAll(examplePayload, "\n", "\n  "))
 	})
 	base, _, logs := startOnFreePort(t, filepath.Join(binDir, "pluxy"), path, cfg, "-bundled", bundled)
 	logs.waitFor(t, "config revision 1 active")
+	installBundled(t, base, "pluxy/codex", "pluxy/claude", "pluxy/gemini")
 	logs.mu.Lock()
 	for _, line := range logs.lines {
 		if strings.Contains(line, "payload") {
@@ -375,8 +379,9 @@ requests:` + strings.ReplaceAll(examplePayload, "\n", "\n  "))
 func TestPayloadDefaultAndClientHeaders(t *testing.T) {
 	up := newPayloadUpstream(t, false)
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"payload": map[string]any{"default": []any{map[string]any{
 			"models": []any{map[string]any{"name": "gemini-2.5-pro", "protocol": "gemini", "headers": map[string]string{"X-Client-Tier": "tenant-*-region-*"}}},
 			"params": map[string]any{"generationConfig.thinkingConfig.thinkingBudget": 32768},
@@ -423,8 +428,9 @@ func TestPayloadRetryAppliedOnce(t *testing.T) {
 			"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey}}
 	}
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"payload": map[string]any{"filter": []any{map[string]any{
 			"models": []any{map[string]any{"name": "gpt-*", "protocol": "codex"}},
 			"params": []string{`tools.#(name=="apply_patch")`},
@@ -468,9 +474,10 @@ func TestPayloadStreamingCountAndEndpoint(t *testing.T) {
 	rules := map[string]any{"override": []any{map[string]any{"models": []any{map[string]any{"name": "m-payload"}}, "params": map[string]any{"pluxy_e2e": "set"}}}}
 	core := func(up *payloadUpstream, manifest string) string {
 		return runCore(t, map[string]any{
-			"listen":      "127.0.0.1:0",
-			"client_keys": []string{clientKey},
-			"payload":     rules,
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
+			"payload":        rules,
 			"extension": map[string]any{
 				"manifest": filepath.Join(binDir, manifest),
 				"accounts": []any{map[string]any{"id": "a", "models": []string{"m-payload"}, "settings": map[string]any{"base_url": up.URL + "/a"},

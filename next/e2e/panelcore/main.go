@@ -5,7 +5,8 @@
 // tries to escape its sandbox; their files are in ui/e2e/fixtures. With -probe, test/probe too:
 // the page the desktop app's native test shows (fixtures/probe).
 //
-// Once core listens and test/beta is disabled, it prints one line of JSON on stdout,
+// Once core listens, the test packages are installed from its bundled registry (a first start
+// installs nothing) and test/beta is disabled, it prints one line of JSON on stdout,
 // {"base":"http://127.0.0.1:port","key":"<management key>","client_key":"<client key>",
 // "config":"<core's config file>"}, and nothing else on stdout. The config file holds core's
 // current management key, also after a rotation. Core writes its log to files (logs.to_file). It runs until stdin reaches
@@ -16,8 +17,8 @@
 //
 // With -prepare <folder>, it starts nothing: it builds core into <folder>/pluxy and writes the
 // test packages as core's bundled packages, <folder>/bundled/index.json (where core looks for
-// them beside its program), prints {"core":"<folder>/pluxy"} and exits. The folder is the
-// caller's to remove.
+// them beside its program; a core started from there installs none of them until asked), prints
+// {"core":"<folder>/pluxy"} and exits. The folder is the caller's to remove.
 package main
 
 import (
@@ -165,6 +166,13 @@ func serve(withTLS bool) error {
 	base, err := c.waitListening(ctx)
 	if err != nil {
 		return err
+	}
+	// A first start installs nothing: the test packages are installed from the bundled registry,
+	// as setup would, and test/beta is then turned off.
+	for _, p := range testPackages {
+		if err := installPackage(base, mgmtKey, p.id); err != nil {
+			return err
+		}
 	}
 	if err := disablePackage(base, mgmtKey, "test/beta"); err != nil {
 		return err
@@ -563,6 +571,28 @@ func (c *core) stop() {
 }
 
 // disablePackage disables installed package id through core's management API.
+// installPackage installs and enables the package id from the bundled registry.
+func installPackage(base, key, id string) error {
+	body := strings.NewReader(`{"id":"` + id + `","registry":"bundled","enable":true}`)
+	req, err := http.NewRequest(http.MethodPost, base+"/v0/management/packages", body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: startTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("install %s: %w", id, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("install %s: status %d: %s", id, resp.StatusCode, b)
+	}
+	return nil
+}
+
 func disablePackage(base, key, id string) error {
 	req, err := http.NewRequest(http.MethodPost, base+"/v0/management/packages/"+id+"/disable", nil)
 	if err != nil {

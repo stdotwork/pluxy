@@ -13,7 +13,9 @@ a mixed package. Start with the [tutorial](TUTORIAL.md).
 
 An app package has one `pluxy-extension.json` at the archive root. It uses `manifest_version: 1`,
 the same `publisher/name` ID and package version rules as the [provider manifest](../../protocol/README.md#package-manifest).
-Version 0 provider manifests keep their existing meaning and ignore an unknown app field. Version 1 adds `app`. A mixed package
+Version 0 provider manifests keep their existing meaning and ignore an unknown app field. Version 1 adds `app`. The top-level
+`title`, `summary` and `kind` describe the package as in the provider manifest; a tool that points
+a coding client at core says `"kind": "client"`. A mixed package
 keeps provider `protocol`, `programs`, `ui` and `config` at the top level and adds `app` beside
 them. App-only packages omit provider fields; no dummy provider is needed.
 

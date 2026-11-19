@@ -1,0 +1,60 @@
+package core
+
+import (
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/stdotwork/pluxy/next/internal/server"
+)
+
+// A first config listens on this machine, holds a client key and a different management key,
+// loads, can be read only by its user, and is never written over. Port -1 (8317 when free) is
+// not tried here: a core of the person running the tests may hold 8317.
+func TestWriteFirstConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "new", "config.json")
+	fc, err := WriteFirstConfig(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fc.Path != path || !strings.HasPrefix(fc.Listen, "127.0.0.1:") || strings.HasSuffix(fc.Listen, ":0") || strings.HasSuffix(fc.Listen, ":8317") {
+		t.Errorf("wrote %+v", fc)
+	}
+	cfg, err := server.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Listen != fc.Listen || len(cfg.ClientKeys) != 1 || cfg.ManagementKey == "" || cfg.ManagementKey == cfg.ClientKeys[0] {
+		t.Errorf("config: listen %s, client keys %d, management key set %v", cfg.Listen, len(cfg.ClientKeys), cfg.ManagementKey != "")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v, want 0600", info.Mode().Perm())
+	}
+	before, _ := os.ReadFile(path)
+	if _, err := WriteFirstConfig(path, 0); !errors.Is(err, fs.ErrExist) {
+		t.Errorf("second write: %v, want fs.ErrExist", err)
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Error("the second write changed the file")
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(path)); len(entries) != 1 {
+		t.Errorf("the folder holds %d entries, want the config only", len(entries))
+	}
+
+	// A chosen port is used as it is; a config.yaml is not written.
+	fc, err = WriteFirstConfig(filepath.Join(t.TempDir(), "config.json"), 18555)
+	if err != nil || fc.Listen != "127.0.0.1:18555" {
+		t.Errorf("port 18555: %+v, %v", fc, err)
+	}
+	if _, err := WriteFirstConfig(filepath.Join(t.TempDir(), "config.yaml"), 0); err == nil {
+		t.Error("wrote a config.yaml")
+	}
+}

@@ -115,9 +115,10 @@ func startInteractionsCore(t *testing.T, accounts ...interactionsAccount) string
 		})
 	}
 	return runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
-		"routing":     map[string]any{"strategy": "fill-first"},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"routing":        map[string]any{"strategy": "fill-first"},
 		"extension": map[string]any{
 			"manifest": geminiManifest(t),
 			"accounts": list,

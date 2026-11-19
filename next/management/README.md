@@ -152,7 +152,7 @@ Every key of the config and every file of the auth folder is in exactly one of `
 | Call | Command | What it does |
 | --- | --- | --- |
 | `GET /packages` | `pluxy ext list` | Installed packages and their state |
-| `GET /registries` | `pluxy ext available` | What each registry offers; **new**: each package's `title`, `summary`, `kind` and `tier` (`pick`, `verified`, `unverified`) |
+| `GET /registries` | `pluxy ext available` | What each registry offers, with each package's `title`, `summary`, `kind` (`provider`, `client`) and `tier` (`pick`, `verified`, `unverified`) when its registry says them; core enforces nothing by tier. A first start installs nothing: every package, the bundled ones too, is installed by `POST /packages` |
 | `POST /packages` | `pluxy ext install <id> [--version v] [--registry r]` | Install and enable |
 | `POST /packages/{id}/enable`, `.../disable` | `pluxy ext enable <id>`, `pluxy ext disable <id>` | Start or stop routing to it |
 | `DELETE /packages/{id}` | `pluxy ext remove <id>` | Remove its files; its accounts stay |

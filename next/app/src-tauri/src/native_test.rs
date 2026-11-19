@@ -739,6 +739,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
     wait_for("the window's shell", || {
         eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
     })?;
+    install_bundled(app)?;
     // The signed application update (update_native.rs), in a session of its own.
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_UPDATE") {
         return crate::update_native::run(app, &main, dir.into());
@@ -1100,6 +1101,55 @@ fn run(app: &AppHandle) -> Result<(), String> {
 }
 
 /// The window as the instance scenario sees it.
+/// A core's first start installs nothing. In managed mode the session installs the packages of
+/// the bundled registry beside the core's program (panelcore's test packages), as setup would,
+/// before the steps that use them. An adopted program is copied without them: nothing to do.
+fn install_bundled(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<App>();
+    let (managed, caller) = {
+        let mut conn = state.conn.lock().unwrap();
+        let managed =
+            conn.view().mode == Some(crate::conn::Mode::Managed) && conn.core_pid().is_some();
+        (managed, conn.caller())
+    };
+    if !managed {
+        return Ok(());
+    }
+    let registries = wait_for("the core's registries", || {
+        let r = caller.call("GET", "/registries", None);
+        (r.status == 200).then_some(r.body).flatten()
+    })?;
+    let installed = caller
+        .call("GET", "/packages", None)
+        .body
+        .unwrap_or_default();
+    let have = |id: &str| {
+        installed["packages"]
+            .as_array()
+            .is_some_and(|ps| ps.iter().any(|p| p["id"] == id))
+    };
+    let mut done = vec![];
+    for reg in registries["registries"].as_array().into_iter().flatten() {
+        if reg["name"] != "bundled" {
+            continue;
+        }
+        for p in reg["packages"].as_array().into_iter().flatten() {
+            let id = p["id"].as_str().unwrap_or_default();
+            if id.is_empty() || have(id) {
+                continue;
+            }
+            let body = json!({"id": id, "registry": "bundled", "enable": true});
+            let r = caller.call("POST", "/packages", Some(&body));
+            if r.status != 200 {
+                return Err(format!("installing {id} from the bundled registry: {r:?}"));
+            }
+            done.push(id.to_string());
+        }
+    }
+    log("bundled packages installed", json!({ "ids": done }));
+    Ok(())
+}
+
 fn window_state(app: &AppHandle) -> Value {
     match app.get_window(WINDOW) {
         Some(w) => json!({

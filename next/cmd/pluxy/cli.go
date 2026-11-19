@@ -201,17 +201,17 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.RegistriesReply
 			return x.call(http.MethodGet, "/registries", nil, nil, &r, func() {
-				rows := [][]string{{"REGISTRY", "PACKAGE", "VERSIONS"}}
+				rows := [][]string{{"REGISTRY", "PACKAGE", "TITLE", "KIND", "TIER", "VERSIONS"}}
 				for _, reg := range r.Registries {
 					if reg.Error != "" {
-						rows = append(rows, []string{reg.Name, "-", "error: " + reg.Error})
+						rows = append(rows, []string{reg.Name, "-", "-", "-", "-", "error: " + reg.Error})
 					}
 					for _, p := range reg.Packages {
 						var versions []string
 						for _, rel := range p.Releases {
 							versions = append(versions, rel.Version)
 						}
-						rows = append(rows, []string{reg.Name, p.ID, strings.Join(versions, ", ")})
+						rows = append(rows, []string{reg.Name, p.ID, dash(p.Title), dash(p.Kind), dash(p.Tier), strings.Join(versions, ", ")})
 					}
 				}
 				x.table(rows)
@@ -440,6 +440,7 @@ func find(args []string) (*command, []string) {
 // help writes the list of commands whose words start with prefix.
 func help(w io.Writer, prefix string) {
 	fmt.Fprintln(w, "usage: pluxy serve [-config file] [flags]   run core (pluxy with no subcommand does too)")
+	fmt.Fprintln(w, "       pluxy init [-config file] [-port n]  write a first config (pluxy serve does when there is none)")
 	fmt.Fprintln(w, "       pluxy <command> [--json] [--config file | --url address --key key]")
 	fmt.Fprintln(w)
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)

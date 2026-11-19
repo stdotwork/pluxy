@@ -115,9 +115,10 @@ func TestOutboundProxyEveryExtension(t *testing.T) {
 				return a
 			}
 			base := runCore(t, map[string]any{
-				"listen":      "127.0.0.1:0",
-				"client_keys": []string{clientKey},
-				"proxy_url":   httpProxy.URL("http"),
+				"listen":         "127.0.0.1:0",
+				"client_keys":    []string{clientKey},
+				"management_key": managementKey,
+				"proxy_url":      httpProxy.URL("http"),
 				"extension": map[string]any{
 					"manifest": filepath.Join(binDir, ext.manifest),
 					"accounts": []any{
@@ -215,9 +216,10 @@ func TestOutboundProxyTunnelsHTTPS(t *testing.T) {
 	p := newHTTPProxy(t, true)
 	target := net.JoinHostPort(proxiedHost, port(t, strings.Replace(tlsUp.URL, "https://", "http://", 1)))
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
-		"proxy_url":   p.URL("http"),
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"proxy_url":      p.URL("http"),
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 			"accounts": []any{map[string]any{"id": "tls", "settings": map[string]any{"base_url": "https://" + target + "/v1"},
@@ -248,9 +250,10 @@ func TestOutboundProxyWebSocket(t *testing.T) {
 			}
 			via := "http://" + net.JoinHostPort(proxiedHost, port(t, u.URL))
 			base := runCore(t, map[string]any{
-				"listen":      "127.0.0.1:0",
-				"client_keys": []string{clientKey},
-				"proxy_url":   p.URL(scheme),
+				"listen":         "127.0.0.1:0",
+				"client_keys":    []string{clientKey},
+				"management_key": managementKey,
+				"proxy_url":      p.URL(scheme),
 				"extension": map[string]any{
 					"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
 					"accounts": []any{map[string]any{"id": "ws", "models": []string{"gpt-test"},

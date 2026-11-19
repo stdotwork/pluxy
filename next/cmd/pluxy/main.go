@@ -9,12 +9,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -38,6 +40,8 @@ func main() {
 		serve(args)
 	case args[0] == "serve":
 		serve(args[1:])
+	case args[0] == "init":
+		os.Exit(initConfig(args[1:], os.Stdout, os.Stderr))
 	default:
 		// Every other subcommand is a client of a running core's management API (cli.go).
 		os.Exit(runCLI(args, os.Stdout, os.Stderr, os.Getenv))
@@ -154,6 +158,63 @@ func listen(addr string, fd int) (net.Listener, error) {
 	return ln, nil
 }
 
+// initPortEnv names the port a config written at a first start listens on, in place of 8317 or
+// a free one; 0 is a free one. Only for tests, which must never take 8317 on the machine they
+// run on.
+const initPortEnv = "PLUXY_INIT_PORT"
+
+// firstStart writes a first config at configPath when there is no file there, and says where
+// it is: a new install starts with no config. It logs the file's path, never its keys.
+func firstStart(configPath string) error {
+	if _, err := os.Stat(configPath); !errors.Is(err, fs.ErrNotExist) {
+		return nil // core reads it, and says what is wrong with it
+	}
+	port := -1
+	if v, ok := os.LookupEnv(initPortEnv); ok {
+		p, err := strconv.Atoi(v)
+		if err != nil || p < 0 {
+			return fmt.Errorf("%s=%q is not a port", initPortEnv, v)
+		}
+		port = p
+	}
+	fc, err := core.WriteFirstConfig(configPath, port)
+	if err != nil {
+		return fmt.Errorf("no config at %s, and a first one could not be written: %w", configPath, err)
+	}
+	log.Printf("first start: wrote a new config, %s, listening on %s; its client key and management key are in that file", fc.Path, fc.Listen)
+	return nil
+}
+
+// initConfig is pluxy init: it writes a first config, as a first start does, without starting
+// core, and returns the exit code.
+func initConfig(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("pluxy init", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	configPath := fs.String("config", "config.json", "where to write the config file; an existing file is never replaced")
+	port := fs.Int("port", -1, "the port core listens on (default: 8317, or a free port when 8317 is taken; 0: a free port)")
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "usage: pluxy init [-config file] [-port n]   write a first config: listening on 127.0.0.1, with a new client key and management key")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return exitOK
+		}
+		return exitUsage
+	}
+	if fs.NArg() > 0 || *port < -1 {
+		fs.Usage()
+		return exitUsage
+	}
+	fc, err := core.WriteFirstConfig(*configPath, *port)
+	if err != nil {
+		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		return exitFailed
+	}
+	fmt.Fprintf(stdout, "wrote %s: core listens on %s; its client key and management key are in that file\n", fc.Path, fc.Listen)
+	return exitOK
+}
+
 // defaultBundled returns bundled/index.json beside the running program when it exists.
 func defaultBundled() string {
 	exe, err := os.Executable()
@@ -187,14 +248,22 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		}
 		ln = l
 	}
+	if err := firstStart(configPath); err != nil {
+		if ln != nil {
+			ln.Close()
+		}
+		return err
+	}
 	c, err := core.Start(core.Options{ConfigPath: configPath, SafeMode: safeMode, Bundled: bundled, Logs: logs})
 	if err != nil {
 		if ln != nil {
 			ln.Close()
 		}
-		// Safe mode opens the credential store too, so it is no way past the store's errors.
+		// Safe mode reads the config and opens the credential store too, so it is no way past
+		// their errors.
 		var store *cred.OpenError
-		if !safeMode && !errors.As(err, &store) {
+		var config *core.ConfigError
+		if !safeMode && !errors.As(err, &store) && !errors.As(err, &config) {
 			err = fmt.Errorf("%w (start with -safe-mode to run without extensions)", err)
 		}
 		return err

@@ -2,6 +2,7 @@ package corpus
 
 import (
 	"bufio"
+	"cmp"
 	crand "crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -667,8 +668,8 @@ func BuildNewCore(moduleRoot, dir string) error {
 
 // StartNewCore starts the new core from binDir with the case's provider pointed at upstreamURL,
 // one account per key, the settings in extra added to its config, and the case's override (over)
-// merged in. With a managementKey the management API is on, and the extensions honour the login
-// and key endpoints their account settings name (a provider's NewCore points them at upstreamURL
+// merged in. With a managementKey the case may call the management API with it, and the
+// extensions honour the login and key endpoints their account settings name (a provider's NewCore points them at upstreamURL
 // where a quota call needs it).
 func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []string, extra map[string]json.RawMessage, over *CoreOverride, managementKey string) (*Core, error) {
 	p, ok := Providers[provider]
@@ -694,9 +695,9 @@ func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []
 			"accounts": accounts,
 		},
 	}
-	if managementKey != "" {
-		cfg["management_key"] = managementKey
-	}
+	// Core always has a management key: a case that does not call the API gets one it never
+	// sends.
+	cfg["management_key"] = cmp.Or(managementKey, "corpus-unused-management-key")
 	for k, v := range extra {
 		cfg[k] = v
 	}

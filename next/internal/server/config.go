@@ -55,8 +55,8 @@ type Config struct {
 	// default, answers with core's own estimate (package tokenest); false answers with the
 	// error. A count that only accounts that can count refuse is an error either way.
 	TokenCountEstimate *bool `json:"token_count_estimate,omitempty"`
-	// ManagementKey turns on the management API (ManagementPrefix); clients send it as a
-	// bearer token. Empty: no management API.
+	// ManagementKey is the key of the management API (ManagementPrefix); clients send it as a
+	// bearer token. Required: a config without one is refused.
 	ManagementKey string `json:"management_key,omitempty"`
 	// ManagementAllowRemote serves the management API to clients on other machines too (today's
 	// management.allow-remote). Default: only to this machine (FromThisMachine).
@@ -483,6 +483,14 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 		// Today's core serves anyone without a key then; this core refuses to.
 		return nil, errors.New("config: client_keys is empty (access.api-keys in a config.yaml): set at least one client key; core serves no client without one")
 	}
+	if c.ManagementKey == "" {
+		// Today's core turned its management API and panel off without one, silently.
+		where := `"management_key": "<a long random secret>"`
+		if IsYAML(path) {
+			where = "remote-management: {secret-key: <a long random secret>}"
+		}
+		return nil, fmt.Errorf("config %s: no management key: core always has one, so the panel and the pluxy command can manage it. Add %s to the file, or move the file aside and run pluxy init to write a new config with both keys", path, where)
+	}
 	if ex := c.ExampleClientKeys(); len(ex) > 0 {
 		// Core starts, as today's core does, so the management API stays open to fix the keys.
 		c.Notices = append(c.Notices, "client_keys still holds the example config's public keys ("+strings.Join(ex, ", ")+
@@ -598,9 +606,6 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 		}
 		x.ID = id
 		c.Extensions[id] = x
-	}
-	if len(seen) == 0 && c.ManagementKey == "" && c.AuthDir == "" {
-		return nil, errors.New("config: set at least one account unless management_key is set (accounts can then be added by login) or, in a config.yaml, oauth.auth-dir (accounts can then be imported)")
 	}
 	if err := c.Routing.Validate(); err != nil {
 		return nil, fmt.Errorf("config: %w", err)

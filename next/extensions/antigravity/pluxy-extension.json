@@ -2,6 +2,8 @@
   "manifest_version": 0,
   "id": "pluxy/antigravity",
   "version": "0.1.0",
+  "title": "Antigravity",
+  "summary": "Gemini and Claude models through a Google account signed in to Antigravity.",
   "protocol": [0],
   "programs": {
     "linux/amd64": "antigravity",

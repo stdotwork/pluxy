@@ -235,8 +235,9 @@ func (l *coreLog) waitFor(t *testing.T, s string) string {
 func startCoreLogged(t *testing.T, u *upstream, options ...func(cfg map[string]any)) (string, *coreLog) {
 	t.Helper()
 	cfg := map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 			"accounts": []any{map[string]any{
