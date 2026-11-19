@@ -162,6 +162,13 @@ func (c *Client) ResetCooldowns(ctx context.Context, id string) (CooldownResetRe
 	return v, err
 }
 
+// Route is GET /route: what a request for model would do now, sent to no one.
+func (c *Client) Route(ctx context.Context, model string) (RouteReply, error) {
+	var out RouteReply
+	err := c.get(ctx, "/route", url.Values{"model": {model}}, &out)
+	return out, err
+}
+
 // TestAccount is POST /accounts/{id}/test; an empty model lets core pick one.
 func (c *Client) TestAccount(ctx context.Context, id, model string) (TestResult, error) {
 	var v TestReply

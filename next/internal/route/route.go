@@ -81,6 +81,10 @@ type Config struct {
 	// for any cooldown; QuotaUsageLimit the final usage-limit reply, which tells the client to
 	// stop until the reset.
 	QuotaResponseMode string `json:"quota_response_mode,omitempty"`
+	// Explain, when false, leaves out of replies the headers that name the account (all but the
+	// trace ID) and the pluxy member of errors, for a core whose client keys go to people who
+	// should not see which accounts serve them. Unset or true: replies say what happened.
+	Explain *bool `json:"explain,omitempty"`
 }
 
 // Quota response modes (Config.QuotaResponseMode).
@@ -160,6 +164,8 @@ type Request struct {
 type Attempt struct {
 	// Account is the account's ID, Extension the extension that serves it.
 	Account, Extension string
+	// Public is the account's public ID, the one replies name it by (State.PublicID).
+	Public string
 	// Model is the account's name for the request's model (an alias or prefix resolved).
 	Model string
 }
@@ -194,6 +200,7 @@ type Router struct {
 	readings Readings
 	catalog  CatalogFunc
 	lists    catalogs // the accounts' model lists from catalog
+	held     func() []Held
 
 	// For tests: the clock, the wait, the source of jitter, and a hook run after an account
 	// is chosen and before it is reserved.
@@ -351,6 +358,7 @@ type call struct {
 	cur      Stream     // the attempt whose reply reached the caller
 	acct     *Account
 	seq      uint64
+	tried    []triedAttempt    // the attempts that failed, in order, for the error that explains them
 	capable  []*Account        // the accounts that serve the request's model
 	upstream map[string]string // each capable account's name for the request's model, by account ID
 	ended    bool              // the attempt's reservation is released
@@ -419,6 +427,9 @@ func (c *call) route() llm.Event {
 		if u := c.usageLimit(ev.Error); u != nil {
 			ev.Error = u
 		}
+		if c.r.cfg.ExplainOn() {
+			ev.Error = c.explained(ev.Error)
+		}
 	}
 	return ev
 }
@@ -431,7 +442,7 @@ func (c *call) attempts() llm.Event {
 	c.creds = creds
 	var eligible []*Account
 	for _, a := range accounts {
-		if c.req.Pin != "" && a.ID != c.req.Pin || r.picker.strategy == StrategyWeighted && a.weight() == 0 {
+		if c.req.Pin != "" && !c.pinned(a) || r.picker.strategy == StrategyWeighted && a.weight() == 0 {
 			continue
 		}
 		eligible = append(eligible, a)
@@ -553,6 +564,8 @@ func (c *call) attempts() llm.Event {
 				return ev
 			}
 			last = ev.Error
+			c.tried = append(c.tried, triedAttempt{a.ID, llm.Tried{Account: r.state.PublicID(a.ID), Provider: a.Extension,
+				Model: c.upstream[a.ID], Result: resultCode(last)}})
 			if rounded && (last.Code == llm.CodeRateLimit || last.Code == llm.CodeQuota) {
 				limited[a.ID] = r.now()
 			}
@@ -745,6 +758,12 @@ func (c *call) choose(cands []*Account, now time.Time) *Account {
 	return r.picker.pick(c.req.LLM.Model, best, r.state.activeCount, now)
 }
 
+// pinned reports whether the request's pin names a: by its ID, or by the public ID a reply
+// named it by.
+func (c *call) pinned(a *Account) bool {
+	return a.ID == c.req.Pin || c.r.state.PublicID(a.ID) == c.req.Pin
+}
+
 func (c *call) affinityKey() affinityKey {
 	return affinityKey{tenant: c.req.Tenant, model: c.req.LLM.Model, session: c.req.Session}
 }
@@ -754,7 +773,7 @@ func (c *call) affinityKey() affinityKey {
 func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 	r := c.r
 	if c.req.Attempting != nil {
-		c.req.Attempting(Attempt{Account: a.ID, Extension: a.Extension, Model: c.upstream[a.ID]})
+		c.req.Attempting(Attempt{Account: a.ID, Extension: a.Extension, Public: r.state.PublicID(a.ID), Model: c.upstream[a.ID]})
 	}
 	call := a.call()
 	var version uint64

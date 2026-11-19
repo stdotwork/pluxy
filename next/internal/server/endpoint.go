@@ -191,24 +191,24 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 	rr.Endpoint = true
 	rr.AnyModel = ep.modelOptional
 	rr.Attempting = func(a route.Attempt) {
-		t.account = a.Account
+		t.attempt(a)
 		m.attempt(a, t.id)
 	}
 	stream := meterStream(g.Router.Generate(host.WithPayloadClient(r.Context(), req.Model, r.Header), rr), m)
-	writeEndpointReply(w, r, stream, ep.format, f, m)
+	writeEndpointReply(w, r, stream, ep.format, f, m, g.Config.Routing.ExplainOn())
 }
 
 // writeEndpointReply checks and writes an endpoint's events. A nil meter records nothing.
-func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, format string, f clientFormat, m *meter) {
+func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, format string, f clientFormat, m *meter, explain bool) {
 	r, t := requestTrace(r)
 	defer stream.Close()
 	fail := func(e *llm.Error) {
 		logFailure(r, e)
-		m.fail(e, f.writeError(w, e))
+		m.fail(e, f.writeError(w, t.explained(e)))
 	}
 
 	ev := stream.Next()
-	t.setHeader(w)
+	t.setHeaders(w, explain)
 	if ev.Type == llm.EventError {
 		fail(ev.Error)
 		return

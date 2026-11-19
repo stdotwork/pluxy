@@ -5,7 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"strconv"
 	"time"
+
+	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/llm"
 )
 
 // TraceHeader carries a request's trace ID in the reply, under today's core's name. The same ID
@@ -13,12 +17,25 @@ import (
 // can be matched with what core logged about it.
 const TraceHeader = "X-CPA-TRACE-ID"
 
+// Headers a client reply names its account by (routing.explain turns them off). PinHeader, the
+// header a request names an account by, is also the first of them: the ID a reply gives can be
+// sent back.
+const (
+	ProviderHeader = "X-Pluxy-Provider"
+	ModelHeader    = "X-Pluxy-Model"
+	AttemptsHeader = "X-Pluxy-Attempts"
+)
+
 // trace is one client request's trace ID and the account its last attempt went to.
 type trace struct {
 	id      string
 	account string
-	failed  bool   // a failure was logged: the request counts as failed for its request log
-	body    []byte // the request's body, once read, for its request log
+	// public, provider and model are the last attempt's account (by its public ID), its provider
+	// and the model sent upstream; attempts counts the attempts.
+	public, provider, model string
+	attempts                int
+	failed                  bool   // a failure was logged: the request counts as failed for its request log
+	body                    []byte // the request's body, once read, for its request log
 	// upstream holds what the request's extensions sent upstream and got back, while every
 	// request is logged; nil otherwise.
 	upstream *upstreamLog
@@ -45,13 +62,36 @@ func traceOf(r *http.Request) *trace {
 	return t
 }
 
-// setHeader sets the trace header once the request went to an account, as today's core does: a
-// request refused before that (no client key, a body that does not parse, no account for the
-// model) gets none.
-func (t *trace) setHeader(w http.ResponseWriter) {
-	if t != nil && t.account != "" {
-		w.Header().Set(TraceHeader, t.id)
+// attempt notes that an attempt went to the account a names.
+func (t *trace) attempt(a route.Attempt) {
+	t.account, t.public, t.provider, t.model = a.Account, a.Public, a.Extension, a.Model
+	t.attempts++
+}
+
+// setHeaders sets the reply's headers once the request has gone to its account, if it did: the
+// trace ID, and with explain the account's public ID, its provider, the model sent upstream and
+// the number of attempts. The reply names the last account the request went to, which is the
+// one that answered it.
+func (t *trace) setHeaders(w http.ResponseWriter, explain bool) {
+	if t == nil {
+		return
 	}
+	h := w.Header()
+	h.Set(TraceHeader, t.id)
+	if explain && t.account != "" {
+		h.Set(PinHeader, t.public)
+		h.Set(ProviderHeader, t.provider)
+		h.Set(ModelHeader, t.model)
+		h.Set(AttemptsHeader, strconv.Itoa(t.attempts))
+	}
+}
+
+// explained puts the trace ID in the pluxy member of e, when it has one.
+func (t *trace) explained(e *llm.Error) *llm.Error {
+	if t != nil && e != nil && e.Explain != nil {
+		e.Explain.Trace = t.id
+	}
+	return e
 }
 
 // logPrefix returns what a log line about r starts with: its method and path, where it came

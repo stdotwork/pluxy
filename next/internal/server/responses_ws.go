@@ -61,6 +61,9 @@ func serveResponsesWebSocket(w http.ResponseWriter, r *http.Request, src Source)
 	g, release := src.Acquire()
 	cfg := g.Config
 	release()
+	// The handshake's reply carries the socket's trace ID; the account of a turn comes later.
+	r, t := requestTrace(r)
+	w.Header().Set(TraceHeader, t.id)
 	if e := refused(cfg, r, false); e != nil {
 		responsesFormat.writeError(w, e)
 		return
@@ -80,7 +83,7 @@ func serveResponsesWebSocket(w http.ResponseWriter, r *http.Request, src Source)
 	conn.SetReadLimit(MaxRequestBody)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	s := &wsSocket{conn: conn, r: r, src: src, ctx: ctx, noSession: map[string]bool{}, codexClient: isCodexClient(r)}
+	s := &wsSocket{conn: conn, r: r, src: src, ctx: ctx, noSession: map[string]bool{}, codexClient: isCodexClient(r), trace: t}
 	defer s.close()
 	queue := make(chan wsMessage, wsQueue)
 	go s.read(queue, cancel)
@@ -125,6 +128,7 @@ type wsSocket struct {
 	src         Source
 	ctx         context.Context
 	codexClient bool
+	trace       *trace // the socket's: a turn's error names it in its pluxy member
 
 	// Owned by the loop that runs turns.
 	session    Session
@@ -224,6 +228,9 @@ func (s *wsSocket) sendError(e *llm.Error) error {
 		if e.ProviderCode == "" {
 			delete(obj, "code")
 		}
+	}
+	if e.Explain != nil && obj != nil {
+		obj["pluxy"], _ = json.Marshal(s.trace.explained(e).Explain)
 	}
 	m := map[string]any{"type": "error", "status": status, "error": obj}
 	if u := e.UsageLimit; u != nil {

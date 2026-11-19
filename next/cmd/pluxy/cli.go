@@ -243,7 +243,7 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.AccountsReply
 			return x.call(http.MethodGet, "/accounts", nil, nil, &r, func() {
-				rows := [][]string{{"ID", "EXTENSION", "SOURCE", "HEALTH", "UNTIL", "WHY"}}
+				rows := [][]string{{"ID", "PUBLIC ID", "EXTENSION", "SOURCE", "HEALTH", "UNTIL", "WHY"}}
 				for _, a := range r.Accounts {
 					health := dash(a.Health.State)
 					if a.Health.Source == management.SourceUnverified {
@@ -253,7 +253,35 @@ var commands = []command{
 					if a.Health.Until != nil {
 						until = a.Health.Until.Local().Format(time.DateTime)
 					}
-					rows = append(rows, []string{a.ID, dash(a.Extension), a.Source, health, until, dash(a.Health.Why)})
+					rows = append(rows, []string{a.ID, a.PublicID, dash(a.Extension), a.Source, health, until, dash(a.Health.Why)})
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "route", args: []string{"model"}, routes: []string{"GET /route"}, summary: "the accounts a request for a model would try now, in order, and those it would leave out",
+		run: func(x *invocation) error {
+			var r management.RouteReply
+			return x.call(http.MethodGet, "/route", url.Values{"model": {x.args[0]}}, nil, &r, func() {
+				if len(r.Order) == 0 {
+					x.printf("no account would be tried for %s\n", r.Model)
+				} else {
+					rows := [][]string{{"TRY", "PUBLIC ID", "ID", "PROVIDER", "MODEL"}}
+					for i, s := range r.Order {
+						rows = append(rows, []string{strconv.Itoa(i + 1), s.Account, s.ID, s.Provider, s.Model})
+					}
+					x.table(rows)
+				}
+				if len(r.LeftOut) == 0 {
+					return
+				}
+				x.printf("\nleft out:\n")
+				rows := [][]string{{"PUBLIC ID", "ID", "STATE", "UNTIL"}}
+				for _, l := range r.LeftOut {
+					until := "-"
+					if l.Until != nil {
+						until = l.Until.Local().Format(time.DateTime)
+					}
+					rows = append(rows, []string{l.Account, l.ID, l.State, until})
 				}
 				x.table(rows)
 			})

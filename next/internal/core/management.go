@@ -53,6 +53,7 @@ const maxManagementBody = 1 << 20
 //	POST   /v0/management/accounts/{id}/cooldown/reset  clear an account's cooldowns
 //	GET    /v0/management/accounts/{id}/models  the models an account serves
 //	POST   /v0/management/accounts/{id}/test  send an account one small request
+//	GET    /v0/management/route     what a request for a model would do now (handleRoute)
 //	GET    /v0/management/usage     usage totals, breakdowns and a time series (handleUsage)
 //	GET    /v0/management/usage/events  the recorded requests, a page at a time
 //	GET    /v0/management/logs      lines of core's log files (handleLogs)
@@ -140,6 +141,7 @@ func (c *Core) Management() *server.Management {
 	})
 	c.handleUI(m)
 	c.handleAccounts(m)
+	c.handleRoute(m)
 	c.handleConfig(m)
 	c.handleUsage(m)
 	c.handleLogs(m)

@@ -2,6 +2,7 @@ package route
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -144,6 +145,25 @@ func (p *picker) pick(model string, cands []*Account, active func(string) int, n
 	}
 	p.last[model] = a.ID
 	return a
+}
+
+// preview returns a picker over a copy of model's memory: picks on it leave this picker's
+// untouched, so a plan can ask what the next picks would be.
+func (p *picker) preview(model string) *picker {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	mem := newRotation()
+	if last, ok := p.last[model]; ok {
+		mem.last[model] = last
+	}
+	balances := p.current
+	if p.gen < p.weightsSince {
+		balances = p.own
+	}
+	if cur := balances[model]; cur != nil {
+		mem.current[model] = maps.Clone(cur)
+	}
+	return &picker{strategy: p.strategy, order: maps.Clone(p.order), rotation: mem}
 }
 
 // after returns the first candidate that comes after the account picked last for model, in

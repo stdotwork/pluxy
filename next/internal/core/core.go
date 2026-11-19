@@ -139,6 +139,7 @@ func Start(opts Options) (*Core, error) {
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(), usage: usage.NewStore(),
 		bgCtx: bgCtx, bgCancel: bgCancel}
+	c.loadPublicKey()
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {
 		if s := c.cur.Load(); s != nil {
@@ -583,6 +584,7 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		router.UseCatalog(catalog(next.exts))
 	}
 	next.Router = router
+	router.SetHeld(c.held)
 	if c.creds == nil { // the first load: nothing is live yet
 		store, err := cred.Open(cred.FileBackend{Dir: cfg.CredentialsDir})
 		if err != nil {

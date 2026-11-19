@@ -119,6 +119,10 @@ var (
 // session bindings and the rotation among accounts. It is shared by every request and safe for concurrent use. It is kept
 // against account IDs and endpoint names, not against one config, so it outlives a reload.
 type State struct {
+	// keyMu guards pubKey, the key public IDs are made with (SetPublicKey).
+	keyMu  sync.RWMutex
+	pubKey []byte
+
 	mu        sync.Mutex
 	seq       uint64
 	scopes    map[scopeKey]*scopeState
@@ -298,7 +302,7 @@ func NewState() *State {
 	return &State{scopes: map[scopeKey]*scopeState{}, active: map[string]int{}, affinity: newAffinity(), rotation: newRotation(),
 		since: map[scopeKey]uint64{}, revs: map[string]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64,
 		bans: map[string]banState{}, unbannedSeq: map[string]uint64{},
-		checkEvery: defaultCheckEvery, changes: make(chan struct{}, 1)}
+		checkEvery: defaultCheckEvery, changes: make(chan struct{}, 1), pubKey: NewPublicKey()}
 }
 
 // RetainBans drops bans for accounts that known reports no longer exist (deleted accounts),
