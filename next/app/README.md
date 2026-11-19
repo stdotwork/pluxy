@@ -1730,6 +1730,14 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   `/etc/group`: ones from LDAP, sssd or systemd-userdb are not seen. The refusal names the path and a
   `chmod g-w,o-w` that fixes it. Nothing stops your own processes from swapping the program
   before the terminal starts it. A direct launch runs the file the app checked, wherever it is.
+- On Windows the terminal (the execution program) runs a launch's program by its path, so it
+  refuses a program that another account may change, or whose folder it may change, or that it
+  could swap by removing or renaming what a folder above holds: only you, SYSTEM,
+  Administrators and TrustedInstaller may. The app does not check this before the launch, so the
+  refusal shows in the terminal's window, naming the path and why. A folder whose access list
+  has an entry of a kind the terminal does not read (such as a conditional entry) is refused
+  too. Nothing stops your own processes, or an
+  administrator's, from swapping the program before the terminal holds it.
 - Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
   entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the
   local data folder, private by its access list. Secrets are kept in a file only the user may read

@@ -5,7 +5,10 @@
 //!   app). It runs the program in that console with the launch's working folder and environment,
 //!   passing Ctrl+C to it, then says how it ended; the window then waits for Enter (`console`) or
 //!   stays at a Command Prompt or PowerShell prompt (`cmd`, `powershell`). Exits with the
-//!   program's code.
+//!   program's code. The program runs by its path once `checked::hold` holds it and every folder
+//!   above it, so none can be changed until it runs, and no other account could have changed
+//!   them since the app checked the program; a program it refuses never runs, and the window
+//!   says why, naming the path.
 //! - `open -- <file>`: opens file in the app Windows opens its type with (`ShellExecuteExW`,
 //!   verb `open`, the file's own extension as its class, no dialog).
 //! - `app -- <AUMID>`: starts a packaged app (`shell:AppsFolder\<AUMID>`).
@@ -67,10 +70,10 @@ fn terminal(kind: &str, program: &str, args: &[&str]) -> i32 {
         SetConsoleTitleW(title.as_ptr());
         SetConsoleCtrlHandler(Some(keep_running), 1);
     }
-    let code = match Command::new(program).args(args).status() {
-        Ok(s) => s.code().unwrap_or(1),
+    let code = match run(program, args) {
+        Ok(code) => code,
         Err(e) => {
-            println!("pluxy: could not start {program}: {e}");
+            println!("pluxy: {e}");
             1
         }
     };
@@ -91,6 +94,39 @@ fn terminal(kind: &str, program: &str, args: &[&str]) -> i32 {
         None => hold(),
     }
     code
+}
+
+/// Runs program with args once it is held (`checked::hold`), and lets it go once it runs: its
+/// image is then mapped, which Windows keeps from being written, and the program may rename its
+/// own file (to update itself) while it runs. Its exit code, or why it did not run.
+fn run(program: &str, args: &[&str]) -> Result<i32, String> {
+    let held =
+        crate::checked::hold(program).map_err(|e| format!("will not run \"{program}\": {e}"))?;
+    #[cfg(test)]
+    BEFORE_RUN.with(|h| {
+        if let Some(h) = h.borrow_mut().as_mut() {
+            h(&held.path)
+        }
+    });
+    let mut child = Command::new(&held.path)
+        .args(args)
+        .spawn()
+        .map_err(|e| format!("could not start \"{program}\": {e}"))?;
+    drop(held);
+    let status = child
+        .wait()
+        .map_err(|e| format!("waiting for \"{program}\": {e}"))?;
+    Ok(status.code().unwrap_or(1))
+}
+
+/// For the tests: called with the program's path once it is held, right before it runs, to
+/// change it as another program could then.
+#[cfg(test)]
+type BeforeRun = Box<dyn FnMut(&Path)>;
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_RUN: std::cell::RefCell<Option<BeforeRun>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Waits for Enter, so the window stays until the person has read it.
@@ -164,3 +200,7 @@ fn app(aumid: &str) -> Result<(), String> {
     }
     shell_execute(&format!(r"shell:AppsFolder\{aumid}"), None, None)
 }
+
+#[cfg(test)]
+#[path = "launch_windows_tests.rs"]
+mod tests;
