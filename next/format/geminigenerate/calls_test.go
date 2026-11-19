@@ -120,7 +120,11 @@ func TestMadeCallIDsUniqueAcrossReplies(t *testing.T) {
 					t.Fatal(err)
 				}
 				streamed := callIDs(append(events, end...))
-				whole, err := DecodeResponse([]byte(reply(r)))
+				other := r // another reply, not streamed
+				if r != "" {
+					other = r + "-whole"
+				}
+				whole, err := DecodeResponse([]byte(reply(other)))
 				if err != nil {
 					t.Fatal(err)
 				}

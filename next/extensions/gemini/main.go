@@ -200,27 +200,102 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	if s.Vertex != nil && !vertexCallIDs(tr.From) {
 		body = stripCallIDs(body)
 	}
-	resp, err := postBody(ctx, t, body, call.Request.Stream, call.Request.Model)
-	if err != nil {
+	// A reply that ends with MALFORMED_FUNCTION_CALL (the model wrote a function call Gemini
+	// could not parse) is asked for once more, as long as the client has seen none of it.
+	for first := true; ; first = false {
+		resp, err := postBody(ctx, t, body, call.Request.Stream, call.Request.Model)
+		if err != nil {
+			return err
+		}
+		again, err := relayReply(ctx, resp, send, first)
+		if again {
+			continue
+		}
+		var e *llm.Error
+		if !first && geminigenerate.IsMalformedCall(err) && errors.As(err, &e) {
+			e.Message += "; it was asked for again once, and that reply ended the same way"
+		}
 		return err
 	}
+}
+
+// relayReply sends one upstream reply to send and closes its body. With mayRetry, a reply that
+// ends with MALFORMED_FUNCTION_CALL before send has been given any of it is not sent: again
+// reports that it should be asked for once more. A stream is held back from send until it shows
+// answer text or a function call (holding), so a reply that fails before that can still be asked
+// for again.
+func relayReply(ctx context.Context, resp *http.Response, send sender, mayRetry bool) (again bool, err error) {
 	defer resp.Body.Close()
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return relayStream(ctx, resp.Body, send)
+		if !mayRetry {
+			return false, relayStream(ctx, resp.Body, send)
+		}
+		h := &holding{out: send}
+		err := relayStream(ctx, resp.Body, h)
+		if !h.open {
+			if geminigenerate.IsMalformedCall(err) {
+				return true, nil
+			}
+			if ferr := h.flush(); ferr != nil {
+				return false, ferr
+			}
+		}
+		return false, err
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
 	if err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return false, ctx.Err()
 		}
-		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
+		return false, &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
 	events, err := geminigenerate.DecodeResponse(raw)
 	if err != nil {
-		return err
+		return mayRetry && geminigenerate.IsMalformedCall(err), err
 	}
 	for _, ev := range events {
 		if err := send.Send(ev); err != nil {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+// maxHeld bounds the bytes of a stream holding keeps back; past it the stream goes to the client
+// and is no longer asked for again.
+const maxHeld = 1 << 20
+
+// holding keeps a stream's events back from out until the reply shows answer text or a function
+// call, ends, or holds maxHeld bytes; then it sends what it held and every event after it. Until
+// then the reply can be dropped and asked for again without the client seeing any of it. Thoughts
+// are held too, so a client sees a reply's reasoning only once its answer starts.
+type holding struct {
+	out  sender
+	held []llm.Event
+	size int
+	open bool // the held events have been sent
+}
+
+func (h *holding) Send(ev llm.Event) error {
+	if h.open {
+		return h.out.Send(ev)
+	}
+	h.held = append(h.held, ev)
+	h.size += len(ev.Raw) + len(ev.Delta)
+	answer := ev.Type == llm.EventTextDelta || (ev.Type == llm.EventItemStart && ev.Item != nil && ev.Item.Kind == llm.ItemToolCall)
+	if answer || ev.Terminal() || h.size > maxHeld {
+		return h.flush()
+	}
+	return nil
+}
+
+// flush sends the held events and lets every later one through.
+func (h *holding) flush() error {
+	h.open = true
+	held := h.held
+	h.held = nil
+	for _, ev := range held {
+		if err := h.out.Send(ev); err != nil {
 			return err
 		}
 	}
