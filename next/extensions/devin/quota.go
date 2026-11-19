@@ -54,7 +54,7 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "Devin's reply broke off", Scope: llm.ScopeEndpoint, Retryable: true}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, quotaFailure(resp.StatusCode, body, token, resp.Header.Get("Retry-After"))
+		return nil, quotaFailure(resp.StatusCode, body, sdk.AccountSecrets(call.Account), resp.Header.Get("Retry-After"))
 	}
 	st, err := parseUserStatus(body)
 	if err != nil {
@@ -66,10 +66,10 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 }
 
 // quotaFailure turns a refusal of the quota read into an error as chat's refusals are, except that
-// what a rate limit or a missing method holds back is the account, not a model. token is the
-// session token the read was sent with.
-func quotaFailure(status int, body []byte, token, retryAfterHeader string) *llm.Error {
-	msg, keep := connectMessage(body, token)
+// what a rate limit or a missing method holds back is the account, not a model. secrets are the
+// account's (sdk.AccountSecrets).
+func quotaFailure(status int, body []byte, secrets []string, retryAfterHeader string) *llm.Error {
+	msg, keep := connectMessage(body, secrets)
 	e := statusError(status, msg, keep, retryAfterHeader)
 	switch {
 	case e.Code == llm.CodeNotFound:

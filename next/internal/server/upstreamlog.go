@@ -240,10 +240,13 @@ func writeBody(b *bytes.Buffer, c protocol.CapturedBody, redact *protocol.Redact
 // extension reads its reply on past the end frame to the body's end, within a bound, so that a
 // complete one is not marked.
 //
-// shortcut: a secret that spans lines can keep its first line where the read stopped after that
-// line's break, when the line is 1 or 2 bytes: too short to be a secret of its own (8 bytes) and,
-// with its line break, to be the part of a form TrimCut removes (4). Upgrade if a config takes
-// such a secret.
+// shortcut: a secret that spans lines can keep a line of fewer than 8 bytes (too short to be a
+// secret of its own, minFragment in protocol) where the read stopped after that line's break. A
+// line of 1 or 2 bytes always survives, since with its break it is too short to be the part of a
+// form TrimCut removes (4). A line of 3 to 7 bytes survives when the body does not spell it as the
+// form TrimCut matches: spelled with JSON or percent escapes (the line `!abcdef` as `%21abcdef`),
+// or ended with `\r\n` instead of `\n`. Upgrade if a config takes a secret with a short line
+// before its last.
 func trimStop(r *protocol.Redactor, s string) string {
 	n := gapWindow(r)
 	q := len(s) - min(n, len(s))
@@ -262,7 +265,8 @@ func trimStop(r *protocol.Redactor, s string) string {
 // longest form of a secret that holds a character other than a key's: more than a spelling of
 // the secret with escapes of up to 11 bytes for each of its bytes takes, the bound a streamed
 // body's redaction uses for what it holds back of one. The redaction removes spellings with
-// deeper escapes too; the window does not hold a part of one of those that the gap cut.
+// deeper escapes too (a percent escape nested 6 times takes 13 bytes for a byte); the window does
+// not hold a part of one of those that the gap cut.
 const gapBytesPerFormByte = 12
 
 // gapWindow returns how many bytes beside a cut trimGap leaves out for r's secrets: 12 for each

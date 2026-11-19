@@ -449,6 +449,20 @@ func UpstreamInfo(ctx context.Context) (Info, bool) {
 	return info, ok
 }
 
+// Uncaptured returns ctx without the call's upstream capture: a request made with it goes as the
+// call's other requests go (through its proxy, with its headers) but is not recorded. Use it for
+// credential traffic a call makes for itself, such as trading a key for an access token: core
+// removes only the account's own secrets from a capture, so the token, and what was sent for it,
+// would reach the request log.
+func Uncaptured(ctx context.Context) context.Context {
+	info, ok := UpstreamInfo(ctx)
+	if !ok || info.capture == nil {
+		return ctx
+	}
+	info.capture = nil
+	return context.WithValue(ctx, upstreamInfoKey{}, info)
+}
+
 // withUpstreamInfo returns ctx carrying call's upstream information, and the call's capture when
 // core asked for one (nil otherwise).
 func withUpstreamInfo(ctx context.Context, call protocol.Call) (context.Context, *captureLog) {

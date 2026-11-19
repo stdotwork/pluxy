@@ -5,8 +5,9 @@
 // run.ts refuses to start when the matrix it was given differs. A new session gets a name here, in
 // the shard it fits best, and run.ts asks want(name) before it runs it. The times are each
 // session's on GitHub's Ubuntu runners (the median of four runs on main and in the merge queue on
-// 2026-11-17, from each session's last line to the next's), so that each shard's sessions take
-// about as long as the release gate's, which is one session and cannot be split.
+// 2026-11-17, from each session's last line to the next's). The grouping made each shard about as
+// long as the release gate was then, when each of its calls rebuilt the release app; the gate is
+// one session and cannot be split.
 export const SHARDS: Record<string, readonly string[]> = {
   // About 7.7 minutes: usage 4.4, program 2.3, core steps 0.5, transactions 0.5.
   usage: ["usage", "program", "transactions", "core steps"],
@@ -32,7 +33,7 @@ export const SHARDS: Record<string, readonly string[]> = {
     "remote",
     "packaged",
   ],
-  // About 9 to 11 minutes: five release builds.
+  // One release build: the gate's later calls find it up to date.
   release: ["release gate"],
 };
 
@@ -50,6 +51,10 @@ export const PLATFORM_SHARDS: Record<string, readonly string[]> = {
   // artifact-test-trust: a job of its own, since it builds that app, the fixture tool and the
   // execution program, and starts a test core.
   tools: ["admission", "program", "routing", "launcher"],
+  // The application update (update-cases.ts): a job of its own, since it builds the test package,
+  // runs a test core, and its route restarts the app four times. Its session is not "update",
+  // which names the Linux one in the app shard: a session is named once across all shards.
+  update: ["app update"],
 };
 
 /** The sessions of shards, each named once across them. */

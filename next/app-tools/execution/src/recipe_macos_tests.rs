@@ -10,14 +10,7 @@ const TERMINAL: &str = "/System/Applications/Utilities/Terminal.app";
 
 /// A new folder for one test, resolved (`/var` is `/private/var`), the user's alone.
 fn folder() -> PathBuf {
-    let d = std::env::temp_dir().join(format!(
-        "pluxy-execution-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let d = std::env::temp_dir().join(crate::test_folder_name("pluxy-execution"));
     std::fs::create_dir_all(&d).unwrap();
     std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::canonicalize(d).unwrap()

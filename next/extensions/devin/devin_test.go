@@ -179,7 +179,7 @@ func (r *recorder) types() string {
 
 func relayFrames(frames ...[]byte) (*recorder, error) {
 	rec := &recorder{}
-	r := newRelay(rec, "swe-2", nil)
+	r := newRelay(rec, "swe-2", nil, nil)
 	return rec, r.run(context.Background(), bytes.NewReader(bytes.Join(frames, nil)))
 }
 
@@ -264,14 +264,14 @@ func TestStatusErrors(t *testing.T) {
 	if e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeModel {
 		t.Errorf("quota with no period: %+v", e)
 	}
-	if e := trailerError([]byte(`{"error":{"code":"canceled","message":"x"}}`)); e.Status != 499 {
+	if e := trailerError([]byte(`{"error":{"code":"canceled","message":"x"}}`), nil); e.Status != 499 {
 		t.Errorf("cancelled: status %d, want 499", e.Status)
 	}
 }
 
-// A refusal keeps its body as the error's Raw only when the message is the Connect body's own. Any
-// other body's message is its cleaned text, and the body itself, which the client and the
-// account's last error would get as it is, is not kept: it may hold part of the token.
+// A refusal with a Connect error body keeps a Raw: the body rebuilt from its cleaned code and
+// message. Any other body's message is its cleaned text, and the body itself, which the client and
+// the account's last error would get as it is, is not kept: it may hold part of the token.
 func TestRefusalRaw(t *testing.T) {
 	const tok = "devin-raw-secret-0f1e2d3c4b5a69788796a5b4c3d2e1f0"
 	for _, tc := range []struct {
@@ -373,7 +373,9 @@ func TestForwardInputsStops(t *testing.T) {
 }
 
 // A server that holds the stream open after the reply's end frame does not hold the reply back:
-// the extension reads on past the end frame for a moment only.
+// the extension reads on past the end frame for afterEndWait only, no less (readToEnd gives up
+// only then, so a reply that returns sooner did not read on) and no more than a little over.
+// What the log then records of that body is covered by e2e.TestUpstreamCaptureDevinReplyLoggedWhole.
 func TestReplyNotHeldAfterEndFrame(t *testing.T) {
 	srv := devintest.New(t)
 	srv.Chat = func(w http.ResponseWriter, r *http.Request, _ devintest.Request) {
@@ -386,7 +388,11 @@ func TestReplyNotHeldAfterEndFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := time.Since(start); d > 10*time.Second {
+	d := time.Since(start)
+	if d < afterEndWait {
+		t.Errorf("the reply took %v, less than %v: the extension did not read on past the end frame", d, afterEndWait)
+	}
+	if d > 10*time.Second {
 		t.Errorf("the reply took %v with the stream held open after its end frame", d)
 	}
 	if got := out.types(); !strings.HasSuffix(got, "finish") {
