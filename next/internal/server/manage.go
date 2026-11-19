@@ -561,7 +561,21 @@ func unmarshalSet(raw json.RawMessage, v any) error {
 func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req map[string]json.RawMessage
-	if !readJSON(w, r, &req) || !m.stored(w, id) {
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if cfgAcct, ok := m.configured(id); ok {
+		var disabled *bool
+		if len(req) == 1 {
+			if raw, has := req["disabled"]; has && json.Unmarshal(raw, &disabled) == nil && disabled != nil && !*disabled {
+				if m.state != nil {
+					m.state.Unban(id)
+				}
+				writeJSON(w, http.StatusOK, management.AccountReply{Account: m.configView(cfgAcct)})
+				return
+			}
+		}
+		m.stored(w, id)
 		return
 	}
 	var disabled *bool

@@ -514,3 +514,85 @@ func TestBannedAccountReauthUnbans(t *testing.T) {
 	}
 	postOK(t, base, chatBody)
 }
+
+// A config-file API-key account that gets account_closed shows banned, and pluxy account enable
+// unbans it (without modifying the config file) so it serves again.
+func TestBannedConfigAccountEnable(t *testing.T) {
+	var closed atomic.Bool
+	closed.Store(true)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/models" && r.Method == http.MethodGet {
+			io.WriteString(w, `{"data":[{"type":"model","id":"claude-sonnet-4-5-20250929","display_name":"Claude Sonnet 4.5"}],"has_more":false}`)
+			return
+		}
+		if r.URL.Path == "/v1/messages" && r.Method == http.MethodPost {
+			if closed.Load() {
+				w.WriteHeader(http.StatusBadRequest)
+				io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"This organization has been disabled."}}`)
+				return
+			}
+			io.WriteString(w, `{"id":"msg_ok","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":5,"output_tokens":3}}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(up.Close)
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeConfig(t, cfgPath, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "claude", "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id":         "cfg-a",
+				"settings":   map[string]any{"base_url": up.URL},
+				"credential": map[string]any{"kind": "api_key", "api_key": "sk-ant-api-cfg"},
+			}},
+		},
+	})
+	beforeCfg, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(binDir, "pluxy")
+	base, _, stop, err := startCoreStoppable(t, bin, "-config", cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stop)
+
+	const chatBody = `{"model":"claude-sonnet-4-5-20250929","messages":[{"role":"user","content":"hi"}]}`
+	resp := post(t, context.Background(), base, clientKey, chatBody)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("first request: %d, want 400", resp.StatusCode)
+	}
+	if h := accountHealth(t, base, "cfg-a"); h.State != mgmt.HealthBanned || h.Why != "This organization has been disabled." {
+		t.Fatalf("cfg-a after account_closed: %+v, want banned", h)
+	}
+
+	closed.Store(false)
+	// Other PATCH fields still return 409 on config accounts.
+	code, _ := mcall(t, base, managementKey, http.MethodPatch, "/accounts/cfg-a", `{"disabled":true}`)
+	if code != http.StatusConflict {
+		t.Fatalf("PATCH disabled:true on config account: %d, want 409", code)
+	}
+	if r := runCLI(t, nil, "account", "enable", "cfg-a", "--url", base, "--key", managementKey); r.code != 0 {
+		t.Fatalf("pluxy account enable cfg-a: %s", r)
+	}
+	if h := accountHealth(t, base, "cfg-a"); h.State != mgmt.HealthOK {
+		t.Fatalf("cfg-a after pluxy account enable: %+v, want ok", h)
+	}
+	postOK(t, base, chatBody)
+	afterCfg, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterCfg) != string(beforeCfg) {
+		t.Errorf("config file changed after enable:\nwas:\n%s\nnow:\n%s", beforeCfg, afterCfg)
+	}
+}
