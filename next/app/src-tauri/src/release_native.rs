@@ -1,20 +1,33 @@
-//! The native test's release feed check, in native-test builds only. It drives Version Management
-//! as the person would (real DOM clicks, real GTK dialogs through X input) against the runner's
-//! fake https feed (`native/run.ts`), and reads what the window, the notes webview, the files the
-//! app keeps and the runner's stand-in browser show. Expected versions come from the feed fixture
-//! (`native/release-feed.json`), not from the app's parser.
+//! The native test's release feed check, in native-test builds only. On Linux it drives Version
+//! Management as the person would (real DOM clicks, real GTK dialogs through X input) against
+//! the runner's fake https feed (`native/run.ts`), and reads what the window, the notes webview,
+//! the files the app keeps and the runner's stand-in browser show. Expected versions come from
+//! the feed fixture (`native/release-feed.json`), not from the app's parser. Its helpers (clicks,
+//! data attributes, the feed change through its native confirmation) run on every platform, for
+//! the update check (`update_native.rs`).
+#[cfg(target_os = "linux")]
 use crate::confirmation::native::{key, window};
-use crate::native_test::{eval, log, wait_for};
+#[cfg(target_os = "linux")]
+use crate::native_test::log;
+use crate::native_test::ui::{self, Key};
+use crate::native_test::{eval, wait_for};
+#[cfg(target_os = "linux")]
 use gtk::prelude::*;
 use serde_json::{json, Value};
+#[cfg(target_os = "linux")]
 use std::fs;
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
+#[cfg(target_os = "linux")]
 use std::sync::mpsc;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, Webview};
+#[cfg(target_os = "linux")]
+use tauri::Manager;
+use tauri::{AppHandle, Webview};
 
 const DIALOG: &str = "pluxy native confirmation";
 
+#[cfg(target_os = "linux")]
 fn env(name: &str) -> Result<String, String> {
     std::env::var(name).map_err(|_| format!("{name} is not set"))
 }
@@ -63,34 +76,9 @@ pub(crate) fn attr(main: &Webview, selector: &str, attr: &str) -> Value {
     .unwrap_or(Value::Null)
 }
 
-/// The text the native confirmation shows, read from its GTK labels.
+/// The text the native confirmation shows, read from its native controls (`ui_driver.rs`).
 pub(crate) fn dialog_text(app: &AppHandle) -> Result<String, String> {
-    let (tx, rx) = mpsc::channel();
-    app.run_on_main_thread(move || {
-        fn labels(w: &gtk::Widget, out: &mut String) {
-            if let Some(l) = w.downcast_ref::<gtk::Label>() {
-                out.push_str(&l.text());
-                out.push('\n');
-            }
-            if let Some(c) = w.downcast_ref::<gtk::Container>() {
-                for child in c.children() {
-                    labels(&child, out);
-                }
-            }
-        }
-        let mut out = String::new();
-        for w in gtk::Window::list_toplevels() {
-            if let Ok(d) = w.downcast::<gtk::Dialog>() {
-                if d.title().as_deref() == Some(DIALOG) && d.is_visible() {
-                    labels(d.upcast_ref(), &mut out);
-                }
-            }
-        }
-        let _ = tx.send(out);
-    })
-    .map_err(|e| e.to_string())?;
-    rx.recv_timeout(Duration::from_secs(5))
-        .map_err(|e| e.to_string())
+    Ok(ui::texts(app, DIALOG)?.join("\n"))
 }
 
 /// Asks for a feed change in the window and waits for its native dialog.
@@ -103,7 +91,9 @@ fn ask_source(app: &AppHandle, main: &Webview, url: &str) -> Result<String, Stri
     .map_err(|e| e.to_string())?;
     std::thread::sleep(Duration::from_millis(200));
     click(main, "[data-part=release-source-change]")?;
-    wait_for("the feed change's native confirmation", || window(DIALOG))?;
+    wait_for("the feed change's native confirmation", || {
+        ui::shown(app, DIALOG).then_some(())
+    })?;
     let text = dialog_text(app)?;
     if !text.contains(url) {
         return Err(format!(
@@ -131,7 +121,7 @@ pub(crate) fn set_source(app: &AppHandle, main: &Webview, url: &str) -> Result<(
         .filter(|v| v == true)
     })?;
     ask_source(app, main, url)?;
-    key(DIALOG, "alt+o")?;
+    ui::press(app, DIALOG, Key::Access('o'))?;
     wait_attr(
         main,
         "the confirmed feed",
@@ -141,6 +131,7 @@ pub(crate) fn set_source(app: &AppHandle, main: &Webview, url: &str) -> Result<(
     )
 }
 
+#[cfg(target_os = "linux")]
 fn browser_log(path: &str) -> Vec<String> {
     fs::read_to_string(path)
         .unwrap_or_default()
@@ -149,6 +140,7 @@ fn browser_log(path: &str) -> Vec<String> {
         .collect()
 }
 
+#[cfg(target_os = "linux")]
 /// A notes webview's document, as its own DOM has it.
 const NOTES_DOM: &str = "({href: location.href, scripts: document.scripts.length, \
     images: document.images.length, embedded: document.querySelectorAll('iframe, object, embed, frame, form, input').length, \
@@ -157,6 +149,7 @@ const NOTES_DOM: &str = "({href: location.href, scripts: document.scripts.length
     text: document.body.innerText, ran: window.__hostileRan ?? null, \
     internals: typeof window.__TAURI_INTERNALS__?.invoke === 'function'})";
 
+#[cfg(target_os = "linux")]
 fn area(main: &Webview, product: &str) -> Value {
     eval(
         main,
@@ -168,6 +161,7 @@ fn area(main: &Webview, product: &str) -> Value {
     .unwrap_or(Value::Null)
 }
 
+#[cfg(target_os = "linux")]
 fn placed(app: &AppHandle, label: &str) -> Result<Value, String> {
     let (tx, rx) = mpsc::channel();
     let l = label.to_string();
@@ -181,12 +175,14 @@ fn placed(app: &AppHandle, label: &str) -> Result<Value, String> {
         .flatten()))
 }
 
+#[cfg(target_os = "linux")]
 fn near(a: &Value, b: &Value) -> bool {
     ["x", "y", "width", "height"].iter().all(
         |k| matches!((a[k].as_f64(), b[k].as_f64()), (Some(x), Some(y)) if (x - y).abs() <= 2.0),
     )
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) fn run(
     app: &AppHandle,
     main: &Webview,
