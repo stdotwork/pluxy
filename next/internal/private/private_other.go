@@ -72,3 +72,9 @@ func Create(root *os.Root, dir, name string) (*os.File, error) {
 // fileOwner accepts every file on unix: each was made 0600 by its owner, and the folder check
 // does not look at owners.
 func fileOwner(f *os.File) (bool, string, error) { return true, "", nil }
+
+// filePrivate reports true on unix: the folder's mode keeps everyone else out.
+func filePrivate(f *os.File) (bool, error) { return true, nil }
+
+// copyAccess does nothing on unix, where a caller sets the mode.
+func copyAccess(src, dst string) error { return nil }
