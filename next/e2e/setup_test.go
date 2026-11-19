@@ -7,53 +7,15 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
-)
 
-type setupView struct {
-	FirstRun  bool       `json:"first_run"`
-	Scanning  bool       `json:"scanning"`
-	ScannedAt *time.Time `json:"scanned_at"`
-	Found     struct {
-		Clients []struct {
-			ID        string `json:"id"`
-			Name      string `json:"name"`
-			Installed bool   `json:"installed"`
-			Version   string `json:"version"`
-			Config    string `json:"config"`
-			State     string `json:"state"`
-		} `json:"clients"`
-		SignIns []struct {
-			Provider string `json:"provider"`
-			From     string `json:"from"`
-			Label    string `json:"label"`
-		} `json:"sign_ins"`
-		Imports []struct {
-			Kind     string `json:"kind"`
-			Config   string `json:"config"`
-			AuthDir  string `json:"auth_dir"`
-			Accounts int    `json:"accounts"`
-		} `json:"imports"`
-		Core struct {
-			Listen               string `json:"listen"`
-			ReachableFromNetwork bool   `json:"reachable_from_network"`
-		} `json:"core"`
-	} `json:"found"`
-	Picks []struct {
-		ID        string `json:"id"`
-		Kind      string `json:"kind"`
-		Title     string `json:"title"`
-		Summary   string `json:"summary"`
-		Installed bool   `json:"installed"`
-		Suggested bool   `json:"suggested"`
-		Because   string `json:"because"`
-	} `json:"picks"`
-}
+	mgmt "github.com/stdotwork/pluxy/next/management"
+)
 
 func managedJSON(t *testing.T, base, key, method, path string, in any) (int, []byte) {
 	t.Helper()
@@ -84,95 +46,64 @@ func managedJSON(t *testing.T, base, key, method, path string, in any) (int, []b
 
 func writeFakeTool(t *testing.T, dir, name, script string) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX shell script fake tools")
-	}
 	p := filepath.Join(dir, name)
 	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
 
+// isolatedSetupEnv is the whole environment of a core whose home is home and whose PATH holds
+// fakeBin and the system's own programs.
 func isolatedSetupEnv(home, fakeBin string) []string {
-	xdg := filepath.Join(home, ".xdg")
-	return []string{
-		"HOME=" + home,
-		"XDG_CONFIG_HOME=" + filepath.Join(xdg, "config"),
-		"XDG_DATA_HOME=" + filepath.Join(xdg, "data"),
-		"XDG_STATE_HOME=" + filepath.Join(xdg, "state"),
-		"XDG_CACHE_HOME=" + filepath.Join(xdg, "cache"),
-		"PATH=" + fakeBin + string(os.PathListSeparator) + "/usr/bin:/bin",
-	}
+	return append(testHomeEnv(home), "PATH="+fakeBin+string(os.PathListSeparator)+"/usr/bin:/bin")
 }
 
-func waitForSetupScan(t *testing.T, base, key string) setupView {
+// startSetupCore starts core on a new config in a folder of its own with env, and returns its
+// address, a management client for it, the config's path and a stop that ends core.
+func startSetupCore(t *testing.T, env []string, cfgPath, bundledIndex string) (string, *mgmt.Client, func()) {
+	t.Helper()
+	if _, err := os.Stat(cfgPath); err != nil {
+		cfg, _ := json.Marshal(map[string]any{
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
+		})
+		if err := os.WriteFile(cfgPath, cfg, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base, _, stop, err := startCoreEnv(t, env, filepath.Join(binDir, "pluxy"), "serve", "-config", cfgPath, "-bundled", bundledIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base, &mgmt.Client{URL: base, Key: managementKey}, stop
+}
+
+func waitForSetupScan(t *testing.T, c *mgmt.Client) mgmt.Setup {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		code, body := managedJSON(t, base, key, http.MethodGet, "/setup", nil)
-		if code != http.StatusOK {
-			t.Fatalf("GET /setup: %d %s", code, body)
+		s, err := c.Setup(context.Background())
+		if err != nil {
+			t.Fatalf("GET /setup: %v", err)
 		}
-		var v setupView
-		if err := json.Unmarshal(body, &v); err != nil {
-			t.Fatalf("GET /setup JSON: %v: %s", err, body)
-		}
-		if !v.Scanning && v.ScannedAt != nil {
-			return v
+		if !s.Scanning && s.ScannedAt != nil {
+			return s
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("setup scan did not finish within 15s: %s", body)
+			t.Fatalf("setup scan did not finish within 15s: %+v", s)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-func startCoreEnvStoppable(t *testing.T, env []string, bin string, argv ...string) (string, func()) {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, bin, argv...)
-	if env != nil {
-		cmd.Env = env
-	}
-	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
-	cmd.WaitDelay = 10 * time.Second
-	addr := make(chan string, 1)
-	w := &lineWriter{fn: func(line string) {
-		t.Logf("core: %.4096s", line)
-		if rest, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
-			select {
-			case addr <- rest:
-			default:
-			}
+func clientByID(s mgmt.Setup, id string) mgmt.SetupClient {
+	for _, c := range s.Found.Clients {
+		if c.ID == id {
+			return c
 		}
-	}}
-	cmd.Stderr = w
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
 	}
-	exited := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		w.flush()
-		close(addr)
-		close(exited)
-	}()
-	stop := func() {
-		http.DefaultClient.CloseIdleConnections()
-		cancel()
-		<-exited
-	}
-	t.Cleanup(stop)
-	select {
-	case u, ok := <-addr:
-		if !ok {
-			t.Fatal("core exited before listening")
-		}
-		return u, stop
-	case <-time.After(15 * time.Second):
-		t.Fatal("core did not listen within 15s")
-		return "", stop
-	}
+	return mgmt.SetupClient{}
 }
 
 func TestSetupScanKeepApplyDone(t *testing.T) {
@@ -198,73 +129,35 @@ func TestSetupScanKeepApplyDone(t *testing.T) {
 	if err := os.MkdirAll(cpaDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(cpaDir, "config.yaml"), []byte("port: 8317\n"), 0o600); err != nil {
-		t.Fatal(err)
+	for name, content := range map[string]string{"config.yaml": "port: 8317\n", "a.json": "{}", "b.json": "{}"} {
+		if err := os.WriteFile(filepath.Join(cpaDir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.WriteFile(filepath.Join(cpaDir, "a.json"), []byte(`{}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(cpaDir, "b.json"), []byte(`{}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	env := isolatedSetupEnv(home, fakeBin)
 
 	packOut := t.TempDir()
 	runPack(t, buildPackTool(t), packOut, "-extensions", "claude,codex,openai-compatible")
-	bundledIndex := filepath.Join(packOut, "bundled", "index.json")
-
 	cfgDir := t.TempDir()
-	cfgPath := filepath.Join(cfgDir, "config.json")
-	cfgBytes, _ := json.Marshal(map[string]any{
-		"listen":         "127.0.0.1:0",
-		"client_keys":    []string{clientKey},
-		"management_key": managementKey,
-	})
-	if err := os.WriteFile(cfgPath, cfgBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	base, client, _ := startSetupCore(t, isolatedSetupEnv(home, fakeBin), filepath.Join(cfgDir, "config.json"), filepath.Join(packOut, "bundled", "index.json"))
 
-	base, stop := startCoreEnvStoppable(t, env, filepath.Join(binDir, "pluxy"), "serve", "-config", cfgPath, "-bundled", bundledIndex)
-	defer stop()
-
-	// GET /status has first_run: true.
 	code, statusBody := managedJSON(t, base, managementKey, http.MethodGet, "/status", nil)
-	if code != http.StatusOK {
-		t.Fatalf("GET /status: %d %s", code, statusBody)
-	}
 	var st struct {
 		FirstRun bool `json:"first_run"`
 	}
-	if err := json.Unmarshal(statusBody, &st); err != nil || !st.FirstRun {
-		t.Fatalf("GET /status first_run = %v (%v): %s", st.FirstRun, err, statusBody)
+	if code != http.StatusOK || json.Unmarshal(statusBody, &st) != nil || !st.FirstRun {
+		t.Fatalf("GET /status: %d %s; want first_run true", code, statusBody)
 	}
 
-	// Scan finishes (hanging codex probe is cut at 4 s, well under 15 s).
-	sv := waitForSetupScan(t, base, managementKey)
+	// The first start scans once core listens; the hanging codex probe is cut at 4 s.
+	sv := waitForSetupScan(t, client)
 	if !sv.FirstRun {
 		t.Errorf("GET /setup first_run = false, want true")
 	}
-
-	clients := map[string]struct {
-		installed bool
-		version   string
-		config    string
-		state     string
-	}{}
-	for _, c := range sv.Found.Clients {
-		clients[c.ID] = struct {
-			installed bool
-			version   string
-			config    string
-			state     string
-		}{c.Installed, c.Version, c.Config, c.State}
-	}
-	if cc := clients["claude-code"]; !cc.installed || cc.version != "2.4.1" || cc.state != "not-configured" || cc.config != "~/.claude/settings.json" {
+	if cc := clientByID(sv, "claude-code"); !cc.Installed || cc.Version != "2.4.1" || cc.State != "not-configured" || cc.Config != "~/.claude/settings.json" {
 		t.Errorf("claude-code client = %+v", cc)
 	}
-	if cx := clients["codex"]; !cx.installed || cx.version != "" || cx.state != "not-configured" || cx.config != "~/.codex/config.toml" {
-		t.Errorf("codex client = %+v (want installed=true, empty version after 4s timeout)", cx)
+	if cx := clientByID(sv, "codex"); !cx.Installed || cx.Version != "" || cx.State != "not-configured" || cx.Config != "~/.codex/config.toml" {
+		t.Errorf("codex client = %+v (want installed, no version after the 4 s limit)", cx)
 	}
 	if len(sv.Found.SignIns) != 1 || sv.Found.SignIns[0].Provider != "pluxy/codex" {
 		t.Errorf("sign_ins = %+v, want pluxy/codex", sv.Found.SignIns)
@@ -276,7 +169,7 @@ func TestSetupScanKeepApplyDone(t *testing.T) {
 		t.Errorf("core.reachable_from_network = true, want false for 127.0.0.1")
 	}
 
-	// Picks order: providers in plan order (codex, claude, openai-compatible).
+	// Picks order: providers in setup's order (codex, claude, openai-compatible).
 	if len(sv.Picks) != 3 || sv.Picks[0].ID != "pluxy/codex" || sv.Picks[1].ID != "pluxy/claude" || sv.Picks[2].ID != "pluxy/openai-compatible" {
 		t.Fatalf("picks = %+v", sv.Picks)
 	}
@@ -284,9 +177,7 @@ func TestSetupScanKeepApplyDone(t *testing.T) {
 		t.Errorf("picks suggested flags: codex=%v claude=%v openai-compatible=%v", sv.Picks[0].Suggested, sv.Picks[1].Suggested, sv.Picks[2].Suggested)
 	}
 
-	// state/setup.json exists with mode 0600.
-	statePath := filepath.Join(cfgDir, "state", "setup.json")
-	info, err := os.Stat(statePath)
+	info, err := os.Stat(filepath.Join(cfgDir, "state", "setup.json"))
 	if err != nil {
 		t.Fatalf("state/setup.json: %v", err)
 	}
@@ -309,109 +200,65 @@ func TestSetupRestartApplyAndDone(t *testing.T) {
 	packOut := t.TempDir()
 	runPack(t, buildPackTool(t), packOut, "-extensions", "claude,openai-compatible")
 	bundledIndex := filepath.Join(packOut, "bundled", "index.json")
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
 
-	cfgDir := t.TempDir()
-	cfgPath := filepath.Join(cfgDir, "config.json")
-	cfgBytes, _ := json.Marshal(map[string]any{
-		"listen":         "127.0.0.1:0",
-		"client_keys":    []string{clientKey},
-		"management_key": managementKey,
-	})
-	if err := os.WriteFile(cfgPath, cfgBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	base1, stop1 := startCoreEnvStoppable(t, env, filepath.Join(binDir, "pluxy"), "serve", "-config", cfgPath, "-bundled", bundledIndex)
-	sv1 := waitForSetupScan(t, base1, managementKey)
-	if sv1.ScannedAt == nil {
-		t.Fatal("scanned_at is nil")
-	}
-	firstScannedAt := *sv1.ScannedAt
+	_, client1, stop1 := startSetupCore(t, env, cfgPath, bundledIndex)
+	first := waitForSetupScan(t, client1)
 	stop1()
 
-	// Restart core: GET /setup returns the kept scan at once (scanned_at unchanged, before the 4s scan finishes).
-	base2, stop2 := startCoreEnvStoppable(t, env, filepath.Join(binDir, "pluxy"), "serve", "-config", cfgPath, "-bundled", bundledIndex)
-	defer stop2()
-
+	// After a restart GET /setup returns the kept scan at once, and core does not scan again
+	// on its own.
+	_, client, _ := startSetupCore(t, env, cfgPath, bundledIndex)
 	start := time.Now()
-	code, body := managedJSON(t, base2, managementKey, http.MethodGet, "/setup", nil)
-	if code != http.StatusOK {
-		t.Fatalf("GET /setup after restart: %d %s", code, body)
+	kept, err := client.Setup(context.Background())
+	if err != nil {
+		t.Fatalf("GET /setup after restart: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
-		t.Errorf("GET /setup after restart took %v, want immediate kept scan", elapsed)
+		t.Errorf("GET /setup after restart took %v, want the kept scan at once", elapsed)
 	}
-	var kept setupView
-	if err := json.Unmarshal(body, &kept); err != nil {
-		t.Fatal(err)
+	if kept.Scanning || kept.ScannedAt == nil || !kept.ScannedAt.Equal(*first.ScannedAt) {
+		t.Errorf("after restart: scanning %v, scanned_at %v; want the kept scan of %v", kept.Scanning, kept.ScannedAt, first.ScannedAt)
 	}
-	if kept.ScannedAt == nil || !kept.ScannedAt.Equal(firstScannedAt) {
-		t.Errorf("kept scanned_at = %v, want %v", kept.ScannedAt, firstScannedAt)
-	}
-	if !kept.Scanning {
-		t.Errorf("kept scanning = false while restart scan (with 4s hanging codex) is running")
-	}
-	waitForSetupScan(t, base2, managementKey)
-
-	// POST /setup/scan returns at once with scanning: true.
-	code, scanBody := managedJSON(t, base2, managementKey, http.MethodPost, "/setup/scan", nil)
-	if code != http.StatusOK {
-		t.Fatalf("POST /setup/scan: %d %s", code, scanBody)
-	}
-	var scanning setupView
-	if err := json.Unmarshal(scanBody, &scanning); err != nil || !scanning.Scanning {
-		t.Fatalf("POST /setup/scan = %s (err=%v); want scanning: true", scanBody, err)
-	}
-	waitForSetupScan(t, base2, managementKey)
-
-	// POST /setup/apply installs pluxy/claude from bundled registry even when another pick fails.
-	code, applyBody := managedJSON(t, base2, managementKey, http.MethodPost, "/setup/apply", map[string]any{
-		"picks": []string{"pluxy/claude", "nobody/missing"},
-	})
-	if code != http.StatusOK {
-		t.Fatalf("POST /setup/apply: %d %s", code, applyBody)
-	}
-	var applyResp struct {
-		Results []struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
-			Error  string `json:"error"`
-		} `json:"results"`
-	}
-	if err := json.Unmarshal(applyBody, &applyResp); err != nil || len(applyResp.Results) != 2 {
-		t.Fatalf("apply reply = %s (%v)", applyBody, err)
-	}
-	if applyResp.Results[0].ID != "pluxy/claude" || applyResp.Results[0].Status != "done" {
-		t.Errorf("result[0] = %+v", applyResp.Results[0])
-	}
-	if applyResp.Results[1].ID != "nobody/missing" || applyResp.Results[1].Status != "error" || applyResp.Results[1].Error == "" {
-		t.Errorf("result[1] = %+v", applyResp.Results[1])
+	time.Sleep(500 * time.Millisecond)
+	if again, err := client.Setup(context.Background()); err != nil || again.Scanning || !again.ScannedAt.Equal(*first.ScannedAt) {
+		t.Errorf("core scanned again on its own after a restart: %+v (%v)", again, err)
 	}
 
-	// GET /packages lists pluxy/claude.
-	code, pkgBody := managedJSON(t, base2, managementKey, http.MethodGet, "/packages", nil)
-	if code != http.StatusOK || !strings.Contains(string(pkgBody), `"pluxy/claude"`) {
-		t.Errorf("GET /packages = %d %s; want pluxy/claude", code, pkgBody)
+	// POST /setup/scan returns at once with scanning: true, and scans.
+	scanning, err := client.SetupScan(context.Background())
+	if err != nil || !scanning.Scanning {
+		t.Fatalf("POST /setup/scan = %+v (%v); want scanning: true", scanning, err)
+	}
+	if rescanned := waitForSetupScan(t, client); !rescanned.ScannedAt.After(*first.ScannedAt) {
+		t.Errorf("POST /setup/scan: scanned_at %v, not after %v", rescanned.ScannedAt, first.ScannedAt)
+	}
+
+	// POST /setup/apply installs pluxy/claude from the bundled registry even when another pick fails.
+	applied, err := client.SetupApply(context.Background(), []string{"pluxy/claude", "nobody/missing"})
+	if err != nil || len(applied.Results) != 2 {
+		t.Fatalf("POST /setup/apply = %+v (%v)", applied, err)
+	}
+	if r := applied.Results[0]; r.ID != "pluxy/claude" || r.Status != "done" {
+		t.Errorf("result[0] = %+v", r)
+	}
+	if r := applied.Results[1]; r.ID != "nobody/missing" || r.Status != "error" || r.Error == "" {
+		t.Errorf("result[1] = %+v", r)
+	}
+	pkgs, err := client.Packages(context.Background())
+	if err != nil || !slices.ContainsFunc(pkgs, func(p mgmt.Package) bool { return p.ID == "pluxy/claude" }) {
+		t.Errorf("GET /packages = %+v (%v); want pluxy/claude", pkgs, err)
 	}
 
 	// POST /setup/done makes first_run false in GET /setup and GET /status.
-	code, doneBody := managedJSON(t, base2, managementKey, http.MethodPost, "/setup/done", nil)
-	if code != http.StatusOK || !strings.Contains(string(doneBody), `"first_run":false`) {
-		t.Errorf("POST /setup/done = %d %s", code, doneBody)
+	if done, err := client.SetupDone(context.Background()); err != nil || done.FirstRun {
+		t.Errorf("POST /setup/done = %+v (%v)", done, err)
 	}
-	_, setupAfter := managedJSON(t, base2, managementKey, http.MethodGet, "/setup", nil)
-	var svDone setupView
-	_ = json.Unmarshal(setupAfter, &svDone)
-	if svDone.FirstRun {
-		t.Errorf("GET /setup after done: first_run = true")
+	if s, err := client.Setup(context.Background()); err != nil || s.FirstRun {
+		t.Errorf("GET /setup after done: first_run %v (%v)", s.FirstRun, err)
 	}
-	_, statusAfter := managedJSON(t, base2, managementKey, http.MethodGet, "/status", nil)
-	var stDone struct {
-		FirstRun bool `json:"first_run"`
-	}
-	_ = json.Unmarshal(statusAfter, &stDone)
-	if stDone.FirstRun {
-		t.Errorf("GET /status after done: first_run = true")
+	if s, err := client.Status(context.Background()); err != nil || s.FirstRun {
+		t.Errorf("GET /status after done: first_run %v (%v)", s.FirstRun, err)
 	}
 }
 
@@ -427,33 +274,16 @@ func TestCLISetupAndClientShow(t *testing.T) {
 
 	packOut := t.TempDir()
 	runPack(t, buildPackTool(t), packOut, "-extensions", "claude,openai-compatible")
-	bundledIndex := filepath.Join(packOut, "bundled", "index.json")
+	base, client, _ := startSetupCore(t, env, filepath.Join(t.TempDir(), "config.json"), filepath.Join(packOut, "bundled", "index.json"))
+	waitForSetupScan(t, client)
 
-	cfgDir := t.TempDir()
-	cfgPath := filepath.Join(cfgDir, "config.json")
-	cfgBytes, _ := json.Marshal(map[string]any{
-		"listen":         "127.0.0.1:0",
-		"client_keys":    []string{clientKey},
-		"management_key": managementKey,
-	})
-	if err := os.WriteFile(cfgPath, cfgBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	base, stop := startCoreEnvStoppable(t, env, filepath.Join(binDir, "pluxy"), "serve", "-config", cfgPath, "-bundled", bundledIndex)
-	defer stop()
-	waitForSetupScan(t, base, managementKey)
-
-	cliEnv := append(slicesClone(env),
-		"PLUXY_URL="+base,
-		"PLUXY_MANAGEMENT_KEY="+managementKey,
-	)
+	cliEnv := append(slices.Clone(env), "PLUXY_URL="+base, "PLUXY_MANAGEMENT_KEY="+managementKey)
 
 	r := runCLI(t, cliEnv, "setup", "--json")
 	if r.code != 0 || r.stderr != "" {
 		t.Fatalf("pluxy setup --json: %s", r)
 	}
-	var sv setupView
+	var sv mgmt.Setup
 	if err := json.Unmarshal([]byte(r.stdout), &sv); err != nil {
 		t.Fatalf("pluxy setup --json invalid JSON: %v\n%s", err, r)
 	}
@@ -488,19 +318,19 @@ func TestCLISetupAndClientShow(t *testing.T) {
 		t.Errorf("client show --key-id: %s", r)
 	}
 
-	// Apply and done through the CLI.
-	r = runCLI(t, cliEnv, "setup", "apply", "--pick", "pluxy/claude", "--json")
-	if r.code != 0 || !strings.Contains(r.stdout, `"status":"done"`) {
-		t.Errorf("pluxy setup apply --pick pluxy/claude --json: %s", r)
+	// pluxy setup --yes --json applies the suggested picks and prints the apply reply.
+	r = runCLI(t, cliEnv, "setup", "--yes", "--json")
+	var reply mgmt.SetupApplyReply
+	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &reply) != nil || len(reply.Results) == 0 || reply.Results[0].ID != "pluxy/claude" || reply.Results[0].Status != "done" {
+		t.Errorf("pluxy setup --yes --json: %s", r)
+	}
+	// Nothing left to apply: with --json, a usage error as an error object.
+	r = runCLI(t, cliEnv, "setup", "apply", "--yes", "--json")
+	if r.code != 2 || r.stdout != "" || !strings.HasPrefix(r.stderr, `{"error":{"code":"invalid_request"`) {
+		t.Errorf("pluxy setup apply --yes --json with nothing suggested: %s", r)
 	}
 	r = runCLI(t, cliEnv, "setup", "done", "--json")
 	if r.code != 0 || !strings.Contains(r.stdout, `"first_run":false`) {
 		t.Errorf("pluxy setup done --json: %s", r)
 	}
-}
-
-func slicesClone(s []string) []string {
-	out := make([]string, len(s))
-	copy(out, s)
-	return out
 }

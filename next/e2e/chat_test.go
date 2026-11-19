@@ -308,9 +308,36 @@ func startCoreBin(t *testing.T, bin, path string, args ...string) (string, *core
 // startCoreArgv is startCoreBin with the program's whole command line after its name.
 func startCoreArgv(t *testing.T, bin string, argv ...string) (string, *coreLog, error) {
 	t.Helper()
+	base, logs, _, err := startCoreEnv(t, nil, bin, argv...)
+	return base, logs, err
+}
+
+// testHomeEnv is the environment that gives a program home as its home, config, data, state and
+// cache folder: core scans those for client tools.
+func testHomeEnv(home string) []string {
+	xdg := filepath.Join(home, ".xdg")
+	return []string{
+		"HOME=" + home,
+		"USERPROFILE=" + home,
+		"XDG_CONFIG_HOME=" + filepath.Join(xdg, "config"),
+		"XDG_DATA_HOME=" + filepath.Join(xdg, "data"),
+		"XDG_STATE_HOME=" + filepath.Join(xdg, "state"),
+		"XDG_CACHE_HOME=" + filepath.Join(xdg, "cache"),
+		"CODEX_HOME=" + filepath.Join(home, ".codex"),
+	}
+}
+
+// startCoreEnv is startCoreArgv with the whole environment env (nil: this process's with a home
+// folder of the test's own) that also returns a stop, which ends core before the test does.
+func startCoreEnv(t *testing.T, env []string, bin string, argv ...string) (string, *coreLog, func(), error) {
+	t.Helper()
+	if env == nil {
+		env = append(os.Environ(), testHomeEnv(t.TempDir())...)
+	}
 	logs := &coreLog{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, bin, argv...)
+	cmd.Env = env
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 10 * time.Second
 	addr := make(chan string, 1)
@@ -338,7 +365,7 @@ func startCoreArgv(t *testing.T, bin string, argv ...string) (string, *coreLog, 
 		close(addr) // core exited
 		close(exited)
 	}()
-	t.Cleanup(func() {
+	stop := sync.OnceFunc(func() {
 		// A connection the client dialled but never sent a request on counts as busy to
 		// core's http.Server.Shutdown until it is 5 s old; closing the idle ones lets core
 		// stop at once.
@@ -346,14 +373,15 @@ func startCoreArgv(t *testing.T, bin string, argv ...string) (string, *coreLog, 
 		cancel()
 		<-exited
 	})
+	t.Cleanup(stop)
 	select {
 	case a, ok := <-addr:
 		if !ok {
-			return "", logs, errors.New("core exited before listening")
+			return "", logs, stop, errors.New("core exited before listening")
 		}
-		return a, logs, nil
+		return a, logs, stop, nil
 	case <-time.After(15 * time.Second):
-		return "", logs, errors.New("core did not report its listening address")
+		return "", logs, stop, errors.New("core did not report its listening address")
 	}
 }
 
