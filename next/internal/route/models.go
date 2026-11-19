@@ -634,7 +634,9 @@ func (r *Router) listedModel(a *Account, n Name, list *protocol.ModelList, name 
 
 // ModelNames returns public and upstream names served by extension's accounts, using
 // Models' cached catalogs and naming rules without renewing credentials. Repeated names
-// keep the first mapping; NonCodex marks names also served by another extension.
+// keep the first mapping; NonCodex marks names also served by another extension. A fallback
+// chain's name is listed when a step of it can go to extension, and is NonCodex when a step can
+// go to another extension, whatever else serves the name.
 func (r *Router) ModelNames(ctx context.Context, extension string) []Name {
 	accounts, creds := r.snapshot()
 	creds = storedCredentials{creds}
@@ -677,6 +679,33 @@ func (r *Router) ModelNames(ctx context.Context, extension string) []Name {
 			if _, ok := a.resolve(out[i].Public, r.cfg.ForceModelPrefix, ids); ok {
 				out[i].NonCodex = true
 			}
+		}
+	}
+	// A chain decides where its name goes: it is NonCodex when a step can go to another
+	// extension, and a chain's new name is listed when a step can go to this one, as that step's
+	// model.
+	if len(r.cfg.Chains) > 0 {
+		known, _ := r.knownSnapshot()
+		served := r.served(ctx, known, creds, catalog)
+		for _, name := range slices.Sorted(maps.Keys(r.cfg.Chains)) {
+			steps := r.cfg.Chains[name]
+			serving, _ := split(r.targets(steps, known, served))
+			other := slices.ContainsFunc(serving, func(t target) bool { return t.a.Extension != extension })
+			if j := slices.IndexFunc(out, func(n Name) bool { return n.Public == name }); j >= 0 {
+				out[j].NonCodex = other
+				continue
+			}
+			i := slices.IndexFunc(serving, func(t target) bool { return t.a.Extension == extension })
+			if i < 0 {
+				continue
+			}
+			t := serving[i]
+			n := Name{Upstream: t.model, Base: t.model}
+			if k := slices.IndexFunc(out, func(n Name) bool { return n.Public == steps[t.step].Model && n.Upstream == t.model }); k >= 0 {
+				n = out[k]
+			}
+			n.Public, n.NonCodex = name, other
+			out = append(out, n)
 		}
 	}
 	slices.SortFunc(out, func(a, b Name) int { return strings.Compare(a.Public, b.Public) })

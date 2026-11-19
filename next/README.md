@@ -1701,11 +1701,13 @@ with an empty value, selects this reply before the Anthropic client check. Witho
 parameter the lists above keep their usual shape.
 
 Core resolves the models served by accounts of `pluxy/codex` with the same exclusions, aliases
-and prefixes as the normal list. It sends one `codex.models` endpoint call containing the client
+and prefixes as the normal list, and each fallback chain's name when a step of it can go to a
+`pluxy/codex` account, as that step's model. It sends one `codex.models` endpoint call containing the client
 version and each model's public and upstream names. The Codex extension loads its embedded
 catalog on the first such call and selects templates by upstream name. It removes
 `cpa_capabilities`, replaces `slug` with the public name and `display_name` when provided,
-and clears Codex-only options for names that a non-Codex account can also serve. The catalog
+and clears Codex-only options for names that a non-Codex account can also serve, or whose
+fallback chain has a step a non-Codex account can serve. The catalog
 keeps `minimal_client_version` from the template;
 clients below 0.144.0 receive reasoning levels only through `xhigh`, while empty or unparseable
 versions keep modern levels. Models without a template are omitted: a routing entry alone

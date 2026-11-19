@@ -105,7 +105,8 @@ type Name struct {
 	Base string
 	// DisplayName is a display name an alias gave the model; empty when it gave none.
 	DisplayName string
-	// NonCodex marks a listed name also served by another extension (ModelNames only).
+	// NonCodex marks a listed name also served by another extension, or whose fallback chain
+	// can go to one (ModelNames only).
 	NonCodex bool
 }
 
