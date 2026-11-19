@@ -19,7 +19,8 @@
     padding: calc(var(--s) * 3);
     border: var(--px-shape-border) solid var(--px-color-border);
     border-radius: var(--px-shape-radius);
-    background: var(--px-color-surface-raised);
+    color: var(--px-color-code-text);
+    background: var(--px-color-code-bg);
     margin: calc(var(--s) * 3) 0;
   }
   .logs-text[data-wrap] {

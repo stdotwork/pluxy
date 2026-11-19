@@ -663,8 +663,9 @@ var connectCodes = map[string]bool{
 
 // cleanConnectError returns a Connect error's code and message cleaned by sdk.UpstreamText with
 // secrets, the account's (sdk.AccountSecrets): one line, bounded, without the pieces of a secret
-// the upstream echoed, which core, removing only whole copies, would pass on. A code that is one
-// of Connect's stays as it is.
+// the upstream echoed. Core removes such pieces from an error's message and raw body too
+// (protocol.RemovePieces), but not from its code, and applies none of UpstreamText's other rules.
+// A code that is one of Connect's stays as it is.
 func cleanConnectError(code, msg string, secrets []string) connectError {
 	if !connectCodes[code] {
 		code = sdk.UpstreamText(code, secrets...)
@@ -715,10 +716,12 @@ func connectStatus(code, msg string) int {
 // ({"code", "message"}) gives its message and, as Raw, the body rebuilt from its code and message,
 // both cleaned (cleanConnectError); any other field of the body is dropped. Any other body gives
 // its text as the message, cleaned by sdk.UpstreamText with secrets, the account's
-// (sdk.AccountSecrets), and no Raw: core removes only whole copies of a secret, and the body can
-// hold part of one the upstream echoed, split across lines, cut short by the upstream, or cut by
-// the read. The caller passes only a body whose read ended without an error; one that fills
-// maxBody may still have been cut there, so it gives no message.
+// (sdk.AccountSecrets), and no Raw: the body can hold part of a secret the upstream echoed, split
+// across lines, cut short by the upstream, or cut by the read, which core's whole-copy redaction
+// misses, and other secrets (a Bearer value, a long token) that only UpstreamText's other rules
+// catch: core's piece rule (protocol.RemovePieces) covers the account's secrets only.
+// The caller passes only a body whose read ended without an error; one that fills maxBody may
+// still have been cut there, so it gives no message.
 func connectMessage(raw []byte, secrets []string) (string, []byte) {
 	var e struct {
 		Code    json.RawMessage `json:"code"`

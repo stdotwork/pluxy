@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/internal/private"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -183,7 +184,7 @@ func TestCreatePrivate(t *testing.T) {
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
 		t.Errorf("the folder holds %d entries, want the file only", len(entries))
 	}
-	if info, _ := os.Stat(path); runtime.GOOS != "windows" && info.Mode().Perm() != fileMode {
-		t.Errorf("mode %v, want %v", info.Mode().Perm(), fileMode)
+	if info, _ := os.Stat(path); runtime.GOOS != "windows" && info.Mode().Perm() != private.FileMode {
+		t.Errorf("mode %v, want %v", info.Mode().Perm(), private.FileMode)
 	}
 }

@@ -57,7 +57,7 @@
         "headers": {
           "Accept": "text/event-stream",
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Cache-Control": "no-cache",
           "Content-Type": "application/json",
           "User-Agent": "pluxy-corpus/0"

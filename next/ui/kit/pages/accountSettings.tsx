@@ -226,11 +226,17 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
         <fieldset class="stack" disabled={save.busy || !!leave}>
           <label class="field" data-part="field">
             <span class="label">{t("prefix")}</span>
-            <input type="text" value={draft.prefix} onInput={(e) => set("prefix", e.currentTarget.value)} />
+            <input
+              data-slot="input"
+              type="text"
+              value={draft.prefix}
+              onInput={(e) => set("prefix", e.currentTarget.value)}
+            />
           </label>
           <label class="field" data-part="field">
             <span class="label">{t("proxyUrl")}</span>
             <input
+              data-slot="input"
               type="text"
               spellcheck={false}
               autocomplete="off"
@@ -243,6 +249,7 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
           <label class="field" data-part="field">
             <span class="label">{t("priority")}</span>
             <input
+              data-slot="input"
               type="text"
               inputMode="numeric"
               placeholder={t("priorityPlaceholder")}
@@ -254,6 +261,7 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
           <label class="field" data-part="field">
             <span class="label">{t("weight")}</span>
             <input
+              data-slot="input"
               type="text"
               inputMode="numeric"
               value={draft.weight}
@@ -291,6 +299,7 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
             <label class="field" data-part="field">
               <span class="label">{t("retryCount")}</span>
               <input
+                data-slot="input"
                 type="text"
                 inputMode="numeric"
                 value={draft.retryCount}
@@ -302,6 +311,7 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
           <label class="field" data-part="field">
             <span class="label">{t("maxConcurrency")}</span>
             <input
+              data-slot="input"
               type="text"
               inputMode="numeric"
               value={draft.maxConcurrency}
@@ -314,6 +324,7 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
             {draft.models.map((m, i) => (
               <div class="account-edit-row" data-part="account-edit-row" key={i}>
                 <input
+                  data-slot="input"
                   type="text"
                   aria-label={t("modelName")}
                   placeholder={t("modelName")}
@@ -321,6 +332,7 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
                   onInput={(e) => models.edit(i, { name: e.currentTarget.value })}
                 />
                 <input
+                  data-slot="input"
                   type="text"
                   aria-label={t("modelAlias")}
                   placeholder={t("modelAlias")}
@@ -367,6 +379,7 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
             {draft.aliases.map((r, i) => (
               <div class="account-edit-row" data-part="account-edit-row" key={i}>
                 <input
+                  data-slot="input"
                   type="text"
                   aria-label={t("modelName")}
                   placeholder={t("modelName")}
@@ -374,6 +387,7 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
                   onInput={(e) => aliases.edit(i, { name: e.currentTarget.value })}
                 />
                 <input
+                  data-slot="input"
                   type="text"
                   aria-label={t("aliasName")}
                   placeholder={t("aliasName")}
@@ -381,6 +395,7 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
                   onInput={(e) => aliases.edit(i, { alias: e.currentTarget.value })}
                 />
                 <input
+                  data-slot="input"
                   type="text"
                   aria-label={t("aliasDisplay")}
                   placeholder={t("aliasDisplay")}

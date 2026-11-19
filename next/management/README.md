@@ -203,7 +203,7 @@ checked within 15 minutes.
 | Call | Command | What it does |
 | --- | --- | --- |
 | `GET /models` | `pluxy model list` | Every model clients can ask for, the accounts that serve it, and **new**: `context_length`, `max_output_tokens`, `capabilities`, and `from` (`account`, `catalogue` or `extension`: where the numbers came from), `listed_at` |
-| **new** `POST /models/refresh` | `pluxy model refresh [--account id]` | Ask the providers again now. Lists refresh by themselves every 30 minutes; a list that cannot be read keeps the last good one |
+| `POST /models/refresh` | `pluxy model refresh [--account id]` | Ask the providers again now. Lists refresh by themselves every 30 minutes; a list that cannot be read keeps the last good one |
 
 ### Routing
 
@@ -220,6 +220,16 @@ checked within 15 minutes.
 | --- | --- | --- |
 | `GET /usage` | `pluxy usage [--since 7d] [--until t] [--by model\|account\|key\|provider] [--model m] [--account a] [--key k]` | Totals, breakdowns and a time series. **Changed**: reaches back as far as the usage files kept on disk (`usage.keep_days`, default 90), not only since the last start |
 | `GET /usage/events` | `pluxy usage events [--after seq] [--limit n]` | The recorded requests, oldest first. **new** fields per event: `attempts`, `chain_step` |
+
+### Themes
+
+| Call | Command | What it does |
+| --- | --- | --- |
+| `GET /themes` | `pluxy theme list` | The selected theme ID (`current`) and the stored themes (`id`, `name`, `bytes`) |
+| `GET /themes/{publisher}/{name}` | `pluxy theme show <id>` | One stored theme's JSON unchanged |
+| `PUT /themes/{publisher}/{name}` | `pluxy theme add <file> [--id publisher/name]` | Store a theme JSON object (up to 256 KiB; at most 64 stored) |
+| `DELETE /themes/{publisher}/{name}` | `pluxy theme remove <id>` | Remove a stored theme; clears `current` if it was selected |
+| `PUT /theme` | `pluxy theme set <id>`, `pluxy theme clear` | Select a theme ID (even one the UI holds) or clear the selection |
 
 ## What a client request gets back (**new**)
 

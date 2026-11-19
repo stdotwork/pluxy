@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -19,7 +22,12 @@ func (e *Extension) Login(ctx context.Context, account protocol.Account, login p
 	account.Credential = nil
 	// What the user entered (an API key, a pasted redirect URL with its code) and the secrets in
 	// the account's settings count as secret in everything the call sends back.
-	l := &LoginCall{ext: e, ctx: ctx, account: account.ID, settings: e.holdSettings(account)}
+	l := &LoginCall{ext: e, ctx: ctx, account: account.ID, settings: e.holdSettings(account), secretInputs: map[string]bool{}}
+	for _, m := range e.info.LoginMethods {
+		if m.Method == login.Method {
+			l.markSecret(m.Inputs)
+		}
+	}
 	l.addSecrets(login.Input)
 	proxy, perr := e.outbound(&account)
 	if perr != nil {
@@ -29,6 +37,7 @@ func (e *Extension) Login(ctx context.Context, account protocol.Account, login p
 	if proxy != nil {
 		l.addSecrets(outboundSecrets(proxy))
 	}
+	l.pieces = l.pieces.add(e.accountPieces(account))
 	conn, lerr := e.dial(ctx)
 	if lerr != nil {
 		l.fail(lerr)
@@ -62,6 +71,12 @@ type LoginCall struct {
 	onClose  func() // ends the call on its managed generation; safe to call more than once
 	release  func() // logs the extension's output held while the call ran; safe to call more than once
 
+	// pieces are the secrets whose pieces are removed from the login's error (see pieces): the
+	// account's, and those of the inputs the login marks secret, by name in secretInputs. wmu
+	// guards both.
+	pieces       pieces
+	secretInputs map[string]bool
+
 	// Close may run on another goroutine while Next runs. Next may then have read a grant it has
 	// not recorded yet, so the output is released only once no Next runs (release).
 	rmu     sync.Mutex
@@ -85,8 +100,33 @@ func (l *LoginCall) endRelease(closing bool) {
 	}
 }
 
-// addSecrets adds what the user entered to what is removed from the frames the call returns.
+// markSecret records which of inputs the login marks secret, for their pieces (addSecrets).
+func (l *LoginCall) markSecret(inputs []protocol.LoginInput) {
+	for _, in := range inputs {
+		if in.Secret {
+			l.secretInputs[in.Name] = true
+		}
+	}
+}
+
+// addSecrets adds what the user entered to what is removed from the frames the call returns,
+// and to the pieces removed from its error: each value of an input the login marks secret, by the
+// rules for a credential's, or for one that is a JSON object (a service account's key file), its
+// secrets by the rules for an account's settings, as its field names and plain values (a
+// project ID, a token endpoint) are no secret; and of any other value that is a URL (a pasted
+// redirect URL), its user name, password and secret query values (protocol.AccountSecretsWith).
 func (l *LoginCall) addSecrets(input map[string]string) {
+	for k, v := range input {
+		var obj map[string]json.RawMessage
+		switch {
+		case l.secretInputs[k] && json.Unmarshal([]byte(v), &obj) == nil:
+			l.pieces = l.pieces.add(l.ext.accountPieces(protocol.Account{Settings: json.RawMessage(v)}))
+		case l.secretInputs[k]:
+			l.pieces = l.pieces.add(protocol.AccountSecrets(protocol.Account{Credential: &protocol.Credential{APIKey: v}}))
+		default:
+			l.pieces = l.pieces.add(protocol.AccountSecretsWith(protocol.Account{}, urlOnly(v)))
+		}
+	}
 	for k, v := range input {
 		if l.secrets == nil {
 			l.secrets = map[string]string{}
@@ -101,6 +141,21 @@ func (l *LoginCall) redactor() *protocol.Redactor {
 	l.wmu.Lock()
 	defer l.wmu.Unlock()
 	return l.redact
+}
+
+// errorPieces returns the pieces removed from the login's error.
+func (l *LoginCall) errorPieces() pieces {
+	l.wmu.Lock()
+	defer l.wmu.Unlock()
+	return slices.Clone(l.pieces)
+}
+
+// urlOnly returns s alone when it is an absolute URL, and nothing otherwise.
+func urlOnly(s string) []string {
+	if u, err := url.Parse(strings.TrimSpace(s)); err == nil && u.Host != "" && strings.Contains(s, "://") {
+		return []string{s}
+	}
+	return nil
 }
 
 // Next returns the next frame: a login.prompt, or the terminal login.done or error.
@@ -119,6 +174,9 @@ func (l *LoginCall) Next() protocol.Reply {
 	}
 	switch {
 	case r.Type == protocol.TypeLoginPrompt && r.Prompt != nil:
+		l.wmu.Lock()
+		l.markSecret(r.Prompt.Inputs)
+		l.wmu.Unlock()
 		p := redactPrompt(l.redactor(), *r.Prompt)
 		return protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginPrompt}, Prompt: &p}
 	case r.Type == protocol.TypeLoginDone && validGrant(r.Grant):
@@ -145,7 +203,7 @@ func (l *LoginCall) Next() protocol.Reply {
 		l.Close()
 		return done
 	case r.Type == llm.EventError && r.Error != nil:
-		ev := l.redactor().Event(r.Event)
+		ev := l.errorPieces().event(l.redactor().Event(r.Event))
 		l.final = &protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: ev.Error}}
 		l.Close()
 		return *l.final
@@ -220,7 +278,7 @@ func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*pro
 		e.held.add(account.ID, r.Grant.Credential)
 		return r.Grant.Credential, nil
 	case r.Type == llm.EventError && r.Error != nil:
-		return nil, redact.Event(r.Event).Error
+		return nil, e.accountPieces(account).event(redact.Event(r.Event)).Error
 	}
 	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a refresh", e.manifest.ID, redact.String(r.Type))}
 }

@@ -77,7 +77,6 @@ const (
 	Gemini           = "pluxy/gemini"
 	Kimi             = "pluxy/kimi"
 	XAI              = "pluxy/xai"
-	Antigravity      = "pluxy/antigravity"
 	Meta             = "pluxy/meta"
 	Devin            = "pluxy/devin"
 	OpenAICompatible = "pluxy/openai-compatible"
@@ -88,7 +87,7 @@ const (
 // OAuthModelAliasChannel); a channel without one has no extension here.
 var channels = map[string]string{
 	"codex": Codex, "claude": Claude, "vertex": Gemini, "kimi": Kimi, "kimi-ai": Kimi, "kimi.ai": Kimi,
-	"kimi.com": Kimi, "xai": XAI, "meta": Meta, "antigravity": Antigravity, "devin": Devin,
+	"kimi.com": Kimi, "xai": XAI, "meta": Meta, "devin": Devin,
 }
 
 // newKeys are this core's own settings, which keep their JSON names in a config.yaml.
@@ -285,7 +284,7 @@ var rules = map[string]rule{
 	"oauth.providers.aistudio.ws-auth":                     {dropped, "the AI Studio relay needs a long-lived listener the extension protocol does not have"},
 	"oauth.providers.codex.live-media-relay":               {dropped, "realtime and WebRTC are out of scope"},
 	"oauth.providers.codex.signin-with-chatgpt-identifier": {supported, ""}, // reported in options
-	"oauth.providers.antigravity":                          {dropped, "no need found; the credits fallback would spend paid credits unasked"},
+	"oauth.providers.antigravity":                          {dropped, "pluxy no longer ships the Antigravity provider"},
 	"oauth.providers.devin":                                {dropped, "rewriting words to get past a content filter is out of scope"},
 
 	"multimedia.disable-image-generation":                     {supported, ""},

@@ -14,6 +14,9 @@
 
 #[cfg(target_os = "macos")]
 mod checked;
+#[cfg(windows)]
+#[path = "checked_windows.rs"]
+mod checked;
 #[cfg(all(unix, any(target_os = "macos", test)))]
 mod handover;
 #[cfg(target_os = "macos")]

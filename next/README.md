@@ -19,6 +19,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | --- | --- |
 | `cmd/pluxy` | The core program. |
 | `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index; packs the desktop app's native tools with `-app-tools`. |
+| `cmd/pluxy-bench` | Measures the time and memory pluxy adds between a client and its upstream, against a mock upstream, and checks them against budgets in CI ([docs/perf.md](../docs/perf.md)). |
 | `protocol/` | The extension protocol: [README](protocol/README.md), [tutorial](protocol/TUTORIAL.md), wire types and framing. |
 | `llm/` | The internal model of a request and its streamed reply, shared by core and extensions. |
 | `sdk/` | Go SDK for writing extensions. |
@@ -31,13 +32,13 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `extensions/kimi` | Provider extension for Kimi Code, Moonshot AI's coding subscription, signed in with a device code; `kimitest` is a fake Kimi for its tests. |
 | `extensions/xai` | Provider extension for xAI's Grok models: an API key, or a Grok account signed in as the Grok CLI signs in; `xaitest` is a fake xAI and xAI sign-in for its tests. |
 | `extensions/meta` | Provider extension for Meta's Muse models: a Muse Code subscription signed in with a device code, or a Meta API key; `metatest` is a fake Meta for its tests. |
-| `extensions/antigravity` | Provider extension for Google Antigravity: Gemini and Claude models through a Google account signed in to Antigravity; `agtest` is a fake Google login and Cloud Code for its tests. |
 | `extensions/devin` | Provider extension for Devin: the models a Devin account gets, signed in as Devin's CLI signs in or with a session token, over Devin's protobuf API; `devintest` is a fake Devin for its tests. |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
 | `management` | The management API's contract ([README](management/README.md)), its request and reply types, and a client; the `pluxy` command's subcommands use it. |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
 | `internal/cred` | Core's credential store and renewal of accounts added by login. |
+| `internal/private` | Core's private folders and files (credentials, extensions' settings, logs): 0700 and 0600 on Linux and macOS, an owner-only access list on Windows. |
 | `internal/packages` | Registries, release archives and the record of installed packages. |
 | `internal/panel` | Serves the web panel at `/panel/`, embedded in core's binary. |
 | `internal/pages` | Serves extension pages on a site of their own ([extension pages](ui/extension-pages/README.md)). |
@@ -160,7 +161,7 @@ the upstream's own count endpoint: Anthropic's for a Claude account on Anthropic
 `https://api.anthropic.com`, the default) or an OpenAI-compatible account with `"wire_api": "messages"`, Kimi's Messages count endpoint for a Kimi account, Gemini's for a Gemini account (Gemini API or Vertex AI) or one with
 `"wire_api": "gemini"`. A count from an upstream of the client's own kind comes back as the upstream sent it;
 otherwise core answers with the count in the client's shape. An account whose upstream has no count
-endpoint (Codex, xAI, Meta, Devin, Antigravity, and Chat or Responses accounts), and a Claude
+endpoint (Codex, xAI, Meta, Devin, and Chat or Responses accounts), and a Claude
 account whose `base_url` is not Anthropic's own (today's core draws the same line), cannot count:
 core tries the model's next account, and when the count gets no answer and one of the accounts
 tried could not count, it answers with its own estimate in the client's shape, as today's core
@@ -588,7 +589,26 @@ after the client's betas. Chat Completions, Responses and Gemini requests are
 translated to Messages; their reasoning effort becomes adaptive thinking with that effort on
 Claude 4.6 and later, and a thinking budget from Claude 3.7 to 4.5 (low 1024, medium 8192, high
 24576 tokens); a model name the extension does not know as a Claude model gets no thinking
-settings, and the effort is reported as dropped. The extension never changes how a client presents itself: a client that is
+settings, and the effort is reported as dropped. A Responses client's `reasoning.summary` becomes
+`thinking.display` (`auto`, `concise` and `detailed` as `summarized`, `none` as `omitted`).
+
+**Thinking settings.** Every request, a Messages client's own included, has its thinking settings
+made ones the model takes, by Anthropic's per-model tables, and each change is reported:
+
+- Effort `xhigh` goes as `xhigh` from Claude 4.7 on, and as `max` to Claude 4.6, which has no
+  `xhigh`; `minimal` goes as `low`.
+- Thinking off (`none`, or `thinking` `disabled` or `between_tools`) goes as each model turns it
+  off: Fable, Mythos and Opus 5.5 always think, so it goes without `thinking`, at effort `low`
+  unless one is set; Sonnet 5.5 takes `between_tools`; Opus 5 and Haiku 5.5 take `disabled` at
+  effort `high` or below, so a higher effort goes as `high`; older models take `disabled`.
+- A thinking budget goes to Claude 4.7 and later as adaptive thinking at the effort it falls in.
+- A forced tool choice (`any` or a named tool) goes as `auto` to Opus 5.5, Sonnet 5.5, and Fable
+  and Mythos 5.1 and later, which refuse one; with a thinking budget it goes without thinking.
+- `top_k` is left out on Claude 4.7 and later, and on older models while thinking is on.
+- With a thinking budget, a tool result whose assistant turn has no thinking block, in a
+  conversation that has none, goes with adaptive thinking on Claude 4.6 and without thinking on
+  older models. On Claude 4.5 and older, a conversation that ends on an assistant turn loses that
+  turn while thinking is on, and with thinking off loses the reasoning it ends on. The extension never changes how a client presents itself: a client that is
 not Claude Code is not made to look like Claude Code.
 
 **Sampling options.** A translated request's `temperature` and `top_p` reach Claude only where
@@ -1093,107 +1113,6 @@ Responses compaction through Meta, and token counting.
 
 **Quota.** Meta reports a Muse Code login's usage only from its key endpoint, so quota sends `POST https://api.meta.ai/muse-code/key` with an empty object, the device token, `x-api-version: 1.0.0` and Muse Code's client identity headers. The device token renews the account, so this goes only where a renewal goes, never to `base_url`. The call makes a new API key, which is dropped and never returned or stored; the account's own key is left alone, and if Meta retires it, core renews the credential on the next refused request (whether Meta does is not known). It reports `window` ("Usage limit", with its length) and `weekly` ("Weekly limit") from `subs_usage`, and the plan from `subs_tier_name`. An API key answers unsupported. A device login's grant carries `identity` `{"email"}`.
 
-## Antigravity
-
-The Antigravity extension (`extensions/antigravity`) serves the Gemini and Claude models a Google
-account gets in Google Antigravity, through Google's Cloud Code API. Point `extension.manifest` at
-`extensions/antigravity/pluxy-extension.json`. Accounts are added by login through the management
-API (below) with method `browser`: the reply's prompt carries Google's sign-in link, and the login
-finishes when the browser comes back to `http://localhost:51121/oauth-callback`, which the
-extension serves on this machine while the login runs. When core runs elsewhere, or the port is
-taken, paste the address the browser ended on as the prompt's `redirect_url` input.
-
-The sign-in is Google's OAuth for installed apps with the Antigravity app's own OAuth client and
-scopes, as today's core signs in, plus PKCE. Google's token endpoint also takes that client's
-secret. The extension has it built in: it is the installed-app client secret of the OAuth client the
-Antigravity desktop app uses, which ships inside every copy of the app, and today's core carries the
-same value (`ClientSecret` in the old core's `core/internal/auth/antigravity/constants.go`). It is not a user's
-credential and gives no access to an account without a sign-in. A login asks for no input, the
-credential does not keep the secret, and every renewal sends it, so an account renews whether it
-was logged in or imported. After signing in, the
-extension asks Cloud Code for the account's Google Cloud project (`loadCodeAssist`), or has one
-made on the account's default tier (`onboardUser`); the credential keeps the project too. Core
-renews the token 30 minutes before it expires; a renewal also looks up a project the credential
-lacks.
-
-An account written in the config holds the same credential:
-
-```json
-{
-  "id": "antigravity",
-  "credential": {"kind": "oauth", "access_token": "ya29...", "refresh_token": "1//...",
-    "data": {"project_id": "my-project-123"}}
-}
-```
-
-| Setting | Meaning |
-| --- | --- |
-| `base_url` | The Cloud Code host (default `https://daily-cloudcode-pa.googleapis.com`, the one today's core uses); the project calls go there too. |
-| `user_agent` | Replaces the Antigravity app's User-Agent (`antigravity/hub/2.29.0 (aidev_client; ...)`). |
-| `callback_listen` | `false` keeps the login from listening on port 51121; only a pasted address finishes it. |
-
-A request is built as a Gemini GenerateContent body: a Gemini client's own, or a translation of
-any other format with its reasoning effort as thinking settings, as the Gemini extension makes
-them. It goes to `{base_url}/v1internal:generateContent` (`:streamGenerateContent?alt=sse` for a
-stream) inside Cloud Code's envelope, as today's core sends it: the model, the project, request
-type `agent` (`image_gen` for image models), a request ID, and a session ID hashed from the first
-user text. Safety settings are left out; a Gemini model gets no output limit and has turns of
-function responses sent as the model's, and a conversation that starts or ends with the model gets
-an empty user turn at that end; a Claude model gets function calling in `VALIDATED` mode;
-translated system instructions go as a user turn. Each function declaration's schema is sent as
-`parameters`, and a response schema as `responseSchema`, in the subset Cloud Code takes, as today's
-core cleans them: local `$ref`s inlined, `const` as an enum, constraints and short enums moved into
-the description as hints (`minLength: 1`, `Allowed: a, b`), a type list such as
-`["string","null"]` as one nullable type, each `allOf` merged into the schema that holds it
-(Cloud Code's schema has no `allOf`: the branches' required names join the schema's, and their
-other keys fill the ones it lacks, its own winning), and other JSON Schema keywords removed; for a
-Claude model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
-object in a function's parameters that requires nothing gets a required placeholder property:
-`reason` (a string) where it has no properties, `_` (a boolean) where it has some and none is
-required. An object is a schema of type `object`; a union object (with `anyOf` or `oneOf`) gets
-none. Every schema with `properties` and no type gets type `object`, whatever the model, as in
-today's core. A function's response schema gets no placeholder: today's core adds one there, but the schema
-describes what the client returns, and nothing would remove the placeholder. A response format's schema keeps
-the `title` of every schema in it, as today's core does: Google's Schema type has a `title` field. A
-function's parameters and response schema lose their titles except for Claude and Gemini 3 Pro, also
-as in today's core. The extension removes
-the placeholders from the model's calls before any client format sees them; today's core does that
-only for Messages clients. It leaves a placeholder in a call where a client schema at the same path
-declares the name, as a property or in `required`: the other branches of a union (also those
-Claude's cleaning cuts), another item of a tuple, or a function declared again under that name. So
-it never removes a key the client declared; it does remove a key named `reason` that the model
-writes into an object with no declared properties, such as a free-form map. Claude models, Gemini 3 Pro and the image model are always
-asked on the stream method and gathered into one reply when the client wants one. Replies are
-taken out of the envelope's `response` field. A 429 is a used-up quota when Google says
-`QUOTA_EXHAUSTED` or asks for a wait of five minutes or more, and a rate limit otherwise, with the
-wait from Google's retry details or message. It holds back only that model on the account, as
-today's core cools only the model that answered, except a used-up credit balance
-(`INSUFFICIENT_G1_CREDITS_BALANCE`), which holds back the account.
-
-A `functionCall` part of a Cloud Code reply is one whole call, as Gemini sends calls, and a part
-with no name is a call with no name. Today's core treats such a part three ways. A Messages client
-gets a nameless part that comes while a call is open as more input for that call
-(`core/internal/translator/antigravity/claude/antigravity_claude_response.go`). A Chat client gets
-it as a second call with an empty name. A Responses client does not get it. The Messages
-behaviour is not kept, because nothing shows that Cloud Code sends such parts in reply to the
-requests the extension makes. Google's Vertex AI documentation shows nameless parts only for
-streamed function call arguments (`streamFunctionCallArguments`, Gemini 3 and later), which a
-request has to ask for, and whose parts carry `partialArgs`, not `args`. Neither core nor the
-extension asks for it. Today's core added the behaviour to its Gemini Messages translator in
-December 2025 with no recorded stream, and to its Antigravity one in October 2026, eleven months
-after that translator was written. Its tests use made-up chunks. It also appends each part's
-whole `args` object to the call's input, so a second part with arguments gives the client
-`{"a":"1"}{"b":"2"}`, which is not JSON.
-
-Not built, from today's core: the paid Google AI credits fallback, its own cache of Antigravity's
-reasoning (thought signatures travel in band, as for Gemini), the per-account model probe
-(`fetchAvailableModels`), Responses compaction through Antigravity, structured output for Claude
-5.5 as prompt text, sensitive-word obfuscation (`antigravity.sensitive-words`), the connection
-pool settings (`antigravity.connection-pool.*`), the app version lookup at every start, token
-counting (core has no count-tokens route).
-
-**Quota.** Quota reads `POST {base_url}/v1internal:retrieveUserQuotaSummary` with the credential's project, and the plan from `POST {base_url}/v1internal:loadCodeAssist`, with the access token and the account's Antigravity user agent. Each bucket of each model group becomes a limit, such as "Gemini models 5-hour limit", with the share used, the reset time, the window length where known and the group's models. A login's grant carries `identity` `{"email"}`.
-
 ## Devin
 
 The Devin extension (`extensions/devin`) serves the models a Devin account gets (SWE-2, Claude,
@@ -1272,15 +1191,18 @@ whole (under 1 MiB, and not broken off), and cleaned. The cleaned text is one li
 1000 characters with an ellipsis. Replaced by `[redacted]` are: every run of token characters
 (letters, digits and `_-.+/=~`) holding 4 or more consecutive characters of one of the account's
 secrets: its session token after the public `devin-session-token$` prefix, the values of its
-secret headers, its proxy's user name and password and the secrets in its settings; `Bearer` and
+secret headers, its proxy's user name and password and the secrets in its settings (4
+characters all within a secret's public vendor prefix, such as `sk-proj-`, do not count; see
+[Account checks](#account-checks)); `Bearer` and
 `Basic` values; the values of fields named like `access_token`, `token` or `api_key`; and any
 other run of 24 or more token characters. A run is also read with its escapes decoded (JSON's
 `\/` and `\uXXXX`, `%XX`), so a piece written with escapes between its characters is replaced
-too. Core removes only whole copies of an account's secrets, and such text can hold part of one
-the upstream echoed, split across lines or cut short. Otherwise the message names only the status
-(`Devin answered 500 Internal Server Error`), or, for a quota read whose reply broke off, says
-that it broke off. The 4-character rule can also replace a word that shares 4 characters with
-one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
+too. Core removes whole copies of an account's secrets everywhere, and pieces of them by the same
+4-character rule from every extension's errors (see [Account checks](#account-checks)), but not
+the other rules or the bound, so the extension keeps its own cleaning. Otherwise the message
+names only the status (`Devin answered 500 Internal Server Error`), or, for a quota read whose
+reply broke off, says that it broke off. The 4-character rule can also replace a word that shares
+4 characters with one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
@@ -1484,7 +1406,7 @@ A rule applies when any entry of its `models` does:
 | Field | Matches |
 | --- | --- |
 | `name` | The model the request reaches the upstream as, or the one the client asked for (before an alias or prefix, with its thinking suffix or without it). `*` matches any text. |
-| `protocol` | The extension: `openai` (`pluxy/openai-compatible`), `claude`, `codex`, `gemini` (Gemini API keys and Vertex), `kimi`, `xai`, `meta`, `antigravity`; for another package the last part of its ID. Today's core used the upstream's API format here, so its `openai` also covered Kimi, which is `kimi` here. |
+| `protocol` | The extension: `openai` (`pluxy/openai-compatible`), `claude`, `codex`, `gemini` (Gemini API keys and Vertex), `kimi`, `xai`, `meta`; for another package the last part of its ID. Today's core used the upstream's API format here, so its `openai` also covered Kimi, which is `kimi` here. |
 | `from-protocol` | The API the client called: `openai` (Chat Completions, legacy Completions), `responses` (also compaction), `claude`, `gemini`, `interactions`, `codex-alpha-search`, `openai-image`. |
 | `headers` | The client's request headers, each value a pattern with `*`. Core checks them; they are not sent to the extension. |
 | `match`, `not-match`, `exist`, `not-exist` | The body about to go upstream. |
@@ -1492,9 +1414,7 @@ A rule applies when any entry of its `models` does:
 Paths are dotted keys (`\.` for a dot in a key), array indexes and the queries `#(...)` (the first
 match) and `#(...)#` (every match), the parts today's example config uses. A path with anything
 else (wildcards, `|`, `@`, `#` counts, `-1`) or a raw value that is not JSON fails the load, a
-reload or a settings change, with a message that names the rule and the path. The Antigravity
-extension's body carries the request inside `request`, and its rules apply there, as in today's
-core.
+reload or a settings change, with a message that names the rule and the path.
 
 A default checks the body the extension built, where today's core checked the client's request
 translated to the upstream's format: a field the extension fills in itself counts as present, such
@@ -1532,7 +1452,22 @@ extension's own output, show `[redacted]` in place of the account's credential a
 secret in its settings (the values `GET /config` and `GET /accounts` show as placeholders), such
 as a `base_url` with a token in its query that an unreachable upstream's error quotes. A
 settings secret shorter than 8 bytes is left in text, since removing every occurrence of so
-short a string would mangle unrelated text. Each
+short a string would mangle unrelated text. An error's message and the string values of its raw
+body, from every extension and for every call (requests, checks, quota and model reads,
+refreshes, sessions and logins), also lose every run of token characters (letters, digits and
+`_-.+/=~`, read as written and with JSON and percent escapes decoded) that holds 4 or more
+consecutive characters of one of the account's secrets: an upstream that refuses a key often
+echoes its start (`invalid x-api-key: sk-ant-api03-AbCdEf...`), which whole-secret redaction
+misses. The secrets are the credential's key and tokens, secret header values, the proxy's user
+name and password and the secrets core finds in the settings (a URL by its user name, password
+and secret query values only), by their parts, and on a login the inputs it marks secret (the
+extension protocol's [Accounts](protocol/README.md#accounts) says which). A known vendor's
+public key prefix (`sk-proj-`, `sk-kimi-`, `xai-` and the others listed there) gives no piece,
+so `project` or `kimi` stays in an error for such a key; a secret of under 16 bytes after its
+prefix keeps every piece. Any other word of the error that shares 4 characters with a secret
+goes too, such as `token` for a header `Bearer gw-token-12345`; a reply that succeeded is never
+changed by the rule.
+Each
 extension checks with its upstream's model list, and only accounts with an API key:
 
 | Extension | Check |
@@ -1569,9 +1504,9 @@ for it. The same list decides which models such an account serves: a request for
 account serves is refused without calling an upstream, as today's core refuses it (404
 `model_not_found`; today's core answers 400). An account whose extension has no list, an empty
 one, or one it could not read within 15 seconds serves any model, and core asks again a minute
-later. Core asks an
-extension once per account and keeps the answer until the accounts change: a reload, or an
-account added, removed or signed in again.
+later. Core asks again for each known list every 30 minutes with jitter, when an account's
+credential is renewed or it signs in again, and on `POST /v0/management/models/refresh`; a
+refresh that fails, times out or comes back empty keeps the last good list.
 
 ### Codex client catalog
 
@@ -1665,7 +1600,7 @@ an account's own, leaving out a rule for an alias the account already has; its
 Besides the accounts in the config, a provider extension that signs in to accounts (OAuth in a
 browser, a device code, or an API key it checks) can add accounts through the management API.
 Core keeps each one in its credential store, a folder with one file per account readable only by
-its owner (`credentials_dir`, default `credentials` beside the config file), and renews its
+core's user and, on Windows, SYSTEM (`credentials_dir`, default `credentials` beside the config file), and renews its
 credential through the extension shortly before it expires. Only the extension that created an
 account ever receives its credential. The protocol side is in the
 [protocol README](protocol/README.md#login-and-refresh).
@@ -1678,7 +1613,8 @@ SYSTEM). A folder made by pluxy run as administrator is owned by the Administrat
 without administrator rights refuses it: take ownership of the folder and its files from an
 elevated prompt (`takeown /f <folder> /r`), or move the folder away and sign the accounts in again.
 A file in the folder that is a link, or that another account owns, is skipped with a notice in the
-log rather than loaded.
+log rather than loaded. The same access list and folder checks keep the extensions' settings
+([extension pages](ui/extension-pages/README.md)) and the [log files](#log-files) private.
 
 An extension may return non-secret account settings with a login grant. When adding an
 account, core uses those as defaults: properties explicitly supplied in `POST /accounts.settings`
@@ -1844,6 +1780,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
 | `GET /v0/management/models` | The models `GET /v1/models` lists, as one list in the same order: `models`, each with `id` (the name clients use), what the extension says about the model (`owned_by`, `display_name`, limits, ...), `upstream` (its name upstream), `extension` (the extension of the account whose entry the list shows) and `accounts` (the IDs of every account that serves the name, in routing order). An account that serves any model because its list is not known lists none. Never a credential. |
+| `POST /v0/management/models/refresh` | Ask providers for their model lists again now; optional JSON body `{"account": "<id>"}` for one account. Returns the updated `models` list and per-account `accounts` results (`models`, `kept`, `error`). A read that fails, times out or comes back empty keeps the last good list. |
 | `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate`, this core's own, under its own name (below). |
 | `PATCH /v0/management/settings` | Changes the settings the body names (`{"routing": {"strategy": "fill-first"}}`) and replies with them all. 400 for a name or value it does not take. |
 
@@ -1981,6 +1918,15 @@ renamed `main-<time>.log` and a new one begins. `logs.max_total_size_mb` (today'
 first, `main.log` never; 0 (the default) is no cap. The cap is applied when a file is rotated, when a
 request log is written and when the setting changes. A change of either setting takes effect at the reload that makes it.
 
+The logs folder and the files core writes in it (`main.log`, its rotated files and the
+[request logs](#request-logs)) can be read only by core's user (and, on Windows, SYSTEM). On
+Linux and macOS the folder is made 0700 and each file 0600. On Windows the folder and each file
+get the protected access list of the [credentials folder](#accounts-added-by-login), and the
+folder is checked the same way each time core opens `main.log` and each time it writes a
+request log: a folder whose list is not private is made private, and one that is a link or a
+file, or that another account owns, is refused. Core still starts then, but writes no log files,
+and says why on standard error. A `main.log` that another account owns is refused too.
+
 Core also writes one access line when each client API request ends: after a streamed reply ends,
 and when a Responses WebSocket closes. It writes none for `/healthz`, the management API, the
 panel and its assets, or a path no route serves (a 404).
@@ -2082,7 +2028,7 @@ was not cut, and what was left unread is only what the upstream sent after that 
 nothing but the end of the transfer. Devin's reply is binary frames with no line breaks, so the
 Devin provider reads on past its end frame to the body's end, for at most 64 KiB and 1 second;
 past that its reply is complete but its body is marked, and its end within the window is left
-out. The Gemini and Antigravity providers read their streams to the end. A response with neither a
+out. The Gemini provider reads its streams to the end. A response with neither a
 length nor chunked encoding whose connection closes early reads, in Go, as a body that ended
 there, also over TLS closed without its closing alert between two records (a close inside a
 record is marked), so it gets no line and nothing is left out: marking such bodies would cut
@@ -2111,7 +2057,11 @@ public prefix (`devin-session-token$<jwt>`), the token of a `Bearer` value or a 
 each part of 8 bytes or more removed on its own too (the extension protocol's
 [Accounts](protocol/README.md#accounts) lists the structures). Replies and upstream
 sections come from the extension with the account's own credential, the secrets in its settings,
-its proxy's password and its secret header values already removed; in the upstream sections the
+its proxy's password and its secret header values already removed, and an error's text and the
+body of an upstream reply with an error status (400 or more), or of every reply of a request
+that failed, without the pieces of the account's secrets (see [Account checks](#account-checks)):
+a failed request's log can lose words of the model's text that share 4 characters with a secret;
+in the upstream sections the
 values of headers and query parameters whose names hold `auth`, `key`, `token`, `secret`,
 `cookie`, `session`, `password`, `passphrase` or `signature` are masked too, the URL's user name and password
 are left out, and the characters a secret could be made of on each side of a body's left-out
@@ -2369,13 +2319,12 @@ are accepted silently.
 | `experimental-cch-signing` (Claude keys) | | Dead |
 | `oauth.auth-dir` (`auth-dir`) | The folder `-import-auth` reads (see below). Core never reads or writes it while it runs; at each load it logs how many credential files there are not imported yet. | Supported |
 | `oauth.auth-auto-refresh-workers` (`auth-auto-refresh-workers`) | Each account is renewed shortly before it expires. | Dropped: no need for a pool size |
-| `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`) | Each channel's rules become the `model_alias` and `excluded_models` of the package that serves its accounts, for the accounts added to it by a sign-in (not with an API key): `codex` is `pluxy/codex`, `claude` is `pluxy/claude`, `vertex` is `pluxy/gemini`, `kimi` (and `kimi-ai`, `kimi.ai`, `kimi.com`) is `pluxy/kimi`, `xai` is `pluxy/xai`, `meta` is `pluxy/meta`, `antigravity` is `pluxy/antigravity`, `devin` is `pluxy/devin`. Rules for another channel are named in the log and ignored. An alias's `force-mapping` and `openapi` are later, as the same settings are on the keys' models below. | Supported |
+| `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`) | Each channel's rules become the `model_alias` and `excluded_models` of the package that serves its accounts, for the accounts added to it by a sign-in (not with an API key): `codex` is `pluxy/codex`, `claude` is `pluxy/claude`, `vertex` is `pluxy/gemini`, `kimi` (and `kimi-ai`, `kimi.ai`, `kimi.com`) is `pluxy/kimi`, `xai` is `pluxy/xai`, `meta` is `pluxy/meta`, `devin` is `pluxy/devin`. Rules for another channel are named in the log and ignored. An alias's `force-mapping` and `openapi` are later, as the same settings are on the keys' models below. | Supported |
 | `oauth.settings` (`oauth-settings`) | | Dropped: needs a model catalog, and no page uses it |
 | `oauth.request-scoped-errors` (`oauth-request-scoped-errors`) and every `request-scoped-errors` | | Dropped: a request-scoped error is already not the account's fault |
 | `oauth.providers.aistudio.ws-auth` (`ws-auth`) | | Dropped: the AI Studio relay needs a long-lived listener the extension protocol does not have |
 | `oauth.providers.codex.live-media-relay.*` | | Dropped: realtime and WebRTC are out of scope |
 | `oauth.providers.codex.signin-with-chatgpt-identifier` (`codex.signin-with-chatgpt-identifier`) | `signin_with_chatgpt_identifier` on the Sign in with ChatGPT (SIWC) accounts `-import-auth` adds. Left unset, they use the extension's default, `pluxy`. | Supported when importing |
-| `oauth.providers.antigravity.*` (`antigravity`, `antigravity-signature-*`, `quota-exceeded.antigravity-credits`) | | Dropped: no need found; the credits fallback would spend paid credits unasked |
 | `oauth.providers.devin.*` (`devin`) | Only `sensitive-words`. | Dropped: rewriting words to get past a content filter is out of scope |
 | `api-keys.meta` (`meta-api-key`) | | Dropped: the login is built; no need for a bare key |
 | Every `headers` on a group or key | The account's [`headers`](#upstream-headers): a key's own, else its group's (a key's `headers: {}` sends none), and an `openai-compatibility` group's for all its keys. Names and values are trimmed and empty ones dropped, as in today's core. A header whose value today's core takes from the client's request (`$` and a header name, or `$CPA-SESSION-ID`) is named in the log and not imported. A header this core refuses (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`) fails the load, where today's core sends it. | Supported |
@@ -2436,7 +2385,6 @@ use it from one core only, or sign in again in the other.
 | `claude` | `pluxy/claude` subscription account | `access_token`, `refresh_token`, `expired`. |
 | `kimi`, `kimi-ai` | `pluxy/kimi` account | `access_token`, `refresh_token`, `expired`, `device_id`; `base_url` is an account setting, and so is the site, `domain`, decided as today's core decides it: from `domain`, else `base_url`'s host, else the type (`kimi.ai` for `kimi-ai`). |
 | `vertex` | `pluxy/gemini` Vertex AI account with a service account | `service_account` is the credential; `project_id` and `location` (default `us-central1`, as in today's core) are the account's `vertex` settings. `interactions` or `native_interactions` set to JSON `true` at the top of the file is the account's `interactions` setting. |
-| `antigravity` | `pluxy/antigravity` account | `access_token`, `refresh_token`, `expired`; `project_id` stays with the credential and `base_url` is an account setting. The file holds no OAuth client secret (today's core has it built in, and so does the extension), so the account renews on its own, as it does in today's core. |
 | `xai` | `pluxy/xai` Grok login account | `access_token`, `refresh_token`, `expired`; `token_endpoint` stays with the credential and `base_url` is an account setting. |
 | `meta` | `pluxy/meta` Muse Code login account | `api_key` (else `access_token`) is the minted key and `dca_token` (else a `dca:` `access_token`) the device token that mints a new one; `base_url` stays with the credential. A file with only the device token mints its key on the first request. |
 | `devin` | `pluxy/devin` account with a session token | `session_token` (else `api_key`) is the credential; `base_url` is an account setting and `user_name` the label when the file has no `label` or `email`. |

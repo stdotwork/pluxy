@@ -50,15 +50,6 @@ var setupPickOrder = []string{
 	"pluxy/omp-setup",
 }
 
-// StateDir returns core's state folder beside configPath.
-func StateDir(configPath string) string {
-	dir := filepath.Dir(configPath)
-	if abs, err := filepath.Abs(dir); err == nil {
-		dir = abs
-	}
-	return filepath.Join(dir, "state")
-}
-
 type setupStateFile struct {
 	Format    int                   `json:"format"`
 	FirstRun  bool                  `json:"first_run"`

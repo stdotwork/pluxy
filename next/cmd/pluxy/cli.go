@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -53,6 +54,7 @@ type opts struct {
 	yes                                    bool
 	picks                                  stringSliceFlag
 	keyID                                  string
+	id                                     string
 }
 
 // invocation is one run of a command.
@@ -312,6 +314,36 @@ var commands = []command{
 				x.table(rows)
 			})
 		}},
+	{words: "model refresh", routes: []string{"POST /models/refresh"}, summary: "ask providers for their model lists again now",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			fs.StringVar(&o.account, "account", "", "refresh only this account (default: every account)")
+		},
+		run: func(x *invocation) error {
+			var in any
+			if x.opts.account != "" {
+				in = management.RefreshModelsRequest{Account: x.opts.account}
+			}
+			var r management.RefreshModelsReply
+			return x.call(http.MethodPost, "/models/refresh", nil, in, &r, func() {
+				if len(r.Accounts) == 0 {
+					x.printf("no accounts to refresh (%d models served)\n", len(r.Models))
+					return
+				}
+				rows := [][]string{{"ACCOUNT", "MODELS", "STATUS"}}
+				for _, a := range r.Accounts {
+					status := "ok"
+					if a.Error != "" {
+						if a.Kept {
+							status = "kept previous list: " + a.Error
+						} else {
+							status = "failed: " + a.Error
+						}
+					}
+					rows = append(rows, []string{a.Account, strconv.Itoa(a.Models), status})
+				}
+				x.table(rows)
+			})
+		}},
 	{words: "usage", routes: []string{"GET /usage"}, summary: "request and token totals, by model",
 		flags: func(fs *flag.FlagSet, o *opts) {
 			fs.StringVar(&o.since, "since", "", "from this time (RFC 3339) or this long ago (such as 24h)")
@@ -344,6 +376,126 @@ var commands = []command{
 				x.table(rows)
 			})
 		}},
+	{words: "theme list", routes: []string{"GET /themes"}, summary: "the selected theme and stored themes",
+		run: func(x *invocation) error {
+			var r management.ThemesReply
+			return x.call(http.MethodGet, "/themes", nil, nil, &r, func() {
+				x.printf("current: %s\n", dash(r.Current))
+				if len(r.Themes) == 0 {
+					return
+				}
+				rows := [][]string{{"ID", "NAME", "BYTES"}}
+				for _, t := range r.Themes {
+					rows = append(rows, []string{t.ID, dash(t.Name), strconv.Itoa(t.Bytes)})
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "theme show", args: []string{"id"}, routes: []string{"GET /themes/{publisher}/{name}"}, summary: "a stored theme's JSON",
+		run: func(x *invocation) error {
+			body, err := x.client.Call(x.ctx, http.MethodGet, management.ThemePath(x.args[0]), nil, nil, nil)
+			if err != nil {
+				return err
+			}
+			if _, err := x.stdout.Write(body); err != nil {
+				return err
+			}
+			if !x.json && !bytes.HasSuffix(body, []byte("\n")) {
+				x.printf("\n")
+			}
+			return nil
+		}},
+	{words: "theme add", args: []string{"file"}, routes: []string{"PUT /themes/{publisher}/{name}"}, summary: "store a theme JSON file",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			fs.StringVar(&o.id, "id", "", "theme ID (publisher/name)")
+		},
+		run: func(x *invocation) error {
+			raw, err := os.ReadFile(x.args[0])
+			if err != nil {
+				return err
+			}
+			id := resolveThemeID(x.opts.id, x.args[0], raw)
+			var summary management.ThemeSummary
+			body, err := x.client.CallBytes(x.ctx, http.MethodPut, management.ThemePath(id), nil, raw, &summary)
+			if err != nil {
+				return err
+			}
+			if x.json {
+				_, err := x.stdout.Write(body)
+				return err
+			}
+			x.printf("%s\n", summary.ID)
+			return nil
+		}},
+	{words: "theme remove", args: []string{"id"}, routes: []string{"DELETE /themes/{publisher}/{name}"}, summary: "remove a stored theme",
+		run: func(x *invocation) error {
+			return x.call(http.MethodDelete, management.ThemePath(x.args[0]), nil, nil, nil, func() {
+				x.printf("theme %s removed\n", x.args[0])
+			})
+		}},
+	{words: "theme set", args: []string{"id"}, routes: []string{"PUT /theme"}, summary: "select a theme ID",
+		run: func(x *invocation) error {
+			var r management.ThemeSelection
+			return x.call(http.MethodPut, "/theme", nil, management.ThemeSelection{ID: x.args[0]}, &r, func() {
+				x.printf("theme %s selected\n", r.ID)
+			})
+		}},
+	{words: "theme clear", routes: []string{"PUT /theme"}, summary: "clear the selected theme",
+		run: func(x *invocation) error {
+			var r management.ThemeSelection
+			return x.call(http.MethodPut, "/theme", nil, management.ThemeSelection{ID: ""}, &r, func() {
+				x.printf("theme cleared\n")
+			})
+		}},
+}
+
+func resolveThemeID(flagID, filePath string, raw []byte) string {
+	if flagID != "" {
+		return flagID
+	}
+	var doc struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(raw, &doc) == nil && validThemeID(doc.ID) {
+		return doc.ID
+	}
+	base := filepath.Base(filePath)
+	if len(base) >= 5 && strings.EqualFold(base[len(base)-5:], ".json") {
+		base = base[:len(base)-5]
+	}
+	var b strings.Builder
+	for _, r := range strings.ToLower(base) {
+		if b.Len() >= 64 {
+			break
+		}
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return "t3/" + b.String()
+}
+
+func validThemeID(id string) bool {
+	pub, name, ok := strings.Cut(id, "/")
+	if !ok || pub == "current" {
+		return false
+	}
+	return validThemePart(pub) && validThemePart(name)
+}
+
+func validThemePart(s string) bool {
+	if len(s) == 0 || len(s) > 64 {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func cmpOr(a, b string) string {
