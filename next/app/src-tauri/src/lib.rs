@@ -113,7 +113,6 @@ struct App {
     startup: Mutex<(startup::Store, startup::Preferences)>,
     conn: Mutex<Connection>,
     /// A change of the app's own core waiting for its native confirmation (`core_updates.rs`).
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     core_change: Mutex<Option<core_updates::Pending>>,
     #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     confirmations: Mutex<confirmation::Confirmations>,
