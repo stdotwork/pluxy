@@ -521,9 +521,11 @@ type Tried struct {
 // account was at its concurrency limit, or skipped when the request's limits ended it before the
 // account's turn. Until is when the block that holds it ends, when known.
 type LeftOut struct {
-	Account string     `json:"account"`
-	State   string     `json:"state"`
-	Until   *time.Time `json:"until,omitempty"`
+	Account  string     `json:"account"`
+	Provider string     `json:"provider,omitempty"`
+	Model    string     `json:"model,omitempty"`
+	State    string     `json:"state"`
+	Until    *time.Time `json:"until,omitempty"`
 }
 
 // Pluxy adds the error's `pluxy` member to the error object o of a client format, when core set

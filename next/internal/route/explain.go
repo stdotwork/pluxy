@@ -180,6 +180,7 @@ func (c *call) explained(e *llm.Error) *llm.Error {
 // Plan is what a request for a model would do now, as GET /route shows it. It sends nothing.
 type Plan struct {
 	Model string `json:"model"`
+	Chain []Step `json:"chain,omitempty"`
 	// Order are the accounts in the order the router would try them.
 	Order []PlanStep `json:"order"`
 	// LeftOut are the accounts that serve the model and would not be tried now, and why.
@@ -190,6 +191,7 @@ type Plan struct {
 type PlanStep struct {
 	// ID is the account's ID, which only the management API shows; Account is its public ID.
 	ID       string `json:"id"`
+	Step     int    `json:"step,omitempty"`
 	Account  string `json:"account"`
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
@@ -197,7 +199,8 @@ type PlanStep struct {
 
 // PlanLeftOut is an account a request would leave out.
 type PlanLeftOut struct {
-	ID string `json:"id"`
+	ID   string `json:"id"`
+	Step int    `json:"step,omitempty"`
 	llm.LeftOut
 }
 

@@ -86,6 +86,8 @@ type Config struct {
 	// trace ID) and the pluxy member of errors, for a core whose client keys go to people who
 	// should not see which accounts serve them. Unset or true: replies say what happened.
 	Explain *bool `json:"explain,omitempty"`
+	// Chains is a stub.
+	Chains map[string][]Step `json:"chains,omitempty"`
 }
 
 // Quota response modes (Config.QuotaResponseMode).
@@ -188,6 +190,8 @@ type Attempt struct {
 	Public string
 	// Model is the account's name for the request's model (an alias or prefix resolved).
 	Model string
+	// Step is a stub.
+	Step int
 }
 
 // Credentials supplies the credentials of managed accounts (Account.Managed): core's
