@@ -61,13 +61,13 @@ func serveResponsesWebSocket(w http.ResponseWriter, r *http.Request, src Source)
 	g, release := src.Acquire()
 	cfg := g.Config
 	release()
-	// The handshake's reply carries the socket's trace ID; the account of a turn comes later.
-	r, t := requestTrace(r)
-	w.Header().Set(TraceHeader, t.id)
 	if e := refused(cfg, r, false); e != nil {
 		responsesFormat.writeError(w, e)
 		return
 	}
+	// The handshake's reply carries the socket's trace ID; the account of a turn comes later.
+	r, t := requestTrace(r)
+	w.Header().Set(TraceHeader, t.id)
 	if ts := r.Header.Get("X-Codex-Turn-State"); ts != "" {
 		// Keeps the client's sticky turn state across reconnects, as today's core does.
 		w.Header().Set("X-Codex-Turn-State", ts)

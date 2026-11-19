@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 // What a client reply says about the account that served it, and what an error says about the
@@ -420,5 +422,23 @@ func TestPinAcceptsPublicID(t *testing.T) {
 	resp.Body.Close()
 	if keys := usedKeys(u); resp.StatusCode != http.StatusOK || !slices.Equal(keys, []string{"sk-b"}) {
 		t.Errorf("status %d, upstream keys %v, want 200 and sk-b", resp.StatusCode, keys)
+	}
+}
+
+// The handshake of the Responses WebSocket carries a trace ID, as an HTTP reply does; the account
+// of a turn is chosen after the upgrade, so no account header can come with it.
+func TestResponsesWebSocketHandshakeCarriesTraceID(t *testing.T) {
+	u := newWSUpstream(t)
+	base := startWSCore(t, u, true, "sk-a")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(base, "http")+"/v1/responses",
+		&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + clientKey}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.CloseNow()
+	if id := resp.Header.Get("X-CPA-TRACE-ID"); !regexp.MustCompile(`^\d{14}-[0-9a-f]{16}$`).MatchString(id) {
+		t.Errorf("handshake trace ID = %q", id)
 	}
 }

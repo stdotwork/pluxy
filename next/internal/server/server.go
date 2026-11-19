@@ -170,13 +170,14 @@ func NewHandler(src Source) http.Handler {
 		mux.HandleFunc("POST "+path, accessLog(func(w http.ResponseWriter, r *http.Request) {
 			g, release := src.Acquire()
 			defer release()
-			// Every reply has the trace ID, also one sent before a request reaches routing.
-			r, t := requestTrace(r)
-			w.Header().Set(TraceHeader, t.id)
 			if e := refused(g.Config, r, f.googleKeys); e != nil {
 				f.writeError(w, e)
 				return
 			}
+			// Every reply to a request that may use the API has the trace ID, also one sent before
+			// the request reaches routing (a body that does not parse, no account for the model).
+			r, t := requestTrace(r)
+			w.Header().Set(TraceHeader, t.id)
 			logged(w, r, g, func(w http.ResponseWriter, r *http.Request) { h(w, r, g) })
 		}))
 	}
