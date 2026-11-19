@@ -415,7 +415,12 @@ function makeRemovable(data: string) {
 /** One session: its fixtures, a fresh app state, the app run, and run.ts's checks of its report. */
 export async function toolSession(name: ToolSession, ctx: Context) {
   const { check, say } = ctx;
-  const root = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-tools-"));
+  // On Windows the user's own temporary folder, by its long path: the execution program's terminal
+  // runs a program only when no other account may change it, its folder, or what a folder above
+  // holds (app-tools README), and on GitHub's runners the Users group may add folders under `D:\a`,
+  // where RUNNER_TEMP is.
+  const base = windows ? realpathSync.native(tmpdir()) : (process.env.RUNNER_TEMP ?? tmpdir());
+  const root = mkdtempSync(join(base, "pluxy-tools-"));
   const fixtures = join(root, name);
   let home = join(root, "home");
   let configDir: string;
