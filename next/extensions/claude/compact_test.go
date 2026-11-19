@@ -25,10 +25,10 @@ const compactBody = `{"model":"claude-opus-4-6","instructions":"You are a coding
 	`"tool_choice":"required","parallel_tool_calls":false,"reasoning":{"effort":"high"},` +
 	`"text":{"format":{"type":"json_schema","name":"out","schema":{"type":"object"}}},"store":false}`
 
-// compactionReply is Anthropic's reply to an on-demand compaction request, as its docs show it:
+// anthropicCompaction is Anthropic's reply to an on-demand compaction request, as its docs show it:
 // one compaction block, stop_reason compaction, and the summarization call's usage in
 // iterations (the top-level counts are zero).
-const compactionReply = `{"id":"msg_compact1","type":"message","role":"assistant","model":"claude-opus-4-6",` +
+const anthropicCompaction = `{"id":"msg_compact1","type":"message","role":"assistant","model":"claude-opus-4-6",` +
 	`"content":[{"type":"compaction","content":"The user asked for the files; ls showed a.txt.","signature":"EuYBCkQYexample"}],` +
 	`"stop_reason":"compaction","stop_sequence":null,` +
 	`"usage":{"input_tokens":0,"output_tokens":0,"iterations":[{"type":"compaction","input_tokens":144,"output_tokens":276,"cache_read_input_tokens":20,"cache_creation_input_tokens":6}]}}`
@@ -72,7 +72,7 @@ func TestCompactThroughExtension(t *testing.T) {
 	srv := claudetest.New(t)
 	srv.Messages = func(w http.ResponseWriter, r *http.Request, req claudetest.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, compactionReply)
+		io.WriteString(w, anthropicCompaction)
 	}
 	ext := startExtension(t)
 	evs := events(t, ext.Endpoint(context.Background(), compactAccount(srv), compactRequest(compactBody)))
@@ -101,7 +101,13 @@ func TestCompactThroughExtension(t *testing.T) {
 	if s := string(sent["stream"]); s == "true" {
 		t.Errorf("upstream stream = %s, want no stream", s)
 	}
-	for _, f := range []string{"tool_choice", "stop_sequences", "context_management", "betas"} {
+	var tc struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(sent["tool_choice"], &tc) == nil && (tc.Type == "any" || tc.Type == "tool") {
+		t.Errorf("upstream tool_choice = %s, want no forced tool choice", sent["tool_choice"])
+	}
+	for _, f := range []string{"stop_sequences", "context_management", "betas"} {
 		if v, ok := sent[f]; ok {
 			t.Errorf("upstream %s = %s, want it left out", f, v)
 		}
@@ -118,6 +124,13 @@ func TestCompactThroughExtension(t *testing.T) {
 		if !strings.Contains(string(sent["messages"]), want) {
 			t.Errorf("upstream messages %s, want %s in them", sent["messages"], want)
 		}
+	}
+	var msgs []struct {
+		Role string `json:"role"`
+	}
+	if json.Unmarshal(sent["messages"], &msgs) != nil || len(msgs) == 0 || msgs[len(msgs)-1].Role != "assistant" ||
+		strings.Contains(string(reqs[0].Body), compactPlaceholder) {
+		t.Errorf("upstream messages %s; want them to end on the assistant's reply, with no placeholder", sent["messages"])
 	}
 	if !strings.Contains(string(sent["tools"]), `"shell"`) {
 		t.Errorf("upstream tools = %s, want the shell tool", sent["tools"])
@@ -223,5 +236,36 @@ func TestCompactionBody(t *testing.T) {
 	}
 	if want := `{"tool_choice":{"type":"auto"},"compaction":{"type":"summarize"},"betas":["a","compact-2026-09-04"]}`; !jsonEqual(got, json.RawMessage(want)) {
 		t.Errorf("got %s\nwant %s", got, want)
+	}
+}
+
+// A conversation that ends on a tool's output (a user turn on Claude) goes as it is, with no
+// placeholder to take out.
+func TestCompactEndingOnToolOutput(t *testing.T) {
+	srv := claudetest.New(t)
+	srv.Messages = func(w http.ResponseWriter, r *http.Request, req claudetest.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, anthropicCompaction)
+	}
+	ext := startExtension(t)
+	body := `{"model":"claude-opus-4-6","input":[{"type":"message","role":"user","content":"List the files."},` +
+		`{"type":"function_call","call_id":"call_1","name":"shell","arguments":"{}"},{"type":"function_call_output","call_id":"call_1","output":"a.txt"}],` +
+		`"tools":[{"type":"function","name":"shell","parameters":{"type":"object","properties":{}}}]}`
+	evs := events(t, ext.Endpoint(context.Background(), compactAccount(srv), compactRequest(body)))
+	if end := evs[len(evs)-1]; end.Type != llm.EventFinish {
+		t.Fatalf("call ended with %+v, want a finished reply", end)
+	}
+	var sent struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	got := srv.Requests()[0].Body
+	if json.Unmarshal(got, &sent) != nil || len(sent.Messages) != 3 || sent.Messages[2].Role != "user" ||
+		len(sent.Messages[2].Content) != 1 || sent.Messages[2].Content[0].Type != "tool_result" || strings.Contains(string(got), compactPlaceholder) {
+		t.Errorf("upstream body %s; want the conversation ending on the tool result, with no placeholder", got)
 	}
 }

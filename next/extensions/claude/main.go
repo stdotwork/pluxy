@@ -103,6 +103,7 @@ func main() {
 		Models:       listModels,
 		Check:        check,
 		Quota:        quota,
+		Endpoint:     endpoint,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claude:", err)
