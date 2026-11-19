@@ -219,8 +219,9 @@ longer than they ran: in 8 merge groups on 2026-11-18, waits on the native test'
 about half of Namespace's capacity. The shards build nothing but the release gate, so a faster
 runner doesn't help them, and they run what `native-build` built on Namespace (both Ubuntu 24.04
 with the same packages). Their packages come from a cache, since about half of GitHub's Linux
-runners fetch from a slow mirror (the install took 9 to 30 minutes there); `next-app.yml` says
-how.
+runners fetch from a slow mirror (the install took 9 to 30 minutes there). Every job that installs
+Ubuntu packages does so through `.github/actions/apt-install`, which says how the cache works and
+which mirrors it tries when the runner's own fail.
 
 Namespace's runners report themselves self-hosted. In `next-app.yml` they use no Go or Bun cache
 and save no Rust cache, and the Rust caches GitHub's runners save don't restore there either (the

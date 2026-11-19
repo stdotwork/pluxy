@@ -53,12 +53,14 @@ jobs:
             exit 1
           fi
           echo "$PRETTY_NAME"
-      # The same packages as the native job below, which says what each is for.
+      # The same packages as the native job below, which says what each is for, from its cache
+      # (a superset of these) and saved only by it.
       - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools and xdotool
-        working-directory: .
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
+        uses: ./.github/actions/apt-install
+        with:
+          cache: native
+          packages: >-
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon
             xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -154,12 +156,14 @@ jobs:
           fi
           echo "$PRETTY_NAME"
       # The same packages as the checks job: the build's libraries, and the services and tools
-      # run.ts checks for before it builds (the native job below says what each is for).
+      # run.ts checks for before it builds (the native job below says what each is for), from the
+      # native job's cache, which only that job saves.
       - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools and xdotool
-        working-directory: .
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
+        uses: ./.github/actions/apt-install
+        with:
+          cache: native
+          packages: >-
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon
             xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -254,49 +258,16 @@ jobs:
       # xdotool sends real input through the X server (XTEST), for native dialog checks.
       # ImageMagick's import takes the screenshots each session keeps (native/shots.ts).
       #
-      # The packages come from a cache when they can: about half of GitHub's Linux runners fetch
-      # from a mirror (us-east-2.ec2.archive.ubuntu.com) at 50 to 200 kB/s, so the 98 MB download
-      # took 9 to 30 minutes there, against seconds from azure.archive.ubuntu.com. apt checks each
-      # cached file against the signed package index it just fetched, downloads any that are
-      # missing, stale or don't match, and keeps the cache to the versions now installed. The
-      # cache is saved from pushes to main (and manual runs, for their own branch), which every
-      # merge group and pull request can restore.
-      - name: Restore the apt packages
-        id: apt-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.cache/pluxy-apt-debs
-          # Never an exact match: the newest saved set, whose name hashes its file names.
-          key: apt-debs-native-${{ github.sha }}
-          restore-keys: apt-debs-native-
+      # The packages come from a cache, which this job saves from pushes to main and manual runs
+      # (.github/actions/apt-install says how, and what happens when a mirror fails).
       - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools, xdotool and ImageMagick
-        id: apt
-        working-directory: .
-        run: |
-          debs="$HOME/.cache/pluxy-apt-debs"
-          mkdir -p "$debs/partial"
-          cached="$(find "$debs" -maxdepth 1 -name '*.deb' | wc -l)"
-          sudo apt-get update
-          sudo apt-get install -y -o Dir::Cache::Archives="$debs" \
-            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
-            xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool imagemagick
-          # Keep only the files of the versions installed now, named as apt names them (an epoch's
-          # colon as %3a).
-          dpkg-query -W -f='${Package}_${Version}_${Architecture}.deb\n' | sed 's/:/%3a/g' > "$RUNNER_TEMP/installed-debs"
-          sudo rm -rf "$debs/partial" "$debs/lock"
-          for f in "$debs"/*.deb; do
-            [ -e "$f" ] || continue
-            grep -qxF "$(basename "$f")" "$RUNNER_TEMP/installed-debs" || sudo rm -f "$f"
-          done
-          kept="$(find "$debs" -maxdepth 1 -name '*.deb' | wc -l)"
-          echo "apt packages: $cached restored from the cache, $kept kept ($(du -sh "$debs" | cut -f1))"
-          echo "key=apt-debs-native-$(find "$debs" -maxdepth 1 -name '*.deb' -printf '%f\n' | sort | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
-      - name: Save the apt packages
-        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.apt.outputs.key != steps.apt-cache.outputs.cache-matched-key
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/apt-install
         with:
-          path: ~/.cache/pluxy-apt-debs
-          key: ${{ steps.apt.outputs.key }}
+          cache: native
+          save: 'true'
+          packages: >-
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon
+            xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool imagemagick
       - name: Set up Go
         uses: actions/setup-go@v5
         with:

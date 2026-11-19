@@ -105,9 +105,9 @@ jobs:
                 .github/workflows/ci.yml)
                 native=true ;;
             esac
-            case $path in extensions/app/* | .github/workflows/app-ci.yml) run[app]=true ;; esac
+            case $path in extensions/app/* | .github/workflows/app-ci.yml | .github/actions/apt-install/*) run[app]=true ;; esac
             case $path in next/* | .github/workflows/next-ci.yml) run[next-ci]=true ;; esac
-            case $path in next/* | .github/workflows/next-app.yml) run[next-app]=true ;; esac
+            case $path in next/* | .github/workflows/next-app.yml | .github/actions/apt-install/*) run[next-app]=true ;; esac
             case $path in
               next/app/* | next/ui/* | next/protocol/testdata/app-manifests/* | next/go.mod | next/go.sum | \
                 .github/workflows/next-app-platforms.yml)
