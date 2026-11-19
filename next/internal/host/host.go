@@ -687,11 +687,12 @@ type Stream struct {
 	// the alive frames.
 	watch   time.Duration
 	started bool
-	alives  int
+	alives  atomic.Int64
 }
 
-// Alives returns how many alive frames the extension has sent on the call so far.
-func (s *Stream) Alives() int { return s.alives }
+// Alives returns how many alive frames the extension has sent on the call so far. It may be
+// called while Next runs.
+func (s *Stream) Alives() int { return int(s.alives.Load()) }
 
 func failed(code, msg string) *Stream {
 	s := &Stream{}
@@ -717,7 +718,7 @@ func (s *Stream) Next() llm.Event {
 			return s.last()
 		}
 		if reply.Type == protocol.TypeAlive {
-			s.alives++
+			s.alives.Add(1)
 		} else if reply.Type != protocol.TypeDiagnostic {
 			break
 		} else if s.capture != nil && reply.Diagnostic != nil {

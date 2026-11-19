@@ -2,7 +2,8 @@
 // extension exactly as core does and checks it against the extension protocol
 // (../protocol/README.md): the handshake, streamed and unstreamed replies, cancellation, a crash,
 // shutdown and structured errors; for an extension that signs in to accounts, login and
-// credential refresh; and, for one that lists models, its model list.
+// credential refresh; for one that lists models, its model list; and, when its fixture arranges
+// a quiet upstream, its alive frames.
 //
 // The kit cannot know how to make an extension's upstream behave, so the extension's test gives
 // it a fixture: for each Scenario, the account that makes the extension act it out. See
@@ -50,6 +51,12 @@ const (
 	// auth, retryable, scope credential; a check call on its account must report code auth (or
 	// unsupported).
 	ScenarioAuthFailed Scenario = "auth_failed"
+	// ScenarioQuiet: the upstream starts a streamed reply with some text, then for at least 15
+	// seconds sends only bytes that carry nothing the extension passes on (such as SSE comments
+	// or pings), at least every 2 seconds, until the request is cancelled. An extension that
+	// reports protocol 0.19 must send core alive frames meanwhile (sdk.Upstream does). Only
+	// used when Target.Quiet is set.
+	ScenarioQuiet Scenario = "quiet"
 )
 
 // What ScenarioText must produce.
@@ -121,6 +128,8 @@ type Target struct {
 	// scenarios). Required when the extension's describe lists login or refresh; called once
 	// per check.
 	PrepareLogin func(t *testing.T, s LoginScenario, method string) LoginSetup
+	// Quiet says Prepare arranges ScenarioQuiet; the alive check runs only then.
+	Quiet bool
 }
 
 // Each check waits at most this long for something that should happen at once.
@@ -182,6 +191,7 @@ func Run(t *testing.T, target Target) {
 	t.Run("models", k.models)
 	t.Run("check", k.check)
 	t.Run("quota", k.quota)
+	t.Run("alive", k.alive)
 }
 
 type kit struct {
@@ -754,5 +764,63 @@ func (k *kit) quota(t *testing.T) {
 		if l.UsedPercent != nil && (*l.UsedPercent < 0 || *l.UsedPercent > 100) {
 			t.Errorf("limits[%d] (%s) used_percent %v is not from 0 to 100", i, l.ID, *l.UsedPercent)
 		}
+	}
+}
+
+// aliveWait is how long the alive check waits for an alive frame: the SDK sends one once the
+// call has sent core nothing for 10 seconds.
+const aliveWait = 20 * time.Second
+
+// alive checks that an extension that reports protocol 0.19 sends alive frames while its
+// upstream sends bytes it passes nothing on for, and nothing else in their place.
+func (k *kit) alive(t *testing.T) {
+	ext := k.start(t)
+	if ext.Info().ProtocolMinor < 19 {
+		t.Skipf("the extension reports protocol 0.%d; alive frames came in 0.19", ext.Info().ProtocolMinor)
+	}
+	if !k.target.Quiet {
+		t.Skip("the fixture does not arrange ScenarioQuiet (Target.Quiet)")
+	}
+	setup := k.target.Prepare(t, ScenarioQuiet)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := ext.Generate(ctx, setup.Account, request(true))
+	defer s.Close()
+	text := make(chan struct{})
+	events := make(chan llm.Event, 64)
+	go func() {
+		defer close(events)
+		sawText := false
+		for {
+			ev := s.Next()
+			if ev.Type == llm.EventTextDelta && !sawText {
+				sawText = true
+				close(text)
+			}
+			events <- ev
+			if ev.Terminal() {
+				return
+			}
+		}
+	}()
+	select {
+	case <-text:
+	case <-time.After(wait):
+		t.Fatal("the quiet reply sent no text")
+	}
+	deadline := time.Now().Add(aliveWait)
+	for s.Alives() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("no alive frame within %s of quiet upstream bytes", aliveWait)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+	var last llm.Event
+	for ev := range events {
+		last = ev
+	}
+	if last.Type != llm.EventError || last.Error.Code != llm.CodeCancelled {
+		t.Errorf("after cancelling, the quiet reply ended with %s, want error %s", jsonString(last), llm.CodeCancelled)
 	}
 }

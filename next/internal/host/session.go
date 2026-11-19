@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -319,11 +320,12 @@ type SessionStream struct {
 	// watch, started and alives are as for Stream.
 	watch   time.Duration
 	started bool
-	alives  int
+	alives  atomic.Int64
 }
 
-// Alives returns how many alive frames the extension has sent on the turn so far.
-func (t *SessionStream) Alives() int { return t.alives }
+// Alives returns how many alive frames the extension has sent on the turn so far. It may be
+// called while Next runs.
+func (t *SessionStream) Alives() int { return int(t.alives.Load()) }
 
 func (t *SessionStream) fail(e *llm.Error) {
 	ev := llm.Event{Type: llm.EventError, Error: e}
@@ -388,7 +390,7 @@ func (t *SessionStream) Next() llm.Event {
 			return *t.final
 		}
 		if f.reply.Type == protocol.TypeAlive {
-			t.alives++
+			t.alives.Add(1)
 			continue
 		}
 		if f.reply.Type != protocol.TypeDiagnostic {
