@@ -1348,7 +1348,9 @@ failure goes to the client. Once a reply has started, nothing is retried. Extens
 retry on their own.
 
 A model name is served by the accounts of one provider: the provider (extension) of the
-highest-priority account that serves the name, the first in the config's order on a tie. Accounts
+highest-priority account that serves the name. On a tie, the account that comes first decides:
+the accounts of the `extension` section, then those of the `extensions` sections in order of
+extension ID, then the accounts added by login, in order of account ID. Accounts
 whose model list could not be read serve any model, but they decide the provider only when no
 account lists the name. Accounts that cannot serve now count in this choice too: a banned or
 blocked account, one turned off and one waiting for a new login keep the name on their provider,
