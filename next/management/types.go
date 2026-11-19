@@ -252,6 +252,26 @@ type QuotaReply struct {
 	Quota     *protocol.Quota `json:"quota"`
 }
 
+// AccountModel is one model an account serves, as GET /accounts/{id}/models lists it: the
+// model by its upstream name, with what the extension says about it, and the names clients ask
+// for it by after the account's exclusions, aliases and prefix.
+type AccountModel struct {
+	protocol.Model
+	// Names are the names clients use for the model on this account; empty when the account's
+	// excluded_models leave it out.
+	Names []string `json:"names"`
+	// Excluded is true when the account's excluded_models leave the model out.
+	Excluded bool `json:"excluded,omitempty"`
+}
+
+// AccountModelsReply is GET /accounts/{id}/models's reply.
+type AccountModelsReply struct {
+	Models []AccountModel `json:"models"`
+	// From says where the list came from: "account" (read from the provider using the account's
+	// credential), "extension" (the extension's built-in list), or omitted.
+	From string `json:"from,omitempty"`
+}
+
 // ModelsReply is GET /models's reply.
 type ModelsReply struct {
 	Models []route.ServedModel `json:"models"`

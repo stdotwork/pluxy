@@ -85,6 +85,14 @@ func fakeExtension(mode string) {
 		echoParts()
 		return
 	}
+	if mode == "models-from-17" {
+		modelsFrom(17)
+		return
+	}
+	if mode == "models-from-18" {
+		modelsFrom(18)
+		return
+	}
 	if mode != "sleep-child" { // the child shares its parent's folder
 		_ = os.WriteFile("pid", []byte(strconv.Itoa(os.Getpid())), 0o644)
 		_ = os.WriteFile("env", []byte(strings.Join(os.Environ(), "\n")), 0o644)
@@ -652,6 +660,61 @@ func TestStartPassesOnlyTheTestLoginHostsVariable(t *testing.T) {
 		}
 		if strings.Contains(env, "PLUXY_HOSTTEST_OTHER") {
 			t.Errorf("another variable of core's reached the extension:\n%s", b)
+		}
+	}
+}
+
+func modelsFrom(minor int) {
+	socket := os.Getenv(protocol.EnvSocket)
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		os.Exit(1)
+	}
+	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer conn.Close()
+			var call protocol.Call
+			if protocol.ReadFrame(conn, &call) != nil {
+				return
+			}
+			switch call.Op {
+			case protocol.OpDescribe:
+				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeDescribeResult},
+					Info: &protocol.Info{ID: os.Getenv(protocol.EnvExtensionID), Version: "0.0.0", Protocol: protocol.Version, ProtocolMinor: minor,
+						Operations: []string{protocol.OpGenerate, protocol.OpModels}}})
+			case protocol.OpModels:
+				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeModelsResult},
+					Models: &protocol.ModelList{OwnedBy: "test", From: protocol.ModelListFromAccount, Models: []protocol.Model{{ID: "m1"}}}})
+			}
+		}()
+	}
+}
+
+// ModelList.From is kept only when the extension reports protocol minor 18 or later.
+func TestModelsFromMinorVersionGating(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		want string
+	}{
+		{"models-from-17", ""},
+		{"models-from-18", protocol.ModelListFromAccount},
+	} {
+		ext, err := Start(filepath.Join(fakePackage(t, tc.mode), ManifestFile), Options{Log: io.Discard})
+		if err != nil {
+			t.Fatal(err)
+		}
+		list, le := ext.Models(context.Background(), protocol.Account{ID: "a"})
+		ext.Stop()
+		if le != nil {
+			t.Fatalf("%s: %v", tc.mode, le)
+		}
+		if list.From != tc.want {
+			t.Errorf("%s: From = %q, want %q", tc.mode, list.From, tc.want)
 		}
 	}
 }
