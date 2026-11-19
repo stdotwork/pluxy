@@ -639,7 +639,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		}
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not reachable: %v", e.manifest.ID, err))
 	}
-	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: redact, capture: capture(ctx, e.info), account: account.ID}
+	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: redact, pieces: e.accountPieces(account), capture: capture(ctx, e.info), account: account.ID}
 	if op == protocol.OpEndpoint {
 		s.body = redact.Body()
 	}
@@ -678,6 +678,11 @@ type Stream struct {
 	// capture receives the call's diagnostic frames; nil when the call is not captured.
 	capture CaptureFunc
 	account string
+	// pieces are the account's secrets, whose pieces are removed from the upstream's error text.
+	pieces pieces
+	// held is the call's capture, redacted, until the call ends: whether it ended in an error
+	// says how much of it loses the pieces (pieces.diagnostic).
+	held heldCapture
 }
 
 func failed(code, msg string) *Stream {
@@ -704,7 +709,7 @@ func (s *Stream) Next() llm.Event {
 	}
 	for reply.Type == protocol.TypeDiagnostic {
 		if s.capture != nil && reply.Diagnostic != nil {
-			s.capture(s.account, redactDiagnostic(s.redact, *reply.Diagnostic))
+			s.held.hold(redactDiagnostic(s.redact, *reply.Diagnostic))
 		}
 		reply = protocol.Reply{}
 		if err := protocol.ReadFrame(s.conn, &reply); err != nil {
@@ -730,8 +735,11 @@ func (s *Stream) Next() llm.Event {
 		}
 		return ev
 	}
-	ev := s.redact.Event(reply.Event)
+	ev := s.pieces.event(s.redact.Event(reply.Event))
 	if ev.Terminal() {
+		if ev.Type == llm.EventFinish {
+			s.held.succeed()
+		}
 		s.final = &ev
 		s.Close()
 		return s.last()
@@ -778,6 +786,10 @@ func (s *Stream) readError(err error) *llm.Error {
 func (s *Stream) Close() {
 	if s.onClose != nil {
 		defer s.onClose()
+	}
+	ds, failed := s.held.take()
+	for _, d := range ds {
+		s.capture(s.account, s.pieces.diagnostic(d, failed))
 	}
 	if s.stop != nil {
 		s.stop()

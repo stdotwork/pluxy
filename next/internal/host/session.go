@@ -34,6 +34,7 @@ type Session struct {
 
 	mu         sync.Mutex
 	creds      []*protocol.Credential // every credential and settings' secrets the session has carried, for redaction
+	pieces     pieces                 // the secrets of every account version the session has carried (pieces)
 	running    bool                   // a turn has been sent and its terminal event not read
 	closeAfter bool                   // close once the running turn ends
 	closed     bool
@@ -90,7 +91,7 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		if reply.Error == nil {
 			return nil, e.protocolError("an error frame without an error")
 		}
-		ev := protocol.NewRedactor(creds...).Event(reply.Event)
+		ev := e.accountPieces(account).event(protocol.NewRedactor(creds...).Event(reply.Event))
 		return nil, ev.Error
 	default:
 		conn.Close()
@@ -100,7 +101,7 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		// ctx ended just as the session opened; its conn is closed.
 		return nil, &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
 	}
-	s := &Session{ext: e, conn: conn, accountID: account.ID, frames: make(chan sessionFrame), done: make(chan struct{}), closing: make(chan struct{})}
+	s := &Session{ext: e, conn: conn, accountID: account.ID, pieces: e.accountPieces(account), frames: make(chan sessionFrame), done: make(chan struct{}), closing: make(chan struct{})}
 	for _, c := range creds {
 		if c != nil {
 			s.creds = append(s.creds, c)
@@ -207,8 +208,10 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	if proxy != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, proxy) }) {
 		s.creds = append(s.creds, proxy)
 	}
+	s.pieces = s.pieces.add(s.ext.accountPieces(account))
 	s.running = true
 	t.redact = protocol.NewRedactor(s.creds...)
+	t.pieces = slices.Clone(s.pieces)
 	s.mu.Unlock()
 
 	// A frame the extension sent between turns breaks the protocol; the connection ending
@@ -304,10 +307,15 @@ type SessionStream struct {
 	s      *Session
 	ctx    context.Context
 	redact *protocol.Redactor
+	pieces pieces
+	held   heldCapture // the turn's capture until the turn ends (see Stream)
 	seq    llm.Sequence
 	stop   func() bool
 	final  *llm.Event
-	ended  bool
+	// ended says the turn is over on the session (end). Close may read it on another goroutine
+	// while Next ends the turn, so mu guards it.
+	mu    sync.Mutex
+	ended bool
 	// capture receives the turn's diagnostic frames; nil when the turn is not captured.
 	capture CaptureFunc
 	account string
@@ -320,10 +328,17 @@ func (t *SessionStream) fail(e *llm.Error) {
 
 // end marks the turn over on the session, which can then take the next one.
 func (t *SessionStream) end() {
+	t.mu.Lock()
 	if t.ended {
+		t.mu.Unlock()
 		return
 	}
 	t.ended = true
+	t.mu.Unlock()
+	ds, failed := t.held.take()
+	for _, d := range ds {
+		t.capture(t.account, t.pieces.diagnostic(d, failed))
+	}
 	if t.stop != nil {
 		t.stop()
 	}
@@ -358,7 +373,7 @@ func (t *SessionStream) Next() llm.Event {
 			break
 		}
 		if t.capture != nil && f.reply.Diagnostic != nil {
-			t.capture(t.account, redactDiagnostic(t.redact, *f.reply.Diagnostic))
+			t.held.hold(redactDiagnostic(t.redact, *f.reply.Diagnostic))
 		}
 	}
 	if err := t.seq.Check(f.reply.Event); err != nil {
@@ -367,8 +382,11 @@ func (t *SessionStream) Next() llm.Event {
 		t.fail(redacted(t.redact, s.ext.protocolError(err.Error())))
 		return *t.final
 	}
-	ev := t.redact.Event(f.reply.Event)
+	ev := t.pieces.event(t.redact.Event(f.reply.Event))
 	if ev.Terminal() {
+		if ev.Type == llm.EventFinish {
+			t.held.succeed()
+		}
 		t.final = &ev
 		t.end()
 	}
@@ -377,7 +395,10 @@ func (t *SessionStream) Next() llm.Event {
 
 // Close ends the turn; if it had not finished, that cancels it and ends the session.
 func (t *SessionStream) Close() {
-	if !t.ended {
+	t.mu.Lock()
+	ended := t.ended
+	t.mu.Unlock()
+	if !ended {
 		t.s.Close()
 		t.end()
 	}

@@ -138,7 +138,8 @@ func echoSecrets() {
 // whole and in every form the extension may write them in, but a short password or user name is
 // not removed on its own: it would also scrub "password", "bypass", "reverse proxy" and the number
 // 1. A user name with no password is removed on its own only from 8 bytes; its Basic login is
-// always removed.
+// always removed. The reply, an error, also loses a word that shares 4 characters with a secret
+// of 8 bytes or more (protocol.RemovePieces), which the extension's log line keeps.
 func TestProxySecretRedaction(t *testing.T) {
 	const keep = `keep: password bypass reverse proxy {"n": 1}`
 	for _, c := range []struct{ name, proxy, want string }{
@@ -169,8 +170,12 @@ func TestProxySecretRedaction(t *testing.T) {
 			s := ext.Generate(context.Background(), protocol.Account{ID: "a", ProxyURL: c.proxy}, llm.Request{Model: "m"})
 			ev := s.Next()
 			s.Close()
-			if ev.Type != llm.EventError || ev.Error.Message != c.want {
-				t.Errorf("reply:\n got %+v\nwant error %q", ev, c.want)
+			reply := c.want
+			if c.name == "long password" { // "Long-Proxy-Secret-7" shares "roxy" with "proxy"
+				reply = strings.Replace(c.want, "reverse proxy", "reverse [redacted]", 1)
+			}
+			if ev.Type != llm.EventError || ev.Error.Message != reply {
+				t.Errorf("reply:\n got %+v\nwant error %q", ev, reply)
 			}
 			log.waitFor(t, "echo: "+c.want)
 		})

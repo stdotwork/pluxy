@@ -5,11 +5,14 @@
 //! announced version, a program for this Mac), then swapped with the installed bundle in one step
 //! (`renamex_np` with `RENAME_SWAP`): the bundle is the old one or the new one, never missing. The
 //! old one ends in that folder, which is removed once the new version runs and the old one has
-//! ended. A volume that cannot swap (not APFS) is refused, not updated another way.
+//! ended: the folder is recorded when it is made (`leftovers.rs`), and only a recorded folder that
+//! is still that folder is removed. A volume that cannot swap (not APFS) is refused, not updated
+//! another way.
 //!
 //! Nothing here asks for an administrator, changes the quarantine attribute or goes through
 //! LaunchServices: a bundle this user cannot change is refused.
 use super::bundle;
+use super::leftovers;
 use super::{check_owned, Pinned};
 use std::ffi::CString;
 use std::fs;
@@ -161,12 +164,12 @@ pub(super) fn remove(path: &Path) {
 }
 
 /// A checked bundle in its staging folder next to the installed one, ready to swap in. The
-/// folder is removed if it is not swapped in.
+/// folder is removed if it is not swapped in, only while it is still the folder made
+/// (`leftovers::Folder`).
 pub(super) struct Staged {
     digest: String,
-    staging: PathBuf,
+    staging: leftovers::Folder,
     bundle: PathBuf,
-    swapped: bool,
 }
 
 impl Staged {
@@ -175,34 +178,31 @@ impl Staged {
     }
 }
 
-impl Drop for Staged {
-    fn drop(&mut self) {
-        if !self.swapped {
-            let _ = fs::remove_dir_all(&self.staging);
-        }
-    }
-}
-
-/// A new staging folder of this user's next to the installed bundle.
-fn staging(installed: &Path) -> Result<PathBuf, String> {
+/// A new staging folder of this user's next to the installed bundle, recorded in the updates
+/// folder dir (`leftovers::Folder`).
+fn staging(installed: &Path, dir: &Path) -> Result<leftovers::Folder, String> {
     let folder = installed.parent().ok_or("The app bundle has no folder.")?;
     let mut nonce = [0u8; 8];
     getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
     let path = folder.join(format!(".pluxy-update-{}", crate::artifact::hex(&nonce)));
-    bundle::private_new_dir(&path)?;
-    Ok(path)
+    leftovers::Folder::new(dir, &path)
 }
 
 /// Unpacks the update's verified archive next to the installed bundle and checks it: the same
 /// identifier and program as the installed bundle, the announced version, a program for this Mac.
-pub(super) fn stage(installed: &Path, bytes: Vec<u8>, version: &str) -> Result<Staged, String> {
+pub(super) fn stage(
+    installed: &Path,
+    bytes: Vec<u8>,
+    version: &str,
+    updates: &Path,
+) -> Result<Staged, String> {
     let want = bundle::info(installed)?;
-    let dir = staging(installed)?;
+    let staging = staging(installed, updates)?;
+    let dir = staging.path().to_path_buf();
     let mut s = Staged {
         digest: String::new(),
         bundle: PathBuf::new(),
-        staging: dir.clone(),
-        swapped: false,
+        staging,
     };
     s.bundle = bundle::unpack(&bytes, &dir)?;
     bundle::check(&s.bundle, &want, Some(version), CPU)?;
@@ -212,15 +212,19 @@ pub(super) fn stage(installed: &Path, bytes: Vec<u8>, version: &str) -> Result<S
 
 /// The kept bundle at kept, copied next to the installed one, if the copy still has its pinned
 /// digest and is this app's.
-pub(super) fn stage_kept(installed: &Path, kept: &Path, pin: &Pinned) -> Result<Staged, String> {
+pub(super) fn stage_kept(
+    installed: &Path,
+    kept: &Path,
+    pin: &Pinned,
+    updates: &Path,
+) -> Result<Staged, String> {
     let want = bundle::info(installed)?;
-    let dir = staging(installed)?;
+    let staging = staging(installed, updates)?;
     let name = installed.file_name().ok_or("The app bundle has no name.")?;
     let s = Staged {
         digest: pin.sha256.clone(),
-        bundle: dir.join(name),
-        staging: dir,
-        swapped: false,
+        bundle: staging.path().join(name),
+        staging,
     };
     bundle::copy_tree(kept, &s.bundle)
         .map_err(|e| format!("the kept copy {}: {e}", kept.display()))?;
@@ -233,7 +237,7 @@ pub(super) fn stage_kept(installed: &Path, kept: &Path, pin: &Pinned) -> Result<
 }
 
 /// Swaps staged with the installed bundle in one step.
-pub(super) fn swap_in(installed: &Path, mut staged: Staged) -> Result<(), String> {
+pub(super) fn swap_in(installed: &Path, mut staged: Staged, _updates: &Path) -> Result<(), String> {
     let from = CString::new(staged.bundle.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
     let to = CString::new(installed.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
     // SAFETY: both are NUL-terminated paths.
@@ -245,7 +249,7 @@ pub(super) fn swap_in(installed: &Path, mut staged: Staged) -> Result<(), String
         ));
     }
     // The old bundle is in the staging folder now: it stays until the old version has ended.
-    staged.swapped = true;
+    staged.staging.keep();
     Ok(())
 }
 
@@ -259,30 +263,11 @@ pub(super) fn program(installed: &Path) -> PathBuf {
     installed.join("Contents").join("MacOS").join(name)
 }
 
-/// Whether name is a staging folder's: `.pluxy-update-` and 16 lowercase hex digits.
-fn ours(name: &str) -> bool {
-    name.strip_prefix(".pluxy-update-")
-        .is_some_and(|h| h.len() == 16 && h.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')))
-}
-
-/// Removes staging folders of this user's next to the installed bundle: an old version swapped
-/// out, or what a failed install left. Never a link.
-pub(super) fn cleanup(installed: &Path) {
-    use std::os::unix::fs::MetadataExt;
-    let Some(folder) = installed.parent() else {
-        return;
-    };
-    let Ok(entries) = fs::read_dir(folder) else {
-        return;
-    };
-    // SAFETY: geteuid has no preconditions.
-    let me = unsafe { libc::geteuid() };
-    for e in entries.flatten() {
-        let mine = fs::symlink_metadata(e.path()).is_ok_and(|m| m.is_dir() && m.uid() == me);
-        if mine && e.file_name().to_str().is_some_and(ours) {
-            let _ = fs::remove_dir_all(e.path());
-        }
-    }
+/// Removes the staging folders an earlier install recorded in the updates folder dir (an old
+/// version swapped out, or what a failed install left), each only while it is still the folder
+/// recorded, never through a link (`leftovers::remove_folder`). The bundle's folder is not listed.
+pub(super) fn cleanup(dir: &Path) {
+    leftovers::clean(dir, leftovers::remove_folder);
 }
 
 /// The process the version put back after a failed update starts after: this one.
@@ -326,11 +311,54 @@ pub(super) mod tests {
         swap_volume("apfs", Path::new("/Applications")).unwrap();
     }
 
+    /// The staging folders beside the bundle in tmp, by name.
+    fn staging_folders(tmp: &Path) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = fs::read_dir(tmp)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".pluxy-update-")
+            })
+            .map(|e| e.path())
+            .collect();
+        v.sort();
+        v
+    }
+
+    // A staged bundle dropped without being swapped in (a failed or cancelled install) removes its
+    // staging folder only while that is still the folder made: a folder put at its name stays.
+    #[test]
+    fn a_dropped_stage_removes_only_the_folder_it_made() {
+        let tmp = super::super::tests::temp("app-drop");
+        let dir = tmp.join("updates");
+        let installed = fixture(&tmp, "old");
+        let kept = tmp.join("kept.app");
+        copy_new(&installed, &kept).unwrap();
+        let pin = Pinned {
+            version: "0.1.0".into(),
+            sha256: digest(&installed).unwrap(),
+        };
+        drop(stage_kept(&installed, &kept, &pin, &dir).unwrap());
+        assert!(staging_folders(&tmp).is_empty(), "dropped as made: removed");
+        let s = stage_kept(&installed, &kept, &pin, &dir).unwrap();
+        let staged = staging_folders(&tmp).remove(0);
+        fs::rename(&staged, tmp.join("moved")).unwrap();
+        fs::create_dir(&staged).unwrap();
+        fs::write(staged.join("theirs"), b"z").unwrap();
+        drop(s);
+        assert!(staged.join("theirs").exists(), "not the folder made");
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
     // The swap leaves the new bundle in place and the old one in the staging folder, which
-    // cleanup removes, leaving anything else alone.
+    // cleanup removes while the bundle in place stays. A kept copy that changed is refused and
+    // its staging folder removed.
     #[test]
     fn the_swap_is_one_step_and_cleanup_removes_only_staging() {
         let tmp = super::super::tests::temp("app-swap");
+        let dir = tmp.join("updates");
         let installed = fixture(&tmp, "old");
         let old = digest(&installed).unwrap();
         let kept = tmp.join("kept.app");
@@ -341,28 +369,56 @@ pub(super) mod tests {
         };
         fixture(&tmp, "new");
         let new = digest(&installed).unwrap();
-        let s = stage_kept(&installed, &kept, &pin).unwrap();
-        swap_in(&installed, s).unwrap();
+        let s = stage_kept(&installed, &kept, &pin, &dir).unwrap();
+        swap_in(&installed, s, &dir).unwrap();
         assert_eq!(digest(&installed).unwrap(), old);
-        fs::create_dir(tmp.join(".pluxy-update-zz")).unwrap();
-        let staged: Vec<_> = fs::read_dir(&tmp)
-            .unwrap()
-            .flatten()
-            .filter(|e| e.file_name().to_str().is_some_and(ours))
-            .collect();
+        let staged = staging_folders(&tmp);
         assert_eq!(staged.len(), 1);
-        let swapped_out = staged[0].path().join("pluxy Test.app");
+        let swapped_out = staged[0].join("pluxy Test.app");
         assert_eq!(digest(&swapped_out).unwrap(), new);
-        cleanup(&installed);
-        assert!(!swapped_out.exists());
-        assert!(tmp.join(".pluxy-update-zz").exists());
+        // The next version's cleanup, once this one has ended.
+        leftovers::forget_mine(&tmp);
+        cleanup(&dir);
+        assert!(!staged[0].exists());
+        assert_eq!(digest(&installed).unwrap(), old);
         // A kept copy that changed is not staged, and its staging folder goes.
         tamper(&kept);
-        assert!(stage_kept(&installed, &kept, &pin).is_err());
-        assert!(!fs::read_dir(&tmp)
-            .unwrap()
-            .flatten()
-            .any(|e| e.file_name().to_str().is_some_and(ours)));
+        assert!(stage_kept(&installed, &kept, &pin, &dir).is_err());
+        assert!(staging_folders(&tmp).is_empty());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // Only a staging folder an install recorded is removed: a folder another user renamed to the
+    // staging pattern beside the bundle stays, and so does a folder of the same name put in
+    // place of a recorded one.
+    #[test]
+    fn cleanup_leaves_folders_it_did_not_record_beside_the_bundle() {
+        let tmp = super::super::tests::temp("app-cleanup");
+        let dir = tmp.join("updates");
+        let installed = fixture(&tmp, "old");
+        let renamed = tmp.join(".pluxy-update-0123456789abcdef");
+        fs::create_dir(&renamed).unwrap();
+        fs::write(renamed.join("theirs"), b"x").unwrap();
+        let kept = tmp.join("kept.app");
+        copy_new(&installed, &kept).unwrap();
+        let pin = Pinned {
+            version: "0.1.0".into(),
+            sha256: digest(&installed).unwrap(),
+        };
+        let s = stage_kept(&installed, &kept, &pin, &dir).unwrap();
+        swap_in(&installed, s, &dir).unwrap();
+        let recorded = staging_folders(&tmp)
+            .into_iter()
+            .find(|p| *p != renamed)
+            .unwrap();
+        fs::rename(&recorded, tmp.join("moved")).unwrap();
+        fs::create_dir(&recorded).unwrap();
+        fs::write(recorded.join("theirs"), b"y").unwrap();
+        leftovers::forget_mine(&tmp);
+        cleanup(&dir);
+        assert!(renamed.join("theirs").exists(), "never recorded");
+        assert!(recorded.join("theirs").exists(), "not the folder recorded");
+        assert!(installed.exists());
         fs::remove_dir_all(&tmp).unwrap();
     }
 }
