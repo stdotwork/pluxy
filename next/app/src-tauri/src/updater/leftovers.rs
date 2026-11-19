@@ -161,7 +161,8 @@ impl Drop for Folder {
 
 /// The identity on Unix of folder path, just made (`Folder::new`): device and inode, read through
 /// one open of it that does not follow a link. Refused unless what that open reached is a folder
-/// of this user's, mode 0700 and empty, all read through the same open folder.
+/// of this user's, mode 0700 and empty, all read through the same open folder; on macOS its access
+/// list is emptied through that open folder before it is found empty.
 #[cfg(unix)]
 pub(super) fn folder_id(path: &Path) -> Result<String, String> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -182,6 +183,10 @@ pub(super) fn folder_id(path: &Path) -> Result<String, String> {
             path.display()
         ));
     }
+    // On macOS a new folder takes its folder's inheritable access list entries: it is given an
+    // empty list, so it lets no one else in and passes nothing on to what is made in it.
+    #[cfg(target_os = "macos")]
+    crate::private_macos::clear_entries(&f).map_err(shown)?;
     if !entries(f.as_raw_fd()).map_err(shown)?.is_empty() {
         return Err(format!("{} is not empty", path.display()));
     }

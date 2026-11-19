@@ -7,10 +7,11 @@
 //!
 //! The staging folder is private (`updates/staging/<hex>` in the app's data folder) whenever that
 //! is on the bundle's volume, after checking that every folder from the home folder down to it is
-//! this user's alone (`private_path`): then nothing in the bundle's folder changes but the
-//! bundle's own entry, at the swap. Only on another volume, where a swap cannot reach, is it made
-//! next to the bundle (`.pluxy-update-<hex>`), in the folder the bundle's checks found this
-//! user's alone. The old bundle ends in the staging folder, which is removed once the new version
+//! this user's alone, by its mode and its access list (`private_path`, `acl`); the staging folder
+//! made there takes no access list entry from its folder (`leftovers::Folder`). Then nothing in
+//! the bundle's folder changes but the bundle's own entry, at the swap. Only on another volume,
+//! where a swap cannot reach, is it made next to the bundle (`.pluxy-update-<hex>`), in the folder
+//! the bundle's checks (mode and access list, as the bundle's own) found this user's alone. The old bundle ends in the staging folder, which is removed once the new version
 //! runs and the old one has ended: the folder is recorded when it is made (`leftovers.rs`), and
 //! only a recorded folder that is still that folder is removed; the bundle's folder is never
 //! listed. A volume that cannot swap (not APFS) is refused, not updated another way.
@@ -20,8 +21,8 @@
 //!
 //! Also built for the tests on Linux, which swap with `renameat2`'s `RENAME_EXCHANGE`.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+use super::acl;
 use super::bundle;
-#[cfg(target_os = "macos")]
 use super::check_owned;
 use super::leftovers;
 use super::Pinned;
@@ -91,10 +92,28 @@ pub(super) fn provenance(app: &AppHandle) -> Result<PathBuf, String> {
     // shortcut: as on Linux, only the bundle and its folder are checked, and the swap opens that
     // folder by its path; a folder further up that others could change could be swapped. Upgrade
     // by checking the ancestors, if updating on shared machines is wanted.
-    check_owned(&bundle, true)?;
-    check_owned(folder, true)?;
+    yours_alone(&bundle)?;
+    yours_alone(folder)?;
     swaps(folder)?;
     Ok(bundle)
+}
+
+/// Refused unless the folder at path is this user's, not a link, and no one else can change it:
+/// no group or other write (`check_owned`) and, read through the folder opened without following
+/// a link, no access list entry that lets another account change it or what is in it (`acl`).
+fn yours_alone(path: &Path) -> Result<(), String> {
+    check_owned(path, true)?;
+    let shown = |e: io::Error| format!("{}: {e}", path.display());
+    let f = open_folder(path).map_err(shown)?;
+    let entries = acl::entries(&f).map_err(shown)?;
+    match acl::others(&entries, &acl::yours()?) {
+        Some(why) => Err(format!(
+            "{} is not a folder of yours that only you can change: {why}; update it the way it \
+             was installed.",
+            path.display()
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Whether path is under a translocation mount (`/private/var/folders/../AppTranslocation/..`).
@@ -203,9 +222,10 @@ fn staging(installed: &Path, dir: &Path) -> Result<leftovers::Folder, String> {
     let hex = crate::artifact::hex(&nonce);
     // SAFETY: geteuid has no preconditions.
     let me = unsafe { libc::geteuid() };
+    let yours = acl::yours()?;
     let home = home()?;
     let private = dir.join("staging");
-    private_path(&home, &private, me, look, Missing::Made)?;
+    private_path(&home, &private, me, &yours, look, Missing::Made)?;
     super::private_dir(&private)?;
     if !same_volume(folder, &private)? {
         let path = folder.join(format!(".pluxy-update-{hex}"));
@@ -218,7 +238,7 @@ fn staging(installed: &Path, dir: &Path) -> Result<leftovers::Folder, String> {
     tests::seen("make", &path);
     let made = leftovers::Folder::new(dir, &path)?;
     // Refused, the folder just made goes with made.
-    private_path(&home, made.path(), me, look, Missing::Refused)?;
+    private_path(&home, made.path(), me, &yours, look, Missing::Refused)?;
     Ok(made)
 }
 
@@ -258,21 +278,35 @@ fn home() -> Result<PathBuf, String> {
 }
 
 /// What `private_path` reads of a path without following a link: whether it is a folder, its
-/// owner and its mode.
-#[derive(Clone, Copy, Debug)]
+/// owner, its mode and, for a folder, its access list's entries.
+#[derive(Clone, Debug)]
 struct Look {
     folder: bool,
     uid: u32,
     mode: u32,
+    entries: Vec<acl::Entry>,
 }
 
+/// A folder is read through one open of it that follows no link: its owner, mode and entries
+/// all come from that open folder.
 fn look(path: &Path) -> io::Result<Look> {
     use std::os::unix::fs::MetadataExt;
     let m = fs::symlink_metadata(path)?;
+    if !m.is_dir() {
+        return Ok(Look {
+            folder: false,
+            uid: m.uid(),
+            mode: m.mode(),
+            entries: vec![],
+        });
+    }
+    let f = open_folder(path)?;
+    let m = f.metadata()?;
     Ok(Look {
         folder: m.is_dir(),
         uid: m.uid(),
         mode: m.mode(),
+        entries: acl::entries(&f)?,
     })
 }
 
@@ -287,8 +321,11 @@ enum Missing {
 }
 
 /// Refused unless path is in the home folder home and every folder from home down to path,
-/// both included, is a folder (not a link) owned by me that no one else can write to (no group or
-/// other write). No other account can then rename or replace any of them, so what the updater
+/// both included, is a folder (not a link) owned by me that no one else can write to: no group or
+/// other write, and no access list entry that lets an account other than those whose UUIDs are in
+/// yours change it or what is in it (`acl`; deny entries, such as the stock `everyone deny
+/// delete` on the home folder, are fine). No other account can then rename or replace any of
+/// them, so what the updater
 /// unpacks and checks there stays what it checked. look reads each, by a path built from home's
 /// and path's parts alone: no trailing `/` that would make a look follow a link, and no `.` or
 /// `..`. With `Missing::Made`, the walk ends at the first folder that does not exist.
@@ -296,6 +333,7 @@ fn private_path(
     home: &Path,
     path: &Path,
     me: u32,
+    yours: &[[u8; 16]],
     look: impl Fn(&Path) -> io::Result<Look>,
     missing: Missing,
 ) -> Result<(), String> {
@@ -337,12 +375,15 @@ fn private_path(
             Err(e) if missing == Missing::Made && e.kind() == io::ErrorKind::NotFound => break,
             l => l.map_err(|e| format!("{}: {e}", f.display()))?,
         };
-        if !l.folder || l.uid != me || l.mode & 0o022 != 0 {
+        let others = acl::others(&l.entries, yours);
+        if !l.folder || l.uid != me || l.mode & 0o022 != 0 || others.is_some() {
             return Err(format!(
-                "{} is not a folder of yours that only you can change, so another account could \
+                "{} is not a folder of yours that only you can change{}, so another account could \
                  move what the update unpacks under it. Make it yours alone (no group or other \
-                 write) and update then.",
-                f.display()
+                 write, and no access list entry that lets another account change it) and \
+                 update then.",
+                f.display(),
+                others.map(|why| format!(" ({why})")).unwrap_or_default()
             ));
         }
     }
@@ -403,8 +444,9 @@ pub(super) fn stage_kept(
 
 /// Swaps staged with the installed bundle in one step, by name in each one's folder, both opened
 /// without following a link. Each is checked through the descriptor the swap goes through: the
-/// bundle's folder must still be a folder this user owns that no one else can write to, and the
-/// staging folder still the one made (`leftovers::Folder`), this user's and 0700.
+/// bundle's folder must still be a folder this user owns that no one else can write to (by its
+/// mode and its access list, `acl`), and the staging folder still the one made
+/// (`leftovers::Folder`), this user's and 0700.
 pub(super) fn swap_in(installed: &Path, mut staged: Staged, _updates: &Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let shown = |p: &Path, e: io::Error| format!("{}: {e}", p.display());
@@ -420,10 +462,13 @@ pub(super) fn swap_in(installed: &Path, mut staged: Staged, _updates: &Path) -> 
     let me = unsafe { libc::geteuid() };
     let to = open_folder(folder).map_err(|e| shown(folder, e))?;
     let m = to.metadata().map_err(|e| shown(folder, e))?;
-    if !m.is_dir() || m.uid() != me || m.mode() & 0o022 != 0 {
+    let entries = acl::entries(&to).map_err(|e| shown(folder, e))?;
+    let others = acl::others(&entries, &acl::yours()?);
+    if !m.is_dir() || m.uid() != me || m.mode() & 0o022 != 0 || others.is_some() {
         return Err(format!(
-            "{} is not a folder of yours that only you can change; the app is not updated there.",
-            folder.display()
+            "{} is not a folder of yours that only you can change{}; the app is not updated there.",
+            folder.display(),
+            others.map(|why| format!(" ({why})")).unwrap_or_default()
         ));
     }
     // The staging folder: next to the bundle, opened through the bundle's folder just checked;
@@ -1124,17 +1169,19 @@ pub(super) mod tests {
             folder: true,
             uid: 501,
             mode: 0o40700,
+            entries: vec![],
         };
         let check = |bad: Option<(&Path, Option<Look>)>| {
             private_path(
                 home,
                 path,
                 501,
-                |p| match bad {
-                    Some((at, l)) if at == p => {
-                        l.ok_or_else(|| io::Error::from(io::ErrorKind::PermissionDenied))
-                    }
-                    _ => Ok(ok),
+                &YOURS,
+                |p| match &bad {
+                    Some((at, l)) if *at == p => l
+                        .clone()
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::PermissionDenied)),
+                    _ => Ok(ok.clone()),
                 },
                 Missing::Refused,
             )
@@ -1145,10 +1192,11 @@ pub(super) mod tests {
             home,
             path,
             501,
+            &YOURS,
             |_| {
                 Ok(Look {
                     mode: 0o40751,
-                    ..ok
+                    ..ok.clone()
                 })
             },
             Missing::Refused,
@@ -1162,27 +1210,33 @@ pub(super) mod tests {
         let wrong = [
             Some(Look {
                 mode: 0o40770,
-                ..ok
+                ..ok.clone()
             }),
             Some(Look {
                 mode: 0o40702,
-                ..ok
+                ..ok.clone()
             }),
             Some(Look {
                 mode: 0o41777,
-                ..ok
+                ..ok.clone()
             }),
-            Some(Look { uid: 0, ..ok }),
-            Some(Look { uid: 502, ..ok }),
+            Some(Look {
+                uid: 0,
+                ..ok.clone()
+            }),
+            Some(Look {
+                uid: 502,
+                ..ok.clone()
+            }),
             Some(Look {
                 folder: false,
-                ..ok
+                ..ok.clone()
             }),
             None,
         ];
         for at in &folders {
-            for l in wrong {
-                let e = check(Some((at, l))).unwrap_err();
+            for l in &wrong {
+                let e = check(Some((at, l.clone()))).unwrap_err();
                 assert!(e.contains(&at.display().to_string()), "{at:?} {l:?}: {e}");
             }
         }
@@ -1192,8 +1246,15 @@ pub(super) mod tests {
             "/Users/meow/x",
             "/tmp/x",
         ] {
-            let e = private_path(home, Path::new(outside), 501, |_| Ok(ok), Missing::Refused)
-                .unwrap_err();
+            let e = private_path(
+                home,
+                Path::new(outside),
+                501,
+                &YOURS,
+                |_| Ok(ok.clone()),
+                Missing::Refused,
+            )
+            .unwrap_err();
             assert!(e.contains("not in your home folder"), "{outside}: {e}");
         }
         // Each folder is looked at by a path of plain names: a home given with a trailing `/`
@@ -1204,9 +1265,10 @@ pub(super) mod tests {
                 Path::new(given),
                 path,
                 501,
+                &YOURS,
                 |p| {
                     looked.borrow_mut().push(p.as_os_str().to_owned());
-                    Ok(ok)
+                    Ok(ok.clone())
                 },
                 Missing::Refused,
             )
@@ -1218,28 +1280,291 @@ pub(super) mod tests {
         // With the rest about to be made, the walk ends at the first folder that is not there;
         // the folders above it still count. Otherwise a missing folder is refused.
         let missing = |at: &'static str, above: Look| {
+            let ok = ok.clone();
             move |p: &Path| {
                 if p.starts_with(at) {
                     Err(io::Error::from(io::ErrorKind::NotFound))
                 } else if p == Path::new("/Users/me/Library") {
-                    Ok(above)
+                    Ok(above.clone())
                 } else {
-                    Ok(ok)
+                    Ok(ok.clone())
                 }
             }
         };
         let at = "/Users/me/Library/Application Support/id";
-        private_path(home, path, 501, missing(at, ok), Missing::Made).unwrap();
-        let e = private_path(home, path, 501, missing(at, ok), Missing::Refused).unwrap_err();
+        private_path(
+            home,
+            path,
+            501,
+            &YOURS,
+            missing(at, ok.clone()),
+            Missing::Made,
+        )
+        .unwrap();
+        let e = private_path(
+            home,
+            path,
+            501,
+            &YOURS,
+            missing(at, ok.clone()),
+            Missing::Refused,
+        )
+        .unwrap_err();
         assert!(e.contains(at), "{e}");
         let open = Look {
             mode: 0o40770,
-            ..ok
+            ..ok.clone()
         };
-        let e = private_path(home, path, 501, missing(at, open), Missing::Made).unwrap_err();
+        let e =
+            private_path(home, path, 501, &YOURS, missing(at, open), Missing::Made).unwrap_err();
         assert!(
             e.contains("/Users/me/Library is not a folder of yours"),
             "{e}"
         );
+    }
+
+    /// This user and root, as `acl::tests` names them.
+    const YOURS: [[u8; 16]; 2] = [acl::tests::ME, acl::tests::ROOT];
+
+    // The staging path check judges each folder's access list by what it lets another account
+    // do: on any folder from the home folder down, an allow entry that lets another account
+    // write, or one that only what is made inside inherits, is refused; a deny entry (the stock
+    // `everyone deny delete`), a read-only allow entry and this user's own entries are fine.
+    #[test]
+    fn a_staging_path_is_judged_by_what_its_access_lists_let_others_do() {
+        use acl::tests::{entry, ADD_FILE, DELETE, EVERYONE, LIST, ME, STAFF};
+        let home = Path::new("/Users/me");
+        let path = Path::new("/Users/me/Library/Application Support/id/updates/staging/ab");
+        let with = |at: &Path, entries: Vec<acl::Entry>| {
+            private_path(
+                home,
+                path,
+                501,
+                &YOURS,
+                |p| {
+                    Ok(Look {
+                        folder: true,
+                        uid: 501,
+                        mode: 0o40700,
+                        entries: if p == at { entries.clone() } else { vec![] },
+                    })
+                },
+                Missing::Refused,
+            )
+        };
+        let deny = entry(false, EVERYONE, DELETE, false);
+        let folders: Vec<&Path> = path
+            .ancestors()
+            .take_while(|a| a.starts_with(home))
+            .collect();
+        assert_eq!(folders.len(), 7);
+        for at in folders {
+            with(at, vec![deny]).unwrap();
+            with(
+                at,
+                vec![
+                    deny,
+                    entry(true, EVERYONE, LIST, true),
+                    entry(true, ME, ADD_FILE | DELETE, false),
+                ],
+            )
+            .unwrap();
+            for (e, what) in [
+                (
+                    entry(true, STAFF, ADD_FILE, false),
+                    "change it or what is in it",
+                ),
+                (
+                    entry(true, STAFF, ADD_FILE, true),
+                    "change what is put in it",
+                ),
+            ] {
+                let err = with(at, vec![deny, e]).unwrap_err();
+                assert!(
+                    err.contains(&format!("{} is not a folder of yours", at.display()))
+                        && err.contains("entry 1 of its access list")
+                        && err.contains(what),
+                    "{at:?} {e:?}: {err}"
+                );
+            }
+        }
+    }
+
+    /// Gives path no access list entry (`chmod -N`), then each of entries (`chmod +a`).
+    #[cfg(target_os = "macos")]
+    fn set_entries(path: &Path, entries: &[&str]) {
+        let out = std::process::Command::new("/bin/chmod")
+            .arg("-N")
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "chmod -N {}: {out:?}", path.display());
+        for e in entries {
+            crate::private_macos::add_entry(path, e);
+        }
+    }
+
+    // With real access lists: staging goes through folders whose lists hold only the stock deny
+    // entry or read-only allow entries, and the staging folder made takes no entry from its
+    // folder, an inheritable one included; an allow entry that lets another account write, or a
+    // write entry only what is made inside inherits, on a folder from the home folder down
+    // refuses it, and the folder made for it goes.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn staging_is_judged_by_its_folders_real_access_lists() {
+        let tmp = temp("app-acl-staging");
+        let dir = tmp.join("updates");
+        let staging = dir.join("staging");
+        let installed = fixture(&tmp, "old");
+        let kept = tmp.join("kept.app");
+        copy_new(&installed, &kept).unwrap();
+        let pin = Pinned {
+            version: "0.1.0".into(),
+            sha256: digest(&installed).unwrap(),
+        };
+        drop(stage_kept(&installed, &kept, &pin, &dir).unwrap());
+        let stock = |at: &Path| {
+            set_entries(at, &["everyone deny delete"]);
+        };
+        for at in [&tmp, &dir, &staging] {
+            stock(at);
+        }
+        set_entries(
+            &staging,
+            &[
+                "everyone deny delete",
+                "everyone allow list,search,readattr,file_inherit,directory_inherit",
+            ],
+        );
+        let s = stage_kept(&installed, &kept, &pin, &dir).unwrap();
+        let made = fs::File::open(s.staging.path()).unwrap();
+        assert!(
+            !crate::private_macos::has_entries(&made).unwrap(),
+            "the staging folder made took an entry from its folder"
+        );
+        drop(s);
+        stock(&staging);
+        for (at, e) in [
+            (&tmp, "everyone allow delete_child"),
+            (&dir, "everyone allow add_file"),
+            (&dir, "group:staff allow add_subdirectory"),
+            (
+                &staging,
+                "everyone allow add_file,delete_child,file_inherit,directory_inherit,only_inherit",
+            ),
+        ] {
+            set_entries(at, &["everyone deny delete", e]);
+            let err = stage_kept(&installed, &kept, &pin, &dir).err().unwrap();
+            stock(at);
+            assert!(
+                err.contains(&format!("{} is not a folder of yours", at.display()))
+                    && err.contains("entry 1 of its access list"),
+                "{e}: {err}"
+            );
+            assert!(private(&dir).is_empty(), "{e}: the folder made for it went");
+        }
+        for at in [&tmp, &dir, &staging] {
+            set_entries(at, &[]);
+        }
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // With real access lists: the bundle and its folder (`yours_alone`, as `provenance` checks
+    // them) pass with the stock deny entry and are refused with an allow entry that lets another
+    // account write, or a write entry only what is made inside inherits; the swap reads the
+    // bundle's folder's list again through the folder it swaps in, and swaps nothing once it lets
+    // another account write.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_bundle_and_its_folder_are_judged_by_their_real_access_lists() {
+        let tmp = temp("app-acl-bundle");
+        let dir = tmp.join("updates");
+        let folder = tmp.join("Applications");
+        let installed = fixture(&folder, "old");
+        let old = digest(&installed).unwrap();
+        for at in [&installed, &folder] {
+            set_entries(at, &["everyone deny delete"]);
+            yours_alone(at).unwrap();
+            for e in [
+                "everyone allow add_file",
+                "group:staff allow writesecurity",
+                "everyone allow add_file,file_inherit,directory_inherit,only_inherit",
+            ] {
+                set_entries(at, &["everyone deny delete", e]);
+                let err = yours_alone(at).unwrap_err();
+                assert!(
+                    err.contains(&format!("{} is not a folder of yours", at.display()))
+                        && err.contains("entry 1 of its access list"),
+                    "{e}: {err}"
+                );
+            }
+            set_entries(at, &[]);
+        }
+        let kept = tmp.join("kept.app");
+        copy_new(&installed, &kept).unwrap();
+        let pin = Pinned {
+            version: "0.1.0".into(),
+            sha256: old,
+        };
+        fixture(&folder, "new");
+        let new = digest(&installed).unwrap();
+        let s = stage_kept(&installed, &kept, &pin, &dir).unwrap();
+        set_entries(
+            &folder,
+            &["everyone deny delete", "everyone allow add_file"],
+        );
+        let e = swap_in(&installed, s, &dir).unwrap_err();
+        set_entries(&folder, &[]);
+        assert!(
+            e.contains("is not a folder of yours") && e.contains("entry 1 of its access list"),
+            "{e}"
+        );
+        assert_eq!(digest(&installed).unwrap(), new, "nothing was swapped");
+        assert!(private(&dir).is_empty(), "the staging folder went");
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // This machine's own home folder, `~/Library` and `~/Library/Application Support`, as they
+    // are (on the macOS runners each carries `group:everyone deny delete`), pass the staging path
+    // check. Their lists are printed (`ls -led`; shown with --nocapture or on failure).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn this_macs_own_home_folders_pass_the_staging_path_check() {
+        let mut buf = vec![0 as libc::c_char; 16 << 10];
+        // SAFETY: getpwuid_r writes only into pw and buf; found points into them or is null; the
+        // home folder's name is copied out before they are dropped.
+        let home = unsafe {
+            let mut pw: libc::passwd = std::mem::zeroed();
+            let mut found: *mut libc::passwd = std::ptr::null_mut();
+            let r = libc::getpwuid_r(
+                libc::geteuid(),
+                &mut pw,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut found,
+            );
+            assert!(r == 0 && !found.is_null(), "no account");
+            PathBuf::from(std::ffi::OsStr::from_bytes(
+                std::ffi::CStr::from_ptr(pw.pw_dir).to_bytes(),
+            ))
+        };
+        let support = home.join("Library/Application Support");
+        let ls = std::process::Command::new("/bin/ls")
+            .arg("-led")
+            .args([&home, &home.join("Library"), &support])
+            .output()
+            .unwrap();
+        println!("{}", String::from_utf8_lossy(&ls.stdout));
+        // SAFETY: geteuid has no preconditions.
+        let me = unsafe { libc::geteuid() };
+        private_path(
+            &home,
+            &support,
+            me,
+            &acl::yours().unwrap(),
+            look,
+            Missing::Refused,
+        )
+        .unwrap();
     }
 }

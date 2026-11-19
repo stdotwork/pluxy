@@ -545,8 +545,11 @@ In this order:
      and the plugin needs it: start the app from its real location, for example from Finder); the
      bundle is not running from a translocated copy (macOS runs an app opened from Downloads or a
      disk image from a read-only copy: move it into a folder of your own such as `~/Applications`
-     first); the bundle and its folder are yours and writable by no one else, so a bundle in
-     `/Applications` is refused, because other administrators can change that folder; and the
+     first); the bundle and its folder are yours and writable by no one else, neither by their
+     mode nor by an extended access list entry that lets another account than you or root do more
+     than read (deny entries, such as the stock `group:everyone deny delete`, are fine), so a
+     bundle in `/Applications` is refused, because other administrators can change that folder;
+     and the
      volume is APFS, which swaps two folders in one step. The stock plugin would ask for an
      administrator's password when it cannot write the bundle; nothing here does (no
      `osascript`, `sudo`, `installer` or `authopen`), and the quarantine attribute is neither
@@ -566,7 +569,8 @@ In this order:
    identifier and program and the announced version (`CFBundleShortVersionString`), with a
    program for this Mac. The staging folder is `updates/staging/<hex>` in the app's data folder
    when that is on the bundle's volume, and only if every folder from your home folder down to it
-   is yours, not a link, and writable by no one else (checked for the folders that exist before
+   is yours, not a link, and writable by no one else, by the same rule as the bundle's folder
+   (mode and access list; checked for the folders that exist before
    anything is made in them, and again once the staging folder is made; otherwise nothing is
    unpacked, and the page says which folder to fix); only on another volume is it
    `.pluxy-update-<hex>` next to the bundle.
@@ -590,7 +594,8 @@ In this order:
      with `RENAME_SWAP`, by name in the staging folder and the bundle's folder, each opened
      without following a link, the staging folder next to the bundle through the bundle's open
      folder; read through those open folders, the bundle's folder must still be yours and writable
-     by no one else, and the staging folder still the one made, yours and 0700): the bundle is the
+     by no one else, by its mode and its access list, and the staging folder still the one made,
+     yours and 0700): the bundle is the
      old one or the new one. With private
      staging, nothing else in the bundle's folder is made, changed or removed. The old bundle, now
      in the staging folder, is removed once the new version runs and the old one has ended.
@@ -600,7 +605,8 @@ In this order:
    its name: on Windows the new program right after it is created and the aside copy just before
    the rename (each by its volume serial number and file ID), on macOS the staging folder right
    after it is created (by its device and inode, read through the open folder, which must be empty
-   and yours alone). When the record
+   and yours alone, and is given an empty access list, so it takes no entry from its folder). When
+   the record
    cannot be written, the install deletes what it just made and stops. Should the app stop in the
    moment between making one and recording it, that empty folder or file stays unrecorded, and no
    later start removes it. Removal at a later start goes through the record only. An entry that is
