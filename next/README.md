@@ -459,8 +459,9 @@ an [endpoint call](protocol/README.md#endpoint); the Codex extension sends the b
 calls turned off on a Responses-lite request, the model renamed for the account, a thinking suffix's
 effort applied, and a prompt cache key (with `Session-Id`) derived as for `/responses` when the
 client names none; the upstream's JSON reply comes back to the client as it is. A request with
-`"stream": true` is refused with a 400, as today's core refuses it. An account of another extension
-does not serve it, so a model only those serve gets an error.
+`"stream": true` is refused with a 400, as today's core refuses it. xAI and Claude accounts serve it
+too (see their sections); an account of any other extension does not, so a model only those serve
+gets an error.
 
 **Alpha Search.** Codex's standalone search endpoint is `POST /v1/alpha/search` (also `POST
 /backend-api/codex/alpha/search`, for a ChatGPT sign-in's requests). Core routes it as an [endpoint call](protocol/README.md#endpoint)
@@ -688,6 +689,24 @@ per-minute limit (one of Anthropic's exact per-minute messages, no quota status 
 window's, the quota refusal carries `quota_window_minutes` 300 or 10080. Unlike today's core,
 no random 1 to 30 seconds are added to the wait. A 529 (overloaded) moves the request to another
 account.
+
+**Compaction.** `POST /v1/responses/compact` (a Responses client's request to shorten its
+conversation, which the Codex CLI sends) is served on Claude accounts through the protocol's
+endpoint operation, with Anthropic's [on-demand
+compaction](https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand). The
+Responses body is translated to Messages as for `/v1/responses` and sent once, not streamed, with
+`"compaction": {"type": "summarize"}` and the `compact-2026-09-04` beta, and without what
+Anthropic refuses on a compaction request: stop sequences, structured output, a `tool_choice` of
+type `any` or `tool`, and `context_management`. A conversation that ends on the model's reply is
+sent with it, which a compaction request takes although a generation on Claude 4.6 and later would
+refuse it as a prefill. The reply is OpenAI's compaction reply, one JSON object
+(`"object": "response.compaction"`), whose `output` is Claude's summary as one user message that
+starts with the Codex CLI's own summary prefix, the shape the Codex CLI keeps in place of the
+conversation when it compacts on its own side; its `usage` is the summarization call's (Anthropic's
+`usage.iterations`). Anthropic's signed compaction block is not passed on, so the next request
+can go to any account and needs no beta. A reply without a summary (a `stop_reason` other than
+`compaction`, such as `max_tokens` or `refusal`) is a 502 for that request, which blocks
+nothing. Every other endpoint call is answered as not served, so core tries another account.
 
 **Quota.** For a subscription account, quota reads `GET {base_url}/api/oauth/usage` and `GET {base_url}/api/oauth/profile` (default base `https://api.anthropic.com`) with the access token, the OAuth beta in `anthropic-beta` and `anthropic-version`. Like the account's requests, it presents no client identity of its own. It reports the 5-hour window (`five_hour`), the weekly windows (`seven_day`, `seven_day_oauth_apps`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_cowork`, the Fable window), any window counted in dollars, and extra usage (`extra_usage`), with the share used and reset time; the plan (Free, Pro, Max, Max 5x, Max 20x or Team) comes from the profile, and usage is still reported when the profile cannot be read. A setup token's quota reads only the
 usage, not the profile: such a token is made for inference and lacks the profile scope (today's core

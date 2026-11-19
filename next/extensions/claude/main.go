@@ -45,6 +45,9 @@
 // account answers that it cannot count, without a request, and core estimates the count itself:
 // a Claude-compatible server may not have the endpoint, or may count differently.
 //
+// Responses compaction (core's endpoint call for POST /v1/responses/compact) is served with
+// Anthropic's on-demand compaction (compact.go).
+//
 // An account check (core's check call) of an api_key account reads Anthropic's model list,
 // GET {base_url}/v1/models with x-api-key and anthropic-version, which costs the account nothing.
 // A subscription login (oauth) and a setup token have no such call here, so they are left not
