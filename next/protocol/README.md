@@ -683,7 +683,7 @@ override and `routing.timeouts`, and sends `timeouts` only to extensions whose `
 is 18 or more.
 
 A timeout that fires before any upstream response byte arrives is retry-safe so core can move the
-request to another account; once response headers or reply bytes have arrived, it ends the
+request to another account, once (a second timeout ends the request, as with `extension_timeout` below); once response headers or reply bytes have arrived, it ends the
 stream or request with an error instead.
 
 ## The request
@@ -1357,8 +1357,8 @@ Core in turn ends a call or turn on which it has received nothing at all, no eve
 for the account's idle limit plus 60 seconds (see [Timeouts](#timeouts); for a request that is not
 streamed, the longer of the idle and total limits plus 60 seconds). It ends it with the error code
 `extension_timeout` and logs a line that names it. Before the reply has started this is a
-retry-safe failure, so core can move the request to another account; after, it ends the reply with
-that error. A limit that is off (`0`) means no such deadline, and an extension below 0.19 gets
+retry-safe failure, so core can move the request to one more account (once, as with an upstream timeout);
+after, it ends the reply with that error. A limit that is off (`0`) means no such deadline, and an extension below 0.19 gets
 none: it cannot promise alive frames.
 
 ## Versioning
