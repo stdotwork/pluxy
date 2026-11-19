@@ -211,16 +211,23 @@ fn add(c: &mut Checks, app: &AppHandle) {
     if !shell(c, app) || !themes_page(c, app) || !paste(c, app) {
         return;
     }
-    c.check(
-        until(
-            app,
-            15,
-            &format!(
-                "document.body.innerText.includes({})",
-                json!(format!("{NAME} was added and turned on."))
-            ),
+    let added = until(
+        app,
+        15,
+        &format!(
+            "document.body.innerText.includes({})",
+            json!(format!("{NAME} was added and turned on."))
         ),
-        format!("the page says {NAME} was added and turned on"),
+    );
+    // What the page said instead, if anything.
+    let notices = main_eval(
+        app,
+        "[...document.querySelectorAll('[role=alert], [role=status]')].map((e) => e.textContent).join(' | ')",
+    )
+    .unwrap_or(Value::Null);
+    c.check(
+        added,
+        format!("the page says {NAME} was added and turned on (notices: {notices})"),
     );
     painted(c, app, "added");
     chosen(c, app, "added");
