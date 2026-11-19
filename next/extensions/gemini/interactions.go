@@ -68,7 +68,7 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	if err != nil {
 		return err
 	}
-	send := &reporting{Stream: out}
+	send := &reporting{out: out}
 	if t.token != "" {
 		// As in generate: the fetched access token is redacted here, which core does not know.
 		send.redact = protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: t.token})

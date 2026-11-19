@@ -163,7 +163,15 @@ func resolveMethod(ctx context.Context, s settings, cred *protocol.Credential, m
 	}, nil
 }
 
-func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
+func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+	return generateTo(ctx, call, out)
+}
+
+// sender takes the events of a reply: the call's stream, or a test's recorder.
+type sender interface{ Send(llm.Event) error }
+
+// generateTo answers a generate call, sending the reply's events to out.
+func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
 		return err
@@ -174,7 +182,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	}
 	body = cleanToolSchemas(body)
 	body = fixTurns(body, s.Vertex != nil, call.Request.Stream, !tr.Passthrough)
-	send := &reporting{Stream: out, tr: tr}
+	send := &reporting{out: out, tr: tr}
 	t, err := resolve(ctx, s, call.Account.Credential, call.Request.Model, call.Request.Stream)
 	if err != nil {
 		return err
@@ -324,7 +332,7 @@ func dropLoss(losses []llm.Loss, path string) []llm.Loss {
 
 // reporting adds the translation report to the reply's response.start event.
 type reporting struct {
-	*sdk.Stream
+	out    sender
 	tr     *llm.Translation
 	redact *protocol.Redactor // nil, or what else to remove from upstream data
 }
@@ -335,12 +343,12 @@ func (r *reporting) Send(ev llm.Event) error {
 		info.Translation = r.tr
 		ev.Response = &info
 	}
-	return r.Stream.Send(r.redact.Event(ev))
+	return r.out.Send(r.redact.Event(ev))
 }
 
 // relayStream decodes the upstream GenerateContent stream and sends each event as soon as it is
 // decoded. A blocked send blocks the next upstream read.
-func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }) error {
+func relayStream(ctx context.Context, body io.Reader, out sender) error {
 	r := sse.NewReader(body)
 	dec := geminigenerate.NewStreamDecoder()
 	for {
