@@ -690,6 +690,7 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	}
 	swapPprof(next, prev)
 	c.checkAccounts(next, inService(accounts))
+	c.logUnservedSteps(next)
 	for _, g := range old {
 		g.Drain(func() {
 			c.mu.Lock()
@@ -701,6 +702,24 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 		})
 	}
 	c.sweep()
+}
+
+// logUnservedSteps logs a line for each chain of s with a step no account serves, as a request
+// through it would find. It reads the accounts' model lists in the background and returns at once.
+func (c *Core) logUnservedSteps(s *snapshot) {
+	chains := s.Config.Routing.Chains
+	if len(chains) == 0 {
+		return
+	}
+	c.bgWG.Add(1)
+	go func() {
+		defer c.bgWG.Done()
+		for _, name := range slices.Sorted(maps.Keys(chains)) {
+			if err := s.Router.CheckSteps(c.bgCtx, chains[name]); err != nil && c.bgCtx.Err() == nil {
+				log.Printf("routing.chains.%s: %v", name, err)
+			}
+		}
+	}()
 }
 
 // extensionConfig returns the config section of extension id in s.
