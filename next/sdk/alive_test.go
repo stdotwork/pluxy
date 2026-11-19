@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -266,3 +267,111 @@ func TestAliveLeavesNoBodyAlone(t *testing.T) {
 		t.Errorf("frames = %v, want start, alive (the headers arrived), finish", types)
 	}
 }
+
+// A session's turn sends alive frames when bytes arrive on the session's upstream connection, which
+// the extension opened before the turn and which is an upgraded (WebSocket-style) connection whose
+// body is read and written. Only a turn whose call asked for them gets frames.
+func TestAliveOnSessionTurns(t *testing.T) {
+	advance := fakeAliveClock(t)
+	next := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, rw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		fmt.Fprint(rw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: test\r\nConnection: Upgrade\r\n\r\n")
+		rw.Flush()
+		gone := make(chan struct{}) // the hijacked request's context never ends: watch the connection
+		go func() {
+			_, _ = io.Copy(io.Discard, rw)
+			close(gone)
+		}()
+		for {
+			select {
+			case <-next:
+			case <-gone:
+				return
+			}
+			if _, err := rw.WriteString("x"); err != nil || rw.Flush() != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(up.Close)
+	client := &http.Client{Transport: Upstream(&http.Transport{})}
+
+	ext := Extension{ID: "t", Version: "0", Generate: func(context.Context, Call, *Stream) error { return nil },
+		Session: func(ctx context.Context, _ SessionCall) (Session, error) {
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, up.URL, nil)
+			req.Header.Set("Connection", "Upgrade")
+			req.Header.Set("Upgrade", "test")
+			resp, err := client.Do(req)
+			if err != nil {
+				return nil, err
+			}
+			if _, ok := resp.Body.(io.ReadWriteCloser); !ok || resp.StatusCode != http.StatusSwitchingProtocols {
+				return nil, fmt.Errorf("status %d, body %T: not an upgraded connection", resp.StatusCode, resp.Body)
+			}
+			return &upgradedSession{body: resp.Body, turn: func(_ context.Context, _ Call, out *Stream) error {
+				if err := out.Start(llm.ResponseInfo{ID: "r"}); err != nil {
+					return err
+				}
+				advance(aliveAfter)
+				next <- struct{}{}
+				var b [1]byte
+				if _, err := io.ReadFull(resp.Body, b[:]); err != nil {
+					return err
+				}
+				return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+			}}, nil
+		}}
+	socket, _, _ := startServe(t, ext)
+
+	for _, alive := range []bool{true, false} {
+		conn := dial(t, socket)
+		account := protocol.Account{ID: "a"}
+		if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "s", Op: protocol.OpSession, Account: &account,
+			Session: &protocol.SessionInfo{Format: protocol.SessionOpenAIResponses}, Alive: alive}); err != nil {
+			t.Fatal(err)
+		}
+		read := func() protocol.Reply {
+			_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			var r protocol.Reply
+			if err := protocol.ReadFrame(conn, &r); err != nil {
+				t.Fatalf("alive=%t: reading a frame: %v", alive, err)
+			}
+			return r
+		}
+		if r := read(); r.Type != protocol.TypeSessionReady {
+			t.Fatalf("alive=%t: first frame %q, want session.ready (%v)", alive, r.Type, r.Event.Error)
+		}
+		if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeSessionTurn, Account: &account, Alive: alive, Request: &llm.Request{Model: "m"}}); err != nil {
+			t.Fatal(err)
+		}
+		var types []string
+		for len(types) == 0 || types[len(types)-1] != llm.EventFinish {
+			types = append(types, read().Type)
+		}
+		want := []string{llm.EventResponseStart, llm.EventFinish}
+		if alive {
+			want = []string{llm.EventResponseStart, protocol.TypeAlive, llm.EventFinish}
+		}
+		if !slices.Equal(types, want) {
+			t.Errorf("alive=%t: frames = %v, want %v", alive, types, want)
+		}
+		conn.Close()
+	}
+}
+
+// upgradedSession is a session over an upstream connection, which it closes with the session.
+type upgradedSession struct {
+	body io.Closer
+	turn func(context.Context, Call, *Stream) error
+}
+
+func (s *upgradedSession) Turn(ctx context.Context, c Call, out *Stream) error {
+	return s.turn(ctx, c, out)
+}
+func (*upgradedSession) Interrupt(json.RawMessage) {}
+func (s *upgradedSession) Close()                  { s.body.Close() }
