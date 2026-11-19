@@ -54,9 +54,6 @@ var noCommand = []string{
 // Every call core's management API serves has a pluxy command, or is listed above as one a
 // later change adds or one that gets none; and every command calls routes core serves.
 func TestEveryRouteHasACommand(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".xdg", "config"))
 	path := filepath.Join(t.TempDir(), "config.json")
 	cfg := `{"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-1"], "management_key": "fake-management-key"}`
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
@@ -253,9 +250,27 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	if out, _, code := runWith("", false, "setup", "scan", "--json"); code != 0 || !strings.Contains(out, `"scanning":true`) {
 		t.Fatalf("setup scan --json: %d %q", code, out)
 	}
-	// setup apply with one failing pick exits 1 and prints JSON body with --json.
-	if out, _, code := runWith("", false, "setup", "apply", "--pick", "pluxy/claude", "--pick", "bad/pkg", "--json"); code != 1 || !strings.Contains(out, `"bad/pkg"`) {
-		t.Fatalf("setup apply partial failure: code=%d out=%q", code, out)
+	// setup --yes --json prints the apply reply alone.
+	applied = nil
+	if out, _, code := runWith("", false, "setup", "--yes", "--json"); code != 0 || len(applied) != 1 || !json.Valid([]byte(out)) || !strings.HasPrefix(out, `{"results":`) {
+		t.Fatalf("setup --yes --json: code=%d out=%q applied=%v", code, out, applied)
+	}
+	// setup apply with one failing pick exits 1, prints the reply and, on stderr, an error object.
+	if out, errOut, code := runWith("", false, "setup", "apply", "--pick", "pluxy/claude", "--pick", "bad/pkg", "--json"); code != 1 || !strings.Contains(out, `"bad/pkg"`) || !strings.HasPrefix(errOut, `{"error":{"code":"failed"`) {
+		t.Fatalf("setup apply partial failure: code=%d out=%q err=%q", code, out, errOut)
+	}
+	// setup apply with no picks, no terminal and no --yes is a usage error; with --json its
+	// error is an object.
+	applied = nil
+	if _, errOut, code := runWith("", false, "setup", "apply"); code != 2 || len(applied) != 0 || !strings.Contains(errOut, "--yes") {
+		t.Fatalf("setup apply without a terminal: code=%d err=%q applied=%v", code, errOut, applied)
+	}
+	if out, errOut, code := runWith("", false, "setup", "apply", "--json"); code != 2 || out != "" || !strings.HasPrefix(errOut, `{"error":{"code":"invalid_request"`) {
+		t.Fatalf("setup apply --json without a terminal: code=%d out=%q err=%q", code, out, errOut)
+	}
+	// An API error with --json is the API's own object.
+	if _, errOut, code := runWith("", false, "logs", "--json"); code != 5 || errOut != "{\"error\":{\"code\":\"not_found\",\"message\":\"nope\"}}\n" {
+		t.Fatalf("logs --json against a 404: code=%d err=%q", code, errOut)
 	}
 	// setup done.
 	if out, _, code := runWith("", false, "setup", "done"); code != 0 || !doneCalled || !strings.Contains(out, "complete") {
@@ -267,6 +282,19 @@ func TestCLISetupAndClientShow(t *testing.T) {
 		out, errOut, code := runWith("", false, "client", "show", tool)
 		if code != 0 || errOut != "" || !strings.Contains(out, srv.URL) || strings.Contains(out, "mgmt-secret") {
 			t.Errorf("client show %s: code=%d err=%q out=%q", tool, code, errOut, out)
+		}
+	}
+	// Pi's files are JSON with no comment line in them.
+	out, _, _ := runWith("", false, "client", "show", "pi", "--json")
+	var pi struct {
+		Files []struct{ Path, Content string }
+	}
+	if err := json.Unmarshal([]byte(out), &pi); err != nil || len(pi.Files) != 2 {
+		t.Fatalf("client show pi --json: %v: %s", err, out)
+	}
+	for _, f := range pi.Files {
+		if !json.Valid([]byte(f.Content)) || strings.Contains(f.Content, "#") {
+			t.Errorf("client show pi: %s is not plain JSON: %q", f.Path, f.Content)
 		}
 	}
 	// --key-id valid vs unknown.

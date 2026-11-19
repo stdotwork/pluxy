@@ -9,8 +9,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/internal/core"
 	"github.com/stdotwork/pluxy/next/management"
 )
 
@@ -100,57 +102,62 @@ func setupCommands() []command {
 }
 
 func runSetup(x *invocation) error {
+	if x.opts.yes {
+		s, err := x.client.Setup(x.ctx)
+		if err != nil {
+			return err
+		}
+		if !x.json {
+			printSetup(x, s)
+		}
+		return applySuggested(x, suggestedUninstalled(s.Picks))
+	}
 	var s management.Setup
 	if err := x.call(http.MethodGet, "/setup", nil, nil, &s, func() {
 		printSetup(x, s)
 	}); err != nil {
 		return err
 	}
-	if x.json {
-		return nil
-	}
 	todo := suggestedUninstalled(s.Picks)
-	if len(todo) == 0 {
+	if x.json || !x.tty || len(todo) == 0 {
 		return nil
 	}
-	if !x.opts.yes {
-		if !x.tty {
-			return nil
-		}
-		if !confirm(x.stdin, x.stderr, fmt.Sprintf("Apply suggested picks (%s)? [y/N]: ", strings.Join(todo, ", "))) {
-			return nil
-		}
+	if !confirm(x.stdin, x.stderr, fmt.Sprintf("Apply suggested picks (%s)? [y/N]: ", strings.Join(todo, ", "))) {
+		return nil
 	}
 	return applySetupPicks(x, todo)
 }
 
 func runSetupApply(x *invocation) error {
-	picks := []string(x.opts.picks)
-	if len(picks) == 0 {
-		s, err := x.client.Setup(x.ctx)
-		if err != nil {
-			return err
-		}
-		picks = suggestedUninstalled(s.Picks)
-		if len(picks) == 0 {
-			if x.json {
-				b, _ := json.Marshal(management.SetupApplyReply{Results: []management.SetupApplyResult{}})
-				x.printf("%s\n", b)
-				return nil
-			}
-			x.printf("no suggested picks to apply\n")
-			return nil
-		}
-		if !x.opts.yes {
-			if !x.tty {
-				return errors.New("pass --yes or --pick <id> when standard input is not a terminal")
-			}
-			if !confirm(x.stdin, x.stderr, fmt.Sprintf("Apply suggested picks (%s)? [y/N]: ", strings.Join(picks, ", "))) {
-				return nil
-			}
-		}
+	if picks := []string(x.opts.picks); len(picks) > 0 {
+		return applySetupPicks(x, picks)
 	}
-	return applySetupPicks(x, picks)
+	if !x.opts.yes && !x.tty {
+		return usageError{"pass --yes or --pick <id> when standard input is not a terminal"}
+	}
+	s, err := x.client.Setup(x.ctx)
+	if err != nil {
+		return err
+	}
+	todo := suggestedUninstalled(s.Picks)
+	if len(todo) > 0 && !x.opts.yes &&
+		!confirm(x.stdin, x.stderr, fmt.Sprintf("Apply suggested picks (%s)? [y/N]: ", strings.Join(todo, ", "))) {
+		return nil
+	}
+	return applySuggested(x, todo)
+}
+
+// applySuggested applies the suggested picks not installed yet. With none, there is no reply to
+// print: with --json that is a usage error, otherwise a line says so.
+func applySuggested(x *invocation, todo []string) error {
+	if len(todo) == 0 {
+		if x.json {
+			return usageError{"no suggested picks to apply: name one with pluxy setup apply --pick <id>"}
+		}
+		x.printf("no suggested picks to apply\n")
+		return nil
+	}
+	return applySetupPicks(x, todo)
 }
 
 func applySetupPicks(x *invocation, picks []string) error {
@@ -249,181 +256,49 @@ func printSetup(x *invocation, s management.Setup) {
 	}
 }
 
-type clientShowSpec struct {
-	id     string
-	name   string
-	config string
-	render func(baseURL, keyPlaceholder string) string
-}
-
-var clientShowTable = []clientShowSpec{
-	{
-		id:     "claude-code",
-		name:   "Claude Code",
-		config: "~/.claude/settings.json",
-		render: func(baseURL, key string) string {
-			b, _ := json.MarshalIndent(map[string]any{
-				"env": map[string]string{
-					"ANTHROPIC_BASE_URL":                         baseURL,
-					"ANTHROPIC_AUTH_TOKEN":                       key,
-					"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-					"CLAUDE_CODE_AUTO_MODE_SERVER":               "0",
-				},
-			}, "", "  ")
-			return string(b)
-		},
-	},
-	{
-		id:     "codex",
-		name:   "Codex CLI",
-		config: "~/.codex/config.toml",
-		render: func(baseURL, key string) string {
-			v1 := strings.TrimRight(baseURL, "/") + "/v1"
-			return fmt.Sprintf(`model_provider = "pluxy"
-
-[model_providers.pluxy]
-name = "pluxy"
-base_url = %q
-wire_api = "responses"
-experimental_bearer_token = %q`, v1, key)
-		},
-	},
-	{
-		id:     "opencode",
-		name:   "OpenCode",
-		config: "~/.config/opencode/opencode.jsonc",
-		render: func(baseURL, key string) string {
-			v1 := strings.TrimRight(baseURL, "/") + "/v1"
-			b, _ := json.MarshalIndent(map[string]any{
-				"$schema": "https://opencode.ai/config.json",
-				"provider": map[string]any{
-					"pluxy": map[string]any{
-						"npm":  "@ai-sdk/openai-compatible",
-						"name": "pluxy",
-						"options": map[string]string{
-							"baseURL": v1,
-							"apiKey":  key,
-						},
-						"models": map[string]any{
-							"<model-id>": map[string]string{
-								"name": "<model-id>",
-							},
-						},
-					},
-				},
-				"model": "pluxy/<model-id>",
-			}, "", "  ")
-			return string(b)
-		},
-	},
-	{
-		id:     "pi",
-		name:   "Pi",
-		config: "~/.pi/agent/cliproxyapi.json",
-		render: func(baseURL, key string) string {
-			root := strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1")
-			b, _ := json.MarshalIndent(map[string]string{
-				"baseUrl": root,
-				"apiKey":  key,
-			}, "", "  ")
-			return string(b) + "\n\n# Also register the pluxy-cliproxyapi-provider adapter in ~/.pi/agent/settings.json (see the desktop app)."
-		},
-	},
-	{
-		id:     "omp",
-		name:   "Oh My Pi",
-		config: "~/.omp/agent/models.yml",
-		render: func(baseURL, key string) string {
-			v1 := strings.TrimRight(baseURL, "/") + "/v1"
-			return fmt.Sprintf(`# ~/.omp/agent/models.yml
-providers:
-  pluxy:
-    baseUrl: %s
-    apiKey: %s
-    api: openai-responses
-    discovery:
-      type: openai-models-list
-
-# ~/.omp/agent/config.yml
-modelRoles:
-  default: pluxy/<model-id>`, v1, key)
-		},
-	},
-}
-
-func lookupClientShow(tool string) (clientShowSpec, bool) {
-	norm := strings.ToLower(strings.TrimSpace(tool))
-	switch norm {
-	case "claude-code", "pluxy/claude-code":
-		return clientShowTable[0], true
-	case "codex", "codex-cli", "pluxy/codex-setup":
-		return clientShowTable[1], true
-	case "opencode", "pluxy/opencode":
-		return clientShowTable[2], true
-	case "pi", "pluxy/pi-setup":
-		return clientShowTable[3], true
-	case "omp", "oh-my-pi", "pluxy/omp-setup":
-		return clientShowTable[4], true
-	default:
-		return clientShowSpec{}, false
-	}
-}
-
 func runClientShow(x *invocation) error {
-	spec, ok := lookupClientShow(x.args[0])
-	if !ok {
-		return usageError{fmt.Sprintf("unknown client tool %q (supported: claude-code, codex, opencode, pi, omp)", x.args[0])}
+	if _, ok := core.ClientSnippetFor(x.args[0], "", ""); !ok {
+		return usageError{fmt.Sprintf("unknown client tool %q (supported: %s)", x.args[0], strings.Join(core.ClientSnippetTools, ", "))}
 	}
 	if _, err := x.client.Setup(x.ctx); err != nil {
 		return err
 	}
-	keyPlaceholder := "<client-key>"
+	key := "<client-key>"
 	if x.opts.keyID != "" {
 		keys, err := x.client.ClientKeys(x.ctx)
 		if err != nil {
 			return err
 		}
-		found := false
-		for _, k := range keys {
-			if k.ID == x.opts.keyID {
-				keyPlaceholder = fmt.Sprintf("<client-key:%s (%s)>", k.ID, k.Masked)
-				found = true
-				break
-			}
-		}
-		if !found {
+		i := slices.IndexFunc(keys, func(k management.ClientKey) bool { return k.ID == x.opts.keyID })
+		if i < 0 {
 			return &management.APIError{
 				Status:  http.StatusNotFound,
 				Code:    "not_found",
 				Message: fmt.Sprintf("no client key with id %q", x.opts.keyID),
 			}
 		}
+		key = fmt.Sprintf("<client-key:%s (%s)>", keys[i].ID, keys[i].Masked)
 	}
 	baseURL := strings.TrimRight(x.client.URL, "/")
-	content := spec.render(baseURL, keyPlaceholder)
+	snip, _ := core.ClientSnippetFor(x.args[0], baseURL, key)
 	if x.json {
-		out := struct {
-			Tool    string `json:"tool"`
-			Name    string `json:"name"`
-			Config  string `json:"config"`
+		b, err := json.MarshalIndent(struct {
+			core.ClientSnippet
 			BaseURL string `json:"base_url"`
 			Key     string `json:"key"`
-			Content string `json:"content"`
-		}{
-			Tool:    spec.id,
-			Name:    spec.name,
-			Config:  spec.config,
-			BaseURL: baseURL,
-			Key:     keyPlaceholder,
-			Content: content,
-		}
-		b, err := json.MarshalIndent(out, "", "  ")
+		}{snip, baseURL, key}, "", "  ")
 		if err != nil {
 			return err
 		}
 		x.printf("%s\n", b)
 		return nil
 	}
-	x.printf("Client: %s\nConfig: %s\nAddress: %s\n\n%s\n", spec.name, spec.config, baseURL, content)
+	x.printf("Client: %s\nAddress: %s\n", snip.Name, baseURL)
+	for _, f := range snip.Files {
+		x.printf("\n%s:\n%s\n", f.Path, f.Content)
+	}
+	if snip.Note != "" {
+		x.printf("\n%s\n", snip.Note)
+	}
 	return nil
 }

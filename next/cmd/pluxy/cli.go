@@ -527,7 +527,7 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 	}
 	t, err := findCore(*configPath, cmpOr(*addr, getenv("PLUXY_URL")), cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY")))
 	if err != nil {
-		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		printError(stderr, *jsonOut, err)
 		return exitFailed
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -537,17 +537,37 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 	if err == nil {
 		return exitOK
 	}
-	code := exitCode(err)
+	printError(stderr, *jsonOut, err)
+	return exitCode(err)
+}
+
+// printError writes a command's error to stderr: with --json, as the API's error object (the
+// reply's own body when core sent one), otherwise as a line of text.
+func printError(stderr io.Writer, asJSON bool, err error) {
+	if !asJSON {
+		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		return
+	}
 	var ae *management.APIError
-	if *jsonOut && errors.As(err, &ae) && json.Valid(ae.Body) {
+	if errors.As(err, &ae) && json.Valid(ae.Body) {
 		stderr.Write(ae.Body)
 		if !bytes.HasSuffix(ae.Body, []byte("\n")) {
 			fmt.Fprintln(stderr)
 		}
-	} else {
-		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		return
 	}
-	return code
+	code, msg := "failed", err.Error()
+	var ue usageError
+	switch {
+	case errors.As(err, &ae):
+		code, msg = ae.Code, ae.Message
+	case errors.As(err, &ue):
+		code = "invalid_request"
+	case management.IsUnreachable(err):
+		code = "unreachable"
+	}
+	b, _ := json.Marshal(map[string]any{"error": map[string]string{"code": code, "message": msg}})
+	fmt.Fprintf(stderr, "%s\n", b)
 }
 
 // exitCode is the exit code for a command's error.
