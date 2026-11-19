@@ -60,7 +60,21 @@ type block struct {
 	// reply needs.
 	told   bool
 	window int64
+	// source says where until came from: SourceProvider, SourceBackoff or SourceUnverified.
+	source string
+	// exhausted marks a quota block that health shows as exhausted rather than cooling.
+	exhausted bool
+	// check is when the block is next checked (Router.Check); zero when it is not checked.
+	check time.Time
+	// pass lets one request through the block: its check found no usage reading to make.
+	pass bool
+	// why, when set, says why the account is held in place of the failure that set the block.
+	why string
 }
+
+// live reports whether b keeps its scope from serving at now: it has not ended, and no check
+// let a request through it.
+func (b *block) live(now time.Time) bool { return b.until.After(now) && !b.pass }
 
 type scopeState struct {
 	blocks [numBlockKinds]block
@@ -129,6 +143,10 @@ type State struct {
 	running map[uint64]struct{}
 	order   seqHeap
 	rand    func() float64
+	// checkEvery is how often a long block is checked (see Router.Check).
+	checkEvery time.Duration
+	// changes is signalled when the quota blocks Saved returns may have changed.
+	changes chan struct{}
 }
 
 // seqHeap is a min-heap of attempt sequence numbers.
@@ -188,8 +206,12 @@ func (st *scopeState) lastEnd() time.Time {
 
 // drop removes the entry for k. Call with s.mu held.
 func (s *State) drop(k scopeKey) {
-	if _, ok := s.scopes[k]; !ok {
+	st, ok := s.scopes[k]
+	if !ok {
 		return
+	}
+	if !st.blocks[kindIndex(blockQuota)].until.IsZero() {
+		s.notify()
 	}
 	delete(s.scopes, k)
 	if k.kind == scopeModel {
@@ -223,13 +245,28 @@ func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.maybeSweep(now)
-	for _, k := range keysFor(a, model) {
-		if st := s.scopes[k]; st != nil && st.lastEnd().After(now) {
-			return 0, false
+	keys := keysFor(a, model)
+	for _, k := range keys {
+		if st := s.scopes[k]; st != nil {
+			for i := range st.blocks {
+				if st.blocks[i].live(now) {
+					return 0, false
+				}
+			}
 		}
 	}
 	if a.MaxConcurrency > 0 && s.active[a.ID] >= a.MaxConcurrency {
 		return 0, false
+	}
+	// This attempt is the one request a check lets through: the next check is due an interval on.
+	for _, k := range keys {
+		if st := s.scopes[k]; st != nil {
+			for i := range st.blocks {
+				if b := &st.blocks[i]; b.pass && b.until.After(now) {
+					b.pass, b.check = false, now.Add(s.checkEvery)
+				}
+			}
+		}
 	}
 	s.seq++
 	s.active[a.ID]++
@@ -241,7 +278,8 @@ func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) 
 // NewState returns empty state.
 func NewState() *State {
 	return &State{scopes: map[scopeKey]*scopeState{}, active: map[string]int{}, affinity: newAffinity(), rotation: newRotation(),
-		since: map[scopeKey]uint64{}, revs: map[string]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64}
+		since: map[scopeKey]uint64{}, revs: map[string]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64,
+		checkEvery: defaultCheckEvery, changes: make(chan struct{}, 1)}
 }
 
 // nextGen returns the generation for a new router.
@@ -392,7 +430,8 @@ func (s *State) end(a *Account, seq uint64) {
 }
 
 // forget drops the state kept on account id's credential and models. Endpoint state stays: other
-// accounts may share the endpoint.
+// accounts may share the endpoint. The account gets a new revision, so outcomes that attempts on
+// its copies until now see afterwards record nothing: added again, it starts clean.
 func (s *State) forget(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -402,6 +441,7 @@ func (s *State) forget(id string) {
 		}
 	}
 	delete(s.last, id)
+	s.revs[id]++
 }
 
 func (s *State) activeCount(id string) int {
@@ -430,7 +470,7 @@ func (s *State) availability(a *Account, model string, now time.Time) (until tim
 			continue
 		}
 		for _, b := range st.blocks {
-			if b.until.After(now) && b.until.After(until) {
+			if b.live(now) && b.until.After(until) {
 				until, reason = b.until, b.reason
 			}
 		}
@@ -504,10 +544,17 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	}
 	b := &st.blocks[kindIndex(kind)]
 	var until time.Time
+	source, why, word := SourceBackoff, "", false
 	switch {
 	case e.RetryAfterMS > 0:
-		// The upstream said when: never try this scope earlier (RFC 9110 §10.2.3).
-		until = now.Add(time.Duration(e.RetryAfterMS) * time.Millisecond)
+		// The upstream said when: never try this scope earlier (RFC 9110 §10.2.3), within the
+		// bounds resetFor puts on what is believed.
+		var d time.Duration
+		d, source = s.resetFor(e.RetryAfterMS)
+		if source == SourceUnverified {
+			why = unverifiedWhy
+		}
+		until, word = now.Add(d), true
 	case fixed > 0:
 		until = now.Add(fixed)
 	default:
@@ -530,14 +577,18 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 		d = d/2 + time.Duration(s.rand()*float64(d/2))
 		until = now.Add(d)
 	}
-	// A deadline only ever moves later; a new failure never shortens a live block.
-	if until.After(b.until) {
-		b.until = until
-		b.told = kind == blockQuota && e.RetryAfterMS > 0
+	// The upstream's newest word replaces the block's, sooner or later. A time core chose
+	// itself, or the word of an attempt that started before the one that set the block, only
+	// moves it later.
+	if word && seq >= b.mark || until.After(b.until) {
+		s.set(b, key, kind, until, source, why, now)
 		b.window = e.QuotaWindowMinutes
 	}
 	if seq >= b.mark {
 		b.mark, b.reason = seq, e
+	}
+	if kind == blockQuota {
+		s.notify()
 	}
 }
 
@@ -622,6 +673,9 @@ func (s *State) success(a *Account, model string, seq uint64) {
 		for i := range st.blocks {
 			b := &st.blocks[i]
 			if b.mark < seq {
+				if i == kindIndex(blockQuota) && !b.until.IsZero() {
+					s.notify()
+				}
 				*b = block{}
 			}
 			if !b.until.IsZero() || b.level > 0 {

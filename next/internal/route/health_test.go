@@ -220,6 +220,7 @@ func TestTurnedOffAccountIgnoresLateOutcomes(t *testing.T) {
 	if got := h.healthOf("a"); got.State != HealthOK {
 		t.Fatalf("turned on again: %+v, want ok", got)
 	}
+	h.on("a", ok())
 	h.runOK("m")
 }
 
@@ -273,7 +274,7 @@ func TestResetBounds(t *testing.T) {
 	}{
 		{1, time.Second, 0, SourceProvider, HealthCooling},
 		{(8 * 24 * time.Hour).Milliseconds(), 8 * 24 * time.Hour, 15 * time.Minute, SourceProvider, HealthExhausted},
-		{(8*24*time.Hour).Milliseconds() + 1, 30 * time.Minute, 15 * time.Minute, SourceUnverified, HealthExhausted},
+		{(8 * 24 * time.Hour).Milliseconds() + 1, 30 * time.Minute, 15 * time.Minute, SourceUnverified, HealthExhausted},
 		{1 << 62, 30 * time.Minute, 15 * time.Minute, SourceUnverified, HealthExhausted},
 	} {
 		st := NewState()

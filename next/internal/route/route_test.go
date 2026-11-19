@@ -491,18 +491,6 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 	}
 }
 
-// A later failure never shortens a live block.
-func TestBlockOnlyExtends(t *testing.T) {
-	st := NewState()
-	a := &Account{ID: "a"}
-	now := time.Unix(0, 0)
-	st.failure(a, "m", 0, &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 60_000}, now, 0)
-	st.failure(a, "m", 0, &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 1_000}, now, 0)
-	if until, _, _ := st.availability(a, "m", now); until.Sub(now) != time.Minute {
-		t.Errorf("block = %v, want 1m", until.Sub(now))
-	}
-}
-
 // Scopes are separate: a model limit leaves the account's other models alone; a credential
 // limit blocks them all; an endpoint outage blocks every account on that endpoint.
 func TestScopes(t *testing.T) {
