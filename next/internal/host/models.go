@@ -59,7 +59,7 @@ func (e *Extension) Models(ctx context.Context, account protocol.Account) (*prot
 		}
 		return list, nil
 	case r.Type == llm.EventError && r.Error != nil:
-		return nil, redact.Event(r.Event).Error
+		return nil, e.accountPieces(account).event(redact.Event(r.Event)).Error
 	}
 	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a models call", e.manifest.ID, redact.String(r.Type))}
 }

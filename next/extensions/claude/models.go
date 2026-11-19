@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -156,4 +158,52 @@ func fetchModels(ctx context.Context, call sdk.ModelsCall) ([]protocol.Model, bo
 		return nil, false
 	}
 	return models, true
+}
+
+// limits maps each model in modelsJSON to its output limit (max_completion_tokens).
+var limits = sync.OnceValue(func() map[string]int {
+	var list struct {
+		Models []struct {
+			ID                  string `json:"id"`
+			MaxCompletionTokens int    `json:"max_completion_tokens"`
+		} `json:"models"`
+	}
+	out := map[string]int{}
+	if json.Unmarshal(modelsJSON, &list) != nil {
+		return out
+	}
+	for _, m := range list.Models {
+		if m.MaxCompletionTokens > 0 {
+			out[m.ID] = m.MaxCompletionTokens
+		}
+	}
+	return out
+})
+
+// dated is the snapshot date at the end of a Claude model id (claude-sonnet-4-5-20250929).
+var dated = regexp.MustCompile(`-\d{8}$`)
+
+// maxOutputTokens returns a model's output limit from the model list, the default max_tokens for a
+// request that names none, as LiteLLM and CLIProxyAPI take theirs from their model catalogs. The
+// name is read lowercase, without a context window in brackets ([1m]), a Vertex AI version after @
+// or a Bedrock prefix up to "anthropic.", and matches a listed id with or without its snapshot
+// date. ok is false for a model the list does not have.
+func maxOutputTokens(model string) (n int, ok bool) {
+	name := strings.ToLower(strings.TrimSpace(model))
+	name, _, _ = strings.Cut(name, "[")
+	name, _, _ = strings.Cut(name, "@")
+	if _, rest, found := strings.Cut(name, "anthropic."); found {
+		name = rest
+	}
+	l := limits()
+	if n, ok := l[name]; ok {
+		return n, true
+	}
+	name = dated.ReplaceAllString(name, "")
+	for id, n := range l {
+		if dated.ReplaceAllString(id, "") == name {
+			return n, true
+		}
+	}
+	return 0, false
 }

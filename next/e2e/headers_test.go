@@ -23,9 +23,11 @@ import (
 	"github.com/stdotwork/pluxy/next/extensions/kimi/kimitest"
 )
 
-// Fake values for the header tests. The gateway keys are secrets by their header's name.
+// Fake values for the header tests. The gateway keys are secrets by their header's name. Like the
+// other fake secrets, they hold no word of the errors the tests read: core removes from an error
+// every run that shares 4 characters with an account's secret (protocol.RemovePieces).
 const (
-	gatewayKey   = "fake-gateway-key-e2e-7f3a"
+	gatewayKey   = "gk-Vb7Nq2Lx9Ps4Jd3f"
 	overrideType = "application/json; pluxy-e2e=override"
 )
 
@@ -324,10 +326,10 @@ api-keys:
 // is in no reply, log or request log, also when the upstream's error repeats it.
 func TestUpstreamHeadersImportedAndSecret(t *testing.T) {
 	const (
-		claudeKey = "fake-claude-gateway-e2e-11"
-		groupKey  = "fake-group-token-e2e-22"
-		kimiKey   = "fake-kimi-gateway-e2e-33"
-		kimi2Key  = "fake-kimi-two-gateway-e2e-44"
+		claudeKey = "gk-Cl4Wv9Xs2Tn7-11"
+		groupKey  = "gk-Gr8Jy3Pk6Hm1-22"
+		kimiKey   = "gk-Ty5Rc8Hn1Zw6-33"
+		kimi2Key  = "gk-Mu3Ef9Ka2Qd7Yb-44"
 		// What the client's requests send as X-Client-Header: kimi-1's "X-Copy": "$X-Client-Header"
 		// must not copy it.
 		clientHeader = "fake-client-header-e2e-5d1c"
@@ -382,7 +384,7 @@ api-keys:
         - name: m-headers
       keys:
         - api-key: ` + upstreamKey + `
-        - api-key: sk-upstream-e2e-2
+        - api-key: sk-Hq4Tz8Wm2Rx6-2
           headers: {}
   openai-compatibility:
     - name: compat
@@ -431,7 +433,7 @@ api-keys:
 	// The two claude keys share the group's base-url: told apart by their API key.
 	var gw1, gw2 []headerRequest
 	for _, r := range up.posts("/claude") {
-		if strings.Contains(r.header.Get("X-Api-Key")+r.header.Get("Authorization"), "sk-upstream-e2e-2") {
+		if strings.Contains(r.header.Get("X-Api-Key")+r.header.Get("Authorization"), "sk-Hq4Tz8Wm2Rx6-2") {
 			gw2 = append(gw2, r)
 		} else {
 			gw1 = append(gw1, r)
