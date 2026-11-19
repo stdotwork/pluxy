@@ -22,8 +22,11 @@ export interface Core {
  * Starts a core for the spec file that calls it, before its tests, and stops it after them.
  * Call it once at the top of the file. panelcore builds core from this checkout, so it embeds the
  * panel just built (`bun run test:browser` builds it first).
+ *
+ * firstRun starts core as a new install: nothing installed, no accounts, a home folder of its own
+ * and only a claude program on its PATH (panelcore's -first-run).
  */
-export function useCore(): Core {
+export function useCore(options: { firstRun?: boolean } = {}): Core {
   let proc: ChildProcess | undefined;
   const core: Core = {
     base: "",
@@ -41,7 +44,7 @@ export function useCore(): Core {
   };
 
   test.beforeAll(async () => {
-    const p = spawn("go", ["run", "./e2e/panelcore"], {
+    const p = spawn("go", ["run", "./e2e/panelcore", ...(options.firstRun ? ["-first-run"] : [])], {
       cwd: join(import.meta.dirname, "..", ".."),
       stdio: ["pipe", "pipe", "inherit"],
     });
