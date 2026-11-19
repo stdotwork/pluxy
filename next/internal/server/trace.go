@@ -81,7 +81,9 @@ func (t *trace) setHeaders(w http.ResponseWriter, explain bool) {
 	if explain && t.account != "" {
 		h.Set(PinHeader, t.public)
 		h.Set(ProviderHeader, t.provider)
-		h.Set(ModelHeader, t.model)
+		if t.model != "" {
+			h.Set(ModelHeader, t.model) // an endpoint that takes no model names none
+		}
 		h.Set(AttemptsHeader, strconv.Itoa(t.attempts))
 	}
 }

@@ -274,11 +274,54 @@ reload applies a change, where today's core needs a restart.
 {"trusted_proxies": ["127.0.0.1", "10.0.0.0/8"]}
 ```
 
-A reply to a request that went to an account carries `X-CPA-TRACE-ID`, as today's core sends it:
+A reply to a request that may use the client API carries `X-CPA-TRACE-ID`, as today's core sends it:
 the time and a random part, such as `20261109061500-3f9a0c2e5b7d4e18`. Core's log lines about the
 request (a failure, what translation lost) carry the same ID and the account, so a reply can be
-matched with them. A request refused before that (no client key, a body that does not parse, no
-account for the model) gets none.
+matched with them. Today's core sends it only once it has chosen an account; this core sends it
+also when no account was tried (every account cooling down, a body that does not parse, no
+account for the model). A request refused for its client key (401, 403) gets none. A Responses
+WebSocket's handshake carries one for the socket.
+
+A reply to a request that went to an account also says which: `X-Pluxy-Account` (the account's
+public ID, below), `X-Pluxy-Provider` (its extension, such as `pluxy/codex`), `X-Pluxy-Model` (the
+name sent upstream) and `X-Pluxy-Attempts` (how many accounts the request tried). An error from
+an upstream's refusal carries them too: they name the last account tried. A WebSocket's handshake
+has none of them, as its turns choose their accounts later.
+
+An account's **public ID** is what replies name it by: `acc_` and 8 hex digits, a keyed digest of
+the account's ID. The ID an account has in the config or the store can be an email address or a
+label someone typed (an import of today's auth files names an account by its file, which holds the
+email address), so it never leaves core in a reply. The digest's key is made at the first start and
+kept in `state/account-key` beside the config, so an account keeps its public ID across restarts
+and a reload; deleting the file gives every account a new one. `GET /accounts` and `pluxy account list`
+show each account's `public_id`, and a request may pin an account (`X-Pluxy-Account`, below) by it.
+
+A request that ends in an error without a reply says what was tried and why the rest were left
+out, in a `pluxy` member of the error object, in the OpenAI, Anthropic and Gemini formats alike (a
+Responses WebSocket turn's error message has it too):
+
+```json
+{"error": {"code": "model_cooldown", "message": "...", "type": "rate_limit_error",
+  "pluxy": {"trace": "20261109061500-3f9a0c2e5b7d4e18",
+    "tried": [{"account": "acc_4e26e0c2", "provider": "pluxy/codex", "model": "gpt-5", "result": "quota"}],
+    "left_out": [{"account": "acc_306dcbdb", "state": "exhausted", "until": "2026-11-09T17:00:00Z"},
+                 {"account": "acc_0702c008", "state": "banned"}]}}}
+```
+
+`tried` lists the attempts in order; `result` is the code of the error the attempt ended with (such
+as `rate_limit`, `quota`, `auth`, `account_closed`, `upstream`). `left_out` lists the accounts that
+serve the model and were not tried: `state` is the account's health (`cooling`, `exhausted`,
+`banned`, `needs_login` or `disabled`), `busy` when it was at its `max_concurrency`, or `skipped` when
+the request's limits ended it before the account's turn; `until` is when the block ends, when known.
+An account that is turned off or waits for a login is named when its own `models` name the model, or
+when it shares its extension with an account that serves it. The member holds codes and times,
+never the words of an upstream's reply. `routing.explain` `false` leaves out the `X-Pluxy-*` headers
+and the member, and keeps the trace ID.
+
+`pluxy route <model>` (`GET /v0/management/route?model=<name>`) says what a request for the model
+would do now without sending one: the accounts in the order it would try them (the account's
+priority, then the strategy's turns) and those it would leave out, as above. Asking changes no
+routing state.
 
 `drop_policy` (top level) says what happens when translating a request to the upstream's format
 would drop part of it: `"report"` (the default) sends it and logs what was dropped, `"reject"`
@@ -1370,6 +1413,7 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
 | `disable_cooling` | `true`: failures leave no block, so every account stays eligible. |
 | `transient_error_cooldown_ms` | How long a failing upstream or endpoint (a 5xx or a broken connection) is blocked when it gave no `Retry-After`: 0 (default) backs off from a second to a minute, above 0 that long, below 0 not at all, `Retry-After` or not. |
 | `quota_response_mode` | What a client gets when every account that serves its model is out of quota until a reset the upstream named, the first of them more than 5 minutes away: `retryable` (default) a retryable 429 with `Retry-After`, as for any block; `usage-limit` the final usage-limit reply below. |
+| `explain` | `false` leaves out of replies the headers that name the account (`X-Pluxy-Account`, `X-Pluxy-Provider`, `X-Pluxy-Model`, `X-Pluxy-Attempts`) and the `pluxy` member of errors (see [Run it](#run-it)), for a core whose client keys go to people who should not see which accounts serve them. The trace ID stays. Default `true`. |
 | `session_affinity` | When present, requests of one session go to the same account while it is eligible. The session comes from the `X-Claude-Code-Session-Id`, `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`; bindings are per client key and model. |
 | account `priority` | Higher first; lower accounts serve only while every higher one is blocked. Default 0. |
 | account `weight` | For `weighted`. Default 1; 0 leaves the account out. |
@@ -1378,8 +1422,9 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
 | account `request_retry` | Rounds after the first that the account takes part in, in place of `request_retry` (today's per-key `request-retry`): the account leaves a request's rounds past its own count, and a count above routing's runs more rounds with only the accounts whose count reaches them. Setting it on an account runs rounds even when routing sets none; accounts without one then take part in the first only. |
 | account `endpoint` | Accounts naming the same endpoint share its outages. Default: the account's ID. |
 
-A client can pin a request to one account with the `X-Pluxy-Account: <id>` header. A pinned
-request never goes to another account.
+A client can pin a request to one account with the `X-Pluxy-Account: <id>` header, naming the
+account by its ID or its public ID (the one replies give). A pinned request never goes to another
+account.
 
 With `quota_response_mode` `usage-limit`, a request that ends with a rate or quota refusal (or
 finds every account blocked) gets today's core's usage-limit reply when each account that serves
