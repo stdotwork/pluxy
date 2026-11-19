@@ -19,7 +19,8 @@
       "want": {
         "code": "upstream",
         "message": "upstream returned 502 Bad Gateway",
-        "type": "server_error"
+        "type": "server_error",
+        "pluxy": "(volatile)"
       }
     }
   ],

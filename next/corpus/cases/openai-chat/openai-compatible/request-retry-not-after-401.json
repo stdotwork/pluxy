@@ -64,7 +64,7 @@
       "path": "client.body.error",
       "kind": "intended",
       "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
-      "want": {"code":"invalid_api_key","message":"bad key","type":"authentication_error"}
+      "want": {"code":"invalid_api_key","message":"bad key","type":"authentication_error", "pluxy": "(volatile)"}
     }
   ]
 }
