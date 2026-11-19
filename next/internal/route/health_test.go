@@ -501,3 +501,18 @@ func TestCheckEndingABlockStartsTheBackoffOver(t *testing.T) {
 		t.Errorf("after the refusal that followed the check: %+v, want cooling for 500ms, the first step", got)
 	}
 }
+
+// A model the account does not have (a 404) is kept off the account for 12 hours, but says
+// nothing about the account itself: its health stays ok, and the block shows in its cooldowns.
+func TestMissingModelLeavesHealthOK(t *testing.T) {
+	h := newHarness(t, Config{}, accts("a")...)
+	h.on("a", fail(llm.Error{Code: llm.CodeNotFound, Status: 404, Scope: llm.ScopeModel, Message: "no such model"}))
+	h.run(h.req("m"))
+	if got := h.healthOf("a"); got.State != HealthOK || got.Until != nil {
+		t.Errorf("health = %+v, want ok", got)
+	}
+	rt := h.r.state.Runtime(Account{ID: "a"}, h.now)
+	if len(rt.Cooldowns) != 1 || rt.Cooldowns[0].Scope != llm.ScopeModel || rt.Cooldowns[0].Model != "m" || rt.Cooldowns[0].Until.Sub(h.now) != 12*time.Hour {
+		t.Errorf("cooldowns = %+v, want model m's for 12h", rt.Cooldowns)
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"strings"
 	"time"
+
+	"github.com/stdotwork/pluxy/next/llm"
 )
 
 // Health is one account's state in one word, with when and why: what the management API shows
@@ -101,7 +103,9 @@ func (s *State) set(b *block, k scopeKey, kind string, until time.Time, source, 
 
 // Health returns account a's health at now. A hold wins over every block. Otherwise the block
 // that holds the account longest decides, an exhausted one before any other: a block on one of
-// its models counts too, and Why then names the model.
+// its models counts too, and Why then names the model. A model the account does not have (a
+// not-found cooldown) says nothing about the account and is left out; it shows in Runtime's
+// cooldowns.
 func (s *State) Health(a Account, now time.Time, h Hold) Health {
 	switch {
 	case h.Disabled:
@@ -120,7 +124,7 @@ func (s *State) Health(a Account, now time.Time, h Hold) Health {
 		}
 		for i := range st.blocks {
 			b := &st.blocks[i]
-			if !b.until.After(now) {
+			if !b.until.After(now) || i == kindIndex(blockCooldown) && b.reason != nil && b.reason.Code == llm.CodeNotFound {
 				continue
 			}
 			if top == nil || before(b, k, i, top, topKey, topKind) {
