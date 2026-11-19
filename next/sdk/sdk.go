@@ -934,11 +934,12 @@ func (s *Stream) write(ev llm.Event) error {
 			}
 		}
 	}
+	now := aliveClock()
 	if err := protocol.WriteFrame(s.w, protocol.Reply{Event: ev}); err != nil {
 		s.broken = true
 		return err
 	}
-	s.last = aliveClock()
+	s.last = now
 	return nil
 }
 
