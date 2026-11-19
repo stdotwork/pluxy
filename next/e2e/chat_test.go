@@ -25,7 +25,7 @@ import (
 
 const (
 	clientKey   = "client-key-e2e"
-	upstreamKey = "sk-upstream-e2e"
+	upstreamKey = "sk-Hq4Tz8Wm2Rx6"
 )
 
 var binDir string

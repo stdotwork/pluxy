@@ -8,22 +8,16 @@
 //! `core_versions`.
 
 use crate::conn::{CoreChange, Versions};
-#[cfg(target_os = "linux")]
 use crate::MAIN;
 use crate::{trusted, App};
-use tauri::{AppHandle, Manager, Webview};
-#[cfg(target_os = "linux")]
-use tauri::{Emitter, EventTarget};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, Webview};
 
 /// A change waiting for the person's confirmation.
 pub(crate) struct Pending {
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     action: String,
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     change: CoreChange,
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 enum Ask {
     Install(String),
     Rollback(String),
@@ -31,7 +25,6 @@ enum Ask {
 }
 
 impl Ask {
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn name(&self) -> &'static str {
         match self {
             Ask::Install(_) => "install",
@@ -75,13 +68,7 @@ pub async fn core_adopt(webview: Webview) -> Result<(), String> {
     blocking(move || ask(&app, Ask::Adopt)).await?
 }
 
-#[cfg(not(target_os = "linux"))]
-fn ask(_app: &AppHandle, _ask: Ask) -> Result<(), String> {
-    Err("changing the app's own core needs a native confirmation, on Linux only for now".into())
-}
-
 /// Checks the change and opens its native confirmation; returns once the dialog shows.
-#[cfg(target_os = "linux")]
 fn ask(app: &AppHandle, ask: Ask) -> Result<(), String> {
     use crate::confirmation::{self, Action, Package};
     let st = app.state::<App>();
@@ -101,7 +88,11 @@ fn ask(app: &AppHandle, ask: Ask) -> Result<(), String> {
         *st.core_change.lock().unwrap() = None;
         e
     };
-    let home = app.path().home_dir().map_err(|e| release(e.to_string()))?;
+    // The process HOME, as `TrustStore::current` reads it: a test-trust profile is used only
+    // there (on Windows the profile folder Tauri knows is another one).
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default();
     // The checks read files and hash them: without the connection's lock, except to read it.
     let checked = (|| -> Result<(String, Package, Vec<std::path::PathBuf>, CoreChange), String> {
         match ask {
@@ -216,7 +207,6 @@ fn ask(app: &AppHandle, ask: Ask) -> Result<(), String> {
 
 /// Waits for the confirmation's native result; only a confirmed, consumed token applies the
 /// change. Then tells the window.
-#[cfg(target_os = "linux")]
 fn settle(app: &AppHandle, id: &str, name: &'static str) {
     use std::time::{Duration, Instant};
     let st = app.state::<App>();

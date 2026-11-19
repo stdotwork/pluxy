@@ -191,7 +191,7 @@ func TestQuotaErrors(t *testing.T) {
 
 // A refused quota read's text body becomes the error's message only when it was read whole. A body
 // longer than the 1 MiB read is cut, and the cut may fall inside a credential the upstream echoed,
-// which core, removing only whole copies, would pass on: then the message is the status alone.
+// which core's whole-copy redaction would pass on: then the message is the status alone.
 func TestQuotaErrorTextBody(t *testing.T) {
 	const secret = "devin-quota-cut-secret-0f1e2d3c4b5a69788796a5b4c3d2e1f0"
 	const read = 30 // bytes of secret the 1 MiB read takes

@@ -255,6 +255,7 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 				m.onReauth(l.account)
 			}
 			m.changed()
+			m.credentialChanged(l.account)
 			return nil
 		}
 	}

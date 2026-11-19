@@ -49,7 +49,8 @@ type outUsage struct {
 	CompletionTokens    int64 `json:"completion_tokens"`
 	TotalTokens         int64 `json:"total_tokens"`
 	PromptTokensDetails *struct {
-		CachedTokens int64 `json:"cached_tokens"`
+		CachedTokens     int64 `json:"cached_tokens"`
+		CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
 	} `json:"prompt_tokens_details,omitempty"`
 	CompletionTokensDetails *struct {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
@@ -139,10 +140,14 @@ func encodeUsage(u *llm.Usage) *outUsage {
 	}
 	out := &outUsage{PromptTokens: v(u.InputTokens), CompletionTokens: v(u.OutputTokens)}
 	out.TotalTokens = out.PromptTokens + out.CompletionTokens
-	if u.CachedInputTokens != nil {
+	if u.CachedInputTokens != nil || v(u.CacheWriteInputTokens) > 0 {
 		out.PromptTokensDetails = &struct {
-			CachedTokens int64 `json:"cached_tokens"`
-		}{*u.CachedInputTokens}
+			CachedTokens     int64 `json:"cached_tokens"`
+			CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+		}{
+			CachedTokens:     v(u.CachedInputTokens),
+			CacheWriteTokens: max(0, v(u.CacheWriteInputTokens)),
+		}
 	}
 	if u.ReasoningTokens != nil {
 		out.CompletionTokensDetails = &struct {

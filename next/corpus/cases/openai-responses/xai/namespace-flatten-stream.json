@@ -196,7 +196,7 @@
         "headers": {
           "Accept": "text/event-stream",
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "User-Agent": "pluxy-corpus/0",
           "X-Grok-Conv-Id": "a683a1f4-2762-501c-9de1-8a17543f0ca3"
