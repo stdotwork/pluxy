@@ -100,10 +100,12 @@ type leftEntry struct {
 // request through a chain names them, since an account can be in two steps.
 func (r *Router) leftOut(targets []target, skip func(target) bool, named bool, now time.Time) []leftEntry {
 	var out []leftEntry
+	seen := map[targetKey]bool{}
 	for _, t := range targets {
-		if skip(t) {
+		if skip(t) || seen[t.key()] {
 			continue
 		}
+		seen[t.key()] = true
 		a := t.a
 		h := r.state.Health(*a, now, Hold{})
 		state, until := h.State, h.Until
@@ -288,6 +290,9 @@ func (r *Router) Plan(ctx context.Context, model string) Plan {
 	for i := range steps {
 		var cands []*Account
 		for _, t := range stepTargetsOf(capable, i) {
+			if ordered[t.key()] {
+				continue // an earlier step's, with the same model
+			}
 			until, _, busy := r.state.availability(t.a, t.model, now)
 			if !r.state.IsBanned(t.a.ID) && until.IsZero() && !busy {
 				cands = append(cands, t.a)

@@ -48,8 +48,8 @@ func (s Step) String() string {
 const MaxChainSteps = 8
 
 // ValidateChain checks one chain, among chains (the config's, with this one in it): its name,
-// its number of steps, and that each step names a model and not another chain. A step may name
-// the chain's own name: that is the model of the name.
+// its number of steps, and that each step names a model and not another chain and does not repeat
+// an earlier step. A step may name the chain's own name: that is the model of the name.
 func ValidateChain(name string, steps []Step, chains map[string][]Step) error {
 	switch {
 	case strings.TrimSpace(name) == "" || strings.TrimSpace(name) != name:
@@ -69,8 +69,16 @@ func ValidateChain(name string, steps []Step, chains map[string][]Step) error {
 		if slices.Contains(s.Accounts, "") {
 			return fmt.Errorf("routing.chains.%s: step %d names an empty account ID", name, i+1)
 		}
+		if j := slices.IndexFunc(steps[:i], func(o Step) bool { return sameStep(o, s) }); j >= 0 {
+			return fmt.Errorf("routing.chains.%s: step %d repeats step %d", name, i+1, j+1)
+		}
 	}
 	return nil
+}
+
+// sameStep reports whether a and b name the same model, provider and accounts, in any order.
+func sameStep(a, b Step) bool {
+	return a.Model == b.Model && a.Provider == b.Provider && slices.Equal(slices.Sorted(slices.Values(a.Accounts)), slices.Sorted(slices.Values(b.Accounts)))
 }
 
 // ValidateChains checks every chain of chains, as ValidateChain does.
@@ -95,13 +103,13 @@ type target struct {
 	step  int    // the step's index; 0 for a request whose model has no chain
 }
 
-// targetKey names a target in a request: the same account may serve two steps.
+// targetKey names a target in a request by its account and upstream model: two steps that come
+// to the same account and model are one target, tried once in a round.
 type targetKey struct {
-	step int
-	id   string
+	id, model string
 }
 
-func (t target) key() targetKey { return targetKey{t.step, t.a.ID} }
+func (t target) key() targetKey { return targetKey{t.a.ID, t.model} }
 
 // stepNumber is t's step as attempts and replies count it: from 1 in a chain, 0 without one.
 func (c *call) stepNumber(t target) int {
