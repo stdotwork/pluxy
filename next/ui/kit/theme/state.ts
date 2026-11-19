@@ -245,9 +245,14 @@ export class ThemeState {
     return run;
   }
 
-  /** A failed reply as one line; a refused key also sends the person back to signing in. */
-  private failure(r: Reply<unknown>): string | undefined {
-    if (r.status === 401) this.unauthorized();
+  /**
+   * A failed reply as one line. A refused key also sends the person back to signing in, but only
+   * for something they did: a read this state makes by itself (at sign-in, when the window gets
+   * focus, for the picker's previews) says what failed and signs nobody out, since it can cross a
+   * sign-in that is under way.
+   */
+  private failure(r: Reply<unknown>, byItself = false): string | undefined {
+    if (r.status === 401 && !byItself) this.unauthorized();
     return problem(r);
   }
 
@@ -293,7 +298,7 @@ export class ThemeState {
   private async read(first: boolean) {
     const r = await this.api.storedThemes();
     if (!ok(r) || !r.body) {
-      this.problem = this.failure(r);
+      this.problem = this.failure(r, true);
       for (const fn of this.listeners) fn();
       return;
     }
@@ -314,7 +319,7 @@ export class ThemeState {
         return;
       }
       if (this.stored.some((s) => s.id === id)) {
-        const why = await this.fetchFile(id);
+        const why = await this.fetchFile(id, true);
         if (why) this.problem = `${id}: ${why}`;
         else {
           this.followed = mark;
@@ -333,9 +338,9 @@ export class ThemeState {
   }
 
   /** Reads one stored theme's file from core. Returns why it cannot be used, or undefined. */
-  private async fetchFile(id: string): Promise<string | undefined> {
+  private async fetchFile(id: string, byItself = false): Promise<string | undefined> {
     const r = await this.api.themeFile(id);
-    if (!ok(r)) return this.failure(r);
+    if (!ok(r)) return this.failure(r, byItself);
     return this.keep(r.body, id);
   }
 
@@ -368,7 +373,7 @@ export class ThemeState {
     return this.queue(async () => {
       const missing = this.stored.filter((s) => !this.files.has(s.id) && !this.builtInFiles.has(s.id));
       if (missing.length === 0) return;
-      for (const s of missing) await this.fetchFile(s.id);
+      for (const s of missing) await this.fetchFile(s.id, true);
       for (const fn of this.listeners) fn();
     });
   }

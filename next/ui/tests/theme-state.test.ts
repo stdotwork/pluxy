@@ -315,3 +315,24 @@ test("a stored file the reader refuses is listed with the reason and cannot be t
   expect(themes.current.theme.id).toBe("pluxy/default");
   expect(s.core.count("PUT /theme")).toBe(0);
 });
+
+test("a key core refuses signs the person out when they act, not when the state reads by itself", async () => {
+  const s = setup();
+  s.core.files.set("t3/nightfall", nightfall);
+  const themes = s.state();
+  let signedOut = 0;
+  themes.connect(() => signedOut++);
+  await until(() => themes.listed.length === 3);
+
+  // The window gets focus while core refuses the key (a sign-in may be under way): no sign-out.
+  s.core.instead = () => ({ status: 401 });
+  s.win.dispatchEvent(new Event("focus"));
+  await until(() => themes.problem !== undefined);
+  await themes.loadFiles();
+  expect(signedOut).toBe(0);
+  expect(themes.current.theme.id).toBe("pluxy/default");
+
+  // The person picks a theme and core refuses the key: back to signing in.
+  expect(await themes.select("pluxy/terminal")).toBeDefined();
+  expect(signedOut).toBe(1);
+});
