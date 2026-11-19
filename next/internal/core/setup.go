@@ -39,7 +39,8 @@ const (
 	maxClientConfig    = 2 << 20
 )
 
-// setupPickOrder matches "The setup picks" order: providers then clients.
+// setupPickOrder is the order setup shows its picks in: providers, most asked for first, then
+// the client tools.
 var setupPickOrder = []string{
 	"pluxy/codex",
 	"pluxy/claude",
@@ -407,7 +408,7 @@ func (c *Core) handleSetup(m *server.Management) {
 	})
 }
 
-// buildSetupPicks maps registry packages with tier "pick" to SetupPick in plan order.
+// buildSetupPicks lists the registries' packages of tier "pick" in setupPickOrder, others after.
 func buildSetupPicks(regs []management.Registry, installed packages.State, found management.SetupFound) []management.SetupPick {
 	byID := map[string]management.RegistryPackage{}
 	var order []string
