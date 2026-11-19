@@ -1302,7 +1302,7 @@ first; a tool a registry only offers is not listed, since Beginner Mode is where
 **Manage Clients** page (Control group) has a checkbox for every client with a search box, **Restore
 automatic display** and **Save**; Save is off for an empty selection ("Keep at least one client
 visible."). The choice is kept in the window's prefs (`pluxy.agent-clients`, on this device, like the
-theme), and saving automatic removes it. Whichever client page is open stays listed while it is
+Themes page's layout choices), and saving automatic removes it. Whichever client page is open stays listed while it is
 open, so hiding it never strands the person. Beginner Mode still offers every client, and the list
 logic is in `src/clientListItems.ts`.
 

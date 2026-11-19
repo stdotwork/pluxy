@@ -299,10 +299,48 @@ CSS of a theme written for T3 Code matches the parts both UIs have:
 
 Every other class name, element and attribute can change in any release.
 
+## Where themes are kept
+
+Core keeps the themes a person adds and which theme is on, so the panel, the desktop app and the
+`pluxy` command show the same ones. Core stores a theme file's JSON as it is given and does not
+read it; the UI is what checks a file. Core keeps at most 64 themes.
+
+On the Themes page:
+
+- **Add a theme** takes a theme file, or JSON pasted into the box. The UI checks it first: a file
+  it refuses is not stored, and the page says why. A theme that is added is turned on at once.
+- **Export** saves the file of the theme that is on as `<name>.json`, a built-in theme's too. The
+  file holds the JSON that was added; its spacing and the order of its fields can differ.
+- **Remove** deletes the stored theme that is on from core, and the default theme comes back.
+
+A window follows a change made in another window or with `pluxy theme` when it next gets focus
+or shows again.
+
+Each device keeps its own appearance (system, light or dark), layout and density choices, the
+person's own CSS and safe mode. It also keeps a copy of the theme last applied, so a window opens
+in that theme before core answers and on the sign-in page.
+
+### The `pluxy theme` commands
+
+```bash
+pluxy theme list                     # the theme that is on, and the stored themes
+pluxy theme show <id>                # a stored theme's file
+pluxy theme add <file> [--id publisher/name]
+pluxy theme set <id>                 # turn a theme on; a built-in theme's ID works too
+pluxy theme clear                    # back to the default theme
+pluxy theme remove <id>
+```
+
+`pluxy theme add` stores the file under `--id`, else under the file's own `id` when it is
+`publisher/name`, else under `t3/<file name>`. The command does not check the file as the UI
+does: a stored file the UI cannot read is listed on the Themes page with the reason and cannot be
+turned on. The built-in themes' IDs are `pluxy/default`, `pluxy/terminal` and `pluxy/paper`.
+
 ## Safe mode
 
 Safe mode turns off all custom CSS: the theme's and the person's own. Tokens and layout options
-keep working. Use it when custom CSS has hidden or broken the UI.
+keep working. Use it when custom CSS has hidden or broken the UI. It is kept on each device, not by
+core.
 
 - On the Themes page: the "Safe mode" switch.
 - If custom CSS hides that switch: open the panel with `?safe` in the address, for example
