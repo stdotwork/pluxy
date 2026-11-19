@@ -18,7 +18,7 @@ const devinErrorBodyLimit = 1 << 20
 // devinCutSecret is the account's session token in the cut-body case. The fake echoes it so that
 // the read limit falls inside it: devinCutSecret[:devinCutAt] is read, the rest is not.
 const (
-	devinCutSecret = "devin-e2e-cut-secret-7f3a9c1d5e8b2a4f6c0d9e1b3a5c7f9e"
+	devinCutSecret = "dvn-Xc7Mq2Wz9Lp4Kf8Rb-7f3a9c1d5e8b2a4f6c0d9e1b3a5c7f9e"
 	devinCutAt     = 30
 )
 
@@ -84,10 +84,10 @@ func checkNoTokenPart(t *testing.T, got string, logs *coreLog, part string) {
 	}
 }
 
-// An upstream refusal whose body is longer than the extension reads is cut. Core removes only
-// whole copies of a credential, so if the upstream echoes the session token and the cut falls
-// inside it, the cut text must not become the error: the token's start would reach the client
-// and core's log in clear.
+// An upstream refusal whose body is longer than the extension reads is cut. If the upstream
+// echoes the session token and the cut falls inside it, the cut text must not become the error:
+// the token's start would reach the client and core's log, cleaned only by core's 4-character
+// rule (protocol.RemovePieces), which the extension does not rely on.
 func TestDevinCutErrorBodyKeepsNoCredential(t *testing.T) {
 	// Text, not JSON, so the extension can't take a message out of it; the token straddles the
 	// read limit.
@@ -149,8 +149,8 @@ func TestDevinBrokenErrorBodyKeepsNoCredential(t *testing.T) {
 const devinJWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLWUyZS0xMjMiLCJleHAiOjE5MDAwMDAwMDAsIm9yZyI6InBsdXh5LXRlc3QifQ.BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSY"
 
 // A text refusal read whole still holds part of a token the upstream echoed when the upstream
-// split it across lines or cut it short itself; core, removing only whole copies, would pass the
-// part on. The text is cleaned first: the parts are replaced, those shorter than the 24-character
+// split it across lines or cut it short itself, which core's whole-copy redaction would pass on.
+// The text is cleaned first: the parts are replaced, those shorter than the 24-character
 // runs the generic cleaner catches too, and the words around them stay.
 func TestDevinTextErrorIsCleaned(t *testing.T) {
 	const secret = "devin-e2e-zz-secret-7f3a9c1d5e8b2a4f6c0d9e1b3a5c7f9e"

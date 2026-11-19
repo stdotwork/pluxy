@@ -16,11 +16,11 @@
   "upstream": [
     {
       "body": {
-        "id": "chatcmpl-sk-corpus-upstream",
+        "id": "chatcmpl-sk-Cq7Vx2Np9Lw4Zr8",
         "object": "chat.completion",
         "created": 1700000001,
-        "model": "gpt-sk-corpus-upstream",
-        "system_fingerprint": "fp_sk-corpus-upstream",
+        "model": "gpt-sk-Cq7Vx2Np9Lw4Zr8",
+        "system_fingerprint": "fp_sk-Cq7Vx2Np9Lw4Zr8",
         "choices": [
           {
             "index": 0,
@@ -29,7 +29,7 @@
               "content": null,
               "tool_calls": [
                 {
-                  "id": "call_sk-corpus-upstream",
+                  "id": "call_sk-Cq7Vx2Np9Lw4Zr8",
                   "type": "function",
                   "function": {"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}
                 }
@@ -55,7 +55,7 @@
               "tool_calls": [
                 {
                   "function": {"arguments":"{\"city\":\"Paris\"}","name":"get_weather"},
-                  "id": "call_sk-corpus-upstream",
+                  "id": "call_sk-Cq7Vx2Np9Lw4Zr8",
                   "type": "function"
                 }
               ]
@@ -63,10 +63,10 @@
           }
         ],
         "created": 1700000001,
-        "id": "chatcmpl-sk-corpus-upstream",
-        "model": "gpt-sk-corpus-upstream",
+        "id": "chatcmpl-sk-Cq7Vx2Np9Lw4Zr8",
+        "model": "gpt-sk-Cq7Vx2Np9Lw4Zr8",
         "object": "chat.completion",
-        "system_fingerprint": "fp_sk-corpus-upstream",
+        "system_fingerprint": "fp_sk-Cq7Vx2Np9Lw4Zr8",
         "usage": {"completion_tokens":2,"prompt_tokens":4,"total_tokens":6}
       },
       "headers": {
@@ -90,7 +90,7 @@
         },
         "headers": {
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "User-Agent": "pluxy-corpus/0"
         },

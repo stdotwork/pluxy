@@ -130,8 +130,11 @@ it, so the form and a page that writes settings get the same answer.
 
 Any other keyword is refused at install, so a schema never means something core does not
 check. Settings are kept by core, per extension, in `{packages.dir}/.settings/<publisher>/<name>.json`
-(readable only by core's user), and survive upgrades: a field the new version no longer
-declares is dropped the next time the settings change. Core does not send settings to the
+(readable only by core's user and, on Windows, SYSTEM), and survive upgrades: a field the new version no longer
+declares is dropped the next time the settings change. On Windows the `.settings` folder is checked
+and made private, as core's [credentials folder](../../README.md#accounts-added-by-login) is,
+each time settings are loaded or saved; a settings file that another account owns is skipped, as
+if none were stored, and the next save replaces it. Core does not send settings to the
 extension's program yet; in version 0 they are for the extension's pages.
 
 ## How core serves pages

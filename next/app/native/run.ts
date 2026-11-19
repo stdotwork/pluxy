@@ -241,11 +241,10 @@
 // sessions on those builds instead of building (CI builds once for every shard).
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { createHash, generateKeyPairSync, type KeyObject, randomBytes, randomUUID, sign } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
-  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -266,6 +265,14 @@ import { appImageHeader, buildSmokeAppImage, packAppImage } from "./appimage";
 import { buildClaudeCodeFixtures } from "./claude-code";
 import { buildClaudeDesktopFixtures } from "./claude-desktop";
 import { buildCodexFixtures } from "./codex";
+import {
+  type CoreSource,
+  coreProblems,
+  coreSource,
+  sentinelProblems,
+  startSentinel,
+  stopSentinel,
+} from "./core-steps";
 import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
 import { buildGrokFixtures } from "./grok";
@@ -512,201 +519,6 @@ async function managementStatus(base: string, key: string, ca?: string): Promise
   } as RequestInit);
   return r.status;
 }
-
-/** Signed test core releases for the managed run, in a folder of their own. */
-interface CoreSource {
-  /** The index file, which the app's connection names as its core source. */
-  index: string;
-  /** A core program of the runner's, which the app must adopt before it runs it. */
-  custom: string;
-  /** The trust profile's root for the run's key, bound to the index. */
-  root: object;
-}
-
-const CORE_ID = "pluxy/core";
-const PLATFORM = `${process.platform}/${process.arch === "x64" ? "amd64" : process.arch}`;
-const VERSION_FLAG = "-X github.com/stdotwork/pluxy/next/internal/buildinfo.Version=";
-
-function hex(b: Buffer | Uint8Array): string {
-  return Buffer.from(b).toString("hex");
-}
-
-/** One release in the index: the archive of folder, its descriptor and a signature by key. */
-function release(dir: string, version: string, folder: string, key: KeyObject, keyId: string, bad = false) {
-  const name = `pluxy-core-${version}-${PLATFORM.replace("/", "-")}.tar.gz`;
-  run("tar", ["-czf", join(dir, name), "-C", folder, "."], dir);
-  const bytes = readFileSync(join(dir, name));
-  const descriptor = JSON.stringify({
-    id: CORE_ID,
-    version,
-    tier: "native",
-    platform: PLATFORM,
-    size: bytes.length,
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-  });
-  const signature = sign(null, Buffer.from(descriptor), key);
-  if (bad) signature[0] = (signature[0] ?? 0) ^ 0xff;
-  return {
-    product: "core",
-    version,
-    channel: "stable",
-    published: "2026-11-01T00:00:00Z",
-    artifacts: [{ platform: PLATFORM, url: name, descriptor, signature: hex(signature), key_id: keyId }],
-  };
-}
-
-/** Builds cores 1.0.0 and 2.0.0 (with the bundled test packages of prepared), a 3.0.0 that
- * breaks its config and exits, and a 2.1.0 whose signature does not verify, signed by a key made
- * for this run, with their index. */
-function coreSource(dir: string, prepared: string): CoreSource {
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const keyId = `native-test-${randomUUID()}`;
-  const releases = [];
-  for (const version of ["1.0.0", "2.0.0"]) {
-    const folder = join(dir, `core-${version}`);
-    mkdirSync(folder);
-    run(
-      "go",
-      [
-        "build",
-        "-buildvcs=false",
-        "-ldflags",
-        `${VERSION_FLAG}${version}`,
-        "-o",
-        join(folder, "pluxy"),
-        "./cmd/pluxy",
-      ],
-      next,
-    );
-    cpSync(join(prepared, "bundled"), join(folder, "bundled"), { recursive: true });
-    releases.push(release(dir, version, folder, privateKey, keyId));
-  }
-  const broken = join(dir, "core-3.0.0");
-  mkdirSync(broken);
-  writeFileSync(
-    join(broken, "pluxy"),
-    "#!/bin/sh\nset -e\n# A bad candidate: it breaks its config (-config <path>) and exits.\nprintf 'not json' > \"$2\"\necho 'pluxy: bad candidate broke its config' >&2\nexit 3\n",
-  );
-  chmodSync(join(broken, "pluxy"), 0o755);
-  releases.push(release(dir, "3.0.0", broken, privateKey, keyId));
-  releases.push(release(dir, "2.1.0", join(dir, "core-2.0.0"), privateKey, keyId, true));
-  const index = join(dir, "index.json");
-  writeFileSync(index, JSON.stringify({ format: 1, releases }, null, 2));
-  const jwk = publicKey.export({ format: "jwk" });
-  return {
-    index,
-    custom: join(prepared, "pluxy"),
-    root: {
-      kind: "test",
-      publisher: "pluxy",
-      source: index,
-      key_id: keyId,
-      public_key: hex(Buffer.from(jwk.x ?? "", "base64url")),
-    },
-  };
-}
-
-/** A core this runner starts, which the app never started: it must outlive the app's run. */
-async function startSentinel(dir: string, from: string) {
-  cpSync(from, dir, { recursive: true });
-  const key = hex(randomBytes(32));
-  const config = join(dir, "config.json");
-  writeFileSync(
-    config,
-    JSON.stringify({
-      listen: "127.0.0.1:0",
-      client_keys: [hex(randomBytes(32))],
-      management_key: key,
-      credentials_dir: join(dir, "credentials"),
-      packages: { dir: join(dir, "packages") },
-    }),
-    { mode: 0o600 },
-  );
-  const before = readFileSync(config);
-  const proc = spawn(join(dir, "pluxy"), ["-config", config], {
-    cwd: dir,
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  const base = await new Promise<string>((resolve, reject) => {
-    proc.once("exit", (code) => reject(new Error(`the sentinel core exited with ${code}`)));
-    if (proc.stderr)
-      createInterface({ input: proc.stderr }).on("line", (line) => {
-        const m = /^pluxy: listening on (\S+)$/.exec(line);
-        if (m?.[1]) resolve(m[1]);
-      });
-  });
-  return { proc, base, key, config, before, exe: statSync(join(dir, "pluxy")).ino };
-}
-
-/** What the managed run's core steps must report (native_core.rs). */
-const CORE_STEPS: [string, Record<string, unknown>][] = [
-  ["core_missing", { state: "missing", connected: false }],
-  ["core_no_roots", { refused: true, dialog: false }],
-  [
-    "core_install",
-    {
-      outcome: "done",
-      version: "1.0.0",
-      connected: true,
-      signed_in: true,
-      status: 200,
-      reported: "1.0.0",
-      exe_in_app: true,
-    },
-  ],
-  ["core_bad_signature", { refused: true, running: "1.0.0" }],
-  [
-    "core_update",
-    {
-      outcome: "done",
-      version: "2.0.0",
-      status: 200,
-      reported: "2.0.0",
-      old_alive: false,
-      new_pid: true,
-      config_kept: true,
-    },
-  ],
-  [
-    "core_bad_start",
-    {
-      outcome: "failed",
-      version: "2.0.0",
-      status: 200,
-      reported: "2.0.0",
-      old_alive: false,
-      running: true,
-      config_restored: true,
-      failed: "3.0.0",
-    },
-  ],
-  [
-    "core_rollback",
-    {
-      unknown_refused: true,
-      cancel: "cancelled",
-      cancel_kept: true,
-      outcome: "done",
-      version: "1.0.0",
-      status: 200,
-      reported: "1.0.0",
-      config_kept: true,
-    },
-  ],
-  [
-    "core_adopt",
-    {
-      custom_not_run: true,
-      running_before: "1.0.0",
-      outcome: "done",
-      status: 200,
-      exe_in_app: true,
-      custom_running: false,
-      back: "1.0.0",
-      back_outcome: "done",
-    },
-  ],
-];
 
 /** The management key in core's config file: its current one, also after a rotation. */
 function managementKey(config: string): string {
@@ -1855,50 +1667,7 @@ async function runApp(
 
     if (core) {
       checkGate();
-      for (const [step, expected] of CORE_STEPS) {
-        const value = steps.get(step);
-        check(
-          value && Object.entries(expected).every(([key, want]) => value[key] === want),
-          `${step} evidence missing or wrong: ${JSON.stringify(value)} (want ${JSON.stringify(expected)})`,
-        );
-      }
-      const installed = (step: string) => JSON.stringify(steps.get(step)?.installed);
-      check(
-        installed("core_no_roots") === "[]",
-        `installed after the refused install: ${installed("core_no_roots")}`,
-      );
-      check(
-        installed("core_bad_signature") === '["1.0.0"]',
-        `installed after the bad signature: ${installed("core_bad_signature")}`,
-      );
-      check(
-        installed("core_bad_start") === '["1.0.0","2.0.0"]',
-        `installed after the bad start: ${installed("core_bad_start")}`,
-      );
-      check(
-        /trust not configured/.test(String(steps.get("core_no_roots")?.detail)),
-        "the no-roots refusal does not say why",
-      );
-      check(
-        /signature/.test(String(steps.get("core_bad_signature")?.detail)),
-        "the bad-signature refusal does not say why",
-      );
-      check(
-        /not installed/.test(String(steps.get("core_rollback")?.unknown_detail)),
-        "the unknown rollback refusal does not say why",
-      );
-      check(
-        /bad candidate broke its config/.test(String(steps.get("core_bad_start")?.detail)),
-        "the bad start's reason is missing",
-      );
-      check(
-        steps.get("core_adopt")?.pending === core.custom,
-        `the custom program is not pending adoption: ${JSON.stringify(steps.get("core_adopt"))}`,
-      );
-      check(
-        /^custom-[0-9a-f]{64}$/.test(String(steps.get("core_adopt")?.version)),
-        "the adopted core has no app-owned version",
-      );
+      problems.push(...coreProblems(steps, core));
       if (problems.length > 0) console.log(`${mode}: the app's last lines:\n  ${log.join("\n  ")}`);
       console.log(`${mode}: core steps ${problems.length === 0 ? "ok" : "FAILED"}`);
       return problems;
@@ -2735,20 +2504,10 @@ async function main(): Promise<number> {
             false,
             source,
           );
-          const status = await managementStatus(sentinel.base, sentinel.key);
-          const kept = readFileSync(sentinel.config).equals(sentinel.before);
-          console.log(
-            `managed sentinel ${JSON.stringify({ alive: alive(sentinel.proc.pid ?? 0), status, config_kept: kept })}`,
-          );
-          if (!alive(sentinel.proc.pid ?? 0) || status !== 200)
-            c.push("the sentinel core did not survive the app");
-          if (!kept) c.push("the sentinel core's config changed");
-          if (statSync(join(prepared, "sentinel", "pluxy")).ino !== sentinel.exe)
-            c.push("the sentinel core's program changed");
+          c.push(...(await sentinelProblems(sentinel, console.log)));
           problems.push(...c.map((x) => `managed, core steps: ${x}`));
         } finally {
-          sentinel.proc.kill("SIGTERM");
-          await new Promise((r) => sentinel.proc.once("exit", r));
+          await stopSentinel(sentinel);
         }
       }
       // The other runs need a core in the app's own store. The startup runs adopt the core_path
