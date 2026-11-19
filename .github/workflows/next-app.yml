@@ -118,6 +118,9 @@ jobs:
           export HOME="$test_env/home" XDG_CONFIG_HOME="$test_env/config" XDG_DATA_HOME="$test_env/data" XDG_CACHE_HOME="$test_env/cache"
           mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
           cargo test --locked
+          # The native test's own unit tests (in src/native_test.rs and the checks it holds), which
+          # build only with the native-test feature.
+          cargo test --locked --features native-test --lib native_test::
       - name: Artifact signature and test trust controls
         working-directory: next/app/src-tauri
         run: cargo test --locked --features artifact-test-trust --test artifact_trust --test release_config
