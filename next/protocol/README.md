@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.17
+# pluxy extension protocol, version 0.18
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -25,9 +25,10 @@ back, for core's request logs. Version 0.14 adds [payload rules](#payload-rules)
 upstream JSON body that the config sets, fills in or removes. Version 0.15 has a session turn carry
 them too. Version 0.16 adds an error's `dropped`: what a refusal under the `reject` drop policy
 could not carry. Version 0.17 adds a captured body's `body_stopped`: the extension did not read it
-to its end. It is deliberately small; later versions add capabilities and more operations
-without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.17 (see
+to its end. Version 0.18 adds a model list's `from`: whether the list came from the account at the
+provider or from the extension's built-in catalog. It is deliberately small; later versions add
+capabilities and more operations without changing what is described here. An extension written for
+version 0 works unchanged with a core that speaks 0.18 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
