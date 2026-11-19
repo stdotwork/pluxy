@@ -1263,7 +1263,7 @@ const IN_APPLICATIONS = {
 };
 
 /** macOS: the test package in the stock /Applications, put there as an administrator would put it
- * with Finder (`ditto`, as this user: the bundle is this user's, its group admin): first the
+ * with Finder (`ditto`, as this user: the bundle is this user's, in the user's own group): first the
  * facts the rule rests on, read with the system's tools; then the route (v1 to v2 and a confirmed
  * rollback, `applications` in update_native.rs), after which a folder of the update's naming that
  * this user put in /Applications is still there, the same folder, and /Applications holds the
