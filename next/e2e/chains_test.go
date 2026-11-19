@@ -12,6 +12,9 @@ import (
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/extensions/codex/codextest"
+	"github.com/stdotwork/pluxy/next/internal/cred"
+	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // Fallback chains, as a person uses them: with every Claude account refusing, a request for a
@@ -154,5 +157,49 @@ func TestChainServesFromTheNextStep(t *testing.T) {
 	resp, b = ask()
 	if resp.StatusCode != http.StatusTooManyRequests || len(codex.Requests()) != codexBefore {
 		t.Errorf("after chain remove: status %d, Codex requests %d then %d; want Claude's 429 and none", resp.StatusCode, codexBefore, len(codex.Requests()))
+	}
+}
+
+// A Claude login waiting for a new login keeps claude-opus-5-5 on Claude: the request fails and
+// names the account as needs_login, and the Codex account that also lists the name gets nothing.
+func TestNeedsLoginKeepsTheProvider(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "credentials")
+	store, err := cred.Open(cred.FileBackend{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Priority 1: with a tie, the config's Codex account would come first and take the name.
+	if _, err := store.Create(cred.Record{ID: "claude-login", Extension: "pluxy/claude", State: cred.StateReauth, Account: route.Account{Priority: 1},
+		Reason: "the provider refused the sign-in", Credential: protocol.Credential{Kind: protocol.CredentialOAuth}}); err != nil {
+		t.Fatal(err)
+	}
+	codex := codextest.New(t)
+	base, _, logs := runCoreArgs(t, map[string]any{
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"credentials_dir": dir,
+		"extension":       map[string]any{"manifest": filepath.Join(binDir, "claude", "pluxy-extension.json")},
+		"extensions": map[string]any{"pluxy/codex": map[string]any{"accounts": []any{map[string]any{
+			"id": "codex-a", "models": []string{"gpt-6.1-sol", "claude-opus-5-5"},
+			"settings":   map[string]any{"base_url": codex.URL},
+			"credential": map[string]any{"kind": "api_key", "api_key": codex.IssueToken("text")},
+		}}}},
+	}, "-bundled", bundledRegistry(t, map[string]string{"pluxy/codex": filepath.Join("codex", "codex")}))
+	logs.waitFor(t, "config revision 1 active")
+
+	resp := postPath(t, context.Background(), base, "/v1/messages", clientKey, `{"model":"claude-opus-5-5","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var b explainBody
+	_ = json.Unmarshal(raw, &b)
+	if resp.StatusCode == http.StatusOK || b.Error.Pluxy == nil {
+		t.Fatalf("status %d, %s; want an error that explains", resp.StatusCode, raw)
+	}
+	if l := b.Error.Pluxy.LeftOut; len(l) != 1 || l[0].State != "needs_login" {
+		t.Errorf("left_out = %+v, want the Claude login as needs_login", l)
+	}
+	if n := len(codex.Requests()); n != 0 {
+		t.Errorf("Codex got %d requests; the name stays on Claude while its login waits", n)
 	}
 }
