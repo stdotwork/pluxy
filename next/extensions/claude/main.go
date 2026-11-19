@@ -27,7 +27,11 @@
 // Requests in other formats (Chat Completions, Responses, Gemini) are translated to Messages,
 // with the client's reasoning effort turned into Claude's thinking settings (thinking.go). Every
 // body, the client's own Messages body included, has two parts Anthropic refuses repaired: empty
-// web search domain lists and tool call IDs with characters it does not take (tools.go).
+// web search domain lists and tool call IDs with characters it does not take (tools.go). Its
+// conversation is repaired too, each change reported in the translation: a tool call with no
+// result, a result with no call, an empty user turn, and for models that refuse prefill (Claude 4.6
+// and later) trailing assistant turns (anthropicmessages.RepairTurns). A request in another format
+// that names no output limit gets the model's own (maxOutputTokens).
 //
 // Token counts (core's count_tokens call) go to Anthropic's count_tokens endpoint only when
 // base_url is Anthropic's own origin (https://api.anthropic.com). For any other base_url the

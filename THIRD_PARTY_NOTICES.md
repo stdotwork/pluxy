@@ -64,6 +64,11 @@ removed when the new core in `next/` replaced it. `next/` keeps from it:
   byte for byte, and the description it builds follows that file's `Description`;
 - adapted: the table of old and v8 config key paths (`moves`) in `next/internal/legacy/config.go`,
   written out from `internal/config/config_v8.go`;
+- follows: the tool call pairing in `next/format/anthropicmessages/turns.go` (`pairToolCalls`,
+  `pairRun`), from `repairClaudeToolPairing` in
+  `internal/translator/claude/openai/responses/claude_openai-responses_request.go`: a tool call
+  with no result gets an error result, a result that answers no call is sent as text, and results go
+  first in their user turn. The error result's text is copied;
 - the replies recorded in the cases of `next/corpus/` are what this core answered, and a few of
   them hold model lists from its catalog.
 
