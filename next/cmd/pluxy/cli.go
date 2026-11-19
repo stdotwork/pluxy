@@ -20,6 +20,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/management"
 )
 
@@ -315,7 +316,7 @@ var commands = []command{
 			})
 		}},
 	{words: "chain set", args: []string{"name", "step"}, more: true, routes: []string{"PUT /chains/{name}"},
-		summary: "set a model name's fallback chain; a step is model[@provider][:account,account]",
+		summary: "set a model name's fallback chain; a step is model[@provider][:account,account] (a model with a colon in its name ends with @: llama3:8b@)",
 		run: func(x *invocation) error {
 			var steps []management.ChainStep
 			for _, a := range x.args[1:] {
@@ -575,15 +576,22 @@ func chainText(steps []management.ChainStep) string {
 	return strings.Join(parts, " -> ")
 }
 
-// parseStep reads a step as chain set takes it: model[@provider][:account,account]. The model
-// ends at the first @; without one, at the last colon, so a model whose name holds a colon is
-// written with an @ after it (llama3:8b@ for any provider).
+// parseStep reads a step as chain set takes it: model[@provider][:account,account]. What follows
+// the last @ is the provider only when it is an extension's ID (publisher/name), or empty;
+// otherwise the @ is part of the model's name (claude-opus-4-7@20260416). Without a provider, the
+// model ends at the last colon, so a model whose name holds a colon is written with an @ after it
+// (llama3:8b@ for any provider, llama3:8b@pluxy/ollama for one).
 func parseStep(s string) (management.ChainStep, error) {
 	step := management.ChainStep{Model: s}
 	accounts, hasAccounts := "", false
-	if model, after, ok := strings.Cut(s, "@"); ok {
-		step.Model = model
-		step.Provider, accounts, hasAccounts = strings.Cut(after, ":")
+	i := strings.LastIndexByte(s, '@')
+	provider := ""
+	if i >= 0 {
+		provider, _, _ = strings.Cut(s[i+1:], ":")
+	}
+	if i >= 0 && (provider == "" || host.ValidID(provider)) {
+		step.Model = s[:i]
+		step.Provider, accounts, hasAccounts = strings.Cut(s[i+1:], ":")
 	} else if i := strings.LastIndexByte(s, ':'); i >= 0 {
 		step.Model, accounts, hasAccounts = s[:i], s[i+1:], true
 	}
