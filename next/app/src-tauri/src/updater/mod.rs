@@ -870,7 +870,11 @@ pub fn accept(app: &AppHandle) {
     {
         std::thread::spawn(move || {
             let _ = fs::write(d.join("gap"), std::process::id().to_string());
-            eprintln!("native-test: update_gap {{\"pid\":{}}}", std::process::id());
+            eprintln!(
+                "native-test: update_gap {{\"pid\":{},\"run\":\"{}\"}}",
+                std::process::id(),
+                crate::update_native::run_id()
+            );
             let until = Instant::now() + Duration::from_secs(60);
             while d.join("hold-gap").exists() && Instant::now() < until {
                 std::thread::sleep(Duration::from_millis(100));
