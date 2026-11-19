@@ -1485,13 +1485,14 @@ end the same way on the next step. A session bound to an account stays on that a
 step's model while it can serve, even once an earlier step could serve again.
 
 A chain has at most 8 steps. A step names a model, never another chain (a step may name the
-chain's own name: that is the model of the name). A chain's name may be one no account serves,
+chain's own name: that is the model of the name), and no step repeats another. Two steps that come
+to the same account and model (`m@pluxy/claude`, then `m` served by Claude) try it once. A chain's name may be one no account serves,
 such as `my-fast`: it is then in the model lists, as its first served step's model.
 
 | Call | Command | What it does |
 | --- | --- | --- |
 | `GET /v0/management/chains` | `pluxy chain list` | The chains, by name |
-| `PUT /v0/management/chains/{name}` | `pluxy chain set <name> <step>...` | Sets the chain, `{"steps": [{"model", "provider", "accounts"}]}`, and writes it to the config file. A step on the command line is `model[@provider][:account,account]`. What follows the last `@` is the provider only when it is an extension's ID (`publisher/name`), so `claude-opus-4-7@20260416` is a model; a model whose name holds a colon ends with an `@` (`llama3:8b@`, or `llama3:8b@pluxy/ollama:a1` with a provider and an account). 422 for more than 8 steps, a step that names another chain, or a step no account serves now. A config.yaml cannot hold chains (409) |
+| `PUT /v0/management/chains/{name}` | `pluxy chain set <name> <step>...` | Sets the chain, `{"steps": [{"model", "provider", "accounts"}]}`, and writes it to the config file. A step on the command line is `model[@provider][:account,account]`. What follows the last `@` is the provider only when it is an extension's ID (`publisher/name`), so `claude-opus-4-7@20260416` is a model; a model whose name holds a colon ends with an `@` (`llama3:8b@`, or `llama3:8b@pluxy/ollama:a1` with a provider and an account). 422 for more than 8 steps, a step that names another chain, a step that repeats another, or a step no account serves now. A config.yaml cannot hold chains (409) |
 | `DELETE /v0/management/chains/{name}` | `pluxy chain remove <name>` | Removes it: the name goes back to one provider's accounts. 404 when there is none |
 
 The reply of a request served through a chain names the account, provider and model of the step
