@@ -451,6 +451,9 @@ const (
 	CodeExtensionCrashed     = "extension_crashed"
 	CodeExtensionProtocol    = "extension_protocol"
 	CodeExtensionUnavailable = "extension_unavailable"
+	// CodeExtensionTimeout: the extension sent core nothing at all on a call for longer than
+	// it promised to (the account's idle limit plus a minute).
+	CodeExtensionTimeout = "extension_timeout"
 )
 
 // Error scopes: what a failure is about.
