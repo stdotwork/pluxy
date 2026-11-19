@@ -67,4 +67,19 @@
   .swatch span:first-child {
     flex: 2;
   }
+
+  /* A stored theme whose file has not been read yet. */
+  .swatch[data-empty] {
+    border-color: var(--px-color-border);
+    background: var(--px-color-surface-raised);
+  }
+
+  .theme-card[data-unusable] {
+    cursor: default;
+    opacity: 0.7;
+  }
+
+  .theme-card[data-unusable] input {
+    cursor: default;
+  }
 }
