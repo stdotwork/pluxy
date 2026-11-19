@@ -40,6 +40,8 @@ mod app;
 #[cfg(target_os = "linux")]
 mod appimage;
 #[cfg(any(target_os = "macos", all(test, unix)))]
+mod applications;
+#[cfg(any(target_os = "macos", all(test, unix)))]
 mod bundle;
 #[cfg(windows)]
 mod exe;

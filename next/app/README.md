@@ -534,12 +534,33 @@ In this order:
      and the plugin needs it: start the app from its real location, for example from Finder); the
      bundle is not running from a translocated copy (macOS runs an app opened from Downloads or a
      disk image from a read-only copy: move it into a folder of your own such as `~/Applications`
-     first); the bundle and its folder are yours and writable by no one else, so a bundle in
-     `/Applications` is refused, because other administrators can change that folder; and the
-     volume is APFS, which swaps two folders in one step. The stock plugin would ask for an
-     administrator's password when it cannot write the bundle; nothing here does (no
-     `osascript`, `sudo`, `installer` or `authopen`), and the quarantine attribute is neither
-     added nor removed.
+     first); the bundle is yours and writable by no one else; its folder is either yours and
+     writable by no one else, or the stock `/Applications` under the rule below; and the volume is
+     APFS, which swaps two folders in one step. The stock plugin would ask for an administrator's
+     password when it cannot write the bundle; nothing here does (no `osascript`, `sudo`,
+     `installer` or `authopen`), and the quarantine attribute is neither added nor removed.
+
+     A bundle in `/Applications` (`updater/applications.rs`) is updated when all of these hold,
+     each read through the folder opened without following a link:
+     - the folder's path, links resolved, is exactly `/Applications` (not a folder inside it);
+     - it is owned by root, its group is the one named `admin` (looked up when the app checks,
+       not a fixed number), and others cannot write to it;
+     - no allow entry of its access list gives anyone but root or the `admin` group more than
+       reading, entries that only what is put in it inherits included; entries are told apart by
+       their UUIDs, so group 0 (`wheel`) is not taken for root;
+     - no allow entry of the bundle's own access list gives anyone but you or root more than
+       reading;
+     - the app's data folder, where the update is unpacked and checked, is on the same volume;
+     - your account is in `admin`. Otherwise the page says: "pluxy is in /Applications, which
+       only administrators can change, and this account is not one. Move pluxy to Applications
+       in your home folder (~/Applications) with Finder, open it from there, and update then."
+       Any other failed condition gives the reason with the same advice.
+
+     The folder's other writers are this Mac's administrators, and any of them can already move
+     your bundle aside and put one of their own at its name, which your next start runs; the
+     updater adds nothing to that. It unpacks and checks the update in your private data folder,
+     makes one change in `/Applications` (it swaps the bundle's own entry, through the folder it
+     checked) and never lists or deletes anything there.
 3. The plugin restores the release from the feed (`restore_update`): its default comparison
    allows only a version newer than the running one, and the signature must carry the announced
    version. No custom comparison is set, so the feed can never offer a downgrade.
@@ -1643,7 +1664,9 @@ app supported there:
   - the package session: the test package and the release gate ([Packages](#packages));
   - the update session: the test package (a folder bundle on Windows, an app bundle on macOS)
     updates itself to its signed newer version and rolls back, and crafted installs are refused
-    ([Application update](#application-update));
+    ([Application update](#application-update)); on macOS it does so from `~/Applications` and
+    from the stock `/Applications`, where an access list entry, another owner or an account
+    outside `admin` is refused;
   - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
     test core, with the window's and page's command probes, the native confirmations, key entry and
     key rotation. [Limits](#limits) says how its input is made.

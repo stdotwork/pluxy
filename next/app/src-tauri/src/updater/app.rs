@@ -15,11 +15,16 @@
 //! only a recorded folder that is still that folder is removed; the bundle's folder is never
 //! listed. A volume that cannot swap (not APFS) is refused, not updated another way.
 //!
+//! The bundle's folder is this user's alone, or the stock `/Applications`, which this Mac's
+//! administrators may change too, under the rule in `applications.rs` (`admitted`): there,
+//! staging is always private, so the swap is the only change in that folder.
+//!
 //! Nothing here asks for an administrator, changes the quarantine attribute or goes through
 //! LaunchServices: a bundle this user cannot change is refused.
 //!
 //! Also built for the tests on Linux, which swap with `renameat2`'s `RENAME_EXCHANGE`.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+use super::applications;
 use super::bundle;
 #[cfg(target_os = "macos")]
 use super::check_owned;
@@ -88,13 +93,81 @@ pub(super) fn provenance(app: &AppHandle) -> Result<PathBuf, String> {
         ));
     }
     let folder = bundle.parent().ok_or("The app bundle has no folder.")?;
-    // shortcut: as on Linux, only the bundle and its folder are checked, and the swap opens that
-    // folder by its path; a folder further up that others could change could be swapped. Upgrade
-    // by checking the ancestors, if updating on shared machines is wanted.
+    // shortcut: as on Linux, only the bundle and its folder are checked (in `/Applications`, whose
+    // folder above is the read-only system volume's root, that is all there is); a folder further
+    // up that others could change could be swapped. Upgrade by checking the ancestors, if updating
+    // on shared machines is wanted.
     check_owned(&bundle, true)?;
-    check_owned(folder, true)?;
+    let dir = open_folder(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    let data = super::dir(app)?;
+    let data = data
+        .parent()
+        .ok_or("The app's data folder has no folder.")?;
+    match admitted(&dir, folder, || volume(data))? {
+        Some(Rule::Own) => {}
+        Some(Rule::Applications) => {
+            let b = open_folder(&bundle).map_err(|e| format!("{}: {e}", bundle.display()))?;
+            let entries = applications::bundle_entries(&b)
+                .map_err(|e| format!("{}: {e}", bundle.display()))?;
+            let ids = applications::ids()?;
+            applications::judge_bundle(&bundle, &entries, applications::my_uuid()?, ids.root)?;
+        }
+        None => check_owned(folder, true)?,
+    }
     swaps(folder)?;
     Ok(bundle)
+}
+
+/// Which rule admits the bundle's folder: this user's alone, or the stock `/Applications`
+/// (`applications.rs`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Rule {
+    Own,
+    Applications,
+}
+
+/// The rule that admits the bundle's folder open as dir (resolved path folder), read through dir:
+/// a folder this user owns that no one else can write to (`Own`); otherwise, when folder is
+/// `/Applications` on macOS, that folder under `applications::judge`, with data_volume giving the
+/// app's data folder's volume (`Applications`, or its refusal). None when neither rule applies.
+fn admitted(
+    dir: &fs::File,
+    folder: &Path,
+    data_volume: impl FnOnce() -> Result<u64, String>,
+) -> Result<Option<Rule>, String> {
+    use std::os::unix::fs::MetadataExt;
+    let m = dir
+        .metadata()
+        .map_err(|e| format!("{}: {e}", folder.display()))?;
+    // SAFETY: geteuid has no preconditions.
+    let me = unsafe { libc::geteuid() };
+    if m.is_dir() && m.uid() == me && m.mode() & 0o022 == 0 {
+        return Ok(Some(Rule::Own));
+    }
+    if folder.as_os_str().as_bytes() != applications::APPLICATIONS.as_bytes() {
+        return Ok(None);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let f = applications::folder(dir).map_err(|e| format!("{}: {e}", folder.display()))?;
+        applications::judge(folder, &f, applications::ids(), data_volume()?)?;
+        Ok(Some(Rule::Applications))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = data_volume;
+        Ok(None)
+    }
+}
+
+/// The volume (device) of the folder at path, not through a link.
+fn volume(path: &Path) -> Result<u64, String> {
+    use std::os::unix::fs::MetadataExt;
+    match fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => Ok(m.dev()),
+        Ok(_) => Err(format!("{} is not a folder", path.display())),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
 }
 
 /// Whether path is under a translocation mount (`/private/var/folders/../AppTranslocation/..`).
@@ -208,6 +281,19 @@ fn staging(installed: &Path, dir: &Path) -> Result<leftovers::Folder, String> {
     private_path(&home, &private, me, look, Missing::Made)?;
     super::private_dir(&private)?;
     if !same_volume(folder, &private)? {
+        // Beside the bundle only in a folder of this user's alone: nothing but the bundle's own
+        // entry changes in a folder others can change (`/Applications`).
+        match look(folder) {
+            Ok(l) if l.folder && l.uid == me && l.mode & 0o022 == 0 => {}
+            _ => {
+                return Err(format!(
+                    "{} is on another volume than the app's data folder, and the update may change \
+                     nothing in it but the app itself. Move pluxy to Applications in your home \
+                     folder (~/Applications) with Finder, open it from there, and update then.",
+                    folder.display()
+                ))
+            }
+        }
         let path = folder.join(format!(".pluxy-update-{hex}"));
         #[cfg(test)]
         tests::seen("make", &path);
@@ -403,7 +489,8 @@ pub(super) fn stage_kept(
 
 /// Swaps staged with the installed bundle in one step, by name in each one's folder, both opened
 /// without following a link. Each is checked through the descriptor the swap goes through: the
-/// bundle's folder must still be a folder this user owns that no one else can write to, and the
+/// bundle's folder must still be admitted (a folder this user owns that no one else can write to,
+/// or the stock `/Applications` with staging private and on its volume: `admitted`), and the
 /// staging folder still the one made (`leftovers::Folder`), this user's and 0700.
 pub(super) fn swap_in(installed: &Path, mut staged: Staged, _updates: &Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
@@ -419,8 +506,20 @@ pub(super) fn swap_in(installed: &Path, mut staged: Staged, _updates: &Path) -> 
     // SAFETY: geteuid has no preconditions.
     let me = unsafe { libc::geteuid() };
     let to = open_folder(folder).map_err(|e| shown(folder, e))?;
-    let m = to.metadata().map_err(|e| shown(folder, e))?;
-    if !m.is_dir() || m.uid() != me || m.mode() & 0o022 != 0 {
+    let (staging_folder, staging_name) = named(staging)?;
+    let beside = staging_folder == folder;
+    // The staging folder's volume, for `/Applications`: the private one, never one beside it.
+    let data_volume = || {
+        if beside {
+            Err(format!(
+                "{} is next to the bundle, in a folder others can change; nothing was swapped.",
+                staging.display()
+            ))
+        } else {
+            volume(staging)
+        }
+    };
+    if admitted(&to, folder, data_volume)?.is_none() {
         return Err(format!(
             "{} is not a folder of yours that only you can change; the app is not updated there.",
             folder.display()
@@ -429,8 +528,7 @@ pub(super) fn swap_in(installed: &Path, mut staged: Staged, _updates: &Path) -> 
     // The staging folder: next to the bundle, opened through the bundle's folder just checked;
     // in private staging, by its path, whose folders `staging` checked. Either way it must still
     // be the folder made: the same device and inode, this user's, 0700.
-    let (staging_folder, staging_name) = named(staging)?;
-    let from = if staging_folder == folder {
+    let from = if beside {
         open_in(&to, &staging_name)
     } else {
         open_folder(staging)
