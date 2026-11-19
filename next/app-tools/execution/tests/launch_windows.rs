@@ -21,11 +21,21 @@ fn run(args: &[&str]) -> Output {
 #[test]
 fn a_console_launch_runs_the_program_with_its_arguments_then_says_how_it_ended() {
     // The program is the execution program again, asked for a terminal kind there is none of:
-    // it says so with its arguments as it got them, and ends with code 2.
-    let me = env!("CARGO_BIN_EXE_execution");
+    // it says so with its arguments as it got them, and ends with code 2. It is a copy in a folder
+    // only this user may change, as the terminal requires (the build folder may not be).
+    let a = agent("console");
     let hostile = r#"nope "x" & calc ^| %PATH% \"#;
     let out = run(&[
-        "terminal", "--with", "console", "--", me, "terminal", "--with", hostile, "--", "x",
+        "terminal",
+        "--with",
+        "console",
+        "--",
+        a.exe.to_str().unwrap(),
+        "terminal",
+        "--with",
+        hostile,
+        "--",
+        "x",
     ]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -35,26 +45,38 @@ fn a_console_launch_runs_the_program_with_its_arguments_then_says_how_it_ended()
         "{stderr}"
     );
     assert!(
-        stdout.contains("[execution.exe exited with code 2]"),
+        stdout.contains("[agent.exe exited with code 2]"),
         "{stdout}"
     );
     assert!(
         stdout.contains("Press Enter to close this window."),
         "{stdout}"
     );
+    std::fs::remove_dir_all(&a.root).unwrap();
 }
 
 #[test]
 fn the_shell_a_window_stays_at_is_system32s_whatever_the_launchs_system_root() {
     // A launch environment whose SystemRoot names a folder with a System32\cmd.exe of its own
-    // (the execution program again, which would say "not a launch this program makes").
+    // (the execution program again, which would say "not a launch this program makes"). The
+    // program is a copy in a folder only this user may change, as the terminal requires.
     let me = env!("CARGO_BIN_EXE_execution");
+    let a = agent("cmd");
     let root = std::env::temp_dir().join(format!("pluxy-system-root-{}", std::process::id()));
     std::fs::create_dir_all(root.join("System32")).unwrap();
     std::fs::copy(me, root.join(r"System32\cmd.exe")).unwrap();
     let mut c = Command::new(me)
         .args([
-            "terminal", "--with", "cmd", "--", me, "terminal", "--with", "nope", "--", "x",
+            "terminal",
+            "--with",
+            "cmd",
+            "--",
+            a.exe.to_str().unwrap(),
+            "terminal",
+            "--with",
+            "nope",
+            "--",
+            "x",
         ])
         .env("SystemRoot", &root)
         .stdin(Stdio::piped())
@@ -75,12 +97,13 @@ fn the_shell_a_window_stays_at_is_system32s_whatever_the_launchs_system_root() {
         "{stderr}"
     );
     assert!(
-        stdout.contains("[execution.exe exited with code 2]"),
+        stdout.contains("[agent.exe exited with code 2]"),
         "{stdout}"
     );
     assert!(stdout.contains("pluxy-shell-ran"), "{stdout}{stderr}");
     assert_eq!(out.status.code(), Some(2));
     std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(&a.root).unwrap();
 }
 
 #[test]
@@ -294,8 +317,8 @@ fn a_program_another_account_may_change_never_runs() {
     std::fs::remove_dir_all(&a.root).unwrap();
 }
 
-/// A program named by a path through a junction is refused, naming that path: what runs is named
-/// by its own path, the one the app checked.
+/// A program named by a path through a junction is refused, naming the junction: what runs is
+/// named by its own path, the one the app checked.
 #[test]
 fn a_program_reached_through_a_junction_never_runs() {
     let a = agent("junction");
@@ -316,8 +339,9 @@ fn a_program_reached_through_a_junction_never_runs() {
     assert_eq!(out.status.code(), Some(1), "{stdout}");
     assert!(
         stdout.contains(&format!(
-            "pluxy: will not run \"{0}\": \"{0}\" is not the program's own path",
-            through.display()
+            "pluxy: will not run \"{}\": \"{}\" is a link or a junction",
+            through.display(),
+            link.display()
         )),
         "{stdout}"
     );
