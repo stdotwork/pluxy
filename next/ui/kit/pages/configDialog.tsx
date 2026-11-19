@@ -14,6 +14,7 @@ export function ConfigDialog(props: { title: string; close: () => void; children
     <dialog
       ref={ref}
       data-part="dialog"
+      data-slot="dialog-popup"
       class="config-dialog"
       aria-labelledby={id}
       onCancel={(e) => {
