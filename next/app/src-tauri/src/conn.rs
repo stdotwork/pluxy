@@ -456,9 +456,12 @@ impl Caller {
         // The app's own core is stopping or has exited: nothing more goes to its address. A
         // call that passed this check just before a stop or an exit, or one made while the core
         // drains after a SIGTERM from outside the app (it closes its listener at once, with the
-        // flag still unset), still goes out, but only to the core or into the app's own copy of
-        // its listening socket (_hold): no other program can listen there while this caller
-        // holds it. Once the core has exited, the app refuses such waiting calls.
+        // flag still unset), still goes out. On Linux and macOS it goes only to the core or into
+        // the app's own copy of its listening socket (_hold): no other program can listen there
+        // while this caller holds it. On Windows the app holds no copy (_hold is None), so in
+        // the time before the app sees a crashed core's exit (up to 100 ms) any call can reach
+        // another program that started listening there, key and all (README, Limits).
+        // Once the core has exited, the app refuses such waiting calls.
         if self
             .gone
             .as_ref()
@@ -771,7 +774,8 @@ impl Connection {
         match change {
             CoreChange::Install(staged) => {
                 let fresh = !store.installed(staged.version());
-                let id = store.install(staged)?;
+                let version = staged.version().to_string();
+                let id = self.replacing(&store, &version, || store.install(staged))?;
                 self.switch(&store, &id, fresh, true)
             }
             CoreChange::Rollback(id) => {
@@ -783,8 +787,10 @@ impl Connection {
                 self.switch(&store, &id, false, false)
             }
             CoreChange::Adopt { path, sha256, size } => {
-                let fresh = !store.installed(&Store::adopted_id(&sha256));
-                let (id, copied) = store.adopt(&path, &sha256, size)?;
+                let adopted = Store::adopted_id(&sha256);
+                let fresh = !store.installed(&adopted);
+                let (id, copied) =
+                    self.replacing(&store, &adopted, || store.adopt(&path, &sha256, size))?;
                 // The program is adopted before anything runs from it; a failed switch keeps
                 // it waiting for adoption again.
                 let pending = self.settings.core_path.take();
@@ -803,6 +809,85 @@ impl Connection {
                 r
             }
         }
+    }
+
+    /// Installs or copies in version id with put. Writing a version again moves its folder
+    /// aside, which Windows refuses while a program in it runs or is held open, so there the
+    /// core is stopped first when it runs id. If put fails, id runs again; if it does not start,
+    /// the app falls back as a failed switch does (`back`): to the version before it, its failure
+    /// recorded with that selection.
+    pub(crate) fn replacing<T>(
+        &mut self,
+        store: &Store,
+        id: &str,
+        put: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let stopped = cfg!(windows) && self.running.as_deref() == Some(id);
+        if stopped {
+            self.revision += 1;
+            self.stop_core();
+        }
+        put().map_err(|e| {
+            if !stopped {
+                return e;
+            }
+            let again = match self.run_version(store, id) {
+                Ok(()) => return format!("{e}; core {id} runs again"),
+                Err(again) => again,
+            };
+            let msg = format!("{e}; core {id} did not start again: {again}");
+            match store.state() {
+                Ok(st) => {
+                    let failed = cores::Failed {
+                        version: id.to_string(),
+                        reason: again,
+                    };
+                    self.back(store, &st, id, msg, true, Some(failed))
+                }
+                Err(why) => {
+                    let msg =
+                        format!("{msg}; the app could not read which version ran before: {why}");
+                    self.error = Some(msg.clone());
+                    msg
+                }
+            }
+        })
+    }
+
+    /// After a switch to id, or a restart of it, ended without it: runs the version that worked
+    /// before (`last_good`; tried: id ran, or its files were replaced, so it is not that one)
+    /// and saves failed (why id failed) together with that selection, in one save; until then
+    /// a recorded candidate stays, so the next start undoes the switch again. Returns msg with
+    /// what ran; when nothing runs, msg is also the connection's error.
+    fn back(
+        &mut self,
+        store: &Store,
+        st: &cores::State,
+        id: &str,
+        mut msg: String,
+        tried: bool,
+        failed: Option<cores::Failed>,
+    ) -> String {
+        let last = last_good(store, st, id, tried);
+        let mut runs = None;
+        if let Some(last) = &last {
+            match self.run_version(store, last) {
+                Ok(()) => {
+                    msg.push_str(&format!("; core {last} runs again"));
+                    runs = Some(last.as_str());
+                }
+                Err(e) => msg.push_str(&format!("; core {last} did not start either: {e}")),
+            }
+        }
+        if failed.is_some() || runs.is_some_and(|r| st.selected.as_deref() != Some(r)) {
+            if let Err(e) = store.save_state(&ended(store, st, failed, runs)) {
+                msg.push_str(&format!(" (the app could not record that: {e})"));
+            }
+        }
+        if runs.is_none() {
+            self.error = Some(msg.clone());
+        }
+        msg
     }
 
     /// Runs version id in place of the current core. fresh: id was installed for this switch, so
@@ -827,57 +912,32 @@ impl Connection {
         self.client = None;
         self.key = None;
         self.error = None;
-        // Runs the version that worked before. tried: the candidate ran, or its files were
-        // replaced. failed: why the candidate failed, saved together with the fallback's
-        // selection; until that one save the candidate stays recorded, so the next start undoes
-        // the switch again (and puts the config back again only if the mark that it was put
-        // back was not saved either).
-        let back = |c: &mut Self,
-                    mut msg: String,
-                    tried: bool,
-                    failed: Option<cores::Failed>|
-         -> Result<(), String> {
-            let last = last_good(store, &st, id, tried);
-            let mut runs = None;
-            if let Some(last) = &last {
-                match c.run_version(store, last) {
-                    Ok(()) => {
-                        msg.push_str(&format!("; core {last} runs again"));
-                        runs = Some(last.as_str());
-                    }
-                    Err(e) => msg.push_str(&format!("; core {last} did not start either: {e}")),
-                }
-            }
-            if failed.is_some() || runs.is_some_and(|r| st.selected.as_deref() != Some(r)) {
-                if let Err(e) = store.save_state(&ended(store, &st, failed, runs)) {
-                    msg.push_str(&format!(" (the app could not record that: {e})"));
-                }
-            }
-            if runs.is_none() {
-                c.error = Some(msg.clone());
-            }
-            Err(msg)
-        };
+        // A failed switch runs the version that worked before (`back`); the config is put back
+        // again only if the mark that it was put back was not saved either.
         let snapshot = match ConfigSnapshot::take(store, &self.config_path()) {
             Ok(s) => s,
             Err(e) => {
-                return back(
-                    self,
+                return Err(self.back(
+                    store,
+                    &st,
+                    id,
                     format!("the app could not keep a copy of the config: {e}"),
                     replaced,
                     None,
-                )
+                ))
             }
         };
         let mut marked = st.clone();
         marked.candidate = Some(id.to_string());
         if let Err(e) = store.save_state(&marked) {
-            return back(
-                self,
+            return Err(self.back(
+                store,
+                &st,
+                id,
                 format!("the app could not record the switch: {e}"),
                 replaced,
                 None,
-            );
+            ));
         }
         let started = self.run_version(store, id).and_then(|()| {
             let mut done = st.clone();
@@ -922,7 +982,7 @@ impl Connection {
             version: id.to_string(),
             reason: why,
         };
-        back(self, msg, true, Some(failed))
+        Err(self.back(store, &st, id, msg, true, Some(failed)))
     }
 
     /// Records how a core change ended, for the window.
@@ -2090,6 +2150,123 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
         fs::remove_dir_all(dir2).unwrap();
     }
+
+    /// Writing the version that runs again (`replacing`): on Windows, which cannot move its
+    /// folder aside while it runs, the core is stopped first. When the write fails, the version
+    /// runs again; when it then does not start either, the version before it runs, with the
+    /// failure recorded. Elsewhere the write happens beside the running core, which keeps
+    /// running.
+    #[test]
+    fn writing_the_running_version_again_restarts_or_falls_back() {
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-replacing-{}", crate::managed::random_key()));
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+            cores: dir.join("cores"),
+        };
+        // Two programs of the app's own: the real core, and the same with a byte added after it
+        // (a program runs with data after its image).
+        let real = crate::managed::real_core();
+        let name = real.file_name().unwrap().to_owned();
+        let (a, b) = (dir.join("a").join(&name), dir.join("b").join(&name));
+        for p in [&a, &b] {
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::copy(&real, p).unwrap();
+        }
+        {
+            use std::io::Write;
+            fs::OpenOptions::new()
+                .append(true)
+                .open(&b)
+                .unwrap()
+                .write_all(b"\0")
+                .unwrap();
+        }
+        let mut c = Connection::open(dirs.clone(), None);
+        let adopt = |c: &mut Connection, p: &Path| {
+            c.change(Change {
+                mode: Some(Mode::Managed),
+                core_path: Some(p.display().to_string()),
+                ..Change::default()
+            })
+            .unwrap();
+            let (path, sha256, size) = c.prepare_adopt().unwrap();
+            let id = Store::adopted_id(&sha256);
+            c.apply(CoreChange::Adopt { path, sha256, size }).unwrap();
+            id
+        };
+        let id_a = adopt(&mut c, &a);
+        let id_b = adopt(&mut c, &b);
+        let store = c.store().unwrap();
+        let pid = c.core_pid().unwrap();
+
+        // The write fails: id_b runs again (on Windows in a new process, elsewhere the same).
+        let err = c
+            .replacing(&store, &id_b, || {
+                Err::<(), _>("the write failed".to_string())
+            })
+            .unwrap_err();
+        let again = c.core_pid().unwrap();
+        assert_eq!(c.running.as_deref(), Some(id_b.as_str()));
+        if cfg!(windows) {
+            assert_eq!(err, format!("the write failed; core {id_b} runs again"));
+            assert_ne!(again, pid, "the core was not stopped first");
+        } else {
+            assert_eq!(err, "the write failed");
+            assert_eq!(again, pid, "the core was stopped");
+        }
+
+        // The write fails and leaves id_b changed, so it does not start again: on Windows id_a,
+        // the version before it, runs, and id_b's failure is recorded with that selection.
+        let program = store.folder(&id_b).join(cores::PROGRAM);
+        let err = c
+            .replacing(&store, &id_b, || {
+                if cfg!(windows) {
+                    change_installed(&program);
+                }
+                Err::<(), _>("the write failed".to_string())
+            })
+            .unwrap_err();
+        if cfg!(windows) {
+            assert!(
+                err.starts_with(&format!(
+                    "the write failed; core {id_b} did not start again: "
+                )),
+                "{err}"
+            );
+            assert!(err.ends_with(&format!("; core {id_a} runs again")), "{err}");
+            assert_eq!(c.running.as_deref(), Some(id_a.as_str()));
+            let st = store.state().unwrap();
+            assert_eq!(st.selected.as_deref(), Some(id_a.as_str()));
+            assert_eq!(st.failed.map(|f| f.version), Some(id_b.clone()));
+            assert!(c.error.is_none(), "{:?}", c.error);
+        } else {
+            assert_eq!(err, "the write failed");
+            assert_eq!(c.running.as_deref(), Some(id_b.as_str()));
+        }
+        c.stop_core();
+        drop(c);
+        cores::remove_tree(&dir);
+    }
+
+    /// Changes the installed file at path as its owner could: writable again, a byte added.
+    #[cfg(windows)]
+    fn change_installed(path: &Path) {
+        use std::io::Write;
+        let f = crate::private_windows::open_for_access_list(path, false).unwrap();
+        crate::private_windows::make_private(&f, false).unwrap();
+        drop(f);
+        fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .unwrap()
+            .write_all(b"\0")
+            .unwrap();
+    }
+
+    #[cfg(not(windows))]
+    fn change_installed(_: &Path) {}
 
     /// With no saved connection, or the app's own core saved, the confirmation says so.
     #[test]

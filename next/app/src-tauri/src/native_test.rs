@@ -87,7 +87,6 @@ mod client_key;
 #[cfg(target_os = "linux")]
 #[path = "codex_native.rs"]
 mod codex;
-#[cfg(target_os = "linux")]
 #[path = "native_core.rs"]
 mod core_updates;
 #[path = "device_native.rs"]
@@ -722,7 +721,6 @@ fn run(app: &AppHandle) -> Result<(), String> {
     let main = wait_for("the window", || app.get_webview(MAIN))?;
     // The core steps (native_core.rs), in a session of their own. They come before the window's
     // shell: until a core is installed the window shows only the Connection page.
-    #[cfg(target_os = "linux")]
     if std::env::var_os("PLUXY_APP_TEST_CORE_SOURCE").is_some() {
         wait_for("the window's IPC", || {
             eval(
