@@ -30,13 +30,13 @@ func (e *Extension) outbound(account *protocol.Account) (*protocol.Credential, *
 	account.ProxyURL = proxyurl.Resolve(account.ProxyURL, global)
 	if account.ProxyURL != "" && e.info.ProtocolMinor < proxyMinor {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
-			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot send through a proxy (0.%d adds proxy_url); account %q has one, so it is not sent there",
-				e.manifest.ID, e.info.ProtocolMinor, proxyMinor, account.ID)}
+			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot send through a proxy (0.%d adds proxy_url); the account has one, so it is not sent there",
+				e.manifest.ID, e.info.ProtocolMinor, proxyMinor)}
 	}
 	if len(account.Headers) > 0 && e.info.ProtocolMinor < headersMinor {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
-			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot send an account's headers (0.%d adds headers); account %q has some, so it is not sent there",
-				e.manifest.ID, e.info.ProtocolMinor, headersMinor, account.ID)}
+			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot send an account's headers (0.%d adds headers); the account has some, so it is not sent there",
+				e.manifest.ID, e.info.ProtocolMinor, headersMinor)}
 	}
 	var d outboundForms
 	d.Proxy = proxyurl.Password(account.ProxyURL)

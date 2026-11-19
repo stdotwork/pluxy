@@ -780,7 +780,7 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 	if a.Managed {
 		var e *llm.Error
 		if c.creds == nil {
-			e = &llm.Error{Code: llm.CodeUnavailable, Scope: llm.ScopeCredential, Message: fmt.Sprintf("account %q has no credential store", a.ID)}
+			e = &llm.Error{Code: llm.CodeUnavailable, Scope: llm.ScopeCredential, Message: "the account has no credential store"}
 		} else {
 			call.Credential, version, e = c.creds.Credential(c.ctx, a.Extension, a.ID)
 		}

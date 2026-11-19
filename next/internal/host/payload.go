@@ -65,12 +65,12 @@ func FromProtocol(format string) string {
 	return ""
 }
 
-// payload returns the payload rules that apply to a call with req on account: the config's
+// payload returns the payload rules that apply to a call with req: the config's
 // (Options.Payload) that match the call's model, the client's (WithPayloadClient), the
 // extension's channel and the client's format and headers, each reduced to its body conditions
 // (payload.Select). It refuses the call when rules apply and the extension implements a protocol
 // older than minor, which would send the request without them.
-func (e *Extension) payload(ctx context.Context, account string, req llm.Request, minor int) (*payload.Rules, *llm.Error) {
+func (e *Extension) payload(ctx context.Context, req llm.Request, minor int) (*payload.Rules, *llm.Error) {
 	if e.opts.Payload == nil {
 		return nil, nil
 	}
@@ -90,8 +90,8 @@ func (e *Extension) payload(ctx context.Context, account string, req llm.Request
 	selected := payload.Select(rules, in)
 	if selected != nil && e.info.ProtocolMinor < minor {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
-			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot apply payload rules here (0.%d adds them); rules apply to this request, so it is not sent to account %q",
-				e.manifest.ID, e.info.ProtocolMinor, minor, account)}
+			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot apply payload rules here (0.%d adds them); rules apply to this request, so it is not sent to the account",
+				e.manifest.ID, e.info.ProtocolMinor, minor)}
 	}
 	return selected, nil
 }

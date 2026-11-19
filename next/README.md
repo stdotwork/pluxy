@@ -291,7 +291,7 @@ has none of them, as its turns choose their accounts later.
 An account's **public ID** is what replies name it by: `acc_` and 8 hex digits, a keyed digest of
 the account's ID. The ID an account has in the config or the store can be an email address or a
 label someone typed (an import of today's auth files names an account by its file, which holds the
-email address), so it never leaves core in a reply. The digest's key is made at the first start and
+email address), so it never leaves core in a reply, and no error `message` names an account either (a message says "the account was removed"; the header and the member say which). The digest's key is made at the first start and
 kept in `state/account-key` beside the config, so an account keeps its public ID across restarts
 and a reload; deleting the file gives every account a new one. `GET /accounts` and `pluxy account list`
 show each account's `public_id`, and a request may pin an account (`X-Pluxy-Account`, below) by it.

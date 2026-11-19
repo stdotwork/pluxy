@@ -179,13 +179,13 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 		return t
 	}
 	if account.ID != s.accountID {
-		return refuse(&llm.Error{Code: llm.CodeInternal, Message: fmt.Sprintf("session of account %q got a turn for account %q", s.accountID, account.ID)})
+		return refuse(&llm.Error{Code: llm.CodeInternal, Message: "the session got a turn for another account"})
 	}
 	proxy, perr := s.ext.outbound(&account)
 	if perr != nil {
 		return refuse(perr)
 	}
-	rules, perr := s.ext.payload(ctx, account.ID, req, payloadTurnMinor)
+	rules, perr := s.ext.payload(ctx, req, payloadTurnMinor)
 	if perr != nil {
 		return refuse(perr)
 	}

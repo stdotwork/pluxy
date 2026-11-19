@@ -620,7 +620,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		s.fail(perr)
 		return s
 	}
-	rules, perr := e.payload(ctx, account.ID, req, payloadMinor)
+	rules, perr := e.payload(ctx, req, payloadMinor)
 	if perr != nil {
 		s := &Stream{}
 		s.fail(perr)
