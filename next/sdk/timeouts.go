@@ -85,8 +85,7 @@ func Retryable(err error) bool {
 	return errors.As(err, &te) && te.retryable
 }
 
-// IdleTimeout returns the idle timeout for ctx from its UpstreamInfo, or fallback when none is
-// configured. A returned duration of 0 means the idle limit is turned off.
+// hasTimeouts reports whether the upstream call carries configured or operation-default timeouts.
 func hasTimeouts(info Info) bool {
 	if info.Timeouts != nil {
 		return true
@@ -98,6 +97,8 @@ func hasTimeouts(info Info) bool {
 	return false
 }
 
+// IdleTimeout returns the idle timeout for ctx from its UpstreamInfo, or fallback when none is
+// configured. A returned duration of 0 means the idle limit is turned off.
 func IdleTimeout(ctx context.Context, fallback time.Duration) time.Duration {
 	info, ok := UpstreamInfo(ctx)
 	if !ok || !hasTimeouts(info) {
@@ -134,9 +135,11 @@ func isStreamedRequest(req *http.Request, info Info) bool {
 	if strings.Contains(strings.ToLower(req.Header.Get("Accept")), "text/event-stream") {
 		return true
 	}
+	// devin always uses Connect streaming (application/connect+proto) even when the client asked for no stream.
 	if strings.HasPrefix(strings.ToLower(req.Header.Get("Content-Type")), "application/connect+proto") {
 		return true
 	}
+	// antigravity routes stream-only models to :streamGenerateContent even when the client asked for no stream.
 	if req.URL != nil && strings.Contains(req.URL.Path, "streamGenerateContent") {
 		return true
 	}
@@ -160,69 +163,15 @@ func (t timeoutTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.roundTripTotal(req, totalLimit)
 }
 
-func (t timeoutTransport) roundTripHeaderOnly(req *http.Request, headerLimit time.Duration) (*http.Response, error) {
-	if headerLimit <= 0 {
-		return t.next.RoundTrip(req)
-	}
+func (t timeoutTransport) roundTripWithHeaderLimit(req *http.Request, headerLimit time.Duration) (*http.Response, context.Context, context.CancelCauseFunc, error) {
 	parentCtx := req.Context()
 	rtCtx, rtCancel := context.WithCancelCause(parentCtx)
-	var mu sync.Mutex
-	headersDone := false
-	var fired *timeoutError
-	timer := time.AfterFunc(headerLimit, func() {
-		mu.Lock()
-		if headersDone || fired != nil || parentCtx.Err() != nil {
-			mu.Unlock()
-			return
-		}
-		te := &timeoutError{kind: timeoutHeader, limit: headerLimit, account: t.info.AccountID, retryable: true}
-		fired = te
-		mu.Unlock()
-		LogTimeout(timeoutHeader, t.info.AccountID, headerLimit)
-		rtCancel(te)
-	})
-	resp, err := t.next.RoundTrip(req.WithContext(rtCtx))
-	mu.Lock()
-	headersDone = true
-	te := fired
-	mu.Unlock()
-	timer.Stop()
-	if err != nil {
-		rtCancel(nil)
-		if te != nil && parentCtx.Err() == nil {
-			return nil, te
-		}
-		return nil, err
-	}
-	if te != nil && parentCtx.Err() == nil {
-		if resp != nil && resp.Body != nil {
-			resp.Body.Close()
-		}
-		rtCancel(nil)
-		return nil, te
-	}
-	if resp.Body == nil || resp.Body == http.NoBody {
-		rtCancel(nil)
-		return resp, nil
-	}
-	if rwc, ok := resp.Body.(io.ReadWriteCloser); ok {
-		resp.Body = cancelOnCloseRWBody{ReadWriteCloser: rwc, cancel: func() { rtCancel(nil) }}
-		return resp, nil
-	}
-	resp.Body = cancelOnCloseBody{ReadCloser: resp.Body, cancel: func() { rtCancel(nil) }}
-	return resp, nil
-}
-
-func (t timeoutTransport) roundTripStreamed(req *http.Request, headerLimit, idleLimit time.Duration) (*http.Response, error) {
-	if headerLimit <= 0 && idleLimit <= 0 {
-		return t.next.RoundTrip(req)
-	}
-	parentCtx := req.Context()
-	rtCtx, rtCancel := context.WithCancelCause(parentCtx)
-	var mu sync.Mutex
-	headersDone := false
-	var fired *timeoutError
-	var timer *time.Timer
+	var (
+		mu          sync.Mutex
+		headersDone bool
+		fired       *timeoutError
+		timer       *time.Timer
+	)
 	if headerLimit > 0 {
 		timer = time.AfterFunc(headerLimit, func() {
 			mu.Lock()
@@ -248,35 +197,67 @@ func (t timeoutTransport) roundTripStreamed(req *http.Request, headerLimit, idle
 	if err != nil {
 		rtCancel(nil)
 		if te != nil && parentCtx.Err() == nil {
-			return nil, te
+			return nil, nil, nil, te
 		}
-		return nil, err
+		return nil, nil, nil, err
 	}
 	if te != nil && parentCtx.Err() == nil {
 		if resp != nil && resp.Body != nil {
 			resp.Body.Close()
 		}
 		rtCancel(nil)
-		return nil, te
+		return nil, nil, nil, te
 	}
+	return resp, rtCtx, rtCancel, nil
+}
+
+func cancelOnClose(rc io.ReadCloser, cancel func()) io.ReadCloser {
+	if rwc, ok := rc.(io.ReadWriteCloser); ok {
+		return cancelOnCloseRWBody{ReadWriteCloser: rwc, cancel: cancel}
+	}
+	return cancelOnCloseBody{ReadCloser: rc, cancel: cancel}
+}
+
+func wrapResponseBody(resp *http.Response, onDone func(), wrapNormal func(io.ReadCloser) io.ReadCloser) *http.Response {
 	if resp.Body == nil || resp.Body == http.NoBody {
-		rtCancel(nil)
-		return resp, nil
+		onDone()
+		return resp
 	}
-	if resp.StatusCode == http.StatusSwitchingProtocols {
-		if rwc, ok := resp.Body.(io.ReadWriteCloser); ok {
-			resp.Body = cancelOnCloseRWBody{ReadWriteCloser: rwc, cancel: func() { rtCancel(nil) }}
-		} else {
-			resp.Body = cancelOnCloseBody{ReadCloser: resp.Body, cancel: func() { rtCancel(nil) }}
-		}
-		return resp, nil
+	if resp.StatusCode == http.StatusSwitchingProtocols || wrapNormal == nil {
+		resp.Body = cancelOnClose(resp.Body, onDone)
+		return resp
 	}
+	resp.Body = wrapNormal(resp.Body)
+	return resp
+}
+
+func (t timeoutTransport) roundTripHeaderOnly(req *http.Request, headerLimit time.Duration) (*http.Response, error) {
+	if headerLimit <= 0 {
+		return t.next.RoundTrip(req)
+	}
+	resp, _, rtCancel, err := t.roundTripWithHeaderLimit(req, headerLimit)
+	if err != nil {
+		return nil, err
+	}
+	return wrapResponseBody(resp, func() { rtCancel(nil) }, nil), nil
+}
+
+func (t timeoutTransport) roundTripStreamed(req *http.Request, headerLimit, idleLimit time.Duration) (*http.Response, error) {
+	if headerLimit <= 0 && idleLimit <= 0 {
+		return t.next.RoundTrip(req)
+	}
+	resp, rtCtx, rtCancel, err := t.roundTripWithHeaderLimit(req, headerLimit)
+	if err != nil {
+		return nil, err
+	}
+	var wrapNormal func(io.ReadCloser) io.ReadCloser
 	if idleLimit > 0 {
-		resp.Body = newIdleTimeoutBody(resp.Body, parentCtx, rtCtx, rtCancel, idleLimit, t.info.AccountID)
-		return resp, nil
+		parentCtx := req.Context()
+		wrapNormal = func(rc io.ReadCloser) io.ReadCloser {
+			return newIdleTimeoutBody(rc, parentCtx, rtCtx, rtCancel, idleLimit, t.info.AccountID)
+		}
 	}
-	resp.Body = cancelOnCloseBody{ReadCloser: resp.Body, cancel: func() { rtCancel(nil) }}
-	return resp, nil
+	return wrapResponseBody(resp, func() { rtCancel(nil) }, wrapNormal), nil
 }
 
 func (t timeoutTransport) roundTripTotal(req *http.Request, totalLimit time.Duration) (*http.Response, error) {
@@ -284,16 +265,16 @@ func (t timeoutTransport) roundTripTotal(req *http.Request, totalLimit time.Dura
 		return t.next.RoundTrip(req)
 	}
 	parentCtx := req.Context()
-	rtCtx, rtCancel := context.WithCancelCause(parentCtx)
+	totalCtx, totalCancel := context.WithCancelCause(parentCtx)
 	state := &totalTimeoutState{
 		parentCtx: parentCtx,
-		rtCtx:     rtCtx,
-		cancel:    rtCancel,
+		rtCtx:     totalCtx,
+		cancel:    totalCancel,
 		limit:     totalLimit,
 		accountID: t.info.AccountID,
 	}
 	state.timer = time.AfterFunc(totalLimit, state.fire)
-	resp, err := t.next.RoundTrip(req.WithContext(rtCtx))
+	resp, _, rtCancel, err := t.roundTripWithHeaderLimit(req.WithContext(totalCtx), 0)
 	state.mu.Lock()
 	te := state.fired
 	if te != nil && parentCtx.Err() == nil {
@@ -301,8 +282,10 @@ func (t timeoutTransport) roundTripTotal(req *http.Request, totalLimit time.Dura
 		if resp != nil && resp.Body != nil {
 			resp.Body.Close()
 		}
-		state.timer.Stop()
-		rtCancel(nil)
+		if rtCancel != nil {
+			rtCancel(nil)
+		}
+		state.stop()
 		return nil, te
 	}
 	state.headersDone = true
@@ -311,21 +294,16 @@ func (t timeoutTransport) roundTripTotal(req *http.Request, totalLimit time.Dura
 		state.stop()
 		return nil, err
 	}
-	if resp.Body == nil || resp.Body == http.NoBody {
-		state.stop()
-		return resp, nil
-	}
 	if resp.StatusCode == http.StatusSwitchingProtocols {
-		state.timer.Stop()
-		if rwc, ok := resp.Body.(io.ReadWriteCloser); ok {
-			resp.Body = cancelOnCloseRWBody{ReadWriteCloser: rwc, cancel: func() { rtCancel(nil) }}
-		} else {
-			resp.Body = cancelOnCloseBody{ReadCloser: resp.Body, cancel: func() { rtCancel(nil) }}
-		}
-		return resp, nil
+		state.disarm()
 	}
-	resp.Body = &totalTimeoutBody{rc: resp.Body, state: state}
-	return resp, nil
+	cleanup := func() {
+		rtCancel(nil)
+		state.stop()
+	}
+	return wrapResponseBody(resp, cleanup, func(rc io.ReadCloser) io.ReadCloser {
+		return &totalTimeoutBody{rc: rc, state: state, onClose: func() { rtCancel(nil) }}
+	}), nil
 }
 
 type cancelOnCloseBody struct {
@@ -474,7 +452,7 @@ func (s *totalTimeoutState) fire() {
 	s.cancel(te)
 }
 
-func (s *totalTimeoutState) stop() {
+func (s *totalTimeoutState) disarm() {
 	s.mu.Lock()
 	if !s.closed {
 		s.closed = true
@@ -483,22 +461,23 @@ func (s *totalTimeoutState) stop() {
 		}
 	}
 	s.mu.Unlock()
+}
+
+func (s *totalTimeoutState) stop() {
+	s.disarm()
 	s.cancel(nil)
 }
 
 type totalTimeoutBody struct {
-	rc    io.ReadCloser
-	state *totalTimeoutState
+	rc      io.ReadCloser
+	state   *totalTimeoutState
+	onClose func()
 }
 
 func (b *totalTimeoutBody) Read(p []byte) (int, error) {
 	n, err := b.rc.Read(p)
 	if err == io.EOF {
-		b.state.mu.Lock()
-		if b.state.timer != nil {
-			b.state.timer.Stop()
-		}
-		b.state.mu.Unlock()
+		b.state.disarm()
 		return n, err
 	}
 	if err != nil {
@@ -519,15 +498,11 @@ func (b *totalTimeoutBody) Read(p []byte) (int, error) {
 }
 
 func (b *totalTimeoutBody) Close() error {
-	b.state.mu.Lock()
-	if !b.state.closed {
-		b.state.closed = true
-		if b.state.timer != nil {
-			b.state.timer.Stop()
-		}
-	}
-	b.state.mu.Unlock()
+	b.state.disarm()
 	err := b.rc.Close()
+	if b.onClose != nil {
+		b.onClose()
+	}
 	b.state.cancel(nil)
 	return err
 }
