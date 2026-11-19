@@ -457,6 +457,8 @@ func statusError(resp *http.Response, model string) *llm.Error {
 	case s >= 300 && s < 400:
 		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
 		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
+	case isAccountClosed(s, ce):
+		e.Code, e.Scope, e.Retryable = llm.CodeAccountClosed, llm.ScopeCredential, true
 	case s == http.StatusUnauthorized:
 		e.Code, e.Scope, e.Retryable = llm.CodeAuth, llm.ScopeCredential, true
 	case s == http.StatusForbidden:
@@ -524,6 +526,11 @@ func classify(err error) error {
 		e.Code, e.Scope, e.Status = llm.CodeRateLimit, llm.ScopeModel, http.StatusTooManyRequests
 	case code == "rate_limit_exceeded" || ce.Type == "rate_limit_error":
 		e.Code, e.Scope, e.Status = llm.CodeRateLimit, llm.ScopeModel, http.StatusTooManyRequests
+	case isAccountClosed(e.Status, ce):
+		e.Code, e.Scope, e.Retryable = llm.CodeAccountClosed, llm.ScopeCredential, true
+		if e.Status < 400 || e.Status > 599 {
+			e.Status = http.StatusForbidden
+		}
 	case ce.Type == "invalid_request_error":
 		e.Code, e.Scope, e.Status = llm.CodeInvalidRequest, llm.ScopeRequest, http.StatusBadRequest
 	}
@@ -650,4 +657,31 @@ func retryAfter(v string) int64 {
 		}
 	}
 	return 0
+}
+
+// isAccountClosed reports whether a Codex error says the account is deactivated, disabled or
+// suspended rather than refusing a single request (such as misalignment_policy_violation).
+func isAccountClosed(status int, ce codexError) bool {
+	code := strings.ToLower(strings.TrimSpace(ce.code()))
+	typ := strings.ToLower(strings.TrimSpace(ce.Type))
+	if code == "account_deactivated" || typ == "account_deactivated" {
+		return true
+	}
+	if status != 0 && status != http.StatusBadRequest && status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return false
+	}
+	m := strings.ToLower(ce.Message)
+	for _, s := range []string{
+		"account_deactivated",
+		"account has been deactivated",
+		"this account is deactivated",
+		"account has been disabled",
+		"your account has been suspended",
+		"organization has been disabled",
+	} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
 }

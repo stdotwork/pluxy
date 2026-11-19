@@ -198,3 +198,40 @@ func TestRateLimitInStreamBlocksTheModel(t *testing.T) {
 		t.Errorf("classify = %+v; want a rate limit on the model, status 429", err)
 	}
 }
+
+// Real deactivated/suspended Codex replies map to account_closed (retryable, credential-scoped),
+// while per-request safety refusals (misalignment_policy_violation / content_policy_violation)
+// and plain invalid-token 401s do not.
+func TestAccountClosedMapping(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		status    int
+		body      string
+		code      string
+		scope     string
+		retryable bool
+	}{
+		// OmniRoute provider-test-account-deactivated.test.ts (port-from-9router#1444)
+		{"401 account deactivated (OmniRoute #1444)", 401, `{"error":{"message":"Your account has been deactivated. Please contact support."}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
+		// OmniRoute error-classifier.test.ts & codex-passive-refresh-gate.test.ts
+		{"401 code account_deactivated (OmniRoute)", 401, `{"error":{"code":"account_deactivated","message":"account_deactivated: this account has been disabled"}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
+		{"403 account suspended", 403, `{"error":{"type":"forbidden","message":"Your account has been suspended."}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
+		// Guard: OmniRoute provider-safety-refusal-not-a-ban.test.ts
+		{"403 misalignment_policy_violation guard", 403, `{"error":{"message":"This request was blocked by our safety systems. Reason: Potentially unintended activity.","type":"invalid_request_error","code":"misalignment_policy_violation"}}`, llm.CodePermission, llm.ScopeCredential, true},
+		{"400 content_policy_violation guard", 400, `{"error":{"message":"blocked","type":"invalid_request_error","code":"content_policy_violation"}}`, llm.CodeInvalidRequest, llm.ScopeRequest, false},
+		{"401 invalid token guard", 401, `{"error":{"message":"Token invalid or revoked"}}`, llm.CodeAuth, llm.ScopeCredential, true},
+	} {
+		e := statusError(capacityReply(c.status, nil, c.body), "gpt-6.1-sol")
+		if e.Code != c.code || e.Scope != c.scope || e.Retryable != c.retryable {
+			t.Errorf("%s: got code=%s scope=%s retryable=%v, want code=%s scope=%s retryable=%v",
+				c.name, e.Code, e.Scope, e.Retryable, c.code, c.scope, c.retryable)
+		}
+	}
+	// Stream response.failed carrying account_deactivated classifies as account_closed too.
+	raw := `{"type":"response.failed","response":{"status":"failed","error":{"type":"invalid_request_error","code":"account_deactivated","message":"Your account has been deactivated."}}}`
+	err := classify(&llm.Error{Code: llm.CodeUpstream, Message: "Your account has been deactivated.", Raw: llm.RawJSON([]byte(raw))})
+	e, ok := err.(*llm.Error)
+	if !ok || e.Code != llm.CodeAccountClosed || e.Scope != llm.ScopeCredential || !e.Retryable {
+		t.Errorf("classify(account_deactivated) = %+v, want account_closed on credential, retryable", err)
+	}
+}

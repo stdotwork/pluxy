@@ -508,6 +508,9 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "20")
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]string{"type": "rate_limit_error", "code": "rate_limit_exceeded", "message": "Rate limit reached"}})
 		return
+	case "account_closed":
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"type": "invalid_request_error", "code": "account_deactivated", "message": "Your account has been deactivated. Please contact support."}})
+		return
 	default:
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"type": "invalid_request_error", "code": "token_expired", "message": "token expired"}})
 		return

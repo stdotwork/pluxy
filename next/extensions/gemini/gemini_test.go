@@ -162,3 +162,35 @@ func asError(err error, e **llm.Error) bool {
 	*e = le
 	return ok
 }
+
+// Real Google TOS_VIOLATION and account-deactivation replies map to account_closed: TOS_VIOLATION
+// is Retryable=false (content/pattern refusal: do not replay on sibling accounts), while
+// account-deactivated is Retryable=true; 403 VALIDATION_REQUIRED ("Verify your account to
+// continue.") stays permission, not a ban.
+func TestAccountClosedMapping(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		status    int
+		body      string
+		code      string
+		scope     string
+		retryable bool
+	}{
+		// CLIProxyAPI #1823, #7515, #7636; EasyCLIProxyAPI #611
+		{"403 TOS_VIOLATION with ErrorInfo (CLIProxyAPI #1823, #7636)", 403, `{"error":{"code":403,"message":"This service has been disabled in this account for violation of Terms of Service. Please submit an appeal to continue using this product.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"TOS_VIOLATION","domain":"cloudcode-pa.googleapis.com","metadata":{"uiMessage":"true","appeal_url":"https://forms.gle/hGzM9MEUv2azZsrb9"}}]}}`, llm.CodeAccountClosed, llm.ScopeCredential, false},
+		// CLIProxyAPI #1637, PR #7500 (Feb 2026 variant without ErrorInfo)
+		{"403 service disabled without ErrorInfo (CLIProxyAPI #1637)", 403, `{"error":{"code":403,"message":"This service has been disabled in this account for violation of Terms of Service.","status":"PERMISSION_DENIED"}}`, llm.CodeAccountClosed, llm.ScopeCredential, false},
+		// OmniRoute geminiProjectBlock.test.ts
+		{"403 account deactivated (OmniRoute)", 403, `{"error":{"code":403,"message":"Your project has been denied access because your account has been deactivated.","status":"PERMISSION_DENIED"}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
+		// Guard: CLIProxyAPI #4272, #1374; OmniRoute antigravity-verify-account-403-not-a-ban.test.ts
+		{"403 VALIDATION_REQUIRED guard (CLIProxyAPI #4272)", 403, `{"error":{"code":403,"message":"Verify your account to continue.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"VALIDATION_REQUIRED"}]}}`, llm.CodePermission, llm.ScopeCredential, true},
+		{"403 generic permission guard", 403, `{"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}}`, llm.CodePermission, llm.ScopeCredential, true},
+	} {
+		resp := &http.Response{StatusCode: c.status, Status: http.StatusText(c.status), Header: http.Header{}, Body: io.NopCloser(strings.NewReader(c.body))}
+		e := upstreamError(resp, "gemini-2.5-pro")
+		if e.Code != c.code || e.Scope != c.scope || e.Retryable != c.retryable {
+			t.Errorf("%s: got code=%s scope=%s retryable=%v, want code=%s scope=%s retryable=%v",
+				c.name, e.Code, e.Scope, e.Retryable, c.code, c.scope, c.retryable)
+		}
+	}
+}

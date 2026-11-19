@@ -26,9 +26,10 @@ func TestConformance(t *testing.T) {
 	for _, kind := range []string{kindGemini, kindVertexSA, kindVertexKey} {
 		t.Run(kind, func(t *testing.T) {
 			conformance.Run(t, conformance.Target{
-				Manifest:     manifest,
-				Prepare:      func(t *testing.T, s conformance.Scenario) conformance.Setup { return prepare(t, s, kind) },
-				PrepareLogin: prepareLogin,
+				Manifest:             manifest,
+				Prepare:              func(t *testing.T, s conformance.Scenario) conformance.Setup { return prepare(t, s, kind) },
+				PrepareLogin:         prepareLogin,
+				PrepareAccountClosed: func(t *testing.T) conformance.Setup { return prepare(t, conformance.ScenarioAccountClosed, kind) },
 			})
 		})
 	}
@@ -69,6 +70,10 @@ func prepare(t *testing.T, s conformance.Scenario, kind string) conformance.Setu
 			}
 		case conformance.ScenarioRateLimited:
 			geminitest.RateLimited(w, 20)
+		case conformance.ScenarioAccountClosed:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, `{"error":{"code":403,"message":"Your project has been denied access because your account has been deactivated.","status":"PERMISSION_DENIED"}}`)
 		}
 	}
 	setup := conformance.Setup{Account: protocol.Account{ID: "conformance", Settings: settingsFor(srv, kind)}}

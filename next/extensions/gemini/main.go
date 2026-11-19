@@ -476,6 +476,12 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		// A redirect sameOrigin refused to follow.
 		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
 		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
+	case isTermsViolation(s, &parsed, e.Message):
+		// Request-pattern / Terms of Service suspension: ban the account and do not replay the
+		// same payload on sibling accounts.
+		e.Code, e.Scope, e.Retryable = llm.CodeAccountClosed, llm.ScopeCredential, false
+	case isAccountClosed(s, e.Message):
+		e.Code, e.Scope, e.Retryable = llm.CodeAccountClosed, llm.ScopeCredential, true
 	case s == http.StatusUnauthorized:
 		e.Code, e.Scope, e.Retryable = llm.CodeAuth, llm.ScopeCredential, true
 	case s == http.StatusBadRequest && (parsed.reason() == "API_KEY_INVALID" || strings.Contains(e.Message, "API key not valid")):
@@ -530,4 +536,39 @@ func retryAfter(v string, now time.Time) int64 {
 		}
 	}
 	return 0
+}
+
+// isTermsViolation reports whether a 403 reply is a Google Terms of Service suspension
+// (TOS_VIOLATION or its message without ErrorInfo). Such a refusal bans the account and is not
+// retryable onto sibling accounts.
+func isTermsViolation(status int, parsed *googleError, msg string) bool {
+	if status != http.StatusForbidden {
+		return false
+	}
+	if parsed.reason() == "TOS_VIOLATION" {
+		return true
+	}
+	m := strings.ToLower(msg)
+	return strings.Contains(m, "this service has been disabled in this account")
+}
+
+// isAccountClosed reports whether a 401 or 403 reply says the account itself has been
+// deactivated, disabled or suspended (distinct from VALIDATION_REQUIRED verification prompts).
+func isAccountClosed(status int, msg string) bool {
+	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return false
+	}
+	m := strings.ToLower(msg)
+	for _, s := range []string{
+		"account_deactivated",
+		"account has been deactivated",
+		"this account is deactivated",
+		"account has been disabled",
+		"your account has been suspended",
+	} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
 }
