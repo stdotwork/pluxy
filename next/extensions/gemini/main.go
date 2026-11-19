@@ -172,9 +172,9 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	if err != nil {
 		return err
 	}
-	body, restoreNames := cleanRequestSchemas(body, s.Vertex != nil)
+	body = cleanToolSchemas(body)
 	body = fixTurns(body, s.Vertex != nil, call.Request.Stream, !tr.Passthrough)
-	send := &reporting{Stream: out, tr: tr, restore: restoreNames}
+	send := &reporting{Stream: out, tr: tr}
 	t, err := resolve(ctx, s, call.Account.Credential, call.Request.Model, call.Request.Stream)
 	if err != nil {
 		return err
@@ -322,28 +322,14 @@ func dropLoss(losses []llm.Loss, path string) []llm.Loss {
 	return out
 }
 
-// reporting adds the translation report to the reply's response.start event and restores
-// sanitized function names on tool calls and raw upstream chunks.
+// reporting adds the translation report to the reply's response.start event.
 type reporting struct {
-	Stream  interface{ Send(llm.Event) error }
-	tr      *llm.Translation
-	redact  *protocol.Redactor // nil, or what else to remove from upstream data
-	restore map[string]string  // nil, or upstream function name -> client's name
+	*sdk.Stream
+	tr     *llm.Translation
+	redact *protocol.Redactor // nil, or what else to remove from upstream data
 }
 
 func (r *reporting) Send(ev llm.Event) error {
-	if len(r.restore) > 0 {
-		if ev.Type == llm.EventItemStart && ev.Item != nil && ev.Item.Kind == llm.ItemToolCall {
-			if orig, ok := r.restore[ev.Item.Name]; ok {
-				item := *ev.Item
-				item.Name = orig
-				ev.Item = &item
-			}
-		}
-		if len(ev.Raw) > 0 {
-			ev.Raw = restoreResponseRaw(ev.Raw, r.restore)
-		}
-	}
 	if ev.Type == llm.EventResponseStart && ev.Response != nil {
 		info := *ev.Response
 		info.Translation = r.tr

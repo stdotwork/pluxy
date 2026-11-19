@@ -24,7 +24,7 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error
 	if err != nil {
 		return err
 	}
-	body, _ = cleanRequestSchemas(body, s.Vertex != nil)
+	body = cleanToolSchemas(body)
 	body = fixLeadingTurn(body)
 	switch {
 	case !tr.Passthrough:

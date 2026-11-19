@@ -161,7 +161,7 @@ func TestCountTokensCleansToolSchema(t *testing.T) {
 						Format: llm.FormatGeminiGenerate,
 						Body: []byte(`{
 							"contents":[{"role":"user","parts":[{"text":"hi"}]}],
-							"tools":[{"functionDeclarations":[{"name":"bad/name","parametersJsonSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","properties":{"x":{"items":true}}}}]}]
+							"tools":[{"functionDeclarations":[{"name":"inspect","parametersJsonSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","properties":{"x":{"items":true}}}}]}]
 						}`),
 					},
 				},
@@ -174,8 +174,8 @@ func TestCountTokensCleansToolSchema(t *testing.T) {
 			if strings.Contains(s, "$schema") {
 				t.Errorf("countTokens kept $schema: %s", s)
 			}
-			if strings.Contains(s, `"bad/name"`) {
-				t.Errorf("countTokens kept invalid function name: %s", s)
+			if !strings.Contains(s, `"items":{}`) {
+				t.Errorf("countTokens did not normalize boolean items subschema: %s", s)
 			}
 		})
 	}
@@ -209,7 +209,7 @@ func TestCleanUnknownKeywordsAndLiteralProtection(t *testing.T) {
 		"required": ["properties", "readOnly", "writeOnly", "$ref", "x-custom", "meta"]
 	}`
 
-	cleaned, changed := cleanSchemaBytes(json.RawMessage(in), schemaOpts{isToolParams: true})
+	cleaned, changed := cleanToolSchema(json.RawMessage(in), false)
 	if !changed {
 		t.Fatal("expected schema to be modified")
 	}
@@ -252,8 +252,7 @@ func TestCleanUnknownKeywordsAndLiteralProtection(t *testing.T) {
 		t.Errorf("literal examples value was mutated: %#v", ex)
 	}
 
-	// Idempotent.
-	if _, again := cleanSchemaBytes(cleaned, schemaOpts{isToolParams: true}); again {
+	if _, again := cleanToolSchema(cleaned, false); again {
 		t.Errorf("expected second pass to be a no-op")
 	}
 }
@@ -279,11 +278,10 @@ func TestCleanRefsCyclesAndNoAliasing(t *testing.T) {
 			"missing": {"$ref": "#/$defs/does_not_exist"}
 		}
 	}`
-	// Fix ~0/~1 pointer cleanly: "#/$defs/leaf~1slash" -> "leaf/slash"; check exact escape below too.
 	in = strings.ReplaceAll(in, "leaf~1slash", "leaf/slash")
 	in = strings.ReplaceAll(in, "leaf~01slash", "leaf~1slash")
 
-	cleaned, _ := cleanSchemaBytes(json.RawMessage(in), schemaOpts{isToolParams: true})
+	cleaned, _ := cleanToolSchema(json.RawMessage(in), false)
 	var m map[string]any
 	if err := json.Unmarshal(cleaned, &m); err != nil {
 		t.Fatal(err)
@@ -325,7 +323,7 @@ func TestCleanConditionalsAndAllOf(t *testing.T) {
 		]
 	}`
 
-	cleaned, _ := cleanSchemaBytes(json.RawMessage(in), schemaOpts{isToolParams: true})
+	cleaned, _ := cleanToolSchema(json.RawMessage(in), false)
 	var m map[string]any
 	if err := json.Unmarshal(cleaned, &m); err != nil {
 		t.Fatal(err)
@@ -336,7 +334,6 @@ func TestCleanConditionalsAndAllOf(t *testing.T) {
 		}
 	}
 	props := m["properties"].(map[string]any)
-	// Existing ids wins over then.ids, and keeps allOf items integer.
 	ids := props["ids"].(map[string]any)
 	if ids["type"] != "array" || ids["items"].(map[string]any)["type"] != "integer" {
 		t.Errorf("ids = %#v, want array of integer", ids)
@@ -350,7 +347,6 @@ func TestCleanConditionalsAndAllOf(t *testing.T) {
 	if _, has := props["env"]; !has {
 		t.Errorf("allOf property env missing: %s", cleaned)
 	}
-	// strictLevel from `then` must NOT become required, while env from `allOf` IS required.
 	req, _ := m["required"].([]any)
 	if !reflect.DeepEqual(req, []any{"env"}) {
 		t.Errorf("required = %#v, want [\"env\"]", req)
@@ -373,7 +369,7 @@ func TestCleanTypeRequiredAndArrayItemsConsistency(t *testing.T) {
 		"required": ["nestedBare", "nestedBare", "nonexistent"]
 	}`
 
-	cleaned, _ := cleanSchemaBytes(json.RawMessage(in), schemaOpts{isToolParams: true})
+	cleaned, _ := cleanToolSchema(json.RawMessage(in), false)
 	var m map[string]any
 	if err := json.Unmarshal(cleaned, &m); err != nil {
 		t.Fatal(err)
@@ -448,7 +444,7 @@ func TestCleanEnumsAndBooleanSubschemas(t *testing.T) {
 		}
 	}`
 
-	cleaned, _ := cleanSchemaBytes(json.RawMessage(in), schemaOpts{isToolParams: true})
+	cleaned, _ := cleanToolSchema(json.RawMessage(in), false)
 	var m map[string]any
 	if err := json.Unmarshal(cleaned, &m); err != nil {
 		t.Fatal(err)
@@ -498,38 +494,27 @@ func TestCleanEnumsAndBooleanSubschemas(t *testing.T) {
 	}
 }
 
-func TestCleanUnionsResponseVsToolParamsAndOpenAPI(t *testing.T) {
-	// Nested oneOf normalizes to anyOf, and responseJsonSchema keeps root multi-branch unions.
-	respIn := `{
-		"anyOf": [
-			{"type": "object", "properties": {"a": {"oneOf": [{"type": "string"}, {"type": "integer"}]}}},
-			{"type": "object", "properties": {"b": {"type": "boolean"}}}
-		]
-	}`
-	respCleaned, _ := cleanSchemaBytes(json.RawMessage(respIn), schemaOpts{isToolParams: false})
-	var respMap map[string]any
-	if err := json.Unmarshal(respCleaned, &respMap); err != nil {
+func TestCleanUnionsAndOpenAPIPassthrough(t *testing.T) {
+	// Nested oneOf normalizes to anyOf, and openAPI parameters preserve uppercase OBJECT/STRING.
+	in := `{"type":"object","properties":{"a":{"oneOf":[{"type":"string"},{"type":"integer"}]}}}`
+	cleaned, _ := cleanToolSchema(json.RawMessage(in), false)
+	var m map[string]any
+	if err := json.Unmarshal(cleaned, &m); err != nil {
 		t.Fatal(err)
 	}
-	branches, _ := respMap["anyOf"].([]any)
-	if len(branches) != 2 {
-		t.Fatalf("responseJsonSchema root lost union branches: %s", respCleaned)
-	}
-	nestedA := branches[0].(map[string]any)["properties"].(map[string]any)["a"].(map[string]any)
+	nestedA := m["properties"].(map[string]any)["a"].(map[string]any)
 	if _, hasOneOf := nestedA["oneOf"]; hasOneOf || len(nestedA["anyOf"].([]any)) != 2 {
 		t.Errorf("nested oneOf not normalized to anyOf: %#v", nestedA)
 	}
 
-	// OpenAPI parameters preserve uppercase OBJECT/STRING byte-for-byte when already clean.
 	cleanOpenAPI := json.RawMessage(`{"type":"OBJECT","properties":{"city":{"type":"STRING"}},"required":["city"]}`)
-	out, changed := cleanSchemaBytes(cleanOpenAPI, schemaOpts{isToolParams: true, isOpenAPI: true})
+	out, changed := cleanToolSchema(cleanOpenAPI, true)
 	if changed || string(out) != string(cleanOpenAPI) {
 		t.Errorf("clean OpenAPI schema changed = %v, out = %s", changed, out)
 	}
 
-	// OpenAPI converts type: ["string", "null"] -> type:"string", nullable:true and hints additionalProperties:false.
 	dirtyOpenAPI := json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"nick":{"type":["string","null"]}}}`)
-	oaOut, oaChanged := cleanSchemaBytes(dirtyOpenAPI, schemaOpts{isToolParams: true, isOpenAPI: true})
+	oaOut, oaChanged := cleanToolSchema(dirtyOpenAPI, true)
 	if !oaChanged {
 		t.Fatal("expected dirty OpenAPI schema to change")
 	}
@@ -542,120 +527,4 @@ func TestCleanUnionsResponseVsToolParamsAndOpenAPI(t *testing.T) {
 	if nick["type"] != "string" || nick["nullable"] != true {
 		t.Errorf("OpenAPI nullable nick = %#v", nick)
 	}
-}
-
-func TestFunctionNameSanitizationAndRestore(t *testing.T) {
-	// Valid names stay untouched on both Gemini API and Vertex AI.
-	if m, _ := buildFunctionNameMap([]string{"get_weather.v1:read-all"}, nil, true); len(m) != 0 {
-		t.Errorf("valid Vertex name was modified: %#v", m)
-	}
-	if m, _ := buildFunctionNameMap([]string{"0_valid_on_gemini"}, nil, false); len(m) != 0 {
-		t.Errorf("valid Gemini name was modified: %#v", m)
-	}
-
-	longVertex := strings.Repeat("a", 80)
-	longGemini := strings.Repeat("b", 140)
-
-	body := []byte(`{
-		"contents":[
-			{"role":"model","parts":[{"functionCall":{"name":"mcp/tool name","args":{}}},{"functionCall":{"name":"1starts_with_digit","args":{}}}]},
-			{"role":"user","parts":[{"functionResponse":{"name":"mcp/tool name","response":{}}}]}
-		],
-		"tools":[{"functionDeclarations":[
-			{"name":"mcp/tool name","parametersJsonSchema":{"type":"object"}},
-			{"name":"mcp_tool_name","parametersJsonSchema":{"type":"object"}},
-			{"name":"1starts_with_digit","parametersJsonSchema":{"type":"object"}},
-			{"name":"` + longVertex + `","parametersJsonSchema":{"type":"object"}},
-			{"name":"` + longGemini + `","parametersJsonSchema":{"type":"object"}}
-		]}],
-		"toolConfig":{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["mcp/tool name","` + longVertex + `"]}}
-	}`)
-
-	cleaned, restore := cleanRequestSchemas(body, true)
-	var req struct {
-		Contents []struct {
-			Parts []struct {
-				FunctionCall     *struct{ Name string } `json:"functionCall"`
-				FunctionResponse *struct{ Name string } `json:"functionResponse"`
-			} `json:"parts"`
-		} `json:"contents"`
-		Tools []struct {
-			FunctionDeclarations []struct {
-				Name string `json:"name"`
-			} `json:"functionDeclarations"`
-		} `json:"tools"`
-		ToolConfig struct {
-			FunctionCallingConfig struct {
-				AllowedFunctionNames []string `json:"allowedFunctionNames"`
-			} `json:"functionCallingConfig"`
-		} `json:"toolConfig"`
-	}
-	if err := json.Unmarshal(cleaned, &req); err != nil {
-		t.Fatal(err)
-	}
-
-	decls := req.Tools[0].FunctionDeclarations
-	seen := map[string]bool{}
-	for _, d := range decls {
-		if !validFunctionName(d.Name, true) {
-			t.Errorf("sanitized Vertex declaration name %q is still invalid", d.Name)
-		}
-		if seen[d.Name] {
-			t.Errorf("collision in sanitized declaration names: %q", d.Name)
-		}
-		seen[d.Name] = true
-	}
-	if decls[1].Name != "mcp_tool_name" {
-		t.Errorf("existing valid colliding tool name changed: got %q", decls[1].Name)
-	}
-	if req.Contents[0].Parts[0].FunctionCall.Name != decls[0].Name ||
-		req.Contents[1].Parts[0].FunctionResponse.Name != decls[0].Name ||
-		req.ToolConfig.FunctionCallingConfig.AllowedFunctionNames[0] != decls[0].Name {
-		t.Errorf("references to sanitized function name drifted: decl=%q call=%q resp=%q allow=%q",
-			decls[0].Name, req.Contents[0].Parts[0].FunctionCall.Name,
-			req.Contents[1].Parts[0].FunctionResponse.Name, req.ToolConfig.FunctionCallingConfig.AllowedFunctionNames[0])
-	}
-
-	// Gemini API leaves names <=128 starting with digit intact, truncates >128.
-	_, gemRestore := cleanRequestSchemas(body, false)
-	for mapped, orig := range gemRestore {
-		if orig == "1starts_with_digit" {
-			t.Errorf("Gemini API should not rewrite 1starts_with_digit (mapped=%q)", mapped)
-		}
-		if !validFunctionName(mapped, false) {
-			t.Errorf("sanitized Gemini name %q invalid", mapped)
-		}
-	}
-
-	// Verify reporting.Send restores both Item.Name and Raw JSON chunk on tool call reply.
-	rec := &recordingSink{}
-	rep := &reporting{Stream: rec, restore: restore}
-	rawChunk := []byte(`{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"` + decls[0].Name + `","args":{"x":1}}}]},"finishReason":"STOP","index":0}]}`)
-	err := rep.Send(llm.Event{
-		Type:  llm.EventItemStart,
-		Index: 0,
-		Item:  &llm.ItemStart{Kind: llm.ItemToolCall, CallID: "c1", Name: decls[0].Name},
-		Raw:   rawChunk,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rec.events) != 1 {
-		t.Fatalf("recorded %d events, want 1", len(rec.events))
-	}
-	if got := rec.events[0].Item.Name; got != "mcp/tool name" {
-		t.Errorf("restored Item.Name = %q, want \"mcp/tool name\"", got)
-	}
-	if !strings.Contains(string(rec.events[0].Raw), `"name":"mcp/tool name"`) {
-		t.Errorf("restored Raw chunk = %s, want original tool name", rec.events[0].Raw)
-	}
-}
-
-type recordingSink struct {
-	events []llm.Event
-}
-
-func (r *recordingSink) Send(ev llm.Event) error {
-	r.events = append(r.events, ev)
-	return nil
 }
