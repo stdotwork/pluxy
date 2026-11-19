@@ -470,8 +470,8 @@ func modelIDs(list *protocol.ModelList) []string {
 }
 
 // Models returns every model the router's accounts serve, each under every name a client can ask
-// for it by, sorted by name; a name two accounts serve is listed once, as the first account in
-// order lists it. A model the account's config lists itself shows its upstream name as its
+// for it by, and each fallback chain's new name, sorted by name; a name two accounts serve is
+// listed once, as the first account in order of the provider that serves it lists it. A model the account's config lists itself shows its upstream name as its
 // display name, when the router was made as created and the owner its extension names; one from
 // the extension's list shows what the extension says about it. An account whose list cannot be
 // read lists only its config's models.
@@ -498,13 +498,17 @@ type ServedModel struct {
 
 // ServedModels is Models with each model's extension, upstream name and serving accounts. An
 // account that serves any model because its list is not known lists none, as Models lists none.
+// A name that accounts of two providers list is the model of the provider that serves it (the
+// provider of its highest-priority account, the first in order on a tie), with that provider's
+// accounts, since requests for it go there alone unless a chain says otherwise.
 func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 	accounts, creds := r.snapshot()
 	r.mu.RLock()
 	catalog := r.catalog
 	r.mu.RUnlock()
 	out := []ServedModel{}
-	index := map[string]int{}
+	index := map[string]int{}    // by name
+	top := map[string]*Account{} // by name: the account whose provider serves it
 	for _, a := range accounts {
 		// For an account whose config lists its models, only the list's owner is used.
 		list := r.listOf(ctx, a, creds, catalog, r.now())
@@ -522,11 +526,15 @@ func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 			}
 		}
 		for _, n := range a.names(modelIDs(list), r.cfg.ForceModelPrefix) {
-			if i, ok := index[n.Public]; ok {
+			i, ok := index[n.Public]
+			switch {
+			case ok && a.Extension == top[n.Public].Extension:
 				out[i].Accounts = append(out[i].Accounts, a.ID)
 				continue
+			case ok && a.Priority <= top[n.Public].Priority:
+				continue // another provider serves the name
 			}
-			index[n.Public] = len(out)
+			top[n.Public] = a
 			var m protocol.Model
 			if len(a.Models) > 0 {
 				m = protocol.Model{DisplayName: n.Upstream, Created: r.created.Unix()}
@@ -546,7 +554,13 @@ func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 			if m.OwnedBy == "" {
 				m.OwnedBy = owner
 			}
-			out = append(out, ServedModel{Model: m, Extension: a.Extension, Upstream: n.Upstream, Accounts: []string{a.ID}})
+			entry := ServedModel{Model: m, Extension: a.Extension, Upstream: n.Upstream, Accounts: []string{a.ID}}
+			if ok {
+				out[i] = entry // a higher-priority provider's account
+				continue
+			}
+			index[n.Public] = len(out)
+			out = append(out, entry)
 		}
 	}
 	out = r.chainModels(accounts, out, index)

@@ -264,6 +264,18 @@ func TestDefaultIsOneProvider(t *testing.T) {
 	}
 }
 
+// The model lists describe a name two providers list as the model of the provider that serves it,
+// with that provider's accounts.
+func TestModelListNamesTheServingProvider(t *testing.T) {
+	m := []ModelEntry{{Name: "m"}}
+	h := newChainHarness(t, Config{}, Account{ID: "p1", Extension: "P", Models: m}, Account{ID: "q1", Extension: "Q", Models: m, Priority: 1},
+		Account{ID: "p2", Extension: "P", Models: m, Priority: 1}, Account{ID: "q2", Extension: "Q", Models: m})
+	models := h.r.ServedModels(context.Background())
+	if len(models) != 1 || models[0].Extension != "Q" || !slices.Equal(models[0].Accounts, []string{"q1", "q2"}) {
+		t.Errorf("models = %+v, want m on Q with q1 and q2", models)
+	}
+}
+
 // A priority tie goes to the provider of the account first in config order.
 func TestDefaultProviderTieByConfigOrder(t *testing.T) {
 	m := []ModelEntry{{Name: "m"}}
