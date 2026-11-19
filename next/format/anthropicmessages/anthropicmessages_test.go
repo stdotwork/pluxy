@@ -1136,3 +1136,56 @@ func TestDevinReasoningSignature(t *testing.T) {
 		t.Errorf("the unstreamed reply has no signature: %s", body)
 	}
 }
+
+func TestEncodeCarriesForeignCacheControl(t *testing.T) {
+	in := `{
+		"model": "claude-sonnet-4-6",
+		"cache_control": {"type": "ephemeral", "ttl": "1h"},
+		"x_req": true,
+		"tools": [
+			{"type": "function", "cache_control": {"type": "ephemeral"}, "function": {"name": "a", "parameters": {"type": "object"}}}
+		],
+		"messages": [
+			{"role": "system", "content": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}]},
+			{"role": "user", "cache_control": {"type": "ephemeral"}, "content": "Check"},
+			{"role": "assistant", "content": null, "tool_calls": [
+				{"id": "call_1", "type": "function", "cache_control": {"type": "ephemeral", "ttl": "1h"}, "function": {"name": "a", "arguments": "{}"}}
+			]},
+			{"role": "tool", "tool_call_id": "call_1", "cache_control": {"type": "ephemeral"}, "content": "res1"},
+			{"role": "user", "content": [{"type": "text", "text": "Next", "cache_control": {"type": "bad"}, "x_part": 1}]}
+		]
+	}`
+	req, err := openaichat.ParseRequest([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, "body", out, `{
+		"model": "claude-sonnet-4-6",
+		"max_tokens": 32000,
+		"stream": false,
+		"cache_control": {"type": "ephemeral", "ttl": "1h"},
+		"tools": [
+			{"name": "a", "input_schema": {"type": "object", "properties": {}}, "cache_control": {"type": "ephemeral"}}
+		],
+		"system": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}],
+		"messages": [
+			{"role": "user", "content": [{"type": "text", "text": "Check", "cache_control": {"type": "ephemeral"}}]},
+			{"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "a", "input": {}, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]},
+			{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "res1", "cache_control": {"type": "ephemeral"}}]},
+			{"role": "user", "content": [{"type": "text", "text": "Next"}]}
+		]
+	}`)
+	want := []string{
+		"dropped messages[4].content[0].cache_control",
+		"dropped messages[4].content[0].x_part",
+		"dropped x_req",
+	}
+	slices.Sort(want)
+	if got := lossList(losses); !reflect.DeepEqual(got, want) {
+		t.Errorf("losses:\n got %q\nwant %q", got, want)
+	}
+}

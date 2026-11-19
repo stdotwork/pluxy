@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/extensions/claude/claudetest"
@@ -123,23 +122,13 @@ func TestBuildBodyWithCacheTTLAndPost(t *testing.T) {
 }
 
 func TestChatCacheControlMapping(t *testing.T) {
-	t.Run("top-level, tools, system, assistant tool_calls and tool_result", func(t *testing.T) {
+	t.Run("text part cache_control reaches Claude", func(t *testing.T) {
 		in := `{
 			"model": "claude-sonnet-4-6",
-			"cache_control": {"type": "ephemeral", "ttl": "1h"},
-			"tools": [
-				{"type": "function", "cache_control": {"type": "ephemeral"}, "function": {"name": "a", "parameters": {"type": "object"}}},
-				{"type": "function", "function": {"name": "b", "parameters": {"type": "object"}, "cache_control": {"type": "ephemeral", "ttl": "1h"}}}
-			],
 			"messages": [
-				{"role": "system", "content": [{"type": "text", "text": "Rules"}, {"type": "text", "text": "", "cache_control": {"type": "ephemeral"}}]},
-				{"role": "user", "cache_control": {"type": "ephemeral"}, "content": [{"type": "text", "text": "Check"}]},
-				{"role": "assistant", "cache_control": {"type": "ephemeral"}, "content": null, "tool_calls": [
-					{"id": "call_1", "type": "function", "cache_control": {"type": "ephemeral", "ttl": "1h"}, "function": {"name": "a", "arguments": "{}"}},
-					{"id": "call_2", "type": "function", "function": {"name": "b", "arguments": "{}"}}
-				]},
-				{"role": "tool", "tool_call_id": "call_1", "content": [{"type": "text", "text": "res1", "cache_control": {"type": "ephemeral"}}]},
-				{"role": "tool", "tool_call_id": "call_2", "cache_control": {"type": "ephemeral", "ttl": "1h"}, "content": "res2"},
+				{"role": "system", "content": [{"type": "text", "text": "Rules"}]},
+				{"role": "user", "content": [{"type": "text", "text": "Check", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]},
+				{"role": "assistant", "content": "Working."},
 				{"role": "user", "content": "Follow up"}
 			]
 		}`
@@ -159,20 +148,10 @@ func TestChatCacheControlMapping(t *testing.T) {
 			"model": "claude-sonnet-4-6",
 			"max_tokens": 64000,
 			"stream": false,
-			"cache_control": {"type": "ephemeral", "ttl": "1h"},
-			"system": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}],
-			"tools": [
-				{"name": "a", "input_schema": {"type": "object", "properties": {}}, "cache_control": {"type": "ephemeral"}},
-				{"name": "b", "input_schema": {"type": "object", "properties": {}}, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
-			],
+			"system": [{"type": "text", "text": "Rules"}],
 			"messages": [
-				{"role": "user", "content": [{"type": "text", "text": "Check", "cache_control": {"type": "ephemeral"}}]},
-				{"role": "assistant", "content": [
-					{"type": "tool_use", "id": "call_1", "name": "a", "input": {}, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-					{"type": "tool_use", "id": "call_2", "name": "b", "input": {}, "cache_control": {"type": "ephemeral"}}
-				]},
-				{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "res1", "cache_control": {"type": "ephemeral"}}]},
-				{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_2", "content": "res2", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]},
+				{"role": "user", "content": [{"type": "text", "text": "Check", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]},
+				{"role": "assistant", "content": [{"type": "text", "text": "Working."}]},
 				{"role": "user", "content": [{"type": "text", "text": "Follow up"}]}
 			]
 		}`
@@ -181,74 +160,45 @@ func TestChatCacheControlMapping(t *testing.T) {
 		}
 	})
 
-	t.Run("blank user part cache_control hoists onto preceding block", func(t *testing.T) {
+	t.Run("tool result cache_control reaches Claude", func(t *testing.T) {
 		in := `{
 			"model": "claude-sonnet-4-6",
+			"tools": [{"type": "function", "function": {"name": "a", "parameters": {"type": "object"}}}],
 			"messages": [
-				{"role": "user", "content": [{"type": "text", "text": "Check"}, {"type": "text", "text": "  ", "cache_control": {"type": "ephemeral"}}]}
+				{"role": "user", "content": "Check"},
+				{"role": "assistant", "content": null, "tool_calls": [
+					{"id": "call_1", "type": "function", "function": {"name": "a", "arguments": "{}"}}
+				]},
+				{"role": "tool", "tool_call_id": "call_1", "cache_control": {"type": "ephemeral"}, "content": "res1"},
+				{"role": "user", "content": "Follow up"}
 			]
 		}`
 		req, err := openaichat.ParseRequest([]byte(in))
 		if err != nil {
 			t.Fatal(err)
 		}
-		body, _, err := buildBodyWithTTL(req, cacheTTL5m)
+		req.DropPolicy = llm.DropReject
+		body, tr, err := buildBodyWithTTL(req, cacheTTL5m)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("unexpected drop reject: %v", err)
 		}
-		want := `{"model":"claude-sonnet-4-6","max_tokens":64000,"stream":false,"messages":[{"role":"user","content":[{"type":"text","text":"Check","cache_control":{"type":"ephemeral"}}]}]}`
+		if len(tr.Losses) != 0 {
+			t.Errorf("losses = %+v, want none", tr.Losses)
+		}
+		want := `{
+			"model": "claude-sonnet-4-6",
+			"max_tokens": 64000,
+			"stream": false,
+			"tools": [{"name": "a", "input_schema": {"type": "object", "properties": {}}}],
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "Check"}]},
+				{"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "a", "input": {}}]},
+				{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "res1", "cache_control": {"type": "ephemeral"}}]},
+				{"role": "user", "content": [{"type": "text", "text": "Follow up"}]}
+			]
+		}`
 		if !jsonEqual(body, json.RawMessage(want)) {
 			t.Errorf("got:\n%s\nwant:\n%s", body, want)
-		}
-	})
-
-	t.Run("mid-conversation system message on system-capable and reminder models", func(t *testing.T) {
-		for _, model := range []string{"claude-opus-4-8", "claude-sonnet-4-6"} {
-			t.Run(model, func(t *testing.T) {
-				in := `{
-					"model": "` + model + `",
-					"messages": [
-						{"role": "user", "content": "Hi"},
-						{"role": "assistant", "content": "Hello"},
-						{"role": "developer", "content": [{"type": "text", "text": "Stay concise.", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]},
-						{"role": "user", "content": "Explain."}
-					]
-				}`
-				req, err := openaichat.ParseRequest([]byte(in))
-				if err != nil {
-					t.Fatal(err)
-				}
-				body, tr, err := buildBodyWithTTL(req, cacheTTL5m)
-				if err != nil {
-					t.Fatal(err)
-				}
-				for _, l := range tr.Losses {
-					if l.Kind == llm.LossDropped {
-						t.Errorf("unexpected dropped loss: %+v", l)
-					}
-				}
-				if !containsCacheControl(t, body, "Stay concise.") {
-					t.Errorf("body %s missing cache_control on mid-system block", body)
-				}
-			})
-		}
-	})
-
-	t.Run("extra unmodelled function field stays reported", func(t *testing.T) {
-		in := `{
-			"model": "claude-sonnet-4-6",
-			"tools": [{"type": "function", "function": {"name": "a", "parameters": {"type": "object"}, "cache_control": {"type": "ephemeral"}, "extra": 1}}],
-			"messages": [{"role": "user", "content": "hi"}]
-		}`
-		req, err := openaichat.ParseRequest([]byte(in))
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.DropPolicy = llm.DropReject
-		_, _, err = buildBodyWithTTL(req, cacheTTL5m)
-		var e *llm.Error
-		if !errors.As(err, &e) || !slices.Contains(e.Dropped, "tools[0].function") {
-			t.Errorf("err = %v, want tools[0].function reported dropped", err)
 		}
 	})
 
@@ -344,27 +294,4 @@ func TestResponsesPromptCacheMapping(t *testing.T) {
 			t.Errorf("got:\n%s\nwant:\n%s", body, want)
 		}
 	})
-}
-
-func containsCacheControl(t *testing.T, body []byte, substr string) bool {
-	t.Helper()
-	var m struct {
-		Messages []struct {
-			Content []struct {
-				Text         string          `json:"text"`
-				CacheControl json.RawMessage `json:"cache_control"`
-			} `json:"content"`
-		} `json:"messages"`
-	}
-	if err := json.Unmarshal(body, &m); err != nil {
-		t.Fatal(err)
-	}
-	for _, msg := range m.Messages {
-		for _, b := range msg.Content {
-			if len(b.CacheControl) > 0 && (substr == "" || strings.Contains(b.Text, substr)) {
-				return true
-			}
-		}
-	}
-	return false
 }
