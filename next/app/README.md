@@ -1311,7 +1311,7 @@ first; a tool a registry only offers is not listed, since Beginner Mode is where
 **Manage Clients** page (Control group) has a checkbox for every client with a search box, **Restore
 automatic display** and **Save**; Save is off for an empty selection ("Keep at least one client
 visible."). The choice is kept in the window's prefs (`pluxy.agent-clients`, on this device, like the
-theme), and saving automatic removes it. Whichever client page is open stays listed while it is
+Themes page's layout choices), and saving automatic removes it. Whichever client page is open stays listed while it is
 open, so hiding it never strands the person. Beginner Mode still offers every client, and the list
 logic is in `src/clientListItems.ts`.
 
@@ -1459,6 +1459,13 @@ stops the app's own core; the next launch opens where the window was. A pending 
 polls are counted while the window shows, while it is unmapped (as a window manager minimizes it;
 GDK then reports it minimized) and once it is mapped again. Without a tray watcher, closing quits
 without asking, with Minimize to Tray or Ask saved.
+
+One more session in managed mode (`native/privacy.ts`) runs the privacy mode checks
+(`src-tauri/src/native_privacy.rs`) and then the themes checks (`src-tauri/src/native_themes.rs`):
+the T3 Code theme file `ui/tests/fixtures/t3-docs-nightfall.json`, pasted on the Themes page and
+added, paints the window in its canvas colour with the root's `dark` class, the picker lists it,
+`GET /themes` through the app's host has it as `current`, and the next launch paints in it. The
+session ends on the Themes page in that theme.
 
 Then, in a session of its own (`native/instances-session.ts`), with the core program adopted in
 each profile, it launches the app again and again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
