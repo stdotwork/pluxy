@@ -258,12 +258,13 @@ func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) 
 	if a.MaxConcurrency > 0 && s.active[a.ID] >= a.MaxConcurrency {
 		return 0, false
 	}
-	// This attempt is the one request a check lets through: the next check is due an interval on.
+	// This attempt is the one request a check lets through: the next check is due an interval on,
+	// when more than an interval is left.
 	for _, k := range keys {
 		if st := s.scopes[k]; st != nil {
 			for i := range st.blocks {
 				if b := &st.blocks[i]; b.pass && b.until.After(now) {
-					b.pass, b.check = false, now.Add(s.checkEvery)
+					b.pass, b.check = false, s.nextCheck(b.until, now)
 				}
 			}
 		}

@@ -59,6 +59,16 @@ func (r *Router) Check(ctx context.Context) {
 	}
 }
 
+// nextCheck returns when a block that ends at until is next checked after a check at now: an
+// interval on when more than an interval is left, and never otherwise (the zero time), so no
+// check is due after the block has ended.
+func (s *State) nextCheck(until, now time.Time) time.Time {
+	if until.Sub(now) > s.checkEvery {
+		return now.Add(s.checkEvery)
+	}
+	return time.Time{}
+}
+
 // claim is one check taken on: block kind index i on scope key, as it was when taken.
 type claim struct {
 	key   scopeKey
@@ -68,7 +78,8 @@ type claim struct {
 }
 
 // due takes on the checks due at now, by account ID: each one's next check moves an interval
-// on, so a check that never answers is made again then.
+// on when more than an interval is left (nextCheck), so a check that never answers is made again
+// then.
 func (s *State) due(now time.Time) map[string][]claim {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -82,7 +93,7 @@ func (s *State) due(now time.Time) map[string][]claim {
 			if b.check.IsZero() || b.check.After(now) || b.pass || !b.until.After(now) {
 				continue
 			}
-			b.check = now.Add(s.checkEvery)
+			b.check = s.nextCheck(b.until, now)
 			out[k.id] = append(out[k.id], claim{key: k, i: i, mark: b.mark, until: b.until})
 		}
 	}
@@ -107,12 +118,13 @@ func (s *State) checked(claims []claim, q *protocol.Quota, e *llm.Error, now tim
 		case e != nil && e.Code == llm.CodeUnsupported:
 			b.pass, b.check = true, time.Time{} // no reading: the next request is the check
 		case e != nil || q == nil:
-			// The reading could not be made: the block holds, and was checked again an interval on
-			// when the check was taken on.
+			// The reading could not be made: the block holds, with the next check due set when
+			// the check was taken on.
 		default:
 			reset, window, full := fullWindow(q, c.key, now)
 			if !full {
-				*b = block{level: b.level, mark: b.mark, reason: b.reason}
+				// The block ends, and its backoff starts over, as after a success.
+				*b = block{mark: b.mark, reason: b.reason}
 				break
 			}
 			d, source := s.resetFor(reset.Sub(now).Milliseconds())

@@ -102,6 +102,13 @@ func checkUnread(h *harness, rd *fakeReadings) {
 	h.r.Check(context.Background())
 }
 
+// backedOff sends a request that the account refuses for a used-up quota without naming a reset,
+// so core backs off: 1s for the first step, held half of it with the harness's jitter.
+func backedOff(h *harness, _ *fakeReadings) {
+	h.on("a", fail(llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeCredential}))
+	h.run(h.req("m"))
+}
+
 func refused(reset time.Duration) func(h *harness, rd *fakeReadings) {
 	return func(h *harness, rd *fakeReadings) {
 		h.on("a", quotaOut(reset))
@@ -180,6 +187,20 @@ func TestResetRuleScenarios(t *testing.T) {
 				h.runOK("m")
 			}, HealthOK, 0, 0, ""},
 		}, 3},
+		{"9. a check with no more than an interval left after it is the last", []healthStep{
+			{0, "429 quota, reset in 20m", refused(20 * m), HealthExhausted, 20 * m, 15 * m, SourceProvider},
+			{15 * m, "check: failed", check(failed), HealthExhausted, 5 * m, 0, SourceProvider},
+			{5 * m, "time passes", nil, HealthOK, 0, 0, ""},
+		}, 1},
+		{"10. the request a check lets through is the last check when no more than an interval is left", []healthStep{
+			{0, "429 quota, reset in 20m", refused(20 * m), HealthExhausted, 20 * m, 15 * m, SourceProvider},
+			{15 * m, "check: no reading, so a request may pass", checkUnread, HealthExhausted, 5 * m, 0, SourceProvider},
+			{0, "the check request: refused for the request itself", func(h *harness, _ *fakeReadings) {
+				h.on("a", fail(llm.Error{Code: llm.CodeInvalidRequest, Status: 400, Message: "bad request"}))
+				h.run(h.req("m"))
+			}, HealthExhausted, 5 * m, 0, SourceProvider},
+			{5 * m, "time passes", nil, HealthOK, 0, 0, ""},
+		}, 2},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -446,5 +467,37 @@ func TestCheckHoldsOnlyOnCoveringWindows(t *testing.T) {
 				t.Errorf("after the check: %s for %v (%s), want %s for %v", got.State, left, got.Why, c.state, c.left)
 			}
 		})
+	}
+}
+
+// A check that ends a block starts its backoff over, as a success does: the next refusal without
+// a reset time is held for the first step again. Here the account's state is not swept between
+// the check and that refusal: a request on the other account swept it just before the check.
+func TestCheckEndingABlockStartsTheBackoffOver(t *testing.T) {
+	h := newHarness(t, Config{}, accts("a", "b")...)
+	rd := &fakeReadings{read: func(string) (*protocol.Quota, *llm.Error) {
+		return windows(h.now, 0, 5*time.Hour, 0, 7*24*time.Hour), nil
+	}}
+	h.r.UseReadings(rd)
+	backoff := fail(llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeCredential})
+	h.on("a", backoff)
+	h.runOK("m") // a refuses: backoff, its first step; b serves
+	if got := h.healthOf("a"); got.State != HealthCooling || got.Until == nil || got.Until.Sub(h.now) != 500*time.Millisecond {
+		t.Fatalf("after the first refusal: %+v, want cooling for 500ms", got)
+	}
+	h.now = h.now.Add(time.Second)
+	h.on("a", quotaOut(5*time.Hour))
+	h.runOK("m") // a refuses until a reset in 5h; b serves
+	h.now = h.now.Add(15 * time.Minute)
+	h.runOK("m") // b serves, and the state is swept
+	h.r.Check(context.Background())
+	if got := h.healthOf("a"); got.State != HealthOK {
+		t.Fatalf("after the check: %+v, want ok", got)
+	}
+	h.on("a", backoff)
+	h.runOK("m") // a refuses again without a reset; b serves
+	h.wantAttempts("a", "b", "a", "b", "b", "a", "b")
+	if got := h.healthOf("a"); got.State != HealthCooling || got.Until == nil || got.Until.Sub(h.now) != 500*time.Millisecond {
+		t.Errorf("after the refusal that followed the check: %+v, want cooling for 500ms, the first step", got)
 	}
 }
