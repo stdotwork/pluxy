@@ -1322,7 +1322,8 @@ request through at the check instead, and that request's outcome decides. A real
 the check where a reading exists. A check that cannot be made leaves the block and is made again
 15 minutes later. Quota blocks are saved to `state/routing.json` beside the config file (mode
 0600) and read back at start, where each is checked at once, so a restart sends no requests to
-accounts whose usage ran out. `pluxy account clear` (`POST /accounts/{id}/cooldown/reset`)
+accounts whose usage ran out. A file core cannot read, or that another version wrote, is not
+loaded and is left as it is until a block must be saved; it is then moved to `routing.json.bad`. `pluxy account clear` (`POST /accounts/{id}/cooldown/reset`)
 still clears an account's blocks at once. Each account's `health` in `GET /accounts` sums this
 up in one word (see `management/README.md`, "Accounts").
 

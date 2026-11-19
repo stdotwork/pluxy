@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -219,5 +220,89 @@ func TestSavedBlockKeepsAccountOutAfterRestart(t *testing.T) {
 	_ = json.Unmarshal(api, &fromAPI)
 	if a, b := mustJSON(fromCLI), mustJSON(fromAPI); a != b {
 		t.Errorf("account list --json printed\n%s\nthe API answers\n%s", a, b)
+	}
+}
+
+// state/routing.json is written only when there is something to save, and a file core cannot
+// read, or that another version wrote, is not loaded and is left in place until a block must be
+// saved; it is then moved aside to routing.json.bad.
+func TestRoutingFileIsLeftAloneUntilABlockMustBeSaved(t *testing.T) {
+	pkg := testPackageID(t, "test/health", "1.0.0")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	writeConfig(t, path, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(pkg, "pluxy-extension.json"),
+			"accounts": []any{
+				map[string]any{"id": "a", "settings": map[string]any{"exhausted_until": time.Now().Add(3 * time.Hour).Unix()}},
+				map[string]any{"id": "b"},
+			},
+		},
+	})
+	bin := filepath.Join(binDir, "pluxy")
+	file := filepath.Join(dir, "state", "routing.json")
+	start := func() (string, func()) {
+		t.Helper()
+		base, _, stop, err := startCoreStoppable(t, bin, "-config", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base, stop
+	}
+	read := func(name string) string {
+		t.Helper()
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+
+	// Nothing to save and no file: a start and a stop write none.
+	_, stop := start()
+	stop()
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Errorf("after a start and a stop with no block, %s: %v, want no file", file, err)
+	}
+
+	// A file that cannot be read, and one another version wrote (holding a block on a), are not
+	// loaded and stay as they are.
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	other := fmt.Sprintf(`{"v": 2, "blocks": [{"account": "a", "scope": "credential", "until": %q, "source": "provider"}]}`,
+		time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+	for _, content := range []string{"{not json", other} {
+		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		base, stop := start()
+		if h := accountHealth(t, base, "a"); h.State != mgmt.HealthOK {
+			t.Errorf("a with %q in %s: %+v, want ok (the file not loaded)", content, file, h)
+		}
+		stop()
+		if got := read(file); got != content {
+			t.Errorf("%s after a start and a stop: %q, want %q left as it was", file, got, content)
+		}
+	}
+
+	// A block to save: the other version's file is moved aside, and routing.json holds the block.
+	base, stop := start()
+	postOK(t, base, `{"model":"plain","messages":[{"role":"user","content":"hi"}]}`) // a refuses, b serves
+	stop()
+	if got := read(file + ".bad"); got != other {
+		t.Errorf("%s.bad = %q, want the file that was there, %q", file, got, other)
+	}
+	var doc struct {
+		V      int `json:"v"`
+		Blocks []struct {
+			Account string `json:"account"`
+		} `json:"blocks"`
+	}
+	if err := json.Unmarshal([]byte(read(file)), &doc); err != nil || doc.V != 1 || len(doc.Blocks) != 1 || doc.Blocks[0].Account != "a" {
+		t.Errorf("%s = %s (%v), want version 1 with a's block", file, read(file), err)
 	}
 }

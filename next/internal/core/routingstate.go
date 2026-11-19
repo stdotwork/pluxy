@@ -32,10 +32,15 @@ func StateDir(configPath string) string {
 // routingFile is the file in the state folder that holds routing's quota blocks.
 const routingFile = "routing.json"
 
-// routingDoc is routing.json: the quota blocks of route.State.Saved.
+// routingDoc is routing.json: the quota blocks of route.State.Saved, under the version of the
+// document's form (routingVersion).
 type routingDoc struct {
+	V      int                `json:"v"`
 	Blocks []route.SavedBlock `json:"blocks"`
 }
+
+// routingVersion is the version of routing.json's form that this core reads and writes.
+const routingVersion = 1
 
 // checkIntervalEnv, for tests only, sets how often routing checks long blocks, in milliseconds,
 // in place of 15 minutes.
@@ -49,13 +54,19 @@ type routing struct {
 	every time.Duration // the check interval
 	stop  context.CancelFunc
 	done  chan struct{}
-	saved []byte // what routing.json holds now
+	path  string // routing.json
+	// saved is what routing.json holds now, when core read or wrote it; nil when there is no
+	// file or core could not read it.
+	saved []byte
+	// bad is true while path holds a file core could not read or that another version wrote:
+	// it is kept until a block must be saved.
+	bad bool
 }
 
 // startRouting reads routing.json back into the routing state, then checks blocks on a timer
 // (the blocks read back at once) and writes the file again whenever its blocks change.
 func (c *Core) startRouting() {
-	r := &routing{every: defaultCheckEvery, done: make(chan struct{})}
+	r := &routing{every: defaultCheckEvery, done: make(chan struct{}), path: filepath.Join(StateDir(c.opts.ConfigPath), routingFile)}
 	if v := os.Getenv(checkIntervalEnv); v != "" {
 		if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms > 0 {
 			r.every = time.Duration(ms) * time.Millisecond
@@ -70,10 +81,10 @@ func (c *Core) startRouting() {
 }
 
 // loadRouting puts back the blocks routing.json holds, for the accounts core has. A file that
-// cannot be read is logged and left alone: core starts without its blocks.
+// cannot be read, or that another version of core wrote, is logged and left in place: core starts
+// without its blocks, and saveRouting moves it aside only when a block must be saved.
 func (c *Core) loadRouting(r *routing) {
-	path := filepath.Join(StateDir(c.opts.ConfigPath), routingFile)
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(r.path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return
 	}
@@ -81,8 +92,13 @@ func (c *Core) loadRouting(r *routing) {
 	if err == nil {
 		err = json.Unmarshal(b, &doc)
 	}
+	if err == nil && doc.V != routingVersion {
+		err = fmt.Errorf("it is version %d of the file, and this core reads version %d", doc.V, routingVersion)
+	}
 	if err != nil {
-		log.Printf("routing: %s cannot be read, so accounts start with no blocks: %v", path, err)
+		r.bad = true
+		log.Printf("routing: %s cannot be read, so accounts start with no blocks; it is left as it is until a quota block must be saved, and then moved to %s: %v",
+			r.path, filepath.Base(r.path)+".bad", err)
 		return
 	}
 	r.saved = b
@@ -127,13 +143,25 @@ func (c *Core) checkRouting(ctx context.Context) {
 }
 
 // saveRouting writes routing's quota blocks to routing.json when they changed: whole, to a
-// temporary file renamed into place, readable by its owner only.
+// temporary file renamed into place, readable by its owner only. With no block to save it writes
+// nothing unless the file holds blocks core saved or read before. A file loadRouting could not
+// read is left in place until a block must be saved, and then moved aside to routing.json.bad.
 func (c *Core) saveRouting(r *routing) {
-	b, err := json.MarshalIndent(routingDoc{Blocks: c.state.Saved(time.Now())}, "", "  ")
-	if err != nil || bytes.Equal(b, r.saved) {
+	blocks := c.state.Saved(time.Now())
+	b, err := json.MarshalIndent(routingDoc{V: routingVersion, Blocks: blocks}, "", "  ")
+	if err != nil || bytes.Equal(b, r.saved) || len(blocks) == 0 && r.saved == nil {
 		return
 	}
-	if err := writePrivate(filepath.Join(StateDir(c.opts.ConfigPath), routingFile), b); err != nil {
+	if r.bad {
+		aside := r.path + ".bad"
+		if err := os.Rename(r.path, aside); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			log.Printf("routing: the quota blocks are not saved: moving %s, which cannot be read, aside: %v", r.path, err)
+			return
+		}
+		log.Printf("routing: moved %s, which cannot be read, to %s", r.path, aside)
+		r.bad = false
+	}
+	if err := writePrivate(r.path, b); err != nil {
 		log.Printf("routing: saving the quota blocks: %v", err)
 		return
 	}
