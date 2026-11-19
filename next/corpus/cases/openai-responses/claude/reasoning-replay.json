@@ -59,6 +59,12 @@
   "volatile": ["client.body.created_at","client.events[*].data.response.created_at"],
   "exceptions": [
     {
+      "path": "upstream[0].body.max_tokens",
+      "kind": "intended",
+      "reason": "A request that sets no output limit gets the model's own from the Claude extension's model list (64000 for claude-sonnet-4-5), as LiteLLM and today's CLIProxyAPI take theirs from their catalogs; today's core sent 32000 whatever the model.",
+      "want": 64000
+    },
+    {
       "path": "upstream[0].body.messages[0].content",
       "kind": "intended",
       "reason": "The same text: the new core writes message content as content blocks; today's core keeps a plain string.",
