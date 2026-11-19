@@ -10,14 +10,15 @@ import (
 const roleSystem = "system"
 
 // placeSystem places the system messages EncodeRequest kept inside the conversation, the
-// consecutive ones as one, by Anthropic's rules for them (prompt caching page, "Mid-conversation
-// system messages"): one follows a user turn and is followed by an assistant turn or ends the
-// conversation. So one is placed after the user turns that follow it, if any, as LiteLLM places
-// them too. Where it then follows a user turn, a model that takes system messages there (takes)
-// gets it as one, and any other gets its text in that user turn as a <system-reminder>, the
-// fallback Anthropic gives for models without them. Where it follows an assistant turn with no
-// user turn after it, its text goes in a user turn of its own, as a <system-reminder>. A move and
-// a change of form are each reported as approximated.
+// consecutive ones as one, by Anthropic's rules for them
+// (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages): one
+// follows a user turn and precedes an assistant turn or ends the conversation. So one is placed
+// after the user turns that follow it, if any, as LiteLLM places them too. Where it then follows a
+// user turn, a model that takes system messages there (takes) gets it as one; any other gets its
+// text in that user turn, in place, as LiteLLM does, inside <system-reminder> tags (the form
+// Claude Code gives such text) where LiteLLM adds an operator note. Where it follows an assistant
+// turn with no user turn after it, its text goes in a user turn of its own. A move and a change of
+// form are each reported as approximated.
 func (e *encoder) placeSystem(msgs []*outMessage, takes bool) []*outMessage {
 	out := make([]*outMessage, 0, len(msgs))
 	for i := 0; i < len(msgs); {

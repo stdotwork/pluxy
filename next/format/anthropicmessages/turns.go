@@ -30,8 +30,9 @@ const (
 
 // refusesPrefill reports whether model refuses a conversation that ends on an assistant turn:
 // Claude 4.6 and later and Mythos Preview do ("Claude 4.6 and later models and Claude Mythos
-// Preview reject a prefilled final assistant turn with a 400 error", Anthropic's extended thinking
-// page), and so is a claude- name not known as a version, as every model since 4.6 refuses it.
+// Preview reject a prefilled final assistant turn with a 400 error",
+// https://platform.claude.com/docs/en/build-with-claude/thinking), and so does a claude- name not
+// known as a version, as every model since 4.6 refuses it.
 // Older Claude models and other vendors' models take one.
 func refusesPrefill(model string) bool {
 	if !strings.HasPrefix(claudeName(model), "claude-") {
@@ -46,8 +47,9 @@ var claudeFamily = regexp.MustCompile(`^claude-(opus|sonnet|haiku|fable|mythos)-
 
 // takesMidSystem reports whether model takes a system message inside the conversation: Claude
 // Opus 4.8 and later, Fable and Mythos 5 and later, Sonnet and Haiku 5.5 and later (not Sonnet 5),
-// as Anthropic's prompt caching page lists them. Any other name, a Claude one not placed as a
-// version included, is treated as one that does not.
+// as Anthropic lists them
+// (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages). Any
+// other name, a Claude one not placed as a version included, is treated as one that does not.
 //
 // shortcut: decided from the model name, as claudeVersion is.
 func takesMidSystem(model string) bool {
