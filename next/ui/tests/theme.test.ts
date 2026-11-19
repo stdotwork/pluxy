@@ -201,6 +201,21 @@ describe("reading a theme", () => {
     expect(parseThemeText(huge).ok).toBe(false);
   });
 
+  test("a T3 Code file with no colours says what it needs; other files without theme_version do not", () => {
+    const why = (raw: unknown) => {
+      const r = parseTheme(raw);
+      return r.ok ? "accepted" : r.error;
+    };
+    const needs = "a T3 Code theme file needs a colors object, or both canvas and accent";
+    expect(why({ name: "No colours", appearance: "dark" })).toBe(needs);
+    expect(why({ name: "No colours", appearance: "light", canvas: "#ffffff" })).toBe(needs);
+    const missing = "theme_version is missing or not a whole number";
+    expect(why({ name: "No colours" })).toBe(missing);
+    expect(why({ name: "No colours", appearance: "sepia" })).toBe(missing);
+    expect(why({ name: " ", appearance: "dark" })).toBe(missing);
+    expect(why({ appearance: "dark", colors: {} })).toBe(missing);
+  });
+
   test("keeps what it can, with a warning for each part it ignores", () => {
     const r = ok({
       ...base,

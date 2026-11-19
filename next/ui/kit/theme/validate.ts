@@ -289,7 +289,12 @@ function parseT3Theme(raw: Record<string, unknown>): ThemeResult {
   const name = raw.name;
   const appearanceRaw = raw.appearance;
   const hasColorsOrSeeds = isObject(raw.colors) || (raw.canvas !== undefined && raw.accent !== undefined);
+  const named = typeof name === "string" && name.trim().length > 0;
 
+  // A T3 Code file with no colours: say what it lacks, not that theme_version is missing.
+  if (named && (appearanceRaw === "light" || appearanceRaw === "dark") && !hasColorsOrSeeds) {
+    return { ok: false, error: "a T3 Code theme file needs a colors object, or both canvas and accent" };
+  }
   if (
     typeof name !== "string" ||
     name.trim().length === 0 ||
