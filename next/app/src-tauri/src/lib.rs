@@ -2572,6 +2572,13 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
         }
         tauri::async_runtime::spawn_blocking(move || {
             let st = app.state::<App>();
+            struct Open<'a>(&'a std::sync::atomic::AtomicBool);
+            impl Drop for Open<'_> {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::SeqCst);
+                }
+            }
+            let open = Open(&st.key_entry_open);
             let input = key_entry::request_as(
                 &app,
                 "pluxy secret",
@@ -2580,7 +2587,7 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
                 ),
                 false,
             );
-            st.key_entry_open.store(false, Ordering::SeqCst);
+            drop(open);
             match input {
                 Ok(Some(input)) => st
                     .vault
