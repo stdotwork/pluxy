@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
 	"github.com/stdotwork/pluxy/next/management"
@@ -35,31 +34,6 @@ func (c *Core) loadPublicKey() {
 		log.Printf("routing: saving %s failed, so accounts' public IDs change at the next start: %v", path, err)
 	}
 	c.state.SetPublicKey(key)
-}
-
-// held lists the accounts the credential store holds that are not routed over: turned off by a
-// person, or waiting for a new login. A request that leaves them out says so.
-func (c *Core) held() []route.Held {
-	s := c.cur.Load()
-	if s == nil || c.creds == nil {
-		return nil
-	}
-	var out []route.Held
-	for _, r := range c.creds.Records() {
-		state := route.HealthNeedsLogin
-		switch {
-		case r.Usable() || s.exts[r.Extension] == nil || c.reserved(r.ID):
-			continue
-		case r.Disabled:
-			state = route.HealthDisabled
-		case r.State != cred.StateReauth:
-			continue
-		}
-		a := r.Account
-		a.ID, a.Credential, a.Managed, a.Extension = r.ID, nil, true, r.Extension
-		out = append(out, route.Held{Account: c.extensionConfig(s, r.Extension).LoginDefaults(a, r.Credential.Kind), State: state})
-	}
-	return out
 }
 
 // handleRoute adds GET /v0/management/route?model=<name>: the accounts a request for the model

@@ -222,13 +222,13 @@ type Router struct {
 	gen      uint64    // this router's generation, from state (see State.Retain)
 	created  time.Time // when the router was made: the created time of models accounts list themselves
 
-	mu       sync.RWMutex // guards accounts, creds, readings and catalog
-	accounts []*Account
+	mu       sync.RWMutex // guards accounts, known, creds, readings and catalog
+	accounts []*Account   // the accounts requests are routed over
+	known    []*Account   // accounts and the held accounts (Account.Held), in the order given
 	creds    Credentials
 	readings Readings
 	catalog  CatalogFunc
-	lists    catalogs // the accounts' model lists from catalog
-	held     func() []Held
+	lists    catalogs // the known accounts' model lists from catalog
 
 	// For tests: the clock, the wait, the source of jitter, and a hook run after an account
 	// is chosen and before it is reserved.
@@ -249,9 +249,10 @@ func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Ro
 	}
 	r := &Router{cfg: cfg, attempt: attempt, state: state, gen: state.nextGen(), created: time.Now(), now: time.Now, sleep: sleepCtx, rand: rand.Float64}
 	var err error
-	if r.accounts, err = accountList(accounts, r.gen, state); err != nil {
+	if r.known, err = accountList(accounts, r.gen, state); err != nil {
 		return nil, err
 	}
+	r.accounts = inService(r.known)
 	if r.picker, err = newPicker(cfg.Strategy, r.accounts, state.rotation, r.gen); err != nil {
 		return nil, err
 	}
@@ -259,6 +260,11 @@ func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Ro
 		r.affinity, r.ttl = state.affinity, cfg.AffinityTTL()
 	}
 	return r, nil
+}
+
+// inService returns the accounts of accounts that are not held.
+func inService(accounts []*Account) []*Account {
+	return slices.DeleteFunc(slices.Clone(accounts), func(a *Account) bool { return a.Held != "" })
 }
 
 func accountList(accounts []Account, gen uint64, state *State) ([]*Account, error) {
@@ -279,7 +285,8 @@ func accountList(accounts []Account, gen uint64, state *State) ([]*Account, erro
 	return out, nil
 }
 
-// SetAccounts replaces the accounts requests are routed over. Requests already routing keep
+// SetAccounts replaces the accounts requests are routed over, with the held accounts among them
+// (Account.Held), which only count toward the choice of a name's provider. Requests already routing keep
 // the set they started with. Routing state of an account that leaves the set is dropped (its
 // blocks, last error and session bindings), so an account added again later under the same ID
 // starts clean. So is the state of an account that
@@ -288,16 +295,25 @@ func accountList(accounts []Account, gen uint64, state *State) ([]*Account, erro
 // endpoint that no unchanged account names. Outcomes that requests already routing see on its
 // old copy record nothing and bind no session.
 func (r *Router) SetAccounts(accounts []Account, same func(old, cur *Account) bool) error {
-	list, err := accountList(accounts, r.gen, r.state)
+	known, err := accountList(accounts, r.gen, r.state)
 	if err != nil {
 		return err
 	}
+	list := inService(known)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// The new copies take their revisions here, under r.mu with the forgets below, so a
 	// SetAccounts running at the same time cannot give a copy a revision its forget has passed.
-	for _, a := range list {
+	for _, a := range known {
 		a.rev = r.state.revision(a.ID)
+	}
+	// A model list read while an account was held was read with no credential: it is read
+	// again once the account is in service, and the other way round.
+	var relist []*Account
+	for _, a := range r.known {
+		if i := slices.IndexFunc(known, func(b *Account) bool { return b.ID == a.ID }); i >= 0 && known[i].Held != a.Held {
+			relist = append(relist, a)
+		}
 	}
 	old := r.accounts
 	var changed, fresh []*Account
@@ -315,9 +331,9 @@ func (r *Router) SetAccounts(accounts []Account, same func(old, cur *Account) bo
 	// Before the new copies serve: a request that picks an old copy meanwhile records nothing
 	// on it.
 	r.state.restart(changed, fresh, kept)
-	r.accounts = list
+	r.accounts, r.known = list, known
 	r.picker.setOrder(list)
-	r.lists.retain(list, changed, same == nil)
+	r.lists.retain(known, append(changed, relist...), same == nil)
 	for _, a := range old {
 		if !slices.ContainsFunc(list, func(b *Account) bool { return b.ID == a.ID }) {
 			r.state.forget(a.ID)
@@ -347,6 +363,25 @@ func (r *Router) snapshot() ([]*Account, Credentials) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.accounts, r.creds
+}
+
+// knownSnapshot is snapshot with the held accounts among the accounts.
+func (r *Router) knownSnapshot() ([]*Account, Credentials) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.known, r.creds
+}
+
+// split returns the targets of accounts in service, and those of held accounts.
+func split(targets []target) (serving, held []target) {
+	for _, t := range targets {
+		if t.a.Held != "" {
+			held = append(held, t)
+		} else {
+			serving = append(serving, t)
+		}
+	}
+	return serving, held
 }
 
 func (r *Router) catalogFunc() CatalogFunc {
@@ -386,6 +421,7 @@ type call struct {
 	steps   []Step         // the request's steps: its model's chain, or one step for the model
 	chain   bool           // the model has a chain
 	capable []target       // the accounts that serve each step, in step order
+	held    []target       // the held accounts that would serve a step, in step order
 	ended   bool           // the attempt's reservation is released
 
 	creds   Credentials
@@ -463,7 +499,7 @@ func (c *call) route() llm.Event {
 // gives up and returns the error event that ends the request.
 func (c *call) attempts() llm.Event {
 	r, model := c.r, c.req.LLM.Model
-	accounts, creds := r.snapshot()
+	accounts, creds := r.knownSnapshot()
 	c.creds = creds
 	var eligible []*Account
 	for _, a := range accounts {
@@ -480,10 +516,12 @@ func (c *call) attempts() llm.Event {
 		for _, a := range eligible {
 			c.capable = append(c.capable, target{a: a})
 		}
+		c.capable, c.held = split(c.capable)
 	} else {
+		// Held accounts take part in choosing each step's provider, and serve nothing.
 		served := r.served(c.ctx, eligible, creds, r.catalogFunc())
 		c.steps, c.chain = r.stepsFor(model)
-		c.capable = r.targets(c.steps, eligible, served)
+		c.capable, c.held = split(r.targets(c.steps, eligible, served))
 	}
 	capable := c.capable
 	if len(capable) == 0 {

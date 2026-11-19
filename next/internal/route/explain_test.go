@@ -216,13 +216,8 @@ func TestResultCode(t *testing.T) {
 // Accounts a person turned off or that wait for a login are named in what a plan leaves out, when
 // their own models say they would have served it.
 func TestPlanNamesHeldAccounts(t *testing.T) {
-	h := newHarness(t, Config{}, accts("a")...)
-	h.r.SetHeld(func() []Held {
-		return []Held{
-			{Account: Account{ID: "off", Models: []ModelEntry{{Name: "m"}}}, State: HealthDisabled},
-			{Account: Account{ID: "other", Models: []ModelEntry{{Name: "other-model"}}}, State: HealthNeedsLogin},
-		}
-	})
+	h := newHarness(t, Config{}, Account{ID: "a"}, Account{ID: "off", Models: []ModelEntry{{Name: "m"}}, Held: HealthDisabled},
+		Account{ID: "other", Models: []ModelEntry{{Name: "other-model"}}, Held: HealthNeedsLogin})
 	p := h.r.Plan(context.Background(), "m")
 	if len(p.LeftOut) != 1 || p.LeftOut[0].ID != "off" || p.LeftOut[0].State != HealthDisabled {
 		t.Errorf("left out = %+v", p.LeftOut)

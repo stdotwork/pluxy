@@ -584,7 +584,6 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		router.UseCatalog(catalog(next.exts))
 	}
 	next.Router = router
-	router.SetHeld(c.held)
 	if c.creds == nil { // the first load: nothing is live yet
 		store, err := cred.Open(cred.FileBackend{Dir: cfg.CredentialsDir})
 		if err != nil {
@@ -690,7 +689,7 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 		c.loadRouting(c.routing)
 	}
 	swapPprof(next, prev)
-	c.checkAccounts(next, accounts)
+	c.checkAccounts(next, inService(accounts))
 	for _, g := range old {
 		g.Drain(func() {
 			c.mu.Lock()
@@ -726,24 +725,40 @@ func (c *Core) configured(s *snapshot) []route.Account {
 
 // routed returns the accounts s routes over: the config's, then those the credential store
 // holds, for the extensions s runs. A stored account whose ID the config also uses is left out.
+// A stored account turned off by a person or waiting for a new login is among them, held
+// (route.Account.Held): the router sends it nothing, but it keeps its provider's model names.
 func (c *Core) routed(s *snapshot) []route.Account {
 	accounts := c.configured(s)
 	all := s.Config.Accounts()
-	kinds := map[string]string{}
 	for _, r := range c.creds.Records() {
-		kinds[r.ID] = r.Credential.Kind
-	}
-	for _, a := range c.creds.Accounts() {
-		if s.exts[a.Extension] == nil {
+		held := ""
+		switch {
+		case r.Disabled:
+			held = route.HealthDisabled
+		case r.State == cred.StateReauth:
+			held = route.HealthNeedsLogin
+		case !r.Usable():
 			continue
 		}
-		if slices.ContainsFunc(all, func(x route.Account) bool { return x.ID == a.ID }) {
-			log.Printf("account %q is both in the config and added by login; using the config's", a.ID)
+		if s.exts[r.Extension] == nil {
 			continue
 		}
-		accounts = append(accounts, c.extensionConfig(s, a.Extension).LoginDefaults(a, kinds[a.ID]))
+		if slices.ContainsFunc(all, func(x route.Account) bool { return x.ID == r.ID }) {
+			if held == "" {
+				log.Printf("account %q is both in the config and added by login; using the config's", r.ID)
+			}
+			continue
+		}
+		a := r.Account
+		a.ID, a.Credential, a.Managed, a.Extension, a.Held = r.ID, nil, true, r.Extension, held
+		accounts = append(accounts, c.extensionConfig(s, r.Extension).LoginDefaults(a, r.Credential.Kind))
 	}
 	return accounts
+}
+
+// inService returns the accounts of accounts that are not held.
+func inService(accounts []route.Account) []route.Account {
+	return slices.DeleteFunc(slices.Clone(accounts), func(a route.Account) bool { return a.Held != "" })
 }
 
 // accountsChanged gives the active router the credential store's accounts after they changed.
@@ -755,7 +770,7 @@ func (c *Core) accountsChanged() {
 	if err := s.Router.SetAccounts(accounts, sameAccount); err != nil {
 		log.Printf("updating accounts: %v", err)
 	}
-	c.checkAccounts(s, accounts)
+	c.checkAccounts(s, inService(accounts))
 }
 
 // reserved reports whether the active config sets an account with ID id, which a login may

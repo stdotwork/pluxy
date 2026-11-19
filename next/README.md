@@ -1350,9 +1350,12 @@ retry on their own.
 A model name is served by the accounts of one provider: the provider (extension) of the
 highest-priority account that serves the name, the first in the config's order on a tie. Accounts
 whose model list could not be read serve any model, but they decide the provider only when no
-account lists the name. When another provider serves the same name too, its accounts take none of
-these requests, however blocked the first provider's are; a fallback chain (below) is how a name
-moves to another provider or model.
+account lists the name. Accounts that cannot serve now count in this choice too: a banned or
+blocked account, one turned off and one waiting for a new login keep the name on their provider,
+and the error of a request they cannot serve names them with their state in `left_out`; only a
+change to accounts, priorities or chains moves a name to another provider. When another provider
+serves the same name too, its accounts take none of these requests, however blocked the first
+provider's are; a fallback chain (below) is how a name moves to another provider or model.
 
 An account is eligible when it serves the model, no block covers it and it is under its
 concurrency limit. Refusals block what they are about, for as long as the upstream said

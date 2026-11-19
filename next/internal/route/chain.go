@@ -19,8 +19,9 @@ import (
 // so a chain cannot loop.
 //
 // With no chain, a name is served by the accounts of one provider: the provider of the
-// highest-priority account that serves it, the first in the config's order on a tie. Two
-// providers that serve one name do not share its requests unless a chain says so.
+// highest-priority account that serves it, the first in the config's order on a tie, counting
+// accounts that cannot serve now (held, banned or blocked). Two providers that serve one name do
+// not share its requests unless a chain says so.
 
 // Step is one step of a fallback chain: a model, and optionally the one provider (an
 // extension's ID, such as pluxy/claude) and the accounts (their IDs) that serve it. A step with
@@ -139,7 +140,9 @@ func (r *Router) targets(steps []Step, accounts []*Account, served map[string][]
 
 // stepTargets returns the accounts that serve step s, the step at index i. With no provider and
 // no accounts named, they are one provider's: that of the highest-priority account that serves
-// the step's model, the first in order on a tie. An account that serves the model because its
+// the step's model, the first in order on a tie. Every account given counts toward that choice,
+// held, banned and blocked ones too, so an account going out of service never moves the name to
+// another provider; the caller leaves the held ones out of what it tries (split). An account that serves the model because its
 // model list is not known (it serves any model) decides only when no account lists the model:
 // otherwise one whose list could not be read would take every name from the providers that
 // list it.
@@ -182,12 +185,13 @@ func rotationKey(model string, chain bool, step int) string {
 
 // CheckSteps reports the first of steps that no account the router routes over serves, as a
 // management call that sets a chain refuses it. An account whose model list is not known serves
-// any model, as for a request.
+// any model, as for a request. A step whose provider is that of held accounts alone is refused
+// too: requests could not use it.
 func (r *Router) CheckSteps(ctx context.Context, steps []Step) error {
-	accounts, creds := r.snapshot()
+	accounts, creds := r.knownSnapshot()
 	served := r.served(ctx, accounts, creds, r.catalogFunc())
 	for i, s := range steps {
-		if len(r.stepTargets(s, i, accounts, served)) == 0 {
+		if serving, _ := split(r.stepTargets(s, i, accounts, served)); len(serving) == 0 {
 			return fmt.Errorf("step %d, %s: no account serves it", i+1, s)
 		}
 	}

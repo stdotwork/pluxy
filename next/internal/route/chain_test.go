@@ -417,22 +417,23 @@ func TestModelListAgreesWithRouting(t *testing.T) {
 	}
 }
 
-// heldCase is an account that serves no requests, of the higher-priority provider P, beside a
-// usable account of Q that also lists m.
-func heldHarness(t *testing.T, state string) *chainHarness {
+// heldHarness has p1, an account of P that serves no requests (held as state), and q1, a usable
+// account of Q that also lists m. p1 has the higher priority, or the same and comes first.
+func heldHarness(t *testing.T, state string, priority int) *chainHarness {
 	m := []ModelEntry{{Name: "m"}}
-	h := newChainHarness(t, Config{}, Account{ID: "q1", Extension: "Q", Models: m})
-	h.r.SetHeld(func() []Held {
-		return []Held{{Account: Account{ID: "p1", Extension: "P", Models: m, Priority: 1}, State: state}}
-	})
-	return h
+	return newChainHarness(t, Config{}, Account{ID: "p1", Extension: "P", Models: m, Priority: priority, Held: state},
+		Account{ID: "q1", Extension: "Q", Models: m})
 }
 
 // An account that is out of service keeps its name on its provider: the request fails and names
 // it, rather than going to another provider that lists the name. Each held kind alike.
 func TestHeldAccountKeepsTheProvider(t *testing.T) {
-	for _, state := range []string{HealthNeedsLogin, HealthDisabled} {
-		h := heldHarness(t, state)
+	for _, c := range []struct {
+		state    string
+		priority int
+	}{{HealthNeedsLogin, 1}, {HealthDisabled, 1}, {HealthNeedsLogin, 0}} {
+		state := c.state
+		h := heldHarness(t, state, c.priority)
 		evs := h.run(h.req("m", ""))
 		e := evs[len(evs)-1].Error
 		if e == nil || e.Explain == nil {
