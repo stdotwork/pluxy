@@ -45,8 +45,8 @@
 //! - `serve`, the client-key check's agent (`src/client_key_native.rs`): sends `GET /v1/models` to
 //!   the core at `base` (plain HTTP) with the secret delivered for `key` as its bearer token, writes
 //!   the status core answered to `out` and answers with it and its process ID; on Windows, where the
-//!   check cannot read another process's argv and environment, it also writes its own to
-//!   `<out>.process`, one per line;
+//!   check cannot read another process's environment, it also writes its own to `<out>.process`,
+//!   one per line;
 //! - `export`, the save check's exporter (`src/save_native.rs`): reads the file `source` and hands
 //!   its bytes to the host's save service for the call, in `files` frames: `append` frames of at
 //!   most `chunk` bytes (default 700,000) at their offsets, then one `save` with `name` and the
@@ -238,15 +238,15 @@ fn windows_seen(out: &mut Value) {
         .map(|which| unsafe { GetFileType(GetStdHandle(which)) } == FILE_TYPE_PIPE));
 }
 
-/// Its own argv and environment, one per line. On Windows the client-key check reads the
-/// environment here, since Windows gives no supported way to read another process's; the argv it
-/// reads as Windows has it (`Win32_Process.CommandLine`).
+/// Its own environment, one entry per line. On Windows the client-key check reads the environment
+/// here, since Windows gives no supported way to read another process's; the argv it reads as
+/// Windows has it (`Win32_Process.CommandLine`).
 #[cfg(windows)]
 fn own_process() -> String {
-    let args = std::env::args_os().map(|a| a.to_string_lossy().into_owned());
-    let env = std::env::vars_os()
-        .map(|(k, v)| format!("{}={}", k.to_string_lossy(), v.to_string_lossy()));
-    args.chain(env).collect::<Vec<_>>().join("\n")
+    std::env::vars_os()
+        .map(|(k, v)| format!("{}={}", k.to_string_lossy(), v.to_string_lossy()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The file this process's handle with value names (`GetFinalPathNameByHandleW`), if it has such
