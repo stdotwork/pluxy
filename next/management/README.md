@@ -90,6 +90,8 @@ management API of a core that is already running. `pluxy -config ...` with no su
 Setup is what a new install shows first. Core looks at the machine it runs on, says what it found, and
 proposes what to install. Nothing is installed until asked.
 
+`first_run` is true only while there is no `state/setup.json` and core has no installed packages and no accounts; once `setup.json` exists, its `first_run` is kept. Core scans on its own only at a first run's start with no kept scan; otherwise only on `POST /setup/scan`.
+
 | Call | Command | What it does |
 | --- | --- | --- |
 | `GET /setup` | `pluxy setup` | The last scan, at once (it is kept on disk): `first_run`; `scanning`; `scanned_at`; `found` (below); `picks` (below). The command prints it and, on a terminal, offers to apply the picks marked `suggested` (`--yes` applies without asking) |
@@ -117,7 +119,7 @@ proposes what to install. Nothing is installed until asked.
 }
 ```
 
-A client's `state` is `not-configured`, `configured` (it points at this core) or `needs-update`. `sign_ins`
+A client's `state` is `not-configured`, `configured` (it points at this core), `needs-update`, or **new** `refused` (a file the desktop app's writer for that tool would refuse to change; no pick is suggested to apply to it). `sign_ins`
 only says a sign-in exists; core reads no token from it.
 
 `picks`, in the order to show them:
