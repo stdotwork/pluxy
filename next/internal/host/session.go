@@ -89,7 +89,7 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		if reply.Error == nil {
 			return nil, e.protocolError("an error frame without an error")
 		}
-		ev := protocol.NewRedactor(creds...).Event(reply.Event)
+		ev := e.normalizeEvent(protocol.NewRedactor(creds...).Event(reply.Event))
 		return nil, ev.Error
 	default:
 		conn.Close()
@@ -365,7 +365,7 @@ func (t *SessionStream) Next() llm.Event {
 		t.fail(redacted(t.redact, s.ext.protocolError(err.Error())))
 		return *t.final
 	}
-	ev := t.redact.Event(f.reply.Event)
+	ev := t.s.ext.normalizeEvent(t.redact.Event(f.reply.Event))
 	if ev.Terminal() {
 		t.final = &ev
 		t.end()

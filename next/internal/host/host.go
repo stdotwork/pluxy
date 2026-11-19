@@ -726,7 +726,7 @@ func (s *Stream) Next() llm.Event {
 		}
 		return ev
 	}
-	ev := s.redact.Event(reply.Event)
+	ev := s.ext.normalizeEvent(s.redact.Event(reply.Event))
 	if ev.Terminal() {
 		s.final = &ev
 		s.Close()
@@ -954,4 +954,21 @@ func (l *lineLogger) Write(p []byte) (int, error) {
 
 func (l *lineLogger) longLine() {
 	l.out.line(l.prefix, fmt.Sprintf("(a line longer than %d bytes, not logged)", maxLogLine))
+}
+
+// accountClosedMinor is the protocol minor version that adds llm.CodeAccountClosed.
+const accountClosedMinor = 19
+
+// normalizeEvent downgrades error codes that require a newer protocol minor version than e
+// reported in describe.
+func (e *Extension) normalizeEvent(ev llm.Event) llm.Event {
+	if e == nil || ev.Type != llm.EventError || ev.Error == nil {
+		return ev
+	}
+	if e.info.ProtocolMinor < accountClosedMinor && ev.Error.Code == llm.CodeAccountClosed {
+		errCopy := *ev.Error
+		errCopy.Code = llm.CodePermission
+		ev.Error = &errCopy
+	}
+	return ev
 }

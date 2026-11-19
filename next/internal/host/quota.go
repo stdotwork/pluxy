@@ -76,7 +76,7 @@ func (e *Extension) Quota(ctx context.Context, account protocol.Account) (*proto
 		}
 		return out, nil
 	case r.Type == llm.EventError && r.Error != nil:
-		return nil, redact.Event(r.Event).Error
+		return nil, e.normalizeEvent(redact.Event(r.Event)).Error
 	}
 	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a quota call", e.manifest.ID, redact.String(r.Type))}
 }
