@@ -42,6 +42,12 @@
   ],
   "exceptions": [
     {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Codex's own request has no metadata field, so the new core's Codex extension does not send the client's metadata; today's core sends it on.",
+      "absent": true
+    },
+    {
       "path": "upstream[*].headers.Accept-Encoding",
       "kind": "intended",
       "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."

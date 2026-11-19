@@ -191,6 +191,12 @@
   ],
   "exceptions": [
     {
+      "path": "upstream[0].body.max_output_tokens",
+      "kind": "intended",
+      "reason": "The Codex endpoint refuses an integer output budget under 16, so the new core's Codex extension raises a smaller one to 16 (Claude Code's model switch asks for 1); today's core sends it as the client wrote it.",
+      "want": 16
+    },
+    {
       "path": "client.events[0].data.message.usage.input_tokens",
       "kind": "gap",
       "reason": "Today's core puts its own local estimate of the input tokens in message_start; the new core has no tokenizer and sends 0 there, as Anthropic's message_start allows, until message_delta carries the upstream's count.",
