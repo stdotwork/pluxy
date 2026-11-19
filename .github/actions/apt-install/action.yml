@@ -92,13 +92,15 @@ runs:
           fi
         fi
         sudo "${apt[@]}" install -y $PACKAGES || exit 1
-        # Keep only the files of the versions installed now, named as apt names them (an epoch's
-        # colon as %3a).
-        dpkg-query -W -f='${Package}_${Version}_${Architecture}.deb\n' | sed 's/:/%3a/g' > "$RUNNER_TEMP/installed-debs"
+        # Keep only the files of the versions installed now, matched on the name and version as apt
+        # writes them in a file name (an epoch's colon as %3a). Not on the architecture: 26.04's
+        # files carry the variant (amd64v3) where dpkg reports amd64.
+        dpkg-query -W -f='${Package}_${Version}\n' | sed 's/:/%3a/g' > "$RUNNER_TEMP/installed-debs"
         sudo rm -rf "$debs/partial" "$debs/lock"
         for f in "$debs"/*.deb; do
           [ -e "$f" ] || continue
-          grep -qxF "$(basename "$f")" "$RUNNER_TEMP/installed-debs" || sudo rm -f "$f"
+          name="$(basename "$f")"
+          grep -qxF "${name%_*}" "$RUNNER_TEMP/installed-debs" || sudo rm -f "$f"
         done
         kept="$(find "$debs" -maxdepth 1 -name '*.deb' | wc -l)"
         echo "apt packages: $cached restored from the cache, $kept kept ($(du -sh "$debs" | cut -f1))"
