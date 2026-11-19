@@ -41,10 +41,16 @@ fn only_apply_receives_the_key_and_writes_ask_each_time() {
     // Creating the library folder asks too, and names it.
     let folders = operation("folders");
     assert_eq!(folders["effect"], "write");
-    assert!(folders["description"]
-        .as_str()
-        .unwrap()
-        .contains("~/.config/Claude-3p/configLibrary"));
+    let named = folders["description"].as_str().unwrap();
+    for place in [
+        "configLibrary",
+        // The app's Linux native step looks for this path in the confirmation.
+        "~/.config/Claude-3p/configLibrary on Linux",
+        "~/Library/Application Support/Claude-3p on macOS",
+        "Claude-3p in the local application data folder on Windows",
+    ] {
+        assert!(named.contains(place), "{named}");
+    }
     for id in ["preview", "status", "recipe"] {
         assert_eq!(operation(id)["effect"], "read");
     }

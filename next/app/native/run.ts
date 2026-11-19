@@ -237,6 +237,8 @@
 // Each session has a name in native/shards.ts, which puts it in one of the shards CI runs as
 // parallel jobs. With PLUXY_APP_NATIVE_SHARD=<shard>, a run builds everything above and runs only
 // that shard's sessions, and fails if one of them never started; without it, it runs them all.
+// PLUXY_APP_NATIVE_BUILD=<dir> only builds, into dir, and PLUXY_APP_NATIVE_PREBUILT=<dir> runs the
+// sessions on those builds instead of building (CI builds once for every shard).
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -251,10 +253,11 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve as resolvePath } from "node:path";
+import { basename, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
 import { buildAccessFixtures } from "./access";
 import { buildAdmissionFixtures, MARKER_FILE, PROFILE_FILE } from "./admission";
@@ -307,9 +310,10 @@ const commands = [
   ...readFileSync(join(tauri, "src", "command_names.rs"), "utf8").matchAll(/^\s+"(\w+)",$/gm),
 ].map((m) => m[1] as string);
 /** Every command of the plugins the build registers, from the ACL manifests Tauri's build
- * writes (as lib.rs plugin_commands reads them); read once the app is built. */
+ * writes (as lib.rs plugin_commands reads them), or a prebuilt folder's copy of them; read once
+ * the app is built. */
 function pluginCommands(): string[] {
-  const manifests = JSON.parse(readFileSync(join(tauri, "gen", "schemas", "acl-manifests.json"), "utf8"));
+  const manifests = JSON.parse(readFileSync(join(prebuilt ?? tauri, ACL_MANIFESTS), "utf8"));
   const all = new Set<string>();
   for (const [plugin, manifest] of Object.entries<{
     permissions?: Record<string, { commands?: { allow?: string[]; deny?: string[] } }>;
@@ -322,6 +326,8 @@ function pluginCommands(): string[] {
   }
   return [...all];
 }
+/** Where Tauri's build writes the ACL manifests, in src-tauri (not in the target folder). */
+const ACL_MANIFESTS = join("gen", "schemas", "acl-manifests.json");
 const PAGE = "ext/test/probe/probe";
 /** Tauri's command check refusing a call (debug builds say where; release builds "by ACL"). */
 const REFUSED = /not allowed( on window|\. Permissions associated| by ACL)/;
@@ -697,7 +703,7 @@ async function runApp(
         JSON.stringify(buildAccessFixtures(access)),
       );
       // No recent files for the session's GTK programs, the portal's file chooser among them:
-      // with recent files, a folder chooser opens in its Recent view, where a typed folder
+      // with recent files, a folder chooser opens in its Recent view, where an entered folder
       // cannot be chosen (GTK 3.24 gtkfilechooserwidget.c gtk_file_chooser_widget_get_files);
       // without, it opens in a folder (startup mode falls back to the current folder).
       mkdirSync(join(dirs.config, "gtk-3.0"), { recursive: true });
@@ -2119,13 +2125,55 @@ function runsSession(name: string): boolean {
 }
 
 const targetDir = resolvePath(tauri, process.env.CARGO_TARGET_DIR ?? "target");
+/** With PLUXY_APP_NATIVE_BUILD=<dir>, a run makes the builds below, copies what the sessions run
+ * into dir (keepBuilds says what) and stops; with PLUXY_APP_NATIVE_PREBUILT=<dir>, it builds none of
+ * them and runs its sessions on what such a run left in dir, from the same commit. CI builds once
+ * that way and runs the shards on the result. The release gate's own builds still run. */
+const buildTo = process.env.PLUXY_APP_NATIVE_BUILD
+  ? resolvePath(process.env.PLUXY_APP_NATIVE_BUILD)
+  : undefined;
+const prebuilt = process.env.PLUXY_APP_NATIVE_PREBUILT
+  ? resolvePath(process.env.PLUXY_APP_NATIVE_PREBUILT)
+  : undefined;
+/** The commit checked out here, which a prebuilt folder must have been built from. */
+const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: app, encoding: "utf8" }).stdout?.trim();
+if (buildTo && prebuilt) {
+  console.error(
+    "native test setup failed: PLUXY_APP_NATIVE_BUILD and PLUXY_APP_NATIVE_PREBUILT exclude each other",
+  );
+  process.exit(1);
+}
+if (!commit && (buildTo || prebuilt)) {
+  console.error("native test setup failed: git rev-parse HEAD named no commit for the prebuilt builds");
+  process.exit(1);
+}
+if (prebuilt) {
+  let from: string | undefined;
+  try {
+    from = JSON.parse(readFileSync(join(prebuilt, "prebuilt.json"), "utf8")).commit;
+  } catch (e) {
+    console.error(`native test setup failed: ${prebuilt} holds no prebuilt.json: ${(e as Error).message}`);
+    process.exit(1);
+  }
+  if (from !== commit) {
+    console.error(`native test setup failed: ${prebuilt} was built from ${from}, this checkout is ${commit}`);
+    process.exit(1);
+  }
+  console.log(`native test: the builds from ${prebuilt} (commit ${commit}); building none here`);
+}
+/** Where the debug builds below are: cargo's target folder, or the prebuilt folder's copy of it. */
+const builtDir = prebuilt ? join(prebuilt, "target") : targetDir;
+/** Runs one of the builds below, unless the run uses prebuilt ones. */
+function build(cmd: string, args: string[], cwd: string) {
+  if (!prebuilt) run(cmd, args, cwd);
+}
 /** The probe the session uses to check the desktop services. */
-const probe = join(targetDir, "debug", "examples", "session_probe");
+const probe = join(builtDir, "debug", "examples", "session_probe");
 /** The disposable summary tool the program host check packs into a signed package. */
-const programFixture = join(targetDir, "debug", "examples", "program_fixture");
+const programFixture = join(builtDir, "debug", "examples", "program_fixture");
 /** The app tools' workspace, and the Codex session reader the session reader check packs. */
 const appTools = join(next, "app-tools");
-const appToolsTarget = join(targetDir, "app-tools");
+const appToolsTarget = join(builtDir, "app-tools");
 const sessionsReader = join(appToolsTarget, "debug", "codex-sessions");
 /** The execution program (next/app-tools/execution) and its manifest, for the launcher check. */
 const executionManifest = join(appTools, "execution", "pluxy-extension.json");
@@ -2182,6 +2230,54 @@ function removeTemporary(): boolean {
   return failed.length === 0;
 }
 
+/** What a PLUXY_APP_NATIVE_BUILD run keeps of cargo's target folder, as paths in it, besides
+ * every program in app-tools/debug and the fixture writer when it was built. */
+const BUILT = [
+  "debug/pluxy-app", // the build with artifact-test-trust
+  "debug/examples/session_probe",
+  "debug/examples/program_fixture",
+];
+
+/** Copies what the sessions run into out/target (the test package and the dev build are already
+ * in out) and the ACL manifests into out/gen, and names the commit and the test package's folder
+ * in out/prebuilt.json. */
+function keepBuilds(out: string, packageDir: string) {
+  mkdirSync(join(out, ACL_MANIFESTS, ".."), { recursive: true });
+  copyFileSync(join(tauri, ACL_MANIFESTS), join(out, ACL_MANIFESTS));
+  const keep = (path: string) => {
+    mkdirSync(join(out, "target", path, ".."), { recursive: true });
+    copyFileSync(join(targetDir, path), join(out, "target", path));
+  };
+  for (const path of BUILT) keep(path);
+  if (existsSync(fixtureWriter)) keep(relative(targetDir, fixtureWriter));
+  const tools = join(targetDir, "app-tools", "debug");
+  if (existsSync(tools))
+    for (const name of readdirSync(tools)) {
+      const s = statSync(join(tools, name));
+      if (s.isFile() && s.mode & 0o111 && !name.endsWith(".d")) keep(join("app-tools", "debug", name));
+    }
+  writeFileSync(join(out, "prebuilt.json"), JSON.stringify({ commit, package: packageDir }));
+}
+
+/** The prebuilt test package's JSON, written anew with its paths moved from the folder it was
+ * built in to dir, where it is now. */
+function movedPackage(dir: string): string {
+  const from: string = JSON.parse(readFileSync(join(prebuilt as string, "prebuilt.json"), "utf8")).package;
+  const made: TestPackage = JSON.parse(readFileSync(join(dir, "test-package.json"), "utf8"));
+  const move = (path: string) => {
+    const r = relative(from, path);
+    if (r.startsWith("..") || isAbsolute(r))
+      throw new Error(`the prebuilt test package's ${path} is outside ${from}`);
+    return join(dir, r);
+  };
+  made.appimage = move(made.appimage);
+  made.binary = move(made.binary);
+  made.update.appimage = move(made.update.appimage);
+  const json = join(tempDir("pluxy-app-native-package-"), "test-package.json");
+  writeFileSync(json, JSON.stringify(made));
+  return json;
+}
+
 let exitCode = 1;
 try {
   exitCode = await main();
@@ -2195,11 +2291,17 @@ async function main(): Promise<number> {
 
   // The test package first: its Tauri build renames the binary it makes in target/debug, and the
   // dev build below puts the dev binary back.
-  const packageDir = tempDir("pluxy-app-native-package-");
+  const packageDir = prebuilt
+    ? join(prebuilt, "package")
+    : buildTo
+      ? join(buildTo, "package")
+      : tempDir("pluxy-app-native-package-");
+  let packageJson = join(packageDir, "test-package.json");
   let testPackage: TestPackage | undefined;
   try {
-    runShown("bun", ["run", "package:test", packageDir], app);
-    const made: TestPackage = JSON.parse(readFileSync(join(packageDir, "test-package.json"), "utf8"));
+    if (prebuilt) packageJson = movedPackage(packageDir);
+    else runShown("bun", ["run", "package:test", packageDir], app);
+    const made: TestPackage = JSON.parse(readFileSync(packageJson, "utf8"));
     const name = basename(made.appimage);
     const header = appImageHeader(made.appimage);
     console.log(
@@ -2216,7 +2318,7 @@ async function main(): Promise<number> {
 
   // The dev app, the probe the session uses to check the desktop services
   // (examples/session_probe.rs) and the program host check's summary tool.
-  run(
+  build(
     "cargo",
     [
       "build",
@@ -2235,44 +2337,51 @@ async function main(): Promise<number> {
   // The execution program the launcher check installs, from its own workspace. Its native-test
   // feature lets an open launch take the open check's stand-in opener from a search path.
   if (existsSync(executionManifest))
-    run(
+    build(
       "cargo",
       ["build", "--locked", "-p", "execution", "--features", "native-test", "--target-dir", appToolsTarget],
       appTools,
     );
   // pluxy/claude-code, which the Claude Code check installs.
   if (existsSync(claudeCodeManifest))
-    run("cargo", ["build", "--locked", "-p", "claude-code", "--target-dir", appToolsTarget], appTools);
+    build("cargo", ["build", "--locked", "-p", "claude-code", "--target-dir", appToolsTarget], appTools);
   // pluxy/codex-setup, which the Codex check installs.
   if (existsSync(codexManifest))
-    run("cargo", ["build", "--locked", "-p", "codex-setup", "--target-dir", appToolsTarget], appTools);
+    build("cargo", ["build", "--locked", "-p", "codex-setup", "--target-dir", appToolsTarget], appTools);
   // pluxy/claude-desktop, which the Claude Desktop check installs.
   if (existsSync(claudeDesktopManifest))
-    run("cargo", ["build", "--locked", "-p", "claude-desktop", "--target-dir", appToolsTarget], appTools);
+    build("cargo", ["build", "--locked", "-p", "claude-desktop", "--target-dir", appToolsTarget], appTools);
   // pluxy/opencode, which the OpenCode check installs.
   if (existsSync(opencodeManifest))
-    run("cargo", ["build", "--locked", "-p", "opencode", "--target-dir", appToolsTarget], appTools);
+    build("cargo", ["build", "--locked", "-p", "opencode", "--target-dir", appToolsTarget], appTools);
   // pluxy/omp-setup, which the Oh My Pi check installs.
   if (existsSync(ompManifest))
-    run("cargo", ["build", "--locked", "-p", "omp-setup", "--target-dir", appToolsTarget], appTools);
+    build("cargo", ["build", "--locked", "-p", "omp-setup", "--target-dir", appToolsTarget], appTools);
   // pluxy/grok-setup, which the Grok Build check installs.
   if (existsSync(grokManifest))
-    run("cargo", ["build", "--locked", "-p", "grok-setup", "--target-dir", appToolsTarget], appTools);
+    build("cargo", ["build", "--locked", "-p", "grok-setup", "--target-dir", appToolsTarget], appTools);
   // pluxy/hermes-setup, which the Hermes Agent check installs.
   if (existsSync(hermesManifest))
-    run("cargo", ["build", "--locked", "-p", "hermes-setup", "--target-dir", appToolsTarget], appTools);
+    build("cargo", ["build", "--locked", "-p", "hermes-setup", "--target-dir", appToolsTarget], appTools);
   // pluxy/pi-setup, which the Pi check installs.
   if (existsSync(piManifest))
-    run("cargo", ["build", "--locked", "-p", "pi-setup", "--target-dir", appToolsTarget], appTools);
+    build("cargo", ["build", "--locked", "-p", "pi-setup", "--target-dir", appToolsTarget], appTools);
   // The build without artifact-test-trust, kept aside before the build with it replaces it. The
   // device check needs the one (a normal build refuses the curated native tool), the admission
   // session and the updater gate's identifier check the other (its features are the test
   // package's, so the two differ only in the identifier and product name). The probe is built
   // again with it, since installing a core release (install-core) checks it with the test roots.
-  const binDir = tempDir("pluxy-app-native-bin-");
+  const binDir = prebuilt
+    ? join(prebuilt, "dev")
+    : buildTo
+      ? join(buildTo, "dev")
+      : tempDir("pluxy-app-native-bin-");
   const bin = join(binDir, "pluxy-app");
-  copyFileSync(join(targetDir, "debug", "pluxy-app"), bin);
-  run(
+  if (!prebuilt) {
+    mkdirSync(binDir, { recursive: true });
+    copyFileSync(join(targetDir, "debug", "pluxy-app"), bin);
+  }
+  build(
     "cargo",
     [
       "build",
@@ -2286,12 +2395,12 @@ async function main(): Promise<number> {
     ],
     tauri,
   );
-  const trustBin = join(targetDir, "debug", "pluxy-app");
+  const trustBin = join(builtDir, "debug", "pluxy-app");
   // The Codex session reader, from the app tools' workspace, when it is there; and the usage hub
   // and its fixture parser, each when its folder is there.
   if (existsSync(join(appTools, "Cargo.toml"))) {
     // Its native-test feature lets `open` send the stand-in opener's folder to execution.
-    run(
+    build(
       "cargo",
       [
         "build",
@@ -2315,7 +2424,7 @@ async function main(): Promise<number> {
       "usage-opencode",
     ].filter((t) => existsSync(join(appTools, t, "Cargo.toml")));
     if (usageTools.length > 0) {
-      run(
+      build(
         "cargo",
         ["build", "--locked", ...usageTools.flatMap((t) => ["-p", t]), "--target-dir", appToolsTarget],
         appTools,
@@ -2324,7 +2433,7 @@ async function main(): Promise<number> {
   }
   // The transaction library's fixture writer, when the library is there.
   if (existsSync(join(appTools, "lib", "transactions", "Cargo.toml"))) {
-    run(
+    build(
       "cargo",
       [
         "build",
@@ -2338,6 +2447,15 @@ async function main(): Promise<number> {
       ],
       appTools,
     );
+  }
+  if (buildTo) {
+    if (problems.length > 0) {
+      console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
+      return 1;
+    }
+    keepBuilds(buildTo, packageDir);
+    console.log(`native test: the builds are in ${buildTo} (commit ${commit})`);
+    return 0;
   }
   const appImageDir = tempDir("pluxy-app-native-appimage-");
   // The same test trust profile in every run; without a test package, a key no build carries.
@@ -3095,7 +3213,7 @@ func main() {
       if (runsSession("update")) {
         if (testPackage) {
           const upd = await runUpdate({
-            packageJson: join(packageDir, "test-package.json"),
+            packageJson,
             pubkey: testPackage.updater_pubkey,
             probe,
             appImage,

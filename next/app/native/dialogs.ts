@@ -17,11 +17,10 @@
 // again. A sentinel core this runner started before the app must still answer afterwards, its
 // config and program unchanged. On Linux run.ts's core steps session runs the same steps.
 //
-// It runs only on a disposable GitHub-hosted runner (GITHUB_ACTIONS=true and
-// RUNNER_ENVIRONMENT=github-hosted). On Windows the app's folders come from the account's known
-// folders, which no environment variable redirects: it refuses to start when the app's roaming or
-// local folder already exists, and afterwards removes only the folders this run made. On macOS
-// the app gets a temporary HOME.
+// It runs only on a disposable CI runner (native/runner.ts). On Windows the app's folders come
+// from the account's known folders, which no environment variable redirects: it refuses to start
+// when the app's roaming or local folder already exists, and afterwards removes only the folders
+// this run made. On macOS the app gets a temporary HOME.
 //
 // Usage, from next/app after `bun run build`: bun native/dialogs.ts
 
@@ -43,6 +42,7 @@ import { dirname, join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
 import { MARKER_FILE, PROFILE_FILE } from "./admission";
 import { coreProblems, coreSource, sentinelProblems, startSentinel, stopSentinel } from "./core-steps";
+import { DISPOSABLE_RUNNER, onDisposableRunner } from "./runner";
 
 const app = resolvePath(import.meta.dir, "..");
 const next = resolvePath(app, "..");
@@ -318,11 +318,8 @@ function stacks(pid: number, symbols: string) {
 async function main(): Promise<number> {
   if (!platform)
     refuse("this session runs on Windows and macOS; on Linux, run.ts's local session runs these checks");
-  if (process.env.GITHUB_ACTIONS !== "true" || process.env.RUNNER_ENVIRONMENT !== "github-hosted")
-    refuse(
-      "it runs only on a disposable GitHub-hosted runner (GITHUB_ACTIONS=true and RUNNER_ENVIRONMENT=github-hosted): " +
-        "on Windows it would use this account's own app folders",
-    );
+  if (!onDisposableRunner())
+    refuse(`it runs only on ${DISPOSABLE_RUNNER}: on Windows it would use this account's own app folders`);
 
   const root = mkdtempSync(join(tmpdir(), "pluxy-app-dialogs-"));
   const home = join(root, "home");

@@ -20,11 +20,21 @@ import (
 //   - a function's parameters lose their enums (Cloud Code does not enforce them) and
 //     additionalProperties (hinted when false); a response schema keeps both, as Cloud Code
 //     enforces them there, but loses a boolean's enum;
+//   - if, then and else, which it lacks too, are removed after the properties of each then and else
+//     move into the schema that holds them (a property the schema has stays as it is), so a model
+//     sees them as plain optional properties, as in today's core; a branch's required names do not
+//     move;
+//   - allOf, which Cloud Code's schema lacks, merges into the schema that holds it: the branches'
+//     required names join its required, and their other keys fill the keys it lacks, recursively
+//     (its own values win). As in today's core this comes after the hints and the conditionals,
+//     deepest first, and before unions and type lists are flattened;
 //   - a type list such as ["string","null"] becomes the one type with nullable true;
 //   - a union with one non-null branch becomes that branch, nullable; for Claude models, whose
 //     backend rejects unions in function declarations, every union becomes its strongest branch
 //     (object over array over scalar) with the other types hinted ("Accepts: a | b");
-//   - other JSON Schema keywords are removed;
+//   - other JSON Schema keywords are removed, and so is title, except in a response schema (Google's
+//     Schema type has a title field, and today's core keeps it there) and, for Claude and Gemini 3 Pro,
+//     in a function's parameters and response;
 //   - for Claude and Gemini 3 Pro (the models today's core marks this way), a function's
 //     parameters get a required placeholder in every object that requires nothing: "reason" (a
 //     string) in one with no properties, "_" (a boolean) in one with properties and none
@@ -36,7 +46,7 @@ import (
 type schemaMode struct {
 	response     bool // a response schema, not a function's parameters
 	claude       bool // a function declaration for a Claude model
-	keepTitle    bool
+	keepTitle    bool // keep title: Google's Schema has the field; a function's parameters and response lose it for other models
 	placeholders bool // add the placeholders to a function's parameters
 }
 
@@ -70,7 +80,7 @@ var hintedConstraints = []string{
 var removedKeywords = []string{
 	"$schema", "$defs", "definitions", "$id", "id", "$anchor", "$vocabulary", "$dynamicRef", "$dynamicAnchor", "$comment",
 	"propertyNames", "patternProperties", "dependentRequired", "dependentSchemas", "dependencies",
-	"if", "then", "else", "not", "unevaluatedProperties", "unevaluatedItems", "additionalItems", "contentSchema",
+	"not", "unevaluatedProperties", "unevaluatedItems", "additionalItems", "contentSchema",
 	"contentMediaType", "contentEncoding", "readOnly", "writeOnly", "deprecated", "discriminator",
 	"enumDescriptions", "enumTitles", "prefill", "encrypted",
 }
@@ -80,8 +90,9 @@ const maxRefDepth = 16
 
 // cleanTools returns a request's tools with every function declaration's schemas cleaned: its
 // parameters (parametersJsonSchema renamed to parameters) and its response. group is true for
-// Claude and Gemini 3 Pro, which keep titles and get placeholders in their parameters; the second
-// result says where the placeholders went, leaving out any that a client schema at the same path
+// Claude and Gemini 3 Pro, which keep titles (also in a function's response) and get placeholders
+// in their parameters; the second result says where the placeholders went, leaving out any that
+// a client schema at the same path
 // (another union branch, whole as the client wrote it even where Claude's cleaning keeps one; a
 // tuple item; a function declared again under the same name) declares a name the placeholder
 // has, as a property or in required: stripping would take the client's key, so that placeholder
@@ -132,7 +143,7 @@ func cleanTools(raw json.RawMessage, claude, group bool) (json.RawMessage, place
 					}
 				}
 				if r, ok := d["response"]; ok {
-					d["response"] = cleanSchema(r, schemaMode{response: true})
+					d["response"] = cleanSchema(r, schemaMode{response: true, keepTitle: group})
 				}
 			}
 			t[key], _ = json.Marshal(decls)
@@ -167,7 +178,7 @@ func cleanResponseSchema(gen map[string]json.RawMessage) bool {
 		}
 	}
 	if v, ok := gen["responseSchema"]; ok {
-		gen["responseSchema"] = cleanSchema(v, schemaMode{response: true})
+		gen["responseSchema"] = cleanSchema(v, schemaMode{response: true, keepTitle: true})
 		changed = true
 	}
 	return changed
@@ -196,8 +207,8 @@ func cleanParameters(raw json.RawMessage, mode schemaMode) (json.RawMessage, []p
 			}
 		}
 	}
-	cleaned := clean(root, defs, mode, 0)
-	typeObjects(cleaned, false)
+	cleaned := cleanTree(root, defs, mode)
+	typeObjects(cleaned)
 	var sites []placeholderSite
 	declared := declaredNames{}
 	if mode.placeholders && !mode.response {
@@ -205,10 +216,10 @@ func cleanParameters(raw json.RawMessage, mode schemaMode) (json.RawMessage, []p
 		// cleaned has cut each union to one branch, and the others' names are the client's too.
 		whole := cleaned
 		if mode.claude {
-			whole = clean(root, defs, schemaMode{keepTitle: mode.keepTitle}, 0)
+			whole = cleanTree(root, defs, schemaMode{keepTitle: mode.keepTitle})
 		}
 		collectDeclared(whole, nil, declared)
-		addPlaceholders(cleaned, nil, false, &sites)
+		addPlaceholders(cleaned, nil, &sites)
 	}
 	out, err := json.Marshal(cleaned)
 	if err != nil {
@@ -218,14 +229,14 @@ func cleanParameters(raw json.RawMessage, mode schemaMode) (json.RawMessage, []p
 }
 
 // typeObjects gives type "object" to every schema that has properties and no type, as today's
-// core does, except an allOf branch, which merges into its object and takes that object's type.
-func typeObjects(node any, merged bool) {
+// core does.
+func typeObjects(node any) {
 	m, ok := node.(map[string]any)
 	if !ok {
 		return
 	}
-	schemaChildren(m, nil, func(child any, _ []placeholderStep, mg bool) { typeObjects(child, mg) })
-	if _, typed := m["type"]; typed || merged {
+	schemaChildren(m, nil, func(child any, _ []placeholderStep) { typeObjects(child) })
+	if _, typed := m["type"]; typed {
 		return
 	}
 	if _, ok := m["properties"].(map[string]any); ok {
@@ -261,30 +272,30 @@ func (d declaredNames) merge(other declaredNames) {
 	}
 }
 
-// schemaChildren calls fn for each subschema of m with the path to the values it describes: a
-// property's, an array element's, or (for a union branch and an allOf branch) m's own. merged is
-// true for an allOf branch, whose properties and required names belong to m.
-func schemaChildren(m map[string]any, path []placeholderStep, fn func(child any, path []placeholderStep, merged bool)) {
+// schemaChildren calls fn for each subschema of a cleaned schema m (allOf is merged by then) with
+// the path to the values it describes: a property's, an array element's, or for a union branch
+// m's own.
+func schemaChildren(m map[string]any, path []placeholderStep, fn func(child any, path []placeholderStep)) {
 	step := func(s placeholderStep) []placeholderStep { return append(slices.Clone(path), s) }
 	if props, ok := m["properties"].(map[string]any); ok {
 		for _, name := range slices.Sorted(maps.Keys(props)) {
-			fn(props[name], step(placeholderStep{key: name}), false)
+			fn(props[name], step(placeholderStep{key: name}))
 		}
 	}
 	for _, k := range []string{"items", "prefixItems"} {
 		switch items := m[k].(type) {
 		case map[string]any:
-			fn(items, step(placeholderStep{any: true}), false)
+			fn(items, step(placeholderStep{any: true}))
 		case []any:
 			for _, it := range items {
-				fn(it, step(placeholderStep{any: true}), false)
+				fn(it, step(placeholderStep{any: true}))
 			}
 		}
 	}
-	for _, k := range []string{"anyOf", "oneOf", "allOf"} {
+	for _, k := range []string{"anyOf", "oneOf"} {
 		if branches, ok := m[k].([]any); ok {
 			for _, b := range branches {
-				fn(b, path, k == "allOf")
+				fn(b, path)
 			}
 		}
 	}
@@ -316,52 +327,24 @@ func collectDeclared(node any, path []placeholderStep, declared declaredNames) {
 			}
 		}
 	}
-	schemaChildren(m, path, func(child any, p []placeholderStep, _ bool) { collectDeclared(child, p, declared) })
-}
-
-// objectShape adds the property names and required names of m and of the allOf branches that merge
-// into it (as today's core merges them before it adds a placeholder).
-func objectShape(m map[string]any, names, required map[string]bool) {
-	if props, ok := m["properties"].(map[string]any); ok {
-		for name := range props {
-			names[name] = true
-		}
-	}
-	if list, ok := m["required"].([]any); ok {
-		for _, r := range list {
-			if name, ok := r.(string); ok {
-				required[name] = true
-			}
-		}
-	}
-	if branches, ok := m["allOf"].([]any); ok {
-		for _, b := range branches {
-			if bm, ok := b.(map[string]any); ok {
-				objectShape(bm, names, required)
-			}
-		}
-	}
+	schemaChildren(m, path, func(child any, p []placeholderStep) { collectDeclared(child, p, declared) })
 }
 
 // addPlaceholders adds a placeholder to every object schema under node, as today's core does, and
 // records each in sites. path leads to the values node describes. An object is a schema of type
-// "object", or one with no type whose properties come only from its allOf branches (typeObjects
-// has typed the others; it gets that type when it gets a placeholder). An object that is a union (it has anyOf or oneOf) gets none, and an allOf branch is judged with the
-// object it merges into, not alone.
+// "object" (typeObjects has typed every schema with properties); one that is a union (it has anyOf
+// or oneOf) gets none.
 //
 // shortcut: an object with no declared properties gets "reason", which strip removes from the
 // model's calls wherever it stands in that object, so a key of that name the model means as data
 // (a free-form map's) is removed too; today's core leaves such a key where the object takes extra
 // keys. Do the same when a client's free-form map is seen to lose a "reason".
-func addPlaceholders(node any, path []placeholderStep, merged bool, sites *[]placeholderSite) {
+func addPlaceholders(node any, path []placeholderStep, sites *[]placeholderSite) {
 	m, ok := node.(map[string]any)
 	if !ok {
 		return
 	}
-	schemaChildren(m, path, func(child any, p []placeholderStep, mg bool) { addPlaceholders(child, p, mg, sites) })
-	if merged {
-		return
-	}
+	schemaChildren(m, path, func(child any, p []placeholderStep) { addPlaceholders(child, p, sites) })
 	if _, ok := m["anyOf"].([]any); ok {
 		return
 	}
@@ -369,41 +352,39 @@ func addPlaceholders(node any, path []placeholderStep, merged bool, sites *[]pla
 		return
 	}
 	own, hasOwn := m["properties"]
-	ownMap, ownIsMap := own.(map[string]any)
-	if hasOwn && !ownIsMap {
+	props, isMap := own.(map[string]any)
+	if hasOwn && !isMap {
 		return // properties: null, or not an object, is left as it is
 	}
-	names, required := map[string]bool{}, map[string]bool{}
-	objectShape(m, names, required)
-	typ, hasType := m["type"]
-	if !(typ == "object" || !hasType && len(names) > 0) {
+	if m["type"] != "object" {
 		return
 	}
-	if ownMap == nil {
-		ownMap = map[string]any{}
+	if props == nil {
+		props = map[string]any{}
 	}
 	switch {
-	case len(names) == 0:
-		ownMap["reason"] = map[string]any{"type": "string", "description": placeholderReason}
+	case len(props) == 0:
+		props["reason"] = map[string]any{"type": "string", "description": placeholderReason}
 		m["required"] = []any{"reason"}
 		*sites = append(*sites, placeholderSite{path: path, name: "reason"})
 	default:
-		for name := range required {
-			if names[name] {
-				return
+		if list, ok := m["required"].([]any); ok {
+			for _, r := range list {
+				if name, ok := r.(string); ok {
+					if _, declared := props[name]; declared {
+						return
+					}
+				}
 			}
 		}
-		if !names["_"] {
-			ownMap["_"] = map[string]any{"type": "boolean"}
+		if _, has := props["_"]; !has {
+			props["_"] = map[string]any{"type": "boolean"}
 			*sites = append(*sites, placeholderSite{path: path, name: "_"})
 		}
 		m["required"] = []any{"_"}
 	}
-	if !hasOwn && len(ownMap) > 0 {
-		m["properties"] = ownMap
-	}
-	if !hasType {
-		m["type"] = "object"
+	if !hasOwn {
+		m["properties"] = props
 	}
 }
 
@@ -526,6 +507,179 @@ func marshalPlain(v any) ([]byte, error) {
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
+// cleanTree cleans a whole schema in today's core's order: keywords and hints (clean), then the
+// properties of if/then/else merged (mergeConditionals), then allOf merged (mergeAllOf), then
+// unions and type lists flattened (flatten).
+func cleanTree(root any, defs map[string]any, mode schemaMode) any {
+	return flatten(mergeAllOf(mergeConditionals(clean(root, defs, mode, 0))), mode)
+}
+
+// walkSchema calls fn on every schema under v, children first, as clean reaches them: a
+// properties map holds schemas by name and is not one itself. fn returns what replaces the schema.
+func walkSchema(v any, fn func(map[string]any) any) any {
+	switch x := v.(type) {
+	case []any:
+		for i, val := range x {
+			x[i] = walkSchema(val, fn)
+		}
+		return x
+	case map[string]any:
+		for k, val := range x {
+			if k == "properties" {
+				if props, ok := val.(map[string]any); ok {
+					for name, p := range props {
+						props[name] = walkSchema(p, fn)
+					}
+				}
+				continue
+			}
+			x[k] = walkSchema(val, fn)
+		}
+		return fn(x)
+	}
+	return v
+}
+
+// mergeConditionals removes every if, then and else, deepest first, after merging the properties
+// of each then and else into the schema that holds it, as today's core does (mergeConditionals in
+// core/internal/util/gemini_schema.go): then first, and a property the schema already has stays as
+// it is. Cloud Code's schema has no conditionals, but a property only a branch declares is one the
+// client accepts, and the model sees it here as a plain optional one. Nothing but properties
+// moves: a branch's required names and its other keys are dropped with the keywords.
+func mergeConditionals(v any) any {
+	return walkSchema(v, func(m map[string]any) any {
+		for _, k := range []string{"then", "else"} {
+			branch, _ := m[k].(map[string]any)
+			props, _ := branch["properties"].(map[string]any)
+			if len(props) == 0 {
+				continue
+			}
+			dest, ok := m["properties"].(map[string]any)
+			if !ok {
+				if _, has := m["properties"]; has {
+					continue // not a properties map: nothing to merge into
+				}
+				dest = map[string]any{}
+			}
+			for name, p := range props {
+				if _, has := dest[name]; !has {
+					dest[name] = p
+				}
+			}
+			m["properties"] = dest
+		}
+		delete(m, "if")
+		delete(m, "then")
+		delete(m, "else")
+		return m
+	})
+}
+
+// mergeAllOf merges every allOf into the schema that holds it, deepest first, as today's core
+// does (mergeAllOf in core/internal/util/gemini_schema.go): a branch's required names are added to
+// the schema's, and its other keys fill the keys the schema lacks, recursively, the schema's own
+// values winning. A branch that is not an object adds nothing, and an allOf that is not a list is
+// removed (today's core keeps it as a property named allOf).
+func mergeAllOf(v any) any {
+	return walkSchema(v, func(m map[string]any) any {
+		branches, has := m["allOf"]
+		if !has {
+			return m
+		}
+		delete(m, "allOf")
+		list, _ := branches.([]any)
+		for _, b := range list {
+			bm, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, k := range slices.Sorted(maps.Keys(bm)) {
+				switch k {
+				case "required":
+					names, ok := bm[k].([]any)
+					if !ok {
+						continue
+					}
+					req, _ := m["required"].([]any)
+					for _, n := range names {
+						if !slices.Contains(req, n) {
+							req = append(req, n)
+						}
+					}
+					if len(req) > 0 {
+						m["required"] = req
+					}
+				case "allOf":
+					// Merged into the branch already; a conditional (if, then, else) is gone
+					// after mergeConditionals.
+				default:
+					fillMissing(m, k, bm[k])
+				}
+			}
+		}
+		return m
+	})
+}
+
+// fillMissing sets m[k] to v when m has no k, and when both are objects fills each of v's keys the
+// same way.
+func fillMissing(m map[string]any, k string, v any) {
+	cur, has := m[k]
+	if !has {
+		m[k] = v
+		return
+	}
+	cm, ok1 := cur.(map[string]any)
+	vm, ok2 := v.(map[string]any)
+	if !ok1 || !ok2 {
+		return
+	}
+	for kk, vv := range vm {
+		fillMissing(cm, kk, vv)
+	}
+}
+
+// flatten flattens every union and type list under v, children first: a union as flattenUnion
+// says, and a type list such as ["string","null"] to its first type other than null, nullable
+// when it has null, with the other types hinted.
+func flatten(v any, mode schemaMode) any {
+	return walkSchema(v, func(out map[string]any) any {
+		for _, uk := range []string{"anyOf", "oneOf"} {
+			if branches, ok := out[uk].([]any); ok {
+				if sel := flattenUnion(out, branches, mode); sel != nil {
+					return sel
+				}
+			}
+		}
+		if types, ok := out["type"].([]any); ok {
+			var nonNull []string
+			null := false
+			for _, t := range types {
+				if s, _ := t.(string); s == "null" {
+					null = true
+				} else if s != "" {
+					nonNull = append(nonNull, s)
+				}
+			}
+			if len(nonNull) > 0 {
+				out["type"] = nonNull[0]
+			} else {
+				delete(out, "type")
+			}
+			if len(nonNull) > 1 {
+				addHint(out, "Accepts: "+strings.Join(nonNull, " | "))
+			}
+			if null {
+				out["nullable"] = true
+				if len(nonNull) <= 1 {
+					addHint(out, "(nullable)")
+				}
+			}
+		}
+		return out
+	})
+}
+
 func clean(v any, defs map[string]any, mode schemaMode, depth int) any {
 	switch x := v.(type) {
 	case []any:
@@ -610,38 +764,6 @@ func cleanObject(x map[string]any, defs map[string]any, mode schemaMode, depth i
 		if val, ok := out[k]; ok {
 			addHint(out, k+": "+valueString(val))
 			delete(out, k)
-		}
-	}
-	for _, uk := range []string{"anyOf", "oneOf"} {
-		if branches, ok := out[uk].([]any); ok {
-			if sel := flattenUnion(out, branches, mode); sel != nil {
-				return sel
-			}
-		}
-	}
-	if types, ok := out["type"].([]any); ok {
-		var nonNull []string
-		null := false
-		for _, t := range types {
-			if s, _ := t.(string); s == "null" {
-				null = true
-			} else if s != "" {
-				nonNull = append(nonNull, s)
-			}
-		}
-		if len(nonNull) > 0 {
-			out["type"] = nonNull[0]
-		} else {
-			delete(out, "type")
-		}
-		if len(nonNull) > 1 {
-			addHint(out, "Accepts: "+strings.Join(nonNull, " | "))
-		}
-		if null {
-			out["nullable"] = true
-			if len(nonNull) <= 1 {
-				addHint(out, "(nullable)")
-			}
 		}
 	}
 	return out

@@ -236,13 +236,16 @@ impl Page {
     }
 
     pub(super) fn reply(&self, id: &str) -> Result<Value, String> {
-        wait_for(&format!("the page's reply {id}"), || {
-            eval(
-                &self.wv,
-                &format!("window.__route.replies[{}] ?? null", json!(id)),
-            )
-            .filter(|v| !v.is_null())
-        })
+        wait_for(&format!("the page's reply {id}"), || self.replied(id))
+    }
+
+    /// The page's reply id, if it has come.
+    pub(super) fn replied(&self, id: &str) -> Option<Value> {
+        eval(
+            &self.wv,
+            &format!("window.__route.replies[{}] ?? null", json!(id)),
+        )
+        .filter(|v| !v.is_null())
     }
 
     pub(super) fn call(&mut self, package: &str, op: &str, input: Value) -> Result<Value, String> {

@@ -13,8 +13,8 @@ use hermes::{yaml11_not_text, Settings};
 use pluxy_program::{run, Call, Error, Handler};
 use pluxy_transactions::{backup_call, data_dir, sha256_of, Pin, Selection, Target, Transactions};
 use serde_json::{json, Value};
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::ffi::OsString;
+use std::path::PathBuf;
 use yaml::Yamls;
 
 /// The one set this tool applies: Hermes Agent's config.yaml.
@@ -24,12 +24,42 @@ const CONFIG: &str = "config.yaml";
 
 struct Hermes;
 
+/// What the tool reads of its environment: `std::env::var_os`, or a test's values.
+type Var<'a> = &'a dyn Fn(&str) -> Option<OsString>;
+
+fn env(name: &str) -> Option<OsString> {
+    std::env::var_os(name)
+}
+
 /// The app's home folder.
-fn home() -> Result<PathBuf, Error> {
-    std::env::var_os("HOME")
+fn home_of(var: Var) -> Result<PathBuf, Error> {
+    var("HOME")
         .filter(|h| !h.is_empty())
         .map(PathBuf::from)
         .ok_or_else(|| Error::unavailable("the app gave no home folder (HOME)"))
+}
+
+/// The Hermes home with no HERMES_HOME (the tool's environment has none) on os, as Hermes picks
+/// it (`hermes_constants.py`, `_platform_default_hermes_home`): `~/.hermes` on Linux and macOS;
+/// on Windows `hermes` in `%LOCALAPPDATA%`, or in `AppData\Local` in the home folder when that is
+/// not set, blank or not a full path.
+fn hermes_root(os: &str, var: Var) -> Result<PathBuf, Error> {
+    if os != "windows" {
+        return Ok(home_of(var)?.join(".hermes"));
+    }
+    // Stripped of blanks as Hermes strips it, and only a full path: a relative one would name a
+    // folder under wherever the tool runs.
+    let local = var("LOCALAPPDATA")
+        .map(|v| match v.to_str() {
+            Some(t) => PathBuf::from(t.trim()),
+            None => PathBuf::from(v),
+        })
+        .filter(|p| p.is_absolute());
+    let local = match local {
+        Some(l) => l,
+        None => home_of(var)?.join("AppData").join("Local"),
+    };
+    Ok(local.join("hermes"))
 }
 
 /// The input's one target, read with f.
@@ -52,9 +82,9 @@ fn profile_id(name: &str) -> bool {
 }
 
 /// The Hermes home `hermes` uses with no flags and no HERMES_HOME (the tool's environment has
-/// none): `~/.hermes`, or the profile `~/.hermes/active_profile` names, as Hermes picks it.
-fn default_home() -> Result<PathBuf, Error> {
-    let root = home()?.join(".hermes");
+/// none): its root (`hermes_root`), or the profile its `active_profile` names, as Hermes picks it.
+fn default_home(os: &str, var: Var) -> Result<PathBuf, Error> {
+    let root = hermes_root(os, var)?;
     let name = match std::fs::read(root.join("active_profile")) {
         Ok(b) => String::from_utf8_lossy(&b)
             .trim_start_matches('\u{feff}')
@@ -93,7 +123,9 @@ fn selection(input: &Value) -> Result<[Selection; 1], Error> {
             root,
         }]);
     }
-    Ok([Selection::File(default_home()?.join(CONFIG))])
+    Ok([Selection::File(
+        default_home(std::env::consts::OS, &env)?.join(CONFIG),
+    )])
 }
 
 /// A preview and the file's bytes, read after it.
@@ -160,18 +192,17 @@ fn settings(input: &Value, key: &str) -> Result<Settings, Error> {
     })
 }
 
-/// Whether path is a file someone may run.
-fn executable(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-}
-
 /// How the launcher starts Hermes Agent: `hermes` in a terminal, with no arguments or variables
-/// (the old app's launch; with no arguments Hermes starts a chat). The installer's
-/// `~/.local/bin/hermes` comes first (often not on a desktop session's PATH), then `hermes` from
-/// the PATH.
-fn recipe() -> Result<Value, Error> {
-    let installed = home()?.join(".local/bin/hermes");
-    let program = if executable(&installed) {
+/// (the old app's launch; with no arguments Hermes starts a chat). The installer's copy comes
+/// first, often not on a desktop session's PATH: `~/.local/bin/hermes` on Linux and macOS
+/// (`install.sh` and `hermes_cli/_launchers.py`), `bin\hermes.exe` in the Hermes home on Windows
+/// (`install.ps1`); then `hermes` from the PATH.
+fn recipe(os: &str, var: Var) -> Result<Value, Error> {
+    let installed = match os {
+        "windows" => hermes_root(os, var)?.join("bin").join("hermes.exe"),
+        _ => home_of(var)?.join(".local/bin/hermes"),
+    };
+    let program = if pluxy_files::executable(&installed) {
         installed.to_string_lossy().into_owned()
     } else {
         "hermes".to_string()
@@ -236,7 +267,7 @@ impl Handler for Hermes {
                 &mut |_| {},
             ),
             "status" => Transactions::new(call, data_dir()?).status(),
-            "recipe" => recipe(),
+            "recipe" => recipe(std::env::consts::OS, &env),
             op => Err(Error::unsupported(format!("no operation {op}"))),
         }
     }

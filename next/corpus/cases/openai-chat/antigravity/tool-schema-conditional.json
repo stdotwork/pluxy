@@ -1,0 +1,194 @@
+{
+  "description": "Antigravity: a Gemini model's tool schema with if/then/else at the root, in a property and in array items reaches Cloud Code with the then and else properties merged into the schema that holds them and the conditional keywords gone.",
+  "source": [
+    "core/internal/runtime/executor/antigravity_executor_request.go",
+    "core/internal/util/gemini_schema.go"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "gemini-3.8-flash-high",
+      "messages": [{"role":"user","content":"Look up Oslo"}],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "lookup",
+            "description": "Look something up",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "kind": {"type":"string"},
+                "address": {
+                  "type": "object",
+                  "properties": {"country":{"type":"string"}},
+                  "if": {"properties":{"country":{"const":"US"}}},
+                  "then": {
+                    "properties": {"state":{"type":"string","minLength":2}},
+                    "required": ["state"]
+                  },
+                  "else": {"properties":{"region":{"type":"string"}}}
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {"id":{"type":"integer"}},
+                    "if": {"properties":{"id":{"const":1}}},
+                    "then": {"properties":{"label":{"type":"string"}}}
+                  }
+                }
+              },
+              "required": ["kind"],
+              "if": {"properties":{"kind":{"const":"a"}}},
+              "then": {
+                "properties": {"alpha":{"type":"string","enum":["x","y"]},"kind":{"type":"integer"}},
+                "required": ["alpha"]
+              },
+              "else": {"properties":{"beta":{"type":"integer"}}}
+            }
+          }
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "response": {
+          "candidates": [
+            {
+              "content": {
+                "role": "model",
+                "parts": [{"text":"thinking...","thought":true},{"text":"Hello world"}]
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 40,
+            "cachedContentTokenCount": 8,
+            "candidatesTokenCount": 12,
+            "thoughtsTokenCount": 20,
+            "totalTokenCount": 72
+          },
+          "modelVersion": "gemini-corpus-upstream",
+          "responseId": "resp-corpus"
+        },
+        "traceId": "trace-corpus"
+      }
+    }
+  ],
+  "volatile": ["client.body.created","upstream[*].body.requestId"],
+  "exceptions": [
+    {
+      "path": "client.body.choices[0].message.tool_calls",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new core writes a Chat completion from a Gemini reply with only the fields that are set (today's core adds tool_calls null and a non-standard native_finish_reason)."
+    },
+    {
+      "path": "client.body.choices[0].native_finish_reason",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new core writes a Chat completion from a Gemini reply with only the fields that are set (today's core adds tool_calls null and a non-standard native_finish_reason)."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello world",
+              "reasoning_content": "thinking...",
+              "role": "assistant",
+              "tool_calls": null
+            },
+            "native_finish_reason": "stop"
+          }
+        ],
+        "created": "(volatile)",
+        "id": "resp-corpus",
+        "model": "gemini-corpus-upstream",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 32,
+          "completion_tokens_details": {"reasoning_tokens":20},
+          "prompt_tokens": 40,
+          "prompt_tokens_details": {"cached_tokens":8},
+          "total_tokens": 72
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "model": "gemini-3.8-flash-high",
+          "project": "corpus-project-0001",
+          "request": {
+            "contents": [{"parts":[{"text":"Look up Oslo"}],"role":"user"}],
+            "sessionId": "-478665919652096520",
+            "tools": [
+              {
+                "functionDeclarations": [
+                  {
+                    "description": "Look something up",
+                    "name": "lookup",
+                    "parameters": {
+                      "properties": {
+                        "address": {
+                          "properties": {
+                            "country": {"type":"string"},
+                            "region": {"type":"string"},
+                            "state": {"description":"minLength: 2","type":"string"}
+                          },
+                          "type": "object"
+                        },
+                        "alpha": {"description":"Allowed: x, y","type":"string"},
+                        "beta": {"type":"integer"},
+                        "kind": {"type":"string"},
+                        "rows": {
+                          "items": {
+                            "properties": {"id":{"type":"integer"},"label":{"type":"string"}},
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": ["kind"],
+                      "type": "object"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "requestId": "(volatile)",
+          "requestType": "agent",
+          "userAgent": "antigravity"
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "antigravity/hub/2.29.0 (aidev_client; os_type=darwin; arch=arm64; cl=1013060670)"
+        },
+        "method": "POST",
+        "path": "/v1internal:generateContent"
+      }
+    ]
+  }
+}
