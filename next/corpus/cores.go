@@ -824,16 +824,17 @@ type fakeTokens struct {
 	access, id, refresh, accountID, email string
 }
 
-// corpusJWT makes an unsigned JWT with the claims.
+// corpusJWT makes an unsigned JWT with the claims. Its signature, like the refresh tokens below,
+// holds no word (see UpstreamKey).
 func corpusJWT(claims map[string]any) string {
 	h := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
 	b, _ := json.Marshal(claims)
-	return h + "." + base64.RawURLEncoding.EncodeToString(b) + ".corpus"
+	return h + "." + base64.RawURLEncoding.EncodeToString(b) + ".Zx8Kp3Qa"
 }
 
 func corpusTokens(key string) fakeTokens {
 	jwt := corpusJWT
-	t := fakeTokens{accountID: "acct-" + key, email: key + "@example.invalid", refresh: "corpus-refresh-" + key}
+	t := fakeTokens{accountID: "acct-" + key, email: key + "@example.invalid", refresh: "rt-Wd4Fj7Ug2-" + key}
 	t.access = jwt(map[string]any{"exp": corpusTokenExpiry, "sub": "corpus|" + key})
 	t.id = jwt(map[string]any{"exp": corpusTokenExpiry, "email": t.email,
 		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": t.accountID, "chatgpt_plan_type": "plus"}})
@@ -852,7 +853,7 @@ const (
 // corpusTokens' but with a different subject, so an upstream request shows which token it carried.
 func corpusSIWCTokens(key string) fakeTokens {
 	t := corpusTokens(key)
-	t.refresh = "corpus-siwc-refresh-" + key
+	t.refresh = "rt-Yh6Bn1Ve5-" + key
 	t.access = corpusJWT(map[string]any{"exp": corpusTokenExpiry, "sub": "corpus-siwc|" + key})
 	t.id = corpusJWT(map[string]any{"exp": corpusTokenExpiry, "email": t.email,
 		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": t.accountID, "chatgpt_plan_type": "plus"}})

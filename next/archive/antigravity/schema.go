@@ -20,10 +20,14 @@ import (
 //   - a function's parameters lose their enums (Cloud Code does not enforce them) and
 //     additionalProperties (hinted when false); a response schema keeps both, as Cloud Code
 //     enforces them there, but loses a boolean's enum;
+//   - if, then and else, which it lacks too, are removed after the properties of each then and else
+//     move into the schema that holds them (a property the schema has stays as it is), so a model
+//     sees them as plain optional properties, as in today's core; a branch's required names do not
+//     move;
 //   - allOf, which Cloud Code's schema lacks, merges into the schema that holds it: the branches'
 //     required names join its required, and their other keys fill the keys it lacks, recursively
-//     (its own values win). As in today's core this comes after the hints, deepest first, and
-//     before unions and type lists are flattened;
+//     (its own values win). As in today's core this comes after the hints and the conditionals,
+//     deepest first, and before unions and type lists are flattened;
 //   - a type list such as ["string","null"] becomes the one type with nullable true;
 //   - a union with one non-null branch becomes that branch, nullable; for Claude models, whose
 //     backend rejects unions in function declarations, every union becomes its strongest branch
@@ -76,7 +80,7 @@ var hintedConstraints = []string{
 var removedKeywords = []string{
 	"$schema", "$defs", "definitions", "$id", "id", "$anchor", "$vocabulary", "$dynamicRef", "$dynamicAnchor", "$comment",
 	"propertyNames", "patternProperties", "dependentRequired", "dependentSchemas", "dependencies",
-	"if", "then", "else", "not", "unevaluatedProperties", "unevaluatedItems", "additionalItems", "contentSchema",
+	"not", "unevaluatedProperties", "unevaluatedItems", "additionalItems", "contentSchema",
 	"contentMediaType", "contentEncoding", "readOnly", "writeOnly", "deprecated", "discriminator",
 	"enumDescriptions", "enumTitles", "prefill", "encrypted",
 }
@@ -503,10 +507,11 @@ func marshalPlain(v any) ([]byte, error) {
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
-// cleanTree cleans a whole schema in today's core's order: keywords and hints (clean), then allOf
-// merged (mergeAllOf), then unions and type lists flattened (flatten).
+// cleanTree cleans a whole schema in today's core's order: keywords and hints (clean), then the
+// properties of if/then/else merged (mergeConditionals), then allOf merged (mergeAllOf), then
+// unions and type lists flattened (flatten).
 func cleanTree(root any, defs map[string]any, mode schemaMode) any {
-	return flatten(mergeAllOf(clean(root, defs, mode, 0)), mode)
+	return flatten(mergeAllOf(mergeConditionals(clean(root, defs, mode, 0))), mode)
 }
 
 // walkSchema calls fn on every schema under v, children first, as clean reaches them: a
@@ -533,6 +538,41 @@ func walkSchema(v any, fn func(map[string]any) any) any {
 		return fn(x)
 	}
 	return v
+}
+
+// mergeConditionals removes every if, then and else, deepest first, after merging the properties
+// of each then and else into the schema that holds it, as today's core does (mergeConditionals in
+// core/internal/util/gemini_schema.go): then first, and a property the schema already has stays as
+// it is. Cloud Code's schema has no conditionals, but a property only a branch declares is one the
+// client accepts, and the model sees it here as a plain optional one. Nothing but properties
+// moves: a branch's required names and its other keys are dropped with the keywords.
+func mergeConditionals(v any) any {
+	return walkSchema(v, func(m map[string]any) any {
+		for _, k := range []string{"then", "else"} {
+			branch, _ := m[k].(map[string]any)
+			props, _ := branch["properties"].(map[string]any)
+			if len(props) == 0 {
+				continue
+			}
+			dest, ok := m["properties"].(map[string]any)
+			if !ok {
+				if _, has := m["properties"]; has {
+					continue // not a properties map: nothing to merge into
+				}
+				dest = map[string]any{}
+			}
+			for name, p := range props {
+				if _, has := dest[name]; !has {
+					dest[name] = p
+				}
+			}
+			m["properties"] = dest
+		}
+		delete(m, "if")
+		delete(m, "then")
+		delete(m, "else")
+		return m
+	})
 }
 
 // mergeAllOf merges every allOf into the schema that holds it, deepest first, as today's core
@@ -570,8 +610,8 @@ func mergeAllOf(v any) any {
 						m["required"] = req
 					}
 				case "allOf":
-					// Merged into the branch already; a conditional (if, then, else) is removed
-					// by clean.
+					// Merged into the branch already; a conditional (if, then, else) is gone
+					// after mergeConditionals.
 				default:
 					fillMissing(m, k, bm[k])
 				}

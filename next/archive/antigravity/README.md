@@ -9,4 +9,4 @@ This extension is archived: it is not built, packed, bundled, or tested in `next
   ```bash
   cd next/archive/antigravity && go build .
   ```
-- Corpus cases: the 39 recorded differential corpus cases are kept beside it in `corpus/` and are not run.
+- Corpus cases: the 41 recorded differential corpus cases are kept beside it in `corpus/` and are not run.

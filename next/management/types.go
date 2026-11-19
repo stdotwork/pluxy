@@ -265,6 +265,20 @@ type ModelsReply struct {
 	Models []route.ServedModel `json:"models"`
 }
 
+// RefreshModelsRequest is POST /models/refresh's optional body.
+type RefreshModelsRequest struct {
+	Account string `json:"account,omitempty"`
+}
+
+// RefreshAccountResult is one account's outcome in POST /models/refresh.
+type RefreshAccountResult = route.RefreshResult
+
+// RefreshModelsReply is POST /models/refresh's reply.
+type RefreshModelsReply struct {
+	Models   []route.ServedModel    `json:"models"`
+	Accounts []RefreshAccountResult `json:"accounts"`
+}
+
 // ClientKey is a client key as the management API lists it.
 type ClientKey struct {
 	// ID names the key in calls, without showing it. It changes when core restarts.
@@ -368,4 +382,22 @@ type UsageReply struct {
 type UsageEventsReply struct {
 	Enabled bool `json:"enabled"`
 	usage.Page
+}
+
+// ThemeSummary describes one theme stored by core, as GET /themes lists it and PUT returns it.
+type ThemeSummary struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Bytes int    `json:"bytes"`
+}
+
+// ThemesReply is GET /themes's reply: the selected theme ID and the themes stored by core.
+type ThemesReply struct {
+	Current string         `json:"current"`
+	Themes  []ThemeSummary `json:"themes"`
+}
+
+// ThemeSelection is PUT /theme's request and reply: the selected theme ID (empty clears it).
+type ThemeSelection struct {
+	ID string `json:"id"`
 }

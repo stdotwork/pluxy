@@ -9,7 +9,7 @@ async function addAccount(id: string, method = "api_key") {
     id,
     extension: "test/alpha",
     method,
-    input: { api_key: "account-tools-test-input" },
+    input: { api_key: "ak-Rm5Tq8Wz3Lc6Vj9" },
   });
   expect(r.status).toBe(202);
   if (method === "browser") {

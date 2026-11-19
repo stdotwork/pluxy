@@ -50,7 +50,8 @@ func (r leakRun) shows(s string, inLog bool) []string {
 
 // wantNoPart fails t where the error the run made (the client's, core's log, the account's last
 // error) shows any of parts. The request log is not checked: its upstream capture keeps the
-// upstream's body as it came, without whole copies of a secret only.
+// upstream's body as it came, without whole copies of a secret, and without the pieces of the
+// account's secrets only when the reply's status is an error.
 func (r leakRun) wantNoPart(t *testing.T, parts ...string) {
 	t.Helper()
 	r.want(t, false, parts)

@@ -34,7 +34,7 @@
   }
   [data-part="tab"][aria-selected="true"] {
     color: var(--px-color-accent);
-    background: var(--px-color-surface-raised);
+    background: var(--px-color-selected);
     border-color: var(--px-color-border);
   }
   [data-part="tab"]:focus-visible {
@@ -79,7 +79,7 @@
     font: inherit;
     color: var(--px-color-text);
     background: var(--px-color-surface-raised);
-    border: var(--px-shape-border) solid var(--px-color-border);
+    border: var(--px-shape-border) solid var(--px-color-input-border);
     border-radius: var(--px-shape-radius);
     padding: calc(var(--s) * 2) calc(var(--s) * 2.5);
     width: 100%;
@@ -98,6 +98,8 @@
     font-family: var(--px-font-mono);
     line-height: var(--px-font-line-height);
     tab-size: 2;
+    color: var(--px-color-code-text);
+    background: var(--px-color-code-bg);
   }
   .config-dialog {
     max-width: min(900px, 90vw);
@@ -108,7 +110,7 @@
     border: var(--px-shape-border) solid var(--px-color-border);
     border-radius: var(--px-shape-radius);
     color: var(--px-color-text);
-    background: var(--px-color-surface);
+    background: var(--px-color-overlay);
     box-shadow: var(--px-shadow-raised);
   }
   .config-dialog::backdrop {
@@ -133,6 +135,8 @@
     line-height: var(--px-font-line-height);
     border: var(--px-shape-border) solid var(--px-color-border);
     padding: calc(var(--s) * 2);
+    color: var(--px-color-code-text);
+    background: var(--px-color-code-bg);
   }
   .config-diff [data-part="diff-line"] {
     display: block;

@@ -1,4 +1,4 @@
-package cred
+package private
 
 import (
 	"errors"
@@ -11,17 +11,17 @@ import (
 )
 
 // On Windows, Go applies only the read-only bit of a mode, so a new folder or file would take
-// its parent's access list, which may let other local users read it. The credentials folder and
-// each file are instead given a protected access list (nothing inherited from their parents)
-// that lets in only this user and SYSTEM, with full access, the folder's entries inherited by
-// what is made in it. The owner is left as Windows sets it: this user, or the token's default
-// owner (the Administrators group when elevated). The folder is checked through a handle to it,
-// as the app checks its own private folders (app/src-tauri/src/private_windows.rs,
+// its parent's access list, which may let other local users read it. A private folder and each
+// file made in it are instead given a protected access list (nothing inherited from their
+// parents) that lets in only this user and SYSTEM, with full access, the folder's entries
+// inherited by what is made in it. The owner is left as Windows sets it: this user, or the
+// token's default owner (the Administrators group when elevated). The folder is checked through
+// a handle to it, as the app checks its own private folders (app/src-tauri/src/private_windows.rs,
 // make_private_dir): a link, a file or a folder another account owns is refused, and a folder
-// whose list is not private gets the private list. Record files that are links or that another
-// account owns are skipped when the records are loaded (file.go, readRecord).
+// whose list is not private gets the private list. Callers skip or refuse files in it that
+// another account owns (Owner).
 //
-// The security calls go through advapi32.dll, and the temporary file is made with ntdll.dll's
+// The security calls go through advapi32.dll, and new files are made with ntdll.dll's
 // NtCreateFile; the standard library registers both as system DLLs, so they are loaded from
 // System32 only.
 
@@ -136,7 +136,7 @@ func privateDescriptor(folder bool) (uintptr, error) {
 // makeDir makes dir, and any missing parents, with the private access list given to dir as it
 // is made. A dir that exists already is left to openChecked.
 func makeDir(dir string) error {
-	if err := os.MkdirAll(filepath.Dir(dir), dirMode); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dir), DirMode); err != nil {
 		return err
 	}
 	sd, err := privateDescriptor(true)
@@ -194,16 +194,16 @@ func owner(h syscall.Handle) (name string, ok bool, err error) {
 	return accountName(sid, text), text == me || text == defaultOwner || text == systemSID, nil
 }
 
-// openChecked opens the folder dir itself, never what a link there points to, after making it
+// openChecked opens the folder d.Path itself, never what a link there points to, after making it
 // (makeDir) when create is set, and checks it through that handle, as the chmod 0700 of unix: a
 // link (a symbolic link or a junction), a file, or a folder owned by another account than this
 // user, the token's default owner or SYSTEM is refused, since that owner could open the folder's
-// list again and plant records. A folder whose list is already private (protected, its allow
+// list again and plant files. A folder whose list is already private (protected, its allow
 // entries only this user's and SYSTEM's) is left as it is; any other gets the private list.
-// Setting the list also passes its entries on to the files already in the folder that inherit
-// theirs (records saved before this rule), so they lose what they inherited before.
-func openChecked(dir string, create bool) (*os.File, error) {
-	dir = filepath.Clean(dir)
+// Setting the list also passes its entries on to what is already in the folder and inherits its
+// entries (files written before this rule), so it loses what it inherited before.
+func openChecked(d Dir, create bool) (*os.File, error) {
+	dir := filepath.Clean(d.Path)
 	if create {
 		if err := makeDir(dir); err != nil {
 			return nil, err
@@ -219,21 +219,24 @@ func openChecked(dir string, create bool) (*os.File, error) {
 	if err != nil {
 		return nil, &os.PathError{Op: "open the folder to make it private", Path: dir, Err: err}
 	}
-	d := os.NewFile(uintptr(h), dir)
-	if err := checkDir(h, dir); err != nil {
-		d.Close()
+	f := os.NewFile(uintptr(h), dir)
+	if err := checkDir(h, dir, d); err != nil {
+		f.Close()
 		return nil, err
 	}
-	return d, nil
+	return f, nil
 }
 
-func checkDir(h syscall.Handle, dir string) error {
+func checkDir(h syscall.Handle, dir string, d Dir) error {
 	var info syscall.ByHandleFileInformation
 	if err := syscall.GetFileInformationByHandle(h, &info); err != nil {
 		return &os.PathError{Op: "stat", Path: dir, Err: err}
 	}
 	if info.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		return fmt.Errorf("%s is a link; credentials_dir must name the folder itself", dir)
+		if d.Setting != "" {
+			return fmt.Errorf("%s is a link; %s must name the folder itself", dir, d.Setting)
+		}
+		return fmt.Errorf("%s is a link; core uses only a folder there, never a link to one", dir)
 	}
 	if info.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY == 0 {
 		return fmt.Errorf("%s is not a folder", dir)
@@ -243,10 +246,14 @@ func checkDir(h syscall.Handle, dir string) error {
 		return fmt.Errorf("%s: %w", dir, err)
 	}
 	if !ok {
+		redo := ""
+		if d.Redo != "" {
+			redo = " and " + d.Redo
+		}
 		return fmt.Errorf("%s is owned by %s, not by this user, so its owner could open it to others; "+
 			"a folder made by pluxy run as administrator is owned by the Administrators group, which only a run as "+
 			"administrator accepts. Take ownership of the folder and its files from an elevated prompt (for example: "+
-			"takeown /f \"%s\" /r), or move the folder away and sign the accounts in again", dir, who, dir)
+			"takeown /f \"%s\" /r), or move the folder away%s", dir, who, dir, redo)
 	}
 	me, _, err := tokenSIDs()
 	if err != nil {
@@ -291,9 +298,9 @@ func sameDir(a, b *os.File) (bool, error) {
 		ia.FileIndexLow == ib.FileIndexLow, nil
 }
 
-// recordOwner reports whether the owner of the record file f is one the folder check accepts,
-// and names it.
-func recordOwner(f *os.File) (bool, string, error) {
+// fileOwner reports whether the owner of the file f is one the folder check accepts, and names
+// it.
+func fileOwner(f *os.File) (bool, string, error) {
 	who, ok, err := owner(syscall.Handle(f.Fd()))
 	return ok, who, err
 }
@@ -316,52 +323,51 @@ type ioStatusBlock struct {
 	Status, Information uintptr
 }
 
-// createTemp creates a new temporary file in root, named by tempName, with the private access
-// list from the moment it exists: no one else can open it while it is written. It is made
-// relative to root's own handle, so it lands in the folder root holds. A rename in the same
-// folder keeps the file's access list, so the record it becomes has it too. dir is root's path,
-// for messages.
-func createTemp(root *os.Root, dir string) (*os.File, string, error) {
+// Create creates the new file name in root, open for reading and writing, with the private
+// access list from the moment it exists: no one else can open it while it is written. It is made
+// relative to root's own handle, so it lands in the folder root holds. A rename or a link in the
+// same folder keeps the file's access list. A name that exists is an error that os.IsExist
+// accepts. name is a name in root itself, never a path. dir is root's path, for messages.
+func Create(root *os.Root, dir, name string) (*os.File, error) {
+	if err := checkName(dir, name); err != nil {
+		return nil, err
+	}
 	d, err := root.Open(".")
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	defer d.Close()
 	sd, err := privateDescriptor(false)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	defer syscall.LocalFree(syscall.Handle(sd))
-	for range 100 {
-		name, err := tempName()
-		if err != nil {
-			return nil, "", err
-		}
-		u := syscall.StringToUTF16(name)
-		us := unicodeString{Length: uint16(2 * (len(u) - 1)), MaximumLength: uint16(2 * (len(u) - 1)), Buffer: &u[0]}
-		oa := objectAttributes{RootDirectory: syscall.Handle(d.Fd()), ObjectName: &us, Attributes: objCaseInsensitve,
-			SecurityDescriptor: sd}
-		oa.Length = uint32(unsafe.Sizeof(oa))
-		var h syscall.Handle
-		var iosb ioStatusBlock
-		// The access and sharing os.OpenFile uses for a new file opened for reading and writing.
-		r, _, _ := procNtCreateFile.Call(uintptr(unsafe.Pointer(&h)), syscall.GENERIC_READ|syscall.GENERIC_WRITE|synchronize,
-			uintptr(unsafe.Pointer(&oa)), uintptr(unsafe.Pointer(&iosb)), 0, syscall.FILE_ATTRIBUTE_NORMAL,
-			syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, fileCreate, fileNonDirectory|fileSyncIO, 0, 0)
-		runtime.KeepAlive(u)
-		runtime.KeepAlive(&us)
-		runtime.KeepAlive(&oa)
-		path := filepath.Join(dir, name)
-		switch status := uint32(r); {
-		case status == nameCollision:
-			continue
-		case status != 0:
-			code, _, _ := procNtStatusToDosError.Call(uintptr(status))
-			return nil, "", &os.PathError{Op: "createtemp", Path: path, Err: syscall.Errno(code)}
-		}
-		return os.NewFile(uintptr(h), path), name, nil
+	u, err := syscall.UTF16FromString(name)
+	if err != nil {
+		return nil, err
 	}
-	return nil, "", &os.PathError{Op: "createtemp", Path: filepath.Join(dir, tmpPrefix+"*"), Err: os.ErrExist}
+	us := unicodeString{Length: uint16(2 * (len(u) - 1)), MaximumLength: uint16(2 * (len(u) - 1)), Buffer: &u[0]}
+	oa := objectAttributes{RootDirectory: syscall.Handle(d.Fd()), ObjectName: &us, Attributes: objCaseInsensitve,
+		SecurityDescriptor: sd}
+	oa.Length = uint32(unsafe.Sizeof(oa))
+	var h syscall.Handle
+	var iosb ioStatusBlock
+	// The access and sharing os.OpenFile uses for a new file opened for reading and writing.
+	r, _, _ := procNtCreateFile.Call(uintptr(unsafe.Pointer(&h)), syscall.GENERIC_READ|syscall.GENERIC_WRITE|synchronize,
+		uintptr(unsafe.Pointer(&oa)), uintptr(unsafe.Pointer(&iosb)), 0, syscall.FILE_ATTRIBUTE_NORMAL,
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, fileCreate, fileNonDirectory|fileSyncIO, 0, 0)
+	runtime.KeepAlive(u)
+	runtime.KeepAlive(&us)
+	runtime.KeepAlive(&oa)
+	path := filepath.Join(dir, name)
+	switch status := uint32(r); {
+	case status == nameCollision:
+		return nil, &os.PathError{Op: "create", Path: path, Err: os.ErrExist}
+	case status != 0:
+		code, _, _ := procNtStatusToDosError.Call(uintptr(status))
+		return nil, &os.PathError{Op: "create", Path: path, Err: syscall.Errno(code)}
+	}
+	return os.NewFile(uintptr(h), path), nil
 }
 
 // isPrivate reports whether the descriptor sd, with its access list dacl, is private: the list

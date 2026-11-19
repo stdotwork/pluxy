@@ -1,21 +1,24 @@
 // Fixtures for the native test's check of the execution program and the launcher
-// (src-tauri/src/launcher_native.rs):
+// (src-tauri/src/launcher_native.rs on Linux; on Windows and macOS
+// src-tauri/src/launcher_platform_native.rs, which uses pluxy/execution, `pluxy-agent` and work/
+// only):
 //
-// - pluxy/execution: the real execution program (next/app-tools/execution, which run.ts builds),
-//   packed with its own manifest's operations into a signed curated package;
+// - pluxy/execution: the real execution program (next/app-tools/execution, which run.ts builds,
+//   and off Linux the workflow), packed with its own manifest's operations into a signed curated
+//   package;
 // - pluxy/launch-relay: the disposable fixture tool (src-tauri/examples/program_fixture), whose
 //   `relay` calls pluxy/execution's `launch`: another chain to the same launch;
 // - pluxy/launch-page: a curated web package whose page imports pluxy/execution's `launch`.
 //
 // bin/ goes first on the app's PATH: `x-terminal-emulator` (the fixture program as a stand-in
-// terminal, the first one Automatic picks) and `pluxy-agent` (the fixture program as the agent,
-// found by name). override/agent is another copy, for an executable override. keys.json holds the
+// terminal, the first one Automatic picks) and `pluxy-agent` (`pluxy-agent.exe` on Windows: the
+// fixture program as the agent, found by name). override/agent is another copy, for an executable override. keys.json holds the
 // key the check types into native key entry, made here at random; the app never chose it.
 
 import { generateKeyPairSync, type KeyObject, randomBytes } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { artifact, type Fixture, platform, writeTrustProfile } from "./admission";
+import { artifact, EXE, type Fixture, platform, TOOL, writeTrustProfile } from "./admission";
 import { index, native, type Package, pack } from "./routing";
 
 const object = { type: "object" };
@@ -63,7 +66,7 @@ export function buildLauncherFixtures(
         id: m.id,
         version: m.version,
         tier: "native",
-        app: { ...m.app, programs: { [platform()]: "bin/tool" } },
+        app: { ...m.app, programs: { [platform()]: TOOL } },
       },
       execution,
     ]);
@@ -96,10 +99,16 @@ export function buildLauncherFixtures(
   const override = join(root, "override");
   mkdirSync(bin);
   mkdirSync(override);
-  for (const to of [join(bin, "x-terminal-emulator"), join(bin, "pluxy-agent"), join(override, "agent")]) {
+  for (const to of [
+    join(bin, "x-terminal-emulator"),
+    join(bin, `pluxy-agent${EXE}`),
+    join(override, "agent"),
+  ]) {
     copyFileSync(program, to);
     chmodSync(to, 0o755);
   }
+  // Off Linux, the agent's working folder: it exits once a file named stop is in it.
+  if (process.platform !== "linux") mkdirSync(join(root, "work"));
   const keys = { key: `pluxy-launcher-key-${randomBytes(16).toString("hex")}` };
   writeFileSync(join(root, "keys.json"), JSON.stringify(keys));
   const nonce = writeTrustProfile(home, [curatedFile], publicKey);

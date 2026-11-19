@@ -13,7 +13,8 @@ type chatUsage struct {
 	PromptTokens        *int64 `json:"prompt_tokens"`
 	CompletionTokens    *int64 `json:"completion_tokens"`
 	PromptTokensDetails *struct {
-		CachedTokens *int64 `json:"cached_tokens"`
+		CachedTokens     *int64 `json:"cached_tokens"`
+		CacheWriteTokens *int64 `json:"cache_write_tokens"`
 	} `json:"prompt_tokens_details"`
 	CompletionTokensDetails *struct {
 		ReasoningTokens *int64 `json:"reasoning_tokens"`
@@ -31,6 +32,7 @@ func decodeUsage(raw json.RawMessage) *llm.Usage {
 	out := &llm.Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens, Raw: append(json.RawMessage(nil), raw...)}
 	if u.PromptTokensDetails != nil {
 		out.CachedInputTokens = u.PromptTokensDetails.CachedTokens
+		out.CacheWriteInputTokens = u.PromptTokensDetails.CacheWriteTokens
 	}
 	if u.CompletionTokensDetails != nil {
 		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
