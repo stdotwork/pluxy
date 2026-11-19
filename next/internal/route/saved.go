@@ -9,7 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// SavedBlock is a quota block as core saves it across a restart.
 // SavedBan is a banned account as core saves it across a restart.
 type SavedBan struct {
 	Account string    `json:"account"`
@@ -17,6 +16,7 @@ type SavedBan struct {
 	At      time.Time `json:"at,omitempty"`
 }
 
+// SavedBlock is a quota block as core saves it across a restart.
 type SavedBlock struct {
 	Account string `json:"account"`
 	// Scope is credential (the whole account) or model (Model on it).
