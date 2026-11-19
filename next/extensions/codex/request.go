@@ -35,6 +35,9 @@ type upstreamRequest struct {
 	// keepOutput says that the reply's terminal event is left as the upstream sent it, without
 	// the id restoration and without the output rebuild (see repairs).
 	keepOutput bool
+	// encryptedReasoning holds the input paths of the reasoning items with encrypted content, which a
+	// retry after Codex refused that content leaves out (dropForeignReasoning).
+	encryptedReasoning []string
 }
 
 // repairs returns the repairs the request's reply gets.
@@ -89,12 +92,18 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 	if err := sh.shape(); err != nil {
 		return nil, err
 	}
+	if req.DropPolicy == llm.DropReject && tr.Dropped() {
+		// Shaping dropped what the endpoint cannot take (see history).
+		paths := tr.DroppedPaths()
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
+			Message: "the Codex endpoint cannot take parts of this request: " + strings.Join(paths, ", ")}
+	}
 	out, err := json.Marshal(m)
 	if err != nil {
 		return nil, err
 	}
 	return &upstreamRequest{body: out, tr: tr, model: model, sessionID: sh.sessionID, names: sh.names,
-		keepOutput: nativeLite && (ws || req.Stream)}, nil
+		keepOutput: nativeLite && (ws || req.Stream), encryptedReasoning: sh.encryptedReasoning}, nil
 }
 
 // Fields the Codex endpoint does not take, removed from every request. Codex's own request has no
@@ -123,6 +132,8 @@ type shaper struct {
 	// names maps each function name the request sent upstream in place of the client's to the
 	// client's (see limits).
 	names map[string]string
+	// encryptedReasoning: see upstreamRequest.
+	encryptedReasoning []string
 }
 
 // wsFields are fields the Responses WebSocket takes that HTTP does not: a turn continues the
@@ -146,6 +157,7 @@ func (h *shaper) shape() error {
 	if err := h.input(); err != nil {
 		return err
 	}
+	h.history()
 	m["stream"] = raw(true)
 	m["store"] = raw(false)
 	h.include()
