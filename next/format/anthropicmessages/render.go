@@ -111,7 +111,8 @@ func encodeUsage(u *llm.Usage) obj {
 }
 
 // usageLosses lists the usage fields of a reply from another format that Messages usage has no
-// place for, nested detail fields included. Token totals and cached input tokens are carried.
+// place for, nested detail fields included. Token totals, cached input tokens and cache-write
+// input tokens are carried.
 func usageLosses(u *llm.Usage, upFormat string) []string {
 	if u == nil || upFormat == format || len(u.Raw) == 0 {
 		return nil
@@ -124,7 +125,7 @@ func usageLosses(u *llm.Usage, upFormat string) []string {
 		case "prompt_tokens_details", "input_tokens_details", "completion_tokens_details", "output_tokens_details":
 			if d := rawjson.Object(v); d != nil {
 				for dk, dv := range d {
-					carried := dk == "cached_tokens" && (k == "prompt_tokens_details" || k == "input_tokens_details") ||
+					carried := (dk == "cached_tokens" || dk == "cache_write_tokens" && u.CacheWriteInputTokens != nil) && (k == "prompt_tokens_details" || k == "input_tokens_details") ||
 						dk == "reasoning_tokens" && u.ReasoningTokens != nil && (k == "completion_tokens_details" || k == "output_tokens_details")
 					if carried || string(dv) == "0" || string(dv) == "null" {
 						continue
