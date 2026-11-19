@@ -79,7 +79,7 @@ const next = resolvePath(import.meta.dir, "..", "..");
 const PAGE = "ext/test/probe/probe";
 /** The updater key in the trust profile: this dev app has no test package to trust. */
 const UPDATER_KEY = "no-test-package";
-/** One app run: four minutes on Linux, with room for slower runners. */
+/** One app run: 10 minutes (4 minutes on Linux), with room for slower runners. */
 const TIMEOUT = 600_000;
 /** The test core's start: `go run` builds it first, once a minute or two on a runner. */
 const CORE_START = 180_000;

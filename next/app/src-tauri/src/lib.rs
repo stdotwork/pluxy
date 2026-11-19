@@ -903,7 +903,7 @@ async fn core_restart(webview: Webview) -> Result<View, String> {
     with_conn(&webview, |c| c.restart_core()).await
 }
 
-/// This command accepts connection metadata only; GTK supplies the secret on the native side.
+/// This command accepts connection metadata only; native key entry supplies the secret on the native side.
 #[derive(serde::Serialize)]
 struct KeyEntryResult {
     status: &'static str,
@@ -948,7 +948,7 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
         if let Some(after) = *st.key_entry_after.lock().unwrap() {
             std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
         }
-        // GTK must remain free to handle IPC/window close while the dialog is open.
+        // Run off the main thread so the app keeps handling IPC and window close while the dialog is open.
         let input = key_entry::request(&app, target.summary.clone());
         let mut error = None;
         // The key's check is a network call: `finish_key_unlocked` makes it without the lock.

@@ -342,11 +342,12 @@ jobs:
       # native/platform-tools.ts and platform.ts): 3 minutes for its test core to start
       # (CORE_START); 10 minutes for the app (TIMEOUT), then 30 seconds for its output to close
       # once stopped (STOP_MS) and, if it still runs, 30 seconds more once cleanup stops it again
-      # (STOP_MS); 1 minute for the core to exit (twice STOP_MS); 3 seconds of fixed pauses; and on
-      # Windows 30 seconds for each of the four folders it removes (FREE_MS): 17 minutes 3 seconds,
-      # 85 minutes 15 seconds for five. 90 minutes lets every session report and clean up even when
-      # each app hangs, with nearly 5 minutes for the short commands it runs besides (PowerShell,
-      # icacls), which have no limit of their own.
+      # (STOP_MS); 1 minute for the core to exit (twice STOP_MS); and on Windows 30 seconds for each
+      # of the four folders it removes (FREE_MS): 17 minutes per session, 85 minutes for five, plus
+      # 3 seconds of fixed pauses across the shard (1 second in program, 2 seconds in launcher).
+      # 90 minutes lets every session report and clean up even when each app hangs, with nearly
+      # 5 minutes for the short commands it runs besides (PowerShell, icacls), which have no limit
+      # of their own.
       - name: Native test
         timeout-minutes: ${{ matrix.shard == 'tools' && 90 || 40 }}
         env:

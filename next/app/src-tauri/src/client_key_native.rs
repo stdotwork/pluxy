@@ -56,7 +56,7 @@ const MODE: &str = if cfg!(target_os = "linux") {
 };
 
 /// The client keys in the core config at path, its `client_keys` (the app writes that config as
-/// JSON, and core keeps a JSON config JSON when it changes it).
+/// JSON, and core keeps a JSON config when it changes it).
 pub(super) fn core_keys(path: &Path) -> Result<BTreeSet<String>, String> {
     let text = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let cfg: Value = serde_json::from_slice(&text)
