@@ -277,3 +277,94 @@ func (c *Client) Usage(ctx context.Context, q url.Values) (UsageReply, error) {
 	var v UsageReply
 	return v, c.get(ctx, "/usage", q, &v)
 }
+
+// ThemePath is the path of theme id (publisher/name), each part escaped.
+func ThemePath(id string) string {
+	publisher, name, _ := strings.Cut(id, "/")
+	return "/themes/" + url.PathEscape(publisher) + "/" + url.PathEscape(name)
+}
+
+// Themes is GET /themes.
+func (c *Client) Themes(ctx context.Context) (ThemesReply, error) {
+	var v ThemesReply
+	return v, c.get(ctx, "/themes", nil, &v)
+}
+
+// Theme is GET /themes/{publisher}/{name}; it returns the stored JSON bytes unchanged.
+func (c *Client) Theme(ctx context.Context, id string) ([]byte, error) {
+	return c.Call(ctx, http.MethodGet, ThemePath(id), nil, nil, nil)
+}
+
+// PutTheme is PUT /themes/{publisher}/{name}; it sends body unchanged as JSON.
+func (c *Client) PutTheme(ctx context.Context, id string, body []byte) (ThemeSummary, error) {
+	var v ThemeSummary
+	_, err := c.CallBytes(ctx, http.MethodPut, ThemePath(id), nil, body, &v)
+	return v, err
+}
+
+// RemoveTheme is DELETE /themes/{publisher}/{name}.
+func (c *Client) RemoveTheme(ctx context.Context, id string) error {
+	_, err := c.Call(ctx, http.MethodDelete, ThemePath(id), nil, nil, nil)
+	return err
+}
+
+// SetTheme is PUT /theme; an empty id clears the selection.
+func (c *Client) SetTheme(ctx context.Context, id string) (ThemeSelection, error) {
+	var v ThemeSelection
+	_, err := c.Call(ctx, http.MethodPut, "/theme", nil, ThemeSelection{ID: id}, &v)
+	return v, err
+}
+
+// CallBytes sends one call with raw JSON bytes body (if non-nil) and behaves like Call.
+func (c *Client) CallBytes(ctx context.Context, method, path string, query url.Values, raw []byte, out any) ([]byte, error) {
+	u := strings.TrimSuffix(c.URL, "/") + Prefix + path
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+	var body io.Reader
+	if raw != nil {
+		body = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, body)
+	if err != nil {
+		return nil, err
+	}
+	if raw != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Key)
+	}
+	hc := c.HTTP
+	if hc == nil {
+		hc = defaultHTTP
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &UnreachableError{URL: c.URL, Err: err}
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxReply))
+	if err != nil {
+		return nil, &UnreachableError{URL: c.URL, Err: err}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		e := &APIError{Status: resp.StatusCode, Body: b}
+		var eb ErrorBody
+		if json.Unmarshal(b, &eb) == nil && eb.Error.Code != "" {
+			e.Code, e.Message = eb.Error.Code, eb.Error.Message
+		} else {
+			e.Message = fmt.Sprintf("core answered %s", resp.Status)
+		}
+		return b, e
+	}
+	if out != nil && len(b) > 0 {
+		if err := json.Unmarshal(b, out); err != nil {
+			return b, fmt.Errorf("reading the reply of %s %s: %w", method, path, err)
+		}
+	}
+	return b, nil
+}
