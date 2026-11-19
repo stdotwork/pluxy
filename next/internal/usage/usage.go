@@ -24,6 +24,7 @@ const (
 	DefaultQueueSize = 4096
 	DefaultKeepDays  = 90
 	MaxKeepDays      = 1000000
+	maxSeriesBuckets = 1440
 )
 
 // Tokens is what one request used, as its upstream reported it. A field that is absent was not
@@ -138,15 +139,25 @@ type Store struct {
 	maxAge    time.Duration
 	now       func() time.Time
 
-	dir          string
-	keepDays     atomic.Int64
-	dropped      atomic.Uint64
-	writeCh      chan Event
-	pruneCh      chan struct{}
-	done         chan struct{}
-	closed       bool
-	closeTimeout time.Duration
-	writeLine    func(day string, line []byte) error // test hook; nil writes to dir
+	dir             string
+	keepDays        atomic.Int64
+	dropped         atomic.Uint64
+	writeCh         chan Event
+	flushCh         chan chan struct{}
+	pruneCh         chan struct{}
+	done            chan struct{}
+	closed          bool
+	closeTimeout    time.Duration
+	writeLine       func(day string, line []byte) error // test hook; nil writes to dir
+	onReadRaw       func(day string)                    // test hook; called when opening a raw .jsonl file
+	openSeq         uint64
+	queuedSeq       atomic.Uint64
+	writtenSeq      atomic.Uint64
+	closedQueuedSeq atomic.Uint64
+	incompleteDay   map[string]bool
+
+	sumMu     sync.Mutex
+	summaries map[string]*daySummaryFile
 }
 
 // NewStore returns an empty, in-memory-only store with the default limits.
@@ -169,8 +180,12 @@ func (s *Store) SetLimits(maxEvents int, maxAge time.Duration) {
 	if maxEvents != s.maxEvents {
 		kept := s.events()
 		if len(kept) > maxEvents {
-			s.evicted += uint64(len(kept) - maxEvents)
-			kept = kept[len(kept)-maxEvents:]
+			cut := len(kept) - maxEvents
+			for i := range cut {
+				s.markIncomplete(kept[i])
+			}
+			s.evicted += uint64(cut)
+			kept = kept[cut:]
 		}
 		// The ring grows as events arrive (append below), so a large limit costs nothing until
 		// it is used.
@@ -195,6 +210,7 @@ func (s *Store) events() []Event {
 func (s *Store) expire() {
 	cutoff := s.now().Add(-s.maxAge)
 	for s.n > 0 && s.ring[s.head].recorded.Before(cutoff) {
+		s.markIncomplete(s.ring[s.head])
 		s.ring[s.head] = Event{}
 		s.head = (s.head + 1) % len(s.ring)
 		s.n--
@@ -222,6 +238,15 @@ func (s *Store) Add(e Event) uint64 {
 	if s.writeCh != nil && !s.closed {
 		select {
 		case s.writeCh <- e:
+			s.queuedSeq.Store(e.Seq)
+			todayDay := e.recorded.UTC().Format(dayLayout)
+			t := e.Timestamp
+			if t.IsZero() {
+				t = e.recorded
+			}
+			if t.UTC().Format(dayLayout) < todayDay {
+				s.closedQueuedSeq.Store(e.Seq)
+			}
 		default:
 			s.dropped.Add(1)
 		}
@@ -244,12 +269,30 @@ func (s *Store) appendRing(e Event, countEviction bool) {
 		s.ring = append(s.ring, e)
 		s.n++
 	default:
+		s.markIncomplete(s.ring[s.head])
 		s.ring[s.head] = e
 		s.head = (s.head + 1) % len(s.ring)
 		if countEviction {
 			s.evicted++
 		}
 	}
+}
+
+func (s *Store) markIncomplete(e Event) {
+	if s.dir == "" {
+		return
+	}
+	t := e.Timestamp
+	if t.IsZero() {
+		t = e.recorded
+	}
+	if t.IsZero() {
+		return
+	}
+	if s.incompleteDay == nil {
+		s.incompleteDay = map[string]bool{}
+	}
+	s.incompleteDay[t.UTC().Format(dayLayout)] = true
 }
 
 // Page is a page of events.
@@ -279,6 +322,28 @@ func (s *Store) Events(f Filter, after uint64, limit int) Page {
 	for i := range s.n {
 		e := &s.ring[(s.head+i)%len(s.ring)]
 		if e.Seq <= after || !f.match(e) {
+			continue
+		}
+		if len(p.Events) == limit {
+			p.More = true
+			break
+		}
+		p.Events = append(p.Events, *e)
+		p.Next = e.Seq
+	}
+	return p
+}
+
+// EventsBefore returns, newest first, up to limit events that match f with Seq below before
+// (or all kept events when before is 0).
+func (s *Store) EventsBefore(f Filter, before uint64, limit int) Page {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.expire()
+	p := Page{Events: []Event{}, Next: before}
+	for i := s.n - 1; i >= 0; i-- {
+		e := &s.ring[(s.head+i)%len(s.ring)]
+		if (before > 0 && e.Seq >= before) || !f.match(e) {
 			continue
 		}
 		if len(p.Events) == limit {
@@ -332,6 +397,22 @@ func (t *Totals) add(e *Event) {
 	t.Tokens.Total += deref(k.Total)
 }
 
+func (t *Totals) addRow(r summaryRow) {
+	t.Requests += r.Requests
+	if r.Failed {
+		t.Failure += r.Requests
+	} else {
+		t.Success += r.Requests
+	}
+	t.latency += r.LatencyMS
+	t.Tokens.Input += r.Input
+	t.Tokens.Output += r.Output
+	t.Tokens.Reasoning += r.Reasoning
+	t.Tokens.Cached += r.Cached
+	t.Tokens.CacheWrite += r.CacheWrite
+	t.Tokens.Total += r.Total
+}
+
 func (t *Totals) finish() {
 	if t.Requests > 0 {
 		t.SuccessRate = float64(t.Success) / float64(t.Requests)
@@ -358,6 +439,8 @@ type Bucket struct {
 // Summary is what the events that match a filter add up to, with breakdowns and a time series.
 type Summary struct {
 	Totals
+	By        string  `json:"by,omitempty"`
+	Breakdown []Group `json:"breakdown,omitzero"`
 	Models    []Group `json:"models"`
 	Providers []Group `json:"providers"`
 	Accounts  []Group `json:"accounts"`
@@ -375,27 +458,137 @@ type Summary struct {
 	Dropped uint64 `json:"dropped"`
 }
 
-// Summarize adds up the events that match f, and counts them over the last buckets steps of
-// bucket for the time series.
+// Summarize adds up the events that match f, and counts them in a time series of buckets steps
+// of bucket. When bucket or buckets is 0, Summarize picks defaults for the range: 1m / 60 when no
+// range is given, else 1h for ranges up to 48 hours and 24h beyond, spanning the range.
 func (s *Store) Summarize(f Filter, bucket time.Duration, buckets int) Summary {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.expire()
 	now := s.now()
-	sum := Summary{BucketSeconds: int64(bucket / time.Second), Series: make([]Bucket, buckets), Evicted: s.evicted, Dropped: s.dropped.Load()}
-	// Buckets start at whole multiples of the step, so a chart polled again lines up.
-	last := now.Truncate(bucket)
-	first := last.Add(-time.Duration(buckets-1) * bucket)
+	nowUTC := now.UTC()
+	todayStart := time.Date(nowUTC.Year(), nowUTC.Month(), nowUTC.Day(), 0, 0, 0, 0, time.UTC)
+	todayDay := todayStart.Format(dayLayout)
+
+	dir := s.dir
+	evicted := s.evicted
+	openSeq := s.openSeq
+	incompleteToday := s.incompleteDay[todayDay]
+	for d := range s.incompleteDay {
+		if d < todayDay {
+			delete(s.incompleteDay, d)
+		}
+	}
+	var ringEvents []Event
+	if dir == "" {
+		ringEvents = s.events()
+	} else {
+		for i := range s.n {
+			e := s.ring[(s.head+i)%len(s.ring)]
+			if !e.Timestamp.Before(todayStart) {
+				ringEvents = append(ringEvents, e)
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	var oldest *time.Time
+	updateOldest := func(t time.Time) {
+		if t.IsZero() {
+			return
+		}
+		if oldest == nil || t.Before(*oldest) {
+			cp := t
+			oldest = &cp
+		}
+	}
+
+	var daySummaries []*daySummaryFile
+	var todayEvents []Event
+	if dir == "" {
+		todayEvents = ringEvents
+		for i := range todayEvents {
+			updateOldest(todayEvents[i].Timestamp)
+		}
+	} else {
+		closedDays := s.listClosedDays(f, todayDay)
+		if (incompleteToday && s.writtenSeq.Load() < s.queuedSeq.Load()) ||
+			s.writtenSeq.Load() < s.closedQueuedSeq.Load() ||
+			s.needsClosedFlush(closedDays) {
+			s.flushWriter()
+		}
+		if len(closedDays) > 0 {
+			daySummaries = s.loadDaySummaries(closedDays)
+			for _, ds := range daySummaries {
+				if ds.Oldest != nil {
+					updateOldest(*ds.Oldest)
+				}
+			}
+		}
+		if f.Until.IsZero() || f.Until.After(todayStart) {
+			todayEvents = s.collectTodayEvents(todayDay, todayStart, incompleteToday, openSeq, ringEvents)
+			for i := range todayEvents {
+				updateOldest(todayEvents[i].Timestamp)
+			}
+		}
+	}
+
+	bucket, buckets, first := resolveSeriesWindow(f, nowUTC, oldest, bucket, buckets)
+	sum := Summary{
+		BucketSeconds: int64(bucket / time.Second),
+		Series:        make([]Bucket, buckets),
+		Oldest:        oldest,
+		Evicted:       evicted,
+		Dropped:       s.dropped.Load(),
+	}
 	for i := range sum.Series {
 		sum.Series[i].Start = first.Add(time.Duration(i) * bucket).UTC()
 	}
+
 	groups := [4]map[string]*Group{{}, {}, {}, {}}
-	for i := range s.n {
-		e := &s.ring[(s.head+i)%len(s.ring)]
-		if i == 0 || e.Timestamp.Before(*sum.Oldest) {
-			t := e.Timestamp
-			sum.Oldest = &t
+	groupFor := func(g int, name, provider string) *Group {
+		grp := groups[g][name]
+		if grp == nil {
+			grp = &Group{Name: name}
+			if g == 2 {
+				grp.Provider = provider
+			}
+			groups[g][name] = grp
 		}
+		return grp
+	}
+
+	for _, ds := range daySummaries {
+		dayStart, err := time.Parse(dayLayout, ds.Day)
+		if err != nil {
+			continue
+		}
+		for _, r := range ds.Rows {
+			hourStart := dayStart.Add(time.Duration(r.Hour) * time.Hour)
+			hourEnd := hourStart.Add(time.Hour)
+			if !f.matchSummaryRow(r, hourStart, hourEnd) {
+				continue
+			}
+			sum.Totals.addRow(r)
+			for g, name := range [4]string{r.Model, r.Provider, r.Account, r.KeyID} {
+				if name == "" {
+					continue
+				}
+				groupFor(g, name, r.Provider).addRow(r)
+			}
+			if !hourStart.Before(first) {
+				if b := int(hourStart.Sub(first) / bucket); b >= 0 && b < buckets {
+					sum.Series[b].Requests += r.Requests
+					if r.Failed {
+						sum.Series[b].Failure += r.Requests
+					}
+					sum.Series[b].Tokens += r.Total
+				}
+			}
+		}
+	}
+
+	for i := range todayEvents {
+		e := &todayEvents[i]
 		if !f.match(e) {
 			continue
 		}
@@ -404,18 +597,10 @@ func (s *Store) Summarize(f Filter, bucket time.Duration, buckets int) Summary {
 			if name == "" {
 				continue
 			}
-			grp := groups[g][name]
-			if grp == nil {
-				grp = &Group{Name: name}
-				if g == 2 {
-					grp.Provider = e.Provider
-				}
-				groups[g][name] = grp
-			}
-			grp.add(e)
+			groupFor(g, name, e.Provider).add(e)
 		}
 		if !e.Timestamp.Before(first) {
-			if b := int(e.Timestamp.Sub(first) / bucket); b < buckets {
+			if b := int(e.Timestamp.Sub(first) / bucket); b >= 0 && b < buckets {
 				sum.Series[b].Requests++
 				if e.Failed {
 					sum.Series[b].Failure++
@@ -424,6 +609,7 @@ func (s *Store) Summarize(f Filter, bucket time.Duration, buckets int) Summary {
 			}
 		}
 	}
+
 	sum.Totals.finish()
 	out := [4][]Group{}
 	for g := range groups {
@@ -439,4 +625,64 @@ func (s *Store) Summarize(f Filter, bucket time.Duration, buckets int) Summary {
 	}
 	sum.Models, sum.Providers, sum.Accounts, sum.Keys = out[0], out[1], out[2], out[3]
 	return sum
+}
+
+func (f Filter) matchSummaryRow(r summaryRow, hourStart, hourEnd time.Time) bool {
+	return (f.Since.IsZero() || hourEnd.After(f.Since)) &&
+		(f.Until.IsZero() || hourStart.Before(f.Until)) &&
+		(f.Model == "" || f.Model == r.Model) &&
+		(f.Provider == "" || f.Provider == r.Provider) &&
+		(f.Account == "" || f.Account == r.Account) &&
+		(f.KeyID == "" || f.KeyID == r.KeyID) &&
+		(f.Failed == nil || *f.Failed == r.Failed)
+}
+
+func resolveSeriesWindow(f Filter, nowUTC time.Time, oldest *time.Time, bucket time.Duration, buckets int) (time.Duration, int, time.Time) {
+	if f.Since.IsZero() && f.Until.IsZero() {
+		if bucket <= 0 {
+			bucket = time.Minute
+		}
+		if buckets <= 0 {
+			buckets = 60
+		}
+		last := nowUTC.Truncate(bucket)
+		return bucket, buckets, last.Add(-time.Duration(buckets-1) * bucket)
+	}
+	end := f.Until.UTC()
+	if end.IsZero() {
+		end = nowUTC
+	}
+	start := f.Since.UTC()
+	if start.IsZero() && oldest != nil {
+		start = oldest.UTC()
+	}
+	if start.IsZero() || start.After(end) {
+		start = end
+	}
+	if bucket <= 0 {
+		if end.Sub(start) <= 48*time.Hour {
+			bucket = time.Hour
+		} else {
+			bucket = 24 * time.Hour
+		}
+	}
+	if buckets <= 0 {
+		lastTime := end
+		if !f.Until.IsZero() && end.After(start) {
+			lastTime = end.Add(-time.Nanosecond)
+		}
+		first := start.Truncate(bucket)
+		last := lastTime.Truncate(bucket)
+		if last.Before(first) {
+			last = first
+		}
+		n := int(last.Sub(first)/bucket) + 1
+		if n > maxSeriesBuckets {
+			n = maxSeriesBuckets
+			first = last.Add(-time.Duration(n-1) * bucket)
+		}
+		return bucket, n, first
+	}
+	last := end.Truncate(bucket)
+	return bucket, buckets, last.Add(-time.Duration(buckets-1) * bucket)
 }

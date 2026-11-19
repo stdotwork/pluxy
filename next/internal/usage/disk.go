@@ -3,6 +3,7 @@ package usage
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,15 +11,19 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
 
 const (
 	recordVersion       = 1
+	summaryVersion      = 1
 	defaultCloseTimeout = 5 * time.Second
 	dayLayout           = "2006-01-02"
 	daySuffix           = ".jsonl"
+	summarySubdir       = "summary"
+	summarySuffix       = ".json"
 )
 
 // ErrCloseTimeout is returned by Close when the disk writer has not drained its queue within
@@ -43,6 +48,34 @@ type Options struct {
 type diskEvent struct {
 	V int `json:"v"`
 	Event
+}
+
+type summaryKey struct {
+	Hour     int    `json:"hour"`
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Account  string `json:"account,omitempty"`
+	KeyID    string `json:"key_id,omitempty"`
+	Failed   bool   `json:"failed,omitempty"`
+}
+
+type summaryRow struct {
+	summaryKey
+	Requests   int64 `json:"requests"`
+	LatencyMS  int64 `json:"latency_ms,omitempty"`
+	Input      int64 `json:"input_tokens,omitempty"`
+	Output     int64 `json:"output_tokens,omitempty"`
+	Reasoning  int64 `json:"reasoning_tokens,omitempty"`
+	Cached     int64 `json:"cached_tokens,omitempty"`
+	CacheWrite int64 `json:"cache_creation_tokens,omitempty"`
+	Total      int64 `json:"total_tokens,omitempty"`
+}
+
+type daySummaryFile struct {
+	V      int          `json:"v"`
+	Day    string       `json:"day"`
+	Oldest *time.Time   `json:"oldest,omitempty"`
+	Rows   []summaryRow `json:"rows"`
 }
 
 // Open returns a Store backed by opts.Dir (when non-empty): it prunes day files older than
@@ -93,7 +126,9 @@ func openStore(opts Options, now func() time.Time, writeLine func(day string, li
 		if err := s.refill(); err != nil {
 			return nil, err
 		}
+		s.summaries = map[string]*daySummaryFile{}
 		s.writeCh = make(chan Event, queueSize)
+		s.flushCh = make(chan chan struct{}, 16)
 		s.pruneCh = make(chan struct{}, 1)
 		s.done = make(chan struct{})
 		go s.writerLoop(initialDay)
@@ -158,6 +193,12 @@ func (s *Store) refill() error {
 	for _, day := range days {
 		path := filepath.Join(s.dir, day+daySuffix)
 		err := readDayFile(path, func(e Event) {
+			if e.Seq > s.seq {
+				s.seq = e.Seq
+			} else {
+				s.seq++
+				e.Seq = s.seq
+			}
 			rec := e.Timestamp
 			if e.LatencyMS > 0 {
 				rec = rec.Add(time.Duration(e.LatencyMS) * time.Millisecond)
@@ -167,10 +208,9 @@ func (s *Store) refill() error {
 			}
 			prevRec = rec
 			if rec.Before(cutoff) {
+				s.markIncomplete(e)
 				return
 			}
-			s.seq++
-			e.Seq = s.seq
 			e.recorded = rec
 			s.appendRing(e, false)
 		})
@@ -178,6 +218,7 @@ func (s *Store) refill() error {
 			return err
 		}
 	}
+	s.openSeq = s.seq
 	return nil
 }
 
@@ -238,6 +279,22 @@ func (s *Store) writerLoop(initialDay string) {
 			if err := s.writeEvent(w, ev); err != nil {
 				s.dropped.Add(1)
 			}
+		case done := <-s.flushCh:
+			for draining := true; draining; {
+				select {
+				case ev, ok := <-s.writeCh:
+					if !ok {
+						close(done)
+						return
+					}
+					if err := s.writeEvent(w, ev); err != nil {
+						s.dropped.Add(1)
+					}
+				default:
+					draining = false
+				}
+			}
+			close(done)
 		case <-s.pruneCh:
 			w.close()
 			s.prune()
@@ -259,7 +316,16 @@ func (s *Store) writeEvent(w *dayWriter, e Event) error {
 		return err
 	}
 	b = append(b, '\n')
-	return w.append(day, b)
+	if err := w.append(day, b); err != nil {
+		return err
+	}
+	if day < s.now().UTC().Format(dayLayout) {
+		s.invalidateClosedSummary(day)
+	}
+	if e.Seq > s.writtenSeq.Load() {
+		s.writtenSeq.Store(e.Seq)
+	}
+	return nil
 }
 
 type dayWriter struct {
@@ -393,4 +459,255 @@ func (s *Store) prune() {
 			_ = os.Remove(filepath.Join(s.dir, name))
 		}
 	}
+}
+
+func (s *Store) flushWriter() {
+	if s.writeCh == nil {
+		return
+	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		select {
+		case <-s.done:
+		case <-time.After(200 * time.Millisecond):
+		}
+		return
+	}
+	ack := make(chan struct{})
+	select {
+	case s.flushCh <- ack:
+	case <-s.done:
+		return
+	case <-time.After(200 * time.Millisecond):
+		return
+	}
+	select {
+	case <-ack:
+	case <-s.done:
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func (s *Store) invalidateClosedSummary(day string) {
+	s.sumMu.Lock()
+	defer s.sumMu.Unlock()
+	if s.summaries != nil {
+		delete(s.summaries, day)
+	}
+	_ = os.Remove(filepath.Join(s.dir, summarySubdir, day+summarySuffix))
+}
+
+func (s *Store) listClosedDays(f Filter, todayDay string) []string {
+	daySet := map[string]struct{}{}
+	addFromDir := func(dir, suffix string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if e.IsDir() || !e.Type().IsRegular() {
+				continue
+			}
+			stem, ok := strings.CutSuffix(e.Name(), suffix)
+			if !ok || len(stem) != len(dayLayout) || stem >= todayDay {
+				continue
+			}
+			dayTime, err := time.Parse(dayLayout, stem)
+			if err != nil {
+				continue
+			}
+			dayEnd := dayTime.AddDate(0, 0, 1)
+			if (f.Since.IsZero() || dayEnd.After(f.Since)) && (f.Until.IsZero() || dayTime.Before(f.Until)) {
+				daySet[stem] = struct{}{}
+			}
+		}
+	}
+	addFromDir(s.dir, daySuffix)
+	addFromDir(filepath.Join(s.dir, summarySubdir), summarySuffix)
+	days := make([]string, 0, len(daySet))
+	for d := range daySet {
+		days = append(days, d)
+	}
+	slices.Sort(days)
+	return days
+}
+
+func (s *Store) needsClosedFlush(days []string) bool {
+	if len(days) == 0 {
+		return false
+	}
+	s.sumMu.Lock()
+	defer s.sumMu.Unlock()
+	for _, day := range days {
+		if s.summaries[day] != nil {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(s.dir, summarySubdir, day+summarySuffix)); err != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) loadDaySummaries(days []string) []*daySummaryFile {
+	s.sumMu.Lock()
+	defer s.sumMu.Unlock()
+	out := make([]*daySummaryFile, 0, len(days))
+	for _, day := range days {
+		if ds := s.loadOrBuildDaySummaryLocked(day); ds != nil {
+			out = append(out, ds)
+		}
+	}
+	return out
+}
+
+func (s *Store) loadOrBuildDaySummaryLocked(day string) *daySummaryFile {
+	if ds := s.summaries[day]; ds != nil {
+		return ds
+	}
+	sumPath := filepath.Join(s.dir, summarySubdir, day+summarySuffix)
+	if raw, err := os.ReadFile(sumPath); err == nil {
+		var ds daySummaryFile
+		if uerr := json.Unmarshal(raw, &ds); uerr == nil && ds.V == summaryVersion && ds.Day == day && ds.Rows != nil {
+			s.summaries[day] = &ds
+			return &ds
+		}
+	}
+	rawPath := filepath.Join(s.dir, day+daySuffix)
+	if _, err := os.Lstat(rawPath); err != nil {
+		return nil
+	}
+	if s.onReadRaw != nil {
+		s.onReadRaw(day)
+	}
+	var oldest *time.Time
+	rowsMap := map[summaryKey]*summaryRow{}
+	if err := readDayFile(rawPath, func(e Event) {
+		if !e.Timestamp.IsZero() && (oldest == nil || e.Timestamp.Before(*oldest)) {
+			cp := e.Timestamp
+			oldest = &cp
+		}
+		k := summaryKey{
+			Hour:     e.Timestamp.UTC().Hour(),
+			Model:    e.Model,
+			Provider: e.Provider,
+			Account:  e.Account,
+			KeyID:    e.KeyID,
+			Failed:   e.Failed,
+		}
+		r := rowsMap[k]
+		if r == nil {
+			r = &summaryRow{summaryKey: k}
+			rowsMap[k] = r
+		}
+		r.Requests++
+		r.LatencyMS += e.LatencyMS
+		r.Input += deref(e.Tokens.Input)
+		r.Output += deref(e.Tokens.Output)
+		r.Reasoning += deref(e.Tokens.Reasoning)
+		r.Cached += deref(e.Tokens.Cached)
+		r.CacheWrite += deref(e.Tokens.CacheWrite)
+		r.Total += deref(e.Tokens.Total)
+	}); err != nil {
+		return nil
+	}
+	rows := make([]summaryRow, 0, len(rowsMap))
+	for _, r := range rowsMap {
+		rows = append(rows, *r)
+	}
+	slices.SortFunc(rows, func(a, b summaryRow) int {
+		return cmp.Or(
+			cmp.Compare(a.Hour, b.Hour),
+			cmp.Compare(a.Model, b.Model),
+			cmp.Compare(a.Provider, b.Provider),
+			cmp.Compare(a.Account, b.Account),
+			cmp.Compare(a.KeyID, b.KeyID),
+			cmp.Compare(boolInt(a.Failed), boolInt(b.Failed)),
+		)
+	})
+	ds := &daySummaryFile{V: summaryVersion, Day: day, Oldest: oldest, Rows: rows}
+	_ = writeSummaryFileAtomic(filepath.Join(s.dir, summarySubdir), sumPath, ds)
+	s.summaries[day] = ds
+	return ds
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func writeSummaryFileAtomic(sumDir, finalPath string, ds *daySummaryFile) error {
+	b, err := json.Marshal(ds)
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	if err := os.MkdirAll(sumDir, 0o700); err != nil {
+		return err
+	}
+	_ = os.Chmod(sumDir, 0o700)
+	tmp, err := os.CreateTemp(sumDir, ds.Day+".json.tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		cleanup()
+		return err
+	}
+	if n, err := tmp.Write(b); err != nil || n != len(b) {
+		cleanup()
+		if err != nil {
+			return err
+		}
+		return io.ErrShortWrite
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+func (s *Store) collectTodayEvents(todayDay string, todayStart time.Time, incompleteToday bool, openSeq uint64, ringEvents []Event) []Event {
+	if !incompleteToday {
+		return ringEvents
+	}
+	rawPath := filepath.Join(s.dir, todayDay+daySuffix)
+	if _, err := os.Lstat(rawPath); err != nil {
+		return ringEvents
+	}
+	if s.onReadRaw != nil {
+		s.onReadRaw(todayDay)
+	}
+	var out []Event
+	var maxFileSeq uint64
+	if err := readDayFile(rawPath, func(e Event) {
+		if e.Seq > maxFileSeq {
+			maxFileSeq = e.Seq
+		}
+		if !e.Timestamp.Before(todayStart) {
+			out = append(out, e)
+		}
+	}); err != nil {
+		return ringEvents
+	}
+	for _, e := range ringEvents {
+		if e.Seq > openSeq && e.Seq > maxFileSeq {
+			out = append(out, e)
+		}
+	}
+	return out
 }
