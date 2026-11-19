@@ -226,9 +226,14 @@ func (c *Core) accountModels(ctx context.Context, s *snapshot, id string) ([]Acc
 	return out, nil
 }
 
-// listModels asks account a's extension for its model list now (the protocol's models call),
-// rather than reading the list routing keeps, so the management view is current.
+// listModels returns account a's model list from the list routing keeps when a is routed
+// and has one, else asks its extension directly.
 func (c *Core) listModels(ctx context.Context, s *snapshot, a route.Account) (*protocol.ModelList, error) {
+	if s.Router != nil {
+		if list := s.Router.AccountList(ctx, a.ID); list != nil {
+			return list, nil
+		}
+	}
 	cr, _, err := c.credential(ctx, a)
 	if err != nil {
 		return nil, err

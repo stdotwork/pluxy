@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,6 +46,7 @@ const maxManagementBody = 1 << 20
 //	POST   /v0/management/management-key/rotate  replace the management key with a new one
 //	GET    /v0/management/models    the models served, as GET /v1/models lists them, each with its
 //	                                extension, upstream name and the IDs of the accounts that serve it
+//	POST   /v0/management/models/refresh  ask providers for their model lists again now
 //	GET    /v0/management/settings  the basic and routing settings, by today's core's names
 //	PATCH  /v0/management/settings  change them
 //	GET    /v0/management/login-methods  each extension's login methods (handleAccounts)
@@ -106,6 +108,31 @@ func (c *Core) Management() *server.Management {
 		defer release()
 		writeJSON(w, http.StatusOK, management.ModelsReply{Models: s.Router.ServedModels(r.Context())})
 	})
+	m.Handle("POST /models/refresh", func(w http.ResponseWriter, r *http.Request) {
+		var req management.RefreshModelsRequest
+		if !readOptionalJSON(w, r, &req) {
+			return
+		}
+		s, release := c.acquire()
+		defer release()
+		if req.Account != "" {
+			if _, ok := c.account(s, req.Account); !ok {
+				writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no account %q", req.Account))
+				return
+			}
+		}
+		var accounts []management.RefreshAccountResult
+		if !c.opts.SafeMode {
+			accounts = s.Router.RefreshModels(r.Context(), req.Account)
+		}
+		if accounts == nil {
+			accounts = []management.RefreshAccountResult{}
+		}
+		writeJSON(w, http.StatusOK, management.RefreshModelsReply{
+			Models:   s.Router.ServedModels(r.Context()),
+			Accounts: accounts,
+		})
+	})
 	c.handleUI(m)
 	c.handleAccounts(m)
 	c.handleConfig(m)
@@ -139,6 +166,29 @@ func writePackage(w http.ResponseWriter, v PackageView, err error) {
 		body["package"] = v
 	}
 	writeJSON(w, code, body)
+}
+
+func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxManagementBody))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_request", "message": "request body is not valid JSON: " + err.Error()}})
+		return false
+	}
+	if len(bytes.TrimSpace(b)) == 0 {
+		return true
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_request", "message": "request body is not valid JSON: " + err.Error()}})
+		return false
+	}
+	var extra any
+	if dec.Decode(&extra) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_request", "message": "request body must be one JSON object"}})
+		return false
+	}
+	return true
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {

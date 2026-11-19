@@ -634,3 +634,126 @@ func TestAggregatorLeavesOutToolInputForUnknownIndex(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeUsageCacheWrite(t *testing.T) {
+	checkUsage := func(t *testing.T, u *llm.Usage) {
+		t.Helper()
+		if u == nil {
+			t.Fatal("usage is nil")
+		}
+		if u.InputTokens == nil || *u.InputTokens != 12000 {
+			t.Errorf("InputTokens = %v, want 12000", u.InputTokens)
+		}
+		if u.CachedInputTokens == nil || *u.CachedInputTokens != 4000 {
+			t.Errorf("CachedInputTokens = %v, want 4000", u.CachedInputTokens)
+		}
+		if u.CacheWriteInputTokens == nil || *u.CacheWriteInputTokens != 7000 {
+			t.Errorf("CacheWriteInputTokens = %v, want 7000", u.CacheWriteInputTokens)
+		}
+		if u.OutputTokens == nil || *u.OutputTokens != 50 {
+			t.Errorf("OutputTokens = %v, want 50", u.OutputTokens)
+		}
+	}
+
+	t.Run("non-stream response", func(t *testing.T) {
+		body := `{
+			"id": "chatcmpl-cw1",
+			"object": "chat.completion",
+			"created": 1700000000,
+			"model": "gpt-4o",
+			"choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+			"usage": {
+				"prompt_tokens": 12000,
+				"completion_tokens": 50,
+				"total_tokens": 12050,
+				"prompt_tokens_details": {"cached_tokens": 4000, "cache_write_tokens": 7000}
+			}
+		}`
+		evs, err := DecodeResponse([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var finish *llm.Event
+		for i := range evs {
+			if evs[i].Type == llm.EventFinish {
+				finish = &evs[i]
+			}
+		}
+		if finish == nil {
+			t.Fatal("missing finish event")
+		}
+		checkUsage(t, finish.Usage)
+	})
+
+	t.Run("stream final usage chunk", func(t *testing.T) {
+		head := `"id":"chatcmpl-cw2","object":"chat.completion.chunk","created":1700000000,"model":"anthropic/claude-sonnet-4"`
+		chunks := []string{
+			`{` + head + `,"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}`,
+			`{` + head + `,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`{` + head + `,"choices":[],"usage":{"prompt_tokens":12000,"completion_tokens":50,"total_tokens":12050,"prompt_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000}}}`,
+			`[DONE]`,
+		}
+		d := NewStreamDecoder()
+		var finish *llm.Event
+		for _, c := range chunks {
+			evs, err := d.Decode([]byte(c))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range evs {
+				if evs[i].Type == llm.EventFinish {
+					ev := evs[i]
+					finish = &ev
+				}
+			}
+		}
+		if finish == nil {
+			t.Fatal("missing finish event")
+		}
+		checkUsage(t, finish.Usage)
+	})
+}
+
+func TestRenderUsageCacheWrite(t *testing.T) {
+	render := func(u *llm.Usage) string {
+		a := NewAggregator()
+		a.Add(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r1", Model: "m", Format: llm.FormatAnthropicMessages}})
+		a.Add(llm.Event{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemMessage}})
+		a.Add(llm.Event{Type: llm.EventTextDelta, Index: 0, Delta: "ok"})
+		a.Add(llm.Event{Type: llm.EventItemEnd, Index: 0})
+		a.Add(llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}, Usage: u})
+		b, err := a.Response()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Usage json.RawMessage `json:"usage"`
+		}
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatal(err)
+		}
+		return string(out.Usage)
+	}
+
+	got := render(&llm.Usage{
+		InputTokens:           llm.Int64(12000),
+		OutputTokens:          llm.Int64(50),
+		CachedInputTokens:     llm.Int64(4000),
+		CacheWriteInputTokens: llm.Int64(7000),
+	})
+	want := `{"prompt_tokens":12000,"completion_tokens":50,"total_tokens":12050,"prompt_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000}}`
+	if got != want {
+		t.Errorf("usage with cache write:\n got %s\nwant %s", got, want)
+	}
+
+	zero := render(&llm.Usage{
+		InputTokens:           llm.Int64(10),
+		OutputTokens:          llm.Int64(5),
+		CachedInputTokens:     llm.Int64(0),
+		CacheWriteInputTokens: llm.Int64(0),
+	})
+	wantZero := `{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":0}}`
+	if zero != wantZero {
+		t.Errorf("usage with zero cache write:\n got %s\nwant %s", zero, wantZero)
+	}
+}
