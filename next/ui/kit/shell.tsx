@@ -204,6 +204,8 @@ export function Shell(props: {
     setSignedIn(false);
   }, [host]);
   const extensionsChanged = useCallback(() => setUiVersion((n) => n + 1), []);
+  // Core keeps the themes: the theme state follows it while signed in.
+  useEffect(() => (signedIn ? themes.connect(unauthorized) : undefined), [signedIn, themes, unauthorized]);
   const kit = useMemo(
     () => ({ host, api: api(host), themes, privacy, unauthorized, extensionsChanged }),
     [host, themes, privacy, unauthorized, extensionsChanged],
