@@ -121,7 +121,8 @@ requests over all their accounts: see [Accounts and routing](#accounts-and-routi
 
 The OpenAI-compatible extension also adds accounts through the management API with method
 `api_key`. Its inputs are `api_key` (secret), `base_url` (required unless the account already has
-one), and optional `wire_api` (`chat`, `responses`, `messages` or `gemini`; default `chat`).
+one), optional `wire_api` (`chat`, `responses`, `messages` or `gemini`; default `chat`), and
+optional `quota` (`openrouter`, `deepseek` or `none`).
 `base_url` includes the API path, such as `https://api.openai.com/v1` or a Gemini host's `/v1beta`.
 The extension trims its trailing slash, checks the key with `GET {base_url}/models` using the
 selected API's authentication header, and returns the URL and wire API as non-secret account
@@ -146,6 +147,17 @@ it does, as today's core does: `"reasoning_levels"` in its `settings` lists the 
 upstream accepts (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`), by default `low`,
 `medium` and `high`, so `xhigh` and `max` go as `high`, `minimal` and `none` as `low`, and `auto`
 as `medium`. Today's core refuses `minimal` with a 400 instead.
+
+For an OpenAI-compatible account whose vendor offers a usage or balance endpoint for a normal API
+key, `GET /v0/management/accounts/{id}/quota` reads it: OpenRouter's `GET /api/v1/key` (reporting
+the plan `free` or `paid` from `is_free_tier`, the key's USD spending limit and remaining allowance
+`limit`, the daily, weekly and monthly USD spend `usage_daily`, `usage_weekly` and `usage_monthly`,
+and `free_model_daily_requests` when present) or DeepSeek's `GET /user/balance` (reporting `available`
+or `unavailable` from `is_available` and each currency's `total_balance` from `balance_infos` as
+`balance_<currency>`). An account's `settings` (or its `api_key` login input) may set `"quota"` to
+`"openrouter"`, `"deepseek"` or `"none"`; when unset, the extension picks by `base_url`'s host
+(`openrouter.ai` for OpenRouter, `api.deepseek.com` for DeepSeek) and answers unsupported for any
+other host.
 
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
 (a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.

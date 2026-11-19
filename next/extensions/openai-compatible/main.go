@@ -23,6 +23,11 @@
 // An account check (core's check call) reads the upstream's model list, GET {base_url}/models,
 // with the key sent the same way; it costs the account nothing. An upstream without that list
 // (404) leaves the account not checked.
+//
+// Quota (core's quota call) reads the vendor's normal-key usage or balance endpoint when one
+// exists: OpenRouter's GET /api/v1/key ("quota": "openrouter") or DeepSeek's GET /user/balance
+// ("quota": "deepseek"). When "quota" is unset, it is chosen from base_url's host (openrouter.ai
+// or api.deepseek.com), and any other host (or "quota": "none") answers unsupported.
 package main
 
 import (
@@ -56,7 +61,7 @@ const (
 )
 
 func main() {
-	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check}); err != nil {
+	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check, Quota: quota}); err != nil {
 		fmt.Fprintln(os.Stderr, "openai-compatible:", err)
 		os.Exit(1)
 	}
@@ -68,6 +73,9 @@ type settings struct {
 	// ReasoningLevels are the reasoning efforts the upstream accepts; an effort outside them
 	// moves to the nearest. Default low, medium and high.
 	ReasoningLevels []string `json:"reasoning_levels"`
+	// Quota names the vendor quota endpoint to read ("openrouter", "deepseek" or "none");
+	// when empty, it is chosen from base_url's host.
+	Quota string `json:"quota"`
 }
 
 // Wire APIs.
@@ -151,6 +159,9 @@ func account(call sdk.Call) (settings, wireInfo, string, error) {
 	wire, ok := wires[s.WireAPI]
 	if !ok {
 		return s, wireInfo{}, "", &llm.Error{Code: llm.CodeInvalidRequest, Message: fmt.Sprintf("account setting wire_api must be %q, %q, %q or %q", wireChat, wireResponses, wireMessages, wireGemini), Scope: llm.ScopeCredential}
+	}
+	if _, err := quotaVendor(s); err != nil {
+		return s, wireInfo{}, "", err
 	}
 	cred := call.Account.Credential
 	if cred == nil || cred.Kind != protocol.CredentialAPIKey || cred.APIKey == "" {
