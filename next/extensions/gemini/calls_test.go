@@ -93,7 +93,7 @@ func (r *recorder) count(typ string) int {
 // malformedReply writes a reply that ends with MALFORMED_FUNCTION_CALL, after a thought (which a
 // stream sends first) and, with text, some answer text.
 func malformedReply(w http.ResponseWriter, stream bool, text string) {
-	thought := `{"text":"I should call get_weather.","thought":true}`
+	thought := `{"text":"I should call get_weather.","thought":true,"thoughtSignature":"CiQbadAttempt"}`
 	finish := `{"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"MALFORMED_FUNCTION_CALL",` +
 		`"finishMessage":"Malformed function call: print(default_api.get_weather(city=))","index":0}],` +
 		`"usageMetadata":{"promptTokenCount":11,"totalTokenCount":11},"responseId":"bad"}`
@@ -117,12 +117,15 @@ func malformedReply(w http.ResponseWriter, stream bool, text string) {
 // answer text is not retried (the client has it), and ends with the error.
 func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 	native := &llm.Native{Format: llm.FormatGeminiGenerate, Body: json.RawMessage(`{"contents":[{"role":"user","parts":[{"text":"Weather in Oslo?"}]}]}`)}
-	chat := llm.Request{Native: &llm.Native{Format: llm.FormatOpenAIChat, Body: json.RawMessage(`{}`)},
-		Items: []llm.Item{{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "Weather in Oslo?"}}}}}
+	items := []llm.Item{{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "Weather in Oslo?"}}}}
+	translated := map[string]llm.Request{
+		"chat":     {Native: &llm.Native{Format: llm.FormatOpenAIChat, Body: json.RawMessage(`{}`)}, Items: items},
+		"messages": {Native: &llm.Native{Format: llm.FormatAnthropicMessages, Body: json.RawMessage(`{}`)}, Items: items},
+	}
 	for _, c := range []struct {
 		name      string
 		stream    bool
-		chat      bool
+		from      string // a client format other than Gemini's: "chat" or "messages"
 		malformed int    // how many replies end malformed before a good one
 		text      string // answer text the malformed stream sends first
 		requests  int
@@ -131,10 +134,12 @@ func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 	}{
 		{name: "non-stream, retry succeeds", malformed: 1, requests: 2, wantText: "Hello"},
 		{name: "stream, retry succeeds", stream: true, malformed: 1, requests: 2, wantText: "Hello"},
-		{name: "chat stream, retry succeeds", stream: true, chat: true, malformed: 1, requests: 2, wantText: "Hello"},
+		{name: "chat stream, retry succeeds", stream: true, from: "chat", malformed: 1, requests: 2, wantText: "Hello"},
+		{name: "messages stream, retry succeeds", stream: true, from: "messages", malformed: 1, requests: 2, wantText: "Hello"},
 		{name: "non-stream, retry fails", malformed: 2, requests: 2, wantError: true},
 		{name: "stream, retry fails", stream: true, malformed: 2, requests: 2, wantError: true},
-		{name: "chat stream, retry fails", stream: true, chat: true, malformed: 2, requests: 2, wantError: true},
+		{name: "chat stream, retry fails", stream: true, from: "chat", malformed: 2, requests: 2, wantError: true},
+		{name: "messages, retry fails", from: "messages", malformed: 2, requests: 2, wantError: true},
 		{name: "stream after answer text", stream: true, malformed: 1, text: "Let me check. ", requests: 1, wantText: "Let me check. ", wantError: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -153,8 +158,8 @@ func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 				geminitest.JSONText(w, "Hello")
 			}
 			req := llm.Request{Model: "gemini-x", Stream: c.stream, Native: native}
-			if c.chat {
-				req = chat
+			if c.from != "" {
+				req = translated[c.from]
 				req.Model, req.Stream = "gemini-x", c.stream
 			}
 			call := sdk.Call{
@@ -176,6 +181,13 @@ func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 			if n := rec.count(llm.EventReasoningDelta); c.wantText == "Hello" && n != 0 {
 				t.Errorf("the client got %d reasoning deltas of the reply that was asked for again", n)
 			}
+			for _, ev := range rec.events {
+				// The dropped reply's thought signature must not reach the client, which would
+				// replay it to Gemini in the next turn.
+				if c.wantText == "Hello" && (ev.Opaque != nil && ev.Opaque.Data == "CiQbadAttempt" || strings.Contains(string(ev.Raw), "CiQbadAttempt")) {
+					t.Errorf("the client got the dropped reply's thought signature: %+v", ev)
+				}
+			}
 			if !c.wantError {
 				if err != nil || rec.count(llm.EventFinish) != 1 {
 					t.Errorf("err = %v, finish events %d; want the retry's reply, finished", err, rec.count(llm.EventFinish))
@@ -190,5 +202,37 @@ func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 				t.Error("the client got a finish as well as the error")
 			}
 		})
+	}
+}
+
+// A Gemini client's body for a Vertex AI account reaches Vertex with its function responses in
+// the order of the calls and every thought signature where the client put it: the reorder moves
+// only function responses, never a signed part.
+func TestVertexNativeOrderKeepsSignatures(t *testing.T) {
+	srv := geminitest.New(t)
+	const body = `{"contents":[{"role":"user","parts":[{"text":"Weather and time?"}]},` +
+		`{"role":"model","parts":[{"functionCall":{"id":"fc-a","name":"get_weather","args":{"city":"Oslo"}},"thoughtSignature":"CiQsigA"},` +
+		`{"functionCall":{"id":"fc-b","name":"get_time","args":{}}}]},` +
+		`{"role":"user","parts":[{"functionResponse":{"id":"fc-b","name":"get_time","response":{"t":"12:00"}}},` +
+		`{"functionResponse":{"id":"fc-a","name":"get_weather","response":{"c":4}}}]}]}`
+	call := sdk.Call{
+		Account: protocol.Account{ID: "v", Settings: settingsFor(srv, kindVertexKey),
+			Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: srv.IssueKey()}},
+		Request: llm.Request{Model: "gemini-x", Native: &llm.Native{Format: llm.FormatGeminiGenerate, Body: json.RawMessage(body)}},
+	}
+	if err := generateTo(context.Background(), call, &recorder{}); err != nil {
+		t.Fatal(err)
+	}
+	reqs := srv.Requests()
+	if len(reqs) != 1 || reqs[0].Kind != "vertex-key" {
+		t.Fatalf("requests %+v, want one to Vertex", reqs)
+	}
+	want := `{"contents":[{"role":"user","parts":[{"text":"Weather and time?"}]},` +
+		`{"role":"model","parts":[{"functionCall":{"id":"fc-a","name":"get_weather","args":{"city":"Oslo"}},"thoughtSignature":"CiQsigA"},` +
+		`{"functionCall":{"id":"fc-b","name":"get_time","args":{}}}]},` +
+		`{"role":"user","parts":[{"functionResponse":{"id":"fc-a","name":"get_weather","response":{"c":4}}},` +
+		`{"functionResponse":{"id":"fc-b","name":"get_time","response":{"t":"12:00"}}}]}]}`
+	if !jsonEqual(reqs[0].Body, want) {
+		t.Errorf("Vertex got %s, want %s", reqs[0].Body, want)
 	}
 }

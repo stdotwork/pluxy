@@ -17,7 +17,10 @@
 // Interactions clients, as endpoint calls (interactions.go); any other account answers them
 // unsupported.
 //
-// A Gemini GenerateContent request is sent unchanged, thought signatures included. Requests in
+// A Gemini GenerateContent request is sent as the client wrote it, thought signatures included,
+// apart from the repairs Google needs (tool schemas in schema.go; turns and the order of function
+// responses in turns.go). A reply that ends with MALFORMED_FUNCTION_CALL before the client has seen
+// any of it is asked for once more (relayReply). Requests in
 // other formats (Chat Completions, Responses, Messages) are translated to GenerateContent, with
 // the client's reasoning effort turned into Gemini's thinking settings (thinking.go).
 package main

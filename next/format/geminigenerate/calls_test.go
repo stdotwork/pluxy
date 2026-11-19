@@ -180,3 +180,29 @@ func TestMalformedFunctionCallIsAnError(t *testing.T) {
 	_, err = DecodeResponse([]byte(reply))
 	check("response", err)
 }
+
+// A function call with null or missing args is still a call, with {} as its arguments, and the
+// reply finishes with tool calls: it does not come out empty.
+func TestCallWithoutArgsIsACall(t *testing.T) {
+	events, err := DecodeResponse([]byte(`{"candidates":[{"content":{"role":"model","parts":[` +
+		`{"functionCall":{"name":"list_files","args":null}},{"functionCall":{"name":"now"}}]},"finishReason":"STOP","index":0}],"responseId":"r"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args []string
+	var finish *llm.Finish
+	for _, ev := range events {
+		if ev.Type == llm.EventToolInputDelta {
+			args = append(args, ev.Delta)
+		}
+		if ev.Type == llm.EventFinish {
+			finish = ev.Finish
+		}
+	}
+	if strings.Join(args, " ") != "{} {}" || len(callIDs(events)) != 2 {
+		t.Errorf("calls %q with arguments %q, want two calls with {}", callIDs(events), args)
+	}
+	if finish == nil || finish.Reason != llm.FinishToolCalls {
+		t.Errorf("finish %+v, want tool calls", finish)
+	}
+}
