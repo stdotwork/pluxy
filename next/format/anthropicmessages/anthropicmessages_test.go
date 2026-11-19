@@ -702,6 +702,48 @@ func TestUsageThinkingTokens(t *testing.T) {
 	}
 }
 
+func TestUsageCacheWriteFromOtherFormat(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		format string
+		raw    string
+	}{
+		{"chat", llm.FormatOpenAIChat, `{"prompt_tokens":12000,"completion_tokens":50,"prompt_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000}}`},
+		{"responses", llm.FormatOpenAIResponses, `{"input_tokens":12000,"output_tokens":50,"input_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000}}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a := NewAggregator()
+			for _, ev := range []llm.Event{
+				{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r", Model: "up", Format: c.format}},
+				{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}, Usage: &llm.Usage{
+					InputTokens:           llm.Int64(12000),
+					OutputTokens:          llm.Int64(50),
+					CachedInputTokens:     llm.Int64(4000),
+					CacheWriteInputTokens: llm.Int64(7000),
+					Raw:                   json.RawMessage(c.raw),
+				}},
+			} {
+				a.Add(ev)
+			}
+			body, err := a.Response()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var m struct {
+				Usage json.RawMessage `json:"usage"`
+			}
+			_ = json.Unmarshal(body, &m)
+			want := `{"input_tokens":1000,"output_tokens":50,"cache_read_input_tokens":4000,"cache_creation_input_tokens":7000}`
+			if !jsonEqual(m.Usage, json.RawMessage(want)) {
+				t.Errorf("usage %s, want %s", m.Usage, want)
+			}
+			if len(a.Losses()) != 0 {
+				t.Errorf("losses %v, want none", a.Losses())
+			}
+		})
+	}
+}
+
 // Assistant text on both sides of a tool call stays in the one Chat message holding the call.
 func TestChatKeepsTextAroundToolCall(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","messages":[

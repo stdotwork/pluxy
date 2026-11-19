@@ -89,6 +89,13 @@ const ALLOWED: &[(&str, Part, &str, usize, &str)] = &[
         "native test (macOS): signal 0, which only asks whether a process exists",
     ),
     (
+        "proc_native.rs",
+        Part::Code,
+        "OpenProcess",
+        2,
+        "native test (Windows, feature native-test): opens a process with QUERY_LIMITED_INFORMATION only, to read its program file and whether it has exited; that right cannot end it",
+    ),
+    (
         "program_tests.rs",
         Part::Code,
         "OpenProcess",

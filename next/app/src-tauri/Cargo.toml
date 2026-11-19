@@ -77,8 +77,9 @@ base64 = "=0.23.1"
 # processes the app starts and holds (src/owned/windows.rs: CreateProcessW, job objects, console
 # control, file identity) and the core's listener check (src/managed.rs); private files
 # (src/private_windows.rs) and the vault's folders (src/vault_windows.rs): access lists, and
-# opening, renaming and listing relative to a held folder. Already in the tree through cap-std and
-# tauri's dirs; the version is the locked one.
+# opening, renaming and listing relative to a held folder; the native test's process and thread
+# listing (src/proc_native.rs, Tool Help). Already in the tree through cap-std and tauri's dirs;
+# the version is the locked one.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = [
     "Wdk",
@@ -92,6 +93,7 @@ windows-sys = { version = "=0.61.2", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_IO",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",

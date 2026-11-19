@@ -249,9 +249,13 @@ func (b *builder) response(stream bool) obj {
 			return *p
 		}
 		total := v(u.InputTokens) + v(u.OutputTokens)
+		inDetails := obj{"cached_tokens": v(u.CachedInputTokens)}
+		if w := v(u.CacheWriteInputTokens); w > 0 {
+			inDetails["cache_write_tokens"] = w
+		}
 		r["usage"] = obj{
 			"input_tokens":          v(u.InputTokens),
-			"input_tokens_details":  obj{"cached_tokens": v(u.CachedInputTokens)},
+			"input_tokens_details":  inDetails,
 			"output_tokens":         v(u.OutputTokens),
 			"output_tokens_details": obj{"reasoning_tokens": v(u.ReasoningTokens)},
 			"total_tokens":          total,

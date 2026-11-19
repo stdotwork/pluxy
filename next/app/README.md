@@ -1665,11 +1665,19 @@ app supported there:
 - The management key's native entry and rotation, and the native confirmations, have Win32
   dialogs on Windows and AppKit dialogs on macOS ([How the app reaches core](#how-the-app-reaches-core),
   [Native confirmations](#native-confirmations)).
-- Four parts of the native test run there:
+- Five parts of the native test run there:
   - the platform session (`native/platform.ts`, `PLATFORM_SHARDS` in `native/shards.ts`): one app
     per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
     Windows, a LaunchAgent on macOS), the tray and the close preference;
   - the package session: the test package and the release gate ([Packages](#packages));
+  - the tools sessions (`native/platform-tools.ts`, the `tools` shard): the signed tool sessions
+    run.ts runs on Linux (admission, the program host with its swaps, routing with jobs), and a
+    launcher check that uses managed launches only (`src-tauri/src/launcher_platform_native.rs`),
+    in the app built with the test trust, in local mode against a test core. That check leaves out
+    what Linux checks with a detached agent, a terminal, key entry and the key consumers, and
+    its crash, chain, page, changed and idle steps, which wait for their own slices; on macOS its
+    tray step calls the menu's event handler with the item's ID, as no menu shows without a person
+    holding it open (on Windows it sends the menu's own command message);
   - the update session: the test package (a folder bundle on Windows, an app bundle on macOS)
     updates itself to its signed newer version and rolls back, and crafted installs are refused
     ([Application update](#application-update));
@@ -1692,9 +1700,9 @@ app supported there:
   program host, the launch service and the launcher, and the vault for tools' backups and
   journals, with the differences [Windows and macOS](app-host/README.md#windows-and-macos) lists.
   A client page reaches its writer tool only where that tool has a program for the system
-  ([app tools](../app-tools/README.md) says which do). Clippy and the Rust tests check this there;
-  no native session starts a tool on those systems yet, and outside tests nothing can be
-  installed to run, as there are no production trust roots ([Limits](#limits)).
+  ([app tools](../app-tools/README.md) says which do). Clippy, the Rust tests and the tools
+  sessions check this there; outside tests nothing can be installed to run, as there are no
+  production trust roots ([Limits](#limits)).
 - On Windows, the page document's address is `http://pluxy-page.localhost/`, and the app holds a
   page's frame to its site through WebView2's frame navigation event (`src-tauri/src/page_frames.rs`).
 - The app tools' readers, usage parsers and execution program, the writer library and the
@@ -1769,9 +1777,13 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test runs on Linux, except its platform, package, update and dialogs sessions, which
-  CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
+- The native test runs on Linux, except its platform, package, tools, update and dialogs sessions,
+  which CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
   refuses there).
+- On Windows the program session does not check which processes hold the tool's pipes, as it
+  does on Linux and macOS: Windows lists no process's handles to an unprivileged one. It checks
+  instead that the tool's three standard handles are pipes and that a file the app holds through
+  an inheritable handle is not open in the tool.
 - The dialogs session runs only on disposable CI runners (`native/runner.ts`): on Windows the app's
   folders are the account's known folders, which no environment variable redirects, so it refuses to
   start when they exist and removes only the ones it made. Its input does not come from a keyboard:

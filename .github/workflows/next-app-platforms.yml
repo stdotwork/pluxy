@@ -2,9 +2,9 @@ name: Next app platforms
 
 # Builds and unit-tests the desktop app's Rust crate on Windows and macOS, and runs the real app
 # there (next/app/native/platform.ts: a second launch raising the first, the login item, the
-# window and the tray; the test package and the release gate; next/app/native/dialogs.ts: native
-# key entry, confirmations and key rotation). The Linux native test (Xvfb, portals) stays in
-# next-app.yml.
+# window and the tray; the test package and the release gate; the signed tool sessions, admission,
+# program, routing and launcher; next/app/native/dialogs.ts: native key entry, confirmations and
+# key rotation). The rest of the Linux native test (Xvfb, portals) stays in next-app.yml.
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when what it
@@ -12,7 +12,9 @@ on:
   workflow_call:
     inputs:
       # ci.yml sets this when the change reaches none of what the native jobs build: the app, the
-      # kit, the workflows, and the Go packages `go run ./e2e/panelcore` builds (see ci.yml).
+      # kit, the app tools the tools shard builds (execution, lib/program, lib/files, the app tools'
+      # Cargo.toml and Cargo.lock), the workflows, and the Go packages `go run ./e2e/panelcore`
+      # builds (see ci.yml).
       skip-native:
         type: boolean
         default: false
@@ -119,6 +121,9 @@ jobs:
             printf "passed %d, failed %d, ignored %d\n", p, f, i
             if (p == 0) exit 1
           }' "$RUNNER_TEMP/cargo-test.log" | tee -a "$GITHUB_STEP_SUMMARY"
+          # The native test's own unit tests (in src/native_test.rs and the checks it holds), which
+          # build only with the native-test feature.
+          cargo test --locked --features native-test --lib native_test::
       # The process ownership tests (`lifetime_...` in src/program_tests.rs and src/spawn_tests.rs):
       # each must have run and passed here, not been compiled out or skipped.
       - name: Lifetime tests ran
@@ -267,7 +272,10 @@ jobs:
   # The package and update shards build the test package first (package.ts test: a folder bundle
   # on Windows, an app bundle on macOS, never an installer), then the dev app, since the package's
   # builds rename the program they make in target/debug. The update shard also runs a test core
-  # (`go run ./e2e/panelcore`), so it sets up Go.
+  # (`go run ./e2e/panelcore`), so it sets up Go. The tools shard (native/platform-tools.ts) runs
+  # run.ts's admission, program, routing and launcher sessions here, on the app built with the
+  # test trust (artifact-test-trust) against a test core it starts with `go run`, so it sets up Go
+  # too.
   # A schedule or manual run has no inputs: null is not true, so it runs these.
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
@@ -281,6 +289,9 @@ jobs:
     runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     env:
       PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
+    # The builds (about 3 minutes with the caches restored), then the native test's own limit
+    # (at most 75 minutes).
+    timeout-minutes: 105
     strategy:
       fail-fast: false
       matrix:
@@ -290,12 +301,14 @@ jobs:
         shard:
           - platform
           - package
+          - tools
           - update
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      # The tools and update shards' sessions start a test core with `go run ./e2e/panelcore`.
       - name: Set up Go
-        if: matrix.shard == 'update'
+        if: matrix.shard == 'tools' || matrix.shard == 'update'
         uses: actions/setup-go@v5
         with:
           go-version-file: next/go.mod
@@ -327,10 +340,31 @@ jobs:
         run: bun run package:test "$RUNNER_TEMP/test-package"
       # The app with the test hooks (never in a release build): the one the checks start.
       - name: Build the app for the native test
+        if: matrix.shard != 'tools'
         working-directory: next/app/src-tauri
         run: cargo build --locked --features native-test
+      # The tools shard: the app with the test hooks and the test trust, the fixture tool its signed
+      # packages hold, and the execution program the launcher session installs, built into
+      # target/app-tools as run.ts builds it (without execution's native-test feature, which only
+      # run.ts's open session uses).
+      - name: Build the app and tools for the tools sessions
+        if: matrix.shard == 'tools'
+        working-directory: next/app/src-tauri
+        run: |
+          cargo build --locked --features native-test,artifact-test-trust --bin pluxy-app --example program_fixture
+          cd ../../app-tools
+          cargo build --locked -p execution --target-dir ../app/src-tauri/target/app-tools
+      # The tools shard runs four app sessions one after another. Each waits at most (limits in
+      # native/platform-tools.ts and platform.ts): 3 minutes for its test core to start
+      # (CORE_START); 10 minutes for the app (TIMEOUT), then 30 seconds for its output to close
+      # once stopped (STOP_MS) and, if it still runs, 30 seconds more once cleanup stops it again
+      # (STOP_MS); 1 minute for the core to exit (twice STOP_MS); 3 seconds of fixed pauses; and on
+      # Windows 30 seconds for each of the four folders it removes (FREE_MS): 17 minutes 3 seconds,
+      # 68 minutes 12 seconds for four. 75 minutes lets every session report and clean up even when
+      # each app hangs, with nearly 7 minutes for the short commands it runs besides (PowerShell,
+      # icacls), which have no limit of their own.
       - name: Native test
-        timeout-minutes: 40
+        timeout-minutes: ${{ matrix.shard == 'tools' && 75 || 40 }}
         env:
           PLUXY_APP_NATIVE_SHARD: ${{ matrix.shard }}
           PLUXY_APP_TEST_PACKAGE: ${{ runner.temp }}/test-package
