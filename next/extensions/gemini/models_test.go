@@ -3,9 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
@@ -52,9 +57,35 @@ var vertexModelIDs = []string{
 	"gemini-4-argon",
 }
 
+func closedGeminiURL(t *testing.T) string {
+	t.Helper()
+	s := httptest.NewServer(http.NotFoundHandler())
+	u := s.URL
+	s.Close()
+	return u
+}
+
+func withClosedBaseURL(t *testing.T, raw string) json.RawMessage {
+	t.Helper()
+	m := map[string]any{}
+	if raw != "" {
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := m["base_url"]; !ok {
+		m["base_url"] = closedGeminiURL(t)
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 func listedIDs(t *testing.T, settings string) ([]string, *protocol.ModelList) {
 	t.Helper()
-	call := sdk.ModelsCall{Account: protocol.Account{ID: "a", Settings: json.RawMessage(settings),
+	call := sdk.ModelsCall{Account: protocol.Account{ID: "a", Settings: withClosedBaseURL(t, settings),
 		Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k"}}}
 	list, err := listModels(context.Background(), call)
 	if err != nil {
@@ -70,6 +101,9 @@ func listedIDs(t *testing.T, settings string) ([]string, *protocol.ModelList) {
 
 func TestListModelsGeminiAPIKey(t *testing.T) {
 	ids, list := listedIDs(t, "")
+	if list.From != protocol.ModelListFromExtension {
+		t.Errorf("from = %q, want %q", list.From, protocol.ModelListFromExtension)
+	}
 	if !slices.Equal(ids, geminiAPIKeyModelIDs) {
 		t.Errorf("models = %v, want %v", ids, geminiAPIKeyModelIDs)
 	}
@@ -101,6 +135,9 @@ func TestListModelsVertex(t *testing.T) {
 	// An express-mode key and a service account both have the vertex settings.
 	for _, settings := range []string{`{"vertex":{"location":"global"}}`, `{"vertex":{"project":"p","location":"us-central1"}}`} {
 		ids, list := listedIDs(t, settings)
+		if list.From != protocol.ModelListFromExtension {
+			t.Errorf("settings %s: from = %q, want %q", settings, list.From, protocol.ModelListFromExtension)
+		}
 		if !slices.Equal(ids, vertexModelIDs) {
 			t.Errorf("settings %s: models = %v, want %v", settings, ids, vertexModelIDs)
 		}
@@ -116,5 +153,231 @@ func TestListModelsVertexImagenLeftOut(t *testing.T) {
 		if strings.HasPrefix(id, "imagen") {
 			t.Errorf("imagen model %s is listed; its only method is predict", id)
 		}
+	}
+}
+
+func TestListModelsFromUpstreamPagination(t *testing.T) {
+	var pageCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1beta/models" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("X-Goog-Api-Key") != "AIza-live-key" {
+			t.Errorf("X-Goog-Api-Key = %q, want AIza-live-key", r.Header.Get("X-Goog-Api-Key"))
+		}
+		if r.URL.Query().Get("pageSize") != "1000" {
+			t.Errorf("pageSize = %q, want 1000", r.URL.Query().Get("pageSize"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch pageCalls.Add(1) {
+		case 1:
+			if tok := r.URL.Query().Get("pageToken"); tok != "" {
+				t.Errorf("page 1 pageToken = %q, want empty", tok)
+			}
+			io.WriteString(w, `{
+				"models": [
+					{
+						"name": "models/gemini-2.5-pro",
+						"version": "2.5",
+						"displayName": "Gemini 2.5 Pro",
+						"description": "Most capable thinking model",
+						"inputTokenLimit": 1048576,
+						"outputTokenLimit": 65536,
+						"supportedGenerationMethods": ["generateContent", "countTokens"]
+					},
+					{
+						"name": "models/imagen-4.0-generate-001",
+						"version": "001",
+						"displayName": "Imagen 4",
+						"supportedGenerationMethods": ["predict"]
+					}
+				],
+				"nextPageToken": "page-2-token"
+			}`)
+		case 2:
+			if tok := r.URL.Query().Get("pageToken"); tok != "page-2-token" {
+				t.Errorf("page 2 pageToken = %q, want page-2-token", tok)
+			}
+			io.WriteString(w, `{
+				"models": [
+					{
+						"name": "models/gemini-future-4",
+						"version": "001",
+						"displayName": "Gemini Future 4",
+						"inputTokenLimit": 2097152,
+						"outputTokenLimit": 65536
+					}
+				]
+			}`)
+		default:
+			t.Errorf("unexpected extra page request %d", pageCalls.Load())
+		}
+	}))
+	defer srv.Close()
+
+	settings, _ := json.Marshal(map[string]string{"base_url": srv.URL})
+	list, err := listModels(context.Background(), sdk.ModelsCall{
+		Account: protocol.Account{
+			ID:         "gem",
+			Settings:   settings,
+			Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "AIza-live-key"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pageCalls.Load() != 2 {
+		t.Fatalf("page calls = %d, want 2", pageCalls.Load())
+	}
+	if list.From != protocol.ModelListFromAccount {
+		t.Errorf("from = %q, want %q", list.From, protocol.ModelListFromAccount)
+	}
+	if list.OwnedBy != "google" {
+		t.Errorf("owned_by = %q, want google", list.OwnedBy)
+	}
+	if len(list.Models) != 2 {
+		t.Fatalf("got %d models, want 2: %+v", len(list.Models), list.Models)
+	}
+	if m := list.Models[0]; m.ID != "gemini-2.5-pro" || m.Name != "models/gemini-2.5-pro" ||
+		m.DisplayName != "Gemini 2.5 Pro" || m.Version != "2.5" || m.OwnedBy != "google" ||
+		m.InputTokenLimit != 1048576 || m.ContextLength != 1048576 ||
+		m.OutputTokenLimit != 65536 || m.MaxCompletionTokens != 65536 ||
+		!slices.Equal(m.GenerationMethods, []string{"generateContent", "countTokens"}) {
+		t.Errorf("model 0 = %+v", m)
+	}
+	if m := list.Models[1]; m.ID != "gemini-future-4" || m.Name != "models/gemini-future-4" ||
+		m.DisplayName != "Gemini Future 4" || m.InputTokenLimit != 2097152 || m.ContextLength != 2097152 ||
+		m.OutputTokenLimit != 65536 || m.MaxCompletionTokens != 65536 {
+		t.Errorf("model 1 = %+v", m)
+	}
+}
+
+func TestListModelsVertexNeverQueriesUpstream(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	settings, _ := json.Marshal(map[string]any{
+		"base_url": srv.URL,
+		"vertex":   map[string]any{"location": "global"},
+	})
+	list, err := listModels(context.Background(), sdk.ModelsCall{
+		Account: protocol.Account{
+			ID:         "vtx",
+			Settings:   settings,
+			Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "vtx-key"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hits.Load() != 0 {
+		t.Errorf("vertex hit upstream %d times, want 0", hits.Load())
+	}
+	if list.From != protocol.ModelListFromExtension {
+		t.Errorf("from = %q, want %q", list.From, protocol.ModelListFromExtension)
+	}
+}
+
+func TestListModelsGeminiFallbackOnFailure(t *testing.T) {
+	cases := []struct {
+		name    string
+		timeout time.Duration
+		cred    *protocol.Credential
+		handler http.HandlerFunc
+	}{
+		{
+			name: "http_401",
+			cred: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "bad"},
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusUnauthorized)
+				io.WriteString(w, `{"error":{"code":401,"message":"API key not valid","status":"UNAUTHENTICATED"}}`)
+			},
+		},
+		{
+			name: "http_500",
+			cred: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k"},
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError)
+			},
+		},
+		{
+			name: "malformed_json",
+			cred: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k"},
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, `{"models": [broken`)
+			},
+		},
+		{
+			name: "empty_list",
+			cred: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k"},
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, `{"models": []}`)
+			},
+		},
+		{
+			name: "only_predict_models",
+			cred: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k"},
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, `{"models": [{"name":"models/imagen-4.0","supportedGenerationMethods":["predict"]}]}`)
+			},
+		},
+		{
+			name:    "timeout",
+			timeout: 40 * time.Millisecond,
+			cred:    &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k"},
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				select {
+				case <-r.Context().Done():
+				case <-time.After(2 * time.Second):
+				}
+			},
+		},
+		{
+			name: "missing_credential",
+			cred: nil,
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				t.Error("unexpected upstream hit without credential")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(tc.handler)
+			defer srv.Close()
+
+			settings, _ := json.Marshal(map[string]string{"base_url": srv.URL})
+			ctx := context.Background()
+			if tc.timeout > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tc.timeout)
+				defer cancel()
+			}
+			list, err := listModels(ctx, sdk.ModelsCall{
+				Account: protocol.Account{ID: "fail", Settings: settings, Credential: tc.cred},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if list.From != protocol.ModelListFromExtension {
+				t.Errorf("from = %q, want %q", list.From, protocol.ModelListFromExtension)
+			}
+			var ids []string
+			for _, m := range list.Models {
+				ids = append(ids, m.ID)
+			}
+			slices.Sort(ids)
+			if !slices.Equal(ids, geminiAPIKeyModelIDs) {
+				t.Errorf("models = %v, want %v", ids, geminiAPIKeyModelIDs)
+			}
+		})
 	}
 }
