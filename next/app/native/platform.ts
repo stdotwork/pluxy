@@ -27,6 +27,17 @@
 // - bundle release gate: the release command (package.ts release) passes a clean release build and
 //   a clean bundle of this system's kind around it, and refuses a bundle holding the test-feature
 //   dev app, the test package renamed and the test package itself.
+// - app update (the update shard): the test package, installed from its bundle into a folder of
+//   this user's and connected to a test core (`go run ./e2e/panelcore`), updates itself to its
+//   signed newer version and back,
+//   and refuses the rest, with update-cases.ts's cases (the same as Linux's update session): no
+//   updater trust; this system's crafted installs (Windows: an .msi- and a setup-program-patched
+//   program, a folder Everyone may change; macOS: the program outside its bundle, a bundle its
+//   group may change, the installed bundle started through a link on its path); macOS: the
+//   update route starts the bundle by its real path, and a launch through LaunchServices (`/usr/bin/open`) is offered the
+//   update; the update route with its third launch in the acceptance gap and its rollback; stand-ins
+//   for installers and elevation first on PATH never ran; macOS: no quarantine on the installed
+//   bundle.
 //
 // These write what a real run writes: the user's registry or LaunchAgents folder, and on Windows
 // the app's own folder in the user's profile. So it runs only on a disposable CI runner
@@ -35,7 +46,7 @@
 // Output: `platform: ...` lines, `platform-problem: ...` for each failed check, and a summary with
 // the counts. A run that checked nothing fails.
 
-import { spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   appendFileSync,
@@ -52,11 +63,28 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { createInterface } from "node:readline";
 import { MARKER_FILE, PROFILE_FILE } from "./admission";
 import { Launch, type Step } from "./launch";
 import { DISPOSABLE_RUNNER, onDisposableRunner } from "./runner";
 import { SESSIONS, selectShard } from "./shards";
+import {
+  checkSteps,
+  LAUNCH_MS,
+  NO_ROOTS,
+  pinOf,
+  privateFolder,
+  REFUSALS,
+  type Refusal,
+  refusedLaunch,
+  sha256,
+  standIns,
+  startUpdateFeed,
+  treeDigest,
+  updateRoute,
+  withPathFirst,
+} from "./update-cases";
 
 const windows = process.platform === "win32";
 const mac = process.platform === "darwin";
@@ -716,18 +744,25 @@ function privateHome(p: Profile): string {
     chmodSync(home, 0o700);
     return home;
   }
-  const home = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-trust-"));
+  return ownFolder(mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-trust-")));
+}
+
+/** Windows: makes folder (if need be) one whose access list lets in only this user, SYSTEM and
+ * Administrators, inherited by what is made in it. Elsewhere: mode 700. */
+function ownFolder(folder: string): string {
+  if (!windows) return privateFolder(folder);
+  mkdirSync(folder, { recursive: true });
   const user = run("whoami", []).out;
   const set = run("icacls", [
-    home,
+    folder,
     "/inheritance:r",
     "/grant:r",
     `${user}:(OI)(CI)F`,
     "*S-1-5-18:(OI)(CI)F",
     "*S-1-5-32-544:(OI)(CI)F",
   ]);
-  if (set.status !== 0) throw new Error(`icacls ${home}: ${set.out}`);
-  return home;
+  if (set.status !== 0) throw new Error(`icacls ${folder}: ${set.out}`);
+  return folder;
 }
 
 /** Writes a test trust profile in home trusting pubkey for the app's own update, and its marker.
@@ -966,6 +1001,244 @@ async function bundleReleaseGate() {
   }
 }
 
+// ---- the update -----------------------------------------------------------------------------
+
+/** The test core, `go run ./e2e/panelcore` (as dialogs.ts starts it): its address and key. It
+ * runs until its stdin ends. */
+async function startCore(): Promise<{ proc: ChildProcess; base: string; key: string }> {
+  const proc = spawn("go", ["run", "./e2e/panelcore"], {
+    cwd: join(app, ".."),
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  const line = await new Promise<string>((resolve, reject) => {
+    proc.once("exit", (code) => reject(new Error(`panelcore exited with ${code}`)));
+    proc.once("error", reject);
+    if (proc.stdout) createInterface({ input: proc.stdout }).once("line", resolve);
+  });
+  return { proc, ...JSON.parse(line) };
+}
+
+/** The test package's program with the bundle type an installer gives it: tauri-bundler patches
+ * the first __TAURI_BUNDLE_TYPE_VAR_UNK with the type's (`MSI`, `NSS`). */
+function patchedBundleType(program: string, kind: "MSI" | "NSS"): Buffer {
+  const bytes = Buffer.from(readFileSync(program));
+  const at = bytes.indexOf(Buffer.from("__TAURI_BUNDLE_TYPE_VAR_UNK"));
+  if (at < 0) throw new Error(`${program} has no unpatched bundle type`);
+  bytes.write(`__TAURI_BUNDLE_TYPE_VAR_${kind}`, at, "latin1");
+  return bytes;
+}
+
+async function update() {
+  const made = testPackage();
+  if (!made) return;
+  const system = windows ? "win32" : "darwin";
+  const exe = windows ? "pluxy-app-test.exe" : "pluxy-app-test";
+  const p = makeProfile(TEST_ID);
+  const root = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-update-"));
+  // Windows: the app keeps its connection in its local folder, which makeProfile's remove takes.
+  const local = windows ? join(process.env.LOCALAPPDATA as string, TEST_ID) : p.dir;
+  let core: Awaited<ReturnType<typeof startCore>> | undefined;
+  let feed: ReturnType<typeof startUpdateFeed> | undefined;
+  // The trust profile's home: on Windows a folder of its own under the runner's temporary folder,
+  // removed below; on macOS the profile's own, removed with it.
+  let home: string | undefined;
+  try {
+    if (windows && existsSync(local))
+      throw new Error(`${local} exists: this is not a fresh runner, and the test would write over it`);
+    home = privateHome(p);
+    const nonce = writeUpdaterTrust(home, made.updater_pubkey);
+    const work = privateFolder(join(root, "work"));
+
+    // The installed test package, a copy in a folder of this user's: Windows, its folder bundle
+    // in a folder only this user (and SYSTEM and Administrators) may change; macOS, its app
+    // bundle in the profile's Applications folder, started by its real path.
+    let installed: string;
+    let program: string;
+    // macOS: the program by the path the bundle was put at, which goes through a link (the
+    // system's temporary folder is under /var, a link to /private/var): the "linked" refusal.
+    let linkedProgram = "";
+    if (windows) {
+      const folder = join(ownFolder(join(root, "install")), basename(made.bundle));
+      mkdirSync(folder);
+      installed = join(folder, exe);
+      copyFileSync(made.program, installed);
+      program = installed;
+    } else {
+      const put = join(privateFolder(join(home, "Applications")), basename(made.bundle));
+      const copied = run("ditto", ["--norsrc", "--noextattr", "--noqtn", made.bundle, put]);
+      if (copied.status !== 0) throw new Error(`ditto: ${copied.out}`);
+      installed = realpathSync(put);
+      program = join(installed, "Contents", "MacOS", exe);
+      linkedProgram = join(put, "Contents", "MacOS", exe);
+      check(
+        installed !== put,
+        `the installed copy's path ${put} has no link in it, so the linked case does not start the app through one`,
+      );
+    }
+    const v1 = pinOf(installed);
+    writeFileSync(join(work, "v1.sha256"), v1);
+    const payload = readFileSync(made.update.payload);
+    // The new version's pin: the program itself, or the tree of the bundle the archive holds.
+    const v2 = windows ? sha256(payload) : treeDigest(made.update.bundle);
+    say(`installed ${installed}: v1 ${v1}, v2 ${v2}`);
+
+    say("starting the test core");
+    core = await startCore();
+    mkdirSync(local, { recursive: true });
+    writeFileSync(
+      join(local, "connection.json"),
+      JSON.stringify({ mode: "local", url: core.base, key: core.key }),
+      { mode: 0o600 },
+    );
+    writeFileSync(join(p.dir, "window.json"), JSON.stringify({ close_behavior: "minimize-to-tray" }), {
+      mode: 0o600,
+    });
+
+    const served = startUpdateFeed({
+      dir: work,
+      payload,
+      file: basename(made.update.payload),
+      target: made.update.target,
+      version: made.update.version,
+      signature: made.update.signature,
+      pubkey: made.updater_pubkey,
+    });
+    feed = served;
+    // Installers and elevation: never run by the app; each stand-in logs if it is.
+    const stand = standIns(
+      root,
+      windows ? ["msiexec", "runas", "schtasks", "sc"] : ["osascript", "sudo", "installer", "authopen"],
+    );
+    const env = {
+      ...withPathFirst({ ...p.env, HOME: home }, stand.bin),
+      PLUXY_APP_TEST_UPDATE: work,
+      PLUXY_APP_TEST_FEED: served.url,
+      PLUXY_APP_TEST_FEED_CA: served.ca,
+    };
+    const trusted = { ...env, PLUXY_TEST_TRUST_NONCE: nonce };
+    const unchanged = () => pinOf(installed) === v1;
+    const seen = new Set<string>();
+    const add = (names: Set<string>) => {
+      for (const n of names) seen.add(n);
+    };
+    const refuse = async (refusal: Refusal, prog: string, e: Record<string, string>) =>
+      add(await refusedLaunch({ refusal, program: prog, env: e, check, say, feed: served, unchanged }));
+
+    // No updater trust (no nonce); the first launch, which sets the feed.
+    await refuse(NO_ROOTS, program, env);
+
+    // This system's crafted installs, each in a folder of its own.
+    for (const refusal of REFUSALS[system]) {
+      // The installed bundle itself, started through the link on its path.
+      if (refusal.case === "linked") {
+        await refuse(refusal, linkedProgram, trusted);
+        continue;
+      }
+      const folder = ownFolder(join(root, `crafted-${refusal.case}`));
+      let crafted: string;
+      if (windows) {
+        const bundle = join(folder, basename(made.bundle));
+        mkdirSync(bundle);
+        crafted = join(bundle, exe);
+        if (refusal.case === "msi" || refusal.case === "nsis") {
+          writeFileSync(crafted, patchedBundleType(made.program, refusal.case === "msi" ? "MSI" : "NSS"));
+        } else {
+          copyFileSync(made.program, crafted);
+          // Everyone may change the bundle's folder (and, inherited, the program).
+          const opened = run("icacls", [bundle, "/grant", "*S-1-1-0:(OI)(CI)M"]);
+          if (opened.status !== 0) throw new Error(`icacls ${bundle}: ${opened.out}`);
+        }
+      } else if (refusal.case === "bare") {
+        crafted = join(folder, exe);
+        copyFileSync(program, crafted);
+        chmodSync(crafted, 0o755);
+      } else {
+        const bundle = join(folder, basename(made.bundle));
+        const copied = run("ditto", ["--norsrc", "--noextattr", "--noqtn", installed, bundle]);
+        if (copied.status !== 0) throw new Error(`ditto: ${copied.out}`);
+        chmodSync(bundle, 0o775);
+        crafted = join(bundle, "Contents", "MacOS", exe);
+      }
+      await refuse(refusal, crafted, trusted);
+    }
+
+    // macOS: the installed bundle started once by LaunchServices, as Finder or the Dock would:
+    // its provenance holds, and the update is offered.
+    if (mac) {
+      const out = join(root, "open.log");
+      const args = ["-n", "-W", "--stdout", out, "--stderr", out];
+      for (const [k, v] of Object.entries({ ...trusted, PLUXY_APP_TEST_UPDATE_CASE: "open" }))
+        if (k === "HOME" || k === "PATH" || k.startsWith("PLUXY_")) args.push("--env", `${k}=${v}`);
+      const opened = spawnSync("/usr/bin/open", [...args, installed], {
+        encoding: "utf8",
+        timeout: LAUNCH_MS,
+      });
+      const lines = existsSync(out) ? readFileSync(out, "utf8").split("\n") : [];
+      const step = (name: string) => {
+        const l = lines.find((x) => x.startsWith(`native-test: ${name} `));
+        return l ? (JSON.parse(l.slice(`native-test: ${name} `.length)) as Step) : undefined;
+      };
+      const s = step("update_open");
+      if (s) seen.add("update_open");
+      say(`open: exit ${opened.status}: ${JSON.stringify(s ?? step("failed") ?? lines.slice(-20))}`);
+      check(opened.status === 0, `open: /usr/bin/open exited with ${opened.status}: ${opened.stderr ?? ""}`);
+      check(
+        s?.available === "true" &&
+          s.installed_sha === v1 &&
+          String(s.installed).endsWith(basename(installed)),
+        `open: the app started by LaunchServices was not offered the update from its bundle: ${JSON.stringify(s)}`,
+      );
+      check(unchanged(), "open: the installed copy changed");
+    }
+    check(stand.ran() === "", `an installer or elevation ran: ${stand.ran()}`);
+
+    // The update route.
+    add(
+      await updateRoute({
+        program,
+        installed,
+        third: program,
+        env: trusted,
+        dir: work,
+        v1,
+        v2,
+        v2Version: made.update.version,
+        managed: false,
+        feed: served,
+        check,
+        say,
+      }),
+    );
+    checkSteps(check, system, seen);
+    check(stand.ran() === "", `an installer or elevation ran: ${stand.ran()}`);
+    // Nothing an install made is left next to the installed copy.
+    const left = readdirSync(dirname(installed));
+    check(
+      JSON.stringify(left) === JSON.stringify([basename(installed)]),
+      `next to the installed copy at the end: ${left.join(", ")}`,
+    );
+    if (mac)
+      check(
+        run("xattr", ["-p", "com.apple.quarantine", installed]).status !== 0,
+        "the installed app bundle is quarantined",
+      );
+    say(`requests: ${JSON.stringify(Object.fromEntries(served.requests))}`);
+  } finally {
+    feed?.stop();
+    if (core) {
+      const proc = core.proc;
+      proc.stdin?.end();
+      if (proc.exitCode === null) await new Promise((r) => proc.once("exit", r));
+    }
+    await Bun.sleep(500);
+    if (windows) {
+      removeWhenFree(root, local);
+      if (home) removeWhenFree(home, local);
+    } else rmSync(root, { recursive: true, force: true });
+    p.remove();
+  }
+}
+
 // ---- the run --------------------------------------------------------------------------------
 
 async function main() {
@@ -975,6 +1248,7 @@ async function main() {
     ["window and tray", windowAndTray],
     ["bundle", bundle],
     ["bundle release gate", bundleReleaseGate],
+    ["app update", update],
   ];
   for (const [name, body] of sessions) {
     if (!runsSession(name)) continue;

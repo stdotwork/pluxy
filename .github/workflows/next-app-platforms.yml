@@ -264,9 +264,10 @@ jobs:
   # runner's user is thrown away after the job; the test removes what it made as well. The sessions
   # are named in next/app/native/shards.ts (PLATFORM_SHARDS), one job per shard; the summary has
   # the counts.
-  # The package shard builds the test package first (package.ts test: a folder bundle on Windows,
-  # an app bundle on macOS, never an installer), then the dev app, since the package's builds
-  # rename the program they make in target/debug.
+  # The package and update shards build the test package first (package.ts test: a folder bundle
+  # on Windows, an app bundle on macOS, never an installer), then the dev app, since the package's
+  # builds rename the program they make in target/debug. The update shard also runs a test core
+  # (`go run ./e2e/panelcore`), so it sets up Go.
   # A schedule or manual run has no inputs: null is not true, so it runs these.
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
@@ -289,9 +290,17 @@ jobs:
         shard:
           - platform
           - package
+          - update
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Set up Go
+        if: matrix.shard == 'update'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -314,7 +323,7 @@ jobs:
       - name: Build the window
         run: bun run build
       - name: Test package
-        if: matrix.shard == 'package'
+        if: matrix.shard == 'package' || matrix.shard == 'update'
         run: bun run package:test "$RUNNER_TEMP/test-package"
       # The app with the test hooks (never in a release build): the one the checks start.
       - name: Build the app for the native test
