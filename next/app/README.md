@@ -1552,8 +1552,9 @@ app supported there:
     run.ts runs on Linux (admission, the program host with its swaps, routing with jobs, the vault
     with client keys), and a launcher check that uses managed launches only
     (`src-tauri/src/launcher_platform_native.rs`), in the app built with the test trust, in local
-    mode against a test core. The client keys are made on that test core, not on the app's own core
-    as on Linux. On Windows the client-key check reads the agent's command line from Windows, but
+    mode against a test core. The vault session's client-key check then runs a second time against
+    the app's own core, as on Linux: the app switches to managed mode with signed test core
+    releases made for the session and installs one through the native confirmation. On Windows the client-key check reads the agent's command line from Windows, but
     its environment is the agent's own report, as Windows gives no supported way to read another
     process's. The launcher check leaves out what Linux checks with a detached agent, a terminal,
     key entry and the key consumers, and its crash, chain, page, changed and idle steps, which wait

@@ -3,11 +3,12 @@
 //! its signed fixture tools (`native/vault.ts`): pluxy/agent (a disposable agent: its `serve`
 //! asks core with the client key it is given) and pluxy/consumer (another tool). It drives the
 //! real app through the window's own commands, the real native confirmations and key entry, and
-//! the app's own core on Linux. On Windows and macOS, where the app's own core does not run yet, it
-//! uses the session's test core in local mode instead (`native/platform-tools.ts` names its config
-//! file in `core.json`). The keys core makes are read from that core's config file, the
-//! independent record; the app never shows them. Each refusal has a positive control on the same
-//! route:
+//! the app's own core on Linux. On Windows and macOS it runs twice (`native/platform-tools.ts`
+//! names what it needs in `core.json`): first against the session's test core in local mode, then,
+//! with the app switched to managed mode and the runner's core release installed through the
+//! native confirmation (`core_updates.rs`), against the app's own core. The keys core makes are read
+//! from that core's config file, the independent record; the app never shows them. Each refusal
+//! has a positive control on the same route:
 //!
 //! - cancel: a capture the person cancels adds no key to core and none to the vault;
 //! - capture: a confirmed capture adds one key to core's config and keeps it in the vault bound to
@@ -27,7 +28,8 @@
 //! - audit: no key reached the window's webview; the runner checks the app's stdout and stderr
 //!   for them too (`client-keys`, written here as each key is learned).
 //!
-//! One line on stderr: `native-test: client_keys <JSON>`.
+//! One line on stderr per run: `native-test: client_keys <JSON>`, and off Linux
+//! `native-test: client_keys_managed <JSON>` for the run against the app's own core.
 
 use super::admission::{ok, press, require, settle, start};
 use super::key_entry_test::{clean_webview, watch};
@@ -48,15 +50,9 @@ const AGENT: &str = "pluxy/agent";
 const OTHER: &str = "pluxy/consumer";
 const LABEL: &str = "fixture agent key";
 const ENTRY: &str = "pluxy client key";
-/// The mode of the core the check uses: the app's own on Linux, a test core elsewhere.
-const MODE: &str = if cfg!(target_os = "linux") {
-    "managed"
-} else {
-    "local"
-};
 
 /// The client keys in the core config at path, its `client_keys` (the app writes that config as
-/// JSON, and core keeps a JSON config JSON when it changes it).
+/// JSON, and core keeps it JSON when it changes it).
 pub(super) fn core_keys(path: &Path) -> Result<BTreeSet<String>, String> {
     let text = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let cfg: Value = serde_json::from_slice(&text)
@@ -156,9 +152,9 @@ pub(super) fn new_key(
     }
 }
 
-/// Requires the capture answer r to name a client key of core origin base for the agent, masked
-/// as key is, and not to hold key; gives the secret's ID and core's key ID.
-fn captured(r: &Value, base: &str, key: &str) -> Result<(String, String), String> {
+/// Requires the capture answer r to name a client key of the mode core at origin base for the
+/// agent, masked as key is, and not to hold key; gives the secret's ID and core's key ID.
+fn captured(r: &Value, mode: &str, base: &str, key: &str) -> Result<(String, String), String> {
     let v = &r["value"];
     let ck = &v["client_key"];
     let masked = format!("{}******{}", &key[..2], &key[key.len() - 2..]);
@@ -166,7 +162,7 @@ fn captured(r: &Value, base: &str, key: &str) -> Result<(String, String), String
         r["ok"] == true
             && v["id"].as_str().is_some_and(|i| i.starts_with("s-"))
             && v["label"] == LABEL
-            && ck["core"] == json!({"mode": MODE, "origin": base})
+            && ck["core"] == json!({"mode": mode, "origin": base})
             && ck["client"] == AGENT
             && ck["masked"] == masked.as_str()
             && ck["key_id"].as_str().is_some_and(|i| !i.is_empty())
@@ -305,47 +301,139 @@ fn agent_seen(pid: u64, out: &Path) -> Result<(String, String), String> {
     }
 }
 
+/// What the runner names in `core.json` off Linux (`native/platform-tools.ts`).
+#[cfg(not(target_os = "linux"))]
+fn named(fixtures: &Path) -> Result<Value, String> {
+    serde_json::from_slice(
+        &std::fs::read(fixtures.join("core.json")).map_err(|e| format!("core.json: {e}"))?,
+    )
+    .map_err(|e| format!("core.json: {e}"))
+}
+
+/// The config file of the app's own core, where the app keeps it (lib.rs): on Windows in the local
+/// application data, which stays on this machine.
+fn managed_config(app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    let data = app.path().app_local_data_dir();
+    #[cfg(not(windows))]
+    let data = app.path().app_data_dir();
+    Ok(data
+        .map_err(|e| e.to_string())?
+        .join("core")
+        .join("config.json"))
+}
+
+/// Switches the app to managed mode with the runner's core source and installs its release
+/// through `core_install` and the native confirmation, which must show the version and the
+/// archive's SHA-256, as a person would on the Connection page; then requires the app connected to
+/// that core and signed in.
+#[cfg(not(target_os = "linux"))]
+fn connect_managed(app: &AppHandle, main: &Webview, named: &Value) -> Result<(), String> {
+    let field = |k: &str| {
+        named[k]
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| format!("core.json names no {k}"))
+    };
+    let (source, version, sha) = (
+        field("core_source")?,
+        field("core_version")?,
+        field("core_sha256")?,
+    );
+    ok(
+        main,
+        "connection_set",
+        json!({"change": {"mode": "managed", "core_source": source}}),
+    )?;
+    let seq = |v: &Value| v["outcome"]["seq"].as_u64().unwrap_or(0);
+    let before = seq(&ok(main, "core_versions", json!({}))?);
+    let slot = start(main, "core_install", json!({"version": version}))?;
+    dialog_with(app, &[version.as_str(), sha.as_str()])?;
+    press("alt+o")?;
+    let r = settle(main, &slot)?;
+    require(r["ok"] == true, format!("core_install {version}: {r}"))?;
+    let outcome = wait_for("the core install's outcome", || {
+        let v = ok(main, "core_versions", json!({})).ok()?;
+        (seq(&v) > before).then(|| v["outcome"].clone())
+    })?;
+    require(
+        outcome["result"] == "done",
+        format!("installing core {version}: {outcome}"),
+    )?;
+    let view = wait_for("the app's own core", || {
+        let v = ok(main, "connection_get", json!({})).ok()?;
+        (v["core"]["version"] == version.as_str() && v["signed_in"] == true).then_some(v)
+    })?;
+    require(
+        view["mode"] == "managed",
+        format!("the connection after the install: {view}"),
+    )
+}
+
+/// The client-key check, once on Linux against the app's own core; off Linux against the test
+/// core in local mode, then against the app's own core.
 pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<(), String> {
-    let work = fixtures.join("client-keys-work");
-    std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
-    let at = |name: &str| work.join(name);
-    let audit = fixtures.join("client-keys");
-    let config = if MODE == "managed" {
-        app.path()
-            .app_data_dir()
-            .map_err(|e| e.to_string())?
-            .join("core")
-            .join("config.json")
-    } else {
-        let named: Value = serde_json::from_slice(
-            &std::fs::read(fixtures.join("core.json")).map_err(|e| format!("core.json: {e}"))?,
-        )
-        .map_err(|e| format!("core.json: {e}"))?;
-        PathBuf::from(
+    #[cfg(target_os = "linux")]
+    check(app, main, &fixtures, "managed", managed_config(app)?, true)?;
+    #[cfg(not(target_os = "linux"))]
+    {
+        let named = named(&fixtures)?;
+        let config = PathBuf::from(
             named["config"]
                 .as_str()
                 .ok_or("core.json names no config")?,
+        );
+        check(app, main, &fixtures, "local", config, true)?;
+        connect_managed(app, main, &named).map_err(|e| format!("client keys managed: {e}"))?;
+        check(app, main, &fixtures, "managed", managed_config(app)?, false)?;
+    }
+    Ok(())
+}
+
+/// One run of the check against the core in mode whose config file is config. The first run
+/// installs and enables the agent and starts the webview's audit, and reports as `client_keys`;
+/// a later one as `client_keys_<mode>`.
+fn check(
+    app: &AppHandle,
+    main: &Webview,
+    fixtures: &Path,
+    mode: &str,
+    config: PathBuf,
+    first_run: bool,
+) -> Result<(), String> {
+    let (report, work) = if first_run {
+        ("client_keys".to_string(), "client-keys-work".to_string())
+    } else {
+        (
+            format!("client_keys_{mode}"),
+            format!("client-keys-{mode}-work"),
         )
     };
+    let work = fixtures.join(work);
+    std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    let at = |name: &str| work.join(name);
+    let audit = fixtures.join("client-keys");
     let view = ok(main, "connection_get", json!({}))?;
     let base = view["target"].as_str().unwrap_or_default().to_string();
     require(
-        view["mode"] == MODE && base.starts_with("http://127.0.0.1:"),
+        view["mode"] == mode && base.starts_with("http://127.0.0.1:"),
         format!("the connection: {view}"),
     )?;
-    watch(main)?;
     let mut keys: Vec<String> = Vec::new();
     let mut out = json!({});
-    let step =
-        |name: &str, r: Result<(), String>| r.map_err(|e| format!("client keys {name}: {e}"));
+    let what = report.replace('_', " ");
+    let step = |name: &str, r: Result<(), String>| r.map_err(|e| format!("{what} {name}: {e}"));
 
-    step(
-        "enable",
-        (|| {
-            install(main, "curated", AGENT, "1.0.0")?;
-            enable(app, main, AGENT).map(|_| ())
-        })(),
-    )?;
+    if first_run {
+        watch(main)?;
+        step(
+            "enable",
+            (|| {
+                install(main, "curated", AGENT, "1.0.0")?;
+                enable(app, main, AGENT).map(|_| ())
+            })(),
+        )?;
+    }
 
     // ---- cancel
     step(
@@ -353,6 +441,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         (|| {
             let before = core_keys(&config)?;
             require(!before.is_empty(), "core's config has no client keys")?;
+            let kept = ok(main, "vault_secrets", json!({}))?;
             let r = capture(app, main, &base, false)?;
             require(
                 r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("cancelled")),
@@ -364,7 +453,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             let list = ok(main, "vault_secrets", json!({}))?;
             require(
-                !list.to_string().contains(LABEL),
+                list == kept,
                 format!("a cancelled capture kept a secret: {list}"),
             )
         })(),
@@ -380,7 +469,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             let key = new_key(&before, &core_keys(&config)?)?;
             note(&audit, &key)?;
             keys.push(key.clone());
-            first = captured(&r, &base, &key)?;
+            first = captured(&r, mode, &base, &key)?;
             let listed = ok(
                 main,
                 "core_call",
@@ -460,7 +549,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             let key = new_key(&before, &core_keys(&config)?)?;
             note(&audit, &key)?;
             keys.push(key.clone());
-            let (secret, key_id) = captured(&r, &base, &key)?;
+            let (secret, key_id) = captured(&r, mode, &base, &key)?;
             let d = ok(
                 main,
                 "core_call",
@@ -485,8 +574,8 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         })(),
     )?;
 
-    // ---- changed core: another core, then the first again (the app's own on Linux, the session's
-    // test core elsewhere)
+    // ---- changed core: another core, then the first again (the app's own in managed mode, the
+    // session's test core in local mode)
     step(
         "changed core",
         (|| {
@@ -520,7 +609,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "the key was sent to the other core",
             )?;
             drop(other);
-            let v = if MODE == "managed" {
+            let v = if mode == "managed" {
                 ok(
                     main,
                     "connection_set",
@@ -562,7 +651,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             type_key(ENTRY, &keys[0])?;
             let r = settle(main, &slot)?;
-            let (secret, _) = captured(&r, &base, &keys[0])?;
+            let (secret, _) = captured(&r, mode, &base, &keys[0])?;
             let file = at("served-entered");
             let s = serve(app, main, &secret, &base, &file)?;
             require(
@@ -592,12 +681,13 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         })(),
     )?;
 
-    // ---- audit
-    let canaries: Vec<&str> = keys.iter().map(String::as_str).collect();
+    // ---- audit: every key noted so far, an earlier run's too (the webview's audit runs on)
+    let noted = std::fs::read_to_string(&audit).map_err(|e| e.to_string())?;
+    let canaries: Vec<&str> = noted.lines().filter(|k| !k.is_empty()).collect();
     step("audit", clean_webview(main, &canaries))?;
 
     out["passed"] = json!(true);
-    log("client_keys", out);
+    log(&report, out);
     Ok(())
 }
 

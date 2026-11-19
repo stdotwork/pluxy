@@ -269,7 +269,8 @@ jobs:
   # an app bundle on macOS, never an installer), then the dev app, since the package's builds
   # rename the program they make in target/debug. The tools shard (native/platform-tools.ts) runs
   # run.ts's admission, program, routing, launcher and vault sessions here, on the app built with
-  # the test trust (artifact-test-trust) against a test core it starts with `go run`.
+  # the test trust (artifact-test-trust) against a test core it starts with `go run`, and in the
+  # vault session against the app's own core too.
   # A schedule or manual run has no inputs: null is not true, so it runs these.
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
@@ -278,7 +279,7 @@ jobs:
     # (RUNNER_ENVIRONMENT=github-hosted), since it writes the account's own folders and settings.
     runs-on: ${{ matrix.os }}
     # The builds (about 3 minutes with the caches restored), then the native test's own limit
-    # (at most 90 minutes).
+    # (at most 100 minutes).
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -344,11 +345,13 @@ jobs:
       # once stopped (STOP_MS) and, if it still runs, 30 seconds more once cleanup stops it again
       # (STOP_MS); 1 minute for the core to exit (twice STOP_MS); 3 seconds of fixed pauses; and on
       # Windows 30 seconds for each of the four folders it removes (FREE_MS): 17 minutes 3 seconds,
-      # 85 minutes 15 seconds for five. 90 minutes lets every session report and clean up even when
-      # each app hangs, with nearly 5 minutes for the short commands it runs besides (PowerShell,
-      # icacls), which have no limit of their own.
+      # 85 minutes 15 seconds for five. The vault session first builds the core releases its app
+      # installs (`go run ./e2e/panelcore -prepare` and three `go build`s of a core). 100 minutes
+      # lets every session report and clean up even when each app hangs, with nearly 15 minutes for
+      # those builds and the short commands it runs besides (PowerShell, icacls), which have no
+      # limit of their own.
       - name: Native test
-        timeout-minutes: ${{ matrix.shard == 'tools' && 90 || 40 }}
+        timeout-minutes: ${{ matrix.shard == 'tools' && 100 || 40 }}
         env:
           PLUXY_APP_NATIVE_SHARD: ${{ matrix.shard }}
           PLUXY_APP_TEST_PACKAGE: ${{ runner.temp }}/test-package

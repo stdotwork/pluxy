@@ -1,7 +1,8 @@
 // The tools shard of the Windows and macOS native test (platform.ts, PLATFORM_SHARDS in
 // shards.ts): the sessions run.ts runs on Linux for signed tools, in the real app built with
 // native-test and artifact-test-trust, against a test core in local mode
-// (`go run ./e2e/panelcore -probe`, as dialogs.ts starts it):
+// (`go run ./e2e/panelcore -probe`, as dialogs.ts starts it), and in the vault session against the
+// app's own core too:
 //
 // - admission: signed native-tier admission (admission_native.rs, fixtures from admission.ts), and
 //   the updater gate of this dev app, which refuses it for its identifier;
@@ -14,11 +15,12 @@
 //   variable no launch may get; after the app quit, a file named stop in the fixtures' work folder
 //   ends any agent left running;
 // - vault: the vault, secret delivery and references and journal recovery, then client-key capture
-//   and entry (vault_native.rs, client_key_native.rs; vault.ts). Client keys are made on the test
-//   core, whose config file core.json in the fixtures names: the app's own core, which run.ts's
-//   session uses on Linux, does not run on these systems yet. Neither the vault's key and canary,
-//   the test core's management key nor a client key the check learned may appear in the app's
-//   output.
+//   and entry (vault_native.rs, client_key_native.rs; vault.ts), twice: first against the test
+//   core, whose config file core.json in the fixtures names; then against the app's own core, as
+//   run.ts's session does on Linux: the app switches to managed mode with signed test core releases
+//   made for this session (core-steps.ts), which core.json names too, and installs 2.0.0 through the
+//   native confirmation. Neither the vault's key and canary, the test core's management key nor a
+//   client key the check learned may appear in the app's output.
 //
 // Each session gets a fresh app state and a private temporary HOME holding the test trust profile
 // (the app's updater gate and trust store read it from HOME). On macOS the app's folders come from
@@ -48,6 +50,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
 import { buildAdmissionFixtures, EXE, PROFILE_FILE } from "./admission";
+import { coreSource } from "./core-steps";
 import { buildLauncherFixtures } from "./launcher";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
@@ -125,6 +128,33 @@ function knownFolders(ctx: Context): { roaming: string; local: string } {
   if (r.status !== 0 || out.length !== 2)
     throw new Error(`PowerShell gave the known folders as ${JSON.stringify(r.out)}`);
   return { roaming: out[0] as string, local: out[1] as string };
+}
+
+/** The core release the vault session's managed run installs. */
+const MANAGED_VERSION = "2.0.0";
+
+/** Signed test core releases in dir/releases (core-steps.ts), from the core and bundled packages
+ * `go run ./e2e/panelcore -probe -prepare` builds in dir: their index, the trust profile's root
+ * for them, and the SHA-256 of release MANAGED_VERSION's archive, which its native confirmation
+ * shows. */
+function managedSource(dir: string): { index: string; root: object; sha256: string } {
+  const prepared = join(dir, "prepared");
+  const releases = join(dir, "releases");
+  mkdirSync(prepared, { recursive: true });
+  mkdirSync(releases);
+  const r = spawnSync("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], {
+    cwd: next,
+    stdio: ["ignore", "ignore", "inherit"],
+  });
+  if (r.status !== 0) throw new Error(`panelcore -prepare exited with ${r.status ?? r.signal}`);
+  const source = coreSource(releases, prepared);
+  const index = JSON.parse(readFileSync(source.index, "utf8")) as {
+    releases: { version: string; artifacts: { descriptor: string }[] }[];
+  };
+  const descriptor = index.releases.find((x) => x.version === MANAGED_VERSION)?.artifacts[0]?.descriptor;
+  const sha256 = descriptor ? (JSON.parse(descriptor) as { sha256?: string }).sha256 : undefined;
+  if (!sha256) throw new Error(`the core source has no release ${MANAGED_VERSION} with a SHA-256`);
+  return { index: source.index, root: source.root, sha256 };
 }
 
 /** Starts the test core and waits at most CORE_START for its first line. Past that, it ends the
@@ -286,8 +316,18 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       ({ registries, nonce, canaries } = f);
       launcherBin = f.bin;
     }
-    // The profile with its roots and the updater key, as run.ts writes it.
-    const roots = JSON.parse(readFileSync(join(home, PROFILE_FILE), "utf8")).roots;
+    // The vault session's core releases, for the client-key check's managed run.
+    let managed: ReturnType<typeof managedSource> | undefined;
+    if (name === "vault") {
+      say("building the test core releases");
+      managed = managedSource(join(root, "core"));
+    }
+    // The profile with its roots and the updater key, as run.ts writes it; in the vault session
+    // with the root of the core releases too.
+    const roots = [
+      ...JSON.parse(readFileSync(join(home, PROFILE_FILE), "utf8")).roots,
+      ...(managed ? [managed.root] : []),
+    ];
     writeFileSync(
       join(home, PROFILE_FILE),
       JSON.stringify({ roots, updater: { kind: "test", public_key: UPDATER_KEY } }),
@@ -297,9 +337,18 @@ export async function toolSession(name: ToolSession, ctx: Context) {
 
     say("starting the test core");
     core = await startCore();
-    if (name === "vault") {
-      // The core whose config file the client-key check reads the keys core makes from.
-      writeFileSync(join(fixtures, "core.json"), JSON.stringify({ config: core.config }));
+    if (managed) {
+      // The core whose config file the client-key check reads the keys core makes from, then the
+      // core source and release the app installs for its managed run.
+      writeFileSync(
+        join(fixtures, "core.json"),
+        JSON.stringify({
+          config: core.config,
+          core_source: managed.index,
+          core_version: MANAGED_VERSION,
+          core_sha256: managed.sha256,
+        }),
+      );
       // Its management key, which the check types when it signs in again off Linux.
       canaries = [...canaries, core.key];
     }
@@ -476,20 +525,27 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       check(v?.passed === true, `the vault check did not complete: ${failure}`);
       const c = steps.get("client_keys");
       check(c?.passed === true, `the client-key check did not complete: ${failure}`);
-      // The client keys the check captured, as it learned them (client_key_native.rs).
+      const m = steps.get("client_keys_managed");
+      check(
+        m?.passed === true,
+        `the client-key check against the app's own core did not complete: ${failure}`,
+      );
+      // The client keys the checks captured, as they learned them (client_key_native.rs): two in
+      // each run.
       const file = join(fixtures, "client-keys");
       const clientKeys = existsSync(file)
         ? readFileSync(file, "utf8")
             .split("\n")
             .filter((k) => k.length > 0)
         : [];
-      check(clientKeys.length === 2, `the client-key check noted ${clientKeys.length} keys, not 2`);
+      check(clientKeys.length === 4, `the client-key checks noted ${clientKeys.length} keys, not 4`);
       check(
         !output.some((line) => clientKeys.some((k) => line.includes(k))),
         "a client key from the client-key check appeared on the app's stdout/stderr",
       );
       say(`vault ${JSON.stringify(v ?? {})}`);
       say(`client keys ${JSON.stringify(c ?? {})}`);
+      say(`client keys managed ${JSON.stringify(m ?? {})}`);
     }
 
     if (timedOut || code !== 0 || steps.has("failed")) say(`the app's last lines:\n  ${log.join("\n  ")}`);
