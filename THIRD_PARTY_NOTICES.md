@@ -64,6 +64,10 @@ removed when the new core in `next/` replaced it. `next/` keeps from it:
   byte for byte, and the description it builds follows that file's `Description`;
 - adapted: the table of old and v8 config key paths (`moves`) in `next/internal/legacy/config.go`,
   written out from `internal/config/config_v8.go`;
+- follows: in `next/extensions/codex/request.go`, the raising of a small output budget to 16 follows
+  `normalizeCodexOutputBudgetDoc` in `internal/runtime/executor/codex_executor_request.go`, and the
+  prompt cache key from a Claude Code session and agent follows `ClaudeCodePromptCache` in
+  `internal/runtime/executor/helps/claude_code_session.go`; both are written afresh, with no code copied;
 - the replies recorded in the cases of `next/corpus/` are what this core answered, and a few of
   them hold model lists from its catalog.
 
