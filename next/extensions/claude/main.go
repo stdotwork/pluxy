@@ -30,8 +30,13 @@
 // web search domain lists and tool call IDs with characters it does not take (tools.go). Its
 // conversation is repaired too, each change reported in the translation: a tool call with no
 // result, a result with no call, an empty user turn, and for models that refuse prefill (Claude 4.6
-// and later) trailing assistant turns (anthropicmessages.RepairTurns). A request in another format
-// that names no output limit gets the model's own (maxOutputTokens).
+// and later) trailing assistant turns (anthropicmessages.RepairTurns). Every body's thinking
+// settings are then made ones its model takes, each change reported (anthropicmessages.FitThinking):
+// thinking off as the model turns it off, effort xhigh as max where the model lacks it, a forced
+// tool choice as auto where the model refuses one, top_k left out where refused, and the thinking
+// repairs to the conversation. A Responses client's reasoning summary becomes thinking display
+// (anthropicmessages.ApplySummary). A request in another format that names no output limit gets
+// the model's own (maxOutputTokens).
 //
 // Token counts (core's count_tokens call) go to Anthropic's count_tokens endpoint only when
 // base_url is Anthropic's own origin (https://api.anthropic.com). For any other base_url the
