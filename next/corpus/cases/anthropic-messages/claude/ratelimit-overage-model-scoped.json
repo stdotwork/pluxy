@@ -148,7 +148,7 @@
       "path": "upstream[*].headers.X-Api-Key",
       "kind": "intended",
       "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
-      "want": "sk-corpus-upstream"
+      "want": "sk-Cq7Vx2Np9Lw4Zr8"
     }
   ],
   "recorded_old_core": {
@@ -226,7 +226,7 @@
           "Accept": "application/json",
           "Accept-Encoding": "gzip, deflate, br, zstd",
           "Anthropic-Version": "2023-06-01",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "User-Agent": "pluxy-corpus/0"
         },
@@ -257,7 +257,7 @@
           "Accept": "application/json",
           "Accept-Encoding": "gzip, deflate, br, zstd",
           "Anthropic-Version": "2023-06-01",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "User-Agent": "pluxy-corpus/0"
         },

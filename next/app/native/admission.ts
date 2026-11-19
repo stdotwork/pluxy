@@ -8,14 +8,38 @@
 import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, type KeyObject, randomBytes, sign } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 /** The trust profile's file names (src-tauri/src/trust.rs). */
 export const MARKER_FILE = ".pluxy-test-trust-profile.json";
 export const PROFILE_FILE = ".pluxy-test-trust-roots.json";
 export const KEY_ID = "fixture";
-/** The native fixtures' program (bin/tool). */
-const PROGRAM = "#!/bin/sh\nexit 0\n";
+/** A native program's file name ending: `.exe` on Windows, where admission takes only program
+ * images (`.exe` or `.com`, starting `MZ`); none elsewhere. */
+export const EXE = process.platform === "win32" ? ".exe" : "";
+/** The path a native fixture package names as its program. */
+export const TOOL = `bin/tool${EXE}`;
+/** The native fixtures' program (TOOL), never run: on Windows the start of a program image. */
+export const PROGRAM = process.platform === "win32" ? "MZ fixture\n" : "#!/bin/sh\nexit 0\n";
+
+/** Packs the folder dir into archive, a gzipped tar of its contents (`./...`). On Windows with the
+ * system's own bsdtar (System32\tar.exe) and relative paths: the tar first on PATH there may be
+ * GNU tar (Git's), which reads `C:\...` as a remote host. On macOS with COPYFILE_DISABLE, so
+ * bsdtar adds no `._` files of extended attributes. Elsewhere the tar on PATH, as before. */
+export function tarGz(archive: string, dir: string) {
+  const r =
+    process.platform === "win32"
+      ? spawnSync(
+          join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe"),
+          ["-czf", basename(archive), "-C", relative(dirname(archive), dir), "."],
+          { cwd: dirname(archive), stdio: "inherit" },
+        )
+      : spawnSync("tar", ["-czf", archive, "-C", dir, "."], {
+          stdio: "inherit",
+          ...(process.platform === "darwin" ? { env: { ...process.env, COPYFILE_DISABLE: "1" } } : {}),
+        });
+  if (r.status !== 0) throw new Error(`tar exited with ${r.status ?? r.error?.message ?? r.signal}`);
+}
 
 /** Go's platform name for this machine, as the app keys a package's programs and a registry's
  * artifacts (`device::platform`): `windows`, `darwin` or `linux`, then `amd64`, `arm64` or `386`.
@@ -42,7 +66,7 @@ function pack(root: string, f: Fixture): string {
           version: 0,
           tier: "native",
           host_versions: [0],
-          programs: { [platform()]: "bin/tool" },
+          programs: { [platform()]: TOOL },
           operations: [
             {
               id: "inspect",
@@ -69,15 +93,14 @@ function pack(root: string, f: Fixture): string {
   );
   if (f.tier === "native") {
     // Never run by this slice: admission starts no process.
-    writeFileSync(join(dir, "bin", "tool"), PROGRAM);
-    chmodSync(join(dir, "bin", "tool"), 0o755);
+    writeFileSync(join(dir, TOOL), PROGRAM);
+    chmodSync(join(dir, TOOL), 0o755);
   } else {
     mkdirSync(join(dir, "pages"));
     writeFileSync(join(dir, "pages", "index.html"), "<!doctype html><title>page</title><p>page</p>");
   }
   const archive = join(root, f.file);
-  const r = spawnSync("tar", ["-czf", archive, "-C", dir, "."], { stdio: "inherit" });
-  if (r.status !== 0) throw new Error(`tar exited with ${r.status}`);
+  tarGz(archive, dir);
   rmSync(dir, { recursive: true, force: true });
   return archive;
 }
@@ -129,7 +152,13 @@ export function writeTrustProfile(home: string, sources: string[], key: KeyObjec
   const nonce = hex(randomBytes(32));
   writeFileSync(
     join(home, MARKER_FILE),
-    JSON.stringify({ format: 1, home: realpathSync(home), purpose: "pluxy-artifact-test-trust", nonce }),
+    // The native form: on Windows the long path the app's canonical HOME is, not an 8.3 name.
+    JSON.stringify({
+      format: 1,
+      home: realpathSync.native(home),
+      purpose: "pluxy-artifact-test-trust",
+      nonce,
+    }),
     { mode: 0o600 },
   );
   return nonce;

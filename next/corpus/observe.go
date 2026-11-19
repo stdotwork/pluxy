@@ -21,8 +21,11 @@ const ClientKey = "corpus-client-key"
 // management API. Not a secret.
 const ManagementKey = "corpus-management-key"
 
-// UpstreamKey is the API key the core sends to the fake upstream. Not a secret.
-const UpstreamKey = "sk-corpus-upstream"
+// UpstreamKey is the API key the core sends to the fake upstream. Not a secret. Like the corpus's
+// other fake account secrets it holds no word: the new core removes from an error every run of
+// text that shares 4 characters with one (protocol.RemovePieces), so a word such as "upstream" in
+// it would vanish from the errors the cores are compared on.
+const UpstreamKey = "sk-Cq7Vx2Np9Lw4Zr8"
 
 // UpstreamKeys returns the keys of n accounts: UpstreamKey for the first, then
 // UpstreamKey-2, UpstreamKey-3 and so on. Not secrets.

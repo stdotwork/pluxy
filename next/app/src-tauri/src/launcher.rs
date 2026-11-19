@@ -479,6 +479,13 @@ pub fn tray_menu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
     Ok(menu)
 }
 
+/// The tray's Start… submenu itself, for the native test's click on Windows (through the menu's own
+/// window message).
+#[cfg(all(feature = "native-test", windows))]
+pub fn start_menu() -> Option<Submenu<Wry>> {
+    START.lock().unwrap().clone()
+}
+
 /// The label of a launch in the tray's Start… menu.
 fn tray_label(e: &Entry) -> String {
     format!(
@@ -548,6 +555,21 @@ pub fn tray_start(app: &AppHandle, item: &str) {
             eprintln!("pluxy-app: the tray's start of a remembered launch: {e}");
         }
     });
+}
+
+/// The tray's Start… items as they are now, each item's ID, label and whether it can be clicked;
+/// none before the tray is built. For the native test, which reads what `refresh_tray` made.
+#[cfg(feature = "native-test")]
+pub fn tray_items() -> Option<Vec<(String, String, bool)>> {
+    let menu = START.lock().unwrap().clone()?;
+    menu.items()
+        .ok()?
+        .into_iter()
+        .map(|i| {
+            let m = i.as_menuitem()?;
+            Some((m.id().0.clone(), m.text().ok()?, m.is_enabled().ok()?))
+        })
+        .collect()
 }
 
 /// The file in the app's config folder.
