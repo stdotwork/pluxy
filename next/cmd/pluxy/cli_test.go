@@ -205,3 +205,18 @@ func TestFindCore(t *testing.T) {
 		t.Errorf("no config and no address: %v", err)
 	}
 }
+
+func TestResolveThemeID(t *testing.T) {
+	if got := resolveThemeID("acme/custom", "/tmp/Foo.json", []byte(`{"id":"other/id"}`)); got != "acme/custom" {
+		t.Errorf("flag wins: got %q", got)
+	}
+	if got := resolveThemeID("", "/tmp/Foo.json", []byte(`{"id":"acme/from-file"}`)); got != "acme/from-file" {
+		t.Errorf("valid file id: got %q", got)
+	}
+	if got := resolveThemeID("", "/tmp/My Theme_v2.JSON", []byte(`{"id":"not-two-parts"}`)); got != "t3/my-theme-v2" {
+		t.Errorf("fallback from filename: got %q", got)
+	}
+	if got := resolveThemeID("", "/tmp/Café.json", []byte(`{"name":"No ID"}`)); got != "t3/caf-" {
+		t.Errorf("non-ascii filename: got %q", got)
+	}
+}
