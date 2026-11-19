@@ -68,6 +68,11 @@ removed when the new core in `next/` replaced it. `next/` keeps from it:
   `normalizeCodexOutputBudgetDoc` in `internal/runtime/executor/codex_executor_request.go`, and the
   prompt cache key from a Claude Code session and agent follows `ClaudeCodePromptCache` in
   `internal/runtime/executor/helps/claude_code_session.go`; both are written afresh, with no code copied;
+- follows: the tool call pairing in `next/format/anthropicmessages/turns.go` (`pairToolCalls`,
+  `pairRun`), from `repairClaudeToolPairing` in
+  `internal/translator/claude/openai/responses/claude_openai-responses_request.go`: a tool call
+  with no result gets an error result, a result that answers no call is sent as text, and results go
+  first in their user turn. The error result's text is copied;
 - the replies recorded in the cases of `next/corpus/` are what this core answered, and a few of
   them hold model lists from its catalog.
 

@@ -164,10 +164,19 @@ mark: then the next start puts the same config back once more. If the app stops 
 starts, it does the same at its next start, also when that was a reinstall or rollback of the
 selected version; a copy it cannot read is an error, and the config is left as it is. From the
 moment the app begins to stop its core, or sees it exit, it sends nothing more to that address.
-On Windows the core binds the address itself and the app keeps no copy of the socket: between
-a crash of the core and the moment the app sees it exit (up to a tenth of a second: it checks
-every 100 ms), any call the app makes still goes to that address with the management key, where
-another user's program could have started listening ([Limits](#limits)). On Linux and macOS the app keeps its
+On Windows the core binds the address itself and the app keeps no copy of the socket. Another
+user's program can then get the core's connections: one that starts listening on that address
+between a crash of the core and the moment the app sees it exit (up to a tenth of a second: it
+checks every 100 ms), or one that stays bound to the wildcard address `0.0.0.0` on that port the
+whole time the core holds its loopback address, which Windows allows another account, and which
+receives the connections as soon as the core's socket closes. So before the app sends anything
+on a new connection to its core, it reads the system's TCP table: the other end of that very
+connection (its own addresses and ports) must belong to the core's own process. If it does not,
+or the table does not show it for at least a second, the app sends nothing on it, and the call
+fails with the reason (addresses and process IDs only): which process accepted the connection, or
+that the connection is not in this computer's table. Each client of the core holds its own
+handle on the core's process for as long as it lives, so the core's process ID cannot pass to
+another process meanwhile, even after the core has ended. On Linux and macOS the app keeps its
 own copy of the core's listening socket for as long as anything in the app could still send
 there, so no other program can listen on that address in between: not while a crashed
 core's exit is being noticed, and not while the core drains after a stop, the app's or a SIGTERM
@@ -1730,6 +1739,14 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   `/etc/group`: ones from LDAP, sssd or systemd-userdb are not seen. The refusal names the path and a
   `chmod g-w,o-w` that fixes it. Nothing stops your own processes from swapping the program
   before the terminal starts it. A direct launch runs the file the app checked, wherever it is.
+- On Windows the terminal (the execution program) runs a launch's program by its path, so it
+  refuses a program that another account may change, or whose folder it may change, or that it
+  could swap by removing or renaming what a folder above holds: only you, SYSTEM,
+  Administrators and TrustedInstaller may. The app does not check this before the launch, so the
+  refusal shows in the terminal's window, naming the path and why. A folder whose access list
+  has an entry of a kind the terminal does not read (such as a conditional entry) is refused
+  too. Nothing stops your own processes, or an
+  administrator's, from swapping the program before the terminal holds it.
 - Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
   entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the
   local data folder, private by its access list. Secrets are kept in a file only the user may read
@@ -1784,10 +1801,10 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   release feed. On Windows and macOS its steps run in the dialogs session's core run; the
   managed-core client-key check runs on Linux only. The store's Windows rules are checked by its
   unit tests on the Windows CI runner.
-- On Windows the app holds no copy of its core's listening socket, so in the moment between a
-  crash of the core and the app seeing it exit (up to a tenth of a second), any call the app
-  makes sends the management key to that address, where another user's program could have
-  started listening. Linux and macOS hold the socket and have no such gap.
+- On Windows, other programs that call the app's core, such as agents with client keys, are not
+  covered by the app's check: after a crash of the core, another user's program listening on
+  the core's port (on its address, or on the wildcard address all along) gets their calls and
+  the client keys in them. Only the app's own calls are checked.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.

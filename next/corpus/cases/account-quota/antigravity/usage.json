@@ -139,7 +139,7 @@
         "body": {"project":"corpus-project-0001"},
         "headers": {
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "User-Agent": "antigravity/hub/2.23.0 darwin/arm64"
         },
@@ -150,7 +150,7 @@
         "body": {"metadata":{"ideType":"ANTIGRAVITY"}},
         "headers": {
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "User-Agent": "antigravity/hub/2.23.0 darwin/arm64"
         },

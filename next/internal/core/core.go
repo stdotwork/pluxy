@@ -49,6 +49,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/internal/usage"
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/management"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
@@ -70,17 +71,8 @@ type Options struct {
 	Bundled string
 }
 
-// Revision describes one version of the config file core has seen.
-type Revision struct {
-	// Revision counts the config versions core has tried to load, from 1.
-	Revision uint64 `json:"revision"`
-	// Hash is the SHA-256 of the file's contents.
-	Hash string `json:"hash,omitempty"`
-	// At is when core read it (desired) or published it (active).
-	At time.Time `json:"at"`
-	// Error says why this version is not active, when it failed.
-	Error string `json:"error,omitempty"`
-}
+// Revision describes one version of the config file core has seen (management.Revision).
+type Revision = management.Revision
 
 // snapshot is one published config with everything built for it.
 type snapshot struct {
@@ -818,24 +810,10 @@ func (c *Core) Stop() {
 }
 
 // ExtensionStatus is a generation's status as management shows it.
-type ExtensionStatus struct {
-	host.Status
-	// Current is true for a generation new requests go to.
-	Current bool `json:"current"`
-}
+type ExtensionStatus = management.ExtensionStatus
 
-// Status is what management shows about core's live state.
-type Status struct {
-	SafeMode bool `json:"safe_mode"`
-	// Desired is the newest config version core has seen; Active is the one serving.
-	Desired    Revision          `json:"desired"`
-	Active     Revision          `json:"active"`
-	Extensions []ExtensionStatus `json:"extensions"`
-	// Version, Commit and Built say which build of core runs (see buildinfo).
-	Version string `json:"version"`
-	Commit  string `json:"commit"`
-	Built   string `json:"built"`
-}
+// Status is what management shows about core's live state (management.Status).
+type Status = management.Status
 
 // Status returns core's live state.
 func (c *Core) Status() Status {

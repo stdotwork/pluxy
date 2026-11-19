@@ -92,7 +92,7 @@
         "headers": {
           "Accept": "text/event-stream",
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Cache-Control": "no-cache",
           "Content-Type": "application/json",
           "User-Agent": "muse-build/1.4.14 (non-interactive; linux-x86_64; build dec7d7497fecdad135ec5835a8161dbc92e55b58)",
