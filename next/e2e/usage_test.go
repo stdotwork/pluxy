@@ -19,11 +19,12 @@ import (
 // management API's usage calls.
 
 type usageTokens struct {
-	Input     *int64 `json:"input_tokens"`
-	Output    *int64 `json:"output_tokens"`
-	Reasoning *int64 `json:"reasoning_tokens"`
-	Cached    *int64 `json:"cached_tokens"`
-	Total     *int64 `json:"total_tokens"`
+	Input      *int64 `json:"input_tokens"`
+	Output     *int64 `json:"output_tokens"`
+	Reasoning  *int64 `json:"reasoning_tokens"`
+	Cached     *int64 `json:"cached_tokens"`
+	CacheWrite *int64 `json:"cache_creation_tokens"`
+	Total      *int64 `json:"total_tokens"`
 }
 
 type usageEvent struct {
@@ -405,6 +406,66 @@ func TestUsageRecordsWebSocketTurns(t *testing.T) {
 	if e.Endpoint != "/v1/responses" || !e.Stream || e.Model != "gpt-test" || e.Account != "acct-ws" || e.Provider != "pluxy/codex" ||
 		e.Failed || e.Status != 200 || e.Tokens.Total != nil {
 		t.Fatalf("turn's event: %+v", e)
+	}
+}
+
+// Cache-write tokens reported by an openai-compatible upstream in prompt_tokens_details are
+// recorded on the usage event as cache_creation_tokens without double-counting input_tokens.
+func TestUsageRecordsCacheWriteTokens(t *testing.T) {
+	u := newUpstream(t)
+	u.respond = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		var req struct {
+			Stream bool `json:"stream"`
+		}
+		_ = json.Unmarshal(body, &req)
+		const usageJSON = `{"prompt_tokens":12000,"completion_tokens":50,"total_tokens":12050,"prompt_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000}}`
+		if req.Stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			const head = `"id":"chatcmpl-cw","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o"`
+			fmt.Fprintf(w, "data: {"+head+`,"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}`+"\n\n")
+			fmt.Fprintf(w, "data: {"+head+`,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\n")
+			fmt.Fprintf(w, "data: {"+head+`,"choices":[],"usage":`+usageJSON+"}\n\n")
+			fmt.Fprintf(w, "data: [DONE]\n\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"chatcmpl-cw","object":"chat.completion","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":`+usageJSON+`}`)
+	}
+	base := runCore(t, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id":         "upstream-cw",
+				"settings":   map[string]any{"base_url": u.URL + "/v1"},
+				"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey},
+			}},
+		},
+	})
+
+	for _, stream := range []bool{false, true} {
+		if code, _, body := chatReply(t, base, clientKey, stream); code != http.StatusOK {
+			t.Fatalf("stream=%v: status %d: %s", stream, code, body)
+		}
+	}
+
+	c := &mcore{base: base}
+	p, raw := c.usageEvents(t, "")
+	if len(p.Events) != 2 {
+		t.Fatalf("events: %s", raw)
+	}
+	for i, ev := range p.Events {
+		if ev.Failed || ev.Status != http.StatusOK ||
+			!i64Is(ev.Tokens.Input, 12000) ||
+			!i64Is(ev.Tokens.Output, 50) ||
+			!i64Is(ev.Tokens.Cached, 4000) ||
+			!i64Is(ev.Tokens.CacheWrite, 7000) ||
+			!i64Is(ev.Tokens.Total, 12050) {
+			t.Errorf("event %d (%v stream=%v): tokens = %+v, want input=12000 cached=4000 cache_creation_tokens=7000 output=50 total=12050 (raw: %s)",
+				i, ev.Endpoint, ev.Stream, ev.Tokens, raw)
+		}
 	}
 }
 

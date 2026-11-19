@@ -27,7 +27,8 @@
 //!    with `PLUXY_APP_TEST_TRANSACTIONS`, only the transaction library's fixture writer
 //!    (`transactions_native.rs`); with `PLUXY_APP_TEST_USAGE`, only the usage hub and its
 //!    fixture parser (`usage_native.rs`); with `PLUXY_APP_TEST_LAUNCHER`, only the execution
-//!    program and the launcher (`launcher_native.rs`); with `PLUXY_APP_TEST_OPEN`, only a tool's
+//!    program and the launcher (`launcher_native.rs`; on Windows and macOS
+//!    `launcher_platform_native.rs`); with `PLUXY_APP_TEST_OPEN`, only a tool's
 //!    opening of a file in the person's own app (`open_native.rs`); with
 //!    `PLUXY_APP_TEST_CLAUDE_CODE`, only the Claude Code setup and launcher
 //!    (`claude_code_native.rs`), with its backup browser (`backups_native.rs`) and Beginner Mode's
@@ -54,6 +55,9 @@
 //! core's exit callback before the app state exists, then the run waits for the app to start
 //! that core again and quits.
 //!
+//! On Windows and macOS (`native/platform.ts`, `native/dialogs.ts`) the main run and the
+//! admission, program, routing and launcher sessions run; the other sessions are Linux's only.
+//!
 //! Each step prints one line on stderr: `native-test: <step> <JSON>`.
 
 use crate::{App, COMMANDS, MAIN, WINDOW};
@@ -66,7 +70,8 @@ use tauri::{AppHandle, Manager, Url, Webview};
 #[cfg(target_os = "linux")]
 #[path = "access_native.rs"]
 mod access;
-#[cfg(target_os = "linux")]
+// The admission checks, and the dialog helpers every session's checks use.
+#[cfg(native_stack)]
 #[path = "admission_native.rs"]
 mod admission;
 #[cfg(target_os = "linux")]
@@ -102,11 +107,15 @@ mod grok;
 mod hermes;
 #[path = "native_ingress.rs"]
 mod ingress;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "jobs_native.rs"]
 mod jobs;
 #[cfg(target_os = "linux")]
 #[path = "launcher_native.rs"]
+mod launcher;
+// Off Linux, the launcher check that needs no detached agent, key entry or terminal.
+#[cfg(all(native_stack, not(target_os = "linux")))]
+#[path = "launcher_platform_native.rs"]
 mod launcher;
 #[cfg(target_os = "linux")]
 #[path = "omp_native.rs"]
@@ -120,12 +129,16 @@ mod opencode;
 #[cfg(target_os = "linux")]
 #[path = "pi_native.rs"]
 mod pi;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "program_native.rs"]
 mod program;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "routing_native.rs"]
 mod routing;
+// What the checks see of processes, threads and pipes.
+#[cfg(native_stack)]
+#[path = "proc_native.rs"]
+mod procs;
 #[cfg(target_os = "linux")]
 #[path = "save_native.rs"]
 mod save;
@@ -138,7 +151,7 @@ mod spawn;
 #[cfg(target_os = "linux")]
 #[path = "spawn_keys_native.rs"]
 mod spawn_keys;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "swap_native.rs"]
 mod swap;
 #[cfg(target_os = "linux")]
@@ -701,6 +714,8 @@ fn shrunk_page_steps(
 }
 
 fn run(app: &AppHandle) -> Result<(), String> {
+    #[cfg(native_stack)]
+    admission::set_app(app);
     #[cfg(target_os = "linux")]
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_ACCESS_STAGE") {
         return access::run(app, &stage);
@@ -742,7 +757,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
         return crate::update_native::run(app, &main, dir.into());
     }
     // Signed native-tier admission (admission_native.rs), in a session of its own.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ADMISSION") {
         admission::run(app, &main, dir.into())?;
         log("quit", json!({}));
@@ -751,7 +766,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
     // Cross-package routing and import authorization (routing_native.rs), then declared jobs
     // (jobs_native.rs), in a session of their own.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ROUTING") {
         routing::run(app, &main, dir.clone().into())?;
         jobs::run(app, &main, dir.into())?;
@@ -782,8 +797,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
         crate::quit(app);
         return Ok(());
     }
-    // The execution program and the launcher (launcher_native.rs), in a session of its own.
-    #[cfg(target_os = "linux")]
+    // The execution program and the launcher (launcher_native.rs; off Linux
+    // launcher_platform_native.rs), in a session of its own.
+    #[cfg(native_stack)]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_LAUNCHER") {
         launcher::run(app, &main, dir.into())?;
         log("quit", json!({}));
@@ -895,7 +911,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     // The program host (program_native.rs), in a session of its own.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_PROGRAM") {
         program::run(app, &main, std::path::PathBuf::from(&dir))?;
         // Swaps, crashes and calls of unknown outcome (swap_native.rs), on from where it left.

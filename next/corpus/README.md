@@ -52,9 +52,12 @@ proxied.
 
 The generated config is the same for every case:
 
-- one provider account pointed at the fake upstream, with the API key `sk-corpus-upstream`
+- one provider account pointed at the fake upstream, with the API key `sk-Cq7Vx2Np9Lw4Zr8`
   (not a secret); a case with `accounts` above 1 gets more accounts, keyed
-  `sk-corpus-upstream-2`, `sk-corpus-upstream-3` and so on, all pointed at the same upstream;
+  `sk-Cq7Vx2Np9Lw4Zr8-2`, `sk-Cq7Vx2Np9Lw4Zr8-3` and so on, all pointed at the same upstream.
+  The fake account secrets hold no words: the new core removes from an error every run of text
+  that shares 4 characters with one of the account's secrets, so a word in a fake key would
+  vanish from the error messages the cores are compared on;
 - the client key `corpus-client-key`;
 - routing that never waits: the new core runs its default routing, which never waits, and still
   moves a request on to another account within one round;
