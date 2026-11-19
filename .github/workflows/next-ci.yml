@@ -33,8 +33,9 @@ defaults:
 
 jobs:
   next:
-    # PLUXY_LINUX_CLOUD_RUNNER, when set (AGENTS.md, "Where jobs run").
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || 'ubuntu-latest' }}
+    # GitHub's runners, never PLUXY_LINUX_CLOUD_RUNNER: this job is shorter than the native test, so
+    # Namespace's vCPUs are kept for that (AGENTS.md, "Where jobs run").
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -163,3 +164,28 @@ jobs:
           path: ${{ runner.temp }}/playwright/test-results
           retention-days: 7
           if-no-files-found: ignore
+
+  # The credential store's Windows code (internal/cred/file_windows.go): the access lists of the
+  # credentials folder and its files, read back from the file system, which the Linux job cannot
+  # do. Only internal/cred, pure Go, so no C compiler is needed.
+  cred-windows:
+    name: credentials (windows)
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Vet
+        run: go vet ./internal/cred/
+      # -v lists each test, so the log shows the Windows access-list test ran.
+      - name: Test
+        run: go test -count=1 -v ./internal/cred/

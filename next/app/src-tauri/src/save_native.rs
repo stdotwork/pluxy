@@ -31,7 +31,7 @@
 
 use super::admission::{dialog_text, press, require, settle, start, x};
 use super::routing::{enable, install, showing, Page};
-use super::{eval, log, on_main, wait_for};
+use super::{chooser, eval, log, on_main, wait_for};
 use serde_json::{json, Value};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -77,22 +77,10 @@ fn suggested(app: &AppHandle) -> Result<String, String> {
     })
 }
 
-/// Types path into the save dialog's name field and presses Return.
-fn choose(path: &Path) -> Result<(), String> {
+/// Enters path in the save dialog's name field and presses Return (`chooser::enter` pastes it).
+fn choose(app: &AppHandle, path: &Path) -> Result<(), String> {
     let id = chooser()?;
-    x(&["windowfocus", "--sync", &id])?;
-    x(&["key", "--clearmodifiers", "ctrl+a"])?;
-    std::thread::sleep(Duration::from_millis(300));
-    x(&[
-        "type",
-        "--clearmodifiers",
-        "--delay",
-        "20",
-        &path.to_string_lossy(),
-    ])?;
-    std::thread::sleep(Duration::from_millis(300));
-    x(&["key", "--clearmodifiers", "Return"])?;
-    Ok(())
+    chooser::enter(app, &id, "ctrl+a", path.to_string_lossy().into_owned())
 }
 
 fn chooser_key(keys: &str) -> Result<(), String> {
@@ -485,7 +473,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 format!("the dialog suggests {name:?}, not the name with its control and format characters replaced"),
             )?;
             let path = out.join("new.jsonl");
-            choose(&path)?;
+            choose(app, &path)?;
             let r = output(main, &slot)?;
             saved(&r, "the confirmed save")?;
             require(
@@ -517,7 +505,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 json!({"source": source, "name": "old.txt"}),
             )?;
             chooser()?;
-            choose(&path)?;
+            choose(app, &path)?;
             // While the question shows, GTK holds the main thread, so the window cannot be asked
             // whether the call answered; the old bytes, and "cancelled" below, say it did not save.
             let q = question(&seen)?;
@@ -539,7 +527,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 json!({"source": source, "name": "old.txt"}),
             )?;
             chooser()?;
-            choose(&path)?;
+            choose(app, &path)?;
             let q = question(&seen)?;
             question_key(&q, "alt+r")?;
             let r = output(main, &slot)?;
@@ -576,7 +564,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 let _ = std::fs::remove_file(&held);
                 let slot = exported(app, main, "export", json!({"source": source, "name": name}))?;
                 chooser()?;
-                choose(&path)?;
+                choose(app, &path)?;
                 if existing {
                     let q = question(&seen)?;
                     question_key(&q, "alt+r")?;
@@ -632,7 +620,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 name == "from-page.jsonl",
                 format!("the dialog suggests {name:?}"),
             )?;
-            choose(&path)?;
+            choose(app, &path)?;
             let r = page.reply(&id)?;
             saved(&r["result"], "the page's save")?;
             holds(&path, &content, 0o600)?;

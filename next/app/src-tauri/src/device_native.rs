@@ -221,22 +221,25 @@ fn only_main(app: &AppHandle, what: &str) -> Result<(), String> {
     .map_err(|e| format!("{e}: {:?}", webviews(app)))
 }
 
-/// Chooses path in the native file chooser that `device_install_file` opened.
-fn choose(path: &Path) -> Result<(), String> {
+/// Chooses path in the native file chooser that `device_install_file` opened, by pasting it
+/// (`chooser::enter`).
+#[cfg(target_os = "linux")]
+fn choose(app: &AppHandle, path: &Path) -> Result<(), String> {
     let id = chooser()?;
-    x(&["windowfocus", "--sync", &id])?;
-    x(&["key", "--clearmodifiers", "ctrl+l"])?;
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    x(&[
-        "type",
-        "--clearmodifiers",
-        "--delay",
-        "20",
-        path.to_str().ok_or("fixture path is not UTF-8")?,
-    ])?;
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    x(&["key", "--clearmodifiers", "Return"])?;
-    Ok(())
+    super::chooser::enter(
+        app,
+        &id,
+        "ctrl+l",
+        path.to_str()
+            .ok_or("fixture path is not UTF-8")?
+            .to_string(),
+    )
+}
+
+/// The native file chooser is driven on Linux only (the sessions that reach it run there).
+#[cfg(not(target_os = "linux"))]
+fn choose(_: &AppHandle, _: &Path) -> Result<(), String> {
+    Err("the device file chooser is driven on Linux only".into())
 }
 
 pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<(), String> {
@@ -451,7 +454,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )?;
 
     let slot = start(main, "device_install_file", json!({}))?;
-    choose(&fixtures.join("pluxy-local-1.0.0.tar.gz"))?;
+    choose(app, &fixtures.join("pluxy-local-1.0.0.tar.gz"))?;
     let r = settle(main, &slot)?;
     require(
         r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("reserved")),
@@ -464,7 +467,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )?;
 
     let slot = start(main, "device_install_file", json!({}))?;
-    choose(&fixtures.join("local-1.0.0.tar.gz"))?;
+    choose(app, &fixtures.join("local-1.0.0.tar.gz"))?;
     let r = settle(main, &slot)?;
     require(r["ok"] == true, format!("local install: {r}"))?;
     let p = listed(main, "example/local")?.ok_or("example/local is not listed")?;

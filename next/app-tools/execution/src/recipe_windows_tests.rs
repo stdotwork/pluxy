@@ -5,14 +5,7 @@ use std::path::{Path, PathBuf};
 
 /// A new folder for one test, by its plain resolved path.
 fn folder() -> PathBuf {
-    let d = std::env::temp_dir().join(format!(
-        "pluxy-execution-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let d = std::env::temp_dir().join(crate::test_folder_name("pluxy-execution"));
     std::fs::create_dir_all(&d).unwrap();
     let r = std::fs::canonicalize(&d).unwrap();
     PathBuf::from(crate::winpath::plain(r.to_str().unwrap()).unwrap())
