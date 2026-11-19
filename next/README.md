@@ -1132,7 +1132,10 @@ core cleans them: local `$ref`s inlined, `const` as an enum, constraints and sho
 the description as hints (`minLength: 1`, `Allowed: a, b`), a type list such as
 `["string","null"]` as one nullable type, each `allOf` merged into the schema that holds it
 (Cloud Code's schema has no `allOf`: the branches' required names join the schema's, and their
-other keys fill the ones it lacks, its own winning), and other JSON Schema keywords removed; for a
+other keys fill the ones it lacks, its own winning), `if`, `then` and `else` removed after the
+properties of each `then` and `else` move into the schema that holds it (the model sees them as plain
+optional properties, as in today's core; the schema's own property wins, and a branch's `required`
+is dropped), and other JSON Schema keywords removed; for a
 Claude model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
 object in a function's parameters that requires nothing gets a required placeholder property:
 `reason` (a string) where it has no properties, `_` (a boolean) where it has some and none is
