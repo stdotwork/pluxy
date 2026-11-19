@@ -694,7 +694,7 @@ mod tests {
         );
         assert_eq!(
             shown(&ids.admin),
-            out("/usr/bin/dsmemberutil", &["getuuid", "-g", "admin"]),
+            out("/usr/bin/dsmemberutil", &["getuuid", "-G", "admin"]),
             "{shown_by}"
         );
         assert_eq!(
