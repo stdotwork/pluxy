@@ -766,6 +766,36 @@ fn writable_settings_parent_is_tightened_on_open_and_save() {
     remove(&dir);
 }
 
+/// macOS: a 0600 settings file an extended access list lets others change is not trusted, as a
+/// group- or world-writable one is not; the folder is emptied of entries on open, so a new
+/// settings file inherits none.
+#[cfg(target_os = "macos")]
+#[test]
+fn settings_with_an_access_list_are_not_trusted_and_the_folder_is_emptied() {
+    let (dir, mut c, a) = fixture();
+    let has = |p: &Path| crate::private_macos::has_entries(&File::open(p).unwrap()).unwrap();
+    approve(&mut c, a.clone(), true);
+    assert!(c.settings.exists());
+    crate::private_macos::add_entry(&c.settings, "everyone allow write");
+    let loaded = Confirmations::open(c.settings.clone()).unwrap();
+    assert!(loaded.approvals.is_empty());
+    assert!(loaded.persistence_blocked);
+    fs::remove_file(&c.settings).unwrap();
+    crate::private_macos::add_entry(&dir, "everyone allow add_file,file_inherit");
+    let loaded = Confirmations::open(c.settings.clone()).unwrap();
+    assert!(!loaded.persistence_blocked);
+    assert!(!has(&dir));
+    // Saving empties the folder too: an entry added after the open is not passed on to the
+    // settings file the save makes.
+    crate::private_macos::add_entry(&dir, "everyone allow add_file,file_inherit");
+    assert!(has(&dir));
+    approve(&mut c, a, true);
+    assert!(c.settings.exists());
+    assert!(!has(&dir));
+    assert!(!has(&c.settings));
+    remove(&dir);
+}
+
 #[test]
 fn an_app_action_is_reviewed_by_its_description_alone() {
     let (dir, mut c, a) = fixture();
@@ -998,6 +1028,36 @@ fn a_launch_opens_only_a_plain_file_inside_its_folder() {
         );
     }
     let _ = fs::remove_dir_all(dir);
+}
+
+/// The home-folder rule takes the resolved home folder, so these tests need no `HOME` change (the
+/// real lookup falls back to the passwd entry, which a test cannot remove).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_within_folder_is_refused_when_the_home_folder_cannot_be_found() {
+    for within in ["/home", "/home/someone/work", "/"] {
+        let e = within_home_rule(Path::new(within), None).unwrap_err();
+        assert!(
+            e.contains("home folder could not be found"),
+            "{within}: {e}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_within_folder_is_checked_against_the_home_folder_when_it_is_found() {
+    let home = Path::new("/home/someone");
+    for within in ["/", "/home", "/home/someone"] {
+        let e = within_home_rule(Path::new(within), Some(home)).unwrap_err();
+        assert!(e.contains("a folder above it"), "{within}: {e}");
+    }
+    for within in ["/home/someone/work", "/home/other", "/srv/data"] {
+        assert!(
+            within_home_rule(Path::new(within), Some(home)).is_ok(),
+            "{within}"
+        );
+    }
 }
 
 #[cfg(target_os = "linux")]

@@ -43,6 +43,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/logfile"
 	"github.com/stdotwork/pluxy/next/internal/packages"
+	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
 	"github.com/stdotwork/pluxy/next/internal/upheader"
@@ -177,14 +178,21 @@ func Start(opts Options) (*Core, error) {
 
 // configSecrets returns the redactor of every secret the config holds: the client keys, the
 // management key, the accounts' credentials, their secret header values (upheader.Forms) and the
-// secrets in their settings.
+// secrets in their settings, and the user info of the global proxy_url and of each account's
+// (proxyurl.Password: the forms the extension's own redactor removes).
 func configSecrets(cfg *server.Config) *protocol.Redactor {
 	cs := []*protocol.Credential{{Kind: protocol.CredentialAPIKey, APIKey: cfg.ManagementKey}}
 	for _, k := range cfg.ClientKeys {
 		cs = append(cs, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: k})
 	}
+	for _, f := range proxyurl.Password(cfg.ProxyURL) {
+		cs = append(cs, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: f})
+	}
 	for _, a := range cfg.Accounts() {
 		cs = append(cs, a.Credential)
+		for _, f := range proxyurl.Password(a.ProxyURL) {
+			cs = append(cs, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: f})
+		}
 		for _, v := range upheader.Forms(a.Headers) {
 			cs = append(cs, &protocol.Credential{Kind: "header", APIKey: v})
 		}

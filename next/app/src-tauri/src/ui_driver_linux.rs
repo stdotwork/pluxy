@@ -43,7 +43,48 @@ fn focus(title: &str) -> Result<(), String> {
     xdotool(&["windowfocus", "--sync", &id]).map(|_| ())
 }
 
-pub(crate) fn press(_app: &AppHandle, title: &str, key: Key) -> Result<(), String> {
+/// The access key (mnemonic) of a GTK label: the character after its single `_`.
+fn mnemonic(label: &str) -> Option<char> {
+    let mut chars = label.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '_' {
+            match chars.next() {
+                Some('_') => {}
+                other => return other,
+            }
+        }
+    }
+    None
+}
+
+/// Whether the button or check box of the dialog titled title with access key c is sensitive;
+/// None when no control has that key.
+fn access_enabled(app: &AppHandle, title: &str, c: char) -> Result<Option<bool>, String> {
+    let title = title.to_string();
+    on_main(app, move || {
+        let mut found = None;
+        for w in windows(&title) {
+            walk(w.upcast_ref(), &mut |w| {
+                if let Some(b) = w.downcast_ref::<gtk::Button>() {
+                    let key = b
+                        .label()
+                        .filter(|_| b.uses_underline())
+                        .and_then(|l| mnemonic(&l));
+                    if key.is_some_and(|k| k.eq_ignore_ascii_case(&c)) {
+                        found = Some(b.is_sensitive());
+                    }
+                }
+            });
+        }
+        found
+    })
+    .ok_or_else(|| "the main thread did not answer".into())
+}
+
+pub(crate) fn press(app: &AppHandle, title: &str, key: Key) -> Result<(), String> {
+    if let Key::Access(c) = key {
+        super::until_enabled(title, c, || access_enabled(app, title, c))?;
+    }
     focus(title)?;
     let keys = match key {
         Key::Access(c) => format!("alt+{c}"),

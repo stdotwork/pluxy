@@ -334,20 +334,40 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// Run at the point named, for the path set here only (tests run in parallel): "checked" in
-    /// `remove_folder` between its identity check and emptying the folder, "opened" in
-    /// `folder_id` right after its open, and "unrecorded" in `Folder::new` just before it removes
-    /// a folder whose record failed.
-    static SWAP: Mutex<Option<Swap>> = Mutex::new(None);
+    /// Run at the point named, for the path a test set it for: "checked" in `remove_folder`
+    /// between its identity check and emptying the folder, "opened" in `folder_id` right after
+    /// its open, and "unrecorded" in `Folder::new` just before it removes a folder whose record
+    /// failed. Tests run in parallel, so each test's swap is an entry of its own (`swap_at`),
+    /// which no other test replaces or clears.
+    static SWAP: Mutex<Vec<Swap>> = Mutex::new(Vec::new());
 
     /// The path a swap is for, the point it runs at, and the swap.
     type Swap = (PathBuf, &'static str, fn(&Path));
 
+    /// The swap one test set (`swap_at`): dropping it removes that entry only.
+    struct Hooked(PathBuf, &'static str);
+
+    impl Drop for Hooked {
+        fn drop(&mut self) {
+            SWAP.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|(p, at, _)| !(*p == self.0 && *at == self.1));
+        }
+    }
+
+    /// Sets f to run at the point at for path, until the value returned is dropped.
+    fn swap_at(path: &Path, at: &'static str, f: fn(&Path)) -> Hooked {
+        SWAP.lock().unwrap().push((path.to_path_buf(), at, f));
+        Hooked(path.to_path_buf(), at)
+    }
+
     pub(super) fn swap_point(path: &Path, at: &str) {
-        let hook = match &*SWAP.lock().unwrap() {
-            Some((p, point, f)) if p == path && *point == at => Some(*f),
-            _ => None,
-        };
+        let hook = SWAP
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(p, point, _)| p == path && *point == at)
+            .map(|(_, _, f)| *f);
         if let Some(f) = hook {
             f(path);
         }
@@ -666,9 +686,9 @@ mod tests {
             fs::create_dir(p).unwrap();
             fs::write(p.join("theirs"), b"z").unwrap();
         }
-        *SWAP.lock().unwrap() = Some((path.clone(), "checked", swap));
+        let hooked = swap_at(&path, "checked", swap);
         let r = remove_folder(&m);
-        *SWAP.lock().unwrap() = None;
+        drop(hooked);
         assert_eq!(r, Outcome::NotThere);
         assert!(
             path.join("theirs").exists(),
@@ -692,9 +712,9 @@ mod tests {
             fs::create_dir(p).unwrap();
             fs::set_permissions(p, fs::Permissions::from_mode(0o700)).unwrap();
         }
-        *SWAP.lock().unwrap() = Some((path.clone(), "opened", swap));
+        let hooked = swap_at(&path, "opened", swap);
         let id = folder_id(&path);
-        *SWAP.lock().unwrap() = None;
+        drop(hooked);
         assert_eq!(id.unwrap(), id_of(&path.with_extension("moved")));
         fs::remove_dir_all(&tmp).unwrap();
     }
@@ -732,9 +752,9 @@ mod tests {
             fs::create_dir(p).unwrap();
             fs::write(p.join("theirs"), b"z").unwrap();
         }
-        *SWAP.lock().unwrap() = Some((path.clone(), "unrecorded", swap));
+        let hooked = swap_at(&path, "unrecorded", swap);
         let r = Folder::new(&dir, &path);
-        *SWAP.lock().unwrap() = None;
+        drop(hooked);
         assert!(r.is_err());
         assert!(path.join("theirs").exists(), "not the folder made");
         fs::remove_dir_all(&tmp).unwrap();

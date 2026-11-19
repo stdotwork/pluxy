@@ -168,7 +168,9 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		if ln != nil {
 			ln.Close()
 		}
-		if !safeMode {
+		// Safe mode opens the credential store too, so it is no way past the store's errors.
+		var store *cred.OpenError
+		if !safeMode && !errors.As(err, &store) {
 			err = fmt.Errorf("%w (start with -safe-mode to run without extensions)", err)
 		}
 		return err
