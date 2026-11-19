@@ -1622,10 +1622,11 @@ func TestCooledDownModelIsNotUnknown(t *testing.T) {
 }
 
 // An account whose model list cannot be read serves any model, so a long block on it must not be
-// the retry time of a model other accounts serve and one of them unblocks sooner.
+// the retry time of a model other accounts serve and one of them unblocks sooner. Both are of one
+// provider, so both serve the request.
 func TestCooldownWaitComesFromTheAccountThatServesTheModel(t *testing.T) {
 	h := newHarness(t, Config{},
-		Account{ID: "codex", Extension: "pluxy/codex"}, Account{ID: "b", Models: []ModelEntry{{Name: "m"}}})
+		Account{ID: "codex", Extension: "pluxy/codex"}, Account{ID: "b", Extension: "pluxy/codex", Models: []ModelEntry{{Name: "m"}}})
 	h.r.UseCatalog(func(context.Context, Account, *protocol.Credential) (*protocol.ModelList, *llm.Error) {
 		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "list unreadable"}
 	})
