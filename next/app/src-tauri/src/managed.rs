@@ -546,6 +546,18 @@ impl ManagedCore {
         self.pid
     }
 
+    /// On Windows, a handle on the core's process that keeps its process ID from passing to
+    /// another process for as long as it is held, past this `ManagedCore` too; it cannot end the
+    /// core (`owned::Child::pin`).
+    #[cfg(windows)]
+    pub(crate) fn pin(&self) -> Result<crate::owned::Pin, String> {
+        self.child
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pin()
+            .map_err(|e| format!("holding the core's process: {e}"))
+    }
+
     /// Set once this core is being stopped or has exited.
     pub fn gone(&self) -> Gone {
         Arc::clone(&self.gone)
@@ -709,13 +721,38 @@ pub fn owns_listener(core: &ManagedCore, base: &str) -> Result<(), String> {
 /// The process IDs owning each TCP socket listening on port, IPv4 and IPv6, on any address.
 #[cfg(windows)]
 fn listener_owners(port: u16) -> io::Result<Vec<u32>> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::TCP_TABLE_OWNER_PID_LISTENER;
+    Ok(tcp_table(TCP_TABLE_OWNER_PID_LISTENER)?
+        .into_iter()
+        .filter(|r| r.local.port() == port)
+        .map(|r| r.pid)
+        .collect())
+}
+
+/// One row of the system's TCP table: its two ends, its state and the process that owns it.
+#[cfg(windows)]
+struct TcpRow {
+    local: std::net::SocketAddr,
+    remote: std::net::SocketAddr,
+    state: u32,
+    pid: u32,
+}
+
+/// The system's TCP table of class (`TCP_TABLE_OWNER_PID_*`), IPv4 and IPv6, every user's.
+#[cfg(windows)]
+fn tcp_table(class: i32) -> io::Result<Vec<TcpRow>> {
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
     use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
         GetExtendedTcpTable, MIB_TCP6TABLE_OWNER_PID, MIB_TCPTABLE_OWNER_PID,
-        TCP_TABLE_OWNER_PID_LISTENER,
     };
     use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
-    let mut found = Vec::new();
+    // Ports are in network byte order, in the low 16 bits; IPv4 addresses in network order too.
+    let port = |p: u32| u16::from_be(p as u16);
+    let v4 = |a: u32, p: u32| SocketAddr::from((Ipv4Addr::from(a.to_ne_bytes()), port(p)));
+    let v6 =
+        |a: [u8; 16], p: u32| SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(a), port(p), 0, 0));
+    let mut rows = Vec::new();
     for family in [AF_INET, AF_INET6] {
         // u64s, so the table is aligned as its rows need.
         let mut buf: Vec<u64> = Vec::new();
@@ -727,7 +764,7 @@ fn listener_owners(port: u16) -> io::Result<Vec<u32>> {
                     &mut size,
                     0,
                     u32::from(family),
-                    TCP_TABLE_OWNER_PID_LISTENER,
+                    class,
                     0,
                 )
             };
@@ -741,29 +778,80 @@ fn listener_owners(port: u16) -> io::Result<Vec<u32>> {
         if buf.is_empty() {
             continue;
         }
-        // The port is in network byte order, in the low 16 bits.
-        let ours = |p: u32| u16::from_be(p as u16) == port;
+        // SAFETY: GetExtendedTcpTable wrote a table of this family's rows into buf.
         unsafe {
             if family == AF_INET {
                 let t = &*(buf.as_ptr() as *const MIB_TCPTABLE_OWNER_PID);
-                let rows = std::slice::from_raw_parts(t.table.as_ptr(), t.dwNumEntries as usize);
-                found.extend(
-                    rows.iter()
-                        .filter(|r| ours(r.dwLocalPort))
-                        .map(|r| r.dwOwningPid),
-                );
+                let t = std::slice::from_raw_parts(t.table.as_ptr(), t.dwNumEntries as usize);
+                rows.extend(t.iter().map(|r| TcpRow {
+                    local: v4(r.dwLocalAddr, r.dwLocalPort),
+                    remote: v4(r.dwRemoteAddr, r.dwRemotePort),
+                    state: r.dwState,
+                    pid: r.dwOwningPid,
+                }));
             } else {
                 let t = &*(buf.as_ptr() as *const MIB_TCP6TABLE_OWNER_PID);
-                let rows = std::slice::from_raw_parts(t.table.as_ptr(), t.dwNumEntries as usize);
-                found.extend(
-                    rows.iter()
-                        .filter(|r| ours(r.dwLocalPort))
-                        .map(|r| r.dwOwningPid),
-                );
+                let t = std::slice::from_raw_parts(t.table.as_ptr(), t.dwNumEntries as usize);
+                rows.extend(t.iter().map(|r| TcpRow {
+                    local: v6(r.ucLocalAddr, r.dwLocalPort),
+                    remote: v6(r.ucRemoteAddr, r.dwRemotePort),
+                    state: r.dwState,
+                    pid: r.dwOwningPid,
+                }));
             }
         }
     }
-    Ok(found)
+    Ok(rows)
+}
+
+/// On Windows, where the app holds no copy of its core's listening socket: checks that the
+/// connection this process just made from local to peer was accepted by process pid, its core,
+/// before anything is sent on it (`client::Client::for_core`). The system's table of
+/// connections lists both ends of each, with the process that owns each end, every user's; the
+/// connection's other end is the row from peer to local. Another program on the core's port
+/// gets nothing, not even the request line: one listening on the core's address since the core
+/// ended, or one that was listening on a wildcard address over it all along (Windows lets
+/// another account bind `0.0.0.0` beside a loopback listener), which gets the core's
+/// connections as soon as the core's socket closes. The caller holds a handle on the core's
+/// process (`owned::Pin`), so pid is not another process's meanwhile.
+#[cfg(windows)]
+pub(crate) fn accepted_by(
+    pid: u32,
+    local: std::net::SocketAddr,
+    peer: std::net::SocketAddr,
+) -> Result<(), String> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::TCP_TABLE_OWNER_PID_CONNECTIONS;
+    // MIB_TCP_STATE_SYN_RCVD and MIB_TCP_STATE_ESTAB: the other end is still a live connection
+    // (its closing states can be listed as no process's, and nothing sent there is read).
+    const SYN_RCVD: u32 = 4;
+    const ESTABLISHED: u32 = 5;
+    let same = |a: &std::net::SocketAddr, b: &std::net::SocketAddr| {
+        a.ip().to_canonical() == b.ip().to_canonical() && a.port() == b.port()
+    };
+    // A connection the system has just made can be missing its other end in the table for a
+    // moment, or show it before the core's process is set as its owner: look again, for at
+    // least a second, before refusing.
+    let mut why = format!("the other end of {local} -> {peer} is not in this computer's table");
+    for _ in 0..100 {
+        let rows = tcp_table(TCP_TABLE_OWNER_PID_CONNECTIONS)
+            .map_err(|e| format!("reading this computer's connections: {e}"))?;
+        let other = rows.iter().find(|r| {
+            same(&r.local, &peer)
+                && same(&r.remote, &local)
+                && matches!(r.state, SYN_RCVD | ESTABLISHED)
+        });
+        match other {
+            Some(r) if r.pid == pid => return Ok(()),
+            Some(r) => {
+                let by = r.pid;
+                why =
+                    format!("{local} -> {peer} was accepted by process {by}, not the core ({pid})");
+            }
+            None => {}
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    Err(why)
 }
 
 /// On macOS: core still runs and base is the address of the socket the app bound and gave it,
@@ -1164,12 +1252,101 @@ mod tests {
             assert!(owns_listener(&core, &elsewhere).is_err());
             assert!(owns_listener(&core, &format!("http://[::1]:{port}")).is_err());
         }
+        // On Windows, where the app holds no copy of the core's socket, a client for the core
+        // checks the core's own process accepted each connection: it reaches the core, and is
+        // refused when another process (this test) is named as the core.
+        #[cfg(windows)]
+        {
+            use crate::client::Client;
+            let r =
+                Client::for_core(&base, &core)
+                    .unwrap()
+                    .call(core.key(), "GET", "/status", None);
+            assert_eq!(r.status, 200, "{r:?}");
+            let this = crate::owned::Pin::this_process_as(std::process::id());
+            let r = Client::with_pin(&base, this).call(core.key(), "GET", "/status", None);
+            assert_eq!(r.status, 0, "{r:?}");
+        }
         core.stop();
         let why = core.exited().expect("the core stopped");
         assert!(cfg!(windows) || why.contains("exit status: 0"), "{why}");
         assert!(
             owns_listener(&core, &base).is_err(),
             "a stopped core still owns {base}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// On Windows, where the app holds no copy of the core's socket: another program (this
+    /// test) listening all along on the wildcard address over the core's port, as Windows lets
+    /// another account do, gets the core's connections once the core has ended. A client for
+    /// the core, made while it ran and kept past its `ManagedCore`, sends that program nothing.
+    #[cfg(windows)]
+    #[test]
+    fn a_core_client_sends_nothing_to_a_listener_beside_the_core_once_it_ends() {
+        use std::io::Read;
+        let program = real_core();
+        let dir = temp("beside");
+        let mut core =
+            ManagedCore::start(File::open(&program).unwrap(), &program, &dir, None).unwrap();
+        let base = core.base().to_string();
+        let port = url::Url::parse(&base).unwrap().port().unwrap();
+        let key = core.key().to_string();
+        let client = crate::client::Client::for_core(&base, &core).unwrap();
+        let r = client.call(&key, "GET", "/status", None);
+        assert_eq!(r.status, 200, "{r:?}");
+        let other = TcpListener::bind(("0.0.0.0", port))
+            .expect("another listener on the wildcard address beside the core's");
+        let r = client.call(&key, "GET", "/status", None);
+        assert_eq!(
+            r.status, 200,
+            "with the wildcard listening beside the core: {r:?}"
+        );
+        // A new client, so a new connection: the running core still takes it.
+        let fresh = crate::client::Client::for_core(&base, &core).unwrap();
+        let r = fresh.call(&key, "GET", "/status", None);
+        assert_eq!(
+            r.status, 200,
+            "a new connection with the wildcard listening beside the core: {r:?}"
+        );
+        drop(fresh);
+        core.stop();
+        assert!(core.exited().is_some(), "the core stopped");
+        // The client's own handle on the core's process keeps its process ID from now on.
+        drop(core);
+        other.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let mut s = loop {
+                match other.accept() {
+                    Ok((s, _)) => break s,
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(e) => return Err(format!("no connection reached the wildcard: {e}")),
+                }
+            };
+            s.set_nonblocking(false).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut got = Vec::new();
+            let _ = s.read_to_end(&mut got);
+            Ok(got.len())
+        });
+        let r = client.call(&key, "GET", "/status", None);
+        let got = server.join().unwrap();
+        assert_eq!(
+            got,
+            Ok(0),
+            "what the other program read, the call answered {r:?}"
+        );
+        assert_eq!(r.status, 0, "{r:?}");
+        let why = r.error.unwrap().message;
+        assert!(
+            why.starts_with("nothing sent to the app's core: ")
+                && why.contains(&format!("was accepted by process {}", std::process::id())),
+            "{why}"
         );
         fs::remove_dir_all(dir).unwrap();
     }

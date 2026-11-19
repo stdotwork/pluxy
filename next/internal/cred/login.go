@@ -252,6 +252,7 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 			m.mu.Unlock()
 			log.Printf("credentials: account %q signed in again", l.account)
 			m.changed()
+			m.credentialChanged(l.account)
 			return nil
 		}
 	}

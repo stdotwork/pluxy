@@ -257,6 +257,20 @@ type ModelsReply struct {
 	Models []route.ServedModel `json:"models"`
 }
 
+// RefreshModelsRequest is POST /models/refresh's optional body.
+type RefreshModelsRequest struct {
+	Account string `json:"account,omitempty"`
+}
+
+// RefreshAccountResult is one account's outcome in POST /models/refresh.
+type RefreshAccountResult = route.RefreshResult
+
+// RefreshModelsReply is POST /models/refresh's reply.
+type RefreshModelsReply struct {
+	Models   []route.ServedModel    `json:"models"`
+	Accounts []RefreshAccountResult `json:"accounts"`
+}
+
 // ClientKey is a client key as the management API lists it.
 type ClientKey struct {
 	// ID names the key in calls, without showing it. It stays the same across restarts (derived

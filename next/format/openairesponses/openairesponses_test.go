@@ -587,3 +587,138 @@ func TestUpstreamKeepaliveNeverReachesResponsesClient(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeUsageCacheWrite(t *testing.T) {
+	checkUsage := func(t *testing.T, u *llm.Usage) {
+		t.Helper()
+		if u == nil {
+			t.Fatal("usage is nil")
+		}
+		if u.InputTokens == nil || *u.InputTokens != 12000 {
+			t.Errorf("InputTokens = %v, want 12000", u.InputTokens)
+		}
+		if u.CachedInputTokens == nil || *u.CachedInputTokens != 4000 {
+			t.Errorf("CachedInputTokens = %v, want 4000", u.CachedInputTokens)
+		}
+		if u.CacheWriteInputTokens == nil || *u.CacheWriteInputTokens != 7000 {
+			t.Errorf("CacheWriteInputTokens = %v, want 7000", u.CacheWriteInputTokens)
+		}
+		if u.OutputTokens == nil || *u.OutputTokens != 50 {
+			t.Errorf("OutputTokens = %v, want 50", u.OutputTokens)
+		}
+	}
+
+	t.Run("non-stream response", func(t *testing.T) {
+		body := `{
+			"id": "resp_cw1",
+			"object": "response",
+			"created_at": 1700000000,
+			"status": "completed",
+			"model": "gpt-5",
+			"output": [{"id": "msg_1", "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "ok"}]}],
+			"usage": {
+				"input_tokens": 12000,
+				"input_tokens_details": {"cached_tokens": 4000, "cache_write_tokens": 7000},
+				"output_tokens": 50,
+				"output_tokens_details": {"reasoning_tokens": 0},
+				"total_tokens": 12050
+			}
+		}`
+		evs, err := DecodeResponse([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var finish *llm.Event
+		for i := range evs {
+			if evs[i].Type == llm.EventFinish {
+				finish = &evs[i]
+			}
+		}
+		if finish == nil {
+			t.Fatal("missing finish event")
+		}
+		checkUsage(t, finish.Usage)
+	})
+
+	t.Run("stream response.completed event", func(t *testing.T) {
+		stream := []string{
+			`{"type":"response.created","sequence_number":0,"response":{"id":"resp_cw2","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-5","output":[]}}`,
+			`{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","content":[]}}`,
+			`{"type":"response.output_text.delta","sequence_number":2,"output_index":0,"item_id":"msg_1","content_index":0,"delta":"ok"}`,
+			`{"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}`,
+			`{"type":"response.completed","sequence_number":4,"response":{"id":"resp_cw2","status":"completed","output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":12000,"input_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000},"output_tokens":50,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":12050}}}`,
+		}
+		dec := NewStreamDecoder()
+		var finish *llm.Event
+		for _, frame := range stream {
+			evs, err := dec.Decode([]byte(frame))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range evs {
+				if evs[i].Type == llm.EventFinish {
+					ev := evs[i]
+					finish = &ev
+				}
+			}
+		}
+		if finish == nil {
+			t.Fatal("missing finish event")
+		}
+		checkUsage(t, finish.Usage)
+	})
+}
+
+func TestRenderUsageCacheWrite(t *testing.T) {
+	req, err := ParseRequest([]byte(`{"model":"m","input":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	render := func(u *llm.Usage) string {
+		a := NewAggregator(req)
+		a.Add(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r1", Model: "m", Format: llm.FormatAnthropicMessages}})
+		a.Add(llm.Event{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemMessage}})
+		a.Add(llm.Event{Type: llm.EventTextDelta, Index: 0, Delta: "ok"})
+		a.Add(llm.Event{Type: llm.EventItemEnd, Index: 0})
+		a.Add(llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}, Usage: u})
+		b, err := a.Response()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Usage json.RawMessage `json:"usage"`
+		}
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatal(err)
+		}
+		return string(out.Usage)
+	}
+
+	got := render(&llm.Usage{
+		InputTokens:           llm.Int64(12000),
+		OutputTokens:          llm.Int64(50),
+		CachedInputTokens:     llm.Int64(4000),
+		CacheWriteInputTokens: llm.Int64(7000),
+	})
+	var g, w any
+	_ = json.Unmarshal([]byte(got), &g)
+	want := `{"input_tokens":12000,"input_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000},"output_tokens":50,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":12050}`
+	_ = json.Unmarshal([]byte(want), &w)
+	if !reflect.DeepEqual(g, w) {
+		t.Errorf("usage with cache write:\n got %s\nwant %s", got, want)
+	}
+
+	zero := render(&llm.Usage{
+		InputTokens:           llm.Int64(10),
+		OutputTokens:          llm.Int64(5),
+		CachedInputTokens:     llm.Int64(0),
+		CacheWriteInputTokens: llm.Int64(0),
+	})
+	var gz, wz any
+	_ = json.Unmarshal([]byte(zero), &gz)
+	wantZero := `{"input_tokens":10,"input_tokens_details":{"cached_tokens":0},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":15}`
+	_ = json.Unmarshal([]byte(wantZero), &wz)
+	if !reflect.DeepEqual(gz, wz) {
+		t.Errorf("usage with zero cache write:\n got %s\nwant %s", zero, wantZero)
+	}
+}
