@@ -36,6 +36,8 @@
   .theme-card {
     display: grid;
     gap: calc(var(--s) * 1);
+    /* Cards in one row are as tall as the tallest: the others keep their text at the top. */
+    align-content: start;
     padding: calc(var(--s) * 3);
     box-shadow: none;
     cursor: pointer;
