@@ -71,9 +71,10 @@ func prepare(t *testing.T, s conformance.Scenario, kind string) conformance.Setu
 		case conformance.ScenarioRateLimited:
 			geminitest.RateLimited(w, 20)
 		case conformance.ScenarioAccountClosed:
+			// Built from Google's documented ErrorInfo example (google/api/error_reason.proto: CONSUMER_SUSPENDED), not a captured reply.
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			io.WriteString(w, `{"error":{"code":403,"message":"Your project has been denied access because your account has been deactivated.","status":"PERMISSION_DENIED"}}`)
+			io.WriteString(w, `{"error":{"code":403,"message":"The consumer 'projects/123' is suspended.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"CONSUMER_SUSPENDED","domain":"googleapis.com","metadata":{"consumer":"projects/123","service":"generativelanguage.googleapis.com"}}]}}`)
 		}
 	}
 	setup := conformance.Setup{Account: protocol.Account{ID: "conformance", Settings: settingsFor(srv, kind)}}

@@ -163,10 +163,9 @@ func asError(err error, e **llm.Error) bool {
 	return ok
 }
 
-// Real Google TOS_VIOLATION and account-deactivation replies map to account_closed: TOS_VIOLATION
-// is Retryable=false (content/pattern refusal: do not replay on sibling accounts), while
-// account-deactivated is Retryable=true; 403 VALIDATION_REQUIRED ("Verify your account to
-// continue.") stays permission, not a ban.
+// Google ErrorInfo reason CONSUMER_SUSPENDED and account-deactivation replies map to
+// account_closed with credential scope; matching is on ErrorInfo reason in error.details[],
+// not message text. 403 VALIDATION_REQUIRED and other permission replies stay permission.
 func TestAccountClosedMapping(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -176,12 +175,12 @@ func TestAccountClosedMapping(t *testing.T) {
 		scope     string
 		retryable bool
 	}{
-		// CLIProxyAPI #1823, #7515, #7636; EasyCLIProxyAPI #611
-		{"403 TOS_VIOLATION with ErrorInfo (CLIProxyAPI #1823, #7636)", 403, `{"error":{"code":403,"message":"This service has been disabled in this account for violation of Terms of Service. Please submit an appeal to continue using this product.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"TOS_VIOLATION","domain":"cloudcode-pa.googleapis.com","metadata":{"uiMessage":"true","appeal_url":"https://forms.gle/hGzM9MEUv2azZsrb9"}}]}}`, llm.CodeAccountClosed, llm.ScopeCredential, false},
-		// CLIProxyAPI #1637, PR #7500 (Feb 2026 variant without ErrorInfo)
-		{"403 service disabled without ErrorInfo (CLIProxyAPI #1637)", 403, `{"error":{"code":403,"message":"This service has been disabled in this account for violation of Terms of Service.","status":"PERMISSION_DENIED"}}`, llm.CodeAccountClosed, llm.ScopeCredential, false},
-		// OmniRoute geminiProjectBlock.test.ts
-		{"403 account deactivated (OmniRoute)", 403, `{"error":{"code":403,"message":"Your project has been denied access because your account has been deactivated.","status":"PERMISSION_DENIED"}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
+		// Built from Google's documented ErrorInfo example (google/api/error_reason.proto: CONSUMER_SUSPENDED), not a captured reply.
+		{"403 CONSUMER_SUSPENDED (from Google's documented example)", 403, `{"error":{"code":403,"message":"The consumer 'projects/123' is suspended.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"CONSUMER_SUSPENDED","domain":"googleapis.com","metadata":{"consumer":"projects/123","service":"generativelanguage.googleapis.com"}}]}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
+		// From OmniRoute's classifier tests (tests/unit/geminiProjectBlock.test.ts), not a captured reply.
+		{"403 account deactivated (from OmniRoute's classifier tests)", 403, `{"error":{"code":403,"message":"Your project has been denied access because your account has been deactivated.","status":"PERMISSION_DENIED"}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
+		// Guard: CONSUMER_SUSPENDED only in message text, without ErrorInfo reason, stays permission.
+		{"403 CONSUMER_SUSPENDED in message text only guard", 403, `{"error":{"code":403,"message":"CONSUMER_SUSPENDED: permission denied","status":"PERMISSION_DENIED"}}`, llm.CodePermission, llm.ScopeCredential, true},
 		// Guard: CLIProxyAPI #4272, #1374; OmniRoute antigravity-verify-account-403-not-a-ban.test.ts
 		{"403 VALIDATION_REQUIRED guard (CLIProxyAPI #4272)", 403, `{"error":{"code":403,"message":"Verify your account to continue.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"VALIDATION_REQUIRED"}]}}`, llm.CodePermission, llm.ScopeCredential, true},
 		{"403 generic permission guard", 403, `{"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}}`, llm.CodePermission, llm.ScopeCredential, true},
