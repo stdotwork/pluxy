@@ -667,7 +667,8 @@ program's name) and `cwd`, and may name:
   Windows, any of `argv`). The confirmation opens and
   hashes it as it does the executable, so a remembered approval does not stand for a replaced
   program (a self-update) either, and the spawn refuses one changed since it was confirmed. The
-  terminal starts it after the spawn, so the spawn also checks who could change it by then:
+  terminal starts it after the spawn, so the spawn (on Windows the terminal) also checks who
+  could change it by then:
   - on Linux the terminal finds it by the path `argv` names, the argument right after the
     terminal's exec flag (`-e`, `-x` or `--`, which must be the first argument), which `program`
     must be (refused otherwise). The check covers only a launch that names `program` there: a
@@ -693,6 +694,22 @@ program's name) and `cwd`, and may name:
     program ([What runs](#windows-and-macos), `admin` folders included): a file put at the
     program's path since the confirmation never runs. The spawn applies the same rule first, so
     the app refuses a program in a folder another user may change;
+  - on Windows the execution program's terminal mode runs the argument right after `--` by its
+    path (the app requires only that `program` is one of `argv`, since a WSL launch names its
+    Linux program after `--exec`). The app checks no more than that the program is still the
+    file confirmed. The execution program, in the launch's console, first opens the program and
+    every folder above it with deleting shared with no one (and writing too, for the program), so
+    none of them can be renamed, removed or replaced, nor the program written, until it starts.
+    It then checks that the path names exactly what it holds (its final path, so no link,
+    junction or short name is on the way, and the same volume serial number and file ID), that
+    the program is a PE image (`.exe` or `.com` starting `MZ`), and that no account but the
+    person, SYSTEM, Administrators and TrustedInstaller may change the program or its folder,
+    nor remove or rename what a folder above holds (owner and access list, read through the held
+    handles; adding to a folder above is allowed, as every account may in `C:\`). It refuses
+    otherwise, naming the path and why, and the program never runs: a program another account
+    swapped in since the confirmation is that account's own, or that account held a right the
+    check refuses. The refusal shows in the terminal's window, after the app has started the
+    launch;
 - `file` and `within`: the file the launch opens, which must be one of `argv`, and the folder it
   must be inside, named together, each by its resolved path. The confirmation resolves both and
   refuses, before any dialog:

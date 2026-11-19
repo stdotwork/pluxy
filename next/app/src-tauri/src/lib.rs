@@ -114,7 +114,6 @@ struct App {
     startup: Mutex<(startup::Store, startup::Preferences)>,
     conn: Mutex<Connection>,
     /// A change of the app's own core waiting for its native confirmation (`core_updates.rs`).
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     core_change: Mutex<Option<core_updates::Pending>>,
     #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     confirmations: Mutex<confirmation::Confirmations>,
@@ -678,14 +677,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let mut tray = TrayIconBuilder::with_id("pluxy")
         .tooltip("pluxy")
         .menu(&menu)
-        .on_menu_event(|app, e| {
-            if tray_item_acts(
-                e.id().as_ref(),
-                app.state::<App>().quitting.load(Ordering::SeqCst),
-            ) {
-                tray_menu(app, e.id().as_ref());
-            }
-        })
+        .on_menu_event(|app, e| tray_menu_event(app, e.id().as_ref()))
         .on_tray_icon_event(|tray, e| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -706,6 +698,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     *app.state::<App>().status.lock().unwrap() = Some(status);
     *app.state::<App>().core_actions.lock().unwrap() = vec![start, stop, restart];
     Ok(())
+}
+
+/// The tray menu's event: a click on its item id.
+pub(crate) fn tray_menu_event(app: &AppHandle, id: &str) {
+    if tray_item_acts(id, app.state::<App>().quitting.load(Ordering::SeqCst)) {
+        tray_menu(app, id);
+    }
 }
 
 fn tray_menu(app: &AppHandle, id: &str) {

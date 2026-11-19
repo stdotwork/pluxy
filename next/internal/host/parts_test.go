@@ -42,7 +42,10 @@ const partsJWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJob3N0LXBhcnRzI
 // A secret stored or configured as a whole is removed also where the upstream echoes only its
 // secret part: a credential's token behind a public prefix (Devin, Meta), the token of an
 // account's Authorization header, Basic's base64 text and password, a cookie's value, and the
-// token of an Authorization header in the account's settings. The words around it stay.
+// token of an Authorization header in the account's settings. The words around it stay, but for
+// a word that shares 4 characters with the secret, which the error loses too
+// (protocol.RemovePieces): these made-up secrets hold the words "device", "token", "password" and
+// "csrf".
 func TestSecretPartsRemovedFromCalls(t *testing.T) {
 	basic := base64.StdEncoding.EncodeToString([]byte("gw-user:gw-password-123"))
 	ext, err := Start(filepath.Join(fakePackage(t, "echo-parts"), ManifestFile), Options{Log: &syncBuffer{}, SettingsSecrets: configdoc.SettingsSecrets})
@@ -60,16 +63,16 @@ func TestSecretPartsRemovedFromCalls(t *testing.T) {
 		{"devin session token", protocol.Account{Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "devin-session-token$" + partsJWT}},
 			nil, "invalid JWT " + partsJWT, "invalid JWT [redacted]"},
 		{"meta device token", protocol.Account{Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "meta-minted-key-0123456789", RefreshToken: "dca:meta-device-0123456789"}},
-			nil, "bad device token meta-device-0123456789", "bad device token [redacted]"},
+			nil, "bad device token meta-device-0123456789", "bad [redacted] token [redacted]"},
 		{"bearer header", protocol.Account{Headers: map[string]string{"Authorization": "Bearer gw-token-0123456789"}},
-			nil, "gateway rejected token gw-token-0123456789", "gateway rejected token [redacted]"},
+			nil, "gateway rejected token gw-token-0123456789", "gateway rejected [redacted] [redacted]"},
 		{"basic header", protocol.Account{Headers: map[string]string{"Authorization": "Basic " + basic}},
-			nil, "bad credentials " + basic + ", wrong password gw-password-123 for gw-user", "bad credentials [redacted], wrong password [redacted] for gw-user"},
+			nil, "bad credentials " + basic + ", wrong password gw-password-123 for gw-user", "bad credentials [redacted], wrong [redacted] [redacted] for gw-user"},
 		{"cookie header", protocol.Account{Headers: map[string]string{"Cookie": "sid=cookie-sid-0123456789; theme=dark; csrf=csrf-token-abcdef12"}},
-			nil, "session cookie-sid-0123456789 expired (csrf csrf-token-abcdef12, theme=dark)", "session [redacted] expired (csrf [redacted], theme=dark)"},
+			nil, "session cookie-sid-0123456789 expired (csrf csrf-token-abcdef12, theme=dark)", "session [redacted] expired ([redacted] [redacted], theme=dark)"},
 		{"settings extra_headers", protocol.Account{},
 			map[string]any{"extra_headers": map[string]string{"Authorization": "Bearer settings-token-0123456789"}},
-			"gateway rejected token settings-token-0123456789", "gateway rejected token [redacted]"},
+			"gateway rejected token settings-token-0123456789", "gateway rejected [redacted] [redacted]"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			settings := map[string]any{"echo": c.echo}

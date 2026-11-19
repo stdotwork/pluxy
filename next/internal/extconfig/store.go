@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/stdotwork/pluxy/next/internal/private"
 )
 
 // maxFile bounds a settings file: above the most a schema's limits allow (50 fields of 4,096
@@ -16,8 +19,12 @@ import (
 // more, so it can always read what it saved.
 const maxFile = 4 << 20
 
-// Store keeps each extension's settings in its own file under a folder, readable only by
-// core's user: {dir}/{publisher}/{name}.json.
+// Store keeps each extension's settings in its own file under a folder:
+// {dir}/{publisher}/{name}.json. Each file can be read only by core's user (and, on Windows,
+// SYSTEM): on unix the folders are made 0700 and each file 0600; on Windows the folder dir is
+// checked and made private (internal/private) each time settings are loaded or saved, each
+// publisher's folder takes its entries, and each file gets the private access list as it is
+// made. A save writes a temporary file, syncs it and renames it over the old one.
 type Store struct {
 	dir string
 	mu  sync.Mutex // one change at a time, so a change never loses another
@@ -26,12 +33,29 @@ type Store struct {
 // NewStore returns the store in dir. The folder is made when settings are first saved.
 func NewStore(dir string) *Store { return &Store{dir: dir} }
 
-func (st *Store) path(id string) (string, error) {
+// names returns the publisher's folder and the file name of extension id's settings.
+func (st *Store) names(id string) (pub, file string, err error) {
 	pub, name, ok := strings.Cut(id, "/")
 	if !ok || pub == "" || name == "" || strings.ContainsAny(name, `/\`) || !filepath.IsLocal(pub) || !filepath.IsLocal(name) {
-		return "", fmt.Errorf("extension ID %q is not publisher/name", id)
+		return "", "", fmt.Errorf("extension ID %q is not publisher/name", id)
 	}
-	return filepath.Join(st.dir, pub, name+".json"), nil
+	return pub, name + ".json", nil
+}
+
+// publisher checks the store's folder (private.Dir.Open) and opens the publisher's folder pub in
+// it as a root, making both when create is set.
+func (st *Store) publisher(pub string, create bool) (*os.Root, error) {
+	top, err := private.Dir{Path: st.dir, Redo: "set the extensions' settings again"}.OpenRoot(create)
+	if err != nil {
+		return nil, err
+	}
+	defer top.Close()
+	if create {
+		if err := top.Mkdir(pub, private.DirMode); err != nil && !errors.Is(err, fs.ErrExist) {
+			return nil, err
+		}
+	}
+	return top.OpenRoot(pub)
 }
 
 // Load returns the settings stored for extension id; none when nothing is stored.
@@ -42,18 +66,36 @@ func (st *Store) Load(id string) (Stored, error) {
 }
 
 func (st *Store) load(id string) (Stored, error) {
-	p, err := st.path(id)
+	none := Stored{Values: Values{}}
+	pub, file, err := st.names(id)
 	if err != nil {
 		return Stored{}, err
 	}
-	f, err := os.Open(p)
+	root, err := st.publisher(pub, false)
 	if errors.Is(err, fs.ErrNotExist) {
-		return Stored{Values: Values{}}, nil
+		return none, nil
+	}
+	if err != nil {
+		return Stored{}, err
+	}
+	defer root.Close()
+	f, err := root.Open(file)
+	if errors.Is(err, fs.ErrNotExist) {
+		return none, nil
 	}
 	if err != nil {
 		return Stored{}, err
 	}
 	defer f.Close()
+	if ok, owner, err := private.Owner(f); err != nil {
+		return Stored{}, fmt.Errorf("settings of %s: %w", id, err)
+	} else if !ok {
+		// Core did not write it: another account may have put it there before the folder was
+		// private. The next save replaces it.
+		log.Printf("settings of %s: skipped %s: it is owned by %s, not by this user", id,
+			filepath.Join(st.dir, pub, file), owner)
+		return none, nil
+	}
 	var v Stored
 	if err := json.NewDecoder(&limited{f, maxFile}).Decode(&v); err != nil {
 		return Stored{}, fmt.Errorf("settings of %s: %w", id, err)
@@ -78,7 +120,7 @@ func (st *Store) Change(id string, s *Schema, change Values) (Stored, error) {
 	if err != nil {
 		return fail(&Invalid{err})
 	}
-	p, _ := st.path(id) // load checked it
+	pub, file, _ := st.names(id) // load checked it
 	b, err := json.Marshal(next)
 	if err != nil {
 		return fail(err)
@@ -86,30 +128,12 @@ func (st *Store) Change(id string, s *Schema, change Values) (Stored, error) {
 	if len(b) > maxFile {
 		return fail(&Invalid{fmt.Errorf("the settings would be larger than %d MiB", maxFile>>20)})
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
-		return fail(err)
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(p), ".settings-*")
+	root, err := st.publisher(pub, true)
 	if err != nil {
 		return fail(err)
 	}
-	defer os.Remove(tmp.Name()) // after the rename, nothing is there
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return fail(err)
-	}
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return fail(err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fail(err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fail(err)
-	}
-	if err := os.Rename(tmp.Name(), p); err != nil {
+	defer root.Close()
+	if err := private.WriteFile(root, filepath.Join(st.dir, pub), ".settings-", file, b); err != nil {
 		return fail(err)
 	}
 	return next, nil
