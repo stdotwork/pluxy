@@ -39,6 +39,13 @@
 //   for installers and elevation first on PATH never ran; macOS: no quarantine on the installed
 //   bundle; macOS: the same package in the stock /Applications (inApplications) updates and rolls
 //   back, and is refused for each access list entry, owner or membership that rule turns away.
+// - install (the update shard; macOS only, Windows records a skip): the test package's disk image
+//   attached; its volume holds the same bundle and a link to /Applications; the bundle copied out
+//   with `ditto` into /Applications and into ~/Applications starts, updates itself and rolls back
+//   from each, nothing else in either folder changing; run from the mounted image it is refused
+//   because its volume is not APFS; `spctl` and `syspolicy_check` output is recorded; the image
+//   detaches; and the login item of a copy whose bundle is then deleted stays behind, with what
+//   launchd does with it at the next login recorded.
 //
 // These write what a real run writes: the user's registry or LaunchAgents folder, and on Windows
 // the app's own folder in the user's profile. So it runs only on a GitHub-hosted runner, whose user
@@ -54,16 +61,18 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { MARKER_FILE, PROFILE_FILE } from "./admission";
@@ -728,6 +737,8 @@ interface BundlePackage {
   program: string;
   updater_pubkey: string;
   update: { bundle: string; payload: string; target: string; version: string; signature: string };
+  /** macOS: the disk image holding the bundle. */
+  dmg?: string;
 }
 
 function testPackage(): BundlePackage | undefined {
@@ -1489,6 +1500,314 @@ async function inApplications(o: {
   }
 }
 
+// ---- the install (macOS: the disk image) ----------------------------------------------------
+
+/** The test package's disk image attached as a person's double-click attaches it (no Finder
+ * window opened): its volume's mount point and kind, as hdiutil reports them. */
+function attach(image: string): { mount: string; kind: string } {
+  const r = spawnSync("hdiutil", ["attach", "-noautoopen", "-plist", image], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`hdiutil attach ${image}: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  const json = spawnSync("plutil", ["-convert", "json", "-o", "-", "-"], {
+    encoding: "utf8",
+    input: r.stdout,
+  });
+  if (json.status !== 0) throw new Error(`plutil, hdiutil's answer: ${json.stderr}`);
+  const entities = (JSON.parse(json.stdout) as { "system-entities": Record<string, string>[] })[
+    "system-entities"
+  ];
+  const mounted = entities.filter((e) => e["mount-point"]);
+  if (mounted.length !== 1)
+    throw new Error(`hdiutil attached ${mounted.length} volumes of ${image}, not one: ${json.stdout}`);
+  const e = mounted[0] as Record<string, string>;
+  return { mount: e["mount-point"] as string, kind: e["volume-kind"] ?? "" };
+}
+
+/** The refusal of the app run from its mounted disk image: its folder (the volume's root) is on
+ * the image's HFS+ volume, which cannot swap a bundle (updater/app.rs, `swap_volume`). Not any
+ * refusal: this one, for this folder. */
+const fromImage = (mount: string): Refusal => ({
+  label: "from the disk image",
+  case: "dmg",
+  reason: new RegExp(
+    `${mount.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is on a hfs volume, which cannot swap the app for its new version in one step`,
+  ),
+});
+
+/** A command's exit and output on one line, for the log. */
+function recorded(cmd: string, args: string[]): string {
+  const r = run(cmd, args);
+  return `exit ${r.status}: ${r.out.replaceAll("\n", " | ").slice(0, 1500)}`;
+}
+
+/** The install session. macOS: the test package's disk image as a person uses it. Windows: the
+ * per-user setup program is a slice of its own; this build has none, so it records a skip. */
+async function install() {
+  if (windows) {
+    skip("this build has no Windows setup program to install");
+    return;
+  }
+  await dmgInstall();
+}
+
+/** macOS: the disk image (package.ts test) attached; its volume holds the test package's bundle,
+ * the same tree, and the link to /Applications a person drags it onto; the bundle copied out of
+ * it, as Finder copies (`ditto`), into the stock /Applications and into ~/Applications (the
+ * runner user's own); from each, the copy starts, updates itself to the signed newer version and
+ * rolls back (the `applications` route, update_native.rs), nothing else in the folder changing;
+ * the bundle run from the mounted image is refused for its volume, not APFS, before any download;
+ * `spctl` and `syspolicy_check` say what they say of the bundle and the image (recorded, not
+ * judged: the image is built here, unsigned and never quarantined, so Gatekeeper's first open is
+ * a release check); the image detaches. Last, the login item of the copy in ~/Applications
+ * outlives the bundle: once the bundle is deleted, its LaunchAgent stays, naming a program that
+ * is gone, and what launchd does with it at the next login (bootstrapping it into this user's
+ * graphical domain, as a login does) is recorded. */
+async function dmgInstall() {
+  const made = testPackage();
+  if (!made) return;
+  check(made.dmg && existsSync(made.dmg), `the test package has no disk image: ${made.dmg}`);
+  if (!made.dmg) return;
+  const name = basename(made.bundle);
+  const exe = "pluxy-app-test";
+  const user = run("id", ["-un"]).out;
+  const homeApps = join(homedir(), "Applications");
+  const folders = ["/Applications", homeApps];
+  for (const f of folders)
+    if (existsSync(join(f, name)))
+      throw new Error(
+        `${join(f, name)} exists: this is not a fresh runner, and the test would write over it`,
+      );
+  const madeHomeApps = !existsSync(homeApps);
+  const root = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-install-"));
+  const profiles: Profile[] = [];
+  let mount: string | undefined;
+  let core: Awaited<ReturnType<typeof startCore>> | undefined;
+  let feed: UpdateFeed | undefined;
+  let loaded = "";
+  try {
+    // /Applications takes an administrator (updater/applications.rs); the runner's account is one.
+    const member = () => run("dseditgroup", ["-o", "checkmember", "-m", user, "admin"]).out;
+    if (!member().startsWith("yes")) {
+      sudo(["dseditgroup", "-o", "edit", "-a", user, "-t", "user", "admin"]);
+      sudo(["dscacheutil", "-flushcache"]);
+    }
+    check(member().startsWith("yes"), `${user} is not in admin: ${member()}`);
+
+    // 1. Attach the image.
+    const attached = attach(made.dmg);
+    mount = attached.mount;
+    const at = mount;
+    say(`hdiutil attach: ${at}, volume kind ${attached.kind}`);
+    say(
+      `mounted as: ${
+        run("mount", [])
+          .out.split("\n")
+          .find((l) => l.includes(` on ${at} (`)) ?? "not listed"
+      }`,
+    );
+
+    // 2. What the volume holds: the bundle, the same tree as the test package's, and the link to
+    // /Applications.
+    say(`the volume holds: ${readdirSync(at).sort().join(", ")}; ${run("ls", ["-lde", at]).out}`);
+    const link = join(at, "Applications");
+    const linkStat = lstatSync(link, { throwIfNoEntry: false });
+    check(
+      linkStat?.isSymbolicLink() && readlinkSync(link) === "/Applications",
+      `the volume's Applications is not a link to /Applications: ${linkStat?.isSymbolicLink() ? readlinkSync(link) : "not a link"}`,
+    );
+    const inImage = join(at, name);
+    const v1 = pinOf(made.bundle);
+    const imaged = existsSync(inImage) ? pinOf(inImage) : "missing";
+    say(`the bundle in the image: ${run("ls", ["-lde", inImage]).out}; tree ${imaged}`);
+    check(imaged === v1, `the image's ${name} is ${imaged}, not the test package's bundle ${v1}`);
+
+    // 3. Copied out, as Finder copies, into /Applications and ~/Applications.
+    if (madeHomeApps) mkdirSync(homeApps);
+    say(`~/Applications: ${run("ls", ["-lde", homeApps]).out}${madeHomeApps ? " (made here)" : ""}`);
+    for (const f of folders) {
+      const dest = join(f, name);
+      const copied = run("ditto", [inImage, dest]);
+      if (copied.status !== 0) throw new Error(`ditto ${inImage} ${dest}: ${copied.out}`);
+      say(`copied to ${dest}: ${run("ls", ["-lde", dest]).out}`);
+      check(pinOf(dest) === v1, `the copy in ${f} is not the image's bundle`);
+    }
+
+    // 4. From each: start, update, roll back.
+    const work = privateFolder(join(root, "work"));
+    writeFileSync(join(work, "v1.sha256"), v1);
+    const v2 = treeDigest(made.update.bundle);
+    say(`v1 ${v1}, v2 ${v2}; starting the test core`);
+    core = await startCore();
+    const served = startUpdateFeed({
+      dir: work,
+      payload: readFileSync(made.update.payload),
+      file: basename(made.update.payload),
+      target: made.update.target,
+      version: made.update.version,
+      signature: made.update.signature,
+      pubkey: made.updater_pubkey,
+    });
+    feed = served;
+    const stand = standIns(root, ["osascript", "sudo", "installer", "authopen"]);
+    let last: { p: Profile; env: Record<string, string> } | undefined;
+    for (const f of folders) {
+      const label = f === "/Applications" ? "/Applications" : "~/Applications";
+      const installed = realpathSync(join(f, name));
+      const program = join(installed, "Contents", "MacOS", exe);
+      const p = makeProfile(TEST_ID);
+      profiles.push(p);
+      const home = privateHome(p);
+      const nonce = writeUpdaterTrust(home, made.updater_pubkey);
+      writeFileSync(
+        join(p.dir, "connection.json"),
+        JSON.stringify({ mode: "local", url: core.base, key: core.key }),
+        { mode: 0o600 },
+      );
+      writeFileSync(join(p.dir, "window.json"), JSON.stringify({ close_behavior: "minimize-to-tray" }), {
+        mode: 0o600,
+      });
+      rmSync(join(work, "stage"), { force: true });
+      const env = {
+        ...withPathFirst({ ...p.env, HOME: home }, stand.bin),
+        PLUXY_APP_TEST_UPDATE: work,
+        PLUXY_APP_TEST_FEED: served.url,
+        PLUXY_APP_TEST_FEED_CA: served.ca,
+        PLUXY_TEST_TRUST_NONCE: nonce,
+      } as Record<string, string>;
+      const before = readdirSync(f).sort();
+      const downloads = served.downloads();
+      const r = await launchChain({
+        label,
+        program,
+        env: { ...env, PLUXY_APP_TEST_UPDATE_CASE: "applications" },
+        ms: CHAIN_MS,
+        check,
+        say,
+      });
+      const stages = r.step("update_stage");
+      const ran = stages.map((s) => `${s.stage}@${s.version}`);
+      say(`${label}: versions that ran: ${ran.join(", ")}`);
+      check(
+        JSON.stringify(ran) ===
+          JSON.stringify([`first@${V1}`, `updated@${made.update.version}`, `rolled-back@${V1}`]),
+        `${label}: the route ran ${JSON.stringify(ran)}`,
+      );
+      const stageOf = (s: string) => stages.find((x) => x.stage === s) ?? {};
+      for (const [s, sha] of Object.entries({ first: v1, updated: v2, "rolled-back": v1 })) {
+        check(
+          stageOf(s).installed === installed && stageOf(s).installed_sha === sha,
+          `${label}: ${s}: the app says it runs from ${stageOf(s).installed} at ${stageOf(s).installed_sha}`,
+        );
+      }
+      check(
+        (stageOf("updated").last as Step)?.result === "installed",
+        `${label}: the update was not reported installed: ${JSON.stringify(stageOf("updated").last)}`,
+      );
+      check(
+        (stageOf("rolled-back").last as Step)?.result === "rolled-back",
+        `${label}: the rollback was not reported: ${JSON.stringify(stageOf("rolled-back").last)}`,
+      );
+      check(r.step("update_applications_done").length === 1, `${label}: the route did not finish`);
+      check(pinOf(installed) === v1, `${label}: the copy installed at the end is not v1`);
+      check(served.downloads() === downloads + 1, `${label}: v2 was not downloaded once`);
+      const after = readdirSync(f).sort();
+      check(
+        JSON.stringify(after) === JSON.stringify(before),
+        `${label}: the folder held ${JSON.stringify(before)}, now ${JSON.stringify(after)}`,
+      );
+      check(stand.ran() === "", `${label}: an installer or elevation ran: ${stand.ran()}`);
+      last = { p, env };
+    }
+
+    // 5. The bundle run from the mounted image (on the last profile, whose feed is set): refused
+    // for its volume, before any download.
+    if (last) {
+      await refusedLaunch({
+        refusal: fromImage(at),
+        program: join(inImage, "Contents", "MacOS", exe),
+        env: last.env,
+        check,
+        say,
+        feed: served,
+        unchanged: () => pinOf(inImage) === v1,
+      });
+    }
+
+    // What Gatekeeper's tools say of the copy in /Applications and of the image: information.
+    const installedApp = join("/Applications", name);
+    say(`spctl, the bundle: ${recorded("spctl", ["--assess", "--type", "execute", "-vv", installedApp])}`);
+    say(
+      `spctl, the image: ${recorded("spctl", ["--assess", "--type", "open", "--context", "context:primary-signature", "-vv", made.dmg])}`,
+    );
+    if (existsSync("/usr/bin/syspolicy_check"))
+      say(
+        `syspolicy_check distribution, the bundle: ${recorded("syspolicy_check", ["distribution", installedApp])}`,
+      );
+    else say("syspolicy_check: not on this system (macOS 14 and later have it)");
+
+    // 6. Detach.
+    const detached = run("hdiutil", ["detach", at]);
+    say(`hdiutil detach: exit ${detached.status}: ${detached.out}`);
+    check(detached.status === 0 && !existsSync(at), `the image did not detach: ${detached.out}`);
+    if (!existsSync(at)) mount = undefined;
+
+    // 7. The login item of the copy in ~/Applications, after the bundle is deleted.
+    const p = last?.p;
+    if (!p) return;
+    const copy = join(realpathSync(homeApps), name);
+    const program = join(copy, "Contents", "MacOS", exe);
+    const enabled = await stage(p, "enable", [], [program]);
+    check(
+      enabled.code === 0 && enabled.report,
+      `login item: the app did not report and quit: ${enabled.code} ${enabled.dump}`,
+    );
+    const plist = join(p.agents, `${TEST_ID}.plist`);
+    const args = () =>
+      (
+        JSON.parse(run("plutil", ["-convert", "json", "-o", "-", plist]).out) as {
+          ProgramArguments: string[];
+        }
+      ).ProgramArguments;
+    check(existsSync(plist) && args()[0] === program, `login item: ${plist} does not run ${program}`);
+    rmSync(copy, { recursive: true, force: true });
+    check(!existsSync(copy), `login item: ${copy} could not be deleted`);
+    check(existsSync(plist), "login item: the LaunchAgent went with the bundle");
+    say(
+      `login item after the bundle is deleted: ${plist} stays, running ${JSON.stringify(existsSync(plist) ? args() : [])}`,
+    );
+    // What a login does with it: launchd loads the user's LaunchAgents into the graphical domain
+    // and runs those that run at load.
+    const domain = `gui/${process.getuid?.() ?? 0}`;
+    if (run("launchctl", ["print", domain]).status !== 0) {
+      skip(
+        `launchd has no ${domain} domain on this machine, so what a login does with the login item is not shown`,
+      );
+    } else {
+      check(
+        run("launchctl", ["print", `${domain}/${TEST_ID}`]).status !== 0,
+        `login item: ${TEST_ID} is loaded in ${domain} already`,
+      );
+      say(`launchctl bootstrap: ${recorded("launchctl", ["bootstrap", domain, plist])}`);
+      loaded = `${domain}/${TEST_ID}`;
+      await Bun.sleep(3000);
+      say(`launchctl print ${loaded}: ${recorded("launchctl", ["print", loaded])}`);
+    }
+  } finally {
+    if (loaded) run("launchctl", ["bootout", loaded]);
+    feed?.stop();
+    if (core) {
+      const proc = core.proc;
+      proc.stdin?.end();
+      if (proc.exitCode === null) await new Promise((r) => proc.once("exit", r));
+    }
+    await Bun.sleep(500);
+    if (mount) run("hdiutil", ["detach", "-force", mount]);
+    for (const f of folders) rmSync(join(f, name), { recursive: true, force: true });
+    if (madeHomeApps) rmSync(homeApps, { recursive: true, force: true });
+    for (const p of profiles) p.remove();
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // ---- the run --------------------------------------------------------------------------------
 
 async function main() {
@@ -1499,6 +1818,7 @@ async function main() {
     ["bundle", bundle],
     ["bundle release gate", bundleReleaseGate],
     ["app update", update],
+    ["install", install],
   ];
   for (const [name, body] of sessions) {
     if (!runsSession(name)) continue;

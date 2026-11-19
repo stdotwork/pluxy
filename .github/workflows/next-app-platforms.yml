@@ -2,8 +2,9 @@ name: Next app platforms
 
 # Builds and unit-tests the desktop app's Rust crate on Windows and macOS, and runs the real app
 # there (next/app/native/platform.ts: a second launch raising the first, the login item, the
-# window and the tray; the test package and the release gate; next/app/native/dialogs.ts: native
-# key entry, confirmations and key rotation). The Linux native test (Xvfb, portals) stays in
+# window and the tray; the test package and the release gate; the app's update; on macOS the
+# disk image's install; next/app/native/dialogs.ts: native key entry, confirmations and key
+# rotation). The Linux native test (Xvfb, portals) stays in
 # next-app.yml.
 
 on:
@@ -261,9 +262,10 @@ jobs:
   # user is thrown away after the job; the test removes what it made as well. The sessions are named
   # in next/app/native/shards.ts (PLATFORM_SHARDS), one job per shard; the summary has the counts.
   # The package and update shards build the test package first (package.ts test: a folder bundle
-  # on Windows, an app bundle on macOS, never an installer), then the dev app, since the package's
+  # on Windows, an app bundle and its disk image on macOS), then the dev app, since the package's
   # builds rename the program they make in target/debug. The update shard also runs a test core
-  # (`go run ./e2e/panelcore`), so it sets up Go.
+  # (`go run ./e2e/panelcore`), so it sets up Go; on macOS its install session attaches the disk
+  # image and installs, updates and rolls back the bundle copied out of it.
   # A schedule or manual run has no inputs: null is not true, so it runs these.
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})

@@ -1,7 +1,8 @@
 // The app's two package commands. Run from next/app (the front end built first, bun run build):
 //
 //   bun package.ts test <out-dir>        the test package: a disposable Linux AppImage, Windows
-//                                        folder bundle or macOS app bundle, for checks only
+//                                        folder bundle, or macOS app bundle and disk image, for
+//                                        checks only
 //   bun package.ts release [artifact...] the release gate: builds the release app and checks it
 //                                        and each artifact given (an AppImage, a Windows folder
 //                                        bundle or a macOS app bundle); it uploads nothing
@@ -18,9 +19,11 @@
 // {"appimage": <path>, "updater_pubkey": <key>, "binary": <path>,
 //  "update": {"appimage": <path>, "version": <version>, "signature": <signature>}}.
 //
-// On Windows and macOS test makes no installer and no disk image: the same two debug builds with
-// the same overlay, but no Tauri bundle on Windows (whose only bundles are installers) and the
-// `app` bundle on macOS. Windows: each build's program goes into a folder of its own,
+// On Windows and macOS test makes the same two debug builds with the same overlay: no Tauri bundle
+// on Windows (whose only bundles are installers) and no installer there; on macOS the `app` bundle,
+// and for the first build also the `dmg` (Tauri's disk image: the bundle and a link to
+// /Applications on an HFS+ volume, unsigned), copied to <out-dir>/pluxy-test_<version>_<arch>.dmg.
+// Windows: each build's program goes into a folder of its own,
 // <out-dir>/pluxy Test/pluxy-app-test.exe and <out-dir>/update/pluxy Test/pluxy-app-test.exe, a
 // plain folder bundle; the update is that exe, signed. macOS: each build's app bundle is copied
 // to <out-dir>/pluxy Test.app and <out-dir>/update/pluxy Test.app; the update is the second
@@ -29,7 +32,8 @@
 // <out-dir>/test-package.json: {"bundle": <folder or .app>, "program": <the app executable in
 // it>, "binary": <a copy of it outside the bundle on macOS, the program on Windows>,
 // "updater_pubkey": <key>, "update": {"bundle": <path>, "payload": <path>, "target": <the feed's
-// target name>, "version": <version>, "signature": <signature>}}. Nothing needs downloading
+// target name>, "version": <version>, "signature": <signature>}}, and on macOS "dmg": <the disk
+// image>. Nothing needs downloading
 // there, so the builds run in the caller's environment, Cargo offline after `cargo fetch` and
 // every proxy variable pointing at a closed port.
 //
@@ -294,8 +298,8 @@ async function bundleTestPackage(outDir: string) {
     const name = "pluxy Test";
     const exe = windows ? "pluxy-app-test.exe" : "pluxy-app-test";
     // One build at each version, its bundle copied into folder; the second rebuilds only the
-    // app's own crate.
-    const build = (v: string, folder: string): string => {
+    // app's own crate. With dmg (macOS), the build is also bundled as the disk image.
+    const build = (v: string, folder: string, dmg = false): string => {
       const overlay = join(work, `tauri.test.${v}.conf.json`);
       writeFileSync(
         overlay,
@@ -304,7 +308,7 @@ async function bundleTestPackage(outDir: string) {
           identifier: "dev.pluxy.desktop.test",
           productName: name,
           mainBinaryName: "pluxy-app-test",
-          bundle: windows ? { active: false } : { active: true, targets: ["app"] },
+          bundle: windows ? { active: false } : { active: true, targets: dmg ? ["app", "dmg"] : ["app"] },
           plugins: { updater: { pubkey: key.pubkey } },
         }),
       );
@@ -347,7 +351,20 @@ async function bundleTestPackage(outDir: string) {
       );
       return bundle;
     };
-    const bundle = build(version, outDir);
+    const bundle = build(version, outDir, !windows);
+    let dmg: string | undefined;
+    if (!windows) {
+      // Tauri's name for it: <product>_<version>_<aarch64 or x64>.dmg.
+      const built = join(
+        targetDir,
+        "debug",
+        "bundle",
+        "dmg",
+        `${name}_${version}_${arch() === "arm64" ? "aarch64" : "x64"}.dmg`,
+      );
+      dmg = join(outDir, `pluxy-test_${version}_${arch()}.dmg`);
+      copyFileSync(built, dmg);
+    }
     const updateBundle = build(UPDATE_VERSION, join(outDir, "update"));
     const program = windows ? join(bundle, exe) : join(bundle, "Contents", "MacOS", exe);
     const binary = windows ? program : join(outDir, exe);
@@ -371,11 +388,13 @@ async function bundleTestPackage(outDir: string) {
         binary,
         updater_pubkey: key.pubkey,
         update: { bundle: updateBundle, payload, target, version: UPDATE_VERSION, signature },
+        ...(dmg ? { dmg } : {}),
       }),
     );
     console.log(
       `test package: ${bundle} (${windows ? "folder bundle" : "app bundle"}); update ${payload} for ${target}`,
     );
+    if (dmg) console.log(`test package: disk image ${dmg}`);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }

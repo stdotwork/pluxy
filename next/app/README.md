@@ -536,7 +536,8 @@ In this order:
      disk image from a read-only copy: move it into a folder of your own such as `~/Applications`
      first); the bundle is yours and writable by no one else; its folder is either yours and
      writable by no one else, or the stock `/Applications` under the rule below; and the volume is
-     APFS, which swaps two folders in one step. The stock plugin would ask for an administrator's
+     APFS, which swaps two folders in one step (an app run from its mounted disk image, an HFS+
+     volume, is refused for that: drag it to Applications first). The stock plugin would ask for an administrator's
      password when it cannot write the bundle; nothing here does (no `osascript`, `sudo`,
      `installer` or `authopen`), and the quarantine attribute is neither added nor removed.
 
@@ -1585,7 +1586,8 @@ after `bun run build`; both use the Tauri CLI pinned in `package.json`:
 
 ```bash
 bun run package:test <out-dir>          # the test package, for checks: an AppImage (Linux), a
-                                        # folder bundle (Windows) or an app bundle (macOS)
+                                        # folder bundle (Windows) or an app bundle and disk
+                                        # image (macOS)
 bun run package:release [artifact...]   # the release gate: builds and checks; uploads nothing
 ```
 
@@ -1610,9 +1612,11 @@ Cargo offline after `cargo fetch --locked`, and every proxy variable pointing at
 the build. Afterwards the tools folder must hold only the pinned tools and the bundler's own two
 plugin scripts. The AppImage's type is still checked on the output.
 
-On Windows and macOS `package:test` makes no installer and no disk image. It builds the same two
-debug apps with the same overlay, with no Tauri bundle on Windows (whose bundles are all
-installers) and the `app` bundle on macOS. On Windows each build's program goes into a plain
+On Windows `package:test` makes no installer. It builds the same two debug apps with the same
+overlay, with no Tauri bundle on Windows (whose bundles are all installers) and the `app` bundle
+on macOS. On macOS the first build is also bundled as Tauri's disk image (`dmg`: the bundle and a
+link to `/Applications` on an HFS+ volume, unsigned), copied to
+`<out-dir>/pluxy-test_<version>_<arch>.dmg`. On Windows each build's program goes into a plain
 folder bundle of its own, `<out-dir>/pluxy Test/pluxy-app-test.exe` and
 `<out-dir>/update/pluxy Test/pluxy-app-test.exe`, and the update is that second exe, signed. On
 macOS each build's bundle is copied to `<out-dir>/pluxy Test.app` and
@@ -1621,7 +1625,7 @@ extended attributes or quarantine), and the update is the second bundle as a `.a
 by the command (one top folder, no macOS metadata), signed; no signing identity or notarization
 is used. `test-package.json` names the bundle, the program in it, the public key and the update
 (its bundle, payload, feed target `windows-x86_64-exe` or `darwin-aarch64-app`, version and
-signature). Nothing is downloaded there, so the builds run in the caller's environment, Cargo
+signature), and on macOS the disk image. Nothing is downloaded there, so the builds run in the caller's environment, Cargo
 offline after `cargo fetch --locked` and every proxy variable pointing at a closed port.
 
 `package:release` turns on no bundle format: release formats are not chosen yet. It builds the
@@ -1667,6 +1671,12 @@ app supported there:
     ([Application update](#application-update)); on macOS it does so from `~/Applications` and
     from the stock `/Applications`, where an access list entry, another owner or an account
     outside `admin` is refused;
+  - the install session (macOS, in the update session's job): the test package's disk image is
+    attached and its bundle, copied out with `ditto` into `/Applications` and `~/Applications`,
+    updates itself and rolls back from each; run from the mounted image it is refused because the
+    image's volume is not APFS; what `spctl` and `syspolicy_check` say is recorded, not judged
+    (the image is unsigned and, built on the runner, never quarantined, so Gatekeeper's first
+    open is not tested there);
   - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
     test core, with the window's and page's command probes, the native confirmations, key entry and
     key rotation. [Limits](#limits) says how its input is made.
@@ -1738,7 +1748,7 @@ app bundle on macOS ([Application update](#application-update)).
   what only a person at the machine would hit, such as another app taking the keyboard. The
   session's summary counts which way each input went.
 - No installer or bundled core yet: the only packages are the test AppImage, the test folder
-  bundle (Windows) and the test app bundle (macOS), which are not for release.
+  bundle (Windows) and the test app bundle and its disk image (macOS), which are not for release.
   The app updates only itself: as an AppImage on Linux x86_64, as a folder bundle's program on
   Windows x86_64 and as an app bundle on macOS, and only with test updater trust until release
   keys exist. The native test updates it on Linux, on Windows and on Apple silicon Macs; Intel
@@ -1751,6 +1761,9 @@ app bundle on macOS ([Application update](#application-update)).
   `updates/kept/` in the app's data folder in place of the installed one to run it again. On
   Windows a new version waits at most 120 seconds for the old one to end and free the profile,
   then exits.
+- On macOS, deleting the app (dragging it to the Trash) leaves its login item behind: the file
+  `~/Library/LaunchAgents/dev.pluxy.desktop.plist` stays and names a program that is gone. Turn
+  **Launch at startup** off before deleting the app, or delete that file.
 - Opening an address in the browser works on Linux only.
 - Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
   the renderer writes alignment as inline style, which the notes' policy refuses.

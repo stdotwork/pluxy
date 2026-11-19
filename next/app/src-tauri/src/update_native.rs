@@ -19,8 +19,10 @@
 //!   `staff-entry`, `wheel-entry`, `inherited-entry` (an access list entry on `/Applications`),
 //!   `bundle-entry` (one on the bundle), `not-yours` (the bundle another user's) and `not-admin`
 //!   (this user removed from `admin`);
-//! - `applications` (macOS): the test package in `/Applications`, which restarts itself twice:
-//!   v1→v2, then a confirmed rollback to v1;
+//! - `dmg` (macOS): the test package run from its mounted disk image, whose volume is not APFS;
+//! - `applications` (macOS): the test package in `/Applications` (or, in the install session,
+//!   copied from its disk image into `/Applications` or `~/Applications`), which restarts itself
+//!   twice: v1→v2, then a confirmed rollback to v1;
 //! - `update`: the test package itself. The app restarts itself on this route, so each process
 //!   reads where it is from `<dir>/stage`: lower feed, bad signature, a signed version that is not
 //!   the announced one and a cancelled download change nothing; an update whose new version does
@@ -475,8 +477,9 @@ fn updated(app: &AppHandle, main: &Webview, dir: &Path) -> Result<(), String> {
     Err("the app did not restart after the rollback".into())
 }
 
-/// The route in `/Applications`: v1 updates to v2, which rolls back to v1 once confirmed. Each
-/// process reports (`update_stage`) and the last one says it is done (`update_applications_done`).
+/// The route in `/Applications` (or `~/Applications`): v1 updates to v2, which rolls back to v1
+/// once confirmed. Each process reports (`update_stage`) and the last one says it is done
+/// (`update_applications_done`).
 fn applications(app: &AppHandle, main: &Webview, dir: &Path) -> Result<(), String> {
     match stage(dir).as_str() {
         "" => {
@@ -519,7 +522,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, dir: PathBuf) -> Result<(), S
         }
         "deb" | "rpm" | "unknown" | "msi" | "nsis" | "shared" | "bare" | "group-writable"
         | "linked" | "staff-entry" | "wheel-entry" | "inherited-entry" | "bundle-entry"
-        | "not-yours" | "not-admin" => refused(app, main, &dir, &case)?,
+        | "not-yours" | "not-admin" | "dmg" => refused(app, main, &dir, &case)?,
         "open" => {
             check(main, &dir, "good", "0.2.0")?;
             let available = wait_for("the updater's view", || {
