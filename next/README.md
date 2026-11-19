@@ -561,18 +561,23 @@ subscription's token an hour before it expires.
 | `client_id` | Claude's OAuth client. Default is Claude's. |
 | `rebuild_mid_system_message` | `true` moves the text of each `system` message in a Messages client's conversation into the top-level `system` prompt, after what it holds, and removes those messages, for a Claude-compatible upstream that refuses them there; non-text blocks in them are left out. Default `false`: such messages go upstream where the client put them. Requests in other formats already have every system message in the top-level prompt. |
 | `model_level_cooling` | `true` keeps a used-up shared subscription window (5-hour or 7-day) on the model that hit it, so the account's other models stay in use; default `false` blocks the whole account. Today's `claude.model-level-cooling`. |
+| `cache_ttl` | Lifetime of `cache_control` markers pluxy adds to translated requests that set none: `"5m"` (default) or `"1h"`. |
 
 A Messages request goes to Anthropic unchanged: its body, so thinking blocks, signatures and
 `cache_control` markers arrive as the client wrote them, and its `anthropic-version`,
 `anthropic-beta` and identification headers (`User-Agent`, `X-App`, the `X-Stainless-*` headers of
 Anthropic's SDKs, `X-Claude-Code-Session-Id`, `X-Client-App` and
 `X-Anthropic-Additional-Protection`; and, only from a request that names itself as Claude Code
-(`X-App: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta), Claude Code's
-subagent, request-class and remote-session headers such as `X-Claude-Code-Agent-Id` and
-`X-Claude-Remote-Session-Id`, as today's core forwards them only from Claude Code). An API key goes in `x-api-key`; a
+(`X-App: cli` or `cli-bg`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta), Claude
+Code's subagent, prompt, request-class and remote-session headers such as `X-Claude-Code-Agent-Id`,
+`X-Claude-Code-Prompt-Id` and `X-Claude-Remote-Session-Id`, as today's core forwards them only
+from Claude Code). An API key goes in `x-api-key`; a
 subscription's token or a setup token goes as a bearer token, with the `oauth-2025-04-20` beta added
 after the client's betas. Chat Completions, Responses and Gemini requests are
-translated to Messages; their reasoning effort becomes adaptive thinking with that effort on
+translated to Messages; a Chat client's own `cache_control` markers (top-level, on tools, on
+`tool_calls`, and on messages and parts) are carried over, a Responses client's
+`prompt_cache_retention` sets the added markers' TTL (`"24h"` as `"1h"`, `"in_memory"` as `"5m"`),
+and their reasoning effort becomes adaptive thinking with that effort on
 Claude 4.6 and later, and a thinking budget from Claude 3.7 to 4.5 (low 1024, medium 8192, high
 24576 tokens); a model name the extension does not know as a Claude model gets no thinking
 settings, and the effort is reported as dropped. A Responses client's `reasoning.summary` becomes
@@ -620,9 +625,11 @@ Today's core leaves both out of every translated request, on every model.
 
 Every request, a Messages client's or a translated one, also gets the betas its body needs, after
 the client's own and without repeats, as today's core adds them: `advisor-tool-2026-03-01` for a
-tool whose type starts with `advisor_`, `extended-cache-ttl-2025-04-11` for a `cache_control`
-marker with `ttl` `"1h"` (not on a token count), and `thinking-binding-controls-2026-08-01` for
-`thinking.block_binding`. A top-level `betas` list in the body, which Messages does not take there,
+tool whose type starts with `advisor_`, `extended-cache-ttl-2025-04-11` for a block- or tool-level
+`cache_control` marker with `ttl` `"1h"` (not on a token count),
+`thinking-binding-controls-2026-08-01` for `thinking.block_binding`,
+`mid-conversation-tool-changes-2026-07-01` for `tool_addition` or `tool_removal` blocks, and
+`inline-tools-2026-09-15` when a `tool_addition` defines a tool inline (`tool_definition`). A top-level `betas` list in the body, which Messages does not take there,
 is moved into `anthropic-beta`. The client's own betas are never removed. Not built: today's
 `anthropic-beta-strip` and `anthropic-beta-append` settings, and the Claude Code beta profile
 today's core sends for clients it makes look like Claude Code.
