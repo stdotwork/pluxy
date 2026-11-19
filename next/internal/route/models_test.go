@@ -274,3 +274,50 @@ func TestSetAccountsRetainsUnchangedModelLists(t *testing.T) {
 		t.Errorf("reads = %v, want a=1 (kept) and b=2 (re-read)", reads)
 	}
 }
+
+// An empty list on the first read is kept as a known empty list (not retried after
+// catalogRetry); served lists no models for that account, and a later refresh that returns a
+// non-empty list replaces it.
+func TestEmptyFirstReadIsKeptWithoutRetry(t *testing.T) {
+	h := newHarness(t, Config{}, Account{ID: "a"})
+	var (
+		mu     sync.Mutex
+		calls  int
+		models = []protocol.Model{}
+	)
+	h.r.UseCatalog(func(_ context.Context, _ Account, _ *protocol.Credential) (*protocol.ModelList, *llm.Error) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		return &protocol.ModelList{Models: slices.Clone(models)}, nil
+	})
+
+	accounts, creds := h.r.snapshot()
+	if got := h.r.served(context.Background(), accounts, creds, h.r.catalogFunc()); len(got) != 0 {
+		t.Fatalf("served after empty first read = %v, want empty", got)
+	}
+	if calls != 1 {
+		t.Fatalf("first read calls = %d, want 1", calls)
+	}
+
+	// Advancing past catalogRetry must not trigger a second read: the empty list is known.
+	mu.Lock()
+	models = []protocol.Model{{ID: "m1"}}
+	mu.Unlock()
+	h.now = h.now.Add(catalogRetry)
+	if got := h.r.served(context.Background(), accounts, creds, h.r.catalogFunc()); len(got) != 0 {
+		t.Fatalf("served at catalogRetry = %v, want empty", got)
+	}
+	if calls != 1 {
+		t.Fatalf("calls after catalogRetry = %d, want 1 (empty first read must not retry every minute)", calls)
+	}
+
+	// A later refresh returning a non-empty list replaces the kept empty list.
+	res := h.r.RefreshModels(context.Background(), "a")
+	if len(res) != 1 || res[0].Models != 1 || res[0].Kept || res[0].Error != "" {
+		t.Fatalf("RefreshModels after empty first read = %+v, want Models=1 Kept=false", res)
+	}
+	if got := modelIDs(&protocol.ModelList{Models: h.r.Models(context.Background())}); !slices.Equal(got, []string{"m1"}) {
+		t.Fatalf("models after refresh = %v, want [m1]", got)
+	}
+}

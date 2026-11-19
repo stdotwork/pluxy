@@ -47,7 +47,7 @@ type catalogs struct {
 type catalogEntry struct {
 	done       chan struct{} // closed once the first read ends
 	list       *protocol.ModelList
-	at         time.Time     // when a first read failed or came back empty (list nil)
+	at         time.Time     // when a first read failed (list nil)
 	refreshAt  time.Time     // when a known list should be asked for again
 	refreshing chan struct{} // non-nil while a refresh of a known list runs; closed when done
 	lastKept   bool
@@ -141,10 +141,10 @@ func (r *Router) nextRefresh(now time.Time) time.Time {
 }
 
 // listOf returns account a's model list from its extension: nil when it is not known (no
-// catalog, or no read has returned a non-empty list yet). It waits for a first read another
-// request started, and gives up waiting when ctx ends. When a known list is due for its
-// periodic refresh, it triggers the refresh in the background and returns the kept list at once
-// so requests never wait for a refresh.
+// catalog, or the first read could not be read). It waits for a first read another request
+// started, and gives up waiting when ctx ends. When a known list is due for its periodic
+// refresh, it triggers the refresh in the background and returns the kept list at once so
+// requests never wait for a refresh.
 func (r *Router) listOf(ctx context.Context, a *Account, creds Credentials, catalog CatalogFunc, now time.Time) *protocol.ModelList {
 	if catalog == nil {
 		return nil
@@ -173,28 +173,7 @@ func (r *Router) listOf(ctx context.Context, a *Account, creds Credentials, cata
 		}
 		// One read serves every request waiting for it, so a request that ends does not end it;
 		// it has a time limit of its own instead.
-		go func(acct Account) {
-			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), catalogTimeout)
-			defer cancel()
-			list, errMsg := r.readList(rctx, &acct, creds, catalog)
-			doneAt := r.now()
-			c.mu.Lock()
-			if list != nil && len(list.Models) > 0 {
-				e.list = list
-				e.refreshAt = r.nextRefresh(doneAt)
-				e.lastError = ""
-				e.lastKept = false
-			} else {
-				e.at = doneAt
-				if errMsg == "" && list != nil {
-					errMsg = "extension returned an empty model list"
-				}
-				e.lastError = errMsg
-				e.lastKept = false
-			}
-			close(e.done)
-			c.mu.Unlock()
-		}(*a)
+		r.startFirstReadLocked(context.WithoutCancel(ctx), e, *a, creds, catalog)
 	} else if isClosed(e.done) && e.list != nil && !now.Before(e.refreshAt) && e.refreshing == nil {
 		r.startRefreshLocked(e, *a, creds, catalog)
 	}
@@ -211,8 +190,23 @@ func (r *Router) listOf(ctx context.Context, a *Account, creds Credentials, cata
 	}
 }
 
+// startFirstReadLocked starts an asynchronous first read of e for acct, closing e.done when
+// it finishes. Caller must hold r.lists.mu.
+func (r *Router) startFirstReadLocked(ctx context.Context, e *catalogEntry, acct Account, creds Credentials, catalog CatalogFunc) {
+	go func() {
+		rctx, cancel := context.WithTimeout(ctx, catalogTimeout)
+		defer cancel()
+		list, errMsg := r.readList(rctx, &acct, creds, catalog)
+		doneAt := r.now()
+		r.lists.mu.Lock()
+		r.applyReadLocked(e, list, errMsg, doneAt, false)
+		close(e.done)
+		r.lists.mu.Unlock()
+	}()
+}
+
 // startRefreshLocked starts an asynchronous refresh of e, keeping any existing e.list in place
-// until a non-empty list is read. Caller must hold r.lists.mu.
+// until a new non-empty list replaces it. Caller must hold r.lists.mu.
 func (r *Router) startRefreshLocked(e *catalogEntry, acct Account, creds Credentials, catalog CatalogFunc) chan struct{} {
 	ch := make(chan struct{})
 	e.refreshing = ch
@@ -222,29 +216,44 @@ func (r *Router) startRefreshLocked(e *catalogEntry, acct Account, creds Credent
 		list, errMsg := r.readList(rctx, &acct, creds, catalog)
 		doneAt := r.now()
 		r.lists.mu.Lock()
-		kept := false
-		if list != nil && len(list.Models) > 0 {
-			e.list = list
-			e.refreshAt = r.nextRefresh(doneAt)
-			e.lastError = ""
-		} else {
-			if e.list != nil {
-				kept = true
-				e.refreshAt = r.nextRefresh(doneAt)
-			} else {
-				e.at = doneAt
-			}
-			if errMsg == "" && list != nil {
-				errMsg = "extension returned an empty model list"
-			}
-			e.lastError = errMsg
-		}
-		e.lastKept = kept
+		r.applyReadLocked(e, list, errMsg, doneAt, true)
 		e.refreshing = nil
 		close(ch)
 		r.lists.mu.Unlock()
 	}()
 	return ch
+}
+
+// applyReadLocked stores the outcome of a catalog read on e. On a first read (e.list == nil),
+// any non-nil list — including an empty one — is kept as known, while a failed read (list ==
+// nil) records e.at for catalogRetry. On a refresh of a known list (refresh is true and e.list
+// != nil), a failed or empty read keeps the existing list. Caller must hold r.lists.mu.
+func (r *Router) applyReadLocked(e *catalogEntry, list *protocol.ModelList, errMsg string, doneAt time.Time, refresh bool) {
+	if e.list == nil {
+		if list != nil {
+			e.list = list
+			e.refreshAt = r.nextRefresh(doneAt)
+			e.lastError = ""
+		} else {
+			e.at = doneAt
+			e.lastError = errMsg
+		}
+		e.lastKept = false
+		return
+	}
+	if refresh && list != nil && len(list.Models) > 0 {
+		e.list = list
+		e.refreshAt = r.nextRefresh(doneAt)
+		e.lastError = ""
+		e.lastKept = false
+		return
+	}
+	e.refreshAt = r.nextRefresh(doneAt)
+	e.lastKept = true
+	if errMsg == "" && list != nil {
+		errMsg = "extension returned an empty model list"
+	}
+	e.lastError = errMsg
 }
 
 // RefreshModels refreshes the model list of accountID (or every routed account when accountID is
@@ -334,28 +343,7 @@ func (r *Router) refreshOne(ctx context.Context, a *Account, creds Credentials, 
 		}
 		c.entries[a.ID] = e
 		waitCh = e.done
-		go func(acct Account) {
-			rctx, cancel := context.WithTimeout(context.Background(), catalogTimeout)
-			defer cancel()
-			list, errMsg := r.readList(rctx, &acct, creds, catalog)
-			doneAt := r.now()
-			c.mu.Lock()
-			if list != nil && len(list.Models) > 0 {
-				e.list = list
-				e.refreshAt = r.nextRefresh(doneAt)
-				e.lastError = ""
-				e.lastKept = false
-			} else {
-				e.at = doneAt
-				if errMsg == "" && list != nil {
-					errMsg = "extension returned an empty model list"
-				}
-				e.lastError = errMsg
-				e.lastKept = false
-			}
-			close(e.done)
-			c.mu.Unlock()
-		}(*a)
+		r.startFirstReadLocked(context.Background(), e, *a, creds, catalog)
 	case !isClosed(e.done):
 		waitCh = e.done
 	case e.refreshing != nil:
