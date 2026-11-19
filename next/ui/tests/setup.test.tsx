@@ -4,7 +4,7 @@ import type { VNode } from "preact";
 import render from "preact-render-to-string";
 import { api, type Setup, type SetupApplyResult } from "../kit/api";
 import type { Feature, Host, Method, Reply } from "../kit/host";
-import { SetupView } from "../kit/pages/setup";
+import { type SetupOptions, SetupView } from "../kit/pages/setup";
 import {
   type Choices,
   hasProvider,
@@ -146,12 +146,19 @@ const html = (node: VNode) => {
 const nothing = () => {};
 function view(
   setup: Setup,
-  more: { choices?: Choices; results?: Results; accounts?: number; remote?: boolean } = {},
+  more: {
+    choices?: Choices;
+    results?: Results;
+    accounts?: number;
+    remote?: boolean;
+    options?: SetupOptions;
+  } = {},
 ) {
   const results = more.results ?? {};
   return html(
     <SetupView
       setup={setup}
+      options={more.options}
       remote={more.remote ?? false}
       choices={more.choices ?? {}}
       results={results}
@@ -354,4 +361,35 @@ test("the gate opens Setup on a first run, unless the address names a page or co
   });
   // A core that could not be asked keeps the page, which then says what failed, and opens nothing.
   expect(setupGate({ status: 0 }, "")).toEqual({ offered: true, open: false });
+});
+
+test("a host's client action adds its button and its sentence to the clients it names, beside the paste text", () => {
+  const hint = "Set up opens the client's own page.";
+  const options: SetupOptions = {
+    clientAction: (client) =>
+      client === "claude-code" ? { label: "Set up", page: "claude-code" } : undefined,
+    clientActionHint: hint,
+  };
+  const row = (page: string) =>
+    page.match(/<li data-part="setup-client" data-state="not-configured">.*?<\/li>/s)?.[0] ?? "";
+  const buttons = (part: string) => [...part.matchAll(/<button[^>]*>([^<]*)</g)].map((m) => m[1]);
+
+  // Without a host action the row has the paste button alone, and no sentence.
+  const plain = view(found);
+  expect(buttons(row(plain))).toEqual(["Show what to paste"]);
+  expect(plain).not.toContain(hint);
+
+  // With one, Claude Code (found installed) gets the button; the page still has one primary button.
+  const page = view(found, { options });
+  expect(buttons(row(page))).toEqual(["Set up", "Show what to paste"]);
+  expect(page).toContain(hint);
+  expect(page.match(/>Set up</g)?.length).toBe(1);
+  expect(primary(page)).toEqual(["Start"]);
+
+  // A client that was not found gets none, and with no client to act on the sentence is left out.
+  const none = view(nothingFound, { options });
+  expect(none).not.toContain(">Set up<");
+  expect(none).not.toContain(hint);
+  const other: SetupOptions = { ...options, clientAction: () => undefined };
+  expect(view(found, { options: other })).not.toContain(hint);
 });

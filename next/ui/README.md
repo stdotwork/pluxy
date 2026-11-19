@@ -78,6 +78,12 @@ Setup opens in place of the Dashboard. The shell does not wait for the answer, s
 may show for an instant. A core without the call (it answers 404) gets no Setup page and nothing
 opens by itself. The page stays in the navigation after setup, as a status of the same things.
 
+A host can add one button to each client the page lists as found:
+`corePages({ setup: { clientAction, clientActionHint } })` (`SetupOptions` in `kit/pages/setup.tsx`). `clientAction` takes the client's ID from core's
+scan and returns a label and the ID of the host's page the button opens, or nothing; the hint is
+one sentence shown while a client has a button. The panel passes none; the desktop app offers
+"Set up" for the clients it can set up on its own computer.
+
 | Page (ID) | Group | Replaces (old route) |
 | --- | --- | --- |
 | Dashboard (`status`) | Operate | Dashboard (`/`) |

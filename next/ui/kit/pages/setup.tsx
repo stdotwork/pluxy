@@ -383,6 +383,24 @@ export function Account(props: {
   );
 }
 
+/** What a host adds to a client's row: a button that opens one of the host's own pages. */
+export interface ClientAction {
+  label: string;
+  /** The ID of the page the button opens. */
+  page: string;
+}
+
+/**
+ * What the build that shows the page adds to it. The panel adds nothing; the desktop app offers
+ * to set a client up on its own computer.
+ */
+export interface SetupOptions {
+  /** The action for a client found installed, by its ID in core's scan; nothing for no action. */
+  clientAction?: (client: string) => ClientAction | undefined;
+  /** One sentence under the clients' heading, shown while a client has an action: what it does. */
+  clientActionHint?: string;
+}
+
 /** The files to paste for one client, and a button that makes the client key they need. */
 function PasteText(props: { client: SetupClient }) {
   const { api, unauthorized } = useKit();
@@ -447,8 +465,8 @@ function PasteText(props: { client: SetupClient }) {
   );
 }
 
-function ClientRow(props: { client: SetupClient }) {
-  const { client } = props;
+function ClientRow(props: { client: SetupClient; action?: ClientAction }) {
+  const { client, action } = props;
   const [open, setOpen] = useState(false);
   return (
     <li data-part="setup-client" data-state={client.installed ? client.state : "not-found"}>
@@ -468,7 +486,18 @@ function ClientRow(props: { client: SetupClient }) {
             <span class="muted">{clientWords(client)}</span>
           )}
         </span>
-        <Button onClick={() => setOpen(!open)}>{open ? t("hidePaste") : t("showPaste")}</Button>
+        <div class="actions">
+          {action && (
+            <Button
+              onClick={() => {
+                location.hash = `#/${action.page}`;
+              }}
+            >
+              {action.label}
+            </Button>
+          )}
+          <Button onClick={() => setOpen(!open)}>{open ? t("hidePaste") : t("showPaste")}</Button>
+        </div>
       </div>
       {open && <PasteText client={client} />}
     </li>
@@ -476,16 +505,19 @@ function ClientRow(props: { client: SetupClient }) {
 }
 
 /** Each client with its state and the text that points it at core. */
-export function Clients(props: { setup: Setup }) {
+export function Clients(props: { setup: Setup; options?: SetupOptions }) {
   const { found, others } = splitClients(props.setup);
   const scanning = scanState(props.setup) === "first";
+  const actions = new Map(found.map((client) => [client.id, props.options?.clientAction?.(client.id)]));
+  const hint = props.options?.clientActionHint;
   return (
     <Card title={t("clients")}>
       <p class="muted setup-hint">{t("clientsHint")}</p>
+      {hint && found.some((client) => actions.get(client.id)) && <p class="muted setup-hint">{hint}</p>}
       {found.length > 0 ? (
         <ul class="setup-rows">
           {found.map((client) => (
-            <ClientRow key={client.id} client={client} />
+            <ClientRow key={client.id} client={client} action={actions.get(client.id)} />
           ))}
         </ul>
       ) : (
@@ -505,7 +537,7 @@ export function Clients(props: { setup: Setup }) {
   );
 }
 
-export function SetupPage() {
+export function SetupPage(props: { options?: SetupOptions }) {
   const { api, host, unauthorized, extensionsChanged } = useKit();
   const loaded = useLoad(api.setup);
   const accounts = useLoad(api.accounts);
@@ -582,6 +614,7 @@ export function SetupPage() {
   return (
     <SetupView
       setup={setup}
+      options={props.options}
       remote={!onThisMachine(host.address)}
       choices={choices}
       results={results}
@@ -608,6 +641,8 @@ export function SetupPage() {
 /** The page's parts, top to bottom, from what the page holds. */
 export function SetupView(props: {
   setup: Setup;
+  /** What the build adds to the page. */
+  options?: SetupOptions;
   /** Core runs on another machine than the one showing the page. */
   remote: boolean;
   choices: Choices;
@@ -666,7 +701,7 @@ export function SetupView(props: {
           error={errors?.accounts}
           onAdded={props.onAdded}
         />
-        <Clients setup={setup} />
+        <Clients setup={setup} options={props.options} />
         {setup.first_run && (
           <Card title={t("finishTitle")}>
             {errors?.finish && <Notice tone="danger">{errors.finish}</Notice>}
@@ -687,11 +722,11 @@ export function SetupView(props: {
   );
 }
 
-export const setupPage = (): PageDef => ({
+export const setupPage = (options?: SetupOptions): PageDef => ({
   id: "setup",
   group: "control",
   title: t("title"),
   short: t("short"),
   tip: t("tip"),
-  render: () => <SetupPage />,
+  render: () => <SetupPage options={options} />,
 });
