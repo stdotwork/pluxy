@@ -113,8 +113,11 @@ pub fn hold(program: &str) -> Result<Held, String> {
     // `.exe` (a `.com`).
     if !program.to_ascii_lowercase().ends_with(".exe") {
         let twin = PathBuf::from(format!("{program}.exe"));
-        if twin.symlink_metadata().is_ok() {
-            return refuse(&twin, "is there, and would run in place of the program");
+        // Only a twin known to be absent passes: any other answer, an error included, refuses.
+        match twin.symlink_metadata() {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) => return refuse(&twin, "is there, and would run in place of the program"),
+            Err(e) => return refuse(&twin, &format!("could not be checked: {e}")),
         }
     }
     let others =
