@@ -50,6 +50,10 @@ const (
 	// auth, retryable, scope credential; a check call on its account must report code auth (or
 	// unsupported).
 	ScenarioAuthFailed Scenario = "auth_failed"
+	// ScenarioAccountClosed: the upstream refuses the request because the account is closed,
+	// suspended or deactivated. The extension must report code account_closed, retryable, scope
+	// credential.
+	ScenarioAccountClosed Scenario = "account_closed"
 )
 
 // What ScenarioText must produce.
@@ -121,6 +125,9 @@ type Target struct {
 	// scenarios). Required when the extension's describe lists login or refresh; called once
 	// per check.
 	PrepareLogin func(t *testing.T, s LoginScenario, method string) LoginSetup
+	// PrepareAccountClosed returns the setup for ScenarioAccountClosed when the extension maps
+	// closed-account replies. Optional: extensions that do not supply it skip that check.
+	PrepareAccountClosed func(t *testing.T) Setup
 }
 
 // Each check waits at most this long for something that should happen at once.
@@ -175,6 +182,9 @@ func Run(t *testing.T, target Target) {
 	t.Run("errors/auth_failed", func(t *testing.T) {
 		k.wantError(t, ScenarioAuthFailed, llm.Error{Code: llm.CodeAuth, Retryable: true, Scope: llm.ScopeCredential})
 	})
+	if target.PrepareAccountClosed != nil {
+		t.Run("errors/account_closed", k.accountClosed)
+	}
 	t.Run("crash", k.crash)
 	t.Run("shutdown", k.shutdown)
 	t.Run("login", k.login)
@@ -385,6 +395,29 @@ func (k *kit) wantError(t *testing.T, s Scenario, want llm.Error, otherScopes ..
 	if e.Code != want.Code || e.Retryable != want.Retryable || !scopeOK || e.RetryAfterMS != want.RetryAfterMS {
 		t.Errorf("error = code %q retryable %v scope %q retry_after_ms %d; want code %q retryable %v scope %q retry_after_ms %d",
 			e.Code, e.Retryable, e.Scope, e.RetryAfterMS, want.Code, want.Retryable, want.Scope, want.RetryAfterMS)
+	}
+	if e.Message == "" {
+		t.Error("error has no message")
+	}
+}
+
+func (k *kit) accountClosed(t *testing.T) {
+	ext := k.start(t)
+	if info := ext.Info(); info.ProtocolMinor < 19 {
+		t.Errorf("describe says protocol_minor %d, want at least 19 for account_closed", info.ProtocolMinor)
+	}
+	setup := k.target.PrepareAccountClosed(t)
+	st := ext.Generate(context.Background(), setup.Account, request(true))
+	defer st.Close()
+	evs := collect(t, st)
+	got := evs[len(evs)-1]
+	if got.Type != llm.EventError {
+		t.Fatalf("ended with %s, want an error", got.Type)
+	}
+	e := got.Error
+	if e.Code != llm.CodeAccountClosed || !e.Retryable || e.Scope != llm.ScopeCredential {
+		t.Errorf("error = code %q retryable %v scope %q; want code %q retryable true scope %q",
+			e.Code, e.Retryable, e.Scope, llm.CodeAccountClosed, llm.ScopeCredential)
 	}
 	if e.Message == "" {
 		t.Error("error has no message")

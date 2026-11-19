@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.18
+# pluxy extension protocol, version 0.19
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -26,9 +26,11 @@ upstream JSON body that the config sets, fills in or removes. Version 0.15 has a
 them too. Version 0.16 adds an error's `dropped`: what a refusal under the `reject` drop policy
 could not carry. Version 0.17 adds a captured body's `body_stopped`: the extension did not read it
 to its end. Version 0.18 adds a quota limit's `feature`: the limit counts a feature of the plan,
-not the account's requests to its models. It is deliberately small; later versions add capabilities and more operations
+not the account's requests to its models. Version 0.19 adds the error code `account_closed`: the
+provider closed, suspended or deactivated the account, or refused it for a breach of terms.
+It is deliberately small; later versions add capabilities and more operations
 without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.18 (see
+core that speaks 0.19 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -863,7 +865,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
 | `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. For `login` and `refresh` calls, see [Errors in login and refresh calls](#errors-in-login-and-refresh-calls). |
-| `scope` | What the failure is about: `request` (this request is bad), `credential` (this account), `model` (this model on this account), `endpoint` (the upstream endpoint). A rate limit or quota is `model` unless the provider says it covers the whole account, such as a subscription's used-up usage window; today's core also holds back only the model for a plain 429. When `scope` is absent, core takes `model` for `rate_limit`, `quota` and `not_found`, `credential` for `auth` and `permission`, and `endpoint` for `upstream` and `unavailable`. |
+| `scope` | What the failure is about: `request` (this request is bad), `credential` (this account), `model` (this model on this account), `endpoint` (the upstream endpoint). A rate limit or quota is `model` unless the provider says it covers the whole account, such as a subscription's used-up usage window; today's core also holds back only the model for a plain 429. When `scope` is absent, core takes `model` for `rate_limit`, `quota` and `not_found`, `credential` for `auth`, `permission` and `account_closed`, and `endpoint` for `upstream` and `unavailable`. |
 | `retry_after_ms` | When the upstream said to try again, in milliseconds from now. |
 | `raw` | The upstream's error body, unchanged. |
 | `usage` | Usage the upstream reported before the failure, in the same form as `finish.usage`; absent when it reported none. A reply that fails partway may still have cost tokens. |
@@ -877,6 +879,7 @@ Codes an extension sends:
 | `invalid_request` | The upstream rejected the request itself. |
 | `auth` | The credential was refused. |
 | `permission` | The credential is valid but not allowed this request. |
+| `account_closed` | Version 0.19. The provider closed, suspended or deactivated the account, or refused it for a breach of terms. Set `retryable: true` when core should move on to another account, and `retryable: false` when the refusal is about the request's content so core must not send it to sibling accounts. |
 | `not_found` | The model or resource does not exist upstream. |
 | `rate_limit` | Too many requests; try again later. |
 | `quota` | A usage allowance is used up. |
@@ -1327,7 +1330,7 @@ recorded.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.18. An extension reports the minor version it
+raise the minor version: this document is version 0.19. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1353,8 +1356,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.16 | An error's `dropped`. |
 | 0.17 | A captured body's `body_stopped` ([upstream capture](#upstream-capture)). |
 | 0.18 | A [quota](#quota) limit's `feature`. |
+| 0.19 | Error code [`account_closed`](#errors). |
 
-## What version 0.18 leaves out
+## What version 0.19 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

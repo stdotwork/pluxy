@@ -789,7 +789,7 @@ func status(e *llm.Error) int {
 		return http.StatusBadRequest
 	case llm.CodeAuth:
 		return http.StatusUnauthorized
-	case llm.CodePermission:
+	case llm.CodePermission, llm.CodeAccountClosed:
 		return http.StatusForbidden
 	case llm.CodeNotFound:
 		return http.StatusNotFound
