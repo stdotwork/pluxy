@@ -33,8 +33,9 @@ defaults:
 
 jobs:
   next:
-    # PLUXY_LINUX_CLOUD_RUNNER, when set (AGENTS.md, "Where jobs run").
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || 'ubuntu-latest' }}
+    # GitHub's runners, never PLUXY_LINUX_CLOUD_RUNNER: this job is shorter than the native test, so
+    # Namespace's vCPUs are kept for that (AGENTS.md, "Where jobs run").
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
