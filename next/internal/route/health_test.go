@@ -541,3 +541,140 @@ func TestCheckSkipsAccountsThatDoNotRoute(t *testing.T) {
 		t.Errorf("x after its check: %+v, want ok", got)
 	}
 }
+
+// 6 (H2). An account_closed failure bans the account with the provider's words; a stale success
+// and a stale 429 from requests already in flight leave it banned, Reset leaves it banned, and
+// only Unban returns it to ok (ignoring outcomes of attempts started before Unban).
+func TestBannedAccountScenario6AndPersistence(t *testing.T) {
+	h := newHarness(t, Config{Strategy: StrategyFillFirst, DisableCooling: true}, accts("a", "b")...)
+	// Start three in-flight attempts on a before the ban lands.
+	h.on("a",
+		ok(),
+		script{start(), {Type: llm.EventError, Error: &llm.Error{Code: llm.CodeRateLimit, Status: 429, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: time.Hour.Milliseconds()}}},
+		fail(llm.Error{Code: llm.CodeAccountClosed, Status: 403, Retryable: true, Scope: llm.ScopeCredential, Message: "Your account has been suspended."}),
+	)
+	h.on("b", ok())
+	sOK := h.r.Generate(context.Background(), h.req("m"))
+	s429 := h.r.Generate(context.Background(), h.req("m"))
+	sBan := h.r.Generate(context.Background(), h.req("m"))
+	// Start sOK (seq 1) and s429 (seq 2) on a so both are in flight before sBan lands.
+	if ev := sOK.Next(); ev.Type != llm.EventResponseStart {
+		t.Fatalf("stale ok first event = %+v", ev)
+	}
+	if ev := s429.Next(); ev.Type != llm.EventResponseStart {
+		t.Fatalf("stale 429 first event = %+v", ev)
+	}
+	// sBan (seq 3) hits account_closed before ResponseStart, bans a, and rotates to b.
+	if ev := sBan.Next(); ev.Type != llm.EventResponseStart {
+		t.Fatalf("sBan should have rotated to b and started: %+v", ev)
+	}
+	for ev := sBan.Next(); !ev.Terminal(); ev = sBan.Next() {
+	}
+	sBan.Close()
+
+	// DisableCooling did NOT stop account_closed from banning a.
+	got := h.healthOf("a")
+	if got.State != HealthBanned || got.Why != "Your account has been suspended." || got.Source != SourceProvider || got.Until != nil || got.NextCheck != nil {
+		t.Fatalf("after account_closed: %+v, want banned with provider words and source provider", got)
+	}
+
+	// Stale success arrives.
+	for ev := sOK.Next(); !ev.Terminal(); ev = sOK.Next() {
+	}
+	sOK.Close()
+	if got := h.healthOf("a"); got.State != HealthBanned {
+		t.Fatalf("after stale success: %+v, want still banned", got)
+	}
+
+	// Stale 429 arrives.
+	for ev := s429.Next(); !ev.Terminal(); ev = s429.Next() {
+	}
+	s429.Close()
+	if got := h.healthOf("a"); got.State != HealthBanned || got.Until != nil || got.Why != "Your account has been suspended." {
+		t.Fatalf("after stale 429: %+v, want still banned without cooldown", got)
+	}
+	if rt := h.r.state.Runtime(Account{ID: "a"}, h.now); len(rt.Cooldowns) != 0 || rt.LastError == nil || rt.LastError.Code != llm.CodeAccountClosed {
+		t.Fatalf("runtime after stale 429: %+v, want no cooldowns and LastError account_closed", rt)
+	}
+
+	// Reset (cooldown clear) does NOT clear a ban.
+	if cleared := h.r.state.Reset(Account{ID: "a"}, h.now); cleared != 0 {
+		t.Errorf("Reset cleared = %d, want 0", cleared)
+	}
+	if got := h.healthOf("a"); got.State != HealthBanned {
+		t.Fatalf("after Reset: %+v, want still banned", got)
+	}
+
+	// SavedBans and LoadBans preserve the ban across a restart, and skip unknown accounts.
+	bans := h.r.state.SavedBans()
+	if len(bans) != 1 || bans[0].Account != "a" || bans[0].Why != "Your account has been suspended." {
+		t.Fatalf("SavedBans = %+v", bans)
+	}
+	h2 := newHarness(t, Config{}, accts("a", "b")...)
+	h2.now = h.now.Add(time.Hour)
+	h2.r.state.LoadBans(append(bans, SavedBan{Account: "gone", Why: "gone"}), func(id string) bool { return id != "gone" })
+	if got := h2.healthOf("a"); got.State != HealthBanned || got.Why != "Your account has been suspended." || got.Source != SourceProvider {
+		t.Fatalf("after LoadBans: %+v", got)
+	}
+	if len(h2.r.state.SavedBans()) != 1 {
+		t.Fatalf("SavedBans after LoadBans = %+v, want gone skipped", h2.r.state.SavedBans())
+	}
+	// Requests after restart skip banned a completely.
+	h2.on("a", ok())
+	h2.on("b", ok())
+	h2.runOK("m")
+	h2.wantAttempts("b")
+
+	// A person turns a back on (Unban): a is ok and serves again; a late failure from an
+	// attempt started before Unban is ignored.
+	h.r.state.failure(&Account{ID: "a"}, "m", 1, &llm.Error{Code: llm.CodeQuota, Status: 429, RetryAfterMS: time.Hour.Milliseconds()}, h.now, 0)
+	if !h.r.state.Unban("a") {
+		t.Fatal("Unban returned false, want true")
+	}
+	if h.r.state.Unban("a") {
+		t.Fatal("second Unban returned true, want false")
+	}
+	if got := h.healthOf("a"); got.State != HealthOK || got.Why != "" {
+		t.Fatalf("after Unban: %+v, want ok", got)
+	}
+	// Late 429 from seq 3 (reserved before Unban) cannot re-block or pollute LastError.
+	h.r.state.failure(&Account{ID: "a"}, "m", 2, &llm.Error{Code: llm.CodeAccountClosed, Message: "stale ban"}, h.now, 0)
+	if got := h.healthOf("a"); got.State != HealthOK {
+		t.Fatalf("after stale failure pre-Unban: %+v, want ok", got)
+	}
+	h.on("a", ok())
+	h.runOK("m")
+	if !slices.Contains(h.attempts, "a") {
+		t.Errorf("attempts after Unban = %v, want a included", h.attempts)
+	}
+}
+
+// Sibling rule: account_closed with Retryable true moves on to the next account; account_closed
+// with Retryable false (a refusal about the request's content) bans the account and stops
+// without sending to siblings.
+func TestAccountClosedSiblingRule(t *testing.T) {
+	t.Run("account closure rotates to sibling", func(t *testing.T) {
+		h := newHarness(t, Config{}, accts("a", "b")...)
+		h.on("a", fail(llm.Error{Code: llm.CodeAccountClosed, Status: 400, Retryable: true, Scope: llm.ScopeCredential, Message: "This organization has been disabled."}))
+		h.on("b", ok())
+		h.runOK("m")
+		h.wantAttempts("a", "b")
+		if got := h.healthOf("a"); got.State != HealthBanned {
+			t.Errorf("a health = %+v, want banned", got)
+		}
+	})
+	t.Run("content ToS refusal bans account and stops before sibling", func(t *testing.T) {
+		h := newHarness(t, Config{}, accts("a", "b")...)
+		h.on("a", fail(llm.Error{Code: llm.CodeAccountClosed, Status: 403, Retryable: false, Scope: llm.ScopeCredential, Message: "This service has been disabled in this account for violation of Terms of Service."}))
+		h.on("b", ok())
+		evs := h.run(h.req("m"))
+		last := evs[len(evs)-1]
+		if last.Type != llm.EventError || last.Error.Code != llm.CodeAccountClosed {
+			t.Fatalf("got %+v, want account_closed error", evs)
+		}
+		h.wantAttempts("a")
+		if got := h.healthOf("a"); got.State != HealthBanned {
+			t.Errorf("a health = %+v, want banned", got)
+		}
+	})
+}

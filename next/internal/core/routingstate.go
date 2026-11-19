@@ -37,6 +37,7 @@ const routingFile = "routing.json"
 type routingDoc struct {
 	V      int                `json:"v"`
 	Blocks []route.SavedBlock `json:"blocks"`
+	Bans   []route.SavedBan   `json:"bans,omitempty"`
 }
 
 // routingVersion is the version of routing.json's form that this core reads and writes.
@@ -65,7 +66,7 @@ type routing struct {
 
 // startRouting reads routing.json back into the routing state, then checks blocks on a timer
 // (the blocks read back at once) and writes the file again whenever its blocks change.
-func (c *Core) startRouting() {
+func (c *Core) initRouting() {
 	r := &routing{every: defaultCheckEvery, done: make(chan struct{}), path: filepath.Join(StateDir(c.opts.ConfigPath), routingFile)}
 	if v := os.Getenv(checkIntervalEnv); v != "" {
 		if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms > 0 {
@@ -73,11 +74,17 @@ func (c *Core) startRouting() {
 			c.state.SetCheckInterval(r.every)
 		}
 	}
-	c.loadRouting(r)
-	ctx, cancel := context.WithCancel(context.Background())
-	r.stop = cancel
 	c.routing = r
-	go c.runRouting(ctx, r)
+}
+
+func (c *Core) startRouting() {
+	if c.routing == nil {
+		c.initRouting()
+		c.loadRouting(c.routing)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.routing.stop = cancel
+	go c.runRouting(ctx, c.routing)
 }
 
 // loadRouting puts back the blocks routing.json holds, for the accounts core has. A file that
@@ -103,10 +110,12 @@ func (c *Core) loadRouting(r *routing) {
 	}
 	r.saved = b
 	s := c.cur.Load()
-	c.state.Load(doc.Blocks, time.Now(), func(id string) bool {
+	known := func(id string) bool {
 		_, ok := c.account(s, id)
 		return ok
-	})
+	}
+	c.state.Load(doc.Blocks, time.Now(), known)
+	c.state.LoadBans(doc.Bans, known)
 }
 
 func (c *Core) runRouting(ctx context.Context, r *routing) {
@@ -148,8 +157,9 @@ func (c *Core) checkRouting(ctx context.Context) {
 // read is left in place until a block must be saved, and then moved aside to routing.json.bad.
 func (c *Core) saveRouting(r *routing) {
 	blocks := c.state.Saved(time.Now())
-	b, err := json.MarshalIndent(routingDoc{V: routingVersion, Blocks: blocks}, "", "  ")
-	if err != nil || bytes.Equal(b, r.saved) || len(blocks) == 0 && r.saved == nil {
+	bans := c.state.SavedBans()
+	b, err := json.MarshalIndent(routingDoc{V: routingVersion, Blocks: blocks, Bans: bans}, "", "  ")
+	if err != nil || bytes.Equal(b, r.saved) || len(blocks) == 0 && len(bans) == 0 && r.saved == nil {
 		return
 	}
 	if r.bad {

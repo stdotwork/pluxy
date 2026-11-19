@@ -639,6 +639,9 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 		writeCredError(w, err)
 		return
 	}
+	if disabled != nil && !*disabled && m.state != nil {
+		m.state.Unban(id)
+	}
 	writeJSON(w, http.StatusOK, management.AccountReply{Account: m.view(rec)})
 }
 

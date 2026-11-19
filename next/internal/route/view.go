@@ -103,7 +103,9 @@ func (s *State) Reset(a Account, now time.Time) int {
 		}
 		s.drop(k)
 	}
-	delete(s.last, a.ID)
+	if _, banned := s.bans[a.ID]; !banned {
+		delete(s.last, a.ID)
+	}
 	return n
 }
 

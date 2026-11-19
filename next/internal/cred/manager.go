@@ -97,6 +97,7 @@ type Manager struct {
 	logins   map[string]*login
 	loginSeq uint64
 	onChange func()
+	onReauth func(id string)
 }
 
 type flight struct {
@@ -124,12 +125,14 @@ type renewal struct {
 type Options struct {
 	// Reserved reports IDs that core's config already uses, which logins may not take.
 	Reserved func(id string) bool
+	// OnReauth is called after an existing account signs in again with a new credential.
+	OnReauth func(id string)
 }
 
 // NewManager returns the manager for store's accounts on provs.
 func NewManager(store *Store, provs Providers, opts Options) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{store: store, provs: provs, reserved: opts.Reserved,
+	m := &Manager{store: store, provs: provs, reserved: opts.Reserved, onReauth: opts.OnReauth,
 		now: time.Now, ctx: ctx, cancel: cancel,
 		flights: map[string]*flight{}, renewals: map[string]*renewal{}, logins: map[string]*login{}}
 	if m.reserved == nil {

@@ -13,7 +13,7 @@ import (
 // credential, its models and its endpoint) and from what a person or the credential store
 // holds against it (Hold).
 type Health struct {
-	// State is ok, cooling, exhausted, needs_login or disabled.
+	// State is ok, cooling, exhausted, needs_login, banned or disabled.
 	State string `json:"state"`
 	// Until is when the block that holds the account ends.
 	Until *time.Time `json:"until,omitempty"`
@@ -31,6 +31,7 @@ const (
 	HealthCooling    = "cooling"     // a short block: a rate limit, a failing endpoint, a backoff
 	HealthExhausted  = "exhausted"   // a usage window ran out
 	HealthNeedsLogin = "needs_login" // the provider refused the sign-in
+	HealthBanned     = "banned"      // the provider closed or suspended the account
 	HealthDisabled   = "disabled"    // turned off by a person
 )
 
@@ -107,14 +108,17 @@ func (s *State) set(b *block, k scopeKey, kind string, until time.Time, source, 
 // not-found cooldown) says nothing about the account and is left out; it shows in Runtime's
 // cooldowns.
 func (s *State) Health(a Account, now time.Time, h Hold) Health {
-	switch {
-	case h.Disabled:
+	if h.Disabled {
 		return Health{State: HealthDisabled, Why: "turned off"}
-	case h.NeedsLogin:
-		return Health{State: HealthNeedsLogin, Why: cmp.Or(h.Why, "the provider refused the sign-in")}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if ban, ok := s.bans[a.ID]; ok {
+		return Health{State: HealthBanned, Why: cmp.Or(ban.why, "the provider closed or suspended the account"), Source: SourceProvider}
+	}
+	if h.NeedsLogin {
+		return Health{State: HealthNeedsLogin, Why: cmp.Or(h.Why, "the provider refused the sign-in")}
+	}
 	var top *block
 	var topKey scopeKey
 	topKind := 0

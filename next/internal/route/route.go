@@ -493,6 +493,9 @@ func (c *call) attempts() llm.Event {
 		more := false
 		busy := false
 		for _, a := range capable {
+			if r.state.IsBanned(a.ID) {
+				continue
+			}
 			if rounded && limit(a) < rounds {
 				continue // past its own rounds
 			}
@@ -822,7 +825,7 @@ func (r *Router) cooling(a *Account) bool {
 // failure records the failed attempt with sequence number seq on account a for model in the
 // routing state, by the router's cooldown settings.
 func (r *Router) failure(a *Account, model string, seq uint64, e *llm.Error) {
-	if !r.cooling(a) {
+	if (e == nil || e.Code != llm.CodeAccountClosed) && !r.cooling(a) {
 		return
 	}
 	r.state.failure(a, model, seq, e, r.now(), time.Duration(r.cfg.TransientErrorCooldownMS)*time.Millisecond)
@@ -836,6 +839,9 @@ func (r *Router) failure(a *Account, model string, seq uint64, e *llm.Error) {
 func retrySafe(e *llm.Error) bool {
 	if e == nil || !e.Retryable {
 		return false
+	}
+	if e.Code == llm.CodeAccountClosed {
+		return e.Scope != llm.ScopeRequest
 	}
 	if e.Code == llm.CodeUnsupported {
 		return e.Scope != "" && e.Scope != llm.ScopeRequest

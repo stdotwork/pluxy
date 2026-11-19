@@ -10,6 +10,13 @@ import (
 )
 
 // SavedBlock is a quota block as core saves it across a restart.
+// SavedBan is a banned account as core saves it across a restart.
+type SavedBan struct {
+	Account string    `json:"account"`
+	Why     string    `json:"why,omitempty"`
+	At      time.Time `json:"at,omitempty"`
+}
+
 type SavedBlock struct {
 	Account string `json:"account"`
 	// Scope is credential (the whole account) or model (Model on it).
@@ -104,4 +111,50 @@ func (s *State) Load(saved []SavedBlock, now time.Time, known func(id string) bo
 		b.reason = &llm.Error{Code: llm.CodeQuota, Status: 429, Scope: k.kind, Message: "a usage window was used up before core restarted"}
 	}
 	s.notify()
+}
+
+// SavedBans returns the banned accounts for core to save across a restart.
+func (s *State) SavedBans() []SavedBan {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.bans) == 0 {
+		return nil
+	}
+	out := make([]SavedBan, 0, len(s.bans))
+	for id, ban := range s.bans {
+		out = append(out, SavedBan{Account: id, Why: ban.why, At: ban.at.UTC()})
+	}
+	slices.SortFunc(out, func(x, y SavedBan) int { return strings.Compare(x.Account, y.Account) })
+	return out
+}
+
+// LoadBans puts back saved bans, as SavedBans returned them before a restart, for the accounts
+// known reports.
+func (s *State) LoadBans(saved []SavedBan, known func(id string) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	for _, sb := range saved {
+		if sb.Account == "" || known != nil && !known(sb.Account) {
+			continue
+		}
+		why := strings.TrimSpace(sb.Why)
+		if why == "" {
+			why = "the provider closed or suspended the account"
+		}
+		s.bans[sb.Account] = banState{
+			why:    why,
+			at:     sb.At,
+			reason: &llm.Error{Code: llm.CodeAccountClosed, Scope: llm.ScopeCredential, Message: why},
+		}
+		for k := range s.scopes {
+			if k.kind != scopeEndpoint && k.id == sb.Account {
+				s.drop(k)
+			}
+		}
+		changed = true
+	}
+	if changed {
+		s.notify()
+	}
 }

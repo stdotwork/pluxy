@@ -95,6 +95,9 @@ func (s *State) due(now time.Time, routes map[string]bool) map[string][]claim {
 		if k.kind == scopeEndpoint || !routes[k.id] {
 			continue
 		}
+		if _, banned := s.bans[k.id]; banned {
+			continue
+		}
 		for i := range st.blocks {
 			b := &st.blocks[i]
 			if b.check.IsZero() || b.check.After(now) || b.pass || !b.until.After(now) {

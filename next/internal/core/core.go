@@ -159,6 +159,7 @@ func Start(opts Options) (*Core, error) {
 	if c.initial, err = c.loadPackages(cfg); err != nil {
 		return nil, err
 	}
+	c.initRouting()
 	if err := c.reload(true, "start"); err != nil {
 		c.checks.stop()
 		if c.creds != nil {
@@ -566,7 +567,7 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 			c.discard(next, prev)
 			return nil, err
 		}
-		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved})
+		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved, OnReauth: func(id string) { c.state.Unban(id) }})
 	}
 	router.UseCredentials(c.creds)
 	router.UseReadings(readings{c})
@@ -659,6 +660,9 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	}
 	c.draining = append(c.draining, old...)
 	c.mu.Unlock()
+	if prev == nil && c.routing != nil {
+		c.loadRouting(c.routing)
+	}
 	swapPprof(next, prev)
 	c.checkAccounts(next, accounts)
 	for _, g := range old {
