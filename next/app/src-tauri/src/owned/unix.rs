@@ -124,14 +124,16 @@ pub(crate) unsafe fn close_on_exec_from_3() -> io::Result<()> {
 
 /// Who, besides root and the app's user, may be able to change the program the app runs or a
 /// folder above it. It matters on macOS only, which runs the program by its path (`exec_target`);
-/// Linux runs the opened file itself.
+/// Linux runs the opened file itself, and lets a terminal run a launch's program by its path only
+/// where root and this user alone (and this user's private group) can change it (`path_target`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Writers {
     /// No one: the app's own core and its native tools, which it installs in its own data folder.
     Nobody,
     /// Also the members of the `admin` group, through a folder that group may write, by its mode
     /// or an access list entry (never the file itself): the program of a detached launch or of a
-    /// managed runtime (`spawn.rs`), which the person confirmed wherever it is installed. macOS
+    /// managed runtime, and the program a terminal launch runs (`spawn.rs`, and the execution
+    /// program in Terminal's window), which the person confirmed wherever it is installed. macOS
     /// makes `/Applications` root:admin 0775, and Homebrew makes the folders of its prefix the
     /// installing user's, group admin, 0775 when that user is an admin; refusing them would
     /// refuse a direct launch of any program installed with Homebrew or inside an app in
@@ -154,6 +156,272 @@ pub(crate) enum Writers {
 #[cfg(target_os = "linux")]
 pub(crate) fn exec_target(f: &File, _: Writers) -> Result<PathBuf, String> {
     Ok(PathBuf::from(format!("/proc/self/fd/{}", f.as_raw_fd())))
+}
+
+/// Refused unless path still leads to the opened file f (`same`) and no user but root and this
+/// one can change f or where path leads: the program a terminal runs on Linux, which the terminal
+/// finds by path as it starts, after this check. Each folder the path's resolution passes
+/// through, each link on the way and the file must be root's or this user's and writable by
+/// others only in a sticky folder (`/tmp`, `/nix/store`), where only the owner of an entry (root
+/// or this user, as checked) can rename or remove it, and by its group only when that group is
+/// this user's own private group (`private_group`): Homebrew on Linux makes its folders the
+/// user's, in the user's group, group-writable, and a umask of 002 (Debian's and Ubuntu's default
+/// for a user whose group is named as they are) makes `~/.local/bin` and what npm or pipx install
+/// there 0775. Any other group is refused: Linux has no group like macOS' `admin` whose folders
+/// hold programs.
+/// Links are followed as the kernel follows them, from the folder that holds each; a path through
+/// the process file system (`/proc`, and `/dev/fd` and `/dev/std*`, which lead there) is refused,
+/// since `/proc/self` and its links lead elsewhere for the terminal than for the app.
+#[cfg(target_os = "linux")]
+pub(crate) fn path_target(f: &File, path: &std::path::Path) -> Result<(), String> {
+    path_target_by(f, path, &private_group)
+}
+
+/// `path_target`, with private saying whether a group is this user's private group.
+#[cfg(target_os = "linux")]
+pub(crate) fn path_target_by(
+    f: &File,
+    path: &std::path::Path,
+    private: &dyn Fn(u32) -> bool,
+) -> Result<(), String> {
+    use std::ffi::OsString;
+    use std::os::unix::fs::MetadataExt;
+    use std::path::{Component, Path};
+    const MAX_LINKS: usize = 40;
+    // The process file system's `f_type`.
+    const PROC_SUPER_MAGIC: libc::c_long = 0x9fa0;
+    let me = unsafe { libc::geteuid() };
+    let read = |p: &Path| std::fs::symlink_metadata(p).map_err(|e| format!("{}: {e}", p.display()));
+    let refuse = |p: &Path, why: &str| {
+        Err(format!(
+            "{} {why}: a terminal runs a launch's program by its path, so no other user may be able to change it",
+            p.display()
+        ))
+    };
+    // A refusal for write permission, with the command that takes it away (`chmod_hint`).
+    let writable = |p: &Path, why: &str, owner: u32| {
+        Err(format!(
+            "{} {why}: a terminal runs a launch's program by its path, so no other user may be able to change it ({})",
+            p.display(),
+            chmod_hint(p, owner == 0)
+        ))
+    };
+    // Whether a user but root and this one may write what m describes.
+    let others_write = |m: &std::fs::Metadata| {
+        m.mode() & 0o002 != 0 || (m.mode() & 0o020 != 0 && !private(m.gid()))
+    };
+    let in_proc = |p: &Path| {
+        let Ok(c) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) else {
+            return true;
+        };
+        let mut s: libc::statfs = unsafe { std::mem::zeroed() };
+        // SAFETY: c is NUL-terminated; s is a statfs to fill.
+        unsafe {
+            libc::statfs(c.as_ptr(), &mut s) != 0 || s.f_type as libc::c_long == PROC_SUPER_MAGIC
+        }
+    };
+    if !path.is_absolute() {
+        return refuse(path, "is not a full path");
+    }
+    // The names still to resolve, the next one last, and the folder reached so far.
+    let names = |p: &Path| -> Vec<OsString> {
+        p.components()
+            .rev()
+            .filter_map(|c| match c {
+                Component::Normal(n) => Some(n.to_os_string()),
+                Component::ParentDir => Some("..".into()),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut todo = names(path);
+    let mut at = PathBuf::from("/");
+    let mut links = 0;
+    loop {
+        let m = read(&at)?;
+        if m.uid() != 0 && m.uid() != me {
+            return refuse(&at, "belongs to another user");
+        }
+        let Some(name) = todo.pop() else {
+            if !m.file_type().is_file() {
+                return refuse(&at, "is not a file");
+            }
+            if others_write(&m) {
+                return writable(&at, "may be written by other users", m.uid());
+            }
+            let opened = f.metadata().map_err(|e| e.to_string())?;
+            if !same(&m, &opened) {
+                return Err(format!(
+                    "{} is no longer the file that was confirmed",
+                    path.display()
+                ));
+            }
+            return Ok(());
+        };
+        if !m.is_dir() {
+            return refuse(&at, "is not a folder");
+        }
+        if in_proc(&at) {
+            return Err(format!(
+                "{} is in the process file system, where a path leads elsewhere for the terminal \
+                 than for the app: name the program by its own path",
+                at.display()
+            ));
+        }
+        if name == ".." {
+            // A folder above one reached was checked on the way down.
+            at.pop();
+            continue;
+        }
+        // Its entries are changed only by root and this user, or, in a sticky folder, each by
+        // its owner, whose entry this check reads next.
+        if others_write(&m) && m.mode() & 0o1000 == 0 {
+            return writable(&at, "may be changed by other users", m.uid());
+        }
+        let next = at.join(&name);
+        let n = read(&next)?;
+        if n.file_type().is_symlink() {
+            if n.uid() != 0 && n.uid() != me {
+                return refuse(&next, "belongs to another user");
+            }
+            links += 1;
+            if links > MAX_LINKS {
+                return refuse(path, "goes through too many links");
+            }
+            let target =
+                std::fs::read_link(&next).map_err(|e| format!("{}: {e}", next.display()))?;
+            if target.is_absolute() {
+                at = PathBuf::from("/");
+            }
+            todo.extend(names(&target));
+            continue;
+        }
+        at = next;
+    }
+}
+
+/// The command that takes group and others' write permission from p, its path quoted for a
+/// shell: run as root when root owns p.
+#[cfg(target_os = "linux")]
+pub(crate) fn chmod_hint(p: &std::path::Path, root: bool) -> String {
+    let quoted = p.to_string_lossy().replace('\'', r"'\''");
+    if root {
+        format!("as root, `chmod g-w,o-w '{quoted}'` makes it root's alone")
+    } else {
+        format!("`chmod g-w,o-w '{quoted}'` makes it yours alone")
+    }
+}
+
+/// What `private` judges a group by.
+#[cfg(target_os = "linux")]
+pub(crate) struct Group<'a> {
+    /// This user's name and primary group.
+    pub user: &'a str,
+    pub primary: u32,
+    /// The group's name, number and members.
+    pub name: &'a str,
+    pub gid: u32,
+    pub members: &'a [String],
+    /// The primary group of every other user `/etc/passwd` lists.
+    pub others_primary: &'a [u32],
+    /// The number of every other line of `/etc/group`.
+    pub other_lines: &'a [u32],
+}
+
+/// Whether g is this user's private group, no one else's: this user's primary group, named as
+/// the user, with no member but the user, no other user's primary group, and the only line of
+/// `/etc/group` with its number. A group's name says nothing by itself: `USERGROUPS_ENAB` and
+/// `pam_umask` make no promise about who else is in it.
+#[cfg(target_os = "linux")]
+pub(crate) fn private(g: &Group) -> bool {
+    g.gid == g.primary
+        && g.name == g.user
+        && g.members.iter().all(|m| m == g.user)
+        && !g.others_primary.contains(&g.gid)
+        && !g.other_lines.contains(&g.gid)
+}
+
+/// Whether group gid is this user's private group (`private`): this user and the group as the
+/// system's user and group databases give them (`getpwuid_r`, `getgrgid_r`), and every other user
+/// and group line of `/etc/passwd` and `/etc/group`, read as files (`getpwent` and `getgrent` keep
+/// process-wide state, unsafe in the app's threads). A lookup or read that fails says no. Users
+/// and groups from other sources (LDAP, sssd, systemd-userdb) are not scanned, and the group
+/// database is trusted to list a group's members.
+#[cfg(target_os = "linux")]
+pub(crate) fn private_group(gid: u32) -> bool {
+    use std::ffi::CStr;
+    let me = unsafe { libc::geteuid() };
+    let mut size = 16 << 10;
+    let (user, primary, name, members) = loop {
+        let mut pw: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut gr: libc::group = unsafe { std::mem::zeroed() };
+        let mut pbuf = vec![0 as libc::c_char; size];
+        let mut gbuf = vec![0 as libc::c_char; size];
+        let mut pfound: *mut libc::passwd = std::ptr::null_mut();
+        let mut gfound: *mut libc::group = std::ptr::null_mut();
+        // SAFETY: each buffer has its length's bytes; the results point into them.
+        let (rp, rg) = unsafe {
+            (
+                libc::getpwuid_r(me, &mut pw, pbuf.as_mut_ptr(), pbuf.len(), &mut pfound),
+                libc::getgrgid_r(gid, &mut gr, gbuf.as_mut_ptr(), gbuf.len(), &mut gfound),
+            )
+        };
+        if (rp == libc::ERANGE || rg == libc::ERANGE) && size < 1 << 20 {
+            size *= 2;
+            continue;
+        }
+        if rp != 0 || rg != 0 || pfound.is_null() || gfound.is_null() {
+            return false;
+        }
+        // SAFETY: both records were filled, their strings NUL-terminated in the buffers, and the
+        // member list ends with a null pointer.
+        unsafe {
+            let text = |p: *const libc::c_char| CStr::from_ptr(p).to_string_lossy().into_owned();
+            let mut members = Vec::new();
+            let mut m = gr.gr_mem;
+            while !m.is_null() && !(*m).is_null() {
+                members.push(text(*m));
+                m = m.add(1);
+            }
+            break (text(pw.pw_name), pw.pw_gid, text(gr.gr_name), members);
+        }
+    };
+    // The colon-separated fields of each entry of file: None when it cannot be read or an entry's
+    // number cannot. NIS compat entries (`+…`, `-…`) are left out, as other sources are.
+    let entries = |file: &str, number: usize| -> Option<Vec<(String, u32)>> {
+        let text = std::fs::read_to_string(file).ok()?;
+        text.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with(['+', '-']))
+            .map(|l| {
+                let f: Vec<&str> = l.split(':').collect();
+                Some((f.first()?.to_string(), f.get(number)?.parse().ok()?))
+            })
+            .collect()
+    };
+    let (Some(users), Some(mut lines)) = (entries("/etc/passwd", 3), entries("/etc/group", 2))
+    else {
+        return false;
+    };
+    let others_primary: Vec<u32> = users
+        .iter()
+        .filter(|(u, _)| *u != user)
+        .map(|(_, g)| *g)
+        .collect();
+    // This group's own line, if the file has it, is not another.
+    if let Some(i) = lines.iter().position(|(n, g)| *n == name && *g == gid) {
+        lines.remove(i);
+    }
+    let other_lines: Vec<u32> = lines.iter().map(|(_, g)| *g).collect();
+    private(&Group {
+        user: &user,
+        primary,
+        name: &name,
+        gid,
+        members: &members,
+        others_primary: &others_primary,
+        other_lines: &other_lines,
+    })
 }
 
 /// What runs the opened file f: macOS cannot execute a descriptor, so the path f has now
@@ -186,7 +454,7 @@ pub(crate) fn exec_target(f: &File, writers: Writers) -> Result<PathBuf, String>
     Ok(path)
 }
 
-#[cfg(target_os = "macos")]
+/// Whether a and b are the same file, unchanged: device, inode, size, mode and times.
 fn same(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     a.dev() == b.dev()

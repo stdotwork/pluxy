@@ -1674,13 +1674,24 @@ program on Windows and as an app bundle on macOS ([Application update](#applicat
   when the tool serving that call asks ([Launches and managed runtimes](app-host/README.md#launches-and-managed-runtimes));
   installing from a file needs the Linux file chooser. Safe mode is covered by unit tests, not a
   native run.
-- On macOS a launch you confirm may run a program from a folder that every administrator of the
-  Mac can change, such as `/Applications` or Homebrew's folders. Another administrator account can
-  swap that program in the moment between the app's check and its start, or, for a program
-  inside an app, what it later starts from that app. For any program that uses those folders,
-  wherever it is, that account can also change at any time what it loads from them (Homebrew's
-  libraries, a script's interpreter). The app's
+- On macOS a launch you confirm, in a terminal or not, may run a program from a folder that every
+  administrator of the Mac can change, such as `/Applications` or Homebrew's folders. Another
+  administrator account can swap that program in the moment between the last check and its
+  start, or, for a program inside an app, what it later starts from that app. For any program
+  that uses those folders, wherever it is, that account can also change at any time what it loads
+  from them (Homebrew's libraries, a script's interpreter). A script's interpreter opens the
+  checked script again by its path, as for a direct launch. The app's
   own core and native tools never run from such a folder: the app refuses them there.
+- On Linux a terminal finds a launch's program by its path as it starts, so the app refuses a
+  terminal launch whose program another user could change or redirect by then: a program below a
+  folder that others, or a group other than your own private group, may write, one reached
+  through a link such a user could change, or one such a group may write. Your private group
+  (your primary group, named as you are, with no other member, no other user's primary group,
+  and no other group with its number) may write them: Homebrew on Linux makes its folders
+  writable by it, and so does a umask of 002. Users and groups are read from `/etc/passwd` and
+  `/etc/group`: ones from LDAP, sssd or systemd-userdb are not seen. The refusal names the path and a
+  `chmod g-w,o-w` that fixes it. Nothing stops your own processes from swapping the program
+  before the terminal starts it. A direct launch runs the file the app checked, wherever it is.
 - Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
   entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the
   local data folder, private by its access list. Secrets are kept in a file only the user may read

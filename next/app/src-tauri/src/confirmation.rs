@@ -677,6 +677,14 @@ impl Authorized {
     pub fn cwd(&self) -> Option<&File> {
         self.prepared.cwd.as_ref().map(|e| &e.file)
     }
+    /// The program a terminal runs, as opened and as the launch names it.
+    #[cfg_attr(not(native_stack), allow(dead_code))]
+    pub fn program(&self) -> Option<(&File, &Path)> {
+        self.prepared
+            .program
+            .as_ref()
+            .map(|p| (&p.file, p.identity.selected.as_path()))
+    }
     /// Refused once a reviewed target changed since it was confirmed: the executable replaced or
     /// written in place (its metadata), or the cwd replaced.
     #[cfg_attr(not(native_stack), allow(dead_code))]
