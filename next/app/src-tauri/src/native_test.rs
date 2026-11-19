@@ -702,6 +702,13 @@ fn shrunk_page_steps(
 }
 
 fn run(app: &AppHandle) -> Result<(), String> {
+    // Every session but the startup ones and the core steps (which start with no core, or test
+    // how one starts) first installs the bundled test packages, as setup would.
+    if std::env::var_os("PLUXY_APP_TEST_STARTUP").is_none()
+        && std::env::var_os("PLUXY_APP_TEST_CORE_SOURCE").is_none()
+    {
+        install_bundled(app)?;
+    }
     #[cfg(target_os = "linux")]
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_ACCESS_STAGE") {
         return access::run(app, &stage);
@@ -739,7 +746,6 @@ fn run(app: &AppHandle) -> Result<(), String> {
     wait_for("the window's shell", || {
         eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
     })?;
-    install_bundled(app)?;
     // The signed application update (update_native.rs), in a session of its own.
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_UPDATE") {
         return crate::update_native::run(app, &main, dir.into());
@@ -1102,7 +1108,8 @@ fn run(app: &AppHandle) -> Result<(), String> {
 
 /// A core's first start installs nothing. In managed mode the session installs the packages of
 /// the bundled registry beside the core's program (panelcore's test packages), as setup would,
-/// before the steps that use them. An adopted program is copied without them: nothing to do.
+/// before the steps that use them. An adopted program is copied without them: nothing to do. The
+/// window reads the extensions' pages once, as it loads, so it is loaded again after an install.
 fn install_bundled(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<App>();
     let (managed, caller) = {
@@ -1145,7 +1152,11 @@ fn install_bundled(app: &AppHandle) -> Result<(), String> {
             done.push(id.to_string());
         }
     }
-    log("bundled packages installed", json!({ "ids": done }));
+    if !done.is_empty() {
+        let main = wait_for("the window", || app.get_webview(MAIN))?;
+        main.eval("location.reload()").map_err(|e| e.to_string())?;
+    }
+    log("bundled_installed", json!({ "ids": done }));
     Ok(())
 }
 
