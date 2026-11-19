@@ -225,12 +225,12 @@ openai-compatibility:
 		"imported kimi-1700000000000.json as account kimi-1700000000000 (pluxy/kimi)",
 		"imported codex-ab12cd34-user@example.com-plus.json as account codex-ab12cd34-user-example.com-plus (pluxy/codex)",
 		"imported claude-user@example.com.json as account claude-user-example.com (pluxy/claude)",
-		"imported antigravity-user@example.com.json as account antigravity-user-example.com (pluxy/antigravity)",
+		"skipped antigravity-user@example.com.json: pluxy no longer ships the Antigravity provider",
 		"imported xai-grok@example.com.json as account xai-grok-example.com (pluxy/xai)",
 		"imported meta-muse.json as account meta-muse (pluxy/meta)",
 		"imported devin-user.json as account devin-user (pluxy/devin)",
 		"skipped gemini-old.json: today's core does not load it either",
-		"7 imported, 1 skipped",
+		"6 imported, 2 skipped",
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("import output lacks %q", want)
@@ -319,12 +319,14 @@ openai-compatibility:
 	for _, a := range accounts.Accounts {
 		got[a.ID] = a.Source + " " + a.Kind + " " + strconv.FormatBool(a.Disabled)
 	}
+	if _, ok := got["antigravity-user-example.com"]; ok {
+		t.Errorf("antigravity account was imported: %v", got["antigravity-user-example.com"])
+	}
 	for id, want := range map[string]string{
 		"local":                                "config api_key false",
 		"kimi-1700000000000":                   "login oauth false",
 		"codex-ab12cd34-user-example.com-plus": "login oauth false",
 		"claude-user-example.com":              "login oauth true",
-		"antigravity-user-example.com":         "login oauth false",
 		"xai-grok-example.com":                 "login oauth false",
 		"meta-muse":                            "login oauth false",
 		"devin-user":                           "login api_key false",

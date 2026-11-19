@@ -65,7 +65,7 @@ The old panel's health labels (`Healthy`, `Warning`, `Disabled`) were a separate
 ### Provider names
 
 Use one display name per provider, from one shared list in each UI:
-`Claude`, `Codex`, `Gemini`, `Antigravity`, `Devin`, `Kimi`, `xAI`, `Muse (Meta)`, `Vertex AI`,
+`Claude`, `Codex`, `Gemini`, `Devin`, `Kimi`, `xAI`, `Muse (Meta)`, `Vertex AI`,
 `AI Studio`, `OpenAI Compatible`. Use `Grok` only for xAI's product, CLI or plan names (`Grok Build`,
 `SuperGrok`), not for the provider (owner to confirm). The Claude login card says `Claude OAuth`,
 not `Anthropic OAuth`.
