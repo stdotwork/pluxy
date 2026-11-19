@@ -96,9 +96,9 @@ SOFTWARE.
 
 ## router-for-me/EasyCLIProxyAPI
 
-The desktop app in `extensions/app/`, from <https://github.com/router-for-me/EasyCLIProxyAPI>. It is
-still in this repository, with its licence in `extensions/app/LICENSE`; when it is removed, this
-section is its notice. `next/` keeps from it, all in Rust or TypeScript as the original:
+The desktop app formerly in this repository, from <https://github.com/router-for-me/EasyCLIProxyAPI>.
+It was removed when the desktop app in `next/app` replaced it. `next/` keeps from it, all in Rust or
+TypeScript as the original:
 
 - adapted: the session listing in `next/app-tools/codex-sessions/src/reader.rs`, from
   `src-tauri/src/codex_sessions.rs`: database discovery, the queries on the `threads` and
@@ -118,11 +118,11 @@ section is its notice. `next/` keeps from it, all in Rust or TypeScript as the o
 - adapted: `event` in `next/app-tools/usage-codex/src/rollout.rs`, from `extract_codex_usage` in
   `src-tauri/src/agent_usage.rs`.
 
-Other app tools in `next/app-tools/` follow this app's rules for the files of the agents they set up
+Other app tools in `next/app-tools/` follow the old app's rules for the files of the agents they set up
 or read (for example `usage-claude`, `lib/pi-sessions` and `claude-desktop`): the rules are the
 original's, the code is written afresh.
 
-Licence text, as it is in `extensions/app/LICENSE`:
+Licence text, as it was in the app's `LICENSE`:
 
 ~~~text
 MIT License

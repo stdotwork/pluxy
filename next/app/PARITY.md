@@ -5,7 +5,7 @@ This page is a reference for two questions about the desktop app in this folder:
 - **Which agent clients and usage sources does it set up or read, and how?** For each one: the
   optional tool that does the work, the files it writes or reads, their format and how they are
   written, the platforms, and the native test session that checks it.
-- **What happened to each feature of the old desktop app** (`extensions/app/` in this repository):
+- **What happened to each feature of the old desktop app** (the desktop app of router-for-me/EasyCLIProxyAPI, <https://github.com/router-for-me/EasyCLIProxyAPI>, which this repository carried before `next/app/` replaced it):
   kept, dropped or deferred, with the reason in one line and where a kept feature lives now.
 
 The app's [README](README.md) describes what each page and command does, and the
