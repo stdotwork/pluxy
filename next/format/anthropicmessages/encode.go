@@ -164,8 +164,20 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	if o.ReasoningEffort != "" {
 		e.lose(llm.LossDropped, "reasoning_effort", "Messages takes a thinking budget, which depends on the model")
 	}
-	if o.ResponseFormat != nil && o.ResponseFormat.Type != llm.ResponseFormatText {
-		e.lose(llm.LossDropped, "response_format", "Messages has no response format")
+	if rf := o.ResponseFormat; rf != nil && rf.Type != "" && rf.Type != llm.ResponseFormatText {
+		switch {
+		case rf.Type == llm.ResponseFormatJSONSchema && rawjson.Object(rf.Schema) != nil:
+			out["output_config"] = map[string]any{
+				"format": map[string]any{
+					"type":   "json_schema",
+					"schema": rf.Schema,
+				},
+			}
+		case rf.Type == llm.ResponseFormatJSONSchema:
+			e.lose(llm.LossDropped, "response_format", "Messages output_config.format json_schema requires a schema object")
+		default:
+			e.lose(llm.LossDropped, "response_format", "Messages output_config.format only supports json_schema")
+		}
 	}
 
 	names := ToolNames(req)

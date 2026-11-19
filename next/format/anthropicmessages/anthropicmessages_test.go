@@ -1189,3 +1189,228 @@ func TestEncodeCarriesForeignCacheControl(t *testing.T) {
 		t.Errorf("losses:\n got %q\nwant %q", got, want)
 	}
 }
+
+func TestEncodeResponseFormat(t *testing.T) {
+	schema := `{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}`
+	t.Run("chat json_schema", func(t *testing.T) {
+		req, err := openaichat.ParseRequest([]byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"Weather?"}],` +
+			`"response_format":{"type":"json_schema","json_schema":{"name":"weather","strict":true,"schema":` + schema + `}}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{"model":"claude-sonnet-4-6","stream":false,"max_tokens":32000,`+
+			`"output_config":{"format":{"type":"json_schema","schema":`+schema+`}},`+
+			`"messages":[{"role":"user","content":[{"type":"text","text":"Weather?"}]}]}`)
+		if len(losses) != 0 {
+			t.Errorf("losses = %q, want none", lossList(losses))
+		}
+	})
+	t.Run("responses json_schema", func(t *testing.T) {
+		req, err := openairesponses.ParseRequest([]byte(`{"model":"claude-sonnet-4-6","input":"Weather?",` +
+			`"text":{"format":{"type":"json_schema","name":"weather","strict":true,"schema":` + schema + `}}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{"model":"claude-sonnet-4-6","stream":false,"max_tokens":32000,`+
+			`"output_config":{"format":{"type":"json_schema","schema":`+schema+`}},`+
+			`"messages":[{"role":"user","content":[{"type":"text","text":"Weather?"}]}]}`)
+		if len(losses) != 0 {
+			t.Errorf("losses = %q, want none", lossList(losses))
+		}
+	})
+	t.Run("json_object drops", func(t *testing.T) {
+		req, err := openaichat.ParseRequest([]byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}],` +
+			`"response_format":{"type":"json_object"}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{"model":"claude-sonnet-4-6","stream":false,"max_tokens":32000,`+
+			`"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+		if got := lossList(losses); !reflect.DeepEqual(got, []string{"dropped response_format"}) {
+			t.Errorf("losses = %q, want [dropped response_format]", got)
+		}
+	})
+	t.Run("text", func(t *testing.T) {
+		req, err := openaichat.ParseRequest([]byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}],` +
+			`"response_format":{"type":"text"}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{"model":"claude-sonnet-4-6","stream":false,"max_tokens":32000,`+
+			`"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+		if len(losses) != 0 {
+			t.Errorf("losses = %q, want none", lossList(losses))
+		}
+	})
+}
+
+func TestParseRequestOutputConfigFormat(t *testing.T) {
+	const schema = `{"type":"object","properties":{"answer":{"type":"string"}},"additionalProperties":false}`
+	t.Run("json_schema carries to other formats", func(t *testing.T) {
+		req, err := ParseRequest([]byte(`{"model":"gpt-5","max_tokens":128,"messages":[{"role":"user","content":"hi"}],` +
+			`"output_config":{"format":{"type":"json_schema","schema":` + schema + `}}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rf := req.Options.ResponseFormat; rf == nil || rf.Type != llm.ResponseFormatJSONSchema || !jsonEqual(rf.Schema, json.RawMessage(schema)) {
+			t.Fatalf("ResponseFormat = %+v, want json_schema", rf)
+		}
+
+		chatBody, chatLosses, err := openaichat.EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(chatLosses) != 0 {
+			t.Errorf("chat losses = %q, want none", lossList(chatLosses))
+		}
+		if !strings.Contains(string(chatBody), `"response_format":{"type":"json_schema"`) {
+			t.Errorf("chat body = %s, want response_format json_schema", chatBody)
+		}
+
+		respBody, respLosses, err := openairesponses.EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(respLosses) != 0 {
+			t.Errorf("responses losses = %q, want none", lossList(respLosses))
+		}
+		if !strings.Contains(string(respBody), `"text":{"format":{`) {
+			t.Errorf("responses body = %s, want text.format json_schema", respBody)
+		}
+
+		gemBody, gemLosses, err := geminigenerate.EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(gemLosses) != 0 {
+			t.Errorf("gemini losses = %q, want none", lossList(gemLosses))
+		}
+		if !strings.Contains(string(gemBody), `"responseJsonSchema"`) {
+			t.Errorf("gemini body = %s, want responseJsonSchema", gemBody)
+		}
+	})
+
+	t.Run("effort and leftover output_config fields stay distinct", func(t *testing.T) {
+		req, err := ParseRequest([]byte(`{"model":"gpt-5","max_tokens":128,"messages":[{"role":"user","content":"hi"}],` +
+			`"thinking":{"type":"adaptive"},` +
+			`"output_config":{"effort":"high","format":{"type":"json_schema","schema":` + schema + `},"task_budget":{"total":1000}}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if req.Options.ReasoningEffort != "high" {
+			t.Errorf("ReasoningEffort = %q, want high", req.Options.ReasoningEffort)
+		}
+		if rf := req.Options.ResponseFormat; rf == nil || rf.Type != llm.ResponseFormatJSONSchema {
+			t.Fatalf("ResponseFormat = %+v, want json_schema", rf)
+		}
+		_, losses, err := openaichat.EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := lossList(losses); !reflect.DeepEqual(got, []string{"dropped output_config"}) {
+			t.Errorf("losses = %q, want [dropped output_config] for task_budget", got)
+		}
+	})
+
+	t.Run("unknown format stays dropped", func(t *testing.T) {
+		req, err := ParseRequest([]byte(`{"model":"gpt-5","max_tokens":128,"messages":[{"role":"user","content":"hi"}],` +
+			`"output_config":{"format":{"type":"other"}}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if req.Options.ResponseFormat != nil {
+			t.Fatalf("ResponseFormat = %+v, want nil", req.Options.ResponseFormat)
+		}
+		_, losses, err := openaichat.EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := lossList(losses); !reflect.DeepEqual(got, []string{"dropped output_config"}) {
+			t.Errorf("losses = %q, want [dropped output_config]", got)
+		}
+	})
+}
+
+func TestRefusalStopReasonBothWays(t *testing.T) {
+	t.Run("messages refusal to chat and responses", func(t *testing.T) {
+		const msgBody = `{"id":"msg_ref","type":"message","role":"assistant","model":"claude-sonnet-4-6",` +
+			`"content":[{"type":"text","text":"I cannot help with that."}],"stop_reason":"refusal","stop_sequence":null,"usage":{"input_tokens":5,"output_tokens":6}}`
+		events, err := DecodeResponse([]byte(msgBody))
+		if err != nil {
+			t.Fatal(err)
+		}
+		chatAgg := openaichat.NewAggregator()
+		for _, ev := range events {
+			chatAgg.Add(ev)
+		}
+		chatResp, err := chatAgg.Response()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(chatResp), `"finish_reason":"content_filter"`) || !strings.Contains(string(chatResp), `"content":"I cannot help with that."`) {
+			t.Errorf("chat response = %s, want finish_reason content_filter and refusal text", chatResp)
+		}
+
+		req, err := openairesponses.ParseRequest([]byte(`{"model":"claude-sonnet-4-6","input":"hi"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		respAgg := openairesponses.NewAggregator(req)
+		for _, ev := range events {
+			respAgg.Add(ev)
+		}
+		respBody, err := respAgg.Response()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(respBody), `"status":"incomplete"`) || !strings.Contains(string(respBody), `"reason":"content_filter"`) || !strings.Contains(string(respBody), `"text":"I cannot help with that."`) {
+			t.Errorf("responses body = %s, want incomplete content_filter with refusal text", respBody)
+		}
+	})
+
+	t.Run("chat content_filter to messages stream and body", func(t *testing.T) {
+		events := []llm.Event{
+			{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "chatcmpl-1", Model: "up", Format: llm.FormatOpenAIChat}},
+			{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemMessage}},
+			{Type: llm.EventTextDelta, Index: 0, Delta: "Sorry."},
+			{Type: llm.EventItemEnd, Index: 0},
+			{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishContentFilter, RawReason: "content_filter"},
+				Usage: &llm.Usage{InputTokens: llm.Int64(5), OutputTokens: llm.Int64(2)}},
+		}
+		var stream bytes.Buffer
+		w := NewStreamWriter(&stream)
+		a := NewAggregator()
+		for _, ev := range events {
+			if err := w.Write(ev); err != nil {
+				t.Fatal(err)
+			}
+			a.Add(ev)
+		}
+		if !strings.Contains(stream.String(), `"stop_reason":"refusal"`) {
+			t.Errorf("stream has no stop_reason refusal:\n%s", stream.String())
+		}
+		body, err := a.Response()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), `"stop_reason":"refusal"`) {
+			t.Errorf("body = %s, want stop_reason refusal", body)
+		}
+	})
+}
