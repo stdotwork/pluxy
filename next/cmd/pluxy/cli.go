@@ -304,6 +304,36 @@ var commands = []command{
 				x.table(rows)
 			})
 		}},
+	{words: "model refresh", routes: []string{"POST /models/refresh"}, summary: "ask providers for their model lists again now",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			fs.StringVar(&o.account, "account", "", "refresh only this account (default: every account)")
+		},
+		run: func(x *invocation) error {
+			var in any
+			if x.opts.account != "" {
+				in = management.RefreshModelsRequest{Account: x.opts.account}
+			}
+			var r management.RefreshModelsReply
+			return x.call(http.MethodPost, "/models/refresh", nil, in, &r, func() {
+				if len(r.Accounts) == 0 {
+					x.printf("no accounts to refresh (%d models served)\n", len(r.Models))
+					return
+				}
+				rows := [][]string{{"ACCOUNT", "MODELS", "STATUS"}}
+				for _, a := range r.Accounts {
+					status := "ok"
+					if a.Error != "" {
+						if a.Kept {
+							status = "kept previous list: " + a.Error
+						} else {
+							status = "failed: " + a.Error
+						}
+					}
+					rows = append(rows, []string{a.Account, strconv.Itoa(a.Models), status})
+				}
+				x.table(rows)
+			})
+		}},
 	{words: "usage", routes: []string{"GET /usage"}, summary: "request and token totals, by model",
 		flags: func(fs *flag.FlagSet, o *opts) {
 			fs.StringVar(&o.since, "since", "", "from this time (RFC 3339) or this long ago (such as 24h)")

@@ -106,6 +106,10 @@ type Core struct {
 	logs   *logfile.Files // the logs folder
 	themes *themeStore    // stored UI themes and selected theme ID in state/themes
 
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	bgWG     sync.WaitGroup
+
 	// accounts serialises setting the accounts a router routes over: a change in the
 	// credential store and a publish never interleave.
 	accounts sync.Mutex
@@ -130,7 +134,9 @@ func Start(opts Options) (*Core, error) {
 	// What a call on an account sends back, and the extension's output, leave out the secrets in
 	// the account's settings: the values the management API shows as placeholders.
 	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
-	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(), usage: usage.NewStore()}
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(), usage: usage.NewStore(),
+		bgCtx: bgCtx, bgCancel: bgCancel}
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {
 		if s := c.cur.Load(); s != nil {
@@ -147,6 +153,7 @@ func Start(opts Options) (*Core, error) {
 	}
 	cfg, err := server.LoadConfig(opts.ConfigPath)
 	if err != nil {
+		bgCancel()
 		return nil, c.scrubbed(err)
 	}
 	if c.logs = opts.Logs; c.logs == nil {
@@ -157,9 +164,11 @@ func Start(opts Options) (*Core, error) {
 	// No publisher's folder can be called .settings: IDs start with a letter or digit.
 	c.settings = extconfig.NewStore(filepath.Join(c.pkgDir, ".settings"))
 	if c.initial, err = c.loadPackages(cfg); err != nil {
+		bgCancel()
 		return nil, err
 	}
 	if err := c.reload(true, "start"); err != nil {
+		bgCancel()
 		c.checks.stop()
 		if c.creds != nil {
 			c.creds.Close()
@@ -167,6 +176,8 @@ func Start(opts Options) (*Core, error) {
 		return nil, err
 	}
 	c.creds.OnChange(c.accountsChanged)
+	c.creds.OnCredentialChange(c.credentialChanged)
+	c.startModelRefresh()
 	return c, nil
 }
 
@@ -642,6 +653,7 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 		log.Printf("updating accounts: %v", err)
 	}
 	if prev != nil {
+		next.Router.CarryLists(prev.Router, sameAccountAndCred)
 		c.state.Retain(prev.Router, next.Router, sameAccount)
 	}
 	for id, g := range next.exts {
@@ -749,6 +761,10 @@ func sameAccount(old, cur *route.Account) bool {
 	return old.Extension == cur.Extension && sameJSON(old.Settings, cur.Settings)
 }
 
+func sameAccountAndCred(old, cur *route.Account) bool {
+	return sameAccount(old, cur) && reflect.DeepEqual(old.Credential, cur.Credential)
+}
+
 // sameJSON compares two JSON values by meaning, not spelling: object key order and spacing do
 // not matter. Numbers compare by their digits, so no two distinct numbers compare equal.
 func sameJSON(a, b json.RawMessage) bool {
@@ -800,6 +816,7 @@ func (c *Core) Stop() {
 	c.reloading.Lock()
 	defer c.reloading.Unlock()
 	c.stopped = true
+	c.bgCancel()
 	c.checks.stop()
 	c.mu.Lock()
 	gens := append([]*host.Managed(nil), c.draining...)
@@ -814,6 +831,7 @@ func (c *Core) Stop() {
 		wg.Go(g.Stop)
 	}
 	wg.Wait()
+	c.bgWG.Wait()
 	if s := c.cur.Load(); s != nil && s.pprof != nil {
 		s.pprof.close()
 	}

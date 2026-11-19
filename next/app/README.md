@@ -164,10 +164,19 @@ mark: then the next start puts the same config back once more. If the app stops 
 starts, it does the same at its next start, also when that was a reinstall or rollback of the
 selected version; a copy it cannot read is an error, and the config is left as it is. From the
 moment the app begins to stop its core, or sees it exit, it sends nothing more to that address.
-On Windows the core binds the address itself and the app keeps no copy of the socket: between
-a crash of the core and the moment the app sees it exit (up to a tenth of a second: it checks
-every 100 ms), any call the app makes still goes to that address with the management key, where
-another user's program could have started listening ([Limits](#limits)). On Linux and macOS the app keeps its
+On Windows the core binds the address itself and the app keeps no copy of the socket. Another
+user's program can then get the core's connections: one that starts listening on that address
+between a crash of the core and the moment the app sees it exit (up to a tenth of a second: it
+checks every 100 ms), or one that stays bound to the wildcard address `0.0.0.0` on that port the
+whole time the core holds its loopback address, which Windows allows another account, and which
+receives the connections as soon as the core's socket closes. So before the app sends anything
+on a new connection to its core, it reads the system's TCP table: the other end of that very
+connection (its own addresses and ports) must belong to the core's own process. If it does not,
+or the table does not show it for at least a second, the app sends nothing on it, and the call
+fails with the reason (addresses and process IDs only): which process accepted the connection, or
+that the connection is not in this computer's table. Each client of the core holds its own
+handle on the core's process for as long as it lives, so the core's process ID cannot pass to
+another process meanwhile, even after the core has ended. On Linux and macOS the app keeps its
 own copy of the core's listening socket for as long as anything in the app could still send
 there, so no other program can listen on that address in between: not while a crashed
 core's exit is being noticed, and not while the core drains after a stop, the app's or a SIGTERM
@@ -1663,11 +1672,19 @@ app supported there:
 - The management key's native entry and rotation, and the native confirmations, have Win32
   dialogs on Windows and AppKit dialogs on macOS ([How the app reaches core](#how-the-app-reaches-core),
   [Native confirmations](#native-confirmations)).
-- Four parts of the native test run there:
+- Five parts of the native test run there:
   - the platform session (`native/platform.ts`, `PLATFORM_SHARDS` in `native/shards.ts`): one app
     per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
     Windows, a LaunchAgent on macOS), the tray and the close preference;
   - the package session: the test package and the release gate ([Packages](#packages));
+  - the tools sessions (`native/platform-tools.ts`, the `tools` shard): the signed tool sessions
+    run.ts runs on Linux (admission, the program host with its swaps, routing with jobs), and a
+    launcher check that uses managed launches only (`src-tauri/src/launcher_platform_native.rs`),
+    in the app built with the test trust, in local mode against a test core. That check leaves out
+    what Linux checks with a detached agent, a terminal, key entry and the key consumers, and
+    its crash, chain, page, changed and idle steps, which wait for their own slices; on macOS its
+    tray step calls the menu's event handler with the item's ID, as no menu shows without a person
+    holding it open (on Windows it sends the menu's own command message);
   - the update session: the test package (a folder bundle on Windows, an app bundle on macOS)
     updates itself to its signed newer version and rolls back, and crafted installs are refused
     ([Application update](#application-update));
@@ -1690,9 +1707,9 @@ app supported there:
   program host, the launch service and the launcher, and the vault for tools' backups and
   journals, with the differences [Windows and macOS](app-host/README.md#windows-and-macos) lists.
   A client page reaches its writer tool only where that tool has a program for the system
-  ([app tools](../app-tools/README.md) says which do). Clippy and the Rust tests check this there;
-  no native session starts a tool on those systems yet, and outside tests nothing can be
-  installed to run, as there are no production trust roots ([Limits](#limits)).
+  ([app tools](../app-tools/README.md) says which do). Clippy, the Rust tests and the tools
+  sessions check this there; outside tests nothing can be installed to run, as there are no
+  production trust roots ([Limits](#limits)).
 - On Windows, the page document's address is `http://pluxy-page.localhost/`, and the app holds a
   page's frame to its site through WebView2's frame navigation event (`src-tauri/src/page_frames.rs`).
 - The app tools' readers, usage parsers and execution program, the writer library and the
@@ -1767,9 +1784,13 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test runs on Linux, except its platform, package, update and dialogs sessions, which
-  CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
+- The native test runs on Linux, except its platform, package, tools, update and dialogs sessions,
+  which CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
   refuses there).
+- On Windows the program session does not check which processes hold the tool's pipes, as it
+  does on Linux and macOS: Windows lists no process's handles to an unprivileged one. It checks
+  instead that the tool's three standard handles are pipes and that a file the app holds through
+  an inheritable handle is not open in the tool.
 - The dialogs session runs only on disposable CI runners (`native/runner.ts`): on Windows the app's
   folders are the account's known folders, which no environment variable redirects, so it refuses to
   start when they exist and removes only the ones it made. Its input does not come from a keyboard:
@@ -1799,10 +1820,10 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   release feed. On Windows and macOS its steps run in the dialogs session's core run; the
   managed-core client-key check runs on Linux only. The store's Windows rules are checked by its
   unit tests on the Windows CI runner.
-- On Windows the app holds no copy of its core's listening socket, so in the moment between a
-  crash of the core and the app seeing it exit (up to a tenth of a second), any call the app
-  makes sends the management key to that address, where another user's program could have
-  started listening. Linux and macOS hold the socket and have no such gap.
+- On Windows, other programs that call the app's core, such as agents with client keys, are not
+  covered by the app's check: after a crash of the core, another user's program listening on
+  the core's port (on its address, or on the wildcard address all along) gets their calls and
+  the client keys in them. Only the app's own calls are checked.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.

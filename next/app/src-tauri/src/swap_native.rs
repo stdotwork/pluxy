@@ -2,9 +2,9 @@
 //! `artifact-test-trust` only): swaps, crash backoff and quarantine, and calls whose outcome is
 //! unknown. It runs after `program_native.rs` in the same session, with the summary tool 1.0.0
 //! enabled and running, and drives the real app through the window's own commands and the real
-//! GTK native confirmation, with the releases `native/program.ts` built (their digests are in
+//! native confirmation, with the releases `native/program.ts` built (their digests are in
 //! `expect.json`, worked out there, not by the app). It looks at the real processes and threads
-//! in `/proc`:
+//! (`proc_native.rs`):
 //!
 //! - a slow call runs on 1.0.0 while 1.1.0 is installed. The native confirmation names 1.1.0 and
 //!   full access; once it is confirmed, 1.1.0 runs (started and described, no call yet) and 1.0.0
@@ -31,7 +31,7 @@
 //! One line on stderr: `native-test: swap <JSON>`.
 
 use super::admission::{dialog_text, ok, press, refused, require, settle, start};
-use super::program::{alive, enable, processes, status, threads, ID};
+use super::program::{alive, enable, processes, program_file, status, threads, ID};
 use super::{log, wait_for};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -99,7 +99,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             .to_string()
     };
     let dir = |v: &str| store.join(sha(v));
-    let program = |v: &str| dir(v).join("bin").join("summary");
+    let program = |v: &str| program_file(&dir(v));
     let (p1, p2, p3) = (program("1.0.0"), program("1.1.0"), program("1.2.0"));
     let mut out = json!({});
 
@@ -177,7 +177,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         swapped_at.elapsed() < Duration::from_millis(SLOW_MS) + Duration::from_secs(10),
         "the slow call took too long",
     )?;
-    // Gone from /proc once it exits; listed as draining until it is reaped and its last lines
+    // Gone from the process list once it exits; listed as draining until it is reaped and its last lines
     // are read.
     wait_for("1.0.0 to be reaped after its drain", || {
         let s = status(main).ok()?;
