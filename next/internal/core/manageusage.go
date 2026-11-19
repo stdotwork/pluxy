@@ -30,7 +30,7 @@ const (
 func (c *Core) handleUsage(m *server.Management) {
 	m.Handle("GET /usage", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		f, sinceDur, err := usageFilter(q)
+		f, err := usageFilter(q)
 		if err != nil {
 			writeUsageError(w, err)
 			return
@@ -48,12 +48,6 @@ func (c *Core) handleUsage(m *server.Management) {
 			if bucket, err = time.ParseDuration(v); err != nil || bucket < time.Second || bucket > 24*time.Hour {
 				writeUsageError(w, fmt.Errorf("bucket %q must be a duration from 1s to 24h, such as 1m", v))
 				return
-			}
-		} else if sinceDur > 0 && f.Until.IsZero() {
-			if sinceDur <= 48*time.Hour {
-				bucket = time.Hour
-			} else {
-				bucket = 24 * time.Hour
 			}
 		}
 		if v := q.Get("buckets"); v != "" {
@@ -77,7 +71,7 @@ func (c *Core) handleUsage(m *server.Management) {
 	})
 	m.Handle("GET /usage/events", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		f, _, err := usageFilter(q)
+		f, err := usageFilter(q)
 		if err != nil {
 			writeUsageError(w, err)
 			return
@@ -120,18 +114,16 @@ func (c *Core) handleUsage(m *server.Management) {
 
 // usageFilter reads the filter parameters both usage calls take: since and until (RFC 3339
 // times, or since as a duration back from now, such as 24h or 7d), model, provider, account,
-// key / key_id and failed (true or false). It also returns the parsed relative duration when
-// since was a duration rather than a timestamp.
-func usageFilter(q url.Values) (usage.Filter, time.Duration, error) {
+// key / key_id and failed (true or false).
+func usageFilter(q url.Values) (usage.Filter, error) {
 	keyID := q.Get("key_id")
 	if k := q.Get("key"); k != "" {
 		if keyID != "" && keyID != k {
-			return usage.Filter{}, 0, errors.New("key and key_id conflict")
+			return usage.Filter{}, errors.New("key and key_id conflict")
 		}
 		keyID = k
 	}
 	f := usage.Filter{Model: q.Get("model"), Provider: q.Get("provider"), Account: q.Get("account"), KeyID: keyID}
-	var sinceDur time.Duration
 	for _, p := range []struct {
 		name string
 		t    *time.Time
@@ -142,7 +134,6 @@ func usageFilter(q url.Values) (usage.Filter, time.Duration, error) {
 		}
 		if p.name == "since" {
 			if d, ok := parseSinceDuration(v); ok {
-				sinceDur = d
 				*p.t = time.Now().Add(-d)
 				continue
 			}
@@ -150,20 +141,20 @@ func usageFilter(q url.Values) (usage.Filter, time.Duration, error) {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
 			if p.name == "since" {
-				return f, 0, fmt.Errorf("since %q must be an RFC 3339 time or a duration such as 24h or 7d", v)
+				return f, fmt.Errorf("since %q must be an RFC 3339 time or a duration such as 24h or 7d", v)
 			}
-			return f, 0, fmt.Errorf("until %q must be an RFC 3339 time", v)
+			return f, fmt.Errorf("until %q must be an RFC 3339 time", v)
 		}
 		*p.t = t
 	}
 	if v := q.Get("failed"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
-			return f, 0, fmt.Errorf("failed %q must be true or false", v)
+			return f, fmt.Errorf("failed %q must be true or false", v)
 		}
 		f.Failed = &b
 	}
-	return f, sinceDur, nil
+	return f, nil
 }
 
 func parseSinceDuration(v string) (time.Duration, bool) {

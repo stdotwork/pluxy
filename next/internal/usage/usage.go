@@ -660,7 +660,12 @@ func resolveSeriesWindow(f Filter, nowUTC time.Time, oldest *time.Time, bucket t
 		start = end
 	}
 	if bucket <= 0 {
-		if end.Sub(start) <= 48*time.Hour {
+		maxHourly := 48 * time.Hour
+		if f.Until.IsZero() {
+			// HTTP callers compute f.Since from time.Now() moments before Summarize reads s.now().
+			maxHourly += 500 * time.Millisecond
+		}
+		if end.Sub(start) <= maxHourly {
 			bucket = time.Hour
 		} else {
 			bucket = 24 * time.Hour
