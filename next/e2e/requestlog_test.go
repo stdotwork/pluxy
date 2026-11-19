@@ -404,3 +404,48 @@ func TestRequestLogHoldsNoSettingsSecret(t *testing.T) {
 		t.Errorf("the request log lacks the redacted message or the reply:\n%s", text)
 	}
 }
+
+// A request log leaves out the passwords of the config's proxy_url (the global one and an
+// account's) wherever it would show them, as it leaves out the credential: here in the client's
+// message. The extension removes its own proxy's password from what it sends back; the client's
+// request is core's to redact.
+func TestRequestLogHoldsNoProxyPassword(t *testing.T) {
+	const accountPass, globalPass = "acct-proxy-pass-0123", "glob-proxy-pass-4567"
+	pkg := testPackage(t, "0.1.0")
+	base, path, _ := runCoreArgs(t, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"proxy_url":      "http://globaluser:" + globalPass + "@127.0.0.1:9",
+		"logs":           map[string]any{"request_log": true},
+		"extension": map[string]any{
+			"manifest": filepath.Join(pkg, "pluxy-extension.json"),
+			"accounts": []any{map[string]any{"id": "prx",
+				"proxy_url":  "http://acctuser:" + accountPass + "@127.0.0.1:9",
+				"settings":   map[string]any{"api_key": "sk-log-proxy-key"},
+				"credential": map[string]any{"kind": "api_key", "api_key": "sk-log-proxy-credential"}}},
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp := post(t, ctx, base, clientKey, `{"model":"account-settings","messages":[{"role":"user","content":"my proxies are `+accountPass+` and `+globalPass+`"}]}`)
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	var text string
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		matches, _ := filepath.Glob(filepath.Join(filepath.Dir(path), "logs", "v1-chat-completions-*.log"))
+		if len(matches) == 1 {
+			raw, _ := os.ReadFile(matches[0])
+			if text = string(raw); strings.Contains(text, "=== RESPONSE ===") {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("request logs: %v", matches)
+		}
+	}
+	wantNoSecrets(t, "the request log", text, accountPass, globalPass)
+	if !strings.Contains(text, "my proxies are [redacted] and [redacted]") {
+		t.Errorf("the request log lacks the redacted message:\n%s", text)
+	}
+}

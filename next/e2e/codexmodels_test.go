@@ -11,6 +11,7 @@ import (
 )
 
 func TestCodexClientModels(t *testing.T) {
+	t.Parallel()
 	base := runCore(t, map[string]any{
 		"listen": "127.0.0.1:0", "client_keys": []string{clientKey},
 		"routing": map[string]any{"force_model_prefix": true},

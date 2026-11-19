@@ -61,6 +61,10 @@ type Options struct {
 	// are removed from what every call on the account sends back and from the program's
 	// output, as its credential is. Core passes configdoc.SettingsSecrets. Default: none.
 	SettingsSecrets func(settings []byte) []string
+
+	// beforeHandshakeWait, set only by tests, runs after the program has started and before
+	// core waits for its handshake, to hold core up there as a stalled start does.
+	beforeHandshakeWait func(deadline time.Time)
 }
 
 // Extension is a running extension program.
@@ -78,6 +82,10 @@ type Extension struct {
 	stopOnce sync.Once
 	held     held
 	out      output // the program's stderr and stdout lines
+
+	// startTook is how long starting the program took, from the start deadline being set to
+	// the program running, for the error of a start that passes Options.StartTimeout.
+	startTook time.Duration
 }
 
 // held are the credentials core has given the extension or got back from it, so that its output
@@ -230,7 +238,9 @@ func (h *held) String(s string) string {
 }
 
 // Start starts the extension described by the manifest at manifestPath, does the handshake and
-// checks the extension's description against the manifest.
+// checks the extension's description against the manifest. A start that passes
+// Options.StartTimeout fails with one error (startLimitError), whether the handshake came too late
+// or not at all, or describe did not finish in time.
 func Start(manifestPath string, opts Options) (*Extension, error) {
 	m, err := LoadManifest(manifestPath)
 	if err != nil {
@@ -317,6 +327,7 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 		return fmt.Errorf("starting extension %s: %w", e.manifest.ID, err)
 	}
 	e.cmd, e.stdin = cmd, stdin
+	e.startTook = e.opts.StartTimeout - time.Until(deadline)
 
 	type handshake struct {
 		line string
@@ -336,10 +347,19 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 		os.RemoveAll(e.dir)
 	}()
 
+	if e.opts.beforeHandshakeWait != nil {
+		e.opts.beforeHandshakeWait(deadline)
+	}
 	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
 	select {
 	case h := <-lines:
+		if h.err == nil && !time.Now().Before(deadline) {
+			// Read only once the deadline had passed: the start failed, as if the timer had won.
+			err := e.startLimitError("sent no handshake", "readable, read after the limit")
+			e.abort()
+			return err
+		}
 		switch {
 		case h.err == nil:
 			if err := e.checkHandshake(h.line); err != nil {
@@ -356,13 +376,67 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 		case <-e.exited:
 			return fmt.Errorf("extension %s exited before its handshake: %v", e.manifest.ID, e.waitErr)
 		case <-timer.C:
+			err := e.startLimitError("closed its stdout without a handshake and did not exit", "not readable, stdout closed")
 			e.abort()
-			return fmt.Errorf("extension %s closed its stdout without a handshake and did not exit within %s", e.manifest.ID, e.opts.StartTimeout)
+			return err
 		}
 	case <-timer.C:
+		handshake := "not read"
+		select {
+		case h := <-lines:
+			if h.err == nil {
+				handshake = "readable, read after the limit"
+			} else {
+				handshake = "not readable, stdout closed"
+			}
+		default:
+			// The reader may hold part of a line it has read; only what is still in the pipe shows.
+			if f, ok := stdout.(*os.File); ok {
+				if n, ok := unreadBytes(f); ok && n > 0 {
+					handshake = fmt.Sprintf("not read, %d bytes waiting in its stdout", n)
+				} else if ok {
+					handshake = "not read, no bytes waiting in its stdout"
+				}
+			}
+		}
+		err := e.startLimitError("sent no handshake", handshake)
 		e.abort()
-		return fmt.Errorf("extension %s sent no handshake within %s", e.manifest.ID, e.opts.StartTimeout)
+		return err
 	}
+}
+
+// startLimitError is the error of a start that passed Options.StartTimeout. what says what the
+// program did not do in time, and handshake whether its handshake line could be read when core
+// looked. The error also says how long starting the program took and, where the system shows
+// them (Linux), the program's process state and the kernel function it waits in, read before
+// the program is killed.
+func (e *Extension) startLimitError(what, handshake string) error {
+	details := append([]string{"starting its process took " + e.startTook.String(), "handshake: " + handshake}, processState(e.PID())...)
+	return fmt.Errorf("extension %s %s within %s (%s)", e.manifest.ID, what, e.opts.StartTimeout, strings.Join(details, "; "))
+}
+
+// processState returns the state and wait channel of process pid from /proc, each left out
+// where it cannot be read.
+func processState(pid int) []string {
+	if pid <= 0 {
+		return nil
+	}
+	var out []string
+	proc := "/proc/" + strconv.Itoa(pid) + "/"
+	if b, err := os.ReadFile(proc + "stat"); err == nil {
+		// The command name in parentheses may hold spaces; the state is the first field after it.
+		if i := bytes.LastIndexByte(b, ')'); i >= 0 {
+			if f := strings.Fields(string(b[i+1:])); len(f) > 0 {
+				out = append(out, "process state "+f[0])
+			}
+		}
+	}
+	if b, err := os.ReadFile(proc + "wchan"); err == nil {
+		if w := strings.TrimSpace(string(b)); w != "" {
+			out = append(out, "wchan "+w)
+		}
+	}
+	return out
 }
 
 func (e *Extension) checkHandshake(line string) error {
@@ -379,7 +453,19 @@ func (e *Extension) checkHandshake(line string) error {
 	return nil
 }
 
+// describe asks the program to describe itself. A describe that times out at the start deadline
+// fails with the start limit's error, not with its own timeout; any other failure keeps its own
+// error.
 func (e *Extension) describe(deadline time.Time) error {
+	err := e.describeCall(deadline)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return e.startLimitError("did not answer describe", "read in time")
+	}
+	return err
+}
+
+func (e *Extension) describeCall(deadline time.Time) error {
 	d := net.Dialer{Deadline: deadline}
 	conn, err := d.Dial("unix", e.socket)
 	if err != nil {
@@ -487,8 +573,11 @@ func ServesEndpoints(info protocol.Info) bool {
 }
 
 // Endpoint starts an endpoint call, answered as a generate call is (see Generate). The reply's
-// body is redacted across its pieces: a secret in one of the forms core removes that is cut between
-// them is removed, but for any part of its start that a piece redacted whole had already sent
+// body is redacted across its pieces: a secret in one of the forms core removes, or spelled with
+// other escapes core decodes, that is cut between them is removed, but for the part of its start
+// that a piece sent whole (redacted as one text, as when it is too heavily escaped to hold back)
+// had already sent as it was; after such a piece, an escape it began that the next completes is
+// replaced too, so the client does not read one there that spells a secret
 // (protocol.BodyRedactor). An extension that serves no endpoints answers at once with an
 // unsupported error about the account, so routing moves on to another account.
 func (e *Extension) Endpoint(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
@@ -658,10 +747,12 @@ func (s *Stream) last() llm.Event {
 }
 
 // bodyPiece returns a body piece as the JSON string a native event carries. BodyRedactor cuts
-// a body only where a form of a secret starts or ends, before an ASCII byte (a number, or the
-// colon, bracket or comma before one), or, after text sent whole, at the start of a character it
-// left as it was, each of which is where a character starts, so the piece is valid UTF-8 as the
-// decoded string it came from was, and encodes exactly.
+// a body only where a character starts: where a form of a secret, or its spelling with escapes,
+// starts or ends, at a backslash or percent sign that starts an escape, before the colon, bracket
+// or comma before a number or the number, where a run of bytes that can be part of a spelling
+// starts, or, after text it sent whole or replaced with [redacted], at the start of a character
+// it left as it was. So the piece is valid UTF-8 as the decoded string it came from was, and
+// encodes exactly.
 func bodyPiece(text string) json.RawMessage {
 	b, _ := json.Marshal(text)
 	return b
