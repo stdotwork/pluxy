@@ -847,6 +847,10 @@ impl Drop for ManagedCore {
     }
 }
 
+/// The real core, built for the tests (`tests::real_core`).
+#[cfg(test)]
+pub(crate) use tests::real_core;
+
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
@@ -1106,7 +1110,7 @@ mod tests {
     }
 
     /// The real core (`next/cmd/pluxy`), built once by `go build` into a folder of its own.
-    fn real_core() -> PathBuf {
+    pub(crate) fn real_core() -> PathBuf {
         static BUILT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
         BUILT
             .get_or_init(|| {

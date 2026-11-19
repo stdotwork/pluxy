@@ -137,9 +137,10 @@ jobs:
   # keeps the programs executable, which upload-artifact does not.
   native-build:
     if: inputs.skip-native != true
-    # The same runner as the shards, which run what it builds, so never PLUXY_LINUX_RUNNER either:
-    # GitHub's, or PLUXY_LINUX_CLOUD_RUNNER's (AGENTS.md, "Where jobs run"). Pinned: the package
-    # names below are Ubuntu 24.04's.
+    # PLUXY_LINUX_CLOUD_RUNNER's, else GitHub's, never PLUXY_LINUX_RUNNER (AGENTS.md, "Where jobs
+    # run"). The shards run what it builds on GitHub's runners: both are Ubuntu 24.04 with the same
+    # packages, and the test moves the prebuilt folder's paths to where it is unpacked. Pinned: the
+    # package names below are Ubuntu 24.04's.
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
@@ -225,11 +226,12 @@ jobs:
     if: inputs.skip-native != true
     needs: native-build
     # Pinned: the package names below are Ubuntu 24.04's, and so are the file paths the native
-    # test starts services from (next/app/native/services.ts). On GitHub's runners or
-    # PLUXY_LINUX_CLOUD_RUNNER's (Namespace's have /dev/fuse), never PLUXY_LINUX_RUNNER: the
-    # document portal needs /dev/fuse, which the maintainers' runner containers don't get (FUSE in a
-    # container needs extra privilege).
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || 'ubuntu-24.04' }}
+    # test starts services from (next/app/native/services.ts). Always GitHub's runners, which are
+    # free for this repository and seldom queue: on PLUXY_LINUX_CLOUD_RUNNER's the shards waited
+    # for its vCPU limit longer than they ran (AGENTS.md, "Where jobs run"). Never
+    # PLUXY_LINUX_RUNNER: the document portal needs /dev/fuse, which the maintainers' runner
+    # containers don't get (FUSE in a container needs extra privilege).
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -254,12 +256,50 @@ jobs:
       # service owns org.kde.StatusNotifierWatcher. squashfs-tools builds the smoke AppImage.
       # xdotool sends real input through the X server (XTEST), for native dialog checks.
       # ImageMagick's import takes the screenshots each session keeps (native/shots.ts).
+      #
+      # The packages come from a cache when they can: about half of GitHub's Linux runners fetch
+      # from a mirror (us-east-2.ec2.archive.ubuntu.com) at 50 to 200 kB/s, so the 98 MB download
+      # took 9 to 30 minutes there, against seconds from azure.archive.ubuntu.com. apt checks each
+      # cached file against the signed package index it just fetched, downloads any that are
+      # missing, stale or don't match, and keeps the cache to the versions now installed. The
+      # cache is saved from pushes to main (and manual runs, for their own branch), which every
+      # merge group and pull request can restore.
+      - name: Restore the apt packages
+        id: apt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/pluxy-apt-debs
+          # Never an exact match: the newest saved set, whose name hashes its file names.
+          key: apt-debs-native-${{ github.sha }}
+          restore-keys: apt-debs-native-
       - name: Install WebKitGTK, the tray library, Xvfb, D-Bus, the portals, a tray watcher, squashfs-tools, xdotool and ImageMagick
+        id: apt
         working-directory: .
         run: |
+          debs="$HOME/.cache/pluxy-apt-debs"
+          mkdir -p "$debs/partial"
+          cached="$(find "$debs" -maxdepth 1 -name '*.deb' | wc -l)"
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
+          sudo apt-get install -y -o Dir::Cache::Archives="$debs" \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-daemon \
             xdg-desktop-portal xdg-desktop-portal-gtk ayatana-indicator-application squashfs-tools xdotool imagemagick
+          # Keep only the files of the versions installed now, named as apt names them (an epoch's
+          # colon as %3a).
+          dpkg-query -W -f='${Package}_${Version}_${Architecture}.deb\n' | sed 's/:/%3a/g' > "$RUNNER_TEMP/installed-debs"
+          sudo rm -rf "$debs/partial" "$debs/lock"
+          for f in "$debs"/*.deb; do
+            [ -e "$f" ] || continue
+            grep -qxF "$(basename "$f")" "$RUNNER_TEMP/installed-debs" || sudo rm -f "$f"
+          done
+          kept="$(find "$debs" -maxdepth 1 -name '*.deb' | wc -l)"
+          echo "apt packages: $cached restored from the cache, $kept kept ($(du -sh "$debs" | cut -f1))"
+          echo "key=apt-debs-native-$(find "$debs" -maxdepth 1 -name '*.deb' -printf '%f\n' | sort | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - name: Save the apt packages
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.apt.outputs.key != steps.apt-cache.outputs.cache-matched-key
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/pluxy-apt-debs
+          key: ${{ steps.apt.outputs.key }}
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -335,8 +375,9 @@ jobs:
   app:
     if: ${{ !cancelled() }}
     needs: [checks, native-build, native]
-    # Like checks: PLUXY_LINUX_CLOUD_RUNNER first, then PLUXY_LINUX_RUNNER.
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    # GitHub's runners: it only compares results, and on PLUXY_LINUX_CLOUD_RUNNER it waited up to
+    # 28 minutes for a runner (AGENTS.md, "Where jobs run").
+    runs-on: ubuntu-latest
     steps:
       - name: Every job passed
         working-directory: .

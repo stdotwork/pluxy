@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/private"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -161,10 +162,15 @@ func (l *RequestLog) write(e *requestEntry) {
 	if l == nil || !l.All && !e.failed() {
 		return
 	}
-	if err := os.MkdirAll(l.Dir, 0o700); err != nil {
+	// The logs folder is checked, and made when it is missing, as main.log's is (logfile), and
+	// each log file can be read only by core's user (and, on Windows, SYSTEM) from the moment it
+	// exists.
+	root, err := private.Dir{Path: l.Dir}.OpenRoot(true)
+	if err != nil {
 		log.Printf("request log: %v", err)
 		return
 	}
+	defer root.Close()
 	name := logFileName(e.url.Path, e.at, e.trace.id)
 	if !l.All {
 		name = "error-" + name
@@ -172,7 +178,7 @@ func (l *RequestLog) write(e *requestEntry) {
 	// Written in full under a name no reader lists, then linked to its own: a reader finds the
 	// whole log or none. Linking fails when the name exists, so an existing name, or a link
 	// planted under it, is never written through.
-	f, err := os.CreateTemp(l.Dir, ".writing-*")
+	f, tmp, err := private.CreateTemp(root, l.Dir, ".writing-")
 	if err != nil {
 		log.Printf("request log: %v", err)
 		return
@@ -182,9 +188,9 @@ func (l *RequestLog) write(e *requestEntry) {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Link(f.Name(), filepath.Join(l.Dir, name))
+		err = root.Link(tmp, name)
 	}
-	_ = os.Remove(f.Name())
+	_ = root.Remove(tmp)
 	if err != nil {
 		log.Printf("request log: %v", err)
 		return

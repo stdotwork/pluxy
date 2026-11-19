@@ -135,15 +135,22 @@ the program file it just checked: on Linux from the open file itself; on macOS a
 the path that file has now, after checking that the path still names that same file
 (`src-tauri/src/owned/`). A changed version does not start:
 **Install … again** installs the same release over it, through the same checks and confirmation;
-a changed adopted copy is copied in again by adopting the same program again.
+a changed adopted copy is copied in again by adopting the same program again. Writing a
+version again moves its old folder aside first, which Windows refuses while a program in it runs,
+so there the app stops the core first when it runs that version, and starts it again if the
+install fails.
 
 **Switching** to a version (an install, **Roll back to** an installed version, or an adoption)
 stops the running core, keeps a copy of `core/config.json` (or a mark that there was none) and
-records the new version as the candidate, then starts it. The app binds the `listen` address in
-`core/config.json` itself (an IP address and port, or `localhost` and a port) and hands the
-listening socket to the core (`-listen-fd`). It counts as started once it says it listens on that
-socket, on this computer, every socket listening on that port belongs to the process the app
-started (read from `/proc` on Linux, before the app sends anything there), it answers
+records the new version as the candidate, then starts it. On Linux and macOS the app binds the
+`listen` address in `core/config.json` itself (an IP address and port, or `localhost` and a port)
+and hands the listening socket to the core (`-listen-fd`); on Windows the core binds it. It counts
+as started once it says it listens there, on this computer, every socket listening on that port
+belongs to the process the app started (read from `/proc` on Linux and from the system's TCP
+table on Windows; on macOS the core still runs and the address is the loopback socket the app
+bound and handed over, which it still holds and no other user can bind over, while other
+processes of your own user are not looked at, as they can read the core's config and its key
+anyway), before the app sends anything there, it answers
 `GET /v0/management/status` with the app's management key and, for a release, reports the
 version it was signed as, and the app has saved the new selection. If not, the app puts the
 config back as it was, removes a version it installed for this switch, and runs the version that
@@ -157,8 +164,12 @@ mark: then the next start puts the same config back once more. If the app stops 
 starts, it does the same at its next start, also when that was a reinstall or rollback of the
 selected version; a copy it cannot read is an error, and the config is left as it is. From the
 moment the app begins to stop its core, or sees it exit, it sends nothing more to that address.
-The app keeps its own copy of the core's listening socket for as long as anything in the app could
-still send there, so no other program can listen on that address in between: not while a crashed
+On Windows the core binds the address itself and the app keeps no copy of the socket: between
+a crash of the core and the moment the app sees it exit (up to a tenth of a second: it checks
+every 100 ms), any call the app makes still goes to that address with the management key, where
+another user's program could have started listening ([Limits](#limits)). On Linux and macOS the app keeps its
+own copy of the core's listening socket for as long as anything in the app could still send
+there, so no other program can listen on that address in between: not while a crashed
 core's exit is being noticed, and not while the core drains after a stop, the app's or a SIGTERM
 from elsewhere (the core closes its listener as it starts draining). A call made in that time
 reaches the core or waits in the app's socket, and fails once the core has exited. This holds
@@ -179,7 +190,9 @@ without being read; on Unix it must be executable, on Windows a program image na
 program has no signature.
 
 The app only ever stops the core process it started. A core it did not start, such as a system
-service or another core of yours on this computer, is never stopped or signalled.
+service or another core of yours on this computer, is never stopped or signalled. The native
+test checks it on Linux, Windows and macOS: a core the runner started before the app still
+answers afterwards, with its config and program unchanged.
 
 Each change works once: while one waits for its confirmation, another is refused. The window
 hears `pluxy-connection` when it has ended, and `core_versions` says whether it was done,
@@ -328,7 +341,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `core_start` | Starts the app's own core only if it is not running (managed mode) |
 | `core_restart` | Starts the app's own core again (managed mode) |
 | `core_versions` | The app's own core versions, what the core source offers, and how the last change ended |
-| `core_install`, `core_rollback`, `core_adopt` | Asks to install a release from the core source, to run an installed version again, or to adopt the chosen core program; each opens a native confirmation (Linux) and applies nothing itself |
+| `core_install`, `core_rollback`, `core_adopt` | Asks to install a release from the core source, to run an installed version again, or to adopt the chosen core program; each opens a native confirmation and applies nothing itself |
 | `core_call` | One management API call to the connected core; refuses the management key's own routes |
 | `management_key_rotate` | Rotates the management key natively after the native confirmation, keeps and shows the new key natively, and returns only how it went (200 with how the key is kept, 204 when cancelled) |
 | `sign_out` | Forgets the key (local and remote modes) |
@@ -584,6 +597,25 @@ In this order:
    - macOS: the unpacked bundle and the installed one swap places in one step (`renamex_np` with
      `RENAME_SWAP`): the bundle is the old one or the new one. The old one, now in the
      `.pluxy-update-<hex>` folder, is removed once the new version runs and the old one has ended.
+
+   What an install leaves beside the installed copy is recorded in `updates/leftovers.json` before
+   the install goes on, with what identifies it beyond its name: on Windows the new program right
+   after it is created and the aside copy just before the rename (each by its volume serial number
+   and file ID), on macOS the `.pluxy-update-<hex>` folder right after it is created (by its device
+   and inode, read through the open folder, which must be empty and yours alone). When the record
+   cannot be written, the install deletes what it just made and stops. Should the app stop in the
+   moment between making one and recording it, that empty folder or file stays unrecorded, and no
+   later start removes it. Removal at a later start goes through the record only. An entry that is
+   still the recorded file or folder (and, on macOS, a folder of yours) is removed without
+   following a link: on Windows through its open handle; on macOS what is in it through the open
+   folder, never entering a folder in it whose device differs from its own (a file system mounted
+   there; a mount that keeps the device, as a bind mount from the same file system does, is not
+   seen), then the emptied folder by its name only while that name still holds it. An entry whose
+   name is gone or now holds something else (on Windows a folder too) is dropped from the record
+   and nothing at that name is deleted; one still in use, or with a file system mounted in it,
+   stays recorded for the next start. A failed or cancelled install removes what it made the same
+   way, only while it is still what it made. The folder the installed copy is in is never listed,
+   so whatever someone else put there, even under one of these names, stays.
 7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
    that order; detached launches run on) and hides its window, but keeps its profile and starts the
    new version as its successor, handing the profile over so no other launch takes it meanwhile
@@ -1466,8 +1498,11 @@ same install with the run's root, confirmed, runs 1.0.0 from the app's folder an
 the bad signature is refused before any dialog; that 2.0.0 replaces 1.0.0 (whose process is gone)
 with the config unchanged; that after 3.0.0 the config is restored and 2.0.0 runs again; that an
 unknown rollback target is refused, a cancelled rollback changes nothing and a confirmed one runs
-1.0.0; and that a core program does not run until it is adopted, after which the app's copy runs
-and the program itself does not. A sentinel core the runner started before the app must still
+1.0.0; that a core program does not run until it is adopted, after which the app's copy runs
+and the program itself does not; that with a file of the installed 1.0.0 changed, rolling back to
+it is refused before any dialog, by the same check of every installed file (`Store::program`)
+that runs before every start, and installing it again, confirmed, repairs it and runs it; and
+that installing the running version again runs it in a new process. A sentinel core the runner started before the app must still
 answer, with its config and program unchanged, after the app has quit. `cargo test` covers a
 crash while a version starts,
 changed installed files, hostile archives and a version that is not what it was signed as
@@ -1639,14 +1674,19 @@ app supported there:
     ([Application update](#application-update));
   - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
     test core, with the window's and page's command probes, the native confirmations, key entry and
-    key rotation. [Limits](#limits) says how its input is made.
+    key rotation; then a second run in managed mode, against signed test core releases, with the
+    app's own core steps as Linux's core steps session runs them (install, a bad signature
+    refused, update, a failed start put back, rollback, adopt, a changed version refused and
+    repaired, the running version installed again), each change through the native confirmation,
+    whose text is checked to show what will run; a core the runner started before the app must
+    still answer afterwards, untouched. [Limits](#limits) says how its input is made.
 - The vault's private storage is built and unit tested there ([Limits](#limits)).
 - How the app starts, holds and stops processes is built there (`src-tauri/src/owned/`: a job
   object on Windows, a process group on macOS), and CI checks that each of its lifetime tests ran
   and passed ([Windows and macOS](app-host/README.md#windows-and-macos)). Native tools, their
   managed runtimes, confirmed launches and the app's own update (`owned::Successor`: the new
-  version, held until it accepts itself) reach it at run time there; the app's own core, which
-  would too, is refused (below).
+  version, held until it accepts itself) reach it at run time there, and so does the app's own
+  core ([The app's own core](#the-apps-own-core)), its changes confirmed natively.
 - Native tools run there as on Linux: enabling a package and its native imports, the router, the
   program host, the launch service and the launcher, and the vault for tools' backups and
   journals, with the differences [Windows and macOS](app-host/README.md#windows-and-macos) lists.
@@ -1665,13 +1705,11 @@ signer or grant can be made. On Windows its commands and a page's Access calls a
 macOS its list, revocation and a page's calls answer, with nothing granted.
 
 Still refused at run time there: a native tool's `files` frames (saving a file), the vault's
-secret entry and list, client keys and core aliases, the app's own core
-(the store of its versions opens, but installing, adopting and rolling back a version need the
-native confirmation, which core changes have on Linux only, so no version is installed and none
-starts), installing a package from a file, a launch that opens a file and opening an address in
-the browser. Changing the release feed works there through the native confirmation. The app
-updates itself, with test updater trust only, as an AppImage on Linux, as a folder bundle's
-program on Windows and as an app bundle on macOS ([Application update](#application-update)).
+secret entry and list, client keys and core aliases, installing a package from a file, a launch
+that opens a file and opening an address in the browser. Changing the release feed works there
+through the native confirmation. The app updates itself, with test updater trust only, as an
+AppImage on Linux, as a folder bundle's program on Windows and as an app bundle on macOS
+([Application update](#application-update)).
 
 ## Limits
 
@@ -1755,9 +1793,13 @@ program on Windows and as an app bundle on macOS ([Application update](#applicat
 - Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
   the renderer writes alignment as inline style, which the notes' policy refuses.
 - The app's own core comes only from a local index file for now; an https source joins with the
-  release feed. Installing, rolling back and adopting need the native confirmation, so they work
-  on Linux only. The store itself works on Windows too, which its unit tests check on the Windows
-  CI runner.
+  release feed. On Windows and macOS its steps run in the dialogs session's core run; the
+  managed-core client-key check runs on Linux only. The store's Windows rules are checked by its
+  unit tests on the Windows CI runner.
+- On Windows the app holds no copy of its core's listening socket, so in the moment between a
+  crash of the core and the app seeing it exit (up to a tenth of a second), any call the app
+  makes sends the management key to that address, where another user's program could have
+  started listening. Linux and macOS hold the socket and have no such gap.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.
