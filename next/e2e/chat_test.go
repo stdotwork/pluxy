@@ -301,9 +301,15 @@ func runCoreBin(t *testing.T, bin, path string, args ...string) (string, *coreLo
 // log is returned in every case.
 func startCoreBin(t *testing.T, bin, path string, args ...string) (string, *coreLog, error) {
 	t.Helper()
+	return startCoreArgv(t, bin, append([]string{"-config", path}, args...)...)
+}
+
+// startCoreArgv is startCoreBin with the program's whole command line after its name.
+func startCoreArgv(t *testing.T, bin string, argv ...string) (string, *coreLog, error) {
+	t.Helper()
 	logs := &coreLog{}
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, bin, append([]string{"-config", path}, args...)...)
+	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 10 * time.Second
 	addr := make(chan string, 1)

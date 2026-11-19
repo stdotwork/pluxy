@@ -27,7 +27,7 @@
 //! One line on stderr: `native-test: access <JSON>`.
 
 use super::device::{call, listed, ok, refused, require, settle, start, x};
-use super::{chooser, eval, log, wait_for};
+use super::{channel_open, chooser, eval, log, wait_for};
 use crate::MAIN;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -198,7 +198,22 @@ fn page(app: &AppHandle, main: &Webview, route: &str, digest: &str) -> Result<We
     let w = app
         .get_webview(&label)
         .ok_or_else(|| format!("no webview {label}"))?;
-    let r = channel(&w, "theme.get", Value::Null)?;
+    // The iframe has an address as soon as the window renders it, before its document has loaded
+    // and its script listens: a call posted then is lost, not queued, and its reply never comes.
+    // The channel is open once the frame's hello is admitted and its port is on the way.
+    channel_open(app, main, &label)?;
+    let r = channel(&w, "theme.get", Value::Null).map_err(|e| {
+        let native = app
+            .state::<crate::App>()
+            .pages
+            .lock()
+            .unwrap()
+            .channel_state(&label);
+        format!(
+            "{route}: {e}: {}",
+            json!({"label": label, "native": native})
+        )
+    })?;
     require(
         r.get("result").is_some(),
         format!("{route}: theme.get: {r}"),
