@@ -23,8 +23,6 @@ import (
 	"github.com/stdotwork/pluxy/next/extensions/kimi/kimitest"
 )
 
-// bundledRegistry writes a local registry offering each extension built in binDir (ID to the
-// program's path under binDir) as version 0.1.0, and returns its index's path.
 // installBundled installs and enables the packages ids from the bundled registry of the core at
 // base: a first start installs nothing.
 func installBundled(t *testing.T, base string, ids ...string) {
@@ -36,6 +34,8 @@ func installBundled(t *testing.T, base string, ids ...string) {
 	}
 }
 
+// bundledRegistry writes a local registry offering each extension built in binDir (ID to the
+// program's path under binDir) as version 0.1.0, and returns its index's path.
 func bundledRegistry(t *testing.T, programs map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -338,17 +338,19 @@ openai-compatibility:
 	}
 }
 
-// -import-auth prints the config's notices (a dropped setting, the example config's public client
-// key) on standard error and keeps standard output for the counts.
+// -import-auth prints the config's notices (a dropped setting, a bcrypt management key) on standard
+// error and keeps standard output for the counts. A config core would not serve, for want of a
+// usable management key, still imports: it is the way a CPA setup's accounts come across.
 func TestImportAuthPrintsConfigNotices(t *testing.T) {
 	work := t.TempDir()
 	authDir := filepath.Join(work, "old-auths")
 	if err := os.Mkdir(authDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	const hash = "$2a$10$abcdefghijklmnopqrstuuAbCdEfGhIjKlMnOpQrStUvWxYz01234"
 	cfg := "server: {host: 127.0.0.1, port: 18999, max-request-body-bytes: 1000}\n" +
-		"access: {api-keys: [your-api-key-1]}\n" +
-		"management: {secret-key: \"" + managementKey + "\"}\n" +
+		"access: {api-keys: [fake-client-key-e2e]}\n" +
+		"management: {secret-key: \"" + hash + "\"}\n" +
 		"oauth: {auth-dir: \"" + authDir + "\"}\n" +
 		"credentials_dir: \"" + filepath.Join(work, "credentials") + "\"\n"
 	path := filepath.Join(work, "config.yaml")
@@ -363,16 +365,16 @@ func TestImportAuthPrintsConfigNotices(t *testing.T) {
 	}
 	for _, want := range []string{
 		"dropped, ignored: server.max-request-body-bytes",
-		"client_keys still holds the example config's public keys",
+		"remote-management.secret-key is a bcrypt hash: replace it with a new key (pluxy cannot use a bcrypt hash)",
 	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("stderr lacks %q:\n%s", want, &stderr)
 		}
 	}
-	if !strings.Contains(stdout.String(), "0 imported, 0 skipped") || strings.Contains(stdout.String(), "dropped") {
+	if !strings.Contains(stdout.String(), "0 imported, 0 skipped") || strings.Contains(stdout.String(), "bcrypt") {
 		t.Errorf("stdout should hold the counts only:\n%s", &stdout)
 	}
-	if strings.Contains(stderr.String()+stdout.String(), managementKey) {
+	if strings.Contains(stderr.String()+stdout.String(), hash) {
 		t.Error("the output holds the management key")
 	}
 }

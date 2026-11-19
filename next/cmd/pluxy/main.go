@@ -89,7 +89,7 @@ func serve(args []string) {
 // config's notices (settings it ignores, a hashed management key) go to standard error, as
 // core's log does at start, so a script reading the counts on standard output does not see them.
 func importAuthDir(configPath, dir string) error {
-	cfg, err := server.LoadConfig(configPath)
+	cfg, err := server.LoadImportConfig(configPath)
 	if err != nil {
 		return core.ScrubConfigError(configPath, err)
 	}
@@ -165,21 +165,30 @@ const initPortEnv = "PLUXY_INIT_PORT"
 
 // firstStart writes a first config at configPath when there is no file there, and says where
 // it is: a new install starts with no config. It logs the file's path, never its keys.
-func firstStart(configPath string) error {
+// With inherited set, core serves on a socket it was handed (-listen-fd), not on the address it
+// writes, so it does not name that address.
+func firstStart(configPath string, inherited bool) error {
 	if _, err := os.Stat(configPath); !errors.Is(err, fs.ErrNotExist) {
 		return nil // core reads it, and says what is wrong with it
 	}
 	port := -1
 	if v, ok := os.LookupEnv(initPortEnv); ok {
 		p, err := strconv.Atoi(v)
-		if err != nil || p < 0 {
+		if err != nil || p < 0 || p > 65535 {
 			return fmt.Errorf("%s=%q is not a port", initPortEnv, v)
 		}
 		port = p
 	}
 	fc, err := core.WriteFirstConfig(configPath, port)
+	if errors.Is(err, fs.ErrExist) {
+		return nil // another first start wrote it in the meantime: core reads that one
+	}
 	if err != nil {
 		return fmt.Errorf("no config at %s, and a first one could not be written: %w", configPath, err)
+	}
+	if inherited {
+		log.Printf("first start: wrote a new config, %s, serving on the inherited socket; its client key and management key are in that file", fc.Path)
+		return nil
 	}
 	log.Printf("first start: wrote a new config, %s, listening on %s; its client key and management key are in that file", fc.Path, fc.Listen)
 	return nil
@@ -202,7 +211,7 @@ func initConfig(args []string, stdout, stderr io.Writer) int {
 		}
 		return exitUsage
 	}
-	if fs.NArg() > 0 || *port < -1 {
+	if fs.NArg() > 0 || *port < -1 || *port > 65535 {
 		fs.Usage()
 		return exitUsage
 	}
@@ -248,7 +257,7 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		}
 		ln = l
 	}
-	if err := firstStart(configPath); err != nil {
+	if err := firstStart(configPath, ln != nil); err != nil {
 		if ln != nil {
 			ln.Close()
 		}

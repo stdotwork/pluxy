@@ -44,16 +44,8 @@ func WriteFirstConfig(path string, port int) (FirstConfig, error) {
 	if port < -1 || port > 65535 {
 		return FirstConfig{}, fmt.Errorf("port %d is not a port", port)
 	}
-	if port == -1 {
-		port = DefaultPort
-		if !portFree(port) {
-			port = 0
-		}
-	}
-	if port == 0 {
-		if port, err = freePort(); err != nil {
-			return FirstConfig{}, fmt.Errorf("finding a free port: %w", err)
-		}
+	if port, err = pickPort(port, DefaultPort); err != nil {
+		return FirstConfig{}, fmt.Errorf("finding a free port: %w", err)
 	}
 	listen := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 	b, err := json.MarshalIndent(struct {
@@ -74,6 +66,21 @@ func WriteFirstConfig(path string, port int) (FirstConfig, error) {
 		return FirstConfig{}, fmt.Errorf("writing %s: %w", abs, err)
 	}
 	return FirstConfig{Path: abs, Listen: listen}, nil
+}
+
+// pickPort returns the port a first config listens on: port when it is above 0; with port -1,
+// preferred when it is free now and a free port when it is taken; with port 0, a free port.
+func pickPort(port, preferred int) (int, error) {
+	if port == -1 {
+		if portFree(preferred) {
+			return preferred, nil
+		}
+		port = 0
+	}
+	if port == 0 {
+		return freePort()
+	}
+	return port, nil
 }
 
 // portFree reports whether port can be listened on at 127.0.0.1 now.

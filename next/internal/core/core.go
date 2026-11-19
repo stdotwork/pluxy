@@ -66,8 +66,8 @@ type Options struct {
 	// so. Nil: core uses the folder logs beside the config file, without writing to it.
 	Logs *logfile.Files
 	// Bundled is the index of the registry of packages this install ships with (absolute), or
-	// empty for none. On the first start with a packages folder that has no record yet, every
-	// package it lists is installed and enabled.
+	// empty for none. It is a registry like any other, named bundled: core installs nothing
+	// from it by itself, on a first start or later.
 	Bundled string
 }
 

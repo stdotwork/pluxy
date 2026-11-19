@@ -130,6 +130,8 @@ func TestConfigWithoutManagementKeyIsRefused(t *testing.T) {
 	for _, c := range []struct{ name, body, want string }{
 		{"config.json", `{"listen": "127.0.0.1:0", "client_keys": ["` + clientKey + `"]}`, `"management_key"`},
 		{"config.yaml", "port: 0\napi-keys: [" + clientKey + "]\n", "remote-management: {secret-key:"},
+		{"hashed.yaml", "port: 0\napi-keys: [" + clientKey + "]\nremote-management: {secret-key: \"$2a$10$abcdefghijklmnopqrstuuAbCdEfGhIjKlMnOpQrStUvWxYz01234\"}\n",
+			"replace it with a new key (pluxy cannot use a bcrypt hash)"},
 	} {
 		path := filepath.Join(t.TempDir(), c.name)
 		if err := os.WriteFile(path, []byte(c.body), 0o600); err != nil {
@@ -141,7 +143,11 @@ func TestConfigWithoutManagementKeyIsRefused(t *testing.T) {
 		if _, ok := err.(*exec.ExitError); !ok {
 			t.Fatalf("%s: core did not exit with an error: %v: %s", c.name, err, out)
 		}
-		for _, want := range []string{"no management key", c.want, "pluxy init"} {
+		wants := []string{c.want}
+		if c.name != "hashed.yaml" {
+			wants = append(wants, "no management key", "pluxy init")
+		}
+		for _, want := range wants {
 			if !strings.Contains(string(out), want) {
 				t.Errorf("%s: message does not say %q: %s", c.name, want, out)
 			}
@@ -183,6 +189,15 @@ func TestInitWritesFirstConfigOnce(t *testing.T) {
 	}
 	if again, _ := os.ReadFile(path); string(again) != string(first) {
 		t.Error("init replaced the config")
+	}
+	// A port out of range is a wrong command line.
+	other := filepath.Join(t.TempDir(), "config.json")
+	err = exec.Command(bin, "init", "-config", other, "-port", "70000").Run()
+	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 2 {
+		t.Errorf("init -port 70000: %v, want exit status 2", err)
+	}
+	if _, err := os.Stat(other); err == nil {
+		t.Error("init -port 70000 wrote a config")
 	}
 	// The config it wrote starts core.
 	base, _ := runCoreFile(t, path)

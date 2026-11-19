@@ -410,8 +410,8 @@ func TestInstallRefusesArchiveWithWrongDigest(t *testing.T) {
 }
 
 // A first start installs nothing from the bundled registry; a package installed from it is
-// installed through the same path as from any registry, and stays installed when core starts
-// again.
+// installed through the same path as from any registry, stays installed when core starts again,
+// and once removed stays removed.
 func TestBundledPackagesInstallOnlyWhenAsked(t *testing.T) {
 	u := answeringUpstream(t)
 	srv := codextest.New(t)
@@ -433,7 +433,16 @@ func TestBundledPackagesInstallOnlyWhenAsked(t *testing.T) {
 		base, _, _ := runCoreArgs(t, cfg, "-bundled", bundled)
 		ps := listPackages(t, base)
 		if len(ps) != 1 || ps[0].ID != "pluxy/codex" || !ps[0].Enabled {
-			t.Errorf("packages after restart: %+v", ps)
+			t.Fatalf("packages after restart: %+v", ps)
+		}
+		if code := manage(t, base, "DELETE", "/packages/pluxy/codex", nil, nil); code != http.StatusNoContent {
+			t.Fatalf("remove: status %d", code)
+		}
+	})
+	t.Run("third start", func(t *testing.T) {
+		base, _, _ := runCoreArgs(t, cfg, "-bundled", bundled)
+		if ps := listPackages(t, base); len(ps) != 0 {
+			t.Errorf("a removed bundled package came back: %+v", ps)
 		}
 	})
 }

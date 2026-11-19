@@ -1100,7 +1100,6 @@ fn run(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// The window as the instance scenario sees it.
 /// A core's first start installs nothing. In managed mode the session installs the packages of
 /// the bundled registry beside the core's program (panelcore's test packages), as setup would,
 /// before the steps that use them. An adopted program is copied without them: nothing to do.
@@ -1150,6 +1149,7 @@ fn install_bundled(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The window as the instance scenario sees it.
 fn window_state(app: &AppHandle) -> Value {
     match app.get_window(WINDOW) {
         Some(w) => json!({

@@ -484,12 +484,12 @@ func TestContainerSettings(t *testing.T) {
 	}
 }
 
-// A bcrypt hash of the management key cannot be used as the key: the config is refused, saying
-// what to set, rather than loaded with the management API off.
+// A bcrypt hash of the management key cannot be used as the key: the translation says so and
+// leaves the key out (core refuses to serve the config; -import-auth still reads it).
 func TestHashedManagementKey(t *testing.T) {
-	r, err := Translate([]byte(`remote-management: {secret-key: "$2a$10$abcdefghijklmnopqrstuuAbCdEfGhIjKlMnOpQrStUvWxYz01234"}`))
-	if err == nil || !strings.Contains(err.Error(), "bcrypt hash") || !strings.Contains(err.Error(), "set it to the key itself") {
-		t.Errorf("Translate = %v, %v; want a refusal saying to set the key itself", r, err)
+	r := translate(t, `remote-management: {secret-key: "$2a$10$abcdefghijklmnopqrstuuAbCdEfGhIjKlMnOpQrStUvWxYz01234"}`)
+	if _, ok := r.Config["management_key"]; ok || !r.HashedManagementKey {
+		t.Errorf("a bcrypt hash: config %v, hashed %v; want no management_key and the hash noted", r.Config, r.HashedManagementKey)
 	}
 }
 

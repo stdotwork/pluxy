@@ -36,6 +36,9 @@ type Result struct {
 	AuthDir string
 	// Import says how accounts imported from AuthDir are set up.
 	Import ImportOptions
+	// HashedManagementKey: management.secret-key holds a bcrypt hash of the key, which today's
+	// core writes over the key and this core cannot use. The config then has no management_key.
+	HashedManagementKey bool
 }
 
 // ImportOptions are the settings of a config.yaml that apply to accounts imported from today's
@@ -949,7 +952,7 @@ func (x *translator) server() error {
 	// The key is used as written, as today's core uses it: a space in it is part of it.
 	switch {
 	case bcryptHash.MatchString(secret):
-		return errors.New("remote-management.secret-key is a bcrypt hash of the key, which pluxy cannot use: set it to the key itself")
+		x.res.HashedManagementKey = true
 	case secret != "":
 		x.out["management_key"] = secret
 	}

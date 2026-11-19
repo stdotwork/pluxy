@@ -83,7 +83,7 @@ func TestConfigRegistryLocations(t *testing.T) {
 		"http://example.com/index.json":  false,
 		"ftp://example.com/index.json":   false,
 	} {
-		cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","management_key":"k","packages":{"registries":[{"name":"r","url":"` + url + `"}]}}`
+		cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"k","packages":{"registries":[{"name":"r","url":"` + url + `"}]}}`
 		if _, err := ParseConfig([]byte(cfg), "/tmp/config.json"); (err == nil) != ok {
 			t.Errorf("registry %q: ParseConfig = %v", url, err)
 		}
@@ -93,7 +93,7 @@ func TestConfigRegistryLocations(t *testing.T) {
 // A registry path is relative to the config file even when the config file's own path is
 // relative, as the default "config.json" is.
 func TestConfigRegistryPathRelativeToRelativeConfig(t *testing.T) {
-	cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","management_key":"k","packages":{"registries":[{"name":"r","url":"registry/index.json"}]}}`
+	cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"k","packages":{"registries":[{"name":"r","url":"registry/index.json"}]}}`
 	c, err := ParseConfig([]byte(cfg), "config.json")
 	if err != nil {
 		t.Fatal(err)

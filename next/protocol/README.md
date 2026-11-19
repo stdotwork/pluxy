@@ -80,8 +80,8 @@ An extension ships as a folder with a manifest named `pluxy-extension.json`:
 | `programs` | Program to run per platform, keyed by Go's `GOOS/GOARCH`. Paths are relative to the manifest's folder and may not leave it. |
 | `ui` | Optional: pages the panel shows for the extension, with their own `version`. See [extension pages](../ui/extension-pages/README.md#ui). |
 | `config` | Optional: the schema of the extension's settings, with its own `version`; the panel draws a form from it. See [extension pages](../ui/extension-pages/README.md#config). |
-| `title` | Since 0.18, optional: the package's name for people, a few words such as `Claude`. One line, at most 80 characters. |
-| `summary` | Since 0.18, optional: one sentence saying what it adds, for someone who does not know the provider. One line, at most 300 characters. |
+| `title` | Since 0.18; core does not need it, `pluxy-pack` refuses to pack a provider extension without it (and an app tool that sets `summary` or `"kind": "client"` without it): the package's name for people, a few words such as `Claude`. One line, at most 80 characters. |
+| `summary` | Since 0.18; needed by `pluxy-pack` as `title` is: one sentence saying what it adds, for someone who does not know the provider. One line, at most 300 characters. |
 | `kind` | Since 0.18, optional: what the package adds. `provider` (the default for a manifest with `protocol`), or `client` for an app tool that points a coding client at core. Later versions add kinds. |
 
 The package version, manifest version, protocol version and the versions of `ui` and `config`

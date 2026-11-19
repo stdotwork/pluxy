@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -56,5 +57,31 @@ func TestWriteFirstConfig(t *testing.T) {
 	}
 	if _, err := WriteFirstConfig(filepath.Join(t.TempDir(), "config.yaml"), 0); err == nil {
 		t.Error("wrote a config.yaml")
+	}
+}
+
+// With no port asked for, a first config takes the preferred port when it is free, and another
+// free port when something listens there. The preferred port here is one the test holds or has
+// just freed, never 8317.
+func TestPickPortFallsBackWhenTaken(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	taken := held.Addr().(*net.TCPAddr).Port
+	got, err := pickPort(-1, taken)
+	held.Close()
+	if err != nil || got == taken || got <= 0 {
+		t.Errorf("preferred port %d held: picked %d, %v; want another free port", taken, got, err)
+	}
+	free, err := freePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := pickPort(-1, free); err != nil || got != free {
+		t.Errorf("preferred port %d free: picked %d, %v; want it", free, got, err)
+	}
+	if got, err := pickPort(18556, free); err != nil || got != 18556 {
+		t.Errorf("a chosen port: picked %d, %v; want 18556", got, err)
 	}
 }
