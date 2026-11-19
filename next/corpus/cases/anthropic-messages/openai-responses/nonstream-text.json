@@ -82,7 +82,7 @@
         "headers": {
           "Accept": "text/event-stream",
           "Accept-Encoding": "gzip, deflate, br, zstd",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "Session-Id": "1278e960-b9c1-51a5-a33b-ea11582e7a90",
           "User-Agent": "pluxy-corpus/0"

@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -161,4 +163,61 @@ func TestCLIServe(t *testing.T) {
 func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// pluxy model refresh updates the served model list from an OpenAI-compatible upstream.
+func TestCLIModelRefresh(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		models = []string{"m-cli-1"}
+	)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
+			mu.Lock()
+			cur := append([]string(nil), models...)
+			mu.Unlock()
+			var data []map[string]any
+			for _, id := range cur {
+				data = append(data, map[string]any{"id": id, "object": "model"})
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(up.Close)
+
+	base := runCore(t, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id":         "upstream-1",
+				"settings":   map[string]any{"base_url": up.URL + "/v1"},
+				"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey},
+			}},
+		},
+	})
+	env := []string{"PLUXY_URL=" + base, "PLUXY_MANAGEMENT_KEY=" + managementKey}
+
+	mu.Lock()
+	models = []string{"m-cli-1", "m-cli-2"}
+	mu.Unlock()
+
+	r := runCLI(t, env, "model", "refresh", "--json")
+	if r.code != 0 || !strings.Contains(r.stdout, "m-cli-2") {
+		t.Fatalf("model refresh --json: %s", r)
+	}
+	if r := runCLI(t, env, "model", "list"); r.code != 0 || !strings.Contains(r.stdout, "m-cli-2") {
+		t.Fatalf("model list after refresh: %s", r)
+	}
+	if r := runCLI(t, env, "model", "refresh", "--account", "upstream-1"); r.code != 0 || !strings.Contains(r.stdout, "upstream-1") {
+		t.Fatalf("model refresh --account upstream-1: %s", r)
+	}
+	if r := runCLI(t, env, "model", "refresh", "--account", "nobody"); r.code != 5 {
+		t.Fatalf("model refresh --account nobody: %s; want exit 5", r)
+	}
 }

@@ -102,7 +102,7 @@
         "body": null,
         "headers": {
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "User-Agent": "Go-http-client/1.1"
         },
         "method": "GET",
@@ -113,7 +113,7 @@
         "headers": {
           "Accept": "application/json",
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "User-Agent": "Go-http-client/1.1"
         },
         "method": "GET",

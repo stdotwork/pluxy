@@ -19,16 +19,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// StateDir returns the state folder of the config file at configPath: state beside it, where core
-// keeps what it must remember across a restart.
-func StateDir(configPath string) string {
-	dir := filepath.Dir(configPath)
-	if abs, err := filepath.Abs(dir); err == nil {
-		dir = abs
-	}
-	return filepath.Join(dir, "state")
-}
-
 // routingFile is the file in the state folder that holds routing's quota blocks.
 const routingFile = "routing.json"
 
