@@ -1716,8 +1716,10 @@ SYSTEM). A folder made by pluxy run as administrator is owned by the Administrat
 without administrator rights refuses it: take ownership of the folder and its files from an
 elevated prompt (`takeown /f <folder> /r`), or move the folder away and sign the accounts in again.
 A file in the folder that is a link, or that another account owns, is skipped with a notice in the
-log rather than loaded. The same access list and folder checks keep the extensions' settings
-([extension pages](ui/extension-pages/README.md)) and the [log files](#log-files) private.
+log rather than loaded. A record file with a list of its own that lets in more (one written before
+the folder was private, or moved in from another folder), which making the folder private does not
+reach, is written again as a private file when the accounts are loaded, with a notice in the log.
+The same access list and folder checks keep the extensions' settings ([extension pages](ui/extension-pages/README.md)) and the [log files](#log-files) private.
 
 An extension may return non-secret account settings with a login grant. When adding an
 account, core uses those as defaults: properties explicitly supplied in `POST /accounts.settings`
@@ -1861,9 +1863,9 @@ These calls read and change the config file core runs on, whether it is the JSON
 `config.yaml` with today's key names. A change goes through the same steps as a reload: core
 checks the new contents and prepares them, and only when they are ready to serve does it write
 the file and switch to them. The file is replaced in one step (a new file renamed over it, with
-the same permissions, through a symbolic link if the path is one), so nothing ever reads half of
-it. When a change is refused, the file and the running config stay as they were, and status
-keeps showing the file as it is. When another program writes the file while a change is being
+the same permissions, on Windows the same access list, through a symbolic link if the path is
+one), so nothing ever reads half of it. When a change is refused, the file and the running
+config stay as they were, and status keeps showing the file as it is. When another program writes the file while a change is being
 prepared, the change is dropped with a 409, so that write is not lost. Today's core writes its file in place and saves a change that
 its reload may then refuse.
 
