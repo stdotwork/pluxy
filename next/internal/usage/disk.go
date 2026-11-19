@@ -176,7 +176,9 @@ func (s *Store) Close() error {
 	}
 }
 
-// refill loads yesterday's and today's UTC JSONL files into the in-memory ring.
+// refill loads yesterday's and today's UTC JSONL files into the in-memory ring. When those
+// yield no records (for example after a multi-day idle gap), it continues seq from the newest
+// earlier day file that has a valid record.
 func (s *Store) refill() error {
 	now := s.now()
 	nowUTC := now.UTC()
@@ -218,7 +220,54 @@ func (s *Store) refill() error {
 			return err
 		}
 	}
+	if s.seq == 0 {
+		if err := s.refillSeqFromOlderDays(days[0]); err != nil {
+			return err
+		}
+	}
 	s.openSeq = s.seq
+	return nil
+}
+
+func (s *Store) refillSeqFromOlderDays(beforeDay string) error {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var older []string
+	for _, e := range entries {
+		if e.IsDir() || !e.Type().IsRegular() {
+			continue
+		}
+		stem, ok := strings.CutSuffix(e.Name(), daySuffix)
+		if !ok || len(stem) != len(dayLayout) || stem >= beforeDay {
+			continue
+		}
+		if _, err := time.Parse(dayLayout, stem); err != nil {
+			continue
+		}
+		older = append(older, stem)
+	}
+	slices.Sort(older)
+	for i := len(older) - 1; i >= 0; i-- {
+		path := filepath.Join(s.dir, older[i]+daySuffix)
+		err := readDayFile(path, func(e Event) {
+			if e.Seq > s.seq {
+				s.seq = e.Seq
+			} else {
+				s.seq++
+			}
+		})
+		if err != nil {
+			return err
+		}
+		if s.seq > 0 {
+			return nil
+		}
+	}
 	return nil
 }
 

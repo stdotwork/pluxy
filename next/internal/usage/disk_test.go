@@ -339,6 +339,42 @@ func TestSeqPersistsAcrossRestarts(t *testing.T) {
 			t.Fatalf("Events(after=%d) = %+v, want only seq 14", seq13, p.Events)
 		}
 	})
+
+	t.Run("continues above newest existing day file after an idle gap", func(t *testing.T) {
+		dir := t.TempDir()
+		fiveDaysAgo := c.now().AddDate(0, 0, -5).UTC().Format("2006-01-02")
+		path := filepath.Join(dir, fiveDaysAgo+".jsonl")
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for seq := uint64(1); seq <= 3; seq++ {
+			b, err := json.Marshal(diskEvent{V: 1, Event: Event{
+				Seq:       seq,
+				Timestamp: c.now().AddDate(0, 0, -5).Add(time.Duration(seq) * time.Minute),
+				Model:     "old-gap",
+			}})
+			if err != nil {
+				f.Close()
+				t.Fatal(err)
+			}
+			if _, err := f.Write(append(b, '\n')); err != nil {
+				f.Close()
+				t.Fatal(err)
+			}
+		}
+		f.Close()
+
+		s, err := openStore(Options{Dir: dir, MaxEvents: 100, MaxAge: 24 * time.Hour}, c.now, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+
+		if seq4 := s.Add(Event{Timestamp: c.now(), Model: "after-gap"}); seq4 != 4 {
+			t.Fatalf("first seq after 5-day idle gap = %d, want 4", seq4)
+		}
+	})
 }
 
 func refSummarize(events []Event, f Filter, bucket time.Duration, first time.Time, buckets int) Summary {
