@@ -161,6 +161,7 @@ func chat(ctx context.Context, call sdk.Call, out sender) error {
 	if token == "" {
 		return &llm.Error{Code: llm.CodeAuth, Message: "the account has no Devin session token", Scope: llm.ScopeCredential}
 	}
+	secrets := sdk.AccountSecrets(call.Account)
 	req := &call.Request
 	chat, err := buildRequest(req)
 	if err != nil {
@@ -204,10 +205,10 @@ func chat(ctx context.Context, call sdk.Call, out sender) error {
 			// body, the error says only the status.
 			return statusError(resp.StatusCode, "", nil, resp.Header.Get("Retry-After"))
 		}
-		msg, keep := connectMessage(raw, token)
+		msg, keep := connectMessage(raw, secrets)
 		return statusError(resp.StatusCode, msg, keep, resp.Header.Get("Retry-After"))
 	}
-	return newRelay(out, req.Model, tr).run(ctx, resp.Body)
+	return newRelay(out, req.Model, tr, secrets).run(ctx, resp.Body)
 }
 
 // setHeaders sets the headers Devin's CLI sends with every call: the session token twice as
@@ -239,6 +240,8 @@ type relay struct {
 	out   sender
 	model string
 	tr    *llm.Translation
+	// secrets are the account's, for sdk.UpstreamText to remove from an end frame's error.
+	secrets []string
 
 	started bool // response.start was sent
 	ran     bool // a data frame came: Devin ran the request
@@ -274,8 +277,8 @@ type usage struct {
 	input, output, cacheWrite, cacheRead int64
 }
 
-func newRelay(out sender, model string, tr *llm.Translation) *relay {
-	return &relay{out: out, model: model, tr: tr, text: -1, reasoning: -1, byID: map[string]*callSlot{}}
+func newRelay(out sender, model string, tr *llm.Translation, secrets []string) *relay {
+	return &relay{out: out, model: model, tr: tr, secrets: secrets, text: -1, reasoning: -1, byID: map[string]*callSlot{}}
 }
 
 func (r *relay) send(ev llm.Event) error {
@@ -370,7 +373,7 @@ func (r *relay) run(ctx context.Context, body io.Reader) error {
 		}
 		if end {
 			readToEnd(ctx, body)
-			if e := trailerError(payload); e != nil {
+			if e := trailerError(payload, r.secrets); e != nil {
 				// Once Devin sent a data frame, the model ran: trying again is not safe.
 				e.Retryable = e.Retryable && !r.ran
 				e.Usage = r.usage.llm()
@@ -625,7 +628,9 @@ func (u usage) llm() *llm.Usage {
 
 // trailerError returns the error an end frame carries ({"error": {"code", "message"}}), or nil
 // for a clean end. An end frame that is not such JSON is a clean end, as today's core reads it.
-func trailerError(payload []byte) *llm.Error {
+// Its code and message are cleaned (cleanConnectError), and its Raw is the frame rebuilt from
+// them: any other field of the frame is dropped.
+func trailerError(payload []byte, secrets []string) *llm.Error {
 	var t struct {
 		Error *struct {
 			Code    string `json:"code"`
@@ -635,9 +640,36 @@ func trailerError(payload []byte) *llm.Error {
 	if json.Unmarshal(payload, &t) != nil || t.Error == nil || t.Error.Code == "" && t.Error.Message == "" {
 		return nil
 	}
-	e := statusError(connectStatus(t.Error.Code, t.Error.Message), t.Error.Message, payload, "")
-	e.ProviderCode = t.Error.Code
+	c := cleanConnectError(t.Error.Code, t.Error.Message, secrets)
+	keep, _ := json.Marshal(map[string]connectError{"error": c})
+	e := statusError(connectStatus(t.Error.Code, t.Error.Message), c.Message, keep, "")
+	e.ProviderCode = c.Code
 	return e
+}
+
+// connectError is a Connect error's code and message, as Raw keeps them.
+type connectError struct {
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// connectCodes are Connect's error codes. Another code is the upstream's text.
+var connectCodes = map[string]bool{
+	"canceled": true, "unknown": true, "invalid_argument": true, "deadline_exceeded": true, "not_found": true,
+	"already_exists": true, "permission_denied": true, "resource_exhausted": true, "failed_precondition": true,
+	"aborted": true, "out_of_range": true, "unimplemented": true, "internal": true, "unavailable": true,
+	"data_loss": true, "unauthenticated": true,
+}
+
+// cleanConnectError returns a Connect error's code and message cleaned by sdk.UpstreamText with
+// secrets, the account's (sdk.AccountSecrets): one line, bounded, without the pieces of a secret
+// the upstream echoed, which core, removing only whole copies, would pass on. A code that is one
+// of Connect's stays as it is.
+func cleanConnectError(code, msg string, secrets []string) connectError {
+	if !connectCodes[code] {
+		code = sdk.UpstreamText(code, secrets...)
+	}
+	return connectError{Code: code, Message: sdk.UpstreamText(msg, secrets...)}
 }
 
 // statusCancelled is the status of a call Devin cancelled, nginx's 499, as today's core gives it.
@@ -679,24 +711,30 @@ func connectStatus(code, msg string) int {
 	return http.StatusBadGateway
 }
 
-// connectMessage returns the message of a Connect error body ({"code", "message"}) and the body,
-// to keep as the error's Raw. Any other body gives its text as the message, cleaned by
-// sdk.UpstreamText with the pieces of token's secret part (the session token without its public
-// prefix), and no Raw: core removes only whole copies of a credential, and the body can hold part
-// of one the upstream echoed, split across lines, cut short by the upstream, or cut by the read.
-// The caller passes only a body whose read ended without an error; one that fills maxBody may
-// still have been cut there, so it gives no message.
-func connectMessage(raw []byte, token string) (string, []byte) {
+// connectMessage returns the message of a refusal's body and the Raw to keep. A Connect error body
+// ({"code", "message"}) gives its message and, as Raw, the body rebuilt from its code and message,
+// both cleaned (cleanConnectError); any other field of the body is dropped. Any other body gives
+// its text as the message, cleaned by sdk.UpstreamText with secrets, the account's
+// (sdk.AccountSecrets), and no Raw: core removes only whole copies of a secret, and the body can
+// hold part of one the upstream echoed, split across lines, cut short by the upstream, or cut by
+// the read. The caller passes only a body whose read ended without an error; one that fills
+// maxBody may still have been cut there, so it gives no message.
+func connectMessage(raw []byte, secrets []string) (string, []byte) {
 	var e struct {
-		Message string `json:"message"`
+		Code    json.RawMessage `json:"code"`
+		Message string          `json:"message"`
 	}
 	if json.Unmarshal(raw, &e) == nil && e.Message != "" {
-		return e.Message, raw
+		var code string
+		_ = json.Unmarshal(e.Code, &code)
+		c := cleanConnectError(code, e.Message, secrets)
+		keep, _ := json.Marshal(c)
+		return c.Message, keep
 	}
 	if len(raw) >= maxBody {
 		return "", nil
 	}
-	return sdk.UpstreamText(string(raw), strings.TrimPrefix(token, tokenPrefix)), nil
+	return sdk.UpstreamText(string(raw), secrets...), nil
 }
 
 // statusError classifies a refusal by its HTTP status. A 429 holds back only the model, as

@@ -1249,18 +1249,24 @@ account. A monthly or unnamed quota holds back only the model. Devin's `canceled
 request (499), as in today's core. An error after Devin sent any frame (output, usage or a
 signature) is not retry-safe, and a reply that ends without its end frame is an error.
 
-A refusal with an HTTP error status takes its message from a Connect error body's `message`,
-and keeps that body as the error's raw body. Unlike today's core, which passes any other body on
-as it is, the extension passes such a body on only as the message, only when it read the body
+A refusal with an HTTP error status takes its message from a Connect error body's `message`, and
+an error in the end frame takes the frame's. Both are cleaned, as is the code when it is not one
+of Connect's, and the error's raw body is the body or frame rebuilt from the cleaned code and
+message only, so its other fields are dropped. Unlike today's core, which passes any other body
+on as it is, the extension passes such a body on only as the message, only when it read the body
 whole (under 1 MiB, and not broken off), and cleaned. The cleaned text is one line, cut after
 1000 characters with an ellipsis. Replaced by `[redacted]` are: every run of token characters
-(letters, digits and `_-.+/=~`) holding 4 or more consecutive characters of the account's session
-token after its public `devin-session-token$` prefix; `Bearer` and `Basic` values; the values of
-fields named like `access_token` or `api_key`; and any other run of 24 or more token characters.
-Core removes only whole copies of an account's credential, and such a body can hold part of one
+(letters, digits and `_-.+/=~`) holding 4 or more consecutive characters of one of the account's
+secrets: its session token after the public `devin-session-token$` prefix, the values of its
+secret headers, its proxy's user name and password and the secrets in its settings; `Bearer` and
+`Basic` values; the values of fields named like `access_token`, `token` or `api_key`; and any
+other run of 24 or more token characters. A run is also read with its escapes decoded (JSON's
+`\/` and `\uXXXX`, `%XX`), so a piece written with escapes between its characters is replaced
+too. Core removes only whole copies of an account's secrets, and such text can hold part of one
 the upstream echoed, split across lines or cut short. Otherwise the message names only the status
 (`Devin answered 500 Internal Server Error`), or, for a quota read whose reply broke off, says
-that it broke off.
+that it broke off. The 4-character rule can also replace a word that shares 4 characters with
+one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
@@ -2007,7 +2013,8 @@ too, and counted with the rest. On each side that is, first, a window of 12 byte
 of the longest form of a secret the log removes that holds a character other than a key's (the
 secret as it is, or escaped, whichever is longest). That holds every part of such a secret the
 line cut in a spelling of up to 11 bytes for each of its bytes; the log also removes spellings
-with deeper escapes, and a part of one of those cut at the line can stay. Secrets made only of
+with deeper escapes (such as a percent escape nested 6 times, `%252525252573` for `s`, 13 bytes
+for each byte), and a part of one of those cut at the line can stay. Secrets made only of
 letters, digits and `-_.~+/=%\`, as API keys and tokens are, need no window: the run of those
 characters that goes on from the edge is left out in any case, and it holds any part of such a
 secret, whatever its length. Where the edge then cuts through a secret in one of its forms, 4
@@ -2074,11 +2081,14 @@ Secrets are left out of every request log: values of headers and query parameter
 hold `authorization`, `api-key`, `apikey`, `api_key`, `token`, `secret`, `cookie` or `password`,
 and `key` (an authorization header keeps its scheme, as in `Bearer [redacted]`), and, anywhere in
 the file, every client key, the management key, every config account's credential and the
-secrets in its settings (as `GET /config` finds them, those of 8 bytes or more), and the user
-info of the global `proxy_url` and of each account's (the forms the extension removes from its
-replies: the user info as written and decoded, its base64 `Proxy-Authorization` login, and the
-user name and password alone when each is 8 bytes or more), in the forms the
-credential redaction finds (JSON escapes, percent-encoding and the rest). Replies and upstream
+secrets in its settings (as `GET /config` finds them, those of 8 bytes or more), and the user info of
+the global `proxy_url` and of each account's (the forms the extension removes from its replies: the
+user info as written and decoded, its base64 `Proxy-Authorization` login, and the user name and
+password alone when each is 8 bytes or more), in the forms the credential redaction finds (JSON
+escapes, percent-encoding and the rest). A secret made of parts, such as a session token behind a
+public prefix (`devin-session-token$<jwt>`), the token of a `Bearer` value or a cookie's value, has
+each part of 8 bytes or more removed on its own too (the extension protocol's
+[Accounts](protocol/README.md#accounts) lists the structures). Replies and upstream
 sections come from the extension with the account's own credential, the secrets in its settings,
 its proxy's password and its secret header values already removed; in the upstream sections the
 values of headers and query parameters whose names hold `auth`, `key`, `token`, `secret`,
