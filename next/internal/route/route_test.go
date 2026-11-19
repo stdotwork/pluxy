@@ -1305,10 +1305,11 @@ func TestUsageLimitOnlyWhenEveryAccountQualifies(t *testing.T) {
 }
 
 // A reply that started and then ends with the last account's quota refusal ends with the
-// usage-limit reply; the provider is named only when every account belongs to one extension, and
-// a pool without a known window has none.
+// usage-limit reply; the provider is named only when every account belongs to one extension (two
+// serve one name only through a chain), and a pool without a known window has none.
 func TestUsageLimitAfterTheReplyStarted(t *testing.T) {
-	h := newHarness(t, Config{QuotaResponseMode: QuotaUsageLimit, Strategy: StrategyFillFirst},
+	chain := map[string][]Step{"m": {{Model: "m", Provider: "pluxy/codex"}, {Model: "m", Provider: "pluxy/openai-compatible"}}}
+	h := newHarness(t, Config{QuotaResponseMode: QuotaUsageLimit, Strategy: StrategyFillFirst, Chains: chain},
 		Account{ID: "a", Extension: "pluxy/codex"}, Account{ID: "b", Extension: "pluxy/openai-compatible"})
 	h.r.state.failure(h.r.accounts[1], "m", 0, &llm.Error{Code: llm.CodeQuota, RetryAfterMS: time.Hour.Milliseconds(), Message: "used up"}, h.now, 0)
 	quota := llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: (3 * time.Hour).Milliseconds(),

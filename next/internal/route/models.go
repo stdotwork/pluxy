@@ -549,7 +549,57 @@ func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 			out = append(out, ServedModel{Model: m, Extension: a.Extension, Upstream: n.Upstream, Accounts: []string{a.ID}})
 		}
 	}
+	out = r.chainModels(accounts, out, index)
 	slices.SortFunc(out, func(a, b ServedModel) int { return strings.Compare(a.ID, b.ID) })
+	return out
+}
+
+// chainModels adds to out, the models the accounts serve with index giving each one's place by
+// name, each chain whose name is not among them: as the model of its first step that an account
+// serves, renamed, served by the accounts of every step. shortcut: the entry describes that
+// model as the first account serving its name lists it, which may be another provider's than
+// the step names; worth a closer match if model details come to differ by provider.
+func (r *Router) chainModels(accounts []*Account, out []ServedModel, index map[string]int) []ServedModel {
+	names := make([]string, 0, len(r.cfg.Chains))
+	for n := range r.cfg.Chains {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		if _, ok := index[name]; ok {
+			continue
+		}
+		var entry *ServedModel
+		for _, s := range r.cfg.Chains[name] {
+			i, ok := index[s.Model]
+			if !ok {
+				continue
+			}
+			if entry == nil {
+				e := out[i]
+				e.GenerationMethods = slices.Clone(e.GenerationMethods)
+				e.InputModalities = slices.Clone(e.InputModalities)
+				e.OutputModalities = slices.Clone(e.OutputModalities)
+				if e.Name != "" {
+					e.Name = renameResource(e.Name, e.ID, name)
+				}
+				e.ID, e.Accounts = name, nil
+				entry = &e
+			}
+			for _, id := range out[i].Accounts {
+				j := slices.IndexFunc(accounts, func(a *Account) bool { return a.ID == id })
+				if j < 0 || s.Provider != "" && accounts[j].Extension != s.Provider || len(s.Accounts) > 0 && !slices.Contains(s.Accounts, id) ||
+					slices.Contains(entry.Accounts, id) {
+					continue
+				}
+				entry.Accounts = append(entry.Accounts, id)
+			}
+		}
+		if entry != nil {
+			index[name] = len(out)
+			out = append(out, *entry)
+		}
+	}
 	return out
 }
 

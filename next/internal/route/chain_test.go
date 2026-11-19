@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // Fallback chains: a request for a chain's name goes through its steps in order, each a model
@@ -272,6 +273,25 @@ func TestDefaultProviderTieByConfigOrder(t *testing.T) {
 		h.served("m", "")
 	}
 	h.wantAttempts("p1", "p2", "p1", "p2")
+}
+
+// An account whose model list cannot be read serves any model, but it does not choose the
+// provider of a name another account lists: it would take every name from the providers that
+// list them.
+func TestDefaultProviderFromAccountsThatListTheModel(t *testing.T) {
+	h := newChainHarness(t, Config{}, Account{ID: "u1", Extension: "U"}, Account{ID: "k1", Extension: "K", Models: []ModelEntry{{Name: "m"}}})
+	h.r.UseCatalog(func(context.Context, Account, *protocol.Credential) (*protocol.ModelList, *llm.Error) {
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "list unreadable"}
+	})
+	for range 2 {
+		if a := h.served("m", ""); a.Account != "k1" {
+			t.Errorf("served by %+v, want k1, the account that lists m", a)
+		}
+	}
+	// A name no account lists goes to the accounts that serve any model.
+	if a := h.served("other", ""); a.Account != "u1" {
+		t.Errorf("other served by %+v, want u1", a)
+	}
 }
 
 // GET /route's plan: each step's accounts in the order they would be tried.

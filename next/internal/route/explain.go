@@ -88,21 +88,29 @@ func (r *Router) SetHeld(f func() []Held) {
 	r.held = f
 }
 
-// leftOut returns, for each of accounts, in order, why it was not used: its health now, or busy
-// or skipped when its health is ok. skip names accounts to leave out of the list (those tried).
-// upstream gives each account's name for the model, for blocks on the model.
-func (r *Router) leftOut(accounts []*Account, upstream map[string]string, skip func(string) bool, now time.Time) []llm.LeftOut {
-	out := []llm.LeftOut{}
-	for _, a := range accounts {
-		if skip(a.ID) {
+// leftEntry is a target a request left out, and why.
+type leftEntry struct {
+	t target
+	llm.LeftOut
+}
+
+// leftOut returns, for each of targets, in order, why it was not used: its account's health now,
+// or busy or skipped when its health is ok. skip names targets to leave out of the list (those
+// tried or ordered). With named, each entry also names the account's provider and model, as a
+// request through a chain names them, since an account can be in two steps.
+func (r *Router) leftOut(targets []target, skip func(target) bool, named bool, now time.Time) []leftEntry {
+	var out []leftEntry
+	for _, t := range targets {
+		if skip(t) {
 			continue
 		}
+		a := t.a
 		h := r.state.Health(*a, now, Hold{})
 		state, until := h.State, h.Until
 		if state == HealthOK {
 			// Health leaves out a block on a model the account does not have; this request's
 			// model may be that one.
-			blockedUntil, _, busy := r.state.availability(a, upstream[a.ID], now)
+			blockedUntil, _, busy := r.state.availability(a, t.model, now)
 			switch {
 			case !blockedUntil.IsZero():
 				state, until = HealthCooling, &blockedUntil
@@ -112,15 +120,21 @@ func (r *Router) leftOut(accounts []*Account, upstream map[string]string, skip f
 				state = LeftSkipped
 			}
 		}
-		out = append(out, llm.LeftOut{Account: r.state.PublicID(a.ID), State: state, Until: until})
+		l := llm.LeftOut{Account: r.state.PublicID(a.ID), State: state, Until: until}
+		if named {
+			l.Provider, l.Model = a.Extension, t.model
+		}
+		out = append(out, leftEntry{t, l})
 	}
 	return out
 }
 
-// heldFor returns the held accounts a request for model would have used: those whose own model
-// list names it, and those with no list of their own that share an extension with an account in
-// serving. Nothing says what else an account without a list serves.
-func (r *Router) heldFor(model string, serving []*Account) []Held {
+// heldFor returns the held accounts step s, the step at index i, would have used: those the step
+// names or whose provider it names, and whose own model list names its model; and those with no
+// list of their own that share an extension with an account in serving, the step's accounts.
+// Nothing says what else an account without a list serves. A step that names no provider and no
+// accounts is served by one provider: the one serving names, when it names one.
+func (r *Router) heldFor(s Step, serving []target) []Held {
 	r.mu.RLock()
 	f := r.held
 	r.mu.RUnlock()
@@ -130,10 +144,16 @@ func (r *Router) heldFor(model string, serving []*Account) []Held {
 	var out []Held
 	for _, h := range f() {
 		a := h.Account
-		if _, ok := a.resolve(model, r.cfg.ForceModelPrefix, nil); !ok {
+		switch {
+		case s.Provider != "" && a.Extension != s.Provider,
+			len(s.Accounts) > 0 && !slices.Contains(s.Accounts, a.ID),
+			s.Provider == "" && len(s.Accounts) == 0 && len(serving) > 0 && a.Extension != serving[0].a.Extension:
 			continue
 		}
-		if len(a.Models) == 0 && !slices.ContainsFunc(serving, func(b *Account) bool { return b.Extension == a.Extension }) {
+		if _, ok := a.resolve(s.Model, r.cfg.ForceModelPrefix, nil); !ok {
+			continue
+		}
+		if len(a.Models) == 0 && !slices.ContainsFunc(serving, func(t target) bool { return t.a.Extension == a.Extension }) {
 			continue
 		}
 		out = append(out, h)
@@ -141,28 +161,59 @@ func (r *Router) heldFor(model string, serving []*Account) []Held {
 	return out
 }
 
+// stepTargetsOf returns the targets of targets that are for step i.
+func stepTargetsOf(targets []target, i int) []target {
+	var out []target
+	for _, t := range targets {
+		if t.step == i {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// heldLeftOut is the entry of a held account h for step s.
+func (r *Router) heldLeftOut(h Held, s Step, named bool) llm.LeftOut {
+	l := llm.LeftOut{Account: r.state.PublicID(h.Account.ID), State: h.State}
+	if named {
+		l.Provider, l.Model = h.Account.Extension, s.Model
+		if up, ok := h.Account.resolve(s.Model, r.cfg.ForceModelPrefix, nil); ok && up != "" {
+			l.Model = up
+		}
+	}
+	return l
+}
+
 // explain says what the call did and left out, for the error that ends it.
 func (c *call) explain() *llm.Explain {
 	r := c.r
 	now := r.now()
-	tried := map[string]bool{}
+	tried := map[targetKey]bool{}
 	for _, t := range c.tried {
-		tried[t.id] = true
+		tried[t.key] = true
 	}
-	e := &llm.Explain{Tried: []llm.Tried{}}
+	e := &llm.Explain{Tried: []llm.Tried{}, LeftOut: []llm.LeftOut{}}
 	for _, t := range c.tried {
 		e.Tried = append(e.Tried, t.Tried)
 	}
-	e.LeftOut = r.leftOut(c.capable, c.upstream, func(id string) bool { return tried[id] }, now)
-	for _, h := range r.heldFor(c.req.LLM.Model, c.capable) {
-		e.LeftOut = append(e.LeftOut, llm.LeftOut{Account: r.state.PublicID(h.Account.ID), State: h.State})
+	for _, l := range r.leftOut(c.capable, func(t target) bool { return tried[t.key()] }, c.chain, now) {
+		e.LeftOut = append(e.LeftOut, l.LeftOut)
+	}
+	if c.anyModel() {
+		return e
+	}
+	for i, s := range c.steps {
+		for _, h := range r.heldFor(s, stepTargetsOf(c.capable, i)) {
+			e.LeftOut = append(e.LeftOut, r.heldLeftOut(h, s, c.chain))
+		}
 	}
 	return e
 }
 
-// triedAttempt is an attempt as the call keeps it: the account's real ID for matching.
+// triedAttempt is an attempt as the call keeps it: its account's real ID and its step, for
+// matching.
 type triedAttempt struct {
-	id string
+	key targetKey
 	llm.Tried
 }
 
@@ -180,6 +231,8 @@ func (c *call) explained(e *llm.Error) *llm.Error {
 // Plan is what a request for a model would do now, as GET /route shows it. It sends nothing.
 type Plan struct {
 	Model string `json:"model"`
+	// Chain is the model's fallback chain, when it has one; the accounts below then say which of
+	// its steps they are in.
 	Chain []Step `json:"chain,omitempty"`
 	// Order are the accounts in the order the router would try them.
 	Order []PlanStep `json:"order"`
@@ -190,7 +243,8 @@ type Plan struct {
 // PlanStep is one account a request would try.
 type PlanStep struct {
 	// ID is the account's ID, which only the management API shows; Account is its public ID.
-	ID       string `json:"id"`
+	ID string `json:"id"`
+	// Step is the chain's step the account is tried for, from 1; absent with no chain.
 	Step     int    `json:"step,omitempty"`
 	Account  string `json:"account"`
 	Provider string `json:"provider"`
@@ -199,15 +253,16 @@ type PlanStep struct {
 
 // PlanLeftOut is an account a request would leave out.
 type PlanLeftOut struct {
-	ID   string `json:"id"`
-	Step int    `json:"step,omitempty"`
+	ID string `json:"id"`
+	// Step is the chain's step the account would serve, from 1; absent with no chain.
+	Step int `json:"step,omitempty"`
 	llm.LeftOut
 }
 
-// Plan says what a request for model would do now: the accounts it would try in order, and those
-// it would leave out. It runs the router's own steps (the accounts that serve the model, the
-// blocks that hold them, priority, then the strategy's turns, on a copy of its memory) and sends
-// nothing, so asking changes no routing state.
+// Plan says what a request for model would do now: the accounts it would try in order, step by
+// step through the model's chain, and those it would leave out. It runs the router's own steps
+// (the accounts that serve each step, the blocks that hold them, priority, then the strategy's
+// turns, on a copy of its memory) and sends nothing, so asking changes no routing state.
 func (r *Router) Plan(ctx context.Context, model string) Plan {
 	accounts, creds := r.snapshot()
 	var eligible []*Account
@@ -218,46 +273,55 @@ func (r *Router) Plan(ctx context.Context, model string) Plan {
 		eligible = append(eligible, a)
 	}
 	served := r.served(ctx, eligible, creds, r.catalogFunc())
+	steps, chain := r.stepsFor(model)
+	capable := r.targets(steps, eligible, served)
 	now := r.now()
-	var capable, cands []*Account
-	upstream := map[string]string{}
-	for _, a := range eligible {
-		if up, ok := a.resolve(model, r.cfg.ForceModelPrefix, served[a.ID]); ok {
-			capable = append(capable, a)
-			upstream[a.ID] = up
-			until, _, busy := r.state.availability(a, up, now)
-			if !r.state.IsBanned(a.ID) && until.IsZero() && !busy {
-				cands = append(cands, a)
-			}
-		}
-	}
 	p := Plan{Model: model, Order: []PlanStep{}, LeftOut: []PlanLeftOut{}}
-	preview := r.picker.preview(model)
-	for len(cands) > 0 {
-		top := cands[0].Priority
-		for _, a := range cands {
-			top = max(top, a.Priority)
+	if chain {
+		p.Chain = slices.Clone(steps)
+	}
+	number := func(t target) int {
+		if !chain {
+			return 0
 		}
-		var best []*Account
-		for _, a := range cands {
-			if a.Priority == top {
-				best = append(best, a)
+		return t.step + 1
+	}
+	ordered := map[targetKey]bool{}
+	for i := range steps {
+		var cands []*Account
+		for _, t := range stepTargetsOf(capable, i) {
+			until, _, busy := r.state.availability(t.a, t.model, now)
+			if !r.state.IsBanned(t.a.ID) && until.IsZero() && !busy {
+				cands = append(cands, t.a)
 			}
 		}
-		a := preview.pick(model, best, r.state.activeCount, now)
-		p.Order = append(p.Order, PlanStep{ID: a.ID, Account: r.state.PublicID(a.ID), Provider: a.Extension, Model: upstream[a.ID]})
-		cands = slices.DeleteFunc(cands, func(b *Account) bool { return b == a })
+		key := rotationKey(model, chain, i)
+		preview := r.picker.preview(key)
+		for len(cands) > 0 {
+			top := cands[0].Priority
+			for _, a := range cands {
+				top = max(top, a.Priority)
+			}
+			var best []*Account
+			for _, a := range cands {
+				if a.Priority == top {
+					best = append(best, a)
+				}
+			}
+			a := preview.pick(key, best, r.state.activeCount, now)
+			t := capable[slices.IndexFunc(capable, func(t target) bool { return t.step == i && t.a == a })]
+			p.Order = append(p.Order, PlanStep{ID: a.ID, Step: number(t), Account: r.state.PublicID(a.ID), Provider: a.Extension, Model: t.model})
+			ordered[t.key()] = true
+			cands = slices.DeleteFunc(cands, func(b *Account) bool { return b == a })
+		}
 	}
-	ordered := func(id string) bool { return slices.ContainsFunc(p.Order, func(s PlanStep) bool { return s.ID == id }) }
-	byPublic := map[string]string{}
-	for _, a := range capable {
-		byPublic[r.state.PublicID(a.ID)] = a.ID
+	for _, l := range r.leftOut(capable, func(t target) bool { return ordered[t.key()] }, chain, now) {
+		p.LeftOut = append(p.LeftOut, PlanLeftOut{ID: l.t.a.ID, Step: number(l.t), LeftOut: l.LeftOut})
 	}
-	for _, l := range r.leftOut(capable, upstream, ordered, now) {
-		p.LeftOut = append(p.LeftOut, PlanLeftOut{ID: byPublic[l.Account], LeftOut: l})
-	}
-	for _, h := range r.heldFor(model, capable) {
-		p.LeftOut = append(p.LeftOut, PlanLeftOut{ID: h.Account.ID, LeftOut: llm.LeftOut{Account: r.state.PublicID(h.Account.ID), State: h.State}})
+	for i, s := range steps {
+		for _, h := range r.heldFor(s, stepTargetsOf(capable, i)) {
+			p.LeftOut = append(p.LeftOut, PlanLeftOut{ID: h.Account.ID, Step: number(target{step: i}), LeftOut: r.heldLeftOut(h, s, chain)})
+		}
 	}
 	return p
 }
