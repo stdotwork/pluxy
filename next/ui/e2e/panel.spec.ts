@@ -161,7 +161,6 @@ test("themes are kept by core: added from a file and from pasted JSON, followed,
     page.evaluate((n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim(), name);
   const picker = page.getByRole("radiogroup", { name: "Theme" });
 
-  await core.mgmt("PUT", "/theme", { id: "" });
   const { problems } = await open(page);
   await signIn(page, core);
   await goTo(page, "Themes");
