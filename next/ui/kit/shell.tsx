@@ -238,7 +238,9 @@ export function Shell(props: {
     let live = true;
     kit.api.setup().then((r) => {
       if (!live) return;
-      if (r.status === 401) return kit.unauthorized();
+      // A refused key is left to the page that loads next: this read is the shell's own, and
+      // signing out here could undo a sign-in that is under way in the desktop app.
+      if (r.status === 401) return;
       const gate = setupGate(r, location.hash);
       setSetupOffered(gate.offered);
       if (gate.open) location.replace(`#/${SETUP_PAGE}`);
