@@ -1481,6 +1481,7 @@ mod tests {
                 &json!({"executable": "/usr/bin/xterm", "argv": argv, "cwd": "/",
                     "program": program}),
                 &executor,
+                Path::new("/test/execution"),
             )
         };
         #[cfg(target_os = "linux")]

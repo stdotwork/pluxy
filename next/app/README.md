@@ -1667,7 +1667,7 @@ app supported there:
 - The management key's native entry and rotation, and the native confirmations, have Win32
   dialogs on Windows and AppKit dialogs on macOS ([How the app reaches core](#how-the-app-reaches-core),
   [Native confirmations](#native-confirmations)).
-- Five parts of the native test run there:
+- Six parts of the native test run there:
   - the platform session (`native/platform.ts`, `PLATFORM_SHARDS` in `native/shards.ts`): one app
     per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
     Windows, a LaunchAgent on macOS), the tray and the close preference;
