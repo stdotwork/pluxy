@@ -69,7 +69,8 @@ type Config struct {
 	// minute, above 0 blocks for that long, below 0 records no block, Retry-After or not
 	// (today's transient-error-cooldown-seconds).
 	TransientErrorCooldownMS int64 `json:"transient_error_cooldown_ms,omitempty"`
-	// SessionAffinity, when set, sends requests of the same session to the same account.
+	// SessionAffinity sends requests of the same session to the same account. It is on unless
+	// it says "enabled": false, with no section at all too (see AffinityOn).
 	SessionAffinity *AffinityConfig `json:"session_affinity,omitempty"`
 	// ForceModelPrefix: an account with a Prefix serves its models only under
 	// "<prefix>/<model>", except a model whose name is the prefix itself (today's
@@ -97,10 +98,29 @@ const (
 // usage-limit mode, as in today's core, since waiting it out is cheaper than stopping.
 const usageLimitMinReset = 5 * time.Minute
 
-// AffinityConfig turns on session affinity.
+// AffinityConfig is the session affinity settings.
 type AffinityConfig struct {
+	// Enabled false turns session affinity off. Unset or true: on.
+	Enabled *bool `json:"enabled,omitempty"`
 	// TTLMS is how long a session stays bound after its last request. Default one hour.
 	TTLMS int64 `json:"ttl_ms,omitempty"`
+}
+
+// defaultAffinityTTL is how long a session stays bound when ttl_ms is not set.
+const defaultAffinityTTL = time.Hour
+
+// AffinityOn reports whether requests of one session go to the same account: unless the config
+// turns it off, so a coding agent's conversation stays where its prompt cache is.
+func (c *Config) AffinityOn() bool {
+	return c.SessionAffinity == nil || c.SessionAffinity.Enabled == nil || *c.SessionAffinity.Enabled
+}
+
+// AffinityTTL is how long a session stays bound after its last request.
+func (c *Config) AffinityTTL() time.Duration {
+	if c.SessionAffinity == nil || c.SessionAffinity.TTLMS == 0 {
+		return defaultAffinityTTL
+	}
+	return time.Duration(c.SessionAffinity.TTLMS) * time.Millisecond
 }
 
 // Validate checks the strategy name and limits.
@@ -189,7 +209,7 @@ type Router struct {
 	attempt  AttemptFunc
 	state    *State
 	picker   *picker
-	affinity *affinity // nil without session affinity
+	affinity *affinity // nil with session affinity off
 	ttl      time.Duration
 	gen      uint64    // this router's generation, from state (see State.Retain)
 	created  time.Time // when the router was made: the created time of models accounts list themselves
@@ -227,12 +247,8 @@ func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Ro
 	if r.picker, err = newPicker(cfg.Strategy, r.accounts, state.rotation, r.gen); err != nil {
 		return nil, err
 	}
-	if cfg.SessionAffinity != nil {
-		ttl := time.Duration(cfg.SessionAffinity.TTLMS) * time.Millisecond
-		if ttl == 0 {
-			ttl = time.Hour
-		}
-		r.affinity, r.ttl = state.affinity, ttl
+	if cfg.AffinityOn() {
+		r.affinity, r.ttl = state.affinity, cfg.AffinityTTL()
 	}
 	return r, nil
 }

@@ -84,7 +84,7 @@ func TestExampleConfig(t *testing.T) {
 	equalJSON(t, r.Config, `{
 		"listen": ":8317",
 		"client_keys": ["your-api-key-1", "your-api-key-2", "your-api-key-3"],
-		"routing": {"request_retry": 3, "max_wait_ms": 30000},
+		"routing": {"request_retry": 3, "max_wait_ms": 30000, "session_affinity": {"enabled": false}},
 		"usage": {"enabled": false}
 	}`)
 	if r.AuthDir != "~/.cli-proxy-api" {
@@ -268,7 +268,7 @@ claude-api-key:
   - api-key: claude-key
 `)
 	equalJSON(t, r.Config, `{
-		"listen": ":8317", "routing": {"request_retry": 0},
+		"listen": ":8317", "routing": {"request_retry": 0, "session_affinity": {"enabled": false}},
 		"extensions": {
 			"pluxy/codex": {"accounts": [
 				{"id": "codex-api-key-3", "settings": {"base_url": "https://codex.example.com"}, "credential": {"kind": "api_key", "api_key": "has-url"}}
@@ -324,7 +324,7 @@ api-keys:
 		"listen": ":9001",
 		"management_key": "new",
 		"management_allow_remote": true,
-		"routing": {"request_retry": 0},
+		"routing": {"request_retry": 0, "session_affinity": {"enabled": false}},
 		"extensions": {"pluxy/codex": {"accounts": [{"id": "c", "settings": {"base_url": "https://new.example.com"}, "credential": {"kind": "api_key", "api_key": "new-key"}}]}}
 	}`)
 	// allow-remote came from the older spelling and still counts: the v8 value wins only
@@ -526,7 +526,7 @@ extensions:
 codex-api-key: [{api-key: from-yaml, base-url: "https://yaml.example.com"}]
 `)
 	equalJSON(t, r.Config, `{
-		"listen": ":8317", "routing": {"request_retry": 0},
+		"listen": ":8317", "routing": {"request_retry": 0, "session_affinity": {"enabled": false}},
 		"credentials_dir": "creds", "drop_policy": "reject", "token_count_estimate": false, "packages": {"dir": "pk"},
 		"cors": {"allowed_origins": ["http://localhost:5173"]},
 		"extensions": {"pluxy/codex": {"idle_stop_ms": 0, "accounts": [
@@ -590,7 +590,7 @@ claude-api-key:
   - api-key: 987654
 `)
 	equalJSON(t, r.Config, `{
-		"listen": ":8317", "routing": {"request_retry": 0},
+		"listen": ":8317", "routing": {"request_retry": 0, "session_affinity": {"enabled": false}},
 		"client_keys": ["123456"],
 		"management_key": " spaced ",
 		"management_allow_remote": true,
@@ -790,7 +790,7 @@ claude-api-key:
 access: {api-keys: [*k]}
 `)
 	equalJSON(t, r.Config, `{
-		"listen": ":8317", "routing": {"request_retry": 0},
+		"listen": ":8317", "routing": {"request_retry": 0, "session_affinity": {"enabled": false}},
 		"client_keys": ["0123"],
 		"extensions": {"pluxy/claude": {"accounts": [{"id": "claude-api-key-1", "credential": {"kind": "api_key", "api_key": "0123"},
 			"prefix": "own", "proxy_url": "http://proxy.example:8080", "settings": {"base_url": "0x1F"}}]}}
@@ -820,7 +820,7 @@ openai-compatibility:
     base-url: http://127.0.0.1:1234/v1
 `)
 	equalJSON(t, r.Config, `{
-		"listen": ":8317", "routing": {"request_retry": 0},
+		"listen": ":8317", "routing": {"request_retry": 0, "session_affinity": {"enabled": false}},
 		"extensions": {"pluxy/gemini": {"accounts": [{"id": "gemini-api-key-2", "credential": {"kind": "api_key", "api_key": "g"}}]}}
 	}`)
 	n := notices(r)
@@ -868,7 +868,7 @@ openai-compatibility:
     api-key-entries: [{api-key: k2}]
     models: [{name: m, alias: m}]
 `)
-	equalJSON(t, r.Config["routing"], `{"force_model_prefix": true, "request_retry": 0}`)
+	equalJSON(t, r.Config["routing"], `{"force_model_prefix": true, "request_retry": 0, "session_affinity": {"enabled": false}}`)
 	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
 	equalJSON(t, exts[Codex].(map[string]any)["accounts"], `[{
 		"id": "codex-api-key-1", "prefix": "team", "excluded_models": ["*-mini"],

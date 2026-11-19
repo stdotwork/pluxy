@@ -1355,7 +1355,7 @@ to a minute. Results count in the order their requests started on the account: a
 clears the blocks that failures of earlier-started requests left on its account (its credential,
 its model and its endpoint), and a failure that ends after a later-started request succeeded on
 the same scope leaves no block and no last error. Among eligible accounts, core prefers the
-session's account (with session affinity on), then the highest `priority`, then picks by
+session's account (session affinity is on unless the config turns it off), then the highest `priority`, then picks by
 strategy.
 
 A reset the upstream names is used when it is between 1 second and 8 days away (the longest usage
@@ -1414,7 +1414,7 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
 | `transient_error_cooldown_ms` | How long a failing upstream or endpoint (a 5xx or a broken connection) is blocked when it gave no `Retry-After`: 0 (default) backs off from a second to a minute, above 0 that long, below 0 not at all, `Retry-After` or not. |
 | `quota_response_mode` | What a client gets when every account that serves its model is out of quota until a reset the upstream named, the first of them more than 5 minutes away: `retryable` (default) a retryable 429 with `Retry-After`, as for any block; `usage-limit` the final usage-limit reply below. |
 | `explain` | `false` leaves out of replies the headers that name the account (`X-Pluxy-Account`, `X-Pluxy-Provider`, `X-Pluxy-Model`, `X-Pluxy-Attempts`) and the `pluxy` member of errors (see [Run it](#run-it)), for a core whose client keys go to people who should not see which accounts serve them. The trace ID stays. Default `true`. |
-| `session_affinity` | When present, requests of one session go to the same account while it is eligible. The session comes from the `X-Claude-Code-Session-Id`, `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`; bindings are per client key and model. |
+| `session_affinity` | On by default, with no setting needed: requests of one session go to the same account while it is eligible, so a coding agent's conversation keeps its provider-side prompt cache. `{"enabled": false}` turns it off; `{"ttl_ms": 1800000}` sets how long a session stays bound after its last request (default one hour, 3600000). The session comes from the `X-Claude-Code-Session-Id`, `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`; a request with none takes turns as usual. Bindings are per client key and model. A `config.yaml` keeps today's default, off (below). |
 | account `priority` | Higher first; lower accounts serve only while every higher one is blocked. Default 0. |
 | account `weight` | For `weighted`. Default 1; 0 leaves the account out. |
 | account `disable_cooling` | Overrides `disable_cooling` for the account. |
@@ -1971,7 +1971,7 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | Setting | JSON config | Values |
 | --- | --- | --- |
 | `routing.strategy` | `routing.strategy` (`weighted` for `weighted-round-robin`) | `round-robin`, `fill-first`, `weighted-round-robin`, `least-active`; today's other spellings (`wrr`, `ff`, ...) are taken too. |
-| `routing.session-affinity` | `routing.session_affinity` there or not | `true` or `false`. |
+| `routing.session-affinity` | `routing.session_affinity.enabled` | `true` or `false`. A `config.yaml` keeps today's default, `false`; a JSON config has it on until it says `false`. |
 | `routing.session-affinity-ttl` | `routing.session_affinity.ttl_ms` | A duration such as `1h` (default) or `30m`. In a JSON config it needs session affinity on. |
 | `routing.force-model-prefix` | `routing.force_model_prefix` | `true`: an account with a `prefix` serves its models only under the prefix. |
 | `routing.retry.max-retry-credentials` | `routing.max_accounts` | Accounts one request may try in a round, as in today's core; 0 is no limit. |
@@ -2425,7 +2425,7 @@ are accepted silently.
 | `server.discovery.*` (`discovery`) | | Dropped: no client here reads the advertisement |
 | `server.discovery.advertise-management` | | Dead |
 | `routing.strategy` | `routing.strategy`: `round-robin`, `fill-first` (also `fillfirst`, `ff`), `weighted-round-robin` (also `weightedroundrobin`, `wrr`; this core's `weighted`); this core's `weighted` and `least-active` work too. A name today's core does not know is `round-robin`, as there, and the log says so. | Supported |
-| `routing.session-affinity`, `routing.session-affinity-ttl` | `routing.session_affinity` with `ttl_ms` from the duration (default `1h`). | Supported |
+| `routing.session-affinity`, `routing.session-affinity-ttl` | `routing.session_affinity` with `ttl_ms` from the duration (default `1h`). A `config.yaml` without `session-affinity: true` has it off, as today's core does, though a JSON config has it on by default. | Supported |
 | `routing.session-affinity-subagents` | A Claude Code subagent sends its session's `X-Claude-Code-Session-Id`, so with `routing.session-affinity` it stays on the session's account, as today's default `true` keeps it. `false` (spread subagents over the pool) is not built, and the log names it. | Dropped: a subagent stays on its session's account, and no need was found to spread subagents over the pool |
 | `routing.session-affinity-rebind-on` | | Dropped: no need found |
 | `routing.force-model-prefix` (`force-model-prefix`) | `routing.force_model_prefix`. | Supported |

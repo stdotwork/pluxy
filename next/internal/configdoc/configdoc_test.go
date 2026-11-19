@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/server"
 	"github.com/stdotwork/pluxy/next/sdk/payload"
@@ -679,7 +680,7 @@ func TestApplySettingsJSON(t *testing.T) {
 			}
 		}
 	})
-	t.Run("affinity off removes it, ttl then needs it on", func(t *testing.T) {
+	t.Run("affinity off is said in the file, ttl then needs it on", func(t *testing.T) {
 		on, err := apply(editJSON, SettingsPatch{Routing: &RoutingPatch{SessionAffinity: flag(true), SessionAffinityTTL: str("30m")}})
 		if err != nil {
 			t.Fatal(err)
@@ -691,14 +692,22 @@ func TestApplySettingsJSON(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if a := loads(t, off, false).Routing.SessionAffinity; a != nil {
-			t.Errorf("affinity = %+v, want none", a)
+		if a := loads(t, off, false).Routing.SessionAffinity; a == nil || a.Enabled == nil || *a.Enabled || a.TTLMS != 1800000 {
+			t.Errorf("affinity = %+v, want off with the ttl kept", a)
 		}
 		if _, err := apply(off, SettingsPatch{Routing: &RoutingPatch{SessionAffinityTTL: str("1h")}}); !errors.Is(err, ErrInvalid) {
 			t.Errorf("ttl with affinity off: err = %v, want ErrInvalid", err)
 		}
 		if _, err := apply(on, SettingsPatch{Routing: &RoutingPatch{SessionAffinity: flag(false), SessionAffinityTTL: str("1h")}}); !errors.Is(err, ErrInvalid) {
 			t.Errorf("ttl with affinity turned off in the same patch: err = %v, want ErrInvalid", err)
+		}
+		// A JSON config that says nothing has affinity on, so a ttl alone is fine.
+		only, err := apply(editJSON, SettingsPatch{Routing: &RoutingPatch{SessionAffinityTTL: str("2h")}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := loads(t, only, false).Routing; !r.AffinityOn() || r.AffinityTTL() != 2*time.Hour {
+			t.Errorf("affinity on = %v, ttl %v, want on for 2h", r.AffinityOn(), r.AffinityTTL())
 		}
 		// A ttl shorter than a second is a second, as today's core reads it.
 		short, err := apply(on, SettingsPatch{Routing: &RoutingPatch{SessionAffinityTTL: str("500ms")}})
@@ -984,8 +993,8 @@ func TestApplySettingsYAML(t *testing.T) {
 		off := edited(t, on, true, func(d *Doc) error {
 			return d.ApplySettings(SettingsPatch{Routing: &RoutingPatch{SessionAffinity: flag(false)}})
 		})
-		if a := loads(t, off, true).Routing.SessionAffinity; a != nil {
-			t.Errorf("affinity = %+v, want none in\n%s", a, off)
+		if r := loads(t, off, true).Routing; r.AffinityOn() {
+			t.Errorf("affinity = %+v, want off in\n%s", r.SessionAffinity, off)
 		}
 	})
 	t.Run("invalid values", func(t *testing.T) {

@@ -348,10 +348,10 @@ func (d *Doc) applyRouting(r *RoutingPatch) error {
 			if err := d.Set(Bool(*r.SessionAffinity), "routing", "session-affinity"); err != nil {
 				return err
 			}
-		case !*r.SessionAffinity:
-			d.Delete("routing", "session_affinity")
-		case isNull(d.Get("routing", "session_affinity")):
-			if err := d.Set(&yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}, "routing", "session_affinity"); err != nil {
+		default:
+			// Said either way: a JSON config has it on without the setting, and the file should
+			// keep saying what the person chose.
+			if err := d.Set(Bool(*r.SessionAffinity), "routing", "session_affinity", "enabled"); err != nil {
 				return err
 			}
 		}
@@ -364,9 +364,8 @@ func (d *Doc) applyRouting(r *RoutingPatch) error {
 		}
 		if d.YAML {
 			err = d.Set(String(s), "routing", "session-affinity-ttl")
-		} else if isNull(d.Get("routing", "session_affinity")) {
-			// In a JSON config the TTL is inside routing.session_affinity, whose presence
-			// turns affinity on.
+		} else if en := d.Get("routing", "session_affinity", "enabled"); en != nil && en.Kind == yaml.ScalarNode && en.Value == "false" {
+			// In a JSON config the TTL is inside routing.session_affinity, next to its switch.
 			err = fmt.Errorf("%w: routing.session-affinity-ttl needs routing.session-affinity on", ErrInvalid)
 		} else {
 			err = d.Set(Int(max(ttl, time.Second).Milliseconds()), "routing", "session_affinity", "ttl_ms")
