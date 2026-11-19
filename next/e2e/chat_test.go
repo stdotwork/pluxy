@@ -40,11 +40,39 @@ func TestMain(m *testing.M) {
 	code := 1
 	if err := build(dir); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+	} else if err := ownHome(dir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 	} else {
 		code = m.Run()
 	}
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// ownHome gives the tests, and every core they start, a home folder of their own under dir, so
+// no test reads or writes the real one (a first start scans the machine's client tools). Go's own
+// caches stay where they are, so a test that builds or runs Go code finds them.
+func ownHome(dir string) error {
+	out, err := exec.Command("go", "env", "GOCACHE", "GOMODCACHE", "GOPATH").Output()
+	if err != nil {
+		return fmt.Errorf("go env: %w", err)
+	}
+	vals := strings.Split(strings.TrimSpace(string(out)), "\n")
+	for i, k := range []string{"GOCACHE", "GOMODCACHE", "GOPATH"} {
+		if i < len(vals) && vals[i] != "" {
+			os.Setenv(k, vals[i])
+		}
+	}
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return err
+	}
+	os.Setenv("HOME", home)
+	os.Setenv("USERPROFILE", home)
+	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"} {
+		os.Setenv(k, filepath.Join(home, strings.ToLower(strings.TrimPrefix(k, "XDG_"))))
+	}
+	return nil
 }
 
 // build compiles core and the extensions and writes each extension's manifest next to it.
