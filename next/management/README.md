@@ -220,6 +220,16 @@ checked within 15 minutes.
 
 Closed days are counted by whole UTC hours, so a `since` or `until` inside an hour on a closed day counts that whole hour.
 
+### Themes
+
+| Call | Command | What it does |
+| --- | --- | --- |
+| `GET /themes` | `pluxy theme list` | The selected theme ID (`current`) and the stored themes (`id`, `name`, `bytes`) |
+| `GET /themes/{publisher}/{name}` | `pluxy theme show <id>` | One stored theme's JSON unchanged |
+| `PUT /themes/{publisher}/{name}` | `pluxy theme add <file> [--id publisher/name]` | Store a theme JSON object (up to 256 KiB; at most 64 stored) |
+| `DELETE /themes/{publisher}/{name}` | `pluxy theme remove <id>` | Remove a stored theme; clears `current` if it was selected |
+| `PUT /theme` | `pluxy theme set <id>`, `pluxy theme clear` | Select a theme ID (even one the UI holds) or clear the selection |
+
 ## What a client request gets back (**new**)
 
 Not part of the management API, listed here because the same names appear in `GET /route`:

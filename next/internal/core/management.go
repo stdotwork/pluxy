@@ -59,6 +59,11 @@ const maxManagementBody = 1 << 20
 //	DELETE /v0/management/logs      empty main.log and delete its rotated files
 //	GET    /v0/management/request-error-logs  the error logs; .../{name} one of them
 //	GET    /v0/management/request-log-by-id/{id}  the request log of a trace ID
+//	GET    /v0/management/themes  selected theme ID and stored themes
+//	GET    /v0/management/themes/{publisher}/{name}  one stored theme's JSON unchanged
+//	PUT    /v0/management/themes/{publisher}/{name}  store a theme JSON object
+//	DELETE /v0/management/themes/{publisher}/{name}  remove a stored theme
+//	PUT    /v0/management/theme   set or clear the selected theme ID
 //
 // Every call needs the active config's management_key as a bearer token. Without a key in the
 // config the API is not served.
@@ -138,6 +143,7 @@ func (c *Core) Management() *server.Management {
 	c.handleConfig(m)
 	c.handleUsage(m)
 	c.handleLogs(m)
+	c.handleThemes(m)
 	return m
 }
 
