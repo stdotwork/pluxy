@@ -11,6 +11,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/server"
+	"github.com/stdotwork/pluxy/next/management"
 )
 
 // ManagementPrefix is where the management API is served.
@@ -59,7 +60,7 @@ const maxManagementBody = 1 << 20
 //
 // Every call needs the active config's management_key as a bearer token. Without a key in the
 // config the API is not served.
-func (c *Core) Management() http.Handler {
+func (c *Core) Management() *server.Management {
 	m := server.NewManagement(c.Config, c.creds, c.state)
 	m.Check = c.checks.result
 	m.Redactor = accountRedactor{c.redactor}
@@ -74,10 +75,10 @@ func (c *Core) Management() http.Handler {
 		writeJSON(w, code, c.Status())
 	})
 	m.Handle("GET /packages", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"packages": c.Packages()})
+		writeJSON(w, http.StatusOK, management.PackagesReply{Packages: c.Packages()})
 	})
 	m.Handle("GET /registries", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"registries": c.Registries(r.Context())})
+		writeJSON(w, http.StatusOK, management.RegistriesReply{Registries: c.Registries(r.Context())})
 	})
 	m.Handle("POST /packages", func(w http.ResponseWriter, r *http.Request) {
 		var req InstallRequest
@@ -103,7 +104,7 @@ func (c *Core) Management() http.Handler {
 	m.Handle("GET /models", func(w http.ResponseWriter, r *http.Request) {
 		s, release := c.acquire()
 		defer release()
-		writeJSON(w, http.StatusOK, map[string]any{"models": s.Router.ServedModels(r.Context())})
+		writeJSON(w, http.StatusOK, management.ModelsReply{Models: s.Router.ServedModels(r.Context())})
 	})
 	c.handleUI(m)
 	c.handleAccounts(m)
@@ -119,7 +120,7 @@ func packageID(r *http.Request) string { return r.PathValue("publisher") + "/" +
 // when it is installed all the same.
 func writePackage(w http.ResponseWriter, v PackageView, err error) {
 	if err == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"package": v})
+		writeJSON(w, http.StatusOK, management.PackageReply{Package: v})
 		return
 	}
 	code, kind := http.StatusInternalServerError, "internal"

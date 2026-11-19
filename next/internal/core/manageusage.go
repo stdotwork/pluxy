@@ -9,6 +9,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/internal/server"
 	"github.com/stdotwork/pluxy/next/internal/usage"
+	"github.com/stdotwork/pluxy/next/management"
 )
 
 // Limits of the usage calls' parameters.
@@ -46,10 +47,7 @@ func (c *Core) handleUsage(m *server.Management) {
 				return
 			}
 		}
-		writeJSON(w, http.StatusOK, struct {
-			Enabled bool `json:"enabled"`
-			usage.Summary
-		}{c.Config().Usage.On(), c.usage.Summarize(f, bucket, buckets)})
+		writeJSON(w, http.StatusOK, management.UsageReply{Enabled: c.Config().Usage.On(), Summary: c.usage.Summarize(f, bucket, buckets)})
 	})
 	m.Handle("GET /usage/events", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -72,10 +70,7 @@ func (c *Core) handleUsage(m *server.Management) {
 				return
 			}
 		}
-		writeJSON(w, http.StatusOK, struct {
-			Enabled bool `json:"enabled"`
-			usage.Page
-		}{c.Config().Usage.On(), c.usage.Events(f, after, limit)})
+		writeJSON(w, http.StatusOK, management.UsageEventsReply{Enabled: c.Config().Usage.On(), Page: c.usage.Events(f, after, limit)})
 	})
 }
 
