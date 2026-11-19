@@ -37,6 +37,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
 | `internal/cred` | Core's credential store and renewal of accounts added by login. |
+| `internal/private` | Core's private folders and files (credentials, extensions' settings, logs): 0700 and 0600 on Linux and macOS, an owner-only access list on Windows. |
 | `internal/packages` | Registries, release archives and the record of installed packages. |
 | `internal/panel` | Serves the web panel at `/panel/`, embedded in core's binary. |
 | `internal/pages` | Serves extension pages on a site of their own ([extension pages](ui/extension-pages/README.md)). |
@@ -1642,7 +1643,7 @@ an account's own, leaving out a rule for an alias the account already has; its
 Besides the accounts in the config, a provider extension that signs in to accounts (OAuth in a
 browser, a device code, or an API key it checks) can add accounts through the management API.
 Core keeps each one in its credential store, a folder with one file per account readable only by
-its owner (`credentials_dir`, default `credentials` beside the config file), and renews its
+core's user and, on Windows, SYSTEM (`credentials_dir`, default `credentials` beside the config file), and renews its
 credential through the extension shortly before it expires. Only the extension that created an
 account ever receives its credential. The protocol side is in the
 [protocol README](protocol/README.md#login-and-refresh).
@@ -1655,7 +1656,8 @@ SYSTEM). A folder made by pluxy run as administrator is owned by the Administrat
 without administrator rights refuses it: take ownership of the folder and its files from an
 elevated prompt (`takeown /f <folder> /r`), or move the folder away and sign the accounts in again.
 A file in the folder that is a link, or that another account owns, is skipped with a notice in the
-log rather than loaded.
+log rather than loaded. The same access list and folder checks keep the extensions' settings
+([extension pages](ui/extension-pages/README.md)) and the [log files](#log-files) private.
 
 An extension may return non-secret account settings with a login grant. When adding an
 account, core uses those as defaults: properties explicitly supplied in `POST /accounts.settings`
@@ -1950,6 +1952,15 @@ renamed `main-<time>.log` and a new one begins. `logs.max_total_size_mb` (today'
 `logs-max-total-size-mb`) caps the folder: when its `.log` files take more, the oldest are deleted
 first, `main.log` never; 0 (the default) is no cap. The cap is applied when a file is rotated, when a
 request log is written and when the setting changes. A change of either setting takes effect at the reload that makes it.
+
+The logs folder and the files core writes in it (`main.log`, its rotated files and the
+[request logs](#request-logs)) can be read only by core's user (and, on Windows, SYSTEM). On
+Linux and macOS the folder is made 0700 and each file 0600. On Windows the folder and each file
+get the protected access list of the [credentials folder](#accounts-added-by-login), and the
+folder is checked the same way each time core opens `main.log` and each time it writes a
+request log: a folder whose list is not private is made private, and one that is a link or a
+file, or that another account owns, is refused. Core still starts then, but writes no log files,
+and says why on standard error. A `main.log` that another account owns is refused too.
 
 Core also writes one access line when each client API request ends: after a streamed reply ends,
 and when a Responses WebSocket closes. It writes none for `/healthz`, the management API, the

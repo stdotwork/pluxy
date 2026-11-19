@@ -164,11 +164,13 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # The credential store's Windows code (internal/cred/file_windows.go): the access lists of the
-  # credentials folder and its files, read back from the file system, which the Linux job cannot
-  # do. Only internal/cred, pure Go, so no C compiler is needed.
-  cred-windows:
-    name: credentials (windows)
+  # Core's private folders on Windows (internal/private/private_windows.go): the access lists of
+  # the credentials folder, the extensions' settings folder and the logs folder, and of the files
+  # in them, read back from the file system, which the Linux job cannot do. internal/cred's
+  # tests run whole; internal/extconfig, internal/logfile and internal/server run only their
+  # Windows tests, the rest of their tests being Linux's. Pure Go, so no C compiler is needed.
+  private-windows:
+    name: private files (windows)
     runs-on: windows-latest
     env:
       CGO_ENABLED: 0
@@ -184,7 +186,9 @@ jobs:
           cache: true
           cache-dependency-path: next/go.mod
       - name: Vet
-        run: go vet ./internal/cred/
-      # -v lists each test, so the log shows the Windows access-list test ran.
+        run: go vet ./internal/cred/ ./internal/private/... ./internal/extconfig/ ./internal/logfile/ ./internal/server/
+      # -v lists each test, so the log shows the Windows access-list tests ran.
       - name: Test
         run: go test -count=1 -v ./internal/cred/
+      - name: Test the settings and logs folders
+        run: go test -count=1 -v -run Windows ./internal/extconfig/ ./internal/logfile/ ./internal/server/
