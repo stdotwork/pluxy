@@ -192,7 +192,8 @@ started 40 minutes after the group, when the rest had finished in about 23.
 
 It applies to these jobs:
 - the `app` job in `next-app-platforms.yml`;
-- the macOS legs of the `native` and `dialogs` jobs in `next-app-platforms.yml`. Their tests write
+- the macOS legs of the `native` and `dialogs` jobs in `next-app-platforms.yml`, except the `native`
+  job's `open` shard, whose session runs only on a GitHub-hosted runner. Their tests write
   the account's own folders, so they also check the runner (`next/app/native/runner.ts`): the job
   passes the label in `PLUXY_EPHEMERAL_CI_RUNNER`, and the check accepts only a Namespace profile
   label, a runner Namespace named and Namespace's own variable. Another provider needs a change to

@@ -285,10 +285,11 @@ jobs:
     # set, outside pull requests (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
     # it to the test in PLUXY_EPHEMERAL_CI_RUNNER, which is empty on every other runner. Windows
     # stays on GitHub's: this names no cloud runner there (Namespace's trial plan has no Windows),
-    # and the tests need a signed-in desktop.
-    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    # and the tests need a signed-in desktop. The open shard stays on GitHub's runner on macOS too:
+    # its session runs only on a GitHub-hosted runner (next/app/README.md, "Limits").
+    runs-on: ${{ matrix.os == 'macos-latest' && matrix.shard != 'open' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     env:
-      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
+      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && matrix.shard != 'open' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
     # The builds (about 3 minutes with the caches restored), then the native test's own limit
     # (at most 90 minutes).
     timeout-minutes: 120
