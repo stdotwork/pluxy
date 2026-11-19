@@ -232,8 +232,14 @@ fn private_dir(path: &Path) -> Result<(), String> {
 /// manager or another user keeps is not this updater's to replace.
 #[cfg(unix)]
 fn check_owned(path: &Path, folder: bool) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
     let m = fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    owned_as(&m, path, folder)
+}
+
+/// `check_owned` on m, what was read of path (through an open descriptor, say).
+#[cfg(unix)]
+fn owned_as(m: &fs::Metadata, path: &Path, folder: bool) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
     let kind_ok = if folder { m.is_dir() } else { m.is_file() };
     // SAFETY: geteuid has no preconditions.
     let me = unsafe { libc::geteuid() };

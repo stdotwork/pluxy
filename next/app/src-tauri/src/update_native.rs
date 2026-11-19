@@ -19,6 +19,8 @@
 //!   `staff-entry`, `wheel-entry`, `inherited-entry` (an access list entry on `/Applications`),
 //!   `bundle-entry` (one on the bundle), `not-yours` (the bundle another user's) and `not-admin`
 //!   (this user removed from `admin`);
+//! - `admitted` (macOS): the test package in `/Applications` with access list entries the rule
+//!   admits (root's and admin's, a deny entry): an update is offered; then it quits;
 //! - `applications` (macOS): the test package in `/Applications`, which restarts itself twice:
 //!   v1→v2, then a confirmed rollback to v1;
 //! - `update`: the test package itself. The app restarts itself on this route, so each process
@@ -520,13 +522,13 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, dir: PathBuf) -> Result<(), S
         "deb" | "rpm" | "unknown" | "msi" | "nsis" | "shared" | "bare" | "group-writable"
         | "linked" | "staff-entry" | "wheel-entry" | "inherited-entry" | "bundle-entry"
         | "not-yours" | "not-admin" => refused(app, main, &dir, &case)?,
-        "open" => {
+        "open" | "admitted" => {
             check(main, &dir, "good", "0.2.0")?;
             let available = wait_for("the updater's view", || {
                 Some(update_attr(main, "available")).filter(|a| !a.is_null())
             })?;
             log(
-                "update_open",
+                &format!("update_{case}"),
                 json!({"available": available, "reason": update_attr(main, "reason"),
                        "installed": installed(app), "installed_sha": installed_sha(app),
                        "pid": std::process::id()}),

@@ -97,25 +97,43 @@ pub(super) fn provenance(app: &AppHandle) -> Result<PathBuf, String> {
     // folder above is the read-only system volume's root, that is all there is); a folder further
     // up that others could change could be swapped. Upgrade by checking the ancestors, if updating
     // on shared machines is wanted.
-    check_owned(&bundle, true)?;
     let dir = open_folder(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    // The bundle as its folder holds it, opened through the folder's descriptor without
+    // following a link: the checks below read what is there, not what a path finds later.
+    let (_, name) = named(&bundle)?;
+    let b = open_in(&dir, &name).map_err(|e| format!("{}: {e}", bundle.display()))?;
     let data = super::dir(app)?;
     let data = data
         .parent()
         .ok_or("The app's data folder has no folder.")?;
+    // The folder first: in `/Applications`, an account outside admin hears that, whoever owns
+    // the bundle.
     match admitted(&dir, folder, || volume(data))? {
-        Some(Rule::Own) => {}
+        Some(Rule::Own) => own_bundle(&b, &bundle)?,
         Some(Rule::Applications) => {
-            let b = open_folder(&bundle).map_err(|e| format!("{}: {e}", bundle.display()))?;
-            let entries = applications::bundle_entries(&b)
-                .map_err(|e| format!("{}: {e}", bundle.display()))?;
-            let ids = applications::ids()?;
-            applications::judge_bundle(&bundle, &entries, applications::my_uuid()?, ids.root)?;
+            let read = applications::folder(&b).map_err(|e| applications::unknown(&bundle, e))?;
+            let ids = applications::ids().map_err(|e| applications::unknown(&bundle, e))?;
+            // SAFETY: geteuid has no preconditions.
+            let me = unsafe { libc::geteuid() };
+            applications::judge_bundle(&bundle, &read, me, &ids)?;
         }
-        None => check_owned(folder, true)?,
+        None => {
+            own_bundle(&b, &bundle)?;
+            check_owned(folder, true)?;
+        }
     }
     swaps(folder)?;
     Ok(bundle)
+}
+
+/// Refused unless the bundle open as b (at path) is a folder this user owns that no one else can
+/// write to, read through b (`check_owned`'s rule and message).
+#[cfg(target_os = "macos")]
+fn own_bundle(b: &fs::File, path: &Path) -> Result<(), String> {
+    let m = b
+        .metadata()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    super::owned_as(&m, path, true)
 }
 
 /// Which rule admits the bundle's folder: this user's alone, or the stock `/Applications`
@@ -149,7 +167,7 @@ fn admitted(
     }
     #[cfg(target_os = "macos")]
     {
-        let f = applications::folder(dir).map_err(|e| format!("{}: {e}", folder.display()))?;
+        let f = applications::folder(dir).map_err(|e| applications::unknown(folder, e))?;
         applications::judge(folder, &f, applications::ids(), data_volume()?)?;
         Ok(Some(Rule::Applications))
     }
@@ -267,8 +285,10 @@ impl Staged {
 /// A new staging folder of this user's, recorded in the updates folder dir (`leftovers::Folder`):
 /// `<dir>/staging/<hex>` when that is on the installed bundle's volume and every folder from the
 /// home folder down to it is this user's alone (`private_path`, refused otherwise); on another
-/// volume, `.pluxy-update-<hex>` next to the bundle. The folders from the home folder down to
-/// `<dir>/staging` that exist already are checked before anything is made in them.
+/// volume, `.pluxy-update-<hex>` next to the bundle, only when the bundle's folder is this user's
+/// alone (refused otherwise: in `/Applications` nothing but the bundle's own entry may change).
+/// The folders from the home folder down to `<dir>/staging` that exist already are checked before
+/// anything is made in them.
 fn staging(installed: &Path, dir: &Path) -> Result<leftovers::Folder, String> {
     let folder = installed.parent().ok_or("The app bundle has no folder.")?;
     let mut nonce = [0u8; 8];
@@ -508,23 +528,8 @@ pub(super) fn swap_in(installed: &Path, mut staged: Staged, _updates: &Path) -> 
     let to = open_folder(folder).map_err(|e| shown(folder, e))?;
     let (staging_folder, staging_name) = named(staging)?;
     let beside = staging_folder == folder;
-    // The staging folder's volume, for `/Applications`: the private one, never one beside it.
-    let data_volume = || {
-        if beside {
-            Err(format!(
-                "{} is next to the bundle, in a folder others can change; nothing was swapped.",
-                staging.display()
-            ))
-        } else {
-            volume(staging)
-        }
-    };
-    if admitted(&to, folder, data_volume)?.is_none() {
-        return Err(format!(
-            "{} is not a folder of yours that only you can change; the app is not updated there.",
-            folder.display()
-        ));
-    }
+    let rule = admitted(&to, folder, || volume(staging))?;
+    swaps_through(rule, beside, folder, staging)?;
     // The staging folder: next to the bundle, opened through the bundle's folder just checked;
     // in private staging, by its path, whose folders `staging` checked. Either way it must still
     // be the folder made: the same device and inode, this user's, 0700.
@@ -555,6 +560,30 @@ pub(super) fn swap_in(installed: &Path, mut staged: Staged, _updates: &Path) -> 
     // The old bundle is in the staging folder now: it stays until the old version has ended.
     staged.staging.keep();
     Ok(())
+}
+
+/// Whether `swap_in` may swap through the bundle's folder (at path folder) that rule admitted, with
+/// the staging folder (at path staging) beside the bundle or not: refused when no rule admits the
+/// folder, and in `/Applications` when the staging folder is beside the bundle, since there the
+/// swap must be the only change.
+fn swaps_through(
+    rule: Option<Rule>,
+    beside: bool,
+    folder: &Path,
+    staging: &Path,
+) -> Result<(), String> {
+    match rule {
+        Some(Rule::Own) => Ok(()),
+        Some(Rule::Applications) if !beside => Ok(()),
+        Some(Rule::Applications) => Err(format!(
+            "{} is next to the bundle, in a folder others can change; nothing was swapped.",
+            staging.display()
+        )),
+        None => Err(format!(
+            "{} is not a folder of yours that only you can change; the app is not updated there.",
+            folder.display()
+        )),
+    }
 }
 
 /// The folder path is in, and its name there.
@@ -1140,6 +1169,69 @@ pub(super) mod tests {
                 "{another}: nothing swapped"
             );
             fs::remove_dir_all(&tmp).unwrap();
+        }
+    }
+
+    // On another volume, staging goes beside the bundle only in a folder of this user's alone: in
+    // one others can change (group write here, as `/Applications` has), it is refused and nothing
+    // is made beside the bundle or in private staging.
+    #[test]
+    fn on_another_volume_nothing_is_staged_in_a_folder_others_can_change() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = temp("app-other-volume-shared");
+        ANOTHER.with(|a| a.set(true));
+        let dir = tmp.join("updates");
+        let folder = tmp.join("Applications");
+        let installed = fixture(&folder, "old");
+        let kept = tmp.join("kept.app");
+        copy_new(&installed, &kept).unwrap();
+        let pin = Pinned {
+            version: "0.1.0".into(),
+            sha256: digest(&installed).unwrap(),
+        };
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o770)).unwrap();
+        let e = stage_kept(&installed, &kept, &pin, &dir).err().unwrap();
+        assert!(
+            e.contains("on another volume than the app's data folder")
+                && e.contains("~/Applications"),
+            "{e}"
+        );
+        assert!(beside(&folder).is_empty(), "staged beside the bundle");
+        assert!(private(&dir).is_empty(), "staged privately");
+        assert!(
+            !SEEN.with(|s| s.borrow().iter().any(|(op, _)| *op == "make")),
+            "a staging folder was made"
+        );
+        // The same folder, this user's alone again: staged beside the bundle.
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
+        let s = stage_kept(&installed, &kept, &pin, &dir).unwrap();
+        assert_eq!(beside(&folder).len(), 1);
+        drop(s);
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // The swap goes through the bundle's folder only when a rule admits it, and in
+    // `/Applications` only from private staging, never from a staging folder beside the bundle.
+    #[test]
+    fn the_swap_in_applications_comes_only_from_private_staging() {
+        let folder = Path::new("/Applications");
+        let staging = |beside: bool| {
+            if beside {
+                PathBuf::from("/Applications/.pluxy-update-0123456789abcdef")
+            } else {
+                PathBuf::from("/Users/me/Library/Application Support/id/updates/staging/ab")
+            }
+        };
+        swaps_through(Some(Rule::Applications), false, folder, &staging(false)).unwrap();
+        let e = swaps_through(Some(Rule::Applications), true, folder, &staging(true)).unwrap_err();
+        assert!(
+            e.contains("next to the bundle") && e.contains("nothing was swapped"),
+            "{e}"
+        );
+        for beside in [false, true] {
+            swaps_through(Some(Rule::Own), beside, folder, &staging(beside)).unwrap();
+            let e = swaps_through(None, beside, folder, &staging(beside)).unwrap_err();
+            assert!(e.contains("is not a folder of yours"), "{e}");
         }
     }
 

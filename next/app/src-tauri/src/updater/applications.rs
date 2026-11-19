@@ -15,11 +15,14 @@
 //!   take group 0 for user 0;
 //! - the app's data folder, where the update is staged, is on the same volume, so the only change
 //!   the update makes in `/Applications` is the swap of the bundle's own entry;
-//! - this user is a member of `admin` (`mbr_check_membership`). That is a message, not a guard:
-//!   without the group the kernel refuses the swap; the check says so first, with what to do.
+//! - this user is a member of `admin` (`mbr_check_membership`). Without the group the kernel
+//!   refuses the swap; this check says so before an update is offered, with what to do. The swap
+//!   checks again (`app::swap_in`), so a membership change while a new version accepts itself
+//!   refuses putting the earlier version back: the update fails closed, as it would in the kernel.
 //!
-//! The bundle itself must still be this user's and writable by no one else, and its own access
-//! list may give no one but this user and root more than reading (`check_bundle`).
+//! The bundle itself, opened through that folder's descriptor, must be this user's folder that no
+//! one else can write to, and its own access list may give no one but this user and root more than
+//! reading (`judge_bundle`).
 //!
 //! Why that is safe, in short (README.md has each step): the folder's other writers are this Mac's
 //! administrators, and any of them can already rename the user's bundle aside and put one of
@@ -52,7 +55,7 @@ pub(super) struct Entry {
     pub only_inherit: bool,
 }
 
-/// What the rule reads of the bundle's folder, through its descriptor.
+/// What the rule reads of the bundle's folder, or of the bundle, through its descriptor.
 #[derive(Clone, Debug)]
 pub(super) struct Folder {
     pub folder: bool,
@@ -69,6 +72,8 @@ pub(super) struct Ids {
     pub root: [u8; 16],
     pub admin_gid: u32,
     pub admin: [u8; 16],
+    /// This user's UUID.
+    pub me: [u8; 16],
     /// Whether this user is a member of `admin`.
     pub member: bool,
 }
@@ -84,9 +89,22 @@ pub(super) fn admits_others<'a>(
         .find(|(_, e)| e.allow && e.rights & !READ_ONLY != 0 && !allowed.contains(&e.who))
 }
 
-/// Advice for every refusal here.
+/// Advice for a refusal of the folder.
 const MOVE: &str = "Move pluxy to Applications in your home folder (~/Applications) with Finder, \
                     open it from there, and update then.";
+
+/// Advice for a bundle that is not this user's: a copy made by this user is.
+const COPY: &str = "Copy pluxy to Applications in your home folder (~/Applications) with Finder, \
+                    open the copy from there, and update then.";
+
+/// The refusal when what the rule reads of path (the folder, the bundle, or who root and `admin`
+/// are) could not be read: error says why.
+pub(super) fn unknown(path: &Path, error: impl std::fmt::Display) -> String {
+    format!(
+        "Whether only you and this Mac's administrators can change {} is unknown ({error}). {MOVE}",
+        path.display()
+    )
+}
 
 /// Whether the bundle's folder at path (as resolved, with no link on it), read as f, admits an
 /// update under this rule, with this user and the groups as ids say (an error when a lookup
@@ -141,6 +159,9 @@ pub(super) fn judge(
             "it is on another volume than the app's data folder, where the update is staged".into(),
         );
     }
+    // Checked again at every swap through this folder (`app::swap_in`), a rollback's or a
+    // put-back's too: a membership change while a new version accepts itself refuses putting the
+    // earlier version back, failing closed as the kernel would. Rare, and accepted.
     if !ids.member {
         return Err(format!(
             "pluxy is in {APPLICATIONS}, which only administrators can change, and this account \
@@ -150,26 +171,48 @@ pub(super) fn judge(
     Ok(())
 }
 
-/// The bundle's own access list, read as entries: refused when an allow entry gives anyone but
-/// this user (me) and root a right beyond reading.
-pub(super) fn judge_bundle(
-    bundle: &Path,
-    entries: &[Entry],
-    me: [u8; 16],
-    root: [u8; 16],
-) -> Result<(), String> {
-    match admits_others(entries, &[me, root]) {
-        Some((i, _)) => Err(format!(
-            "{} is not a folder of yours that only you can change: entry {i} of its access list \
-             (`ls -le` shows it) lets another account change it. {MOVE}",
-            bundle.display()
-        )),
-        None => Ok(()),
+/// The bundle at path in `/Applications`, read as b through a descriptor opened in that folder:
+/// it must be a folder this user (my_uid) owns that no one else can write to, and no allow entry
+/// of its access list may give anyone but this user and root (ids) more than reading. The
+/// refusal says why and what to do.
+pub(super) fn judge_bundle(path: &Path, b: &Folder, my_uid: u32, ids: &Ids) -> Result<(), String> {
+    let not = |why: String, advice: String| {
+        Err(format!(
+            "{} is not a folder of yours that only you can change: {why}. {advice}",
+            path.display()
+        ))
+    };
+    if !b.folder {
+        return not("it is not a folder".into(), COPY.into());
     }
+    if b.uid != my_uid {
+        return not(format!("its owner is user {}, not you", b.uid), COPY.into());
+    }
+    if b.mode & 0o022 != 0 {
+        return not(
+            "other accounts can change it".into(),
+            format!(
+                "Remove their write permission (in Terminal: chmod go-w \"{}\") and update then.",
+                path.display()
+            ),
+        );
+    }
+    if let Some((i, _)) = admits_others(&b.entries, &[ids.me, ids.root]) {
+        return not(
+            format!(
+                "entry {i} of its access list (`ls -le` shows it) lets another account change it"
+            ),
+            format!(
+                "Remove that entry (in Terminal: chmod -a# {i} \"{}\") and update then.",
+                path.display()
+            ),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
-pub(super) use sys::{bundle_entries, folder, ids, my_uuid};
+pub(super) use sys::{folder, ids};
 
 #[cfg(target_os = "macos")]
 mod sys {
@@ -204,7 +247,7 @@ mod sys {
         fn mbr_check_membership(user: *const u8, group: *const u8, ismember: *mut c_int) -> c_int;
     }
 
-    /// The folder open as f: its kind, owner, group, mode and volume (`fstat`) and its extended
+    /// What is open as f: its kind, owner, group, mode and volume (`fstat`) and its extended
     /// access list (`acl_get_fd_np`), both through the descriptor.
     pub(in super::super) fn folder(f: &File) -> io::Result<Folder> {
         use std::os::unix::fs::MetadataExt;
@@ -217,11 +260,6 @@ mod sys {
             dev: m.dev(),
             entries: entries(f)?,
         })
-    }
-
-    /// The extended access list of the bundle open as f.
-    pub(in super::super) fn bundle_entries(f: &File) -> io::Result<Vec<Entry>> {
-        entries(f)
     }
 
     /// Every entry of the extended access list of what is open as f, inherit-only ones too: none
@@ -284,19 +322,40 @@ mod sys {
         read.map(|()| out)
     }
 
+    /// Runs call with a buffer of 16 KiB, doubled while call says it is too small (`ERANGE`), up
+    /// to 1 MiB, and gives back what call last returned (0 or an error number).
+    fn sized(mut call: impl FnMut(&mut [libc::c_char]) -> c_int) -> c_int {
+        let mut len = 16 << 10;
+        loop {
+            let mut buf = vec![0 as libc::c_char; len];
+            let r = call(&mut buf);
+            if r != libc::ERANGE || len >= 1 << 20 {
+                return r;
+            }
+            len *= 2;
+        }
+    }
+
     /// This user's UUID: refused when the effective user has no account (`getpwuid_r`), since
     /// `mbr_uid_to_uuid` makes one up for an unknown user.
-    pub(in super::super) fn my_uuid() -> Result<[u8; 16], String> {
+    fn my_uuid() -> Result<[u8; 16], String> {
         // SAFETY: geteuid has no preconditions.
         let me = unsafe { libc::geteuid() };
-        let mut buf = vec![0 as libc::c_char; 16 << 10];
+        let mut known = false;
         // SAFETY: getpwuid_r writes only into pw and buf; found points into them or is null.
-        let known = unsafe {
+        let r = sized(|buf| unsafe {
             let mut pw: libc::passwd = std::mem::zeroed();
             let mut found: *mut libc::passwd = std::ptr::null_mut();
-            libc::getpwuid_r(me, &mut pw, buf.as_mut_ptr(), buf.len(), &mut found) == 0
-                && !found.is_null()
-        };
+            let r = libc::getpwuid_r(me, &mut pw, buf.as_mut_ptr(), buf.len(), &mut found);
+            known = r == 0 && !found.is_null();
+            r
+        });
+        if r != 0 {
+            return Err(format!(
+                "looking up user {me}: {}",
+                io::Error::from_raw_os_error(r)
+            ));
+        }
         if !known {
             return Err(format!("user {me} has no account"));
         }
@@ -315,13 +374,13 @@ mod sys {
         }
     }
 
-    /// Root's and `admin`'s UUIDs, `admin`'s group number as `getgrnam` gives it now, and whether
-    /// this user is a member of `admin`. Any lookup that fails is an error.
+    /// Root's, `admin`'s and this user's UUIDs, `admin`'s group number as `getgrnam` gives it now,
+    /// and whether this user is a member of `admin`. Any lookup that fails is an error.
     pub(in super::super) fn ids() -> Result<Ids, String> {
-        let mut buf = vec![0 as libc::c_char; 16 << 10];
         let name = c"admin";
+        let mut gid = None;
         // SAFETY: getgrnam_r writes only into g and buf; found points into them or is null.
-        let admin_gid = unsafe {
+        let r = sized(|buf| unsafe {
             let mut g: libc::group = std::mem::zeroed();
             let mut found: *mut libc::group = std::ptr::null_mut();
             let r = libc::getgrnam_r(
@@ -331,11 +390,16 @@ mod sys {
                 buf.len(),
                 &mut found,
             );
-            if r != 0 || found.is_null() {
-                return Err("there is no group named admin".into());
-            }
-            g.gr_gid
-        };
+            gid = (r == 0 && !found.is_null()).then_some(g.gr_gid);
+            r
+        });
+        if r != 0 {
+            return Err(format!(
+                "looking up the admin group: {}",
+                io::Error::from_raw_os_error(r)
+            ));
+        }
+        let admin_gid = gid.ok_or("there is no group named admin")?;
         // SAFETY (each closure): u points to 16 writable bytes.
         let root = uuid(|u| unsafe { mbr_uid_to_uuid(0, u) }, "root")?;
         let admin = uuid(
@@ -356,6 +420,7 @@ mod sys {
             root,
             admin_gid,
             admin,
+            me,
             member: is != 0,
         })
     }
@@ -415,6 +480,7 @@ mod tests {
             root: ROOT,
             admin_gid: 80,
             admin: ADMIN,
+            me: ME,
             member: true,
         })
     }
@@ -601,25 +667,85 @@ mod tests {
         );
     }
 
+    // The bundle in /Applications: this user's folder that no one else can write to, with no
+    // allow entry for anyone but this user and root beyond reading. Each refusal says why and
+    // what to do: copy a bundle that is not yours, remove others' write or the entry.
     #[test]
-    fn a_bundle_admits_only_this_users_and_roots_entries() {
-        let b = Path::new("/Applications/pluxy.app");
-        judge_bundle(b, &[], ME, ROOT).unwrap();
-        judge_bundle(
-            b,
-            &[allow(ME, GENERIC_ALL), allow(ROOT, ADD_FILE)],
-            ME,
-            ROOT,
-        )
+    fn a_bundle_must_be_yours_alone_with_no_entry_for_others() {
+        let p = Path::new("/Applications/pluxy.app");
+        let ids = ids().unwrap();
+        let mine = Folder {
+            folder: true,
+            uid: 501,
+            gid: 20,
+            mode: 0o40755,
+            dev: DEV,
+            entries: vec![],
+        };
+        let with = |b: Folder| judge_bundle(p, &b, 501, &ids);
+        with(mine.clone()).unwrap();
+        with(Folder {
+            entries: vec![
+                allow(ME, GENERIC_ALL),
+                allow(ROOT, ADD_FILE),
+                allow(EVERYONE, LIST | SEARCH),
+            ],
+            ..mine.clone()
+        })
         .unwrap();
-        judge_bundle(b, &[allow(EVERYONE, LIST | SEARCH)], ME, ROOT).unwrap();
-        for who in [ADMIN, STAFF, WHEEL, EVERYONE] {
-            let e =
-                judge_bundle(b, &[allow(ME, LIST), allow(who, ADD_FILE)], ME, ROOT).unwrap_err();
+        let refused = |b: Folder, why: &str, advice: &str| {
+            let e = with(b).unwrap_err();
             assert!(
-                e.contains("/Applications/pluxy.app is not a folder of yours")
-                    && e.contains("entry 1"),
-                "{e}"
+                e.starts_with(
+                    "/Applications/pluxy.app is not a folder of yours that only you can change: "
+                ) && e.contains(why)
+                    && e.contains(advice),
+                "{why}: {e}"
+            );
+        };
+        let copy = "Copy pluxy to Applications in your home folder (~/Applications) with Finder";
+        refused(
+            Folder {
+                uid: 0,
+                ..mine.clone()
+            },
+            "its owner is user 0, not you",
+            copy,
+        );
+        refused(
+            Folder {
+                uid: 502,
+                ..mine.clone()
+            },
+            "its owner is user 502",
+            copy,
+        );
+        refused(
+            Folder {
+                folder: false,
+                ..mine.clone()
+            },
+            "not a folder",
+            copy,
+        );
+        for mode in [0o40775, 0o40757] {
+            refused(
+                Folder {
+                    mode,
+                    ..mine.clone()
+                },
+                "other accounts can change it",
+                "chmod go-w \"/Applications/pluxy.app\"",
+            );
+        }
+        for who in [ADMIN, STAFF, WHEEL, EVERYONE] {
+            refused(
+                Folder {
+                    entries: vec![allow(ME, LIST), allow(who, ADD_FILE)],
+                    ..mine.clone()
+                },
+                "entry 1 of its access list",
+                "Remove that entry (in Terminal: chmod -a# 1 \"/Applications/pluxy.app\")",
             );
         }
     }
@@ -651,9 +777,12 @@ mod tests {
         )
     }
 
-    // The calls the rule makes, on the runner's real /Applications: what they read matches what
-    // the system's own tools show (`stat`, `ls -le`, `dsmemberutil`, `dseditgroup`), and the
-    // rule's verdict follows from that. The tools' output is in every failure message.
+    // The calls the rule makes, on the real /Applications of a GitHub-hosted macOS runner, whose
+    // user is an administrator: they read the stock folder (root, admin, 0775, no access list
+    // entry), the well-known UUIDs of root and admin, admin's gid 80 and the membership, each as
+    // written out here and as the system's own tools show it (`stat`, `ls -le`, `dsmemberutil`,
+    // `dscl`, `dseditgroup`), and the rule admits the folder. The tools' output is in every
+    // failure message. (The native update session adds and removes entries with sudo.)
     #[cfg(target_os = "macos")]
     #[test]
     fn the_real_applications_folder_reads_as_the_systems_tools_show_it() {
@@ -713,17 +842,24 @@ mod tests {
             &["-o", "checkmember", "-m", &user, "admin"],
         );
         assert_eq!(ids.member, member.starts_with("yes"), "{member}");
-        // The verdict: admitted exactly when the stock folder's facts hold for this user.
-        let stock = f.uid == 0
-            && f.gid == ids.admin_gid
-            && f.mode & 0o002 == 0
-            && admits_others(&f.entries, &[ids.root, ids.admin]).is_none();
-        let verdict = judge(Path::new(APPLICATIONS), &f, Ok(ids), f.dev);
+        // Written out: the stock folder and the well-known identities.
         assert_eq!(
-            verdict.is_ok(),
-            stock && ids.member,
-            "{verdict:?}\n{f:?}\n{member}\n{shown_by}"
+            (f.folder, f.uid, f.gid, f.mode, f.entries.len()),
+            (true, 0, 80, 0o40775, 0),
+            "{f:?}\n{shown_by}"
         );
+        assert_eq!(stat, "0 80 40775", "{shown_by}");
+        assert_eq!(listed, 0, "{shown_by}");
+        assert_eq!(shown(&ids.root), "FFFFEEEE-DDDD-CCCC-BBBB-AAAA00000000");
+        assert_eq!(shown(&ids.admin), "ABCDEFAB-CDEF-ABCD-EFAB-CDEF00000050");
+        assert_eq!(ids.admin_gid, 80);
+        assert_eq!(
+            shown(&ids.me),
+            out("/usr/bin/dsmemberutil", &["getuuid", "-U", &user])
+        );
+        assert!(ids.member, "{member}");
+        judge(Path::new(APPLICATIONS), &f, Ok(ids), f.dev)
+            .unwrap_or_else(|e| panic!("{e}\n{f:?}\n{shown_by}"));
         // The folder is root's on the read-only system volume's root, above it.
         let up = out("/usr/bin/stat", &["-f", "%Su %Sg %Lp", "/"]);
         assert!(up.starts_with("root wheel"), "/: {up}");

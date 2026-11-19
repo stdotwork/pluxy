@@ -38,7 +38,8 @@
 //   update; the update route with its third launch in the acceptance gap and its rollback; stand-ins
 //   for installers and elevation first on PATH never ran; macOS: no quarantine on the installed
 //   bundle; macOS: the same package in the stock /Applications (inApplications) updates and rolls
-//   back, and is refused for each access list entry, owner or membership that rule turns away.
+//   back, is offered the update with root's, admin's and deny entries on that folder, and is
+//   refused for each access list entry, owner or membership that rule turns away.
 //
 // These write what a real run writes: the user's registry or LaunchAgents folder, and on Windows
 // the app's own folder in the user's profile. So it runs only on a GitHub-hosted runner, whose user
@@ -1267,7 +1268,7 @@ const IN_APPLICATIONS = {
  * facts the rule rests on, read with the system's tools; then the route (v1 to v2 and a confirmed
  * rollback, `applications` in update_native.rs), after which a folder of the update's naming that
  * this user put in /Applications is still there, the same folder, and /Applications holds the
- * same names as before; then the refusals. The runner's account is an administrator with sudo
+ * same names as before; then the refusals and the admitted entries. The runner's account is an administrator with sudo
  * that asks no password (GitHub's macOS images); the runner is thrown away after the job, and
  * what is changed here is put back. */
 async function inApplications(o: {
@@ -1452,21 +1453,53 @@ async function inApplications(o: {
       label: "bundle entry",
       case: "bundle-entry",
       reason:
-        /pluxy Test\.app is not a folder of yours that only you can change: entry \d+ of its access list/,
+        /pluxy Test\.app is not a folder of yours that only you can change: entry \d+ of its access list .*Remove that entry \(in Terminal: chmod -a# \d+ /s,
     });
     sudo(["chown", "root", installed]);
     try {
       await refuse({
         label: "not yours",
         case: "not-yours",
-        reason: /pluxy Test\.app is not a folder of yours that only you can change \(a package manager/,
+        reason:
+          /pluxy Test\.app is not a folder of yours that only you can change: its owner is user 0, not you\. Copy pluxy to Applications in your home folder/,
       });
     } finally {
       sudo(["chown", user, installed]);
     }
-    // Last: this user out of admin. Only the rule's message is checked: processes started before
-    // still carry the group, so the kernel would still let this session's processes write.
+
+    // Admitted: entries for root and admin, whatever they allow, and a deny entry, read through
+    // the same calls: the update is offered.
+    const admittedEntries = [
+      "user:root allow add_file,delete_child",
+      "group:admin allow add_file,add_subdirectory,delete_child",
+      "everyone deny delete",
+    ];
+    for (const entry of admittedEntries) sudo(["chmod", "+a", entry, apps]);
+    try {
+      say(`admitted entries: ${run("ls", ["-lde", apps]).out.replaceAll("\n", " | ")}`);
+      const r = await launchChain({
+        label: "admitted entries",
+        program,
+        env: { ...env, PLUXY_APP_TEST_UPDATE_CASE: "admitted" },
+        ms: LAUNCH_MS,
+        check,
+        say,
+      });
+      const s = r.step("update_admitted")[0];
+      check(
+        s?.available === "true" && s.installed === installed && s.installed_sha === o.v1,
+        `admitted entries: the update was not offered from /Applications: ${JSON.stringify(s)}`,
+      );
+    } finally {
+      for (const entry of admittedEntries) sudo(["chmod", "-a", entry, apps]);
+    }
+
+    // Last: this user out of admin, with the bundle another account's (as one an administrator
+    // put there): the administrators' message, whoever owns the bundle. Only the rule's message
+    // is checked: processes started before still carry the group, so the kernel would still let
+    // this session's processes write.
     sudo(["dseditgroup", "-o", "edit", "-d", user, "-t", "user", "admin"]);
+    sudo(["chown", "root", installed]);
     try {
       sudo(["dscacheutil", "-flushcache"]);
       say(`not admin: ${member()}`);
@@ -1477,6 +1510,7 @@ async function inApplications(o: {
           /pluxy is in \/Applications, which only administrators can change, and this account is not one/,
       });
     } finally {
+      sudo(["chown", user, installed]);
       sudo(["dseditgroup", "-o", "edit", "-a", user, "-t", "user", "admin"]);
       sudo(["dscacheutil", "-flushcache"]);
     }

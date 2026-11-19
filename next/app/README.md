@@ -541,20 +541,25 @@ In this order:
      `installer` or `authopen`), and the quarantine attribute is neither added nor removed.
 
      A bundle in `/Applications` (`updater/applications.rs`) is updated when all of these hold,
-     each read through the folder opened without following a link:
+     each read through the folder, and the bundle in it, opened without following a link:
      - the folder's path, links resolved, is exactly `/Applications` (not a folder inside it);
      - it is owned by root, its group is the one named `admin` (looked up when the app checks,
        not a fixed number), and others cannot write to it;
      - no allow entry of its access list gives anyone but root or the `admin` group more than
        reading, entries that only what is put in it inherits included; entries are told apart by
        their UUIDs, so group 0 (`wheel`) is not taken for root;
-     - no allow entry of the bundle's own access list gives anyone but you or root more than
-       reading;
+     - the bundle is a folder of yours that no one else can write to, and no allow entry of its
+       own access list gives anyone but you or root more than reading;
      - the app's data folder, where the update is unpacked and checked, is on the same volume;
-     - your account is in `admin`. Otherwise the page says: "pluxy is in /Applications, which
-       only administrators can change, and this account is not one. Move pluxy to Applications
-       in your home folder (~/Applications) with Finder, open it from there, and update then."
-       Any other failed condition gives the reason with the same advice.
+     - your account is in `admin`. Otherwise the page says, whoever owns the bundle: "pluxy is
+       in /Applications, which only administrators can change, and this account is not one. Move
+       pluxy to Applications in your home folder (~/Applications) with Finder, open it from
+       there, and update then."
+
+     Any other refusal says which condition failed and what to do: for the folder, or when what
+     the rule reads cannot be read, the same advice; for a bundle that is not yours, to copy it to
+     `~/Applications` and open the copy; for a bundle others can write to, the `chmod` that takes
+     their write permission or the access list entry away.
 
      The folder's other writers are this Mac's administrators, and any of them can already move
      your bundle aside and put one of their own at its name, which your next start runs; the
@@ -579,7 +584,8 @@ In this order:
    is yours, not a link, and writable by no one else (checked for the folders that exist before
    anything is made in them, and again once the staging folder is made; otherwise nothing is
    unpacked, and the page says which folder to fix); only on another volume is it
-   `.pluxy-update-<hex>` next to the bundle.
+   `.pluxy-update-<hex>` next to the bundle, and only when the bundle's folder is yours and
+   writable by no one else (in `/Applications` the update is refused instead).
 6. The running version's copy is kept in the app's data folder (`updates/kept/`, the last three
    versions), pinned in `updates/history.json` by its SHA-256 (on macOS, a digest of the bundle's
    whole tree: every folder, file, size, content digest and execute bit), and
@@ -599,9 +605,10 @@ In this order:
    - macOS: the unpacked bundle and the installed one swap places in one step (`renameatx_np`
      with `RENAME_SWAP`, by name in the staging folder and the bundle's folder, each opened
      without following a link, the staging folder next to the bundle through the bundle's open
-     folder; read through those open folders, the bundle's folder must still be yours and writable
-     by no one else, and the staging folder still the one made, yours and 0700): the bundle is the
-     old one or the new one. With private
+     folder; read through those open folders, the bundle's folder must still pass the rule that
+     admitted it (yours and writable by no one else, or the stock `/Applications` with the staging
+     folder private, not next to the bundle), and the staging folder still the one made, yours and
+     0700): the bundle is the old one or the new one. With private
      staging, nothing else in the bundle's folder is made, changed or removed. The old bundle, now
      in the staging folder, is removed once the new version runs and the old one has ended.
 
