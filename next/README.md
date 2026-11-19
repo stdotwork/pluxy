@@ -577,7 +577,26 @@ after the client's betas. Chat Completions, Responses and Gemini requests are
 translated to Messages; their reasoning effort becomes adaptive thinking with that effort on
 Claude 4.6 and later, and a thinking budget from Claude 3.7 to 4.5 (low 1024, medium 8192, high
 24576 tokens); a model name the extension does not know as a Claude model gets no thinking
-settings, and the effort is reported as dropped. The extension never changes how a client presents itself: a client that is
+settings, and the effort is reported as dropped. A Responses client's `reasoning.summary` becomes
+`thinking.display` (`auto`, `concise` and `detailed` as `summarized`, `none` as `omitted`).
+
+**Thinking settings.** Every request, a Messages client's own included, has its thinking settings
+made ones the model takes, by Anthropic's per-model tables, and each change is reported:
+
+- Effort `xhigh` goes as `xhigh` from Claude 4.7 on, and as `max` to Claude 4.6, which has no
+  `xhigh`; `minimal` goes as `low`.
+- Thinking off (`none`, or `thinking` `disabled` or `between_tools`) goes as each model turns it
+  off: Fable, Mythos and Opus 5.5 always think, so it goes without `thinking`, at effort `low`
+  unless one is set; Sonnet 5.5 takes `between_tools`; Opus 5 and Haiku 5.5 take `disabled` at
+  effort `high` or below, so a higher effort goes as `high`; older models take `disabled`.
+- A thinking budget goes to Claude 4.7 and later as adaptive thinking at the effort it falls in.
+- A forced tool choice (`any` or a named tool) goes as `auto` to Opus 5.5, Sonnet 5.5, and Fable
+  and Mythos 5.1 and later, which refuse one; with a thinking budget it goes without thinking.
+- `top_k` is left out on Claude 4.7 and later, and on older models while thinking is on.
+- With a thinking budget, a tool result whose assistant turn has no thinking block, in a
+  conversation that has none, goes with adaptive thinking on Claude 4.6 and without thinking on
+  older models. On Claude 4.5 and older, a conversation that ends on an assistant turn loses that
+  turn while thinking is on, and with thinking off loses the reasoning it ends on. The extension never changes how a client presents itself: a client that is
 not Claude Code is not made to look like Claude Code.
 
 **Sampling options.** A translated request's `temperature` and `top_p` reach Claude only where

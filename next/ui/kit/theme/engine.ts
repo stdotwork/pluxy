@@ -96,6 +96,8 @@ export class ThemeApplier {
   apply(r: Resolved) {
     const root = this.doc.documentElement;
     root.dataset.appearance = r.appearance;
+    // The class CSS written for T3 Code picks the dark appearance by.
+    root.classList.toggle("dark", r.appearance === "dark");
     for (const option of LAYOUT_OPTIONS) root.dataset[option] = r.layout[option];
     root.style.colorScheme = r.appearance;
     this.tokens.replaceSync(tokensCss(r.tokens));

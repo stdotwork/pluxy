@@ -102,8 +102,9 @@ type Core struct {
 
 	checks *checks // each account's last check
 
-	usage *usage.Store   // the usage record, kept across reloads
-	logs  *logfile.Files // the logs folder
+	usage  *usage.Store   // the usage record, kept across reloads
+	logs   *logfile.Files // the logs folder
+	themes *themeStore    // stored UI themes and selected theme ID in state/themes
 
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
@@ -158,6 +159,7 @@ func Start(opts Options) (*Core, error) {
 	if c.logs = opts.Logs; c.logs == nil {
 		c.logs = logfile.New(LogsDir(opts.ConfigPath))
 	}
+	c.themes = newThemeStore(filepath.Join(StateDir(opts.ConfigPath), "themes"))
 	c.pkgDir = cfg.Packages.Dir
 	// No publisher's folder can be called .settings: IDs start with a letter or digit.
 	c.settings = extconfig.NewStore(filepath.Join(c.pkgDir, ".settings"))
@@ -213,6 +215,15 @@ func LogsDir(configPath string) string {
 		dir = abs
 	}
 	return filepath.Join(dir, "logs")
+}
+
+// StateDir returns the state folder of the config file at configPath: state beside it.
+func StateDir(configPath string) string {
+	dir := filepath.Dir(configPath)
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	return filepath.Join(dir, "state")
 }
 
 // Config returns the active config.

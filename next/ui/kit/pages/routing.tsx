@@ -182,6 +182,7 @@ function WeightEditor({ account, save }: { account: Account; save: (weight: numb
         <label class="field routing-weight" data-part="field">
           <span class="label">{t("setWeight")}</span>
           <input
+            data-slot="input"
             type="number"
             aria-label={name}
             data-focus-key={`weight ${account.id}`}

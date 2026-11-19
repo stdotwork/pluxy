@@ -44,9 +44,9 @@ jobs:
   app:
     name: app (${{ matrix.os }})
     # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
-    # to use instead of GitHub's (AGENTS.md, "Where jobs run"). Windows stays on GitHub's runner:
+    # to use instead of GitHub's, except in pull requests (AGENTS.md, "Where jobs run"). Windows stays on GitHub's runner:
     # the registry tests run only on a runner that reports itself GitHub-hosted.
-    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -282,13 +282,13 @@ jobs:
     if: inputs.skip-native != true
     # It writes the account's own folders and settings, so it runs only on a disposable runner
     # (next/app/native/runner.ts): GitHub's, or on macOS the one PLUXY_MACOS_CLOUD_RUNNER names when
-    # set (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
+    # set, outside pull requests (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
     # it to the test in PLUXY_EPHEMERAL_CI_RUNNER, which is empty on every other runner. Windows
     # stays on GitHub's: this names no cloud runner there (Namespace's trial plan has no Windows),
     # and the tests need a signed-in desktop.
-    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     env:
-      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
+      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
     # The builds (about 3 minutes with the caches restored), then the native test's own limit
     # (at most 90 minutes).
     timeout-minutes: 120
@@ -386,13 +386,13 @@ jobs:
     name: dialogs (${{ matrix.os }})
     # It writes the account's own folders and settings, so it runs only on a disposable runner
     # (next/app/native/runner.ts): GitHub's, or on macOS the one PLUXY_MACOS_CLOUD_RUNNER names when
-    # set (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
+    # set, outside pull requests (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
     # it to the test in PLUXY_EPHEMERAL_CI_RUNNER, which is empty on every other runner. Windows
     # stays on GitHub's: this names no cloud runner there (Namespace's trial plan has no Windows),
     # and the tests need a signed-in desktop.
-    runs-on: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     env:
-      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
+      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false

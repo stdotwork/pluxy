@@ -1756,6 +1756,10 @@ folder bundle's program on Windows and as an app bundle on macOS
   from them (Homebrew's libraries, a script's interpreter). A script's interpreter opens the
   checked script again by its path, as for a direct launch. The app's
   own core and native tools never run from such a folder: the app refuses them there.
+- On macOS the app refuses a program, the app's own core and native tools included, that is on a
+  volume that ignores ownership (Finder's "Ignore ownership on this volume", the default for many
+  external drives), or that lies below a folder on one: there macOS shows every file as yours and
+  lets any user change it. Turn ownership on for that volume, or move the program.
 - On Linux a terminal finds a launch's program by its path as it starts, so the app refuses a
   terminal launch whose program another user could change or redirect by then: a program below a
   folder that others, or a group other than your own private group, may write, one reached

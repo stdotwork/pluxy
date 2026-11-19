@@ -375,3 +375,21 @@ type UsageEventsReply struct {
 	Enabled bool `json:"enabled"`
 	usage.Page
 }
+
+// ThemeSummary describes one theme stored by core, as GET /themes lists it and PUT returns it.
+type ThemeSummary struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Bytes int    `json:"bytes"`
+}
+
+// ThemesReply is GET /themes's reply: the selected theme ID and the themes stored by core.
+type ThemesReply struct {
+	Current string         `json:"current"`
+	Themes  []ThemeSummary `json:"themes"`
+}
+
+// ThemeSelection is PUT /theme's request and reply: the selected theme ID (empty clears it).
+type ThemeSelection struct {
+	ID string `json:"id"`
+}

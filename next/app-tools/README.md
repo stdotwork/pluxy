@@ -1187,7 +1187,8 @@ output, so an app that gives no descriptor (one older than this execution progra
 terminal launches start and no window open. A terminal launch must name as its `program` the
 argument right after `--`.
 In the window, that file runs, by the path it has then, once no other user but a member of
-`admin` can change it or a folder above it and that path still names it (the rule the app holds
+`admin` can change it or a folder above it, each on a volume that keeps ownership (not one with
+Finder's "Ignore ownership on this volume"), and that path still names it (the rule the app holds
 a direct launch's program to); otherwise the window says which path another user could change,
 and nothing runs. A file put at the program's path since the app checked it never runs. The
 program runs with the launch's environment and the window's own `TERM…`, `LC_TERMINAL…` and
