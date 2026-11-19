@@ -779,7 +779,7 @@ Today's core can also relay Gemini requests through a browser tab signed in to A
 connects to core over a WebSocket. This extension does not: the extension protocol gives a
 program no listener that outlives its calls, and core stops idle programs.
 
-**Quota and identity.** Gemini has no usage endpoint, so quota answers unsupported. A `service_account` login's grant carries `identity` `{"client_email"}`, the key's service account; an API key login has none.
+**Quota and identity.** Google offers no quota reading or rate-limit headers for Gemini API keys or Vertex AI accounts, so `quota` reports the last-seen values from the account's most recent HTTP 429 reply (`google.rpc.QuotaFailure`, `google.rpc.RetryInfo` or HTTP `Retry-After`, and `google.rpc.ErrorInfo`), kept in extension memory only (nothing is written to disk) and labelled with when the 429 was seen and that it is not a live reading; an account that has not received a 429 answers with an empty limit list stating that no rate-limit reply has been seen yet. A `service_account` login's grant carries `identity` `{"client_email"}`, the key's service account; an API key login has none.
 
 ## Kimi
 

@@ -67,6 +67,7 @@ func main() {
 		CountTokens:  countTokens,
 		Models:       listModels,
 		Check:        check,
+		Quota:        quota,
 		Endpoint:     endpoint,
 	})
 	if err != nil {
@@ -177,6 +178,7 @@ type sender interface{ Send(llm.Event) error }
 
 // generateTo answers a generate call, sending the reply's events to out.
 func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
+	ctx = withAccountID(ctx, call.Account.ID)
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
 		return err
@@ -219,6 +221,10 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 		var e *llm.Error
 		if !first && geminigenerate.IsMalformedCall(err) && errors.As(err, &e) {
 			e.Message += "; it was asked for again once, and that reply ended the same way"
+		}
+		if err != nil && errors.As(err, &e) && len(e.Raw) > 0 &&
+			(e.Status == http.StatusTooManyRequests || e.Code == llm.CodeRateLimit || e.Code == llm.CodeQuota) {
+			observeRateLimit(ctx, nil, e.Raw, nil, false, call.Request.Model, send.redact, time.Now())
 		}
 		return err
 	}
@@ -325,7 +331,11 @@ func postBody(ctx context.Context, t target, body []byte, stream bool, model str
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()
-		e := upstreamError(resp, model)
+		var redact *protocol.Redactor
+		if resp.StatusCode == http.StatusTooManyRequests && t.token != "" {
+			redact = protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: t.token})
+		}
+		e := upstreamErrorFor(ctx, resp, model, redact)
 		if t.sa != nil && resp.StatusCode == http.StatusUnauthorized {
 			tokens.invalidate(t.sa, t.token)
 		}
@@ -481,47 +491,13 @@ func relayStream(ctx context.Context, body io.Reader, out sender) error {
 	}
 }
 
-// googleError is the error body Google's APIs answer with.
-type googleError struct {
-	Error struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Status  string `json:"status"`
-		Details []struct {
-			Type       string `json:"@type"`
-			Reason     string `json:"reason"`
-			RetryDelay string `json:"retryDelay"`
-		} `json:"details"`
-	} `json:"error"`
-}
-
-// reason returns the ErrorInfo reason in the error's details, such as API_KEY_INVALID.
-func (g *googleError) reason() string {
-	for _, d := range g.Error.Details {
-		if d.Reason != "" {
-			return d.Reason
-		}
-	}
-	return ""
-}
-
-// retryDelay returns the RetryInfo delay in the error's details, in milliseconds, or 0.
-func (g *googleError) retryDelay() int64 {
-	for _, d := range g.Error.Details {
-		if d.RetryDelay == "" {
-			continue
-		}
-		if dur, err := time.ParseDuration(d.RetryDelay); err == nil && dur > 0 {
-			return dur.Milliseconds()
-		}
-	}
-	return 0
-}
+// parseGoogleError / reason / retryDelay are defined in quota.go.
 
 // check asks the Gemini API for its model list with an API key, which costs nothing and generates
 // nothing. A Vertex account, or a credential of another kind, is answered unsupported without a
 // request.
 func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
+	ctx = withAccountID(ctx, call.Account.ID)
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
 		return nil, err
@@ -550,7 +526,7 @@ func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, erro
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "the upstream has no model list to check the key with", Scope: llm.ScopeCredential}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, upstreamError(resp, "")
+		return nil, upstreamErrorFor(ctx, resp, "", nil)
 	}
 	var list struct {
 		Models []json.RawMessage `json:"models"`
@@ -565,9 +541,16 @@ func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, erro
 // upstreamError turns a non-2xx GenerateContent response into a structured error. model is the
 // model the request asked for.
 func upstreamError(resp *http.Response, model string) *llm.Error {
+	var ctx context.Context
+	if resp != nil && resp.Request != nil {
+		ctx = resp.Request.Context()
+	}
+	return upstreamErrorFor(ctx, resp, model, nil)
+}
+
+func upstreamErrorFor(ctx context.Context, resp *http.Response, model string, redact *protocol.Redactor) *llm.Error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	var parsed googleError
-	_ = json.Unmarshal(raw, &parsed)
+	parsed, hasParsed := parseGoogleError(raw)
 	e := &llm.Error{Status: resp.StatusCode, Message: parsed.Error.Message, ProviderCode: parsed.Error.Status}
 	if e.Message == "" {
 		e.Message = fmt.Sprintf("upstream returned %s", resp.Status)
@@ -593,6 +576,8 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		// another account may serve the model.
 		e.Retryable = model != "" && strings.Contains(e.Message, model)
 	case s == http.StatusTooManyRequests:
+		now := time.Now()
+		observeRateLimit(ctx, resp.Header, raw, &parsed, hasParsed, model, redact, now)
 		// Only the model waits on this account, as today's core cools only the model that answered.
 		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
 		if model == "" {
@@ -603,7 +588,7 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 			// A quota is used up, not a request rate exceeded (RATE_LIMIT_EXCEEDED).
 			e.Code = llm.CodeQuota
 		}
-		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), now)
 		if e.RetryAfterMS == 0 {
 			e.RetryAfterMS = parsed.retryDelay()
 		}

@@ -39,6 +39,7 @@ const maxInteractionsReply = 64 << 20
 
 // endpoint serves endpoint calls: the Interactions API, on an account that opts in.
 func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
+	ctx = withAccountID(ctx, call.Account.ID)
 	format := ""
 	if call.Request.Native != nil {
 		format = call.Request.Native.Format
