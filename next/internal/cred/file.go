@@ -220,7 +220,7 @@ func CreatePrivate(path string, b []byte) error {
 		return err
 	}
 	defer root.Close()
-	tmp, tmpName, err := createTemp(root, dir)
+	tmp, tmpName, err := private.CreateTemp(root, dir, tmpPrefix)
 	if err != nil {
 		return err
 	}
@@ -239,5 +239,5 @@ func CreatePrivate(path string, b []byte) error {
 	if err := root.Link(tmpName, name); err != nil {
 		return err
 	}
-	return syncDir(root)
+	return private.SyncDir(root)
 }
