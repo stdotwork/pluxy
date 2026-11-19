@@ -1152,7 +1152,18 @@ fn install_bundled(app: &AppHandle) -> Result<(), String> {
     }
     if !done.is_empty() {
         let main = wait_for("the window", || app.get_webview(MAIN))?;
-        main.eval("location.reload()").map_err(|e| e.to_string())?;
+        // The window lists extension pages once, when it loads. Wait for the new page: a step
+        // that ran on the old one would have its command answered into a page that is gone.
+        main.eval("window.__beforeReload = true; location.reload()")
+            .map_err(|e| e.to_string())?;
+        wait_for("the window to load again", || {
+            (eval(
+                &main,
+                "window.__beforeReload === undefined && document.readyState === 'complete' \
+                 && typeof window.__TAURI_INTERNALS__?.invoke === 'function'",
+            ) == Some(json!(true)))
+            .then_some(())
+        })?;
     }
     log("bundled_installed", json!({ "ids": done }));
     Ok(())
