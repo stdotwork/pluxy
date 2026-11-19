@@ -43,6 +43,8 @@ mod appimage;
 mod bundle;
 #[cfg(windows)]
 mod exe;
+#[cfg(any(not(target_os = "linux"), test))]
+mod leftovers;
 #[cfg(target_os = "macos")]
 use app as format;
 #[cfg(target_os = "linux")]
@@ -510,14 +512,14 @@ fn install(
     if st.updater.cancel.load(Ordering::SeqCst) {
         return Err("cancelled".into());
     }
+    let dir = dir(app)?;
     // The verified bytes, checked as this format's and made ready to put in place (on macOS,
-    // unpacked next to the bundle).
-    let staged = format::stage(installed, bytes, &release.version)?;
+    // unpacked next to the bundle, in a folder recorded in dir).
+    let staged = format::stage(installed, bytes, &release.version, &dir)?;
     if st.updater.cancel.load(Ordering::SeqCst) {
         return Err("cancelled".into());
     }
     set_task(app, |t| t.phase = "installing");
-    let dir = dir(app)?;
     let running = app.package_info().version.to_string();
     let from = keep(&dir, installed, &running, &started_from(app)?)?;
     let to = Pinned {
@@ -529,7 +531,7 @@ fn install(
     let pending = pending(&dir, "update", from, to.clone(), installed)?;
     // The app's own replace of what the plugin just verified: the installed copy is the old one
     // or the new one (on Windows, see `exe.rs` for the one moment it is neither).
-    if let Err(e) = format::swap_in(installed, staged) {
+    if let Err(e) = format::swap_in(installed, staged, &dir) {
         let _ = fs::remove_file(dir.join("pending.json"));
         return Err(format!("The update could not be installed: {e}"));
     }
@@ -619,8 +621,8 @@ fn evict(dir: &Path) {
 /// The pending install is over either way.
 fn restore(dir: &Path, p: &Pending) -> Result<(), String> {
     let kept = kept_path(dir, &p.from);
-    let outcome = format::stage_kept(&p.installed, &kept, &p.from)
-        .and_then(|s| format::swap_in(&p.installed, s));
+    let outcome = format::stage_kept(&p.installed, &kept, &p.from, dir)
+        .and_then(|s| format::swap_in(&p.installed, s, dir));
     let _ = fs::remove_file(dir.join("pending.json"));
     outcome
 }
@@ -798,16 +800,17 @@ fn supervise(app: &AppHandle, r: &Restart) {
 
 /// At startup, after the profile lock: the version an install started accepts itself once the
 /// installed copy is the one it pinned, which the waiting earlier version reads. What an earlier
-/// install left beside the installed copy is removed once the earlier version has ended.
+/// install recorded that it left beside the installed copy (`leftovers.rs`) is removed once the
+/// earlier version has ended; nothing else there is looked at.
 pub fn accept(app: &AppHandle) {
     // An AppImage's replace leaves nothing beside it.
     #[cfg(not(target_os = "linux"))]
-    if gate(app).is_ok() {
-        if let Some(here) = format::here(app) {
+    if gate(app).is_ok() && format::here(app).is_some() {
+        if let Ok(dir) = dir(app) {
             let app = app.clone();
             std::thread::spawn(move || {
                 earlier_ended(&app);
-                format::cleanup(&here);
+                format::cleanup(&dir);
             });
         }
     }
@@ -1062,19 +1065,20 @@ fn roll_back(
     }
     gate(app)?;
     provenance(app)?;
-    let staged = format::stage_kept(installed, &kept_path(dir, target), target).map_err(|_| {
-        format!(
-            "The kept copy of {} no longer has its pinned digest; it is not used.",
-            target.version
-        )
-    })?;
+    let staged =
+        format::stage_kept(installed, &kept_path(dir, target), target, dir).map_err(|_| {
+            format!(
+                "The kept copy of {} no longer has its pinned digest; it is not used.",
+                target.version
+            )
+        })?;
     set_task(app, |t| {
         t.phase = "installing";
         t.error = None;
     });
     let from = keep(dir, installed, running, &started_from(app)?)?;
     let pending = pending(dir, "rollback", from, target.clone(), installed)?;
-    if let Err(e) = format::swap_in(installed, staged) {
+    if let Err(e) = format::swap_in(installed, staged, dir) {
         let _ = fs::remove_file(dir.join("pending.json"));
         return Err(format!("The rollback could not be installed: {e}"));
     }

@@ -597,6 +597,25 @@ In this order:
    - macOS: the unpacked bundle and the installed one swap places in one step (`renamex_np` with
      `RENAME_SWAP`): the bundle is the old one or the new one. The old one, now in the
      `.pluxy-update-<hex>` folder, is removed once the new version runs and the old one has ended.
+
+   What an install leaves beside the installed copy is recorded in `updates/leftovers.json` before
+   the install goes on, with what identifies it beyond its name: on Windows the new program right
+   after it is created and the aside copy just before the rename (each by its volume serial number
+   and file ID), on macOS the `.pluxy-update-<hex>` folder right after it is created (by its device
+   and inode, read through the open folder, which must be empty and yours alone). When the record
+   cannot be written, the install deletes what it just made and stops. Should the app stop in the
+   moment between making one and recording it, that empty folder or file stays unrecorded, and no
+   later start removes it. Removal at a later start goes through the record only. An entry that is
+   still the recorded file or folder (and, on macOS, a folder of yours) is removed without
+   following a link: on Windows through its open handle; on macOS what is in it through the open
+   folder, never entering a folder in it whose device differs from its own (a file system mounted
+   there; a mount that keeps the device, as a bind mount from the same file system does, is not
+   seen), then the emptied folder by its name only while that name still holds it. An entry whose
+   name is gone or now holds something else (on Windows a folder too) is dropped from the record
+   and nothing at that name is deleted; one still in use, or with a file system mounted in it,
+   stays recorded for the next start. A failed or cancelled install removes what it made the same
+   way, only while it is still what it made. The folder the installed copy is in is never listed,
+   so whatever someone else put there, even under one of these names, stays.
 7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
    that order; detached launches run on) and hides its window, but keeps its profile and starts the
    new version as its successor, handing the profile over so no other launch takes it meanwhile
