@@ -1,13 +1,15 @@
-// Package usage keeps a bounded, in-memory record of the requests core served: one typed event
-// per client request, with what it used. Reading the record never removes anything from it;
-// events leave only when the store is full or they are older than its age limit. Nothing is kept
-// across restarts.
+// Package usage keeps the record of the requests core served: one typed event per client
+// request, with what it used. An in-memory ring holds the recent window within limits; when
+// opened with a directory, events are also appended asynchronously to one JSONL file per UTC
+// day and refilled at start from today's and yesterday's files. Reading the record never
+// removes anything from it.
 package usage
 
 import (
 	"cmp"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -19,6 +21,9 @@ const (
 	MaxMaxEvents     = 200000
 	DefaultMaxAge    = 24 * time.Hour
 	MaxMaxAge        = 30 * 24 * time.Hour
+	DefaultQueueSize = 4096
+	DefaultKeepDays  = 90
+	MaxKeepDays      = 1000000
 )
 
 // Tokens is what one request used, as its upstream reported it. A field that is absent was not
@@ -132,9 +137,19 @@ type Store struct {
 	maxEvents int
 	maxAge    time.Duration
 	now       func() time.Time
+
+	dir          string
+	keepDays     atomic.Int64
+	dropped      atomic.Uint64
+	writeCh      chan Event
+	pruneCh      chan struct{}
+	done         chan struct{}
+	closed       bool
+	closeTimeout time.Duration
+	writeLine    func(day string, line []byte) error // test hook; nil writes to dir
 }
 
-// NewStore returns an empty store with the default limits.
+// NewStore returns an empty, in-memory-only store with the default limits.
 func NewStore() *Store {
 	return &Store{maxEvents: DefaultMaxEvents, maxAge: DefaultMaxAge, now: time.Now}
 }
@@ -187,7 +202,9 @@ func (s *Store) expire() {
 	}
 }
 
-// Add records e, numbering it, and returns its Seq.
+// Add records e, numbering it, and returns its Seq. When backed by a directory, e is queued
+// without blocking for the disk writer; if the queue is full, e is dropped from disk and
+// counted in Summary.Dropped.
 func (s *Store) Add(e Event) uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -201,6 +218,19 @@ func (s *Store) Add(e Event) uint64 {
 			e.recorded = last
 		}
 	}
+	s.appendRing(e, true)
+	if s.writeCh != nil && !s.closed {
+		select {
+		case s.writeCh <- e:
+		default:
+			s.dropped.Add(1)
+		}
+	}
+	return e.Seq
+}
+
+// appendRing inserts e at the end of the ring. s.mu is held.
+func (s *Store) appendRing(e Event, countEviction bool) {
 	switch {
 	case s.n < len(s.ring):
 		s.ring[(s.head+s.n)%len(s.ring)] = e
@@ -216,9 +246,10 @@ func (s *Store) Add(e Event) uint64 {
 	default:
 		s.ring[s.head] = e
 		s.head = (s.head + 1) % len(s.ring)
-		s.evicted++
+		if countEviction {
+			s.evicted++
+		}
 	}
-	return e.Seq
 }
 
 // Page is a page of events.
@@ -340,6 +371,8 @@ type Summary struct {
 	Oldest *time.Time `json:"oldest,omitempty"`
 	// Evicted counts the events the limits have pushed out since core started.
 	Evicted uint64 `json:"evicted"`
+	// Dropped counts the events dropped since core started because the disk writer's queue was full.
+	Dropped uint64 `json:"dropped"`
 }
 
 // Summarize adds up the events that match f, and counts them over the last buckets steps of
@@ -349,7 +382,7 @@ func (s *Store) Summarize(f Filter, bucket time.Duration, buckets int) Summary {
 	defer s.mu.Unlock()
 	s.expire()
 	now := s.now()
-	sum := Summary{BucketSeconds: int64(bucket / time.Second), Series: make([]Bucket, buckets), Evicted: s.evicted}
+	sum := Summary{BucketSeconds: int64(bucket / time.Second), Series: make([]Bucket, buckets), Evicted: s.evicted, Dropped: s.dropped.Load()}
 	// Buckets start at whole multiples of the step, so a chart polled again lines up.
 	last := now.Truncate(bucket)
 	first := last.Add(-time.Duration(buckets-1) * bucket)

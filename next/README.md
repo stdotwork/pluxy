@@ -41,7 +41,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `internal/panel` | Serves the web panel at `/panel/`, embedded in core's binary. |
 | `internal/pages` | Serves extension pages on a site of their own ([extension pages](ui/extension-pages/README.md)). |
 | `internal/logfile` | Core's [log files](#log-files): `main.log`, its rotation, the folder's size cap, reading lines back. |
-| `internal/usage` | The [usage record](#usage-statistics): one event per request, kept in memory within limits. |
+| `internal/usage` | The [usage record](#usage-statistics): one event per request, kept in memory and written asynchronously to daily JSONL files. |
 | `internal/extconfig` | Extensions' settings: the schema from the manifest, checking values, and the store core keeps them in. |
 | `ui/` | The UI kit the panel and the desktop app share, the panel's browser build, and the [theme contract](ui/themes/README.md) ([README](ui/README.md)). |
 | `app/` | The desktop app: the kit's second build in a Tauri window, with a tray icon and three ways to reach core ([README](app/README.md)). Linux only for now; its agent clients and the record of the old desktop app's features are in [PARITY.md](app/PARITY.md). |
@@ -1821,7 +1821,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets (names are compared in lower case whatever joins their words, or none, so `accessToken` and `accesstoken` are `access_token`, with letters folded as core matches a JSON key to a setting, so `client_keyſ` is `client_keys`; `aws_secret_access_key`, `client_secrets` and `passwords` are ones too, and so is a name that ends in a number or a word saying how the value is written, such as `apiKey2`, `api_key_value` or `privateKeyPem`), header values about authentication (`Authorization`, `X-Api-Key`, cookies) or named like a secret in any mapping whose name holds `header` (`extra_headers`, `headers_override`), and any URL with a user name, password or query. Everything below a key named like a secret is a secret, however deep, also when given through a YAML alias (as a value, or as a key's name), as `GET /accounts` shows a login account's settings, except in today's core's provider sections at the top of a `config.yaml` (the sections of the v8 `api-keys` mapping, such as `codex`, and the older lists such as `codex-api-key`), whose entries are read by these rules; any other key of the v8 `api-keys` mapping is read as a secret key. A string secret of 8 bytes or more written again as a whole value anywhere else in the file (a note holding a key) is hidden there too; a shorter copy, or a number, is shown, and so is a copy of a value that is a secret only for being in a mapping below a secret key. `true`, `false`, `null` and the empty string never are secrets, as they carry none. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
 | `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything, placeholders put back as `PUT /config` puts them (below). 200 with `valid: true` and the `notices` a `config.yaml` load logs, or `valid: false` and `error`, such as for a placeholder where its secret is not. |
 | `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. Each placeholder goes back only where its own secret is in the file now: the same account or list item (by its `id` or `name` when it holds that item's secrets, else by its secrets), and the same keys, also where a YAML alias or merge key reads it (below). 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document, such as for a placeholder anywhere else, naming its line; a refused document writes nothing. |
-| `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as the old panel showed them; a key shorter than 8 characters is hidden whole). |
+| `GET /v0/management/client-keys` | The client keys: each one's `id` (a keyed hash whose key is kept in `state/key-id.key` beside the config file, mode `0600`, so IDs stay the same across restarts) and `masked` form (first and last two characters, as the old panel showed them; a key shorter than 8 characters is hidden whole). |
 | `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
@@ -1923,13 +1923,21 @@ a client that has that message finds the turn in the record; a client that goes 
 is written leaves the turn recorded as finished, with the tokens the upstream reported. For a
 reply core translates, that holds for the `.done` messages written just before it too.
 
-The record lives in memory and is gone after a restart. It keeps the last `max_events` requests
+The recent window lives in an in-memory ring holding the last `max_events` requests
 (default 10000, at most 200000) and none recorded (when the request ended) longer ago than
-`max_age_ms` (default 24 hours, at most 30 days); a reload that lowers either drops the oldest at once. Reading it never removes anything:
+`max_age_ms` (default 24 hours, at most 30 days); a reload that lowers either drops the oldest at once.
+Core also writes every recorded event asynchronously through a bounded 4,096-event queue to one
+JSONL file per UTC day under `usage/` beside the config file (`usage/YYYY-MM-DD.jsonl`, mode `0600`,
+`"v": 1` on each line), without `fsync` per line. When the queue is full, new events are dropped from
+the disk queue and counted in `dropped` so slow storage never blocks requests. On startup, the
+in-memory ring is refilled from today's and yesterday's files (skipping a torn last line), and day
+files older than `keep_days` (default 90; `0` keeps everything) are deleted at startup and daily.
+Client key IDs (`key_id`) use an HMAC key stored in `state/key-id.key` beside the config file
+(mode `0600`), so key IDs match across restarts. Reading the record never removes anything:
 today's core hands its usage queue out once and deletes what it hands out.
 
 ```json
-{"usage": {"enabled": true, "max_events": 10000, "max_age_ms": 86400000}}
+{"usage": {"enabled": true, "max_events": 10000, "max_age_ms": 86400000, "keep_days": 90}}
 ```
 
 `usage.enabled` (today's `usage-statistics-enabled`) is on unless the config turns it off. Off,
@@ -1937,7 +1945,7 @@ requests are not recorded and what was recorded stays readable.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/usage` | What the recorded requests add up to: `total_requests`, `success_count`, `failure_count`, `success_rate` (0 to 1), `average_latency_ms` and `tokens` (the sums of each token count); the same per model (`models`), extension (`providers`), account (`accounts`, each with its `provider`) and client key (`keys`, by `key_id`), most requests first; and `series`, the requests, failures and tokens in each of the last `buckets` steps of `bucket` (default 60 steps of `1m`; `bucket` from `1s` to `24h`, `buckets` up to 1440), oldest first, ending with the step that holds now. `oldest` is the arrival time of the oldest event kept, `evicted` how many events the limits have pushed out since core started, and `enabled` whether recording is on. |
+| `GET /v0/management/usage` | What the recorded requests add up to: `total_requests`, `success_count`, `failure_count`, `success_rate` (0 to 1), `average_latency_ms` and `tokens` (the sums of each token count); the same per model (`models`), extension (`providers`), account (`accounts`, each with its `provider`) and client key (`keys`, by `key_id`), most requests first; and `series`, the requests, failures and tokens in each of the last `buckets` steps of `bucket` (default 60 steps of `1m`; `bucket` from `1s` to `24h`, `buckets` up to 1440), oldest first, ending with the step that holds now. `oldest` is the arrival time of the oldest event kept, `evicted` how many events the limits have pushed out since core started, `dropped` how many events were dropped since core started because the disk writer's queue was full, and `enabled` whether recording is on. |
 | `GET /v0/management/usage/events` | The recorded events, oldest first: up to `limit` (default 100, at most 1000) with a `seq` above `after`. The reply's `next` is the `seq` to pass as `after` for the next page, `more` says whether more match, and `lost` says whether events after `after` were pushed out before this read, so a program that polls with `after` knows it missed some. |
 
 Both calls take the filters `since` (an RFC 3339 time, or a duration back from now such as

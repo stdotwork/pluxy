@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -77,6 +78,7 @@ type usageSummary struct {
 	Providers     []usageGroup `json:"providers"`
 	Accounts      []usageGroup `json:"accounts"`
 	Keys          []usageGroup `json:"keys"`
+	Dropped       uint64       `json:"dropped"`
 	BucketSeconds int64        `json:"bucket_seconds"`
 	Series        []struct {
 		Start    time.Time `json:"start"`
@@ -403,5 +405,137 @@ func TestUsageRecordsWebSocketTurns(t *testing.T) {
 	if e.Endpoint != "/v1/responses" || !e.Stream || e.Model != "gpt-test" || e.Account != "acct-ws" || e.Provider != "pluxy/codex" ||
 		e.Failed || e.Status != 200 || e.Tokens.Total != nil {
 		t.Fatalf("turn's event: %+v", e)
+	}
+}
+
+// Usage events and client key IDs survive a core restart: the events are written to
+// usage/<UTC day>.jsonl with "v": 1 and mode 0600, the key-ID key lives in state/key-id.key,
+// and GET /usage counts the earlier requests with the same key IDs after restarting.
+func TestUsageSurvivesRestart(t *testing.T) {
+	u := answeringUpstream(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeConfig(t, cfgPath, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey, secondClientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id":         "upstream-1",
+				"settings":   map[string]any{"base_url": u.URL + "/v1"},
+				"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey},
+			}},
+		},
+	})
+
+	var id1, id2, dayFile string
+	t.Run("before restart", func(t *testing.T) {
+		base, _ := runCoreFile(t, cfgPath, noWatch...)
+		c := &mcore{base: base}
+
+		if code, _, _ := chatReply(t, base, clientKey, false); code != http.StatusOK {
+			t.Fatalf("first request: status %d", code)
+		}
+		if code, _, _ := chatReply(t, base, clientKey, true); code != http.StatusOK {
+			t.Fatalf("second request: status %d", code)
+		}
+		if code, _, _ := chatReply(t, base, secondClientKey, false); code != http.StatusOK {
+			t.Fatalf("third request: status %d", code)
+		}
+
+		for _, k := range c.keys(t) {
+			switch k.Masked {
+			case mask(clientKey):
+				id1 = k.ID
+			case mask(secondClientKey):
+				id2 = k.ID
+			}
+		}
+		if id1 == "" || id2 == "" {
+			t.Fatalf("client keys missing IDs: %+v", c.keys(t))
+		}
+
+		p, _ := c.usageEvents(t, "")
+		if len(p.Events) != 3 {
+			t.Fatalf("events before restart: %d, want 3", len(p.Events))
+		}
+		dayFile = filepath.Join(dir, "usage", p.Events[0].Timestamp.UTC().Format("2006-01-02")+".jsonl")
+	})
+
+	info, err := os.Stat(dayFile)
+	if err != nil {
+		t.Fatalf("usage file %s missing after stop: %v", dayFile, err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Errorf("usage file mode = %o, want 0600", mode)
+	}
+	rawFile, err := os.ReadFile(dayFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantNoSecrets(t, dayFile, string(rawFile), clientKey, secondClientKey, upstreamKey, managementKey)
+	lines := strings.Split(strings.TrimSuffix(string(rawFile), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("usage file lines = %d, want 3:\n%s", len(lines), rawFile)
+	}
+	for i, line := range lines {
+		var row struct {
+			V int `json:"v"`
+		}
+		if err := json.Unmarshal([]byte(line), &row); err != nil || row.V != 1 {
+			t.Fatalf("line %d = %s (%v), want valid JSON with v: 1", i, line, err)
+		}
+	}
+
+	keyInfo, err := os.Stat(filepath.Join(dir, "state", "key-id.key"))
+	if err != nil {
+		t.Fatalf("state/key-id.key missing: %v", err)
+	}
+	if mode := keyInfo.Mode().Perm(); mode != 0o600 {
+		t.Errorf("state/key-id.key mode = %o, want 0600", mode)
+	}
+
+	t.Run("after restart", func(t *testing.T) {
+		base, _ := runCoreFile(t, cfgPath, noWatch...)
+		c := &mcore{base: base}
+
+		var afterID1, afterID2 string
+		for _, k := range c.keys(t) {
+			switch k.Masked {
+			case mask(clientKey):
+				afterID1 = k.ID
+			case mask(secondClientKey):
+				afterID2 = k.ID
+			}
+		}
+		if afterID1 != id1 || afterID2 != id2 {
+			t.Fatalf("key IDs changed across restart: got (%q, %q), want (%q, %q)", afterID1, afterID2, id1, id2)
+		}
+
+		s, raw := c.usageSummary(t, "")
+		if s.Requests != 3 || s.Success != 3 || s.Tokens.Total != 36 || s.Dropped != 0 {
+			t.Fatalf("usage summary after restart: %s", raw)
+		}
+		if len(s.Keys) != 2 || s.Keys[0].Name != id1 || s.Keys[0].Requests != 2 || s.Keys[1].Name != id2 || s.Keys[1].Requests != 1 {
+			t.Fatalf("usage keys after restart: %+v (want %s:2, %s:1)", s.Keys, id1, id2)
+		}
+
+		if code, _, _ := chatReply(t, base, clientKey, false); code != http.StatusOK {
+			t.Fatalf("request after restart: status %d", code)
+		}
+		s, raw = c.usageSummary(t, "")
+		if s.Requests != 4 || s.Tokens.Total != 48 || s.Keys[0].Name != id1 || s.Keys[0].Requests != 3 {
+			t.Fatalf("usage summary after new request: %s", raw)
+		}
+	})
+
+	afterRaw, err := os.ReadFile(dayFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterLines := strings.Split(strings.TrimSuffix(string(afterRaw), "\n"), "\n")
+	if len(afterLines) != 4 {
+		t.Fatalf("usage file lines after restart+request = %d, want 4", len(afterLines))
 	}
 }

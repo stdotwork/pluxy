@@ -219,7 +219,8 @@ func newKey() string { return rand.Text() }
 
 // clientKeyView is a client key as the management API lists it.
 type clientKeyView struct {
-	// ID names the key in calls, without showing it. It changes when core restarts.
+	// ID names the key in calls, without showing it. It stays the same across restarts (derived
+	// with the key in state/key-id.key).
 	ID string `json:"id"`
 	// Masked is the key with all but its first and last two characters hidden, as today's
 	// panel shows keys; a key shorter than 8 characters is hidden whole.
@@ -227,7 +228,7 @@ type clientKeyView struct {
 }
 
 func (c *Core) keyView(k string) clientKeyView {
-	return clientKeyView{ID: c.redactor.ID(k), Masked: maskKey(k)}
+	return clientKeyView{ID: c.keyID(k), Masked: maskKey(k)}
 }
 
 func maskKey(k string) string {
@@ -438,7 +439,7 @@ func (c *Core) handleConfig(m *server.Management) {
 		err := c.WriteConfig("management API: client key removed", c.edit(func(d *configdoc.Doc) error {
 			found := false
 			left, err := d.RemoveClientKeys(func(k string) bool {
-				drop := c.redactor.ID(k) == id
+				drop := c.keyID(k) == id
 				found = found || drop
 				return drop
 			})
