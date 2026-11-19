@@ -1139,7 +1139,10 @@ object in a function's parameters that requires nothing gets a required placehol
 required. An object is a schema of type `object`; a union object (with `anyOf` or `oneOf`) gets
 none. Every schema with `properties` and no type gets type `object`, whatever the model, as in
 today's core. A function's response schema gets no placeholder: today's core adds one there, but the schema
-describes what the client returns, and nothing would remove the placeholder. The extension removes
+describes what the client returns, and nothing would remove the placeholder. A response format's schema keeps
+the `title` of every schema in it, as today's core does: Google's Schema type has a `title` field. A
+function's parameters and response schema lose their titles except for Claude and Gemini 3 Pro, also
+as in today's core. The extension removes
 the placeholders from the model's calls before any client format sees them; today's core does that
 only for Messages clients. It leaves a placeholder in a call where a client schema at the same path
 declares the name, as a property or in `required`: the other branches of a union (also those
@@ -1974,7 +1977,7 @@ it `[warn ]`; every other line is `[info ]`.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/logs` | Lines of `main.log` and its rotated files (not the request logs), oldest first: with `after` (a time in Unix seconds, such as a reply's `latest-timestamp`), the oldest `limit` lines written after it, so a reader can page forward; without it, the newest `limit` lines. `limit` defaults to 1000, at most 10000. The reply holds `lines`, `line-count` and `latest-timestamp` (the newest returned line's time, in seconds with milliseconds; `after` itself when there is none). A line with no time of its own counts as written with the line before it. |
+| `GET /v0/management/logs` | Lines of `main.log` and its rotated files (not the request logs), oldest first: with `after` (a time in Unix seconds, such as a reply's `latest-timestamp`), the oldest `limit` lines written after it, so a reader can page forward and miss none (every write has a time later than the write before it, and a page that ends inside one write's lines holds the rest of them, so it can have a few more than `limit`); without it, the newest `limit` lines. `limit` defaults to 1000, at most 10000. The reply holds `lines`, `line-count` and `latest-timestamp` (the newest returned line's time, in seconds with milliseconds; `after` itself when there is none). A line with no time of its own counts as written with the line before it. |
 | `DELETE /v0/management/logs` | Empties `main.log` and deletes its rotated files; replies with `removed`, how many files it deleted. Request logs stay. |
 
 Both answer 400 while logging to file is off, as today's core does. Today's core also takes a
