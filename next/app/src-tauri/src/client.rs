@@ -52,6 +52,24 @@ pub struct Client {
     agent: ureq::Agent,
 }
 
+/// The calls core takes as PUT: the config, the theme that is on, and one stored theme, whose
+/// ID parts are 1 to 64 of a-z, 0-9 and "-".
+fn put_allowed(path: &str) -> bool {
+    fn part(s: &str) -> bool {
+        (1..=64).contains(&s.len())
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    }
+    if path == "/config" || path == "/theme" {
+        return true;
+    }
+    let mut parts = path.strip_prefix("/themes/").unwrap_or("").split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(publisher), Some(name), None) if part(publisher) && part(name)
+    )
+}
+
 /// Why path may not be sent: it must be an absolute path under the management API, with no `..`
 /// segment, no fragment and no characters a URL cannot hold as they are.
 pub fn path_problem(path: &str) -> Option<String> {
@@ -258,11 +276,11 @@ impl Client {
                 .header("Authorization", &auth)
                 .call(),
             "POST" | "PATCH" | "PUT" => {
-                if method == "PUT" && path != "/config" {
+                if method == "PUT" && !put_allowed(path) {
                     return Reply::failed(
                         400,
                         "invalid_request",
-                        "PUT is only allowed for /config",
+                        "PUT is only allowed for /config, /theme and /themes/{publisher}/{name}",
                     );
                 }
                 let req = within(
@@ -387,6 +405,26 @@ mod tests {
         // Refused before anything is sent.
         let c = Client::new("http://127.0.0.1:1", None);
         assert_eq!(c.call("k", "PUT", "/status", None).status, 400);
+        for path in [
+            "/themes",
+            "/themes/t3",
+            "/themes/t3/a/b",
+            "/themes/T3/night",
+            "/themes/t3/",
+            "/themes//night",
+            "/themes/t3/..",
+            "/theme/x",
+        ] {
+            assert!(!put_allowed(path), "{path}");
+        }
+        for path in [
+            "/config",
+            "/theme",
+            "/themes/t3/nightfall",
+            "/themes/a-1/b-2",
+        ] {
+            assert!(put_allowed(path), "{path}");
+        }
         assert_eq!(c.call("k", "TRACE", "/config", None).status, 400);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
