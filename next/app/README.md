@@ -263,6 +263,9 @@ as yours.
 and SHA-256 are the manifest's): the app installs that itself. A program you name still goes
 through Adopt.
 
+The release gate checks the same files in each package against the manifest before a release
+([Validate release inputs](#validate-release-inputs)).
+
 ## The window and the tray
 
 What closing the window does is the Connection page's **Close behavior**: **Ask every time**
@@ -1625,7 +1628,8 @@ offline after `cargo fetch --locked` and every proxy variable pointing at a clos
 release app with no features and no overlay (`tauri build --no-bundle`), finds that build's
 snapshots by its receipt, and runs the [release validator](#validate-release-inputs) on them,
 the staged trust folder (`src-tauri/trust`), the built binary (`pluxy-app.exe` on Windows) and
-each artifact given: an AppImage, a Windows folder bundle or a macOS app bundle. Its last
+each artifact given: an AppImage, a Windows folder bundle or a macOS app bundle, with the core
+each package carries checked against the manifest built into the app. Its last
 line says `release-package: valid`, `release-package: refused: <reason>` or, when it could not
 check, `release-package: failed: <reason>`.
 
@@ -1741,7 +1745,10 @@ in the browser. The app updates itself only as a Linux AppImage.
 - No installer yet: the only packages are the test AppImage, the test folder bundle (Windows) and
   the test app bundle (macOS), which are not for release. They come with test-signed cores; the
   release gate builds no package with a core yet, since the core release the app names and a
-  production publisher key do not exist yet.
+  production publisher key do not exist yet. The gate checks a package's core against the
+  manifest built into the app, not which key signed the release `bundle-core` checked: that the
+  core release is signed with a production key is a release step
+  ([docs/app-release.md](../../docs/app-release.md)).
   The app updates only itself, only as an AppImage, on Linux x86_64, and only with test updater
   trust until release keys exist. Rollback keeps the last three versions that ran on this
   profile; a new version that hangs is stopped after 90 seconds and the earlier one put back, but
@@ -1837,8 +1844,8 @@ cargo run --locked --example validate-release-config -- \
 ```
 
 `build.rs` writes the config using tauri-utils' base/platform merge followed by `TAURI_CONFIG`,
-plus the trust and feature snapshots, in Cargo's `OUT_DIR`. A digest of all three is embedded in
-the app. The validator compares its own compiled inputs and requires the matching receipt in an
+plus the trust and feature snapshots and the bundled core's manifest, in Cargo's `OUT_DIR`. A
+digest of all four is embedded in the app. The validator compares its own compiled inputs and requires the matching receipt in an
 artifact. Supply the actual app executable along with every package. The validator streams each
 regular file for test markers, test identifiers and Tauri updater keys or signatures. Each
 artifact must be a well-formed executable, ELF (type, machine and program headers inside the
@@ -1865,6 +1872,17 @@ must be empty trust whatever its name, JSON over 1 MiB or invalid is refused, an
 unnamed file that starts like JSON and does not parse; the receipt must be in the package's app
 executable, `usr/bin/<mainBinaryName>` (`usr/bin/pluxy-app` by default), which must be a
 well-formed ELF executable as above.
+
+A package's core ([The core the app comes with](#the-core-the-app-comes-with)) is checked first,
+against the manifest built into the validator, which the receipt binds to the app it was built
+with: each file the manifest lists must be at its place (the core's program beside the app's,
+`pluxy.exe` at a folder bundle's top or `usr/bin/pluxy` in an AppImage, and the rest in the
+bundled folder, `bundled\`, `Contents/Resources/core/bundled/` or `usr/lib/pluxy/core/bundled/`),
+a regular file, not a link, of the listed size and SHA-256, and the bundled folder may hold
+nothing else but folders. A build without a manifest may carry no core program and no bundled
+folder. The archives the manifest lists are not looked inside, since the manifest pins each one,
+but they are scanned and checked like every other file, and so is the core's `index.json`: a
+core whose index lists test packages is refused.
 The gate checks our own build for test material; it does not stand against a hostile builder.
 A compressed file whose encoding has no known signature (raw deflate, brotli) is scanned as it
 is, so test material inside one would pass. Then every byte of the AppImage is
