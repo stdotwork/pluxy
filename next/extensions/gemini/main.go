@@ -37,6 +37,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -335,9 +336,10 @@ func postBody(ctx context.Context, t target, body []byte, stream bool, model str
 
 // buildBody returns the GenerateContent body for req and how it was built. A GenerateContent
 // request is sent unchanged; any other is rebuilt from the model, with its reasoning effort as
-// thinking settings. A thinking suffix on the model name sets the thinking settings either way,
-// in place of the request's own. Under the reject drop policy a translation that drops anything
-// is refused.
+// thinking settings and any Messages thinking.display or Responses reasoning.summary as
+// includeThoughts. A thinking suffix on the model name sets the thinking settings either way, in
+// place of the request's own. Under the reject drop policy a translation that drops anything is
+// refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatGeminiGenerate}
 	if n := req.Native; n != nil {
@@ -346,9 +348,13 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 			tr.Passthrough = true
 			body := n.Body
 			if s := req.Options.ThinkingSuffix; s != "" {
+				var losses []llm.Loss
 				var err error
-				if body, _, err = geminigenerate.ApplyEffort(body, req.Model, s); err != nil {
+				if body, losses, _, err = geminigenerate.ApplyEffortReport(body, req.Model, s); err != nil {
 					return nil, nil, err
+				}
+				for _, l := range losses {
+					tr.Losses = llm.AddLoss(tr.Losses, l)
 				}
 			}
 			return body, tr, nil
@@ -372,15 +378,32 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	if s := req.Options.ThinkingSuffix; s != "" {
 		effort = s
 	}
+	var more []llm.Loss
 	if effort != "" {
 		var applied bool
-		body, applied, err = geminigenerate.ApplyEffort(body, req.Model, effort)
+		body, more, applied, err = geminigenerate.ApplyEffortReport(body, req.Model, effort)
 		if err != nil {
 			return nil, nil, err
 		}
 		if applied {
 			losses = dropLoss(losses, "reasoning_effort")
 		}
+	}
+	var summary []llm.Loss
+	var carried bool
+	if body, summary, carried, err = geminigenerate.ApplySummary(body, req.Model, req); err != nil {
+		return nil, nil, err
+	}
+	if carried && req.Origin != nil {
+		switch req.Origin.Format {
+		case llm.FormatAnthropicMessages:
+			losses = dropLoss(losses, "thinking")
+		case llm.FormatOpenAIResponses:
+			losses = dropLoss(losses, "reasoning")
+		}
+	}
+	for _, l := range slices.Concat(more, summary) {
+		losses = llm.AddLoss(losses, l)
 	}
 	tr.Losses = losses
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
