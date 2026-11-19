@@ -50,6 +50,9 @@ type opts struct {
 	model, version, registry               string
 	since, until, account, provider, after string
 	limit                                  int
+	yes                                    bool
+	picks                                  stringSliceFlag
+	keyID                                  string
 }
 
 // invocation is one run of a command.
@@ -59,7 +62,10 @@ type invocation struct {
 	args   []string
 	opts   opts
 	json   bool
+	stdin  io.Reader
 	stdout io.Writer
+	stderr io.Writer
+	tty    bool
 }
 
 // call makes one management call. With --json the reply's body goes to standard output as it
@@ -105,6 +111,10 @@ func yesNo(b bool) string {
 }
 
 func accountPath(id string) string { return "/accounts/" + url.PathEscape(id) }
+
+func init() {
+	commands = append(commands, setupCommands()...)
+}
 
 // commands are the client subcommands, in the order help lists them.
 var commands = []command{
@@ -370,6 +380,9 @@ func printStatus(x *invocation, s management.Status) {
 		x.printf("; revision %d refused: %s", s.Desired.Revision, s.Desired.Error)
 	}
 	x.printf("\n")
+	if s.FirstRun {
+		x.printf("first run: setup has not been completed (run pluxy setup)\n")
+	}
 	if s.SafeMode {
 		x.printf("safe mode: no extension runs\n")
 	}
@@ -459,6 +472,10 @@ func help(w io.Writer, prefix string) {
 
 // runCLI runs one client subcommand and returns its exit code.
 func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	return runCLIWithInput(args, os.Stdin, stdout, stderr, getenv, isInteractive(os.Stdin))
+}
+
+func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, tty bool) int {
 	if args[0] == "help" {
 		help(stdout, strings.Join(args[1:], " "))
 		return exitOK
@@ -515,7 +532,7 @@ func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	x := &invocation{ctx: ctx, client: &management.Client{URL: t.url, Key: t.key, HTTP: t.http}, args: pos, opts: o, json: *jsonOut, stdout: stdout}
+	x := &invocation{ctx: ctx, client: &management.Client{URL: t.url, Key: t.key, HTTP: t.http}, args: pos, opts: o, json: *jsonOut, stdin: stdin, stdout: stdout, stderr: stderr, tty: tty}
 	err = cmd.run(x)
 	if err == nil {
 		return exitOK
@@ -535,8 +552,11 @@ func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string)
 
 // exitCode is the exit code for a command's error.
 func exitCode(err error) int {
+	var ue usageError
 	var ae *management.APIError
 	switch {
+	case errors.As(err, &ue):
+		return exitUsage
 	case management.IsUnreachable(err):
 		return exitUnreachable
 	case errors.As(err, &ae):

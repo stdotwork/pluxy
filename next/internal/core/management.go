@@ -26,6 +26,10 @@ const maxManagementBody = 1 << 20
 //	GET    /v0/management/status    core's live state: desired and active config revision,
 //	                                each extension generation's state, and core's build
 //	POST   /v0/management/reload    reload the config file now; 200 with the status when the
+//	GET    /v0/management/setup     kept setup scan, first-run flag and suggested picks
+//	POST   /v0/management/setup/scan   start a background setup scan now
+//	POST   /v0/management/setup/apply  install and enable setup picks
+//	POST   /v0/management/setup/done   end first run
 //	                                new revision is active, 422 with the status (desired.error
 //	                                says why) when it was refused and the active revision stays
 //	GET    /v0/management/packages  installed packages
@@ -106,6 +110,7 @@ func (c *Core) Management() *server.Management {
 		defer release()
 		writeJSON(w, http.StatusOK, management.ModelsReply{Models: s.Router.ServedModels(r.Context())})
 	})
+	c.handleSetup(m)
 	c.handleUI(m)
 	c.handleAccounts(m)
 	c.handleConfig(m)

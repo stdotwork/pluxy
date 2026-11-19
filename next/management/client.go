@@ -266,3 +266,30 @@ func (c *Client) Usage(ctx context.Context, q url.Values) (UsageReply, error) {
 	var v UsageReply
 	return v, c.get(ctx, "/usage", q, &v)
 }
+
+// Setup is GET /setup.
+func (c *Client) Setup(ctx context.Context) (Setup, error) {
+	var v Setup
+	return v, c.get(ctx, "/setup", nil, &v)
+}
+
+// SetupScan is POST /setup/scan.
+func (c *Client) SetupScan(ctx context.Context) (Setup, error) {
+	var v Setup
+	_, err := c.Call(ctx, http.MethodPost, "/setup/scan", nil, nil, &v)
+	return v, err
+}
+
+// SetupApply is POST /setup/apply.
+func (c *Client) SetupApply(ctx context.Context, picks []string) (SetupApplyReply, error) {
+	var v SetupApplyReply
+	_, err := c.Call(ctx, http.MethodPost, "/setup/apply", nil, SetupApplyRequest{Picks: picks}, &v)
+	return v, err
+}
+
+// SetupDone is POST /setup/done.
+func (c *Client) SetupDone(ctx context.Context) (SetupDoneReply, error) {
+	var v SetupDoneReply
+	_, err := c.Call(ctx, http.MethodPost, "/setup/done", nil, nil, &v)
+	return v, err
+}
