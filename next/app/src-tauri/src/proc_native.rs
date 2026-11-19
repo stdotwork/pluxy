@@ -330,23 +330,7 @@ mod imp {
             return None;
         }
         buf.truncate(size);
-        let argc = i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?);
-        let rest = buf.get(size_of::<libc::c_int>()..)?;
-        // The executable's path, then the NULs padding it.
-        let path_end = rest.iter().position(|b| *b == 0)?;
-        let mut at = path_end;
-        while rest.get(at) == Some(&0) {
-            at += 1;
-        }
-        let mut end = at;
-        for _ in 0..argc.max(0) {
-            end += rest.get(end..)?.iter().position(|b| *b == 0)? + 1;
-        }
-        let lossy = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
-        Some((
-            format!("{}\0{}", lossy(&rest[..path_end]), lossy(&rest[at..end])),
-            lossy(&rest[end..]),
-        ))
+        super::parse_procargs2(&buf)
     }
 }
 
@@ -530,4 +514,72 @@ pub(super) fn pipe_holders(pid: u64, fd: u32) -> Result<(String, BTreeSet<u64>),
 #[cfg(unix)]
 pub(super) fn argv_env(pid: u64) -> Option<(String, String)> {
     imp::argv_env(pid)
+}
+
+/// Parses a macOS `sysctl(KERN_PROCARGS2)` buffer: `argc` (`i32` in native byte order), the
+/// executable's path, NUL padding, `argc` NUL-terminated arguments, then the environment strings.
+#[cfg(any(target_os = "macos", test))]
+fn parse_procargs2(buf: &[u8]) -> Option<(String, String)> {
+    let argc = i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?);
+    if argc <= 0 {
+        return None;
+    }
+    let rest = buf.get(4..)?;
+    // The executable's path, then the NULs padding it (the format gives no padding length, so skip
+    // all consecutive NULs after it, matching `ps`).
+    let path_end = rest.iter().position(|b| *b == 0)?;
+    let mut at = path_end;
+    while rest.get(at) == Some(&0) {
+        at += 1;
+    }
+    let mut end = at;
+    for _ in 0..argc {
+        end += rest.get(end..)?.iter().position(|b| *b == 0)? + 1;
+    }
+    let lossy = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+    Some((
+        format!("{}\0{}", lossy(&rest[..path_end]), lossy(&rest[at..end])),
+        lossy(&rest[end..]),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_procargs2;
+
+    fn procargs2(argc: i32, rest: &[u8]) -> Vec<u8> {
+        let mut buf = argc.to_ne_bytes().to_vec();
+        buf.extend_from_slice(rest);
+        buf
+    }
+
+    #[test]
+    fn procargs2_parses_padded_args_and_env() {
+        let buf = procargs2(
+            3,
+            b"/s/bin/tool\0\0\0\0tool\0\0serve\0HOME=/h\0PLUXY_EXTENSION_ID=pluxy/agent\0",
+        );
+        let (argv, env) = parse_procargs2(&buf).expect("valid KERN_PROCARGS2 buffer");
+        assert_eq!(argv, "/s/bin/tool\0tool\0\0serve\0");
+        assert_eq!(env, "HOME=/h\0PLUXY_EXTENSION_ID=pluxy/agent\0");
+    }
+
+    #[test]
+    fn procargs2_rejects_nonpositive_argc_and_truncated_buffers() {
+        assert_eq!(parse_procargs2(&[]), None);
+        assert_eq!(parse_procargs2(&[1, 0, 0]), None);
+        assert_eq!(
+            parse_procargs2(&procargs2(0, b"/s/bin/tool\0\0ENV=1\0")),
+            None
+        );
+        assert_eq!(
+            parse_procargs2(&procargs2(-1, b"/s/bin/tool\0\0ENV=1\0")),
+            None
+        );
+        assert_eq!(parse_procargs2(&procargs2(1, b"/s/bin/tool")), None);
+        assert_eq!(
+            parse_procargs2(&procargs2(2, b"/s/bin/tool\0\0only_one\0")),
+            None
+        );
+    }
 }
