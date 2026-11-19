@@ -13,9 +13,9 @@ import (
 
 // aliveAfter is how long a call that asked for alive frames (protocol.Call.Alive) may go without
 // a frame to core before upstream bytes make the SDK send one: core ends an attempt that has sent
-// it nothing at all for as long as the account's timeouts let the upstream stay quiet, plus a minute, and an upstream that is still
-// sending, only nothing the extension passes on (a model thinking, keep-alive comments), must not
-// look dead to it.
+// it nothing at all for as long as the account's timeouts let the upstream stay quiet, plus a
+// minute, and an upstream that is still sending, only nothing the extension passes on (a model
+// thinking, keep-alive comments), must not look dead to it.
 const aliveAfter = 10 * time.Second
 
 // aliveClock is the SDK's clock for alive frames; tests replace it.
@@ -94,8 +94,10 @@ func (t aliveTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return resp, err
 	}
 	t.sink.arrived()
+	if resp.Body == nil || resp.Body == http.NoBody {
+		return resp, nil // nothing to read, and the layers above tell NoBody by identity
+	}
 	switch b := resp.Body.(type) {
-	case nil:
 	case io.ReadWriteCloser:
 		resp.Body = aliveRWBody{ReadWriteCloser: b, sink: t.sink}
 	default:

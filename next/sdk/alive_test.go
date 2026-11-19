@@ -219,3 +219,50 @@ func TestAliveFromUpstreamBytes(t *testing.T) {
 		t.Errorf("frames without alive = %v, want start and finish only", got)
 	}
 }
+
+// A response with no body keeps http.NoBody under the alive layer, which the capture and timeout
+// layers read as "nothing to read"; its headers still count as bytes that arrived.
+func TestAliveLeavesNoBodyAlone(t *testing.T) {
+	advance := fakeAliveClock(t)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(up.Close)
+	client := &http.Client{Transport: Upstream(&http.Transport{})}
+	sameBody := make(chan bool, 1)
+	socket, _, _ := startServe(t, Extension{ID: "t", Version: "0", Generate: func(ctx context.Context, call Call, out *Stream) error {
+		if err := out.Start(llm.ResponseInfo{ID: "r"}); err != nil {
+			return err
+		}
+		advance(aliveAfter)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, up.URL, nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		sameBody <- resp.Body == http.NoBody
+		return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+	}})
+	conn := dial(t, socket)
+	defer conn.Close()
+	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "1", Op: protocol.OpGenerate,
+		Account: &protocol.Account{ID: "a"}, Request: &llm.Request{Model: "m", Stream: true}, Alive: true}); err != nil {
+		t.Fatal(err)
+	}
+	var types []string
+	for len(types) == 0 || types[len(types)-1] != llm.EventFinish {
+		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		var r protocol.Reply
+		if err := protocol.ReadFrame(conn, &r); err != nil {
+			t.Fatalf("reading a frame: %v (so far %v)", err, types)
+		}
+		types = append(types, r.Type)
+	}
+	if !<-sameBody {
+		t.Error("the response body is not http.NoBody: the alive layer wrapped it")
+	}
+	if len(types) != 3 || types[1] != protocol.TypeAlive {
+		t.Errorf("frames = %v, want start, alive (the headers arrived), finish", types)
+	}
+}
