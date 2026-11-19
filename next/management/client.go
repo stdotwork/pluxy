@@ -223,6 +223,17 @@ func (c *Client) Models(ctx context.Context) (ModelsReply, error) {
 	return v, c.get(ctx, "/models", nil, &v)
 }
 
+// RefreshModels is POST /models/refresh; an empty account refreshes every account.
+func (c *Client) RefreshModels(ctx context.Context, account string) (RefreshModelsReply, error) {
+	var in any
+	if account != "" {
+		in = RefreshModelsRequest{Account: account}
+	}
+	var v RefreshModelsReply
+	_, err := c.Call(ctx, http.MethodPost, "/models/refresh", nil, in, &v)
+	return v, err
+}
+
 // ClientKeys is GET /client-keys.
 func (c *Client) ClientKeys(ctx context.Context) ([]ClientKey, error) {
 	var v ClientKeysReply
