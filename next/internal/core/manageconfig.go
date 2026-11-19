@@ -19,7 +19,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
-	"github.com/stdotwork/pluxy/next/sdk/payload"
+	"github.com/stdotwork/pluxy/next/management"
 )
 
 // The management calls that read and change core's config file: the document itself, the
@@ -102,15 +102,7 @@ func fileHash(b []byte) string {
 }
 
 // configView is the config document as the management API shows it.
-type configView struct {
-	// Format is "yaml" for a config.yaml with today's core's key names, else "json".
-	Format string `json:"format"`
-	// Hash is the SHA-256 of the file's contents, as status shows it; a write may send it
-	// back as base_hash.
-	Hash string `json:"hash"`
-	// Content is the file's contents with a placeholder in place of each secret.
-	Content string `json:"content"`
-}
+type configView = management.Config
 
 func (c *Core) configView() (configView, error) {
 	b, err := os.ReadFile(c.opts.ConfigPath)
@@ -218,13 +210,7 @@ func readStrictJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 func newKey() string { return rand.Text() }
 
 // clientKeyView is a client key as the management API lists it.
-type clientKeyView struct {
-	// ID names the key in calls, without showing it. It changes when core restarts.
-	ID string `json:"id"`
-	// Masked is the key with all but its first and last two characters hidden, as today's
-	// panel shows keys; a key shorter than 8 characters is hidden whole.
-	Masked string `json:"masked"`
-}
+type clientKeyView = management.ClientKey
 
 func (c *Core) keyView(k string) clientKeyView {
 	return clientKeyView{ID: c.redactor.ID(k), Masked: maskKey(k)}
@@ -238,58 +224,19 @@ func maskKey(k string) string {
 	return string(r[:2]) + strings.Repeat("*", 6) + string(r[len(r)-2:])
 }
 
-// settingsView is the basic and routing settings, by today's core's names.
-type settingsView struct {
-	Routing       routingView       `json:"routing"`
-	Observability observabilityView `json:"observability"`
-	// TokenCountEstimate is this core's own setting (no counterpart in today's core).
-	TokenCountEstimate bool `json:"token_count_estimate"`
-	// ProxyURL is the global proxy_url, with "redacted" in place of its user name and password.
-	ProxyURL string `json:"proxy-url"`
-	// Payload is the payload rules, with today's core's names; absent when there are none.
-	Payload *payload.Rules `json:"payload,omitempty"`
-}
+type settingsView = management.Settings
 
-type observabilityView struct {
-	Logs  logsView  `json:"logs"`
-	Usage usageView `json:"usage"`
-}
+type observabilityView = management.ObservabilitySettings
 
-type logsView struct {
-	LoggingToFile      bool `json:"logging-to-file"`
-	LogsMaxTotalSizeMB int  `json:"logs-max-total-size-mb"`
-	RequestLog         bool `json:"request-log"`
-	ErrorLogsMaxFiles  int  `json:"error-logs-max-files"`
-}
+type logsView = management.LogSettings
 
-type usageView struct {
-	UsageStatisticsEnabled bool `json:"usage-statistics-enabled"`
-}
+type usageView = management.UsageSettings
 
-type routingView struct {
-	Strategy           string       `json:"strategy"`
-	SessionAffinity    bool         `json:"session-affinity"`
-	SessionAffinityTTL string       `json:"session-affinity-ttl"`
-	ForceModelPrefix   bool         `json:"force-model-prefix"`
-	Retry              retryView    `json:"retry"`
-	Cooldown           cooldownView `json:"cooldown"`
-}
+type routingView = management.RoutingSettings
 
-type retryView struct {
-	// RequestRetry is null while the config leaves rounds to this core's own rules.
-	RequestRetry        *int `json:"request-retry"`
-	MaxRetryCredentials int  `json:"max-retry-credentials"`
-	// MaxRetryInterval is in seconds.
-	MaxRetryInterval float64 `json:"max-retry-interval"`
-}
+type retryView = management.RetrySettings
 
-type cooldownView struct {
-	DisableCooling bool `json:"disable-cooling"`
-	// TransientErrorCooldownSeconds is 0 for this core's backoff, -1 for none.
-	TransientErrorCooldownSeconds float64 `json:"transient-error-cooldown-seconds"`
-	// QuotaResponseMode is retryable (the default) or usage-limit.
-	QuotaResponseMode string `json:"quota-response-mode"`
-}
+type cooldownView = management.CooldownSettings
 
 // settings returns the active config's settings by today's core's names.
 func settings(cfg *server.Config) settingsView {
@@ -420,7 +367,7 @@ func (c *Core) handleConfig(m *server.Management) {
 		for _, k := range c.Config().ClientKeys {
 			keys = append(keys, c.keyView(k))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
+		writeJSON(w, http.StatusOK, management.ClientKeysReply{Keys: keys})
 	})
 
 	m.Handle("POST /client-keys", func(w http.ResponseWriter, r *http.Request) {
@@ -430,7 +377,7 @@ func (c *Core) handleConfig(m *server.Management) {
 			c.writeChangeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"key": c.keyView(key), "value": key})
+		writeJSON(w, http.StatusCreated, management.NewClientKeyReply{Key: c.keyView(key), Value: key})
 	})
 
 	m.Handle("DELETE /client-keys/{id}", func(w http.ResponseWriter, r *http.Request) {

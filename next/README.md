@@ -35,6 +35,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `extensions/devin` | Provider extension for Devin: the models a Devin account gets, signed in as Devin's CLI signs in or with a session token, over Devin's protobuf API; `devintest` is a fake Devin for its tests. |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
+| `management` | The management API's contract ([README](management/README.md)), its request and reply types, and a client; the `pluxy` command's subcommands use it. |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
 | `internal/cred` | Core's credential store and renewal of accounts added by login. |
 | `internal/private` | Core's private folders and files (credentials, extensions' settings, logs): 0700 and 0600 on Linux and macOS, an owner-only access list on Windows. |
@@ -89,10 +90,10 @@ go build -o extensions/claude/claude ./extensions/claude
 ```
 
 ```bash
-./pluxy -config config.json
+./pluxy serve -config config.json
 ```
 
-Flags:
+`pluxy -config config.json`, with no subcommand, serves too. Flags:
 
 - `-config`: the config file (default `config.json`).
 - `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
@@ -1768,6 +1769,10 @@ config can still be checked and reloaded through management.
 
 ### Management API
 
+[`management/README.md`](management/README.md) is the API's contract and describes the `pluxy`
+command, its client: `pluxy serve` runs core, and the other subcommands (`pluxy status`,
+`pluxy account list`, `pluxy help` for the rest) call a running core's management API.
+
 Beside the account calls [above](#accounts-added-by-login), management serves these. Every call
 needs `Authorization: Bearer <management_key>`.
 
@@ -1786,13 +1791,15 @@ page are not gated; the panel's calls are.
 {"management_key": "choose-a-management-key", "management_allow_remote": true}
 ```
 
-A client that sends a missing or wrong management key 5 times in a row is refused for 30 minutes,
-with a 403 and `Retry-After`, even when it then sends the right key; core logs a line naming it.
+A client on another machine that sends a wrong management key 5 times in a row is refused for 30
+minutes, with a 403 `blocked` and `Retry-After`, even when it then sends the right key; core logs a
+line naming it. A call with no key at all is a 401 that does not count, and a call from this machine
+is never counted or blocked, so the person at the keyboard can always get back in.
 A right key clears its count, and a count is forgotten after 2 hours without a failure. These are
 today's core's numbers. The client is the address [`trusted_proxies`](#run-it) gives, and an
 IPv6 client is counted by its /64, so it cannot start again by moving to another address in the
-block it was given; today's core counts each address. Behind a proxy that is not in
-`trusted_proxies`, every client has the proxy's address, so one client's wrong keys block them all.
+block it was given; today's core counts each address. Behind a proxy on another machine that is not
+in `trusted_proxies`, every client has the proxy's address, so one client's wrong keys block them all.
 
 | Call | What it does |
 | --- | --- |
