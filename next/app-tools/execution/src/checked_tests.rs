@@ -605,7 +605,13 @@ impl Volume {
             .lines()
             .find(|l| l.contains(&format!(" on {} (", mnt.display())))
             .unwrap_or_else(|| panic!("{} is not mounted: {listed}", mnt.display()));
-        assert_eq!(line.contains("noowners"), !owners, "{line}");
+        // Only the options in the brackets: the mount point may hold the word too.
+        let options = &line[line.rfind(" (").unwrap() + 2..];
+        let noowners = options
+            .trim_end_matches(')')
+            .split(", ")
+            .any(|o| o == "noowners");
+        assert_eq!(noowners, !owners, "{line}");
         fs::set_permissions(mnt, fs::Permissions::from_mode(0o755)).unwrap();
         v
     }
