@@ -251,10 +251,7 @@ func (p *PprofConfig) prepare() error {
 	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
 		return fmt.Errorf("config: pprof.addr %q: the port must be a number from 0 to 65535", p.Addr)
 	}
-	if strings.EqualFold(host, "localhost") {
-		return nil
-	}
-	if ip, err := netip.ParseAddr(host); err != nil || !ip.IsLoopback() {
+	if !IsLoopbackHost(host) {
 		return fmt.Errorf("config: pprof.addr %q must be a loopback address (127.0.0.0/8, ::1 or localhost): the profiling pages show the program's memory and goroutines, so they are served on this machine only", p.Addr)
 	}
 	return nil
@@ -600,14 +597,11 @@ func parseConfig(b []byte, path string, needKey bool) (*Config, error) {
 	}
 	if c.AuthDir != "" {
 		// As today's core reads it, ~ is the home folder.
-		if rest, ok := strings.CutPrefix(c.AuthDir, "~"); ok && (rest == "" || rest[0] == '/' || rest[0] == filepath.Separator) {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return nil, fmt.Errorf("config: oauth.auth-dir %q: %w", c.AuthDir, err)
-			}
-			c.AuthDir = filepath.Join(home, rest)
+		dir, err := ExpandHome(c.AuthDir)
+		if err != nil {
+			return nil, fmt.Errorf("config: oauth.auth-dir %q: %w", c.AuthDir, err)
 		}
-		c.AuthDir = rel(c.AuthDir)
+		c.AuthDir = rel(dir)
 	}
 	if c.CredentialsDir == "" {
 		c.CredentialsDir = "credentials"
@@ -639,4 +633,49 @@ func parseConfig(b []byte, path string, needKey bool) (*Config, error) {
 	c.prepareClientKeys()
 	c.prepareManagementKey()
 	return &c, nil
+}
+
+// ExpandHome returns path with a leading ~ (alone, or before a path separator) replaced by the
+// home folder.
+func ExpandHome(path string) (string, error) {
+	rest, ok := strings.CutPrefix(path, "~")
+	if !ok || rest != "" && rest[0] != '/' && rest[0] != filepath.Separator {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, rest), nil
+}
+
+// IsLoopbackHost reports whether host (a name or an address, with no port) reaches this machine
+// only: localhost or a loopback address.
+func IsLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.IsLoopback()
+}
+
+// LocalURL is the address a program on this machine reaches a server listening on listen at:
+// a listen address with no host or an unspecified one (every interface) is reached at the
+// loopback address of its family.
+func LocalURL(listen string, tlsEnable bool) (string, error) {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "", err
+	}
+	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
+		host = "127.0.0.1"
+		if ip != nil && ip.To4() == nil {
+			host = "::1"
+		}
+	}
+	scheme := "http"
+	if tlsEnable {
+		scheme = "https"
+	}
+	return scheme + "://" + net.JoinHostPort(host, port), nil
 }
