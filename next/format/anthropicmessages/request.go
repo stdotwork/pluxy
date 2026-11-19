@@ -57,6 +57,7 @@ var ClaudeCodeHeaders = []string{
 	"x-claude-code-agent-id",
 	"x-claude-code-parent-agent-id",
 	"x-claude-code-agent-type",
+	"x-claude-code-prompt-id",
 	"x-claude-code-request-class",
 	"x-claude-code-prev-tool-durations",
 	"x-claude-code-compaction",
@@ -66,10 +67,11 @@ var ClaudeCodeHeaders = []string{
 }
 
 // IsClaudeCode reports whether native headers (by lower-case name) are those of a request that
-// names itself as Claude Code: X-App cli, a claude-cli User-Agent and the claude-code-20250219
-// beta, the header signals today's core requires before it takes a client for Claude Code.
+// names itself as Claude Code: X-App cli or cli-bg, a claude-cli User-Agent and the
+// claude-code-20250219 beta, the header signals today's core requires before it takes a client for
+// Claude Code.
 func IsClaudeCode(headers map[string]string) bool {
-	if headers["x-app"] != "cli" || !strings.HasPrefix(headers["user-agent"], "claude-cli/") {
+	if (headers["x-app"] != "cli" && headers["x-app"] != "cli-bg") || !strings.HasPrefix(headers["user-agent"], "claude-cli/") {
 		return false
 	}
 	for _, b := range strings.Split(headers["anthropic-beta"], ",") {

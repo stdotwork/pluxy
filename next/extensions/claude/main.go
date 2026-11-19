@@ -12,7 +12,9 @@
 // client's conversation into the top-level system prompt, for a Claude-compatible upstream that
 // refuses them there; it is today's per-key setting of the same name.
 // model_level_cooling keeps a used-up shared subscription window on the model that hit it rather
-// than on the whole account (today's claude.model-level-cooling; see ratelimit.go). The OAuth
+// than on the whole account (today's claude.model-level-cooling; see ratelimit.go). cache_ttl
+// sets the lifetime ("5m" default, or "1h") of cache_control markers pluxy adds to translated
+// requests that set none. The OAuth
 // client can be changed with client_id; tests move the sign-in page and token endpoint to a fake
 // with authorize_url and token_url (sdk.TestLoginHost), which a normal run ignores; see oauth.go.
 //
@@ -119,6 +121,8 @@ type settings struct {
 	RebuildMidSystemMessage bool `json:"rebuild_mid_system_message"`
 	// ModelLevelCooling keeps a refused shared usage window on the model, not the account.
 	ModelLevelCooling bool `json:"model_level_cooling"`
+	// CacheTTL is the lifetime ("5m" default, or "1h") of cache_control markers pluxy adds.
+	CacheTTL string `json:"cache_ttl"`
 }
 
 // readSettings reads an account's settings and fills in the defaults.
@@ -147,6 +151,15 @@ func readSettings(raw json.RawMessage) (settings, error) {
 	}
 	if s.ClientID == "" {
 		s.ClientID = defaultClientID
+	}
+	s.CacheTTL = strings.ToLower(strings.TrimSpace(s.CacheTTL))
+	switch s.CacheTTL {
+	case "", cacheTTL5m:
+		s.CacheTTL = cacheTTL5m
+	case cacheTTL1h:
+	default:
+		return s, &llm.Error{Code: llm.CodeInvalidRequest, Scope: llm.ScopeCredential,
+			Message: fmt.Sprintf("cache_ttl must be %q or %q, not %q", cacheTTL5m, cacheTTL1h, s.CacheTTL)}
 	}
 	return s, nil
 }
@@ -229,7 +242,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	body, tr, err := buildBody(call.Request)
+	body, tr, err := buildBodyWithTTL(call.Request, s.CacheTTL)
 	if err != nil {
 		return err
 	}
@@ -395,7 +408,7 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: "this account's base_url is not Anthropic's own (" + defaultBaseURL + "), which is the only one this extension sends a token count to"}
 	}
-	body, tr, err := buildBody(call.Request)
+	body, tr, err := buildBodyWithTTL(call.Request, s.CacheTTL)
 	if err != nil {
 		return err
 	}
@@ -456,6 +469,10 @@ func isAnthropicBase(baseURL string) bool {
 // settings either way, in place of the request's own. Under the reject drop policy a request
 // that drops anything is refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
+	return buildBodyWithTTL(req, cacheTTL5m)
+}
+
+func buildBodyWithTTL(req llm.Request, cacheTTL string) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatAnthropicMessages}
 	if n := req.Native; n != nil {
 		tr.From = n.Format
@@ -498,7 +515,10 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 			return nil, nil, err
 		}
 	}
-	if body, err = addCacheBreakpoints(body); err != nil {
+	if body, losses, cacheTTL, err = applyClientCache(body, req, losses, cacheTTL); err != nil {
+		return nil, nil, err
+	}
+	if body, err = addCacheBreakpointsTTL(body, cacheTTL); err != nil {
 		return nil, nil, err
 	}
 	if body, err = fixBody(body); err != nil {
