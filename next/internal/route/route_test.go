@@ -1568,3 +1568,17 @@ func TestCooldownWaitComesFromTheAccountThatServesTheModel(t *testing.T) {
 	}
 	h.wantAttempts()
 }
+
+// An account that leaves the set loses its session bindings, as a changed one does, so added
+// again later it starts clean: a session it served before is not sent back to it ahead of a
+// higher-priority account.
+func TestRemovedAccountLosesSessionBindings(t *testing.T) {
+	h := newHarness(t, Config{SessionAffinity: &AffinityConfig{}}, accts("a")...)
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	h.run(s1) // a, bound
+	b := Account{ID: "b", Priority: 1}
+	h.setAccounts(b)                   // a leaves
+	h.setAccounts(Account{ID: "a"}, b) // a comes back
+	h.run(s1)
+	h.wantAttempts("a", "b")
+}

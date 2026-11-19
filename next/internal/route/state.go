@@ -429,12 +429,12 @@ func (s *State) end(a *Account, seq uint64) {
 	}
 }
 
-// forget drops the state kept on account id's credential and models. Endpoint state stays: other
-// accounts may share the endpoint. The account gets a new revision, so outcomes that attempts on
-// its copies until now see afterwards record nothing: added again, it starts clean.
+// forget drops the state kept on account id's credential and models, and its session bindings.
+// Endpoint state stays: other accounts may share the endpoint. The account gets a new revision,
+// so outcomes that attempts on its copies until now see afterwards record nothing and bind no
+// session: added again, it starts clean.
 func (s *State) forget(id string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for k := range s.scopes {
 		if k.kind != scopeEndpoint && k.id == id {
 			s.drop(k)
@@ -442,6 +442,9 @@ func (s *State) forget(id string) {
 	}
 	delete(s.last, id)
 	s.revs[id]++
+	rev := s.revs[id]
+	s.mu.Unlock()
+	s.affinity.unbind(map[string]uint64{id: rev})
 }
 
 func (s *State) activeCount(id string) int {
