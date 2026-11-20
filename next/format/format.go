@@ -9,6 +9,6 @@ package format
 // extension from another release whose parsers differ gets the full request instead.
 //
 // Raise it whenever a parser makes something else of a body it already read: the test next to
-// it (TestParserVersion) fails when the parsers' output on the corpus and format-test requests
-// changes, and says so.
+// it (TestParserVersion) fails when a parser's output on a request it recorded (from the corpus
+// and the format tests) changes, and says so.
 const ParserVersion = 1

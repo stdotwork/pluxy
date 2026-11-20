@@ -150,9 +150,11 @@ core's parsers (the SDK does, with its own release's `format.ParserVersion`), an
 leaves the parsed form out whenever the body is still the one it parsed and the extension's
 parser version is core's. The extension parses the body with the same parsers core uses, so its
 handler gets the same request as before; an extension from another release whose parsers differ
-gets the full request. A test hashes what the parsers make of every corpus and format-test
-request, and fails until the version is raised when that changes. The
-tradeoff: core no longer encodes the parsed form for such a call, but the extension parses the
+gets the full request. A test keeps what the parsers make of each corpus and format-test request
+in a golden file and fails, naming some of them, until the version is raised when a recorded
+request's parse changes; a request added to the corpus or the format tests need not be recorded
+to pass.
+The tradeoff: core no longer encodes the parsed form for such a call, but the extension parses the
 body in place of decoding it, also when it only passes the body through, since a handler's
 request is a plain value that cannot be filled only when it is read. Core still sends the full
 request when the body changed after parsing (a thinking suffix taken off its model), when the
