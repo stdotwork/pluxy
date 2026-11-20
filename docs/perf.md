@@ -14,10 +14,12 @@ go run ./cmd/pluxy-bench -runs 1         # one run (about 3 minutes)
 go run ./cmd/pluxy-bench -check          # what CI runs: the budget check (about 80 seconds)
 go run ./cmd/pluxy-bench -json out.json  # also write every number, per run, as JSON
 go run ./cmd/pluxy-bench -profile DIR    # CPU and heap profiles of the selected scenarios
+go run ./cmd/pluxy-bench -requests 500 -profile DIR -scenarios stream-translate  # more samples to read
 ```
 
 `go run ./cmd/pluxy-bench -h` lists the other flags: the mock's timings, the request body size,
-a subset of scenarios, and `-proxy-url` to measure another proxy that is already running against
+a subset of scenarios, `-requests` (the request count of the scenarios that send a fixed number:
+all but `agents` and `throughput`; refused with `-check`), and `-proxy-url` to measure another proxy that is already running against
 the same mock. The memory and CPU figures read `/proc`, so they are Linux only; elsewhere the
 report says they were not measured.
 

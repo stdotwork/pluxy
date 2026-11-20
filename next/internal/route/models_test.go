@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/catalogue"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -319,5 +320,237 @@ func TestEmptyFirstReadIsKeptWithoutRetry(t *testing.T) {
 	}
 	if got := modelIDs(&protocol.ModelList{Models: h.r.Models(context.Background())}); !slices.Equal(got, []string{"m1"}) {
 		t.Fatalf("models after refresh = %v, want [m1]", got)
+	}
+}
+
+func TestMergeModelLimitsAndCapabilities(t *testing.T) {
+	catModels := map[string]protocol.Model{
+		"gpt-5.6-luna": {
+			ID:                  "gpt-5.6-luna",
+			ContextLength:       922000,
+			MaxCompletionTokens: 128000,
+			Capabilities: &protocol.ModelCapabilities{
+				Tools:            true,
+				StructuredOutput: true,
+				Vision:           true,
+				Reasoning:        true,
+				ReasoningLevels:  []string{"none", "low", "medium", "high", "xhigh", "max"},
+			},
+		},
+		"kimi-k3": {
+			ID:                  "kimi-k3",
+			ContextLength:       1048576,
+			MaxCompletionTokens: 65536,
+			Capabilities: &protocol.ModelCapabilities{
+				Tools:           true,
+				Vision:          true,
+				Reasoning:       true,
+				ReasoningLevels: []string{"low", "high", "max"},
+			},
+		},
+		"claude-sonnet-4-6": {
+			ID:                  "claude-sonnet-4-6",
+			ContextLength:       1000000,
+			MaxCompletionTokens: 128000,
+			Capabilities: &protocol.ModelCapabilities{
+				Tools:            true,
+				StructuredOutput: true,
+				Vision:           true,
+				PDF:              true,
+				Reasoning:        true,
+				ReasoningLevels:  []string{"low", "medium", "high", "max"},
+			},
+		},
+	}
+
+	h := newHarness(t, Config{},
+		Account{ID: "codex-sub", Extension: "pluxy/codex"},
+		Account{ID: "kimi-live", Extension: "pluxy/openai-compatible"},
+		Account{ID: "claude-builtin", Extension: "pluxy/claude"},
+		Account{ID: "custom-ext", Extension: "pluxy/custom"},
+	)
+	h.r.UseCatalogue(func(_ string, _ json.RawMessage, id string) (protocol.Model, bool) {
+		m, ok := catModels[id]
+		return m, ok
+	})
+	h.r.UseCatalog(func(_ context.Context, a Account, _ *protocol.Credential) (*protocol.ModelList, *llm.Error) {
+		switch a.ID {
+		case "codex-sub":
+			// Account list gives 272k window, silent on max_output_tokens and capabilities.
+			return &protocol.ModelList{
+				OwnedBy: "openai",
+				From:    protocol.ModelListFromAccount,
+				Models: []protocol.Model{
+					{ID: "gpt-5.6-luna", ContextLength: 272000},
+				},
+			}, nil
+		case "kimi-live":
+			// Account list gives model ID only (silent on limits and capabilities).
+			return &protocol.ModelList{
+				OwnedBy: "moonshot",
+				From:    protocol.ModelListFromAccount,
+				Models: []protocol.Model{
+					{ID: "kimi-k3"},
+				},
+			}, nil
+		case "claude-builtin":
+			// Extension built-in list gives 200k/64k, smaller than catalogue's 1M/128k.
+			return &protocol.ModelList{
+				OwnedBy: "anthropic",
+				From:    protocol.ModelListFromExtension,
+				Models: []protocol.Model{
+					{ID: "claude-sonnet-4-6", ContextLength: 200000, MaxCompletionTokens: 64000},
+				},
+			}, nil
+		case "custom-ext":
+			// Extension built-in list for a model not in the catalogue.
+			return &protocol.ModelList{
+				OwnedBy: "custom",
+				From:    protocol.ModelListFromExtension,
+				Models: []protocol.Model{
+					{ID: "custom-only", ContextLength: 64000, MaxCompletionTokens: 8192},
+				},
+			}, nil
+		}
+		return nil, nil
+	})
+
+	served := h.r.ServedModels(context.Background())
+	byID := map[string]ServedModel{}
+	for _, m := range served {
+		byID[m.ID] = m
+	}
+
+	// 1. Account limit 272k vs catalogue 922k -> 272k wins (from: "account"), max_output_tokens
+	// and capabilities filled from catalogue.
+	luna, ok := byID["gpt-5.6-luna"]
+	if !ok {
+		t.Fatalf("gpt-5.6-luna missing from ServedModels")
+	}
+	if luna.ContextLength != 272000 || luna.MaxOutputTokens != 128000 || luna.MaxCompletionTokens != 128000 {
+		t.Errorf("gpt-5.6-luna limits = (ctx=%d, out=%d, maxComp=%d), want (272000, 128000, 128000)",
+			luna.ContextLength, luna.MaxOutputTokens, luna.MaxCompletionTokens)
+	}
+	if luna.From != protocol.ModelListFromAccount {
+		t.Errorf("gpt-5.6-luna from = %q, want %q", luna.From, protocol.ModelListFromAccount)
+	}
+	if luna.Capabilities == nil || !luna.Capabilities.Tools || !luna.Capabilities.Vision ||
+		!luna.Capabilities.Reasoning || !slices.Equal(luna.Capabilities.ReasoningLevels, []string{"none", "low", "medium", "high", "xhigh", "max"}) {
+		t.Errorf("gpt-5.6-luna capabilities = %+v", luna.Capabilities)
+	}
+
+	// 2. Account list silent on limits and capabilities -> filled from catalogue (from: "catalogue").
+	kimi, ok := byID["kimi-k3"]
+	if !ok {
+		t.Fatalf("kimi-k3 missing from ServedModels")
+	}
+	if kimi.ContextLength != 1048576 || kimi.MaxOutputTokens != 65536 {
+		t.Errorf("kimi-k3 limits = (%d, %d), want (1048576, 65536)", kimi.ContextLength, kimi.MaxOutputTokens)
+	}
+	if kimi.From != protocol.ModelListFromCatalogue {
+		t.Errorf("kimi-k3 from = %q, want %q", kimi.From, protocol.ModelListFromCatalogue)
+	}
+	if kimi.Capabilities == nil || !kimi.Capabilities.Tools || !kimi.Capabilities.Reasoning {
+		t.Errorf("kimi-k3 capabilities = %+v", kimi.Capabilities)
+	}
+
+	// 3. Extension built-in list has smaller positive limits (200k/64k) than catalogue (1M/128k) ->
+	// smaller limits win (from: "extension"), capabilities filled from catalogue.
+	sonnet, ok := byID["claude-sonnet-4-6"]
+	if !ok {
+		t.Fatalf("claude-sonnet-4-6 missing from ServedModels")
+	}
+	if sonnet.ContextLength != 200000 || sonnet.MaxOutputTokens != 64000 {
+		t.Errorf("claude-sonnet-4-6 limits = (%d, %d), want (200000, 64000)", sonnet.ContextLength, sonnet.MaxOutputTokens)
+	}
+	if sonnet.From != protocol.ModelListFromExtension {
+		t.Errorf("claude-sonnet-4-6 from = %q, want %q", sonnet.From, protocol.ModelListFromExtension)
+	}
+	if sonnet.Capabilities == nil || !sonnet.Capabilities.PDF || !sonnet.Capabilities.Tools {
+		t.Errorf("claude-sonnet-4-6 capabilities = %+v", sonnet.Capabilities)
+	}
+
+	// 4. Model only in extension's built-in list -> limits from extension (from: "extension").
+	custom, ok := byID["custom-only"]
+	if !ok {
+		t.Fatalf("custom-only missing from ServedModels")
+	}
+	if custom.ContextLength != 64000 || custom.MaxOutputTokens != 8192 || custom.From != protocol.ModelListFromExtension {
+		t.Errorf("custom-only = (ctx=%d, out=%d, from=%q), want (64000, 8192, extension)",
+			custom.ContextLength, custom.MaxOutputTokens, custom.From)
+	}
+	if custom.Capabilities != nil {
+		t.Errorf("custom-only capabilities = %+v, want nil because models.dev does not carry it", custom.Capabilities)
+	}
+}
+
+func TestDevinModelsDoNotBorrowOpenAICatalogueData(t *testing.T) {
+	h := newHarness(t, Config{}, Account{ID: "devin", Extension: "pluxy/devin"})
+	h.r.UseCatalogue(catalogue.New(catalogue.Options{}).LookupFor)
+	h.r.UseCatalog(func(context.Context, Account, *protocol.Credential) (*protocol.ModelList, *llm.Error) {
+		return &protocol.ModelList{
+			OwnedBy: "openai",
+			From:    protocol.ModelListFromExtension,
+			Models: []protocol.Model{{
+				ID:                  "devin/gpt-6-luna",
+				ContextLength:       1000000,
+				MaxCompletionTokens: 64000,
+			}},
+		}, nil
+	})
+
+	var got *ServedModel
+	for _, m := range h.r.ServedModels(context.Background()) {
+		if m.ID == "devin/gpt-6-luna" {
+			m := m
+			got = &m
+			break
+		}
+	}
+	if got == nil {
+		t.Fatal("devin/gpt-6-luna missing from ServedModels")
+	}
+	if got.ContextLength != 1000000 || got.MaxOutputTokens != 64000 || got.Capabilities != nil || got.From != protocol.ModelListFromExtension {
+		t.Errorf("devin/gpt-6-luna = %+v, want only its extension's 1000000/64000 limits and no capabilities", got)
+	}
+}
+
+func TestAccountAliasDoesNotUsePublicCatalogueEntry(t *testing.T) {
+	h := newHarness(t, Config{}, Account{
+		ID:        "local",
+		Extension: "pluxy/openai-compatible",
+		Models:    []ModelEntry{{Name: "my-local-llama", Alias: "gpt-5.6-luna"}},
+	})
+	h.r.UseCatalogue(catalogue.New(catalogue.Options{}).LookupFor)
+
+	var got *ServedModel
+	for _, m := range h.r.ServedModels(context.Background()) {
+		if m.ID == "gpt-5.6-luna" {
+			m := m
+			got = &m
+			break
+		}
+	}
+	if got == nil {
+		t.Fatal("gpt-5.6-luna alias missing from ServedModels")
+	}
+	if got.ContextLength != 0 || got.MaxOutputTokens != 0 || got.MaxCompletionTokens != 0 || got.Capabilities != nil || got.From != "" {
+		t.Errorf("gpt-5.6-luna alias = %+v, want no catalogue limits, capabilities or from", got)
+	}
+}
+
+func TestMergeModelAlignsGeminiLimitsWithTheMergedLimits(t *testing.T) {
+	acct := &protocol.Model{
+		ContextLength:       1048576,
+		MaxCompletionTokens: 65536,
+		InputTokenLimit:     1048576,
+		OutputTokenLimit:    65536,
+	}
+	cat := &protocol.Model{ContextLength: 500000, MaxCompletionTokens: 32768}
+	got, maxOut, _ := MergeModel(acct, cat, nil)
+	if got.ContextLength != 500000 || got.MaxCompletionTokens != 32768 ||
+		got.InputTokenLimit != 500000 || got.OutputTokenLimit != 32768 || maxOut != 32768 {
+		t.Errorf("merged limits = ctx=%d, out=%d, input=%d, output=%d, max_output_tokens=%d; want all context/input 500000 and all output/max 32768",
+			got.ContextLength, got.MaxCompletionTokens, got.InputTokenLimit, got.OutputTokenLimit, maxOut)
 	}
 }

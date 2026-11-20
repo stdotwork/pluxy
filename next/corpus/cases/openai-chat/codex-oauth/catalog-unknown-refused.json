@@ -20,7 +20,8 @@
       "want": {
         "code": "model_not_found",
         "message": "no account serves model \"corpus-not-in-catalog\"",
-        "type": "invalid_request_error"
+        "type": "invalid_request_error",
+        "pluxy": "(volatile)"
       }
     }
   ],

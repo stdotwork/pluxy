@@ -1,7 +1,7 @@
 # pluxy UI kit and panel
 
-One UI kit, two builds. The **panel** is the kit's browser build: core embeds it and serves it at
-`/panel/` while the management API is on. The desktop app ([`../app`](../app/README.md)) is the
+One UI kit, two builds. The **panel** is the kit's browser build: core embeds it and always serves it
+at `/panel/`; the management API is always on. The desktop app ([`../app`](../app/README.md)) is the
 kit's second build, with more pages. Both read the same theme files ([theme contract](themes/README.md)) and put shared
 pages in the same places. Core keeps the themes a person adds and which theme is on
 ([where themes are kept](themes/README.md#where-themes-are-kept)), so both builds show the same ones.
@@ -25,6 +25,10 @@ that arrives after leaving the tab waits in page state until the person returns 
 `panel/browserHost.ts` sends every call to `/v0/management` on the origin that served the panel,
 and only those calls carry the key. The desktop app implements the same interface over its own
 connection to core, holding the key in its native side.
+
+A page that saves a file (a theme file, a log, the usage table) calls `kit/save.tsx`, which
+downloads it as a browser does. A host whose window cannot download has `saveFile`: the desktop
+app's saves the file in the Downloads folder, and the page shows the path it answers.
 
 A build then picks its pages and mounts the shell:
 
@@ -78,6 +82,21 @@ shell asks core for `GET /setup`: on a first run (`first_run`), when the address
 Setup opens in place of the Dashboard. The shell does not wait for the answer, so the Dashboard
 may show for an instant. A core without the call (it answers 404) gets no Setup page and nothing
 opens by itself. The page stays in the navigation after setup, as a status of the same things.
+Leaving the page scrolls the window to its top, so a page opened from a button far down Setup
+(Finish, a client's button) shows from its start.
+
+When core's scan found a CLIProxyAPI setup, its row on the page has "Bring it across". The button
+sends `POST /setup/import` as a dry run and shows core's report in its three lists (what comes
+across, what is different in pluxy, what does not come across and why), with the provider packages
+the accounts need; nothing is written until the person confirms. After the import the page reads
+Setup, the accounts and the packages again and ticks the providers the report says are needed, so
+Start installs them. The row also names the command that does the same, `pluxy import cpa`. A
+refusal is shown in the row with what to do about it; a core without the call (404) gets the
+command only. An import can change core's management key: the page then keeps the report on
+screen, shows a new key once if core made one, and offers to sign in again. A host without the
+`signOut` feature keeps the key itself and could not follow the change (the desktop app running
+its own core): there the page shows the dry run and does not offer the import while the report
+has a management key row.
 
 A host can add one button to each client the page lists as found:
 `corePages({ setup: { clientAction, clientActionHint } })` (`SetupOptions` in `kit/pages/setup.tsx`). `clientAction` takes the client's ID from core's
@@ -216,7 +235,8 @@ feature, it keeps the old label, unless the label named something this core does
   `config.yaml`, where it sets both on the file's Codex accounts.
 - "Host Address", "Port", "OAuth Credential Directory", "Enable TLS" and its paths, "Trusted
   proxies" and "Allow Remote Access": core runs them, but they set where core listens, who may
-  reach it, or the folder `-import-auth` reads, and core's settings call does not change them.
+  reach it, or the folder an import reads (`pluxy import cpa`, or "Bring it across" on the Setup
+  page), and core's settings call does not change them.
   They are edited in the Source tab.
 - Typing or pasting a client key, "Generate" and the "API key strength" meter: core makes every
   new key itself, at random. A specific key that a client already uses can be written in the
@@ -346,8 +366,8 @@ before it builds and tests core, so its tests always run against the panel of th
 
 ## What core serves
 
-`/panel/` and its files, only while the config sets `management_key` (the panel is a page for the
-management API; without the key, `/panel/` is not found, as the API is). Every reply carries a
+`/panel/` and its files. The panel is a page for the management API, and the management API is always
+on: a config without `management_key` is refused at start and on a reload. Every reply carries a
 Content Security Policy that allows scripts, styles and requests only to core itself, images
 and fonts also from `data:` URLs, and frames only from the extension pages site. The page itself is revalidated on each load; the other files
 have content-hashed names and are cached.

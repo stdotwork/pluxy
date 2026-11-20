@@ -32,7 +32,9 @@
 // Responses compaction (core's endpoint call for POST /v1/responses/compact) passes the client's
 // body through to POST {base_url}/responses/compact on a Responses account, summarizes through
 // POST {base_url}/chat/completions on a Chat account, and answers unsupported on a Messages or
-// Gemini account (compact.go).
+// Gemini account (compact.go). OpenAI's Images API (POST /v1/images/generations and
+// /v1/images/edits) passes through to the same paths under base_url on a Chat or Responses
+// account, with a multipart edit sent as multipart (images.go).
 package main
 
 import (
@@ -66,7 +68,7 @@ const (
 )
 
 func main() {
-	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check, Quota: quota, Endpoint: compact}); err != nil {
+	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check, Quota: quota, Endpoint: endpointCall}); err != nil {
 		fmt.Fprintln(os.Stderr, "openai-compatible:", err)
 		os.Exit(1)
 	}

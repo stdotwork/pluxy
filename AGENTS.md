@@ -146,11 +146,11 @@ A third variable, `PLUXY_MACOS_CLOUD_RUNNER`, sends some macOS jobs to another p
 runners, Namespace's. It holds a bare runner profile label, for example
 `namespace-profile-macos-26` (no `;key=value` settings: the runner check refuses them). When it is not set, those jobs run on `macos-latest`.
 
-Pull requests and merge groups use it only for the `tools` job in `next-app-tools-platforms.yml`:
-their other macOS jobs run on `macos-latest`, which leaves Namespace's Mac to that job, pushes, the
-daily runs and manual runs. The app tools' Terminal launch tests failed on GitHub's macOS runners in
-both runs tried on 2026-11-19 (Terminal did not take the launch's Apple event in time, error -1712),
-so that job stays on Namespace. Namespace runs one macOS job at a time, about 20 an hour. From 19:30
+Pull requests and merge groups do not use it: all their macOS jobs run on `macos-latest`, which
+leaves Namespace's Mac to pushes, the daily runs and manual runs. The app tools' Terminal launch
+tests failed on GitHub's macOS runners in both runs tried on 2026-11-19 (Terminal did not take the
+launch's Apple event in time, error -1712), which kept the `tools` job on Namespace; those tests now
+run one at a time. Namespace runs one macOS job at a time, about 20 an hour. From 19:30
 to 23:40 UTC on 2026-11-19 each merge group needed 6 to 8 of them, and three groups building at once
 shared that line with pull requests' runs: one group's macOS jobs ran over 2 hours, while the rest of
 a group's work takes about 23 minutes.

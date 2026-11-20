@@ -78,10 +78,14 @@
 
   .theme-card[data-unusable] {
     cursor: default;
+  }
+
+  /* Dimmed, except its Remove button. */
+  .theme-card[data-unusable] > :not(.btn, .confirm) {
     opacity: 0.7;
   }
 
-  .theme-card[data-unusable] input {
-    cursor: default;
+  .theme-card[data-unusable] .confirm {
+    flex-wrap: wrap;
   }
 }

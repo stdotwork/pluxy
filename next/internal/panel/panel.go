@@ -77,12 +77,11 @@ type file struct {
 	kind string
 }
 
-// Handler serves the panel files in assets at Prefix while on returns true (core passes whether
-// the management API is on); otherwise every panel path is not found. Register it for both
-// "/panel" and Prefix. The page is never cached without asking core; the other files have
-// content-hashed names, so browsers keep them. pagesOrigin returns the extension pages site's
-// origin for a request, or "" for none (nil: none).
-func Handler(assets fs.FS, on func() bool, pagesOrigin func(*http.Request) string) http.Handler {
+// Handler serves the panel files in assets at Prefix. Register it for both "/panel" and Prefix.
+// The page is never cached without asking core; the other files have content-hashed names, so
+// browsers keep them. pagesOrigin returns the extension pages site's origin for a request, or ""
+// for none (nil: none).
+func Handler(assets fs.FS, pagesOrigin func(*http.Request) string) http.Handler {
 	files := map[string]file{}
 	_ = fs.WalkDir(assets, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || strings.HasPrefix(path.Base(name), ".") {
@@ -103,10 +102,6 @@ func Handler(assets fs.FS, on func() bool, pagesOrigin func(*http.Request) strin
 	_, built := files["index.html"]
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !on() {
-			http.NotFound(w, r)
-			return
-		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

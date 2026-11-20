@@ -71,7 +71,10 @@ const ok = (r: Reply<unknown>) => r.status >= 200 && r.status < 300;
 /** A stored theme's file, read: usable, or why not. */
 type Read = { file: unknown; offered: Offered } | { problem: string };
 
-const BUILT_IN_ID = (id: string) => `${id} is a built-in theme's ID`;
+const BUILT_IN_ID = (id: string) =>
+  `"id" is ${id}, a built-in theme's ID. Change "id" in the file to your own, such as my/${id.split("/").pop()}, and add it again`;
+/** Core answered 404 for a theme this state listed: it was removed somewhere else. */
+const GONE = "core does not store this theme any more";
 
 export class ThemeState {
   private builtIns: Offered[];
@@ -93,6 +96,11 @@ export class ThemeState {
   resolved!: Resolved;
   /** Why the themes could not be read from core, when the last read failed. */
   problem?: string;
+  /**
+   * The theme core has on, when its stored file cannot be used, with why. The theme that was
+   * applied before stays applied.
+   */
+  unusable?: { id: string; problem: string };
 
   constructor(
     private readonly host: Host,
@@ -303,6 +311,7 @@ export class ThemeState {
       return;
     }
     this.problem = undefined;
+    this.unusable = undefined;
     // A file read before is kept only while core still lists it at the same size.
     const before = new Map(this.stored.map((s) => [s.id, s.bytes]));
     this.stored = r.body.themes ?? [];
@@ -320,12 +329,21 @@ export class ThemeState {
       }
       if (this.stored.some((s) => s.id === id)) {
         const why = await this.fetchFile(id, true);
-        if (why) this.problem = `${id}: ${why}`;
-        else {
+        if (why === undefined) {
           this.followed = mark;
           this.apply(id);
           return;
         }
+        if (why === GONE) {
+          // Removed since core listed it: as a theme nobody holds, below.
+          this.followed = mark;
+          this.apply(DEFAULT_THEME);
+          return;
+        }
+        // Core answered and the file is what is wrong, or core did not give the file.
+        const read = this.files.get(id);
+        if (read && "problem" in read) this.unusable = { id, problem: read.problem };
+        else this.problem = `${id}: ${why}`;
       } else {
         // Core names a theme nobody holds: the default shows, and core's choice is left alone.
         this.followed = mark;
@@ -340,8 +358,19 @@ export class ThemeState {
   /** Reads one stored theme's file from core. Returns why it cannot be used, or undefined. */
   private async fetchFile(id: string, byItself = false): Promise<string | undefined> {
     const r = await this.api.themeFile(id);
+    if (r.status === 404) {
+      this.forget(id);
+      return GONE;
+    }
     if (!ok(r)) return this.failure(r, byItself);
     return this.keep(r.body, id);
+  }
+
+  /** Takes a theme core no longer stores off the list. */
+  private forget(id: string) {
+    this.stored = this.stored.filter((s) => s.id !== id);
+    this.files.delete(id);
+    for (const fn of this.listeners) fn();
   }
 
   /** Themes an earlier version kept in prefs go to core once; one core refuses stays out. */
@@ -401,6 +430,7 @@ export class ThemeState {
       return this.failure(r);
     }
     this.followed = this.mark(id);
+    this.unusable = undefined;
     return undefined;
   }
 
@@ -458,15 +488,19 @@ export class ThemeState {
     });
   }
 
-  /** Removes a stored theme from core. Returns what failed, or undefined. */
+  /**
+   * Removes a stored theme from core. Returns what failed, or undefined; a theme core no longer
+   * stores is removed already.
+   */
   removeTheme(id: string): Promise<string | undefined> {
     return this.queue(async () => {
       const r = await this.api.removeStoredTheme(id);
-      if (!ok(r)) return this.failure(r);
+      if (!ok(r) && r.status !== 404) return this.failure(r);
       this.stored = this.stored.filter((s) => s.id !== id);
       this.files.delete(id);
       // Core goes back to the default when the theme that was on is removed.
-      if (this.themeId === id) {
+      if (this.themeId === id || this.unusable?.id === id) {
+        this.unusable = undefined;
         this.followed = this.mark("");
         this.apply(DEFAULT_THEME);
       } else this.update();

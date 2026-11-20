@@ -34,8 +34,9 @@ const Version = 0
 // captured body's BodyStopped; minor 18 adds ModelList.From; minor 19 adds a quota limit's
 // Feature; minor 20 adds llm.CodeAccountClosed; minor 21 adds what a package is (title, summary,
 // kind) to the manifest and registry index, and changes no call; minor 22 adds the account's
-// timeouts (Account.Timeouts).
-const Minor = 22
+// timeouts (Account.Timeouts); minor 23 adds alive frames (Call.Alive and TypeAlive); minor 24
+// adds Model.Capabilities.
+const Minor = 24
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -108,6 +109,10 @@ const (
 	// TypeDiagnostic is a frame an extension sends before a captured call's terminal event: its
 	// upstream exchanges (minor version 13). It is not an event.
 	TypeDiagnostic = "diagnostic"
+	// TypeAlive is a frame an extension sends during a call or turn whose Alive is set (minor
+	// version 23): upstream bytes arrived and the extension had sent core nothing else for a
+	// while. It carries nothing else, and core never passes it on.
+	TypeAlive = "alive"
 )
 
 // Session kinds (SessionInfo.Format).
@@ -147,6 +152,10 @@ type Call struct {
 	// core matched their models to the call already, so each model holds only its body
 	// conditions (payload.Select). Nil: none.
 	Payload *payload.Rules `json:"payload,omitempty"`
+	// Alive says core takes alive frames (TypeAlive) on a generate, count_tokens or endpoint
+	// call or a session.turn (minor version 23), and ends one on which it has received nothing
+	// at all for as long as the account's timeouts let the upstream stay quiet, plus a minute.
+	Alive bool `json:"alive,omitempty"`
 }
 
 // Login is the subject of a login call.
@@ -345,9 +354,11 @@ const (
 // budget as the maximum total identity value bytes (16 fields of 512 bytes).
 const MaxGrantSettings = MaxIdentityFields * MaxIdentityValue
 
-// ModelList sources (ModelList.From, minor version 18).
+// ModelList sources (ModelList.From, minor version 18; ModelListFromCatalogue is core's
+// model catalogue in merged lists).
 const (
 	ModelListFromAccount   = "account"
+	ModelListFromCatalogue = "catalogue"
 	ModelListFromExtension = "extension"
 )
 
@@ -392,6 +403,20 @@ type Model struct {
 	GenerationMethods []string `json:"generation_methods,omitempty"`
 	InputModalities   []string `json:"input_modalities,omitempty"`
 	OutputModalities  []string `json:"output_modalities,omitempty"`
+	// Capabilities is what the model supports and when it was deprecated (minor version 24).
+	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
+}
+
+// ModelCapabilities is what a model supports and when it was deprecated (minor version 24).
+type ModelCapabilities struct {
+	Tools            bool     `json:"tools"`
+	StructuredOutput bool     `json:"structured_output"`
+	Vision           bool     `json:"vision"`
+	PDF              bool     `json:"pdf"`
+	Reasoning        bool     `json:"reasoning"`
+	ReasoningLevels  []string `json:"reasoning_levels,omitempty"`
+	// DeprecatedAt is when the model was deprecated, in Unix seconds; 0 when not deprecated.
+	DeprecatedAt int64 `json:"deprecated_at,omitempty"`
 }
 
 // CheckResult is the result of a check call for an account that works.
@@ -519,8 +544,8 @@ type CapturedBody struct {
 	BodyStopped bool `json:"body_stopped,omitempty"`
 }
 
-// Reply is a frame an extension sends: an event, the result of describe, models, check or quota,
-// a login or refresh frame, or a diagnostic frame.
+// Reply is a frame an extension sends: an event, an alive frame, the result of describe, models,
+// check or quota, a login or refresh frame, or a diagnostic frame.
 type Reply struct {
 	llm.Event
 	Info       *Info        `json:"info,omitempty"`
