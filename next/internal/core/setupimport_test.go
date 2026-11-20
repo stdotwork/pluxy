@@ -151,6 +151,53 @@ claude-api-key:
 	}
 }
 
+// In a real or dry import into a running core, every listen row says core keeps listening on its
+// own address, with the file's reach in from and core's in to: the row of a file with no
+// server.host too, which today's core listened on every interface without.
+func TestSetupImportKeepsCoreListen(t *testing.T) {
+	setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeTestFile(t, cfgPath, `{"listen":"0.0.0.0:0","client_keys":["fake-client-key-1"],"management_key":"fake-mgmt-key"}`)
+	cpa := t.TempDir()
+	writeTestFile(t, filepath.Join(cpa, "config.yaml"), "port: 8317\n")
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+	want := c.Config().Listen
+	for _, dry := range []bool{true, false} {
+		code, rep, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: filepath.Join(cpa, "config.yaml"), DryRun: dry})
+		if code != http.StatusOK {
+			t.Fatalf("dry %v: %d %s", dry, code, body)
+		}
+		rows := map[string]management.ImportRow{}
+		for _, r := range rep.Changed {
+			rows[r.What] = r
+		}
+		for _, what := range []string{"server.host", "port"} {
+			r, ok := rows[what]
+			if !ok {
+				t.Fatalf("dry %v: %s is not under changed: %s", dry, what, body)
+			}
+			// The file's reach: every interface (no host) on 8317.
+			if !strings.Contains(r.From, "every interface") && r.From != "0.0.0.0:8317" {
+				t.Errorf("dry %v: %s from %q", dry, what, r.From)
+			}
+			if r.To != want {
+				t.Errorf("dry %v: %s to %q, want core's %q: %s", dry, what, r.To, want, body)
+			}
+			if !strings.Contains(r.Why, "core keeps listening on "+want) {
+				t.Errorf("dry %v: %s why %q", dry, what, r.Why)
+			}
+			if !strings.Contains(r.KeepWith, `"listen": "0.0.0.0:8317"`) {
+				t.Errorf("dry %v: %s keep_with %q", dry, what, r.KeepWith)
+			}
+		}
+	}
+}
+
 // A path that is not absolute, a missing file and a file that is not a config are refused, and
 // the refusal holds none of the file's secrets.
 func TestSetupImportRefusals(t *testing.T) {

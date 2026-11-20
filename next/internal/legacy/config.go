@@ -48,8 +48,9 @@ type Result struct {
 	Ledger *Ledger
 	// OldListen is the address today's core listened on: every interface (0.0.0.0) without a host.
 	OldListen string
-	// ListenKeys are the report items of the keys of the file that make up listen (server.host
-	// and server.port, in whichever spelling the file uses).
+	// ListenKeys are the report items of the keys that make up listen (server.host and
+	// server.port, in whichever spelling the file uses), and of server.host when the file sets no
+	// host: the import then has a row for it too.
 	ListenKeys []string
 	// Accounts maps each account the config's provider sections become to the item of the report
 	// that names it (ConfigItem).
@@ -1093,6 +1094,11 @@ func (x *translator) server() error {
 		x.mark(Changed, "server.host", Row{From: from, To: host,
 			Why:      "pluxy listens on this machine only unless told otherwise",
 			KeepWith: fmt.Sprintf(`"listen": %q in pluxy's config file, then restart core`, x.res.OldListen)})
+		if _, set := get(x.t, "server.host"); !set {
+			// The row stands for a key the file does not set; an import into a running core
+			// corrects it with the rest of the listen rows (importRows).
+			x.res.ListenKeys = append(x.res.ListenKeys, ConfigItem(x.fileKey("server.host")))
+		}
 	}
 	x.out["listen"] = net.JoinHostPort(host, strconv.Itoa(port))
 	for _, p := range []string{"server.host", "server.port"} {

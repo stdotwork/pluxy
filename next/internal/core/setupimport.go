@@ -209,15 +209,19 @@ func authDirKey(res *legacy.Result) string {
 // importRows adds what core decided to the report: listen, which cannot change while core runs,
 // the accounts core already has, and the chains it already has.
 func (c *Core) importRows(led *legacy.Ledger, p *importPlan) {
-	want, _ := p.res.Config["listen"].(string)
-	if have := c.Config().Listen; want != "" && want != have {
-		for _, it := range p.res.ListenKeys {
-			led.Update(it, func(list *int, row *legacy.Row) {
-				*list = legacy.Changed
-				row.Why = strings.Join(slices.DeleteFunc([]string{row.Why, "core keeps listening on " + have + ": listen cannot change while core runs"}, func(s string) bool { return s == "" }), "; ")
-				row.KeepWith = fmt.Sprintf(`"listen": %q in pluxy's config file, then restart core`, p.res.OldListen)
-			})
-		}
+	// mergeImport never writes listen (it cannot change while core runs): every listen row says
+	// core keeps its own, with the file's reach in from and core's address in to.
+	have := c.Config().Listen
+	for _, it := range p.res.ListenKeys {
+		led.Update(it, func(list *int, row *legacy.Row) {
+			*list = legacy.Changed
+			if row.From == "" {
+				row.From = p.res.OldListen
+			}
+			row.To = have
+			row.Why = "core keeps listening on " + have + ": listen cannot change while core runs"
+			row.KeepWith = fmt.Sprintf(`"listen": %q in pluxy's config file, then restart core`, p.res.OldListen)
+		})
 	}
 	byItem := map[string][]string{}
 	for id, item := range p.res.Accounts {
