@@ -10,7 +10,8 @@ import (
 // Renamed returns req as it goes to an account that knows its model as upstream: the model
 // renamed, in the request and in the client's body when the body names it (a top-level
 // "model"), so a body passed through unchanged asks for the same model. Everything else in the
-// body stays byte for byte.
+// body stays byte for byte, and the body's llm.Native.Parsed follows it where renaming leaves
+// its items, tools and origin as they were.
 func Renamed(req llm.Request, upstream string) llm.Request {
 	if upstream == "" || upstream == req.Model {
 		return req
@@ -19,6 +20,13 @@ func Renamed(req llm.Request, upstream string) llm.Request {
 	if req.Native != nil {
 		if body, ok := setModel(req.Native.Body, upstream); ok {
 			n := *req.Native
+			// The parsers of the formats whose model is in the body read it only into the
+			// request's model, so the renamed body still parses to the same items, tools and
+			// origin. Gemini's model is in the request path; a "model" in its body is a field
+			// the model has no place for, kept in the request's origin, so it changes them.
+			if n.IsParsed() && n.Format != llm.FormatGeminiGenerate {
+				n.Parsed = body
+			}
 			n.Body = body
 			req.Native = &n
 		}

@@ -34,8 +34,9 @@ const Version = 0
 // captured body's BodyStopped; minor 18 adds ModelList.From; minor 19 adds a quota limit's
 // Feature; minor 20 adds llm.CodeAccountClosed; minor 21 adds what a package is (title, summary,
 // kind) to the manifest and registry index, and changes no call; minor 22 adds the account's
-// timeouts (Account.Timeouts); minor 23 adds alive frames (Call.Alive and TypeAlive).
-const Minor = 23
+// timeouts (Account.Timeouts); minor 23 adds alive frames (Call.Alive and TypeAlive); minor 24
+// adds native-only generate calls (Info.ParsesNative and Call.NativeOnly).
+const Minor = 24
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -155,6 +156,11 @@ type Call struct {
 	// call or a session.turn (minor version 23), and ends one on which it has received nothing
 	// at all for as long as the account's timeouts let the upstream stay quiet, plus a minute.
 	Alive bool `json:"alive,omitempty"`
+	// NativeOnly says core left the request's items, tools and origin out of a generate call
+	// (minor version 24), to an extension that describes itself with Info.ParsesNative: they are
+	// what the parser of the request's native format makes of its native body, which the
+	// extension parses itself (ParseNative). The request's other fields are as in any call.
+	NativeOnly bool `json:"native_only,omitempty"`
 }
 
 // Login is the subject of a login call.
@@ -263,6 +269,10 @@ type Info struct {
 	// ProtocolMinor is the minor version of Protocol the extension implements; 0 when absent.
 	ProtocolMinor int      `json:"protocol_minor,omitempty"`
 	Operations    []string `json:"operations"`
+	// ParsesNative says the extension takes native-only generate calls (Call.NativeOnly,
+	// minor version 24): it parses a request's items, tools and origin from its native body
+	// itself, so core need not send them twice.
+	ParsesNative bool `json:"parses_native,omitempty"`
 	// LoginMethods are the ways login can add an account; present when Operations includes
 	// login.
 	LoginMethods []LoginMethod `json:"login_methods,omitempty"`

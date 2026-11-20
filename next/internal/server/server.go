@@ -64,6 +64,17 @@ type clientFormat struct {
 	noKeepAlive bool
 }
 
+// markParsed records that req's items, tools and origin are what its native body parses to
+// (llm.Native.Parsed), as they are right after a format's parser made req: core may then leave
+// them out of a generate call to an extension that parses the body itself. Every parser a
+// clientFormat or the Responses WebSocket reads a generate request with keeps the body it parsed
+// as the native body; the legacy completions parser keeps the Chat body it parsed.
+func markParsed(req *llm.Request) {
+	if req.Native != nil {
+		req.Native.Parsed = req.Native.Body
+	}
+}
+
 // bodyOnly adapts a parser for a format whose request is all in its body.
 func bodyOnly(parse func(body []byte) (llm.Request, error)) func(*http.Request, []byte) (llm.Request, error) {
 	return func(_ *http.Request, body []byte) (llm.Request, error) { return parse(body) }
@@ -323,6 +334,7 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 		f.writeError(w, asLLMError(err))
 		return
 	}
+	markParsed(&req)
 	req.DropPolicy = g.Config.DropPolicy
 	takeThinkingSuffix(&req)
 	f.nativeHeaders(r, &req)

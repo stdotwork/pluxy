@@ -8,6 +8,7 @@
 package llm
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"time"
@@ -135,6 +136,18 @@ type Native struct {
 	// the client names itself with (anthropicmessages.ClientHeaders), which an extension may send
 	// with a body it passes through.
 	Headers map[string]string `json:"headers,omitempty"`
+	// Parsed is core's own record, never sent: the body the request's Items, Tools and Origin
+	// were parsed from, by Format's parser. While it is still Body (IsParsed), an extension that
+	// parses Body gets the same Items, Tools and Origin, so core can leave them out of the call
+	// (protocol minor version 24). Code that changes Body leaves Parsed alone, so the two differ
+	// and core sends them, unless the change cannot change what the parser makes of them.
+	Parsed json.RawMessage `json:"-"`
+}
+
+// IsParsed reports whether n's Body is the body its request's Items, Tools and Origin were parsed
+// from (Parsed).
+func (n *Native) IsParsed() bool {
+	return n != nil && len(n.Body) > 0 && bytes.Equal(n.Parsed, n.Body)
 }
 
 // Native formats.

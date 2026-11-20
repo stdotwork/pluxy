@@ -320,7 +320,7 @@ func (s *server) handle(conn net.Conn) {
 			Event: llm.Event{Type: protocol.TypeDescribeResult},
 			Info: &protocol.Info{
 				ID: s.ext.ID, Version: s.ext.Version, Protocol: protocol.Version, ProtocolMinor: protocol.Minor,
-				Operations: s.ext.operations(), LoginMethods: s.ext.LoginMethods,
+				Operations: s.ext.operations(), LoginMethods: s.ext.LoginMethods, ParsesNative: true,
 			},
 		})
 	case protocol.OpGenerate:
@@ -383,6 +383,13 @@ func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none str
 	var err error
 	if h == nil {
 		err = &llm.Error{Code: llm.CodeUnsupported, Message: none, Scope: llm.ScopeRequest}
+	} else if call.NativeOnly && call.Request != nil {
+		// Core left the request's parsed form out: it is what the native body parses to.
+		if perr := protocol.ParseNative(&c.Request); perr != nil {
+			err = &llm.Error{Code: llm.CodeInternal, Message: "the request's native body does not parse: " + perr.Error()}
+		} else {
+			err = runHandler(ctx, h, c, out)
+		}
 	} else {
 		err = runHandler(ctx, h, c, out)
 	}

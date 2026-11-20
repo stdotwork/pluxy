@@ -569,6 +569,13 @@ func (e *Extension) CountTokens(ctx context.Context, account protocol.Account, r
 	return e.call(ctx, protocol.OpCountTokens, account, req)
 }
 
+// ParsesNative reports whether an extension that described itself with info takes native-only
+// generate calls (protocol.Call.NativeOnly): it implements minor version 24 or later and says
+// it parses a request's native body itself.
+func ParsesNative(info protocol.Info) bool {
+	return info.ProtocolMinor >= protocol.NativeOnlyMinor && info.ParsesNative
+}
+
 // ServesEndpoints reports whether an extension that described itself with info serves endpoint
 // calls: it implements minor version 7 or later and lists the endpoint operation.
 func ServesEndpoints(info protocol.Info) bool {
@@ -649,6 +656,11 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 	}
 	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req, Capture: s.capture != nil, Payload: rules, Alive: alive}
+	if op == protocol.OpGenerate && ParsesNative(e.info) && protocol.CanBeNativeOnly(req) {
+		// The extension parses the native body itself: send the request's content once.
+		sent := protocol.NativeOnly(req)
+		call.Request, call.NativeOnly = &sent, true
+	}
 	if err := protocol.WriteFrame(conn, call); err != nil {
 		if errors.Is(err, protocol.ErrFrameTooLarge) {
 			// The request is valid but too big to pass on in one frame; only a smaller request
