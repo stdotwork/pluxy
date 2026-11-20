@@ -66,10 +66,9 @@ account ID and settings, request model and native format, and operation, without
 
 ```bash
 go generate ./internal/panel   # builds the web panel core embeds; needs Bun (skip it for a core without the panel)
+go run ./cmd/pluxy-pack -out dist   # packs the provider extensions and their registry index for this platform
 go build -o pluxy ./cmd/pluxy
 go build -ldflags "-X github.com/stdotwork/pluxy/next/internal/buildinfo.Version=1.2.3 -X github.com/stdotwork/pluxy/next/internal/buildinfo.Commit=$(git rev-parse HEAD) -X github.com/stdotwork/pluxy/next/internal/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluxy ./cmd/pluxy   # sets the build info; without -ldflags the version is dev, and a git checkout still records its commit and time
-go build -o extensions/openai-compatible/openai-compatible ./extensions/openai-compatible
-go build -o extensions/claude/claude ./extensions/claude
 ```
 
 `config.json`:
@@ -78,32 +77,30 @@ go build -o extensions/claude/claude ./extensions/claude
 {
   "listen": "127.0.0.1:8400",
   "client_keys": ["choose-a-client-key"],
-  "management_key": "choose-a-management-key",
-  "extension": {
-    "manifest": "extensions/openai-compatible/pluxy-extension.json",
-    "accounts": [
-      {
-        "id": "openai",
-        "settings": {"base_url": "https://api.openai.com/v1"},
-        "credential": {"kind": "api_key", "api_key": "sk-..."}
-      }
-    ]
-  }
+  "management_key": "choose-a-management-key"
 }
 ```
 
 ```bash
-./pluxy serve -config config.json
+./pluxy serve -config config.json -bundled dist/bundled/index.json
 ```
 
-`pluxy -config config.json`, with no subcommand, serves too. With no file at the config's path,
-`pluxy serve` writes a first config there and starts on it: it listens on `127.0.0.1` port 8317,
-or a free port when 8317 is taken, with one new client key and a new management key, in a file
-only its user can read. Core logs the file's path and the address, never the keys; read them in
-the file. `pluxy init [-config file] [-port n]` writes the same config without starting core
-(`-port 0`: a free port), and never replaces a file. A config with no management key is refused
-at start, with a message saying how to add one. A first start installs no package: install the
-providers you use from the bundled registry ([Packages](#packages)) or the panel. Flags:
+`pluxy-pack` gives a source build the same provider packages a release ships. Without
+`-bundled` (or a `bundled` folder beside the program), core has no registry: Setup has no
+providers to offer and Extensions has nothing to install. Add Account has no sign-in methods
+unless the config names an extension directly. After starting core, open Setup in the panel and
+tick the providers you use, or install one by ID from the terminal with
+`./pluxy setup apply --pick pluxy/claude`.
+
+`pluxy -config config.json -bundled dist/bundled/index.json`, with no subcommand, serves too.
+With no file at the config's path, `pluxy serve -bundled dist/bundled/index.json` writes a first
+config there and starts on it: it listens on `127.0.0.1` port 8317, or a free port when 8317 is
+taken, with one new client key and a new management key, in a file only its user can read. Core
+logs the file's path and the address, never the keys; read them in the file. `pluxy init
+[-config file] [-port n]` writes the same config without starting core (`-port 0`: a free port),
+and never replaces a file. A config with no management key is refused at start, with a message
+saying how to add one. A first start installs no package: install the providers you use from the
+bundled registry ([Packages](#packages)) or the panel. Flags:
 
 - `-config`: the config file (default `config.json`).
 - `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
