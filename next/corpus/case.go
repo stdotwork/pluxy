@@ -87,8 +87,9 @@ type ClientRequest struct {
 	// User-Agent unless set here.
 	Headers map[string]string `json:"headers,omitempty"`
 	// Auth is "client-key" (default: the corpus client key as a bearer token), "management-key"
-	// (the corpus management key; a case that sends it turns the management API on), "none", or
-	// any other value, sent as the bearer token.
+	// (the corpus management key, which a case that sends it gets its core configured with;
+	// other cases' cores have a key they never send), "none", or any other value, sent as the
+	// bearer token.
 	Auth string `json:"auth,omitempty"`
 	// Body is a JSON body. BodyText is a literal body, for requests that are not valid JSON.
 	Body     json.RawMessage `json:"body,omitempty"`

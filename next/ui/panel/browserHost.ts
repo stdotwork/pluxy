@@ -116,7 +116,7 @@ export function browserHost(): Host {
     async signIn(candidate, keepOnDevice) {
       const r = await send("GET", "/status", undefined, candidate);
       if (r.status === 401) return "core refused this key";
-      if (r.status === 404) return "core's management API is off: set management_key in its config";
+      if (r.status === 404) return "no pluxy management API answered at this address";
       if (r.status !== 200) return r.status === 0 ? "core could not be reached" : `core answered ${r.status}`;
       remember = keepOnDevice;
       keep(candidate);

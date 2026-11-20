@@ -43,8 +43,9 @@ func TestGeminiResponsesCompact(t *testing.T) {
 				`"usageMetadata":{"promptTokenCount":144,"cachedContentTokenCount":20,"candidatesTokenCount":76,"thoughtsTokenCount":200}}`)
 		}
 		base := runCore(t, map[string]any{
-			"listen":      "127.0.0.1:0",
-			"client_keys": []string{clientKey},
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
 			"extension": map[string]any{
 				"manifest": geminiManifest(t),
 				"accounts": []any{map[string]any{
@@ -168,8 +169,9 @@ func TestGeminiResponsesCompact(t *testing.T) {
 		}
 		var sa json.RawMessage = srv.ServiceAccount("compact-proj", true)
 		base := runCore(t, map[string]any{
-			"listen":      "127.0.0.1:0",
-			"client_keys": []string{clientKey},
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
 			"extension": map[string]any{
 				"manifest": geminiManifest(t),
 				"accounts": []any{map[string]any{
@@ -201,8 +203,9 @@ func TestGeminiResponsesCompact(t *testing.T) {
 	t.Run("streaming refused", func(t *testing.T) {
 		srv := geminitest.New(t)
 		base := runCore(t, map[string]any{
-			"listen":      "127.0.0.1:0",
-			"client_keys": []string{clientKey},
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
 			"extension": map[string]any{
 				"manifest": geminiManifest(t),
 				"accounts": []any{map[string]any{

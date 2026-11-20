@@ -2,6 +2,9 @@
   "manifest_version": 1,
   "id": "pluxy/pi-setup",
   "version": "0.1.0",
+  "title": "Pi",
+  "summary": "Points the Pi coding agent at pluxy with its provider adapter, with a backup to undo it.",
+  "kind": "client",
   "app": {
     "version": 0,
     "tier": "native",
