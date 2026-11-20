@@ -276,7 +276,7 @@ func TestResolveThemeID(t *testing.T) {
 		{"flag wins", "acme/custom", "/tmp/Foo.json", `{"id":"other/id"}`, "acme/custom"},
 		{"pluxy file id", "", "/tmp/Foo.json", `{"theme_version":0,"id":"acme/from-file"}`, "acme/from-file"},
 		{"pluxy file invalid id", "", "/tmp/Foo.json", `{"theme_version":0,"id":"ok-id","name":"X Y"}`, "t3/foo"},
-		{"T3 file id", "", "/tmp/Foo.json", `{"id":"ok-id","name":"X Y"}`, "t3/ok-id"},
+		{"T3 file id without name", "", "/tmp/Foo.json", `{"id":"ok-id","name":""}`, "t3/ok-id"},
 		{"T3 file name", "", "/tmp/Foo.json", `{"name":"Nightfall"}`, "t3/nightfall"},
 		{"T3 file name trimmed", "", "/tmp/Foo.json", `{"name":"  My Theme!! "}`, "t3/my-theme"},
 		{"T3 file long name", "", "/tmp/Foo.json", `{"name":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`, "t3/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
