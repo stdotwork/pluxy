@@ -1,7 +1,8 @@
 // Package conformance is the extension conformance kit, version 0. It starts a provider
 // extension exactly as core does and checks it against the extension protocol
-// (../protocol/README.md): the handshake, streamed and unstreamed replies, a tool result's parts
-// and error flag, cancellation, a crash, shutdown and structured errors; for an extension that
+// (../protocol/README.md): the handshake, streamed and unstreamed replies, that a tool result
+// with media and an error flag is accepted and the call still finishes, cancellation, a crash,
+// shutdown and structured errors; for an extension that
 // signs in to accounts, login and
 // credential refresh; for one that lists models, its model list; and, when its fixture arranges
 // a quiet upstream, its alive frames.
@@ -352,10 +353,10 @@ func (k *kit) text(t *testing.T, stream bool) {
 	}
 }
 
-// toolResult checks that a tool result holding an image beside its text and reporting a failure
-// gets the normal reply: an extension that reports protocol 0.25 or later gets its parts and
-// error flag, and core gives one before it the text alone, so neither may fail the call over
-// them.
+// toolResult checks that an extension accepts a tool result holding an image beside its text and
+// reporting a failure (the parts and error flag protocol 0.25 added) and the call still finishes
+// with the normal reply. The kit cannot see the extension's upstream request, so it does not
+// check that the image and error flag reach it.
 func (k *kit) toolResult(t *testing.T) {
 	ext := k.start(t)
 	setup := k.target.Prepare(t, ScenarioText)
