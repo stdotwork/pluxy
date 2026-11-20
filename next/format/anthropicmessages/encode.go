@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
@@ -120,12 +121,13 @@ type outMessage struct {
 // are sent under the names ToolNames gives them, and each tool's parameter schema is made one
 // Messages takes (an object schema without a root union). A tool choice that names the tools the
 // model may call (an allowed list) is carried by defining only those function tools, since
-// Messages has no such list; every other tool, hosted ones included, is dropped. Reasoning from
-// another provider cannot be
-// replayed to a Messages upstream (its signatures do not verify), so it is dropped and reported,
-// as is the reasoning effort (thinking budgets are model-specific; the Claude provider sets
-// them). A user turn left with nothing to send after its unsupported parts are dropped is an
-// invalid_request error, never sent empty.
+// Messages has no such list; every other tool, hosted ones included, is dropped, and an allowed
+// name the request does not define beside them is reported as dropped. A list that leaves no tool
+// to define is an invalid_request error: nothing would hold the model to it. Reasoning from
+// another provider cannot be replayed to a Messages upstream (its signatures do not verify), so it
+// is dropped and reported, as is the reasoning effort (thinking budgets are model-specific; the
+// Claude provider sets them). A user turn left with nothing to send after its unsupported parts
+// are dropped is an invalid_request error, never sent empty.
 //
 // For a Claude model (a claude- name), system and developer messages after the conversation has
 // started stay where they are, so the prefix Claude caches stays the same when a client adds one:
@@ -220,6 +222,31 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			ft["strict"] = *t.Strict
 		}
 		tools = append(tools, marshal(ft, e.kept(t.Origin)))
+	}
+	if len(allowed) > 0 {
+		defined := map[string]bool{}
+		for _, t := range req.Tools {
+			if t.Type != llm.ToolNative {
+				defined[t.Name] = true
+			}
+		}
+		var missing []string
+		seen := map[string]bool{}
+		for _, name := range o.ToolChoice.Allowed {
+			if !defined[name] && !seen[name] {
+				seen[name] = true
+				missing = append(missing, name)
+			}
+		}
+		if len(tools) == 0 {
+			// Nothing is defined to narrow to, so the request cannot say which tools the model
+			// may call; sending it would let the model call any of them, or answer with text.
+			return nil, nil, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest,
+				Message: fmt.Sprintf("tool_choice allows no function tool this request defines: %s", strings.Join(missing, ", "))}
+		}
+		if len(missing) > 0 {
+			e.lose(llm.LossDropped, "tool_choice", fmt.Sprintf("allowed function tools this request does not define: %s", strings.Join(missing, ", ")))
+		}
 	}
 	if len(tools) > 0 {
 		out["tools"] = tools
