@@ -37,10 +37,12 @@ jobs:
   # packages the app's tests build and run: e2e/panelcore, e2e/testext and cmd/pluxy, with
   # everything they import on Linux, Windows and macOS. `go list` works the packages out from the
   # code being tested, so a new import counts at once. Its native jobs build the app and the kit,
-  # and some of their sessions start a test core with `go run ./e2e/panelcore`, which builds those
-  # same Go packages. So the native jobs run for next/app, next/ui, the workflows, go.mod and
-  # go.sum, and a change to those Go packages; a change that reaches only the app-manifest cases
-  # skips them (next-app-platforms-native).
+  # and their tools shard also builds the app tools' execution crate with the two libraries it
+  # uses (lib/program, lib/files); some of their sessions start a test core with
+  # `go run ./e2e/panelcore`, which builds those same Go packages. So the native jobs run for
+  # next/app, next/ui, the workflows, go.mod and go.sum, those app tools' crates and the app tools'
+  # Cargo.toml and Cargo.lock (which run the workflow too), and a change to those Go packages; a
+  # change that reaches only the app-manifest cases skips them (next-app-platforms-native).
   # next-app-tools-wsl is not a workflow: it says whether next-app-tools-platforms.yml runs its WSL
   # jobs.
   changes:
@@ -99,30 +101,53 @@ jobs:
             case $path in
               .github/workflows/ci.yml) for w in "${!run[@]}"; do run[$w]=true; done ;;
             esac
+            # The app tools the native tools shard builds (`cargo build -p execution` in
+            # next-app-platforms.yml, which builds lib/program and lib/files with it) are among them.
             case $path in
               next/app/* | next/ui/* | next/go.mod | next/go.sum | .github/workflows/next-app-platforms.yml | \
-                .github/workflows/ci.yml)
+                .github/workflows/ci.yml | next/app-tools/execution/* | next/app-tools/lib/program/* | \
+                next/app-tools/lib/files/* | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock)
                 native=true ;;
             esac
             case $path in next/* | .github/workflows/next-ci.yml) run[next-ci]=true ;; esac
-            case $path in next/* | .github/workflows/next-app.yml) run[next-app]=true ;; esac
+            case $path in next/* | .github/workflows/next-app.yml | .github/actions/apt-install/*) run[next-app]=true ;; esac
             case $path in
               next/app/* | next/ui/* | next/protocol/testdata/app-manifests/* | next/go.mod | next/go.sum | \
-                .github/workflows/next-app-platforms.yml)
+                .github/workflows/next-app-platforms.yml | next/app-tools/execution/* | \
+                next/app-tools/lib/program/* | next/app-tools/lib/files/* | next/app-tools/Cargo.toml | \
+                next/app-tools/Cargo.lock)
                 run[next-app-platforms]=true ;;
               # Any other file in next/ may be in one of those Go packages: the go-packages step
               # decides.
               next/*) printf '%s\0' "$path" >> "$RUNNER_TEMP/next-other" ;;
             esac
-            # The desktop app's files that exist for WSL run this workflow too, for its WSL jobs.
-            case $path in next/app-tools/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | .github/workflows/next-app-tools-platforms.yml) run[next-app-tools-platforms]=true ;; esac
+            # The desktop app's files the WSL jobs run (below) run this workflow too, for those jobs.
+            case $path in
+              next/app-tools/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | \
+                next/app/src-tauri/src/program.rs | next/app/src-tauri/src/program_tests.rs | \
+                next/app/src-tauri/src/spawn.rs | next/app/src-tauri/src/vault.rs | \
+                next/app/src-tauri/src/vault_windows.rs | next/app/src-tauri/src/owned/mod.rs | \
+                next/app/src-tauri/src/owned/windows.rs | next/app/src-tauri/src/managed.rs | \
+                next/app/src-tauri/src/private_windows.rs | .github/workflows/next-app-tools-platforms.yml)
+                run[next-app-tools-platforms]=true ;;
+            esac
             # What the WSL jobs build and run: pluxy/wsl, pluxy-program, pluxy-transactions (with its
             # fixture writer) and pluxy-files, which it depends on, the workspace's manifest and lock,
-            # pluxy/claude-code, and the desktop app's files that exist for WSL (its environments
-            # module and its wsl-named files). The app's general host files (program, vault, spawn,
-            # launcher, route) are left out: they change often, and their Linux and unit tests guard them.
+            # pluxy/claude-code, and the desktop app's files its real-WSL tests (`wsl_real_*`) run:
+            # its environments module and wsl-named files, the program host (program.rs, and
+            # program_tests.rs, which holds those tests' helpers), the spawn service (spawn.rs), the
+            # vault (vault.rs, vault_windows.rs), the Windows process code they start wsl.exe with
+            # (owned/mod.rs, owned/windows.rs), the start-when-free wait and private writes the
+            # program host and spawn service use (managed.rs) and the private folders and files the
+            # vault and environments module make (private_windows.rs). The launcher, the router and
+            # the Linux build's admission are left out: no real-WSL test runs them.
             case $path in
-              next/app-tools/wsl/* | next/app-tools/lib/program/* | next/app-tools/lib/transactions/* | next/app-tools/lib/files/* | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock | next/app-tools/claude-code/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | .github/workflows/next-app-tools-platforms.yml)
+              next/app-tools/wsl/* | next/app-tools/lib/program/* | next/app-tools/lib/transactions/* | next/app-tools/lib/files/* | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock | next/app-tools/claude-code/* | next/app/src-tauri/src/environments*.rs | next/app/src-tauri/src/*wsl* | \
+                next/app/src-tauri/src/program.rs | next/app/src-tauri/src/program_tests.rs | \
+                next/app/src-tauri/src/spawn.rs | next/app/src-tauri/src/vault.rs | \
+                next/app/src-tauri/src/vault_windows.rs | next/app/src-tauri/src/owned/mod.rs | \
+                next/app/src-tauri/src/owned/windows.rs | next/app/src-tauri/src/managed.rs | \
+                next/app/src-tauri/src/private_windows.rs | .github/workflows/next-app-tools-platforms.yml)
                 run[next-app-tools-wsl]=true ;;
             esac
             # A tool's manifest, and the workspace's and every member's Cargo.toml (`*` matches `/`

@@ -56,6 +56,14 @@ platform code of its own for them:
   system has them (the name is replaced even while another program has the old file open).
   `create_private_in` makes a new file relative to a folder's handle, private as it is made and
   shared with no other handle.
+- On Windows, `others_may_write` says whether an account other than this user, SYSTEM and
+  Administrators may change a path (its owner is another's, it has no access list, or an allow
+  entry that applies to it gives another account a right to write, add, delete or change the
+  list or owner, or is of a kind it does not read). `others_may_change` says why, for a file or
+  folder open as a handle, with TrustedInstaller trusted too (it owns `C:\` and Windows' own
+  folders), looking for any such change (`Change::Any`) or only for removing or renaming what a
+  folder holds, or the folder, or changing its list or owner (`Change::Entries`): what the
+  execution program's Windows terminal requires of its program and the folders above it.
 - `windows_name_problem` says why Windows would read a path's name as another file (a stream such
   as `a.json:x`, a name ending in a dot or a blank, a device name such as `NUL` or `COM1.json`), a
   plain string check the same on every platform.
@@ -91,7 +99,7 @@ The program side of the contract, for any tool (`pluxy-program`):
 | `Error` | The contract's error object: `invalid_request`, `unsupported`, `not_found`, `unavailable`, `internal`, `cancelled`, or any code. |
 | `read_frame`, `write_frame` | The framing: a four-byte big-endian length and UTF-8 JSON; a program's frames are at most `MAX_FRAME` (1 MiB). |
 | `MAX_BATCH` | The largest batch a producer may send, 48 KiB of JSON. |
-| `environment` | `PLUXY_ENVIRONMENT`, which the host sets when it runs a package's Linux program in a WSL distribution: `wsl:<distribution>:<user>`. `Identity::from_env` (so `run`) then checks that `WSL_DISTRO_NAME` is that distribution and that the effective user ID's name in `/etc/passwd` is that user; otherwise the program stops before hello with `pluxy expected WSL <d>/<u>, this is <d'>/<u'>`, so a record of a distribution or user made again under the same name, or a routing mistake, runs nothing. Anywhere but Linux the variable is refused. |
+| `environment` | `PLUXY_ENVIRONMENT`, which the host sets when it runs a package's Linux program in a WSL distribution: `wsl:<distribution>:<user>`, with `PLUXY_ENVIRONMENT_ACCOUNT`, `<user ID>:<home>` as the host's record of the user has them. `Identity::from_env` (so `run`) then checks that `WSL_DISTRO_NAME` is that distribution, that the effective user ID's name in `/etc/passwd` is that user, and that the ID and that entry's home are the ones named; otherwise the program stops before hello with `pluxy expected WSL <d>/<u>, this is <d'>/<u'>` or `pluxy expected <u> with user ID <n> and home <h>, this is user ID <n'> with home <h'>`, so a record of a distribution or user made again under the same name (or of a home since moved), or a routing mistake, runs nothing. A missing or unreadable account is refused too. Anywhere but Linux the variable is refused. |
 
 Each call runs on a thread of its own that ends with the call; the thread that reads stdin
 routes cancels, the answers to a call's own calls, vault and jobs frames, and a job's acks. An
@@ -1062,7 +1070,20 @@ desktop app's list): `x-terminal-emulator` (System terminal), `gnome-terminal` (
 `xfce4-terminal` (`-x`), `mate-terminal` (`-x`), `kitty`, `alacritty`, `ghostty` and `xterm`, each
 running the program after `-e` unless noted. A terminal launch runs `<terminal> <flag> <program>
 <args>`; a direct one `<program> <args>`. The program must be an executable file, the working folder
-an existing absolute folder.
+an existing absolute folder. The terminal finds the program by that path as it starts, after the
+app's checks, so the app refuses a terminal launch whose program another user could change or
+redirect by then: one below a folder others or a group may write (a sticky folder such as `/tmp`
+aside, and the person's own private group, as Homebrew on Linux and a umask of 002 make them: a
+group no other user in `/etc/passwd` and `/etc/group` has, users and groups from other sources
+such as LDAP being unseen),
+reached through a link such a user could change, through `/proc`, or that such a group may write
+(`../app/app-host/README.md`, "Launches and managed runtimes"). `launch` refuses, before the host
+is asked, a launch of a terminal of the list above whose argv starts with its exec flag but that
+does not name as its `program` the argument right after it, one that names a `program` whose
+argv does not start with that flag, and on Linux and macOS a launch that names a `program` but
+is no terminal's: the app checks `program` as the file the terminal runs. A terminal of the list
+started without its exec flag and naming no `program` (its own window, or its own options) is a
+direct launch of it.
 
 A launch's `lifetime` is `detached` or `managed`, and **`managed` applies to direct launches only**.
 The host keeps and stops a managed runtime through the process it started, and for a terminal
@@ -1110,7 +1131,26 @@ and then waits for Enter (`console`) or stays at a `cmd.exe /D` or `powershell.e
 -NoProfile` prompt, both from the System32 folder Windows reports (never the launch's
 `SystemRoot`). There is no Windows Terminal kind:
 `wt.exe` splits its command line its own way, so the arguments confirmed would not be the ones
-it runs.
+it runs. In the native test's build (feature `native-test`) nobody is at the window, so the
+`console` window does not wait for Enter, and the shell after the program runs one fixed command
+that writes its working folder to `pluxy-after-exit` in that folder, then exits; a normal build
+does neither.
+
+Windows cannot run an open file, so the execution program runs the program by its path, and
+first holds it: it opens the program and every folder above it so that none of them can be
+renamed, removed or replaced, nor the program written, until the program has started. With all of
+them held it checks that the path names exactly what it holds (the program's final path is the
+path named, so no link, junction or short name is on the way, and it is the same file by volume
+serial number and file ID), that the program is a PE image (`.exe` or `.com` starting with `MZ`,
+and no `.com.exe` beside a `.com`), and, through the held handles, that no account but the user,
+SYSTEM, Administrators and TrustedInstaller may change the program or its folder (another
+account's file there would load as one of the program's libraries), nor remove or rename what a
+folder above holds (owner and access list, `pluxy_files::others_may_change`; adding to a folder
+above is allowed, as every account may in `C:\`). So a program another account swapped in after
+the app checked it, or could swap in before it starts, never runs. Otherwise the window says
+`pluxy: will not run "<program>": "<path>" …`, naming the path and why, and the program does not
+start. The user's own processes, and administrators', can still swap the program before it is
+held, as on Linux and macOS.
 
 A program is a PE image (`.exe` or `.com` starting with `MZ`), looked up as `<name>.com`,
 `.exe`, `.bat`, `.cmd` in each search path folder in turn. A batch file runs only as an npm, pnpm
@@ -1140,8 +1180,19 @@ private folder in the per-user temporary folder with a Unix socket and a `.comma
 Terminal open the file (`/usr/bin/open -a`), and hands the program, arguments, folder and
 environment over the socket to the first connection from this user; the file only runs
 `<execution> attach <socket>`, so nothing of the launch is written to a file or read by a shell.
-In the window, the program runs with the launch's environment and the window's own `TERM…`,
-`LC_TERMINAL…` and `PATH`. When macOS holds `open` back for 20 seconds (a quarantine or a
+The program itself goes over the socket too, as the file the app confirmed and checked: the app
+gives it to the execution program as descriptor 3, and a terminal launch without it is refused.
+That refusal is silent today: the app does not read the terminal mode's exit code or error
+output, so an app that gives no descriptor (one older than this execution program) sees its
+terminal launches start and no window open. A terminal launch must name as its `program` the
+argument right after `--`.
+In the window, that file runs, by the path it has then, once no other user but a member of
+`admin` can change it or a folder above it, each on a volume that keeps ownership (not one with
+Finder's "Ignore ownership on this volume"), and that path still names it (the rule the app holds
+a direct launch's program to); otherwise the window says which path another user could change,
+and nothing runs. A file put at the program's path since the app checked it never runs. The
+program runs with the launch's environment and the window's own `TERM…`, `LC_TERMINAL…` and
+`PATH`. When macOS holds `open` back for 20 seconds (a quarantine or a
 permission prompt), the launch fails as blocked; when no window takes it within 60 seconds, as
 expired. A launch whose hand-over would be over 1 MiB (the program, arguments, folder and
 environment) is refused before Terminal opens.
@@ -1161,10 +1212,10 @@ either before the host is asked.
 
 `pluxy/wsl` (program `bin/pluxy-wsl.exe`, Windows only: on any other system every operation answers
 `unsupported`) tells pluxy's desktop app which WSL distributions and users there are, checks one,
-and prepares launches inside it. It is groundwork for the later WSL support: the app does not run
-native tools on Windows yet, so it does not use this tool, and its side (setting a client up in a
-distribution by running the client package's own Linux program there, through `wsl.exe`) is not
-built. This tool only reads. It writes nothing
+and prepares launches inside it. The app uses it to list and check the distributions and users a
+client page offers and to prepare a launch there; it then runs the client package's own Linux
+program in the distribution through `wsl.exe` itself ([Tools in
+WSL](../app/app-host/README.md#tools-in-wsl-windows)). This tool only reads. It writes nothing
 anywhere and never starts a launch. It runs only Windows' own `wsl.exe`, from System32 as
 `GetSystemDirectoryW` reports it: with no window, empty standard input, an environment of
 `SystemRoot`, `WINDIR` and `WSL_UTF8=1` only, its output read while it runs and capped, and a

@@ -5,14 +5,24 @@
 // folders); it writes each address it is asked to open into a log and opens nothing.
 
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+/** The OpenSSL to run: on macOS Homebrew's OpenSSL 3 when there is one (the system's own is
+ * LibreSSL), otherwise the first on PATH. */
+function openssl(): string {
+  if (process.platform === "darwin")
+    for (const p of ["/opt/homebrew/opt/openssl@3/bin/openssl", "/usr/local/opt/openssl@3/bin/openssl"])
+      if (existsSync(p)) return p;
+  return "openssl";
+}
 
 /** Makes a certificate authority and a server certificate for 127.0.0.1 in dir. */
 export function certificates(dir: string): { ca: string; cert: string; key: string } {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const bin = openssl();
   const ssl = (args: string[]) => {
-    const r = spawnSync("openssl", args, { cwd: dir, stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" });
+    const r = spawnSync(bin, args, { cwd: dir, stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" });
     // r.error: openssl did not run at all (not found, or no such working folder).
     if (r.error) throw new Error(`openssl ${args[0]} could not run in ${dir}: ${r.error.message}`);
     if (r.status !== 0) throw new Error(`openssl ${args[0]}: exit ${r.status}: ${r.stderr}`);

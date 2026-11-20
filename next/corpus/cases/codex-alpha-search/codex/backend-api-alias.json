@@ -59,7 +59,7 @@
         "headers": {
           "Accept": "application/json",
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "Originator": "codex_cli_rs",
           "Session_id": "sess-corpus",

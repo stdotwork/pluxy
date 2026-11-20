@@ -1,0 +1,113 @@
+name: Install Ubuntu packages
+description: >-
+  Installs Ubuntu packages with apt from a package cache, and from other mirrors when the runner's
+  own Ubuntu mirrors fail or stall.
+# Why: Ubuntu's mirrors fail or crawl now and then, and every job waiting on them failed with them.
+# On 2026-11-19 GitHub's runners could not reach azure.archive.ubuntu.com and Namespace's could not
+# reach archive.ubuntu.com or security.ubuntu.com, from about 12:13 to 12:36 UTC, and apt retried
+# each package in turn until the jobs failed. About half of GitHub's Linux runners also fetch from a
+# mirror (us-east-2.ec2.archive.ubuntu.com) at 50 to 200 kB/s, where a 98 MB download took 9 to 30
+# minutes, against seconds from azure.archive.ubuntu.com.
+#
+# So the packages come from a cache when they can. apt checks each cached file against the signed
+# package index it just fetched, downloads any that are missing, stale or don't match, and the step
+# then keeps the cache to the versions now installed. Only jobs given `save: 'true'` save it, and
+# only from pushes and manual runs: a cache saved on a pull request or merge-group ref serves only
+# that ref. Whatever must be downloaded is fetched with a time limit; when the runner's mirrors
+# fail or run out of time, the Ubuntu sources are pointed at the mirrors in FALLBACK_MIRRORS in
+# turn. Every mirror serves the same archive, signed by Ubuntu's key, which apt checks, so the
+# mirror is not trusted with what is installed.
+inputs:
+  packages:
+    description: The packages to install, separated by spaces.
+    required: true
+  cache:
+    description: >-
+      The cache's name: one per set of packages and Ubuntu release. A job that installs a subset
+      of another job's packages may restore that job's cache and leave saving it to that job.
+    required: true
+  save:
+    description: "'true' to save the cache from pushes and manual runs."
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Restore the packages
+      id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/pluxy-apt-debs
+        # Never an exact match: the newest saved set, whose name hashes its file names.
+        key: apt-debs-${{ inputs.cache }}-${{ github.sha }}
+        restore-keys: apt-debs-${{ inputs.cache }}-
+    - name: Install the packages
+      id: apt
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        CACHE: ${{ inputs.cache }}
+        # Checked to serve noble and resolute, with their -security pockets, on 2026-11-19. They
+        # are run by other organisations than Canonical's and Microsoft's mirrors.
+        FALLBACK_MIRRORS: https://mirrors.edge.kernel.org/ubuntu https://mirrors.mit.edu/ubuntu
+      run: |
+        set -uo pipefail
+        debs="$HOME/.cache/pluxy-apt-debs"
+        mkdir -p "$debs/partial"
+        cached="$(find "$debs" -maxdepth 1 -name '*.deb' | wc -l)"
+        apt=(apt-get -o Dir::Cache::Archives="$debs" -o Acquire::Retries=2 \
+          -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+        # The package lists, then every file the install needs, each within a time limit, so a dead
+        # or crawling mirror costs minutes, not the job. apt-get update reports most failed indexes
+        # as warnings and keeps the old lists, so the download is what decides.
+        fetch() {
+          sudo timeout 180 "${apt[@]}" update
+          sudo timeout 600 "${apt[@]}" install -y --download-only $PACKAGES
+        }
+        if ! fetch; then
+          # Set aside the sources of the Ubuntu archive: those naming an *.ubuntu.com host's /ubuntu
+          # path (not ports' /ubuntu-ports or ESM's /apps/ubuntu), and those reading a mirror list
+          # (GitHub's image, which Namespace's runners also use, names
+          # mirror+file:/etc/apt/apt-mirrors.txt). Other sources (Microsoft's, Google's) stay.
+          pattern='https?://([a-z0-9-]+\.)*ubuntu\.com/ubuntu([/[:space:]]|$)|mirror\+file:'
+          mapfile -t sources < <(sudo grep -lE "$pattern" /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null)
+          if [ "${#sources[@]}" -eq 0 ]; then
+            echo "::error::apt could not fetch the packages, and no Ubuntu archive source was found to replace"
+            exit 1
+          fi
+          aside="$(mktemp -d)"
+          for f in "${sources[@]}"; do echo "setting aside $f"; sudo mv "$f" "$aside/"; done
+          . /etc/os-release
+          fetched=false
+          for mirror in $FALLBACK_MIRRORS; do
+            echo "::warning::apt could not fetch the packages from the runner's Ubuntu mirrors; trying $mirror"
+            printf 'Types: deb\nURIs: %s\nSuites: %s %s-updates %s-backports %s-security\nComponents: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' \
+              "$mirror" "$VERSION_CODENAME" "$VERSION_CODENAME" "$VERSION_CODENAME" "$VERSION_CODENAME" |
+              sudo tee /etc/apt/sources.list.d/pluxy-fallback.sources
+            if fetch; then fetched=true; break; fi
+          done
+          if [ "$fetched" != true ]; then
+            echo "::error::apt could not fetch the packages from the runner's Ubuntu mirrors or from $FALLBACK_MIRRORS"
+            exit 1
+          fi
+        fi
+        sudo "${apt[@]}" install -y $PACKAGES || exit 1
+        # Keep only the files of the versions installed now, matched on the name and version as apt
+        # writes them in a file name (an epoch's colon as %3a). Not on the architecture: 26.04's
+        # files carry the variant (amd64v3) where dpkg reports amd64.
+        dpkg-query -W -f='${Package}_${Version}\n' | sed 's/:/%3a/g' > "$RUNNER_TEMP/installed-debs"
+        sudo rm -rf "$debs/partial" "$debs/lock"
+        for f in "$debs"/*.deb; do
+          [ -e "$f" ] || continue
+          name="$(basename "$f")"
+          grep -qxF "${name%_*}" "$RUNNER_TEMP/installed-debs" || sudo rm -f "$f"
+        done
+        kept="$(find "$debs" -maxdepth 1 -name '*.deb' | wc -l)"
+        echo "apt packages: $cached restored from the cache, $kept kept ($(du -sh "$debs" | cut -f1))"
+        echo "key=apt-debs-$CACHE-$(find "$debs" -maxdepth 1 -name '*.deb' -printf '%f\n' | sort | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+    - name: Save the packages
+      if: inputs.save == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.apt.outputs.key != steps.restore.outputs.cache-matched-key
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.cache/pluxy-apt-debs
+        key: ${{ steps.apt.outputs.key }}

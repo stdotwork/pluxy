@@ -179,7 +179,7 @@ func (r *recorder) types() string {
 
 func relayFrames(frames ...[]byte) (*recorder, error) {
 	rec := &recorder{}
-	r := newRelay(rec, "swe-2", nil)
+	r := newRelay(rec, "swe-2", nil, nil)
 	return rec, r.run(context.Background(), bytes.NewReader(bytes.Join(frames, nil)))
 }
 
@@ -264,14 +264,14 @@ func TestStatusErrors(t *testing.T) {
 	if e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeModel {
 		t.Errorf("quota with no period: %+v", e)
 	}
-	if e := trailerError([]byte(`{"error":{"code":"canceled","message":"x"}}`)); e.Status != 499 {
+	if e := trailerError([]byte(`{"error":{"code":"canceled","message":"x"}}`), nil); e.Status != 499 {
 		t.Errorf("cancelled: status %d, want 499", e.Status)
 	}
 }
 
-// A refusal keeps its body as the error's Raw only when the message is the Connect body's own. Any
-// other body's message is its cleaned text, and the body itself, which the client and the
-// account's last error would get as it is, is not kept: it may hold part of the token.
+// A refusal with a Connect error body keeps a Raw: the body rebuilt from its cleaned code and
+// message. Any other body's message is its cleaned text, and the body itself, which the client and
+// the account's last error would get as it is, is not kept: it may hold part of the token.
 func TestRefusalRaw(t *testing.T) {
 	const tok = "devin-raw-secret-0f1e2d3c4b5a69788796a5b4c3d2e1f0"
 	for _, tc := range []struct {

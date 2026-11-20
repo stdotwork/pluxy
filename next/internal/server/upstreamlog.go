@@ -265,7 +265,8 @@ func trimStop(r *protocol.Redactor, s string) string {
 // longest form of a secret that holds a character other than a key's: more than a spelling of
 // the secret with escapes of up to 11 bytes for each of its bytes takes, the bound a streamed
 // body's redaction uses for what it holds back of one. The redaction removes spellings with
-// deeper escapes too; the window does not hold a part of one of those that the gap cut.
+// deeper escapes too (a percent escape nested 6 times takes 13 bytes for a byte); the window does
+// not hold a part of one of those that the gap cut.
 const gapBytesPerFormByte = 12
 
 // gapWindow returns how many bytes beside a cut trimGap leaves out for r's secrets: 12 for each

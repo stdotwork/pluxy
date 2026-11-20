@@ -1,6 +1,7 @@
 package anthropicmessages
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,8 @@ const defaultMaxTokens = 32000
 
 type encoder struct {
 	losses []llm.Loss
+	// keepModelTurn: the conversation's trailing assistant turns are kept (EncodeOptions).
+	keepModelTurn bool
 }
 
 func (e *encoder) lose(kind, path, detail string) {
@@ -23,7 +26,7 @@ func (e *encoder) lose(kind, path, detail string) {
 }
 
 // kept returns o's kept fields when o came from Messages, so they are written back; for another
-// format it reports them as dropped.
+// format it carries a valid cache_control field and reports any other kept fields as dropped.
 func (e *encoder) kept(o *llm.Origin) json.RawMessage {
 	if o == nil {
 		return nil
@@ -31,8 +34,42 @@ func (e *encoder) kept(o *llm.Origin) json.RawMessage {
 	if o.Format == format {
 		return o.Raw
 	}
+	if m := rawjson.Object(o.Raw); m != nil {
+		if cc, ok := validCacheControl(m["cache_control"]); ok {
+			if rest := rawjson.Rest(m, "cache_control"); len(rest) > 0 {
+				r := *o
+				r.Raw = rest
+				e.losses = append(e.losses, rawjson.Losses(&r, format)...)
+			}
+			return rawjson.Encode(map[string]json.RawMessage{"cache_control": cc})
+		}
+	}
 	e.losses = append(e.losses, rawjson.Losses(o, format)...)
 	return nil
+}
+
+// validCacheControl reports whether raw is a Messages ephemeral cache_control object (with optional
+// ttl "5m" or "1h") and returns its trimmed JSON.
+func validCacheControl(raw json.RawMessage) (json.RawMessage, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, false
+	}
+	var obj map[string]any
+	if json.Unmarshal(trimmed, &obj) != nil || obj == nil {
+		return nil, false
+	}
+	typ, _ := obj["type"].(string)
+	if typ != "ephemeral" {
+		return nil, false
+	}
+	if ttlVal, hasTTL := obj["ttl"]; hasTTL && ttlVal != nil {
+		ttlStr, ok := ttlVal.(string)
+		if !ok || (ttlStr != "5m" && ttlStr != "1h") {
+			return nil, false
+		}
+	}
+	return trimmed, true
 }
 
 func pathOf(o *llm.Origin, fallback string) string {
@@ -64,6 +101,13 @@ type outMessage struct {
 	role    string
 	turn    string
 	content []json.RawMessage
+	// paths names where each content block came from in the source body, and path the message.
+	paths []string
+	path  string
+	// raw is the message as a Messages client sent it (RepairTurns); changed says its content
+	// was repaired, so it is written again.
+	raw     json.RawMessage
+	changed bool
 	// joinNext: the next item of the same role goes in this message too. A replayed thinking
 	// block opens the assistant turn its tool calls and text belong to.
 	joinNext bool
@@ -78,10 +122,29 @@ type outMessage struct {
 // replayed to a Messages upstream (its signatures do not verify), so it is dropped and reported,
 // as is the reasoning effort (thinking budgets are model-specific; the Claude provider sets
 // them). A user turn left with nothing to send after its unsupported parts are dropped is an
-// invalid_request error, never sent empty. It does not look at req.Native; callers that can pass
-// the native body through do so first.
+// invalid_request error, never sent empty.
+//
+// For a Claude model (a claude- name), system and developer messages after the conversation has
+// started stay where they are, so the prefix Claude caches stays the same when a client adds one:
+// placeSystem says how. Other models get every system message in the system prompt. The
+// conversation then gets the repairs RepairTurns describes, each reported. It does not look at
+// req.Native; callers that can pass the native body through do so first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
-	e := &encoder{}
+	return EncodeRequestWith(req, EncodeOptions{})
+}
+
+// EncodeOptions changes how EncodeRequestWith builds a body.
+type EncodeOptions struct {
+	// KeepModelTurn keeps the conversation's trailing assistant turns on every model: they are
+	// the end of the conversation, not a prefill the reply continues. It is for requests that
+	// Anthropic takes ending on the model's turn, such as on-demand compaction; a generation
+	// leaves it off. Every other repair still runs.
+	KeepModelTurn bool
+}
+
+// EncodeRequestWith builds a Messages request body as EncodeRequest does, changed by opts.
+func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
+	e := &encoder{keepModelTurn: opts.KeepModelTurn}
 	o := req.Options
 	out := map[string]any{"model": req.Model, "stream": req.Stream}
 	if o.MaxOutputTokens != nil {
@@ -101,8 +164,20 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	if o.ReasoningEffort != "" {
 		e.lose(llm.LossDropped, "reasoning_effort", "Messages takes a thinking budget, which depends on the model")
 	}
-	if o.ResponseFormat != nil && o.ResponseFormat.Type != llm.ResponseFormatText {
-		e.lose(llm.LossDropped, "response_format", "Messages has no response format")
+	if rf := o.ResponseFormat; rf != nil && rf.Type != "" && rf.Type != llm.ResponseFormatText {
+		switch {
+		case rf.Type == llm.ResponseFormatJSONSchema && rawjson.Object(rf.Schema) != nil:
+			out["output_config"] = map[string]any{
+				"format": map[string]any{
+					"type":   "json_schema",
+					"schema": rf.Schema,
+				},
+			}
+		case rf.Type == llm.ResponseFormatJSONSchema:
+			e.lose(llm.LossDropped, "response_format", "Messages output_config.format json_schema requires a schema object")
+		default:
+			e.lose(llm.LossDropped, "response_format", "Messages output_config.format only supports json_schema")
+		}
 	}
 
 	names := ToolNames(req)
@@ -139,14 +214,16 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	searches := scanWebSearches(req.Items)
 	var system []json.RawMessage
 	var msgs []*outMessage
-	add := func(role, turn string, block json.RawMessage) {
+	add := func(role, turn, path string, block json.RawMessage) {
 		if n := len(msgs); n > 0 && msgs[n-1].role == role && (msgs[n-1].turn == turn || msgs[n-1].joinNext) {
 			msgs[n-1].joinNext = false
 			msgs[n-1].content = append(msgs[n-1].content, block)
+			msgs[n-1].paths = append(msgs[n-1].paths, path)
 			return
 		}
-		msgs = append(msgs, &outMessage{role: role, turn: turn, content: []json.RawMessage{block}})
+		msgs = append(msgs, &outMessage{role: role, turn: turn, path: turn, content: []json.RawMessage{block}, paths: []string{path}})
 	}
+	claude := strings.HasPrefix(claudeName(req.Model), "claude-")
 	for i, it := range req.Items {
 		p := pathOf(it.Origin, fmt.Sprintf("items[%d]", i))
 		turn := turnOf(it, i)
@@ -155,20 +232,32 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			if len(it.Content) == 0 && !it.TextContent && it.Origin != nil && it.Origin.Format != format && len(it.Origin.Raw) > 0 {
 				// An empty message from another format only holds its own fields; they are
 				// reported, and nothing is sent for it.
-				e.kept(it.Origin)
+				e.losses = append(e.losses, rawjson.Losses(it.Origin, format)...)
 				break
 			}
-			e.kept(it.Origin)
-			blocks, sendable, dropped := e.content(it, p)
+			blocks, paths, sendable, dropped := e.content(it, p)
 			if it.Role == llm.RoleUser && dropped && !sendable {
 				return nil, nil, invalid("%s: nothing in this user turn can be sent to Messages", p)
 			}
-			switch it.Role {
-			case llm.RoleSystem, llm.RoleDeveloper:
+			if it.Origin != nil && it.Origin.Format != format {
+				if len(blocks) > 0 {
+					if raw := e.kept(it.Origin); len(raw) > 0 && rawjson.Object(blocks[len(blocks)-1])["cache_control"] == nil {
+						blocks[len(blocks)-1] = rawjson.Merge(blocks[len(blocks)-1], raw)
+					}
+				} else {
+					e.losses = append(e.losses, rawjson.Losses(it.Origin, format)...)
+				}
+			}
+			switch {
+			case (it.Role == llm.RoleSystem || it.Role == llm.RoleDeveloper) && claude && len(msgs) > 0:
+				for _, b := range blocks {
+					add(roleSystem, turn, p, b)
+				}
+			case it.Role == llm.RoleSystem || it.Role == llm.RoleDeveloper:
 				system = append(system, blocks...)
 			default:
-				for _, b := range blocks {
-					add(it.Role, turn, b)
+				for k, b := range blocks {
+					add(it.Role, turn, paths[k], b)
 				}
 			}
 		case llm.ItemTypeToolCall:
@@ -184,23 +273,23 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 				}
 				input = json.RawMessage("{}")
 			}
-			add(llm.RoleAssistant, turn, marshal(map[string]any{"type": "tool_use", "id": it.CallID, "name": toolName(names, it.Name), "input": input}, e.kept(it.Origin)))
+			add(llm.RoleAssistant, turn, p, marshal(map[string]any{"type": "tool_use", "id": it.CallID, "name": toolName(names, it.Name), "input": input}, e.kept(it.Origin)))
 		case llm.ItemTypeToolResult:
-			add(llm.RoleUser, turn, marshal(map[string]any{"type": "tool_result", "tool_use_id": it.CallID, "content": it.Output}, e.kept(it.Origin)))
+			add(llm.RoleUser, turn, p, marshal(map[string]any{"type": "tool_result", "tool_use_id": it.CallID, "content": it.Output}, e.kept(it.Origin)))
 		case llm.ItemTypeReasoning:
 			if it.Origin != nil && it.Origin.Format == format {
-				add(llm.RoleAssistant, turn, marshal(map[string]any{"type": "thinking", "thinking": it.Text}, it.Origin.Raw))
+				add(llm.RoleAssistant, turn, p, marshal(map[string]any{"type": "thinking", "thinking": it.Text}, it.Origin.Raw))
 				break
 			}
 			if sig := replayedSignature(it); sig != "" {
-				add(llm.RoleAssistant, turn, marshal(map[string]any{"type": "thinking", "thinking": it.Text, "signature": sig}, nil))
+				add(llm.RoleAssistant, turn, p, marshal(map[string]any{"type": "thinking", "thinking": it.Text, "signature": sig}, nil))
 				msgs[len(msgs)-1].joinNext = true
 				break
 			}
 			e.lose(llm.LossDropped, p, "Messages cannot replay reasoning from another provider")
 		case llm.ItemTypeNative:
 			if it.Origin != nil && it.Origin.Format == format {
-				add(llm.RoleAssistant, turn, it.Origin.Raw)
+				add(llm.RoleAssistant, turn, p, it.Origin.Raw)
 				break
 			}
 			if c, ok := asWebSearchCall(it); ok {
@@ -211,7 +300,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 					msgs[n-1].joinNext = true
 				}
 				for _, b := range blocks {
-					add(llm.RoleAssistant, turn, b)
+					add(llm.RoleAssistant, turn, p, b)
 				}
 				if len(blocks) > 0 {
 					msgs[len(msgs)-1].joinNext = true
@@ -225,6 +314,11 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	}
 	if len(system) > 0 {
 		out["system"] = system
+	}
+	msgs = e.placeSystem(msgs, takesMidSystem(req.Model))
+	msgs, err := e.repairTurns(msgs, req.Model)
+	if err != nil {
+		return nil, nil, err
 	}
 	messages := make([]any, 0, len(msgs))
 	for _, m := range msgs {
@@ -263,9 +357,10 @@ func encodeToolChoice(tc *llm.ToolChoice, parallel *bool, names map[string]strin
 	return out
 }
 
-// content encodes a message's parts as Messages content blocks. sendable reports whether any
-// block with something in it was kept, dropped whether any part was dropped and reported.
-func (e *encoder) content(it llm.Item, msgPath string) (blocks []json.RawMessage, sendable, dropped bool) {
+// content encodes a message's parts as Messages content blocks, with the path each came from.
+// sendable reports whether any block with something in it was kept, dropped whether any part was
+// dropped and reported.
+func (e *encoder) content(it llm.Item, msgPath string) (blocks []json.RawMessage, paths []string, sendable, dropped bool) {
 	for i, p := range it.Content {
 		pp := pathOf(p.Origin, fmt.Sprintf("%s.content[%d]", msgPath, i))
 		var block map[string]any
@@ -273,7 +368,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (blocks []json.RawMessage
 		case llm.PartText:
 			if p.Text == "" {
 				// Messages rejects empty text blocks.
-				e.kept(p.Origin)
+				e.losses = append(e.losses, rawjson.Losses(p.Origin, format)...)
 				continue
 			}
 			block = map[string]any{"type": "text", "text": p.Text}
@@ -298,6 +393,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (blocks []json.RawMessage
 		case llm.PartNative:
 			if p.Format == format {
 				blocks = append(blocks, p.Data)
+				paths = append(paths, pp)
 				sendable = true
 				continue
 			}
@@ -310,9 +406,10 @@ func (e *encoder) content(it llm.Item, msgPath string) (blocks []json.RawMessage
 			continue
 		}
 		blocks = append(blocks, marshal(block, e.kept(p.Origin)))
+		paths = append(paths, pp)
 		sendable = true
 	}
-	return blocks, sendable, dropped
+	return blocks, paths, sendable, dropped
 }
 
 // source returns the Messages source of an image or file part: inline base64 from a data URL, a
@@ -345,8 +442,8 @@ func source(p llm.Part) map[string]any {
 // encrypted_content, or "" when it carries none. The Responses writer puts a Claude signature
 // there unchanged; OpenAI's own encrypted content is a Fernet token, which starts with "g".
 //
-// shortcut: a Claude signature is told apart by its shape (base64 starting with "E" or "R", as
-// today's core checks); an origin record that travels with the item would be exact.
+// shortcut: a Claude signature is told apart by its shape (claudeSignature); an origin record that
+// travels with the item would be exact.
 func replayedSignature(it llm.Item) string {
 	if it.Origin == nil || it.Origin.Format != llm.FormatOpenAIResponses {
 		return ""
@@ -357,14 +454,26 @@ func replayedSignature(it llm.Item) string {
 	if json.Unmarshal(it.Origin.Raw, &r) != nil {
 		return ""
 	}
-	sig := r.EncryptedContent
-	if sig == "" || (sig[0] != 'E' && sig[0] != 'R') {
+	if !claudeSignature(r.EncryptedContent) {
 		return ""
 	}
-	if _, err := base64.StdEncoding.DecodeString(sig); err != nil {
-		if _, err := base64.RawStdEncoding.DecodeString(sig); err != nil {
-			return ""
+	return r.EncryptedContent
+}
+
+// claudeSignature reports whether sig has the shape of a thinking signature Claude issues: base64
+// of a protobuf message. The older forms start with E (first byte 0x12, field 2) or R (base64 of
+// such a string), as today's core checks. Claude 5 models issue a newer envelope that starts with C:
+// field 1, a one-byte version varint, then field 2 (0x08, version, 0x12), the layout CLIProxyAPI
+// describes for it (internal/signature/claude_validation.go, "CAIS envelope").
+func claudeSignature(sig string) bool {
+	if sig == "" || (sig[0] != 'E' && sig[0] != 'R' && sig[0] != 'C') {
+		return false
+	}
+	b, err := base64.StdEncoding.DecodeString(sig)
+	if err != nil {
+		if b, err = base64.RawStdEncoding.DecodeString(sig); err != nil {
+			return false
 		}
 	}
-	return sig
+	return sig[0] != 'C' || (len(b) > 2 && b[0] == 0x08 && b[1] < 0x80 && b[2] == 0x12)
 }

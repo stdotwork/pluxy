@@ -6,9 +6,11 @@ import (
 	"time"
 )
 
-// The management key lockout, with today's core's numbers: a client that sends a missing or
-// wrong management key lockoutFailures times in a row is refused for lockoutFor, whatever it
-// sends. A client's count is forgotten after lockoutIdle without a failure.
+// The management key lockout, with today's core's numbers: a client on another machine that
+// sends a wrong management key lockoutFailures times in a row is refused for lockoutFor,
+// whatever it sends. A client's count is forgotten after lockoutIdle without a failure. A call
+// with no key does not count, and a caller on this machine is never counted or blocked
+// (Management.ServeHTTP).
 const (
 	lockoutFailures = 5
 	lockoutFor      = 30 * time.Minute

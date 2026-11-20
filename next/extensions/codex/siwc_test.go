@@ -421,6 +421,9 @@ func TestSIWCModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got.From != protocol.ModelListFromExtension {
+		t.Errorf("from = %q, want %q", got.From, protocol.ModelListFromExtension)
+	}
 	plus := planModels["plus"]
 	if len(got.Models) != len(plus)-len(imageModels) || len(got.Models) == 0 {
 		t.Fatalf("%d models, want the %d plus models without the %d image models", len(got.Models), len(plus), len(imageModels))

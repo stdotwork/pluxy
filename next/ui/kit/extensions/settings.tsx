@@ -90,7 +90,12 @@ function FieldInput(props: {
         {label}
       </label>
       {f.enum ? (
-        <select id={id} value={value} onChange={(e) => props.onChange(e.currentTarget.value)}>
+        <select
+          data-slot="select-trigger"
+          id={id}
+          value={value}
+          onChange={(e) => props.onChange(e.currentTarget.value)}
+        >
           {!f.enum.includes(value) && <option value="">{t("none")}</option>}
           {f.enum.map((o) => (
             <option key={o} value={o}>
@@ -100,6 +105,7 @@ function FieldInput(props: {
         </select>
       ) : (
         <input
+          data-slot="input"
           id={id}
           {...(f.writeOnly
             ? {

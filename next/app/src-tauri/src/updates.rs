@@ -4,17 +4,13 @@
 
 use crate::notes::{Doc, Style};
 use crate::release::{self, Channel, Product, View};
-#[cfg(target_os = "linux")]
-use crate::MAIN;
-use crate::{trusted, App, Rect};
-#[cfg(target_os = "linux")]
+use crate::{trusted, App, Rect, MAIN};
 use std::time::{Duration, Instant};
 use tauri::webview::NewWindowResponse;
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder, WebviewUrl,
     Window,
 };
-#[cfg(target_os = "linux")]
 use tauri::{Emitter, EventTarget};
 
 /// The certificates a feed's https is checked against: the public roots. A native-test build
@@ -102,12 +98,6 @@ pub async fn release_channel_set(webview: Webview, channel: Channel) -> Result<V
 #[tauri::command]
 pub fn release_source_set(webview: Webview, source: Option<String>) -> Result<(), String> {
     trusted(&webview)?;
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = source;
-        Err("changing the release feed needs a native confirmation, on Linux only for now".into())
-    }
-    #[cfg(target_os = "linux")]
     {
         use crate::confirmation::{self, Action, Package};
         let app = webview.app_handle().clone();
@@ -137,6 +127,7 @@ pub fn release_source_set(webview: Webview, source: Option<String>) -> Result<()
             native_tool: false,
             files: vec![],
             launch: None,
+            environment: None,
         };
         let id = {
             let mut c = st.confirmations.lock().unwrap();
@@ -158,7 +149,6 @@ pub fn release_source_set(webview: Webview, source: Option<String>) -> Result<()
 }
 
 /// Waits for the confirmation's native result; only a confirmed, consumed token applies the change.
-#[cfg(target_os = "linux")]
 fn settle_source(app: &AppHandle, id: &str) {
     let st = app.state::<App>();
     // The dialog cancels itself after its lifetime; window close invalidates it sooner.
@@ -200,8 +190,8 @@ fn notes_url() -> Url {
 }
 
 /// Opens an https address in the person's browser; any other address is refused here too,
-/// whatever its caller checked.
-fn open_external(app: &AppHandle, url: String) {
+/// whatever its caller checked, before anything else.
+pub(crate) fn open_external(app: &AppHandle, url: String) {
     let url = match release::https_url(&url) {
         Ok(u) => u,
         Err(e) => {
@@ -220,11 +210,55 @@ fn open_external(app: &AppHandle, url: String) {
             }
         });
     }
-    #[cfg(not(target_os = "linux"))]
+    // The shell's `open` verb on the address, with the https class's handler (the person's
+    // browser), on the main thread, which the window's event loop has set up for COM.
+    #[cfg(windows)]
     {
-        let _ = app;
-        eprintln!("pluxy-app: opening {url} in the browser is supported on Linux only for now");
+        let _ = app.run_on_main_thread(move || {
+            if let Err(e) = shell_open(&url) {
+                eprintln!("pluxy-app: could not open {url}: {e}");
+            }
+        });
     }
+    // The person's default browser, through LaunchServices, on the main thread.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.run_on_main_thread(move || {
+            use objc2_app_kit::NSWorkspace;
+            use objc2_foundation::{NSString, NSURL};
+            let opened = NSURL::URLWithString(&NSString::from_str(&url))
+                .is_some_and(|u| NSWorkspace::sharedWorkspace().openURL(&u));
+            if !opened {
+                eprintln!("pluxy-app: could not open {url}");
+            }
+        });
+    }
+}
+
+/// Opens https address url with the `open` verb of the `https` class (the person's browser):
+/// `ShellExecuteExW`, which takes the address as one string, with no dialog of its own.
+#[cfg(windows)]
+fn shell_open(url: &str) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_CLASSNAME, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC,
+        SHELLEXECUTEINFOW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (verb, file, class) = (wide("open"), wide(url), wide("https"));
+    // SAFETY: an all-zero SHELLEXECUTEINFOW is its documented empty value.
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI | SEE_MASK_CLASSNAME;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpClass = class.as_ptr();
+    info.nShow = SW_SHOWNORMAL;
+    // SAFETY: every pointer in info outlives the call.
+    if unsafe { ShellExecuteExW(&mut info) } == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
 }
 
 /// Opens a webview over rect of the window (the part of the notes area that shows; none: hidden),

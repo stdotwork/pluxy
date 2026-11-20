@@ -16,13 +16,18 @@ import (
 //     body: the field is removed and its betas sent in the header;
 //   - extended-cache-ttl-2025-04-11 for a cache_control marker with ttl "1h" (not on a token
 //     count);
-//   - thinking-binding-controls-2026-08-01 for thinking.block_binding.
+//   - thinking-binding-controls-2026-08-01 for thinking.block_binding;
+//   - mid-conversation-tool-changes-2026-07-01 for tool_addition or tool_removal blocks, or
+//     inline-tools-2026-09-15 when a tool_addition defines a tool inline (which also covers
+//     reference tool additions and removals).
 //
 // A client's own betas are never removed.
 const (
-	advisorBeta          = "advisor-tool-2026-03-01"
-	extendedCacheTTLBeta = "extended-cache-ttl-2025-04-11"
-	thinkingBindingBeta  = "thinking-binding-controls-2026-08-01"
+	advisorBeta                    = "advisor-tool-2026-03-01"
+	extendedCacheTTLBeta           = "extended-cache-ttl-2025-04-11"
+	thinkingBindingBeta            = "thinking-binding-controls-2026-08-01"
+	midConversationToolChangesBeta = "mid-conversation-tool-changes-2026-07-01"
+	inlineToolsBeta                = "inline-tools-2026-09-15"
 )
 
 // bodyBetas returns the betas body needs, in the order today's core adds them, and body without
@@ -32,7 +37,8 @@ func bodyBetas(body []byte, count bool) ([]byte, []string) {
 	// A body with none of these fields needs no beta; skip decoding it. (An advisor tool's type
 	// is matched ignoring case and spaces, so look for tools, not the type.)
 	if !bytes.Contains(body, []byte(`"tools"`)) && !bytes.Contains(body, []byte(`"betas"`)) &&
-		!bytes.Contains(body, []byte(`"1h"`)) && !bytes.Contains(body, []byte(`"block_binding"`)) {
+		!bytes.Contains(body, []byte(`"1h"`)) && !bytes.Contains(body, []byte(`"block_binding"`)) &&
+		!bytes.Contains(body, []byte(`"tool_addition"`)) && !bytes.Contains(body, []byte(`"tool_removal"`)) {
 		return body, nil
 	}
 	var m map[string]json.RawMessage
@@ -78,6 +84,9 @@ func bodyBetas(body []byte, count bool) ([]byte, []string) {
 		if _, ok := thinking["block_binding"]; ok {
 			betas = append(betas, thinkingBindingBeta)
 		}
+	}
+	if b := toolChangeBeta(m); b != "" {
+		betas = append(betas, b)
 	}
 	return body, betas
 }
@@ -144,6 +153,53 @@ func hasHourTTL(m map[string]json.RawMessage, tools []cacheable) bool {
 		}
 	}
 	return false
+}
+
+// toolChangeBeta returns the mid-conversation tool-change beta a Messages body calls for, if any:
+// inline-tools-2026-09-15 when a tool_addition block defines a tool inline (which also covers
+// adding and removing tools by reference), or mid-conversation-tool-changes-2026-07-01 for
+// reference-only tool_addition or tool_removal blocks.
+func toolChangeBeta(m map[string]json.RawMessage) string {
+	raw := m["messages"]
+	if !bytes.Contains(raw, []byte(`"tool_addition"`)) && !bytes.Contains(raw, []byte(`"tool_removal"`)) {
+		return ""
+	}
+	var messages []struct {
+		Content json.RawMessage `json:"content"`
+	}
+	_ = json.Unmarshal(raw, &messages)
+	hasChange := false
+	for _, msg := range messages {
+		var content []struct {
+			Type string          `json:"type"`
+			Tool json.RawMessage `json:"tool"`
+		}
+		if json.Unmarshal(msg.Content, &content) != nil {
+			continue
+		}
+		for _, b := range content {
+			switch b.Type {
+			case "tool_removal":
+				hasChange = true
+			case "tool_addition":
+				hasChange = true
+				var tool struct {
+					Type       string          `json:"type"`
+					Definition json.RawMessage `json:"definition"`
+				}
+				if json.Unmarshal(b.Tool, &tool) == nil {
+					def := bytes.TrimSpace(tool.Definition)
+					if tool.Type == "tool_definition" || (len(def) > 0 && !bytes.Equal(def, []byte("null"))) {
+						return inlineToolsBeta
+					}
+				}
+			}
+		}
+	}
+	if hasChange {
+		return midConversationToolChangesBeta
+	}
+	return ""
 }
 
 // addBetas adds each beta to the request's anthropic-beta list, after what is there, unless it
