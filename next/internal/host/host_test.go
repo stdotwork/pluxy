@@ -731,7 +731,7 @@ func accountClosedExtension(minor int) {
 
 // Core acts on account_closed only from an extension whose describe reports minor 20 or later;
 // from an older extension it is downgraded to permission.
-func TestAccountClosedRequiresProtocolMinor19(t *testing.T) {
+func TestAccountClosedRequiresProtocolMinor20(t *testing.T) {
 	for _, c := range []struct {
 		mode string
 		want string
