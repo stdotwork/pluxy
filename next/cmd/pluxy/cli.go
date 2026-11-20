@@ -748,13 +748,13 @@ func parseStep(s string) (management.ChainStep, error) {
 	if hasAccounts {
 		for _, a := range strings.Split(accounts, ",") {
 			if a == "" {
-				return step, usageError(fmt.Sprintf("step %q: an account ID is empty", s))
+				return step, usageError{fmt.Sprintf("step %q: an account ID is empty", s)}
 			}
 			step.Accounts = append(step.Accounts, a)
 		}
 	}
 	if step.Model == "" {
-		return step, usageError(fmt.Sprintf("step %q names no model", s))
+		return step, usageError{fmt.Sprintf("step %q names no model", s)}
 	}
 	return step, nil
 }
@@ -1005,17 +1005,10 @@ func printError(stderr io.Writer, asJSON bool, err error) {
 	fmt.Fprintf(stderr, "%s\n", b)
 }
 
-// usageError is a wrong command line that a command finds as it runs, such as a step chain set
-// cannot read.
-type usageError string
-
-func (e usageError) Error() string { return string(e) }
-
 // exitCode is the exit code for a command's error.
 func exitCode(err error) int {
 	var ue usageError
 	var ae *management.APIError
-	var ue usageError
 	switch {
 	case errors.As(err, &ue):
 		return exitUsage
