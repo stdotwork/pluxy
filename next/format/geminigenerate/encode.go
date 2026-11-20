@@ -289,9 +289,12 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	return rawjson.Merge(b, e.kept(req.Origin)), e.losses, nil
 }
 
-// functionCalling returns the functionCallingConfig for a tool choice. Gemini cannot limit a reply
-// to one call, so parallel_tool_calls false turns function calling off (mode NONE), as today's
-// core does rather than risk several calls the client said it cannot take; it is reported.
+// functionCalling returns the functionCallingConfig for a tool choice. A choice that names the
+// tools the model may call, and not just one, is ANY or VALIDATED with allowedFunctionNames, the
+// only modes Gemini takes them with: required as ANY, auto as VALIDATED, in which the model picks
+// from the allowed functions. Gemini cannot limit a reply to one call, so parallel_tool_calls
+// false turns function calling off (mode NONE), as today's core does rather than risk several
+// calls the client said it cannot take; it is reported.
 func (e *encoder) functionCalling(tc *llm.ToolChoice, parallel *bool) map[string]any {
 	if parallel != nil && !*parallel {
 		e.lose(llm.LossApproximated, "parallel_tool_calls", "GenerateContent cannot limit a reply to one function call; function calling is turned off")
@@ -302,10 +305,16 @@ func (e *encoder) functionCalling(tc *llm.ToolChoice, parallel *bool) map[string
 	}
 	switch tc.Mode {
 	case llm.ToolChoiceAuto:
+		if len(tc.Allowed) > 0 {
+			return map[string]any{"mode": "VALIDATED", "allowedFunctionNames": tc.Allowed}
+		}
 		return map[string]any{"mode": "AUTO"}
 	case llm.ToolChoiceNone:
 		return map[string]any{"mode": "NONE"}
 	case llm.ToolChoiceRequired:
+		if len(tc.Allowed) > 0 {
+			return map[string]any{"mode": "ANY", "allowedFunctionNames": tc.Allowed}
+		}
 		return map[string]any{"mode": "ANY"}
 	case llm.ToolChoiceTool:
 		return map[string]any{"mode": "ANY", "allowedFunctionNames": []string{tc.Name}}

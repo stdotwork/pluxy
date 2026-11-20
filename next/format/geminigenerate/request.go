@@ -257,9 +257,10 @@ func reasoningEffort(raw json.RawMessage) (string, json.RawMessage) {
 	return effort, rawjson.Encode(m)
 }
 
-// parseToolConfig reads toolConfig.functionCallingConfig: AUTO, NONE, and ANY (one allowed
-// function names it; otherwise any tool is required). Anything else stays in the fields it
-// returns.
+// parseToolConfig reads toolConfig.functionCallingConfig: AUTO, NONE, ANY (one allowed function
+// names it; otherwise any tool is required) and VALIDATED (the model calls one of the allowed
+// functions or answers in text). The allowed function names, which Gemini sets with ANY or
+// VALIDATED, become the choice's allowed list. Anything else stays in the fields it returns.
 func parseToolConfig(raw json.RawMessage) (*llm.ToolChoice, json.RawMessage) {
 	m := object(raw)
 	fcRaw, ok := m["functionCallingConfig"]
@@ -283,9 +284,22 @@ func parseToolConfig(raw json.RawMessage) (*llm.ToolChoice, json.RawMessage) {
 	case "NONE":
 		choice = &llm.ToolChoice{Mode: llm.ToolChoiceNone}
 	case "ANY":
-		choice = &llm.ToolChoice{Mode: llm.ToolChoiceRequired}
-		if len(c.Allowed) == 1 {
+		switch len(c.Allowed) {
+		case 0:
+			choice = &llm.ToolChoice{Mode: llm.ToolChoiceRequired}
+		case 1:
 			choice = &llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: c.Allowed[0]}
+			modelled = append(modelled, "allowedFunctionNames")
+		default:
+			// ANY with several names is a forced call narrowed to them.
+			choice = &llm.ToolChoice{Mode: llm.ToolChoiceRequired, Allowed: c.Allowed}
+			modelled = append(modelled, "allowedFunctionNames")
+		}
+	case "VALIDATED":
+		// VALIDATED lets the model call one of the allowed functions or answer in text, which is
+		// an allowed list with an auto choice.
+		if len(c.Allowed) > 0 {
+			choice = &llm.ToolChoice{Mode: llm.ToolChoiceAuto, Allowed: c.Allowed}
 			modelled = append(modelled, "allowedFunctionNames")
 		}
 	}

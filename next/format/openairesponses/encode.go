@@ -111,9 +111,16 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		out.Text = map[string]any{"format": f}
 	}
 	if tc := o.ToolChoice; tc != nil {
-		if tc.Mode == llm.ToolChoiceTool {
+		switch {
+		case len(tc.Allowed) > 0:
+			tools := make([]any, 0, len(tc.Allowed))
+			for _, name := range tc.Allowed {
+				tools = append(tools, map[string]any{"type": "function", "name": name})
+			}
+			out.ToolChoice = map[string]any{"type": "allowed_tools", "mode": tc.Mode, "tools": tools}
+		case tc.Mode == llm.ToolChoiceTool:
 			out.ToolChoice = map[string]string{"type": "function", "name": tc.Name}
-		} else {
+		default:
 			out.ToolChoice = tc.Mode
 		}
 	}
