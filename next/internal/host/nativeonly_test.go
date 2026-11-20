@@ -89,7 +89,7 @@ func nativeOnlyRequest(t *testing.T, parsed bool) llm.Request {
 }
 
 // Core leaves a generate request's items, tools and origin out of the frame only for an
-// extension at minor 24 or later whose native_parser is core's, and only when the request's native
+// extension at minor 27 or later whose native_parser is core's, and only when the request's native
 // body is the one it was parsed from; count_tokens always gets the full request.
 func TestNativeOnlyFrame(t *testing.T) {
 	for _, tc := range []struct {
@@ -99,12 +99,12 @@ func TestNativeOnlyFrame(t *testing.T) {
 		count  bool
 		want   bool // native-only
 	}{
-		{"minor 24 parses native", "native-only-24-parses", true, false, true},
-		{"minor 23 parses native", "native-only-23-parses", true, false, false},
-		{"minor 24 without parses native", "native-only-24", true, false, false},
-		{"minor 24 parses with another parser version", "native-only-24-skew", true, false, false},
-		{"parsed unset", "native-only-24-parses", false, false, false},
-		{"count tokens", "native-only-24-parses", true, true, false},
+		{"minor 27 parses native", "native-only-27-parses", true, false, true},
+		{"minor 26 parses native", "native-only-26-parses", true, false, false},
+		{"minor 27 without parses native", "native-only-27", true, false, false},
+		{"minor 27 parses with another parser version", "native-only-27-skew", true, false, false},
+		{"parsed unset", "native-only-27-parses", false, false, false},
+		{"count tokens", "native-only-27-parses", true, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ext, err := Start(filepath.Join(fakePackage(t, tc.mode), ManifestFile), Options{Log: io.Discard})

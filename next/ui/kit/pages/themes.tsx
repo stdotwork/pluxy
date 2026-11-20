@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from "preact/hooks";
+import { useSave } from "../save";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
 import { type Layout, type LayoutOption, MAX_THEME_BYTES } from "../theme/contract";
@@ -129,18 +130,6 @@ function noted<V extends string>(choices: Choice<V>[], themeValue: string | unde
   return choices.map((c) => (c.value === themeValue ? { ...c, note: t("themeNote") } : c));
 }
 
-function saveFile(name: string, text: string) {
-  const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = name;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  // Allow the browser to start consuming the Blob before releasing it.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
 /** A theme's own colours in its light (or only) appearance; none until its file has been read. */
 function Swatch(props: { listed: Listed }) {
   const theme = props.listed.offered?.theme;
@@ -207,7 +196,10 @@ function ThemePicker(props: { onProblem: (problem: string | undefined) => void }
 }
 
 /** Export and Remove, for the theme that is on. */
-function CurrentTheme(props: { onProblem: (problem: string | undefined) => void }) {
+function CurrentTheme(props: {
+  onProblem: (problem: string | undefined) => void;
+  onExport: (name: string, text: string) => void;
+}) {
   const themes = useThemeState();
   const { theme, builtIn } = themes.current;
   return (
@@ -216,7 +208,7 @@ function CurrentTheme(props: { onProblem: (problem: string | undefined) => void 
         label={t("exportLabel", { name: theme.name })}
         onClick={() => {
           const file = themes.exportFile();
-          saveFile(file.name, file.text);
+          props.onExport(file.name, file.text);
         }}
       >
         {t("export")}
@@ -318,6 +310,7 @@ export function ThemesPage() {
   const allWarnings = [...warnings, ...r.warnings];
   const layout = layoutChoices();
   const [problem, setProblem] = useState<string>();
+  const saved = useSave();
 
   return (
     <>
@@ -332,7 +325,11 @@ export function ThemesPage() {
               {theme.name}: {allWarnings.join("; ")}
             </Notice>
           )}
-          <CurrentTheme onProblem={setProblem} />
+          {saved.notice}
+          <CurrentTheme
+            onProblem={setProblem}
+            onExport={(name, text) => saved.save(name, text, "application/json")}
+          />
         </Card>
 
         <AddTheme />

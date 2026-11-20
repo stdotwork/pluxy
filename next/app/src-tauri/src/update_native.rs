@@ -15,6 +15,16 @@
 //!   others can change);
 //! - `open` (macOS): the test package started by LaunchServices (`/usr/bin/open`): an update is
 //!   offered, so its provenance holds for such a launch; then it quits;
+//! - refusals of the test package in `/Applications` (macOS), each of the session's making:
+//!   `staff-entry`, `wheel-entry`, `inherited-entry` (an access list entry on `/Applications`),
+//!   `bundle-entry` (one on the bundle), `not-yours` (the bundle another user's) and `not-admin`
+//!   (this user removed from `admin`);
+//! - `dmg` (macOS): the test package run from its mounted disk image, whose volume is not APFS;
+//! - `admitted` (macOS): the test package in `/Applications` with access list entries the rule
+//!   admits (root's and admin's, a deny entry): an update is offered; then it quits;
+//! - `applications` (macOS): the test package in `/Applications` (or, in the install session,
+//!   copied from its disk image into `/Applications` or `~/Applications`), which restarts itself
+//!   twice: v1→v2, then a confirmed rollback to v1;
 //! - `parts` and `parts-undone` (Windows): the test package starts an update that waits between
 //!   two parts of its program set (`<dir>/hold-parts`), where the session ends it; then, started
 //!   again on the mixed folder, it reports what its start made of it (the replace undone);
@@ -251,8 +261,9 @@ pub(crate) fn run_id() -> &'static str {
 
 /// What every process on the update route reports first: its version and process, the installed
 /// copy's digest and what is next to it (once an earlier install's leftovers are gone, or after
-/// 30 s), its own core (managed mode), what the page says about the last update and the versions
-/// it can go back to.
+/// 30 s; not in `/Applications`, which holds other apps: the session compares that folder
+/// itself), its own core (managed mode), what the page says about the last update and the
+/// versions it can go back to.
 fn report(app: &AppHandle, main: &Webview, dir: &Path, stage: &str) -> Result<Value, String> {
     check(main, dir, "good", "0.2.0")?;
     let core = if app.state::<crate::App>().conn.lock().unwrap().mode()
@@ -264,9 +275,12 @@ fn report(app: &AppHandle, main: &Webview, dir: &Path, stage: &str) -> Result<Va
     } else {
         Value::Null
     };
-    let _ = soon("only the installed copy next to it", 30, || {
-        (beside(app) == own(app)).then_some(())
-    });
+    let shared = installed(app).is_some_and(|p| p.parent() == Some(Path::new("/Applications")));
+    if !shared {
+        let _ = soon("only the installed copy next to it", 30, || {
+            (beside(app) == own(app)).then_some(())
+        });
+    }
     let r = json!({
         "stage": stage,
         "version": app.package_info().version.to_string(),
@@ -278,7 +292,7 @@ fn report(app: &AppHandle, main: &Webview, dir: &Path, stage: &str) -> Result<Va
         // The bundle type Tauri's bundler patched into this program, if any (the setup program's
         // copy reads Nsis until its first update).
         "bundle_type": tauri::utils::platform::bundle_type().map(|t| format!("{t:?}")),
-        "beside": beside(app),
+        "beside": if shared { Value::Null } else { json!(beside(app)) },
         "core_pid": core,
         "last": eval(main, "(e => e ? {result: e.dataset.result, detail: e.dataset.detail} : null)(document.querySelector('[data-part=app-update-last]'))"),
         "rollback": eval(main, "[...document.querySelectorAll('[data-part=app-rollback]')].map(e => ({version: e.dataset.version, sha256: e.dataset.sha256}))"),
@@ -505,6 +519,39 @@ fn updated(app: &AppHandle, main: &Webview, dir: &Path) -> Result<(), String> {
     Err("the app did not restart after the rollback".into())
 }
 
+/// The route in `/Applications` (or `~/Applications`): v1 updates to v2, which rolls back to v1
+/// once confirmed. Each process reports (`update_stage`) and the last one says it is done
+/// (`update_applications_done`).
+fn applications(app: &AppHandle, main: &Webview, dir: &Path) -> Result<(), String> {
+    match stage(dir).as_str() {
+        "" => {
+            // A profile of its own: the feed, confirmed natively, first.
+            main.eval("location.hash = '#/versions'")
+                .map_err(|e| e.to_string())?;
+            set_source(app, main, &feed()?)?;
+            report(app, main, dir, "first")?;
+            set_stage(dir, "updated")?;
+            update_now(main)
+        }
+        "updated" => {
+            report(app, main, dir, "updated")?;
+            set_stage(dir, "rolled-back")?;
+            click(main, "[data-part=app-rollback][data-version=\"0.1.0\"]")?;
+            ui::wait_shown(app, DIALOG)?;
+            ui::press(app, DIALOG, Key::Access('o'))?;
+            phase(main, "the rollback to install", &["restarting"])?;
+            std::thread::sleep(Duration::from_secs(120));
+            Err("the app did not restart after the rollback".into())
+        }
+        "rolled-back" => {
+            report(app, main, dir, "rolled-back")?;
+            log("update_applications_done", json!({}));
+            Ok(())
+        }
+        s => Err(format!("unknown update stage {s:?}")),
+    }
+}
+
 pub(crate) fn run(app: &AppHandle, main: &Webview, dir: PathBuf) -> Result<(), String> {
     let case = std::env::var("PLUXY_APP_TEST_UPDATE_CASE").unwrap_or_default();
     match case.as_str() {
@@ -515,21 +562,22 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, dir: PathBuf) -> Result<(), S
             set_source(app, main, &feed()?)?;
             refused(app, main, &dir, &case)?
         }
-        "deb" | "rpm" | "unknown" | "msi" | "shared" | "bare" | "group-writable" | "linked" => {
-            refused(app, main, &dir, &case)?
-        }
-        "open" => {
+        "deb" | "rpm" | "unknown" | "msi" | "shared" | "bare" | "group-writable" | "linked"
+        | "staff-entry" | "wheel-entry" | "inherited-entry" | "bundle-entry" | "not-yours"
+        | "not-admin" | "dmg" => refused(app, main, &dir, &case)?,
+        "open" | "admitted" => {
             check(main, &dir, "good", "0.2.0")?;
             let available = wait_for("the updater's view", || {
                 Some(update_attr(main, "available")).filter(|a| !a.is_null())
             })?;
             log(
-                "update_open",
+                &format!("update_{case}"),
                 json!({"available": available, "reason": update_attr(main, "reason"),
                        "installed": installed(app), "installed_sha": installed_sha(app),
                        "pid": std::process::id()}),
             );
         }
+        "applications" => applications(app, main, &dir)?,
         // Windows: an update ended between two parts of the set, then the start after it.
         "parts" => {
             check(main, &dir, "good", "0.2.0")?;

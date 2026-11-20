@@ -35,8 +35,9 @@ const Version = 0
 // Feature; minor 20 adds llm.CodeAccountClosed; minor 21 adds what a package is (title, summary,
 // kind) to the manifest and registry index, and changes no call; minor 22 adds the account's
 // timeouts (Account.Timeouts); minor 23 adds alive frames (Call.Alive and TypeAlive); minor 24
-// adds native-only generate calls (Info.NativeParser and Call.NativeOnly).
-const Minor = 24
+// adds Model.Capabilities; minor 27 adds native-only generate calls (Info.NativeParser and
+// Call.NativeOnly).
+const Minor = 27
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -157,7 +158,7 @@ type Call struct {
 	// at all for as long as the account's timeouts let the upstream stay quiet, plus a minute.
 	Alive bool `json:"alive,omitempty"`
 	// NativeOnly says core left the request's items, tools and origin out of a generate call
-	// (minor version 24), to an extension that parses with core's parsers (Info.NativeParser): they are
+	// (minor version 27), to an extension that parses with core's parsers (Info.NativeParser): they are
 	// what the parser of the request's native format makes of its native body, which the
 	// extension parses itself (nativeonly.Parse). The request's other fields are as in any call.
 	NativeOnly bool `json:"native_only,omitempty"`
@@ -270,7 +271,7 @@ type Info struct {
 	ProtocolMinor int      `json:"protocol_minor,omitempty"`
 	Operations    []string `json:"operations"`
 	// NativeParser says the extension takes native-only generate calls (Call.NativeOnly,
-	// minor version 24): it parses a request's items, tools and origin from its native body
+	// minor version 27): it parses a request's items, tools and origin from its native body
 	// itself, so core need not send them twice, with the format parsers of this version
 	// (format.ParserVersion). Core sends native-only calls only when it equals core's own
 	// version; 0 or absent: the extension does not parse.
@@ -365,9 +366,11 @@ const (
 // budget as the maximum total identity value bytes (16 fields of 512 bytes).
 const MaxGrantSettings = MaxIdentityFields * MaxIdentityValue
 
-// ModelList sources (ModelList.From, minor version 18).
+// ModelList sources (ModelList.From, minor version 18; ModelListFromCatalogue is core's
+// model catalogue in merged lists).
 const (
 	ModelListFromAccount   = "account"
+	ModelListFromCatalogue = "catalogue"
 	ModelListFromExtension = "extension"
 )
 
@@ -412,6 +415,20 @@ type Model struct {
 	GenerationMethods []string `json:"generation_methods,omitempty"`
 	InputModalities   []string `json:"input_modalities,omitempty"`
 	OutputModalities  []string `json:"output_modalities,omitempty"`
+	// Capabilities is what the model supports and when it was deprecated (minor version 24).
+	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
+}
+
+// ModelCapabilities is what a model supports and when it was deprecated (minor version 24).
+type ModelCapabilities struct {
+	Tools            bool     `json:"tools"`
+	StructuredOutput bool     `json:"structured_output"`
+	Vision           bool     `json:"vision"`
+	PDF              bool     `json:"pdf"`
+	Reasoning        bool     `json:"reasoning"`
+	ReasoningLevels  []string `json:"reasoning_levels,omitempty"`
+	// DeprecatedAt is when the model was deprecated, in Unix seconds; 0 when not deprecated.
+	DeprecatedAt int64 `json:"deprecated_at,omitempty"`
 }
 
 // CheckResult is the result of a check call for an account that works.

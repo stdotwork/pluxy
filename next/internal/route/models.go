@@ -3,6 +3,7 @@ package route
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"log"
 	"maps"
 	"slices"
@@ -71,6 +72,17 @@ func (r *Router) UseCatalog(f CatalogFunc) {
 	defer r.mu.Unlock()
 	r.catalog = f
 	r.lists.clear()
+}
+
+// CatalogueFunc looks up a model's limits and capabilities in core's model catalogue for an
+// account of extension with settings.
+type CatalogueFunc func(extension string, settings json.RawMessage, id string) (protocol.Model, bool)
+
+// UseCatalogue sets how the router reads model limits and capabilities from the catalogue.
+func (r *Router) UseCatalogue(f CatalogueFunc) {
+	r.mu.Lock()
+	r.catalogue = f
+	r.mu.Unlock()
 }
 
 func (c *catalogs) clear() {
@@ -517,6 +529,11 @@ func (r *Router) Models(ctx context.Context) []protocol.Model {
 // the management API shows it. Never a credential.
 type ServedModel struct {
 	protocol.Model
+	// MaxOutputTokens is the model's output token limit after merging the account's list,
+	// the catalogue and the extension's built-in list.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+	// From names where the model's limits came from: "account", "catalogue" or "extension".
+	From string `json:"from,omitempty"`
 	// Upstream is the model's name upstream, as the account whose entry the list shows sends it.
 	Upstream string `json:"upstream"`
 	// Extension is the extension of that account.
@@ -533,13 +550,15 @@ type ServedModel struct {
 // list is not known lists no name, but serves those of its provider. A name with a fallback
 // chain, and a chain's new name, is served by the accounts of each of its steps, step by step, and
 // described as the first of them that lists its step's model has that model, or, when none lists
-// it, as the first of them. A name whose accounts are all held is not listed: no request for it
-// can be served now. Accounts routing leaves out (weight 0 under the weighted strategy) are in no
-// entry.
+// it, as the first of them. Each entry's model merges what the account's own list, the catalogue
+// and the extension's list say about it (MergeModel), and From says which gave its limits. A name
+// whose accounts are all held is not listed: no request for it can be served now. Accounts
+// routing leaves out (weight 0 under the weighted strategy) are in no entry.
 func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 	accounts, creds := r.knownSnapshot()
 	accounts = r.routed(accounts)
 	catalog := r.catalogFunc()
+	catalogue := r.catalogueFunc()
 	now := r.now()
 	lists := make([]*protocol.ModelList, len(accounts))
 	var wg sync.WaitGroup
@@ -577,7 +596,7 @@ func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 		}
 		steps := []Step{{Model: name}}
 		serving, _ := split(r.targets(steps, accounts, l.served))
-		if e, ok := r.servedEntry(name, steps, serving, accounts, l, false); ok {
+		if e, ok := r.servedEntry(name, steps, serving, accounts, l, catalogue, false); ok {
 			out = append(out, e)
 		}
 	}
@@ -585,12 +604,118 @@ func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 	for _, name := range slices.Sorted(maps.Keys(r.cfg.Chains)) {
 		steps := r.cfg.Chains[name]
 		serving, _ := split(r.targets(steps, accounts, l.served))
-		if e, ok := r.servedEntry(name, steps, serving, accounts, l, true); ok {
+		if e, ok := r.servedEntry(name, steps, serving, accounts, l, catalogue, true); ok {
 			out = append(out, e)
 		}
 	}
 	slices.SortFunc(out, func(a, b ServedModel) int { return strings.Compare(a.ID, b.ID) })
 	return out
+}
+
+// MergeModel merges a model's metadata, token limits and capabilities across the three sources
+// in priority order: (1) the account's own upstream list, (2) the catalogue, and (3) the
+// extension's built-in list. Where two sources give a positive token limit, the smaller positive
+// limit wins.
+func MergeModel(acct, cat, ext *protocol.Model) (m protocol.Model, maxOutputTokens int, from string) {
+	for _, src := range []*protocol.Model{acct, ext, cat} {
+		if src == nil {
+			continue
+		}
+		if m.ID == "" {
+			m.ID = src.ID
+		}
+		if m.Name == "" {
+			m.Name = src.Name
+		}
+		if m.DisplayName == "" {
+			m.DisplayName = src.DisplayName
+		}
+		if m.Description == "" {
+			m.Description = src.Description
+		}
+		if m.Version == "" {
+			m.Version = src.Version
+		}
+		if m.Created == 0 {
+			m.Created = src.Created
+		}
+		if m.OwnedBy == "" {
+			m.OwnedBy = src.OwnedBy
+		}
+		if m.InputTokenLimit == 0 {
+			m.InputTokenLimit = src.InputTokenLimit
+		}
+		if m.OutputTokenLimit == 0 {
+			m.OutputTokenLimit = src.OutputTokenLimit
+		}
+		if len(m.GenerationMethods) == 0 && len(src.GenerationMethods) > 0 {
+			m.GenerationMethods = slices.Clone(src.GenerationMethods)
+		}
+		if len(m.InputModalities) == 0 && len(src.InputModalities) > 0 {
+			m.InputModalities = slices.Clone(src.InputModalities)
+		}
+		if len(m.OutputModalities) == 0 && len(src.OutputModalities) > 0 {
+			m.OutputModalities = slices.Clone(src.OutputModalities)
+		}
+	}
+
+	type source struct {
+		m    *protocol.Model
+		from string
+	}
+	sources := []source{
+		{acct, protocol.ModelListFromAccount},
+		{cat, protocol.ModelListFromCatalogue},
+		{ext, protocol.ModelListFromExtension},
+	}
+
+	var ctxLimit, outLimit int
+	var ctxFrom, outFrom, capFrom string
+
+	for _, s := range sources {
+		if s.m == nil {
+			continue
+		}
+		if v := cmp.Or(s.m.ContextLength, s.m.InputTokenLimit); v > 0 {
+			if ctxLimit == 0 || v < ctxLimit {
+				ctxLimit = v
+				ctxFrom = s.from
+			}
+		}
+		if v := cmp.Or(s.m.MaxCompletionTokens, s.m.OutputTokenLimit); v > 0 {
+			if outLimit == 0 || v < outLimit {
+				outLimit = v
+				outFrom = s.from
+			}
+		}
+		if s.m.Capabilities != nil {
+			if m.Capabilities == nil {
+				cp := *s.m.Capabilities
+				cp.ReasoningLevels = slices.Clone(cp.ReasoningLevels)
+				m.Capabilities = &cp
+				if capFrom == "" {
+					capFrom = s.from
+				}
+			} else {
+				if len(m.Capabilities.ReasoningLevels) == 0 && len(s.m.Capabilities.ReasoningLevels) > 0 {
+					m.Capabilities.ReasoningLevels = slices.Clone(s.m.Capabilities.ReasoningLevels)
+				}
+				if m.Capabilities.DeprecatedAt == 0 && s.m.Capabilities.DeprecatedAt > 0 {
+					m.Capabilities.DeprecatedAt = s.m.Capabilities.DeprecatedAt
+				}
+			}
+		}
+	}
+
+	m.ContextLength = ctxLimit
+	m.MaxCompletionTokens = outLimit
+	if m.InputTokenLimit != 0 || m.OutputTokenLimit != 0 {
+		m.InputTokenLimit = ctxLimit
+		m.OutputTokenLimit = outLimit
+	}
+	maxOutputTokens = outLimit
+	from = cmp.Or(ctxFrom, outFrom, capFrom)
+	return m, maxOutputTokens, from
 }
 
 // modelLists are the model lists of a router's known accounts, by their index: each list, the
@@ -604,10 +729,10 @@ type modelLists struct {
 
 // servedEntry is the entry of name, served by targets, the targets of steps: its accounts,
 // highest priority first within a step, and the model of the first of them that lists its step's
-// model, under name. When none lists it, a chain's entry (chain true) is built from the first
-// target, whose list is not known; ok is false for a name without a chain, and when there is no
-// target.
-func (r *Router) servedEntry(name string, steps []Step, targets []target, accounts []*Account, l modelLists, chain bool) (ServedModel, bool) {
+// model, under name, as listedModel merges it from its sources. When none lists it, a chain's
+// entry (chain true) is built from the first target, whose list is not known; ok is false for a
+// name without a chain, and when there is no target.
+func (r *Router) servedEntry(name string, steps []Step, targets []target, accounts []*Account, l modelLists, catalogue CatalogueFunc, chain bool) (ServedModel, bool) {
 	targets = slices.Clone(targets)
 	slices.SortStableFunc(targets, func(a, b target) int { return cmp.Or(a.step-b.step, b.a.Priority-a.a.Priority) })
 	var e ServedModel
@@ -625,49 +750,63 @@ func (r *Router) servedEntry(name string, steps []Step, targets []target, accoun
 			continue
 		}
 		found = true
-		e.Model, e.Upstream, e.Extension = r.listedModel(t.a, l.names[i][j], l.lists[i], name), t.model, t.a.Extension
+		e.Model, e.MaxOutputTokens, e.From = r.listedModel(catalogue, t.a, l.names[i][j], l.lists[i], name)
+		e.Upstream, e.Extension = t.model, t.a.Extension
 	}
 	if !found && chain && len(targets) > 0 {
 		t := targets[0]
 		i := slices.Index(accounts, t.a)
 		n := Name{Public: steps[t.step].Model, Upstream: t.model, Base: t.model}
-		e.Model, e.Upstream, e.Extension = r.listedModel(t.a, n, l.lists[i], name), t.model, t.a.Extension
+		e.Model, e.MaxOutputTokens, e.From = r.listedModel(catalogue, t.a, n, l.lists[i], name)
+		e.Upstream, e.Extension = t.model, t.a.Extension
 		found = true
 	}
 	return e, found
 }
 
-// listedModel is the model n of account a, whose list from its extension is list, under name. A
-// model the account's config lists itself shows its upstream name as its display name, when the
-// router was made as created and the owner its extension names; one from the extension's list
-// shows what the extension says about it.
-func (r *Router) listedModel(a *Account, n Name, list *protocol.ModelList, name string) protocol.Model {
-	owner := a.Extension
-	if list != nil && list.OwnedBy != "" {
-		owner = list.OwnedBy
-	}
-	var m protocol.Model
-	if len(a.Models) > 0 {
-		m = protocol.Model{DisplayName: n.Upstream, Created: r.created.Unix()}
-	} else if list != nil {
+// listedModel is the model n of account a, whose list from its extension is list, under name,
+// merged by MergeModel from the account's own list, the catalogue (of a's extension and
+// settings) and the extension's built-in list, with where its limits came from. A model the
+// account's config lists itself shows its upstream name as its display name, when the router was
+// made as created and the owner its extension names; one from the extension's list shows what the
+// extension says about it.
+func (r *Router) listedModel(catalogue CatalogueFunc, a *Account, n Name, list *protocol.ModelList, name string) (protocol.Model, int, string) {
+	// A model of a list the account's own config asked for is the account's source; one the
+	// extension lists, the extension's.
+	var acct, ext, cat *protocol.Model
+	if len(a.Models) == 0 && list != nil {
 		if i := slices.IndexFunc(list.Models, func(x protocol.Model) bool { return x.ID == n.Upstream }); i >= 0 {
-			m = list.Models[i]
+			m := list.Models[i]
+			if list.From == protocol.ModelListFromAccount {
+				acct = &m
+			} else {
+				ext = &m
+			}
 		}
-		m.GenerationMethods = slices.Clone(m.GenerationMethods)
-		m.InputModalities = slices.Clone(m.InputModalities)
-		m.OutputModalities = slices.Clone(m.OutputModalities)
-		if m.Name != "" {
-			m.Name = renameResource(m.Name, n.Upstream, name)
+	}
+	if catalogue != nil {
+		if cm, ok := catalogue(a.Extension, a.Settings, n.Upstream); ok {
+			cat = &cm
 		}
+	}
+	m, maxOut, from := MergeModel(acct, cat, ext)
+	if len(a.Models) > 0 {
+		m.DisplayName, m.Created = n.Upstream, r.created.Unix()
+	} else if m.Name != "" {
+		m.Name = renameResource(m.Name, n.Upstream, name)
 	}
 	m.ID = name
 	if n.DisplayName != "" {
 		m.DisplayName = n.DisplayName
 	}
+	owner := a.Extension
+	if list != nil && list.OwnedBy != "" {
+		owner = list.OwnedBy
+	}
 	if m.OwnedBy == "" {
 		m.OwnedBy = owner
 	}
-	return m
+	return m, maxOut, from
 }
 
 // ModelNames returns public and upstream names served by extension's accounts, using

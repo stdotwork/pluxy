@@ -30,17 +30,16 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/buildinfo"
+	"github.com/stdotwork/pluxy/next/internal/catalogue"
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/extconfig"
 	"github.com/stdotwork/pluxy/next/internal/host"
-	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/logfile"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
@@ -107,9 +106,11 @@ type Core struct {
 
 	routing *routing // routing's checks and saved blocks, from start
 
-	usage  *usage.Store   // the usage record, kept across reloads
-	logs   *logfile.Files // the logs folder
-	themes *themeStore    // stored UI themes and selected theme ID in state/themes
+	usage        *usage.Store         // the usage record, kept across reloads
+	logs         *logfile.Files       // the logs folder
+	themes       *themeStore          // stored UI themes and selected theme ID in state/themes
+	catalogue    *catalogue.Catalogue // the models.dev snapshot and refresh
+	catalogueNow func() time.Time     // tests can move the refresh clock
 
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
@@ -141,7 +142,7 @@ func Start(opts Options) (*Core, error) {
 	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(),
-		bgCtx: bgCtx, bgCancel: bgCancel}
+		bgCtx: bgCtx, bgCancel: bgCancel, catalogueNow: time.Now}
 	c.loadPublicKey()
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {
@@ -189,6 +190,9 @@ func Start(opts Options) (*Core, error) {
 		c.logs = logfile.New(LogsDir(opts.ConfigPath))
 	}
 	c.themes = newThemeStore(filepath.Join(StateDir(opts.ConfigPath), "themes"))
+	c.catalogue = catalogue.New(catalogue.Options{
+		StatePath: filepath.Join(StateDir(opts.ConfigPath), "catalogue.json"),
+	})
 	c.pkgDir = cfg.Packages.Dir
 	// No publisher's folder can be called .settings: IDs start with a letter or digit.
 	c.settings = extconfig.NewStore(filepath.Join(c.pkgDir, ".settings"))
@@ -446,31 +450,7 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 	for _, n := range next.Config.Notices {
 		log.Print(n)
 	}
-	c.reportPendingImport(next.Config)
 	return nil
-}
-
-// reportPendingImport logs how many credential files of today's auth folder (a config.yaml's
-// oauth.auth-dir) are not imported yet. Core never imports them while it runs: see
-// legacy.Import.
-func (c *Core) reportPendingImport(cfg *server.Config) {
-	if cfg.AuthDir == "" {
-		return
-	}
-	known := map[string]bool{}
-	for _, r := range c.creds.Records() {
-		known[strings.ToLower(r.ID)] = true
-	}
-	for _, a := range cfg.Accounts() {
-		known[strings.ToLower(a.ID)] = true
-	}
-	n, err := legacy.Pending(cfg.AuthDir, func(id string) bool { return known[strings.ToLower(id)] })
-	switch {
-	case err != nil:
-		log.Printf("config.yaml: oauth.auth-dir: %v", err)
-	case n > 0:
-		log.Printf("config.yaml: oauth.auth-dir %s holds %d credential files not imported yet; to import them, stop core and run: pluxy -config %s -import-auth %s", cfg.AuthDir, n, c.opts.ConfigPath, cfg.AuthDir)
-	}
 }
 
 // fixed refuses a config that changes a setting that cannot change while core runs.
@@ -615,6 +595,9 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 	if err != nil {
 		c.discard(next, prev)
 		return nil, fmt.Errorf("config: %w", err)
+	}
+	if c.catalogue != nil {
+		router.UseCatalogue(c.catalogue.LookupFor)
 	}
 	if !c.opts.SafeMode {
 		router.UseCatalog(catalog(next.exts))

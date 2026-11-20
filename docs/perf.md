@@ -145,7 +145,7 @@ extension decoded both, though an extension that sends the client's body upstrea
 reads the parsed form. Later profiles put the largest remaining cost of a request in that
 encoding and decoding, on both sides of the socket.
 
-Since protocol 0.24 an extension can say it parses the body itself, and with which version of
+Since protocol 0.27 an extension can say it parses the body itself, and with which version of
 core's parsers (the SDK does, with its own release's `format.ParserVersion`), and core then
 leaves the parsed form out whenever the body is still the one it parsed and the extension's
 parser version is core's. The extension parses the body with the same parsers core uses, so its

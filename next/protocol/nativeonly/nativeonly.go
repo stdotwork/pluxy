@@ -1,4 +1,4 @@
-// Package nativeonly holds the rule of native-only generate calls (protocol minor version 24,
+// Package nativeonly holds the rule of native-only generate calls (protocol minor version 27,
 // protocol.Call.NativeOnly): when core may leave a request's items, tools and origin out of a
 // call, and how an extension restores them from the request's native body. It is apart from
 // package protocol because it uses the format parsers, whose tests use package protocol.

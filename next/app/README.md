@@ -300,6 +300,16 @@ theme snapshot. The app keeps the choice natively, in `privacy-mode.json` beside
 `connection.json` (readable only by your user), not in the window's storage, so losing that
 storage cannot turn it off. A file that cannot be read or parsed counts as on.
 
+## Files the window saves
+
+The Themes page's **Export**, the Logs page's downloads and the Usage page's **Export** save
+a file. In the panel that is a browser download. The app's window opens no address but the app's
+own, so a download link, whose address starts with `blob:`, does nothing there; these pages hand
+the file to the `file_save` command instead (`src-tauri/src/export.rs`). It saves the file in
+your Downloads folder (`Downloads` in your home folder when the desktop names none) under the
+page's name for it, and the page shows `Saved to <path>`. A name already there is kept, and the
+new file gets ` (1)`, ` (2)` and so on before its extension.
+
 ## Startup preferences
 
 The Connection page has three startup choices:
@@ -398,6 +408,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
 | `privacy_get`, `privacy_set` | Reads or saves privacy mode |
+| `file_save` | Saves a file one of the window's own pages made (a theme file, a log, the usage table) in the Downloads folder, never over another file, and returns its path |
 
 The window may also listen to the app's events. To add a command: add it to
 `command_names.rs`, to `generate_handler!` in `lib.rs`, and its `allow-<name>` permission to
@@ -578,12 +589,42 @@ In this order:
      and the plugin needs it: start the app from its real location, for example from Finder); the
      bundle is not running from a translocated copy (macOS runs an app opened from Downloads or a
      disk image from a read-only copy: move it into a folder of your own such as `~/Applications`
-     first); the bundle and its folder are yours and writable by no one else, so a bundle in
-     `/Applications` is refused, because other administrators can change that folder; and the
-     volume is APFS, which swaps two folders in one step. The stock plugin would ask for an
-     administrator's password when it cannot write the bundle; nothing here does (no
-     `osascript`, `sudo`, `installer` or `authopen`), and the quarantine attribute is neither
-     added nor removed.
+     first); the bundle is yours and writable by no one else, neither by its mode nor by an
+     extended access list entry that lets another account than you or root do more than read
+     (deny entries, such as the stock `group:everyone deny delete`, are fine); its folder is
+     either yours and writable by no one else in the same way, or the stock `/Applications` under
+     the rule below; and the volume is APFS, which swaps two folders in one step (an app run from
+     its mounted disk image, an HFS+ volume, is refused for that: drag it to Applications first).
+     The stock plugin would ask for an administrator's
+     password when it cannot write the bundle; nothing here does (no `osascript`, `sudo`,
+     `installer` or `authopen`), and the quarantine attribute is neither added nor removed.
+
+     A bundle in `/Applications` (`updater/applications.rs`) is updated when all of these hold,
+     each read through the folder, and the bundle in it, opened without following a link:
+     - the folder's path, links resolved, is exactly `/Applications` (not a folder inside it);
+     - it is owned by root, its group is the one named `admin` (looked up when the app checks,
+       not a fixed number), and others cannot write to it;
+     - no allow entry of its access list gives anyone but root or the `admin` group more than
+       reading, entries that only what is put in it inherits included; entries are told apart by
+       their UUIDs, so group 0 (`wheel`) is not taken for root;
+     - the bundle is a folder of yours that no one else can write to, and no allow entry of its
+       own access list gives anyone but you or root more than reading;
+     - the app's data folder, where the update is unpacked and checked, is on the same volume;
+     - your account is in `admin`. Otherwise the page says, whoever owns the bundle: "pluxy is
+       in /Applications, which only administrators can change, and this account is not one. Move
+       pluxy to Applications in your home folder (~/Applications) with Finder, open it from
+       there, and update then."
+
+     Any other refusal says which condition failed and what to do: for the folder, or when what
+     the rule reads cannot be read, the same advice; for a bundle that is not yours, to copy it to
+     `~/Applications` and open the copy; for a bundle others can write to, the `chmod` that takes
+     their write permission or the access list entry away.
+
+     The folder's other writers are this Mac's administrators, and any of them can already move
+     your bundle aside and put one of their own at its name, which your next start runs; the
+     updater adds nothing to that. It unpacks and checks the update in your private data folder,
+     makes one change in `/Applications` (it swaps the bundle's own entry, through the folder it
+     checked) and never lists or deletes anything there.
 3. The plugin restores the release from the feed (`restore_update`): its default comparison
    allows only a version newer than the running one, and the signature must carry the announced
    version. No custom comparison is set, so the feed can never offer a downgrade.
@@ -595,14 +636,21 @@ In this order:
    system's: a type-2 AppImage; on Windows a `.tar.gz` of the program set; or, on macOS, a
    `.app.tar.gz` holding one `<name>.app` folder. Either archive holds folders and regular files
    only (no links, devices, `..`, absolute paths, or setuid, setgid or sticky bits; at most 4096
-   entries and 1 GiB) and is unpacked into a new folder of yours (`.pluxy-update-<hex>`): on
-   Windows inside the program's folder, taking that folder's access list, and holding at its top
-   exactly the program (by this program's own name), `pluxy.exe` and the folder `bundled`, every
-   name one Windows holds as it is (no device name such as `CON`, no `:` stream, no trailing dot or
-   space, no backslash, none in the form of a short (8.3) name such as `PACKAG~1`, which may be
-   another entry's second name) and no two that differ only in case, with a 64-bit Windows
-   program (not a library) for this processor; on macOS next to the bundle, whose `Info.plist`
-   names this app's identifier and program and the announced version
+   entries and 1 GiB) and is unpacked into a new staging folder of yours: on Windows
+   `.pluxy-update-<hex>` inside the program's folder, taking that folder's access list, and
+   holding at its top exactly the program (by this program's own name), `pluxy.exe` and the
+   folder `bundled`, every name one Windows holds as it is (no device name such as `CON`, no `:`
+   stream, no trailing dot or space, no backslash, none in the form of a short (8.3) name such as
+   `PACKAG~1`, which may be another entry's second name) and no two that differ only in case,
+   with a 64-bit Windows program (not a library) for this processor; on macOS a staging folder
+   named `updates/staging/<hex>` in the app's data folder when that is on the bundle's volume, and
+   only if every folder from your home folder down to it is yours, not a link, and writable by no
+   one else, by the same rule as the bundle's folder (mode and access list; checked for the
+   folders that exist before anything is made in them, and again once the staging folder is made;
+   otherwise nothing is unpacked, and the page says which folder to fix); only on another volume
+   is it `.pluxy-update-<hex>` next to the bundle, and only when the bundle's folder is yours and
+   writable by no one else (in `/Applications` the update is refused instead); the staged `.app`'s
+   `Info.plist` names this app's identifier and program and the announced version
    (`CFBundleShortVersionString`), with a program for this Mac.
 6. The running version's copy is kept in the app's data folder (`updates/kept/`, the last three
    versions; on Windows the local data folder, on a fixed local drive, so it stays on this
@@ -634,30 +682,38 @@ In this order:
      program's name and start it; that start puts the other parts back by the record. What is
      left aside, and the staging folder, are removed once the new version runs and the old one has
      ended.
-   - macOS: the unpacked bundle and the installed one swap places in one step (`renamex_np` with
-     `RENAME_SWAP`): the bundle is the old one or the new one. The old one, now in the
-     `.pluxy-update-<hex>` folder, is removed once the new version runs and the old one has ended.
+   - macOS: the unpacked bundle and the installed one swap places in one step (`renameatx_np`
+     with `RENAME_SWAP`, by name in the staging folder and the bundle's folder, each opened
+     without following a link, the staging folder next to the bundle through the bundle's open
+     folder; read through those open folders, the bundle's folder must still pass the rule that
+     admitted it (yours and writable by no one else, by its mode and its access list, or the stock
+     `/Applications` with the staging folder private, not next to the bundle), and the staging folder still the one made, yours and
+     0700): the bundle is the old one or the new one. With private
+     staging, nothing else in the bundle's folder is made, changed or removed. The old bundle, now
+     in the staging folder, is removed once the new version runs and the old one has ended.
 
-   What an install leaves beside the installed copy is recorded in `updates/leftovers.json` before
-   the install goes on, with what identifies it beyond its name: the `.pluxy-update-<hex>` folder
-   right after it is created (read through one open of it, which must be an empty folder, and on
-   macOS yours alone), and on Windows each part just before it is renamed aside (by volume serial
-   number and file ID on Windows, by device and inode on macOS). When the record cannot be
-   written, the install deletes what it just made and stops. Should the app stop in the moment
-   between making the folder and recording it, that empty folder stays unrecorded, and no later
-   start removes it. Removal at a later start goes through the record only. An entry that is
+   What an install leaves (on Windows beside the installed copy, on macOS its staging folder) is
+   recorded in `updates/leftovers.json` before the install goes on, with what identifies it beyond
+   its name: the staging folder right after it is created (read through one open of it, which must
+   be an empty folder and, on macOS, yours alone, and is given an empty access list there, so it
+   takes no entry from its folder; by its device and inode on macOS), and, on Windows, each part
+   just before it is renamed aside (by its volume serial number and file ID). When the record
+   cannot be written, the install deletes what it just made and stops. Should the app stop in the
+   moment between making the folder and recording it, that empty folder stays unrecorded, and no
+   later start removes it. Removal at a later start goes through the record only. An entry that is
    still the recorded file or folder (and, on macOS, a folder of yours) is removed without
    following a link: on Windows through its open handle, a folder emptied through it first (each
    entry in it opened relative to it, a link or junction removed as a link); on macOS what is in it through the open
    folder, never entering a folder in it whose device differs from its own (a file system mounted
    there; a mount that keeps the device, as a bind mount from the same file system does, is not
    seen), then the emptied folder by its name only while that name still holds it. An entry whose
-   name is gone or now holds something else is dropped from the record and nothing at that name
-   is deleted; one still in use, or with a file system mounted in it, stays recorded for the next
-   start, and so do, on Windows, the staging folder and aside parts of an install whose
-   `pending.json` is not finished. A failed or cancelled install removes what it made the same
-   way, only while it is still what it made. The folder the installed copy is in is never listed,
-   so whatever someone else put there, even under one of these names, stays.
+   name is gone or now holds something else (on Windows a folder too) is dropped from the record
+   and nothing at that name is deleted; one still in use, or with a file system mounted in it,
+   stays recorded for the next start, and so do, on Windows, the staging folder and aside parts of
+   an install whose `pending.json` is not finished. A failed or cancelled install removes what it
+   made the same way, only while it is still what it made. Neither the folder the installed copy
+   is in nor the private staging folder is ever listed, so whatever someone else put there, even
+   under one of these names, stays.
 7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
    that order; detached launches run on) and hides its window, but keeps its profile and starts the
    new version as its successor, handing the profile over so no other launch takes it meanwhile
@@ -1559,8 +1615,9 @@ One more session in managed mode (`native/privacy.ts`) runs the privacy mode che
 (`src-tauri/src/native_privacy.rs`) and then the themes checks (`src-tauri/src/native_themes.rs`):
 the T3 Code theme file `ui/tests/fixtures/t3-docs-nightfall.json`, pasted on the Themes page and
 added, paints the window in its canvas colour with the root's `dark` class, the picker lists it,
-`GET /themes` through the app's host has it as `current`, and the next launch paints in it. The
-session ends on the Themes page in that theme.
+`GET /themes` through the app's host has it as `current`, Export saves `nightfall.json` in the
+session's Downloads folder with the theme file's JSON (read from disk at the path the page shows),
+and the next launch paints in it. The session ends on the Themes page in that theme.
 
 One more managed session (`native/setup.ts`, with the stages in `src-tauri/src/native_setup.rs`)
 walks [Setup](../management/README.md#setup) on the app's first start, on the build with
@@ -1710,7 +1767,7 @@ after `bun run build`; both use the Tauri CLI pinned in `package.json`:
 ```bash
 bun run package:test <out-dir>          # the test package, for checks: an AppImage (Linux), a
                                         # folder bundle and a per-user setup program (Windows) or
-                                        # an app bundle (macOS)
+                                        # an app bundle and disk image (macOS)
 bun run package:release [artifact...]   # the release gate: builds and checks; uploads nothing
 ```
 
@@ -1736,7 +1793,9 @@ the build. Afterwards the tools folder must hold only the pinned tools and the b
 plugin scripts. The AppImage's type is still checked on the output.
 
 On Windows and macOS `package:test` builds the same two debug apps with the same overlay, with
-the `app` bundle on macOS (no disk image). On Windows each build's program goes into a plain
+the `app` bundle on macOS. On macOS the first build is also bundled as Tauri's disk image (`dmg`:
+the bundle and a link to `/Applications` on an HFS+ volume, unsigned), copied to
+`<out-dir>/pluxy-test_<version>_<arch>.dmg`. On Windows each build's program goes into a plain
 folder bundle of its own, `<out-dir>/pluxy Test/` and `<out-dir>/update/pluxy Test/`, each holding the program set the
 updater replaces: `pluxy-app-test.exe` and, until the app bundles its core, a stub `pluxy.exe` and
 `bundled\stub.txt` (text files that say the version; nothing runs them). The update is the second
@@ -1777,9 +1836,9 @@ extended attributes or quarantine), and the update is the second bundle as a `.a
 by the command (one top folder, no macOS metadata), signed; no signing identity or notarization
 is used. `test-package.json` names the bundle, the program in it, the public key, the update
 (its bundle, payload, feed target `windows-x86_64-set` or `darwin-aarch64-app`, version and
-signature) and on Windows the setup program. The builds download nothing there, so they run in
-the caller's environment, Cargo offline after `cargo fetch --locked` and every proxy variable
-pointing at a closed port.
+signature), on Windows the setup program and on macOS the disk image. The builds download nothing
+there, so they run in the caller's environment, Cargo offline after `cargo fetch --locked` and
+every proxy variable pointing at a closed port.
 
 `package:release` turns on no bundle format: release formats are not chosen yet. It builds the
 release app with no features and no overlay (`tauri build --no-bundle`), finds that build's
@@ -1844,18 +1903,25 @@ app supported there:
     in Notepad or TextEdit, and on Windows a `.jsonl` file in the fixture program, through a
     per-user file type of the check's own that it removes again; on macOS no app opens `.jsonl`
     files on GitHub's image, so it checks that refusal there ([Limits](#limits));
-  - the update session: the test package (a folder bundle's program set on Windows, an app
-    bundle on macOS) updates itself to its signed newer version and rolls back, and crafted
-    installs are refused; on Windows an update is also ended between two parts of the set, and
-    the earlier version, started again on the half-replaced folder, undoes it
+  - the update session: the test package (a folder bundle's program set on Windows, an app bundle
+    on macOS) updates itself to its signed newer version and rolls back, and crafted installs are
+    refused; on Windows an update is also ended between two parts of the set, and the earlier
+    version, started again on the half-replaced folder, undoes it; on macOS it does so from
+    `~/Applications` and from the stock `/Applications`, where an access list entry, another
+    owner or an account outside `admin` is refused
     ([Application update](#application-update));
-  - the install session, on Windows (with the update session, in the job that builds the test
-    package): the per-user setup program, run silently, installs into the user's local application
+  - the install session (with the update session, in the job that builds the test package): on
+    Windows the per-user setup program, run silently, installs into the user's local application
     data folder with nothing machine-wide and no elevation asked; the installed app updates itself
     in place and rolls back, the uninstall entry's version following; the setup and the
     uninstaller refuse while the app runs; uninstalling removes the folder (with what the app left
     in it), the login item and the uninstall entry, keeps the app's data, and does not follow a
-    junction in `bundled\` ([Packages](#packages));
+    junction in `bundled\` ([Packages](#packages)); on macOS the test package's disk image is
+    attached and its bundle, copied out with `ditto` into `/Applications` and `~/Applications`,
+    updates itself and rolls back from each; run from the mounted image it is refused because the
+    image's volume is not APFS; what `spctl` and `syspolicy_check` say is recorded, not judged
+    (the image is unsigned and, built on the runner, never quarantined, so Gatekeeper's first
+    open is not tested there);
   - the dialogs session (`native/dialogs.ts`, a job of its own): the app in local mode against a
     test core, with the window's and page's command probes, the native confirmations, key entry and
     key rotation; then a second run in managed mode, against signed test core releases, with the
@@ -2001,8 +2067,8 @@ installed, and as an app bundle on macOS
   counts which way each input went.
 - No release installer or bundled core yet: the only packages are the test AppImage, the test
   folder bundle and per-user setup program (Windows; their `pluxy.exe` and `bundled\` are stubs,
-  and nothing is code-signed) and the test app bundle (macOS), which are not for release. How
-  Windows SmartScreen treats the unsigned setup program is not tested.
+  and nothing is code-signed) and the test app bundle and its disk image (macOS), which are not
+  for release. How Windows SmartScreen treats the unsigned setup program is not tested.
   The app updates only itself: as an AppImage on Linux x86_64, on Windows x86_64 as the program
   set of a folder bundle or of a copy the per-user setup program installed, and as an app bundle
   on macOS, and only with test updater trust until release
@@ -2017,6 +2083,9 @@ installed, and as an app bundle on macOS
   data folder's `updates\kept\`) in place of the installed one to run it again. On
   Windows a new version waits at most 120 seconds for the old one to end and free the profile,
   then exits.
+- On macOS, deleting the app (dragging it to the Trash) leaves its login item behind: the file
+  `~/Library/LaunchAgents/dev.pluxy.desktop.plist` stays and names a program that is gone. Turn
+  **Launch at startup** off before deleting the app, or delete that file.
 - Opening an address in the system's handler for https addresses (normally the default browser; an
   app that claims the address's domain may take it instead) works on all three systems: GIO on
   Linux, the `https` class's `open` verb (`ShellExecuteExW`) on Windows, `NSWorkspace` on macOS;

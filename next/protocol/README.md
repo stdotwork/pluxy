@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.24
+# pluxy extension protocol, version 0.27
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -35,13 +35,12 @@ the registry's `tier`. Version 0.22 adds the account's
 [`timeouts`](#timeouts): upstream request limits for response headers, stream byte gaps and
 non-streamed completion. Version 0.23 adds [alive frames](#alive-frames): the extension tells core
 its upstream is still sending, and core ends a call that sends nothing at all for too long.
-Version 0.24 adds [native-only calls](#native-only-calls): an extension that parses the client's
-body itself gets a `generate` call's request without its parsed form, so the request's content
-crosses the socket once. It is
-deliberately small; later versions add capabilities and more operations
-without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.24 (see
-[Versioning](#versioning)).
+Version 0.24 adds a model's `capabilities`: what the model supports and when it was deprecated. It
+is deliberately small; later versions add more capabilities and operations without changing what
+is described here. An extension written for version 0 works unchanged with a core that speaks 0.24
+(see [Versioning](#versioning)). Version 0.27 adds [native-only calls](#native-only-calls): an
+extension that parses the client's body itself gets a `generate` call's request without its parsed
+form, so the request's content crosses the socket once.
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -263,7 +262,7 @@ Core opens a connection and writes one call frame:
 | `capture` | Since 0.13, for `generate`, `count_tokens` and `endpoint`: true when core asks for the call's [upstream capture](#upstream-capture). Absent: false. |
 | `payload` | Since 0.14, for `generate`, `count_tokens` and `endpoint`, and since 0.15 for a `session.turn`: the [payload rules](#payload-rules) that apply to the call or turn. Absent: none. |
 | `alive` | Since 0.23, for `generate`, `count_tokens` and `endpoint`: true when core takes [alive frames](#alive-frames) on the call. Absent: false. |
-| `native_only` | Since 0.24, for `generate`, to an extension whose describe's `native_parser` is core's: true when core left the request's `items`, `tools` and `origin` out, for the extension to parse from `native.body` (see [Native-only calls](#native-only-calls)). Absent: false. |
+| `native_only` | Since 0.27, for `generate`, to an extension whose describe's `native_parser` is core's: true when core left the request's `items`, `tools` and `origin` out, for the extension to parse from `native.body` (see [Native-only calls](#native-only-calls)). Absent: false. |
 
 An extension that gets an `op` it does not know replies with an `error` event whose code is
 `unsupported`.
@@ -284,7 +283,7 @@ accounts, `session` when it holds [sessions](#sessions), `count_tokens` when it
 `check` when it [checks](#check) its accounts, `quota` when it reads their [quota](#quota), and
 `endpoint` when it serves [endpoint calls](#endpoint). An
 extension that lists `login` also
-lists its `login_methods` (see [Login and refresh](#login-and-refresh)). Since 0.24, a
+lists its `login_methods` (see [Login and refresh](#login-and-refresh)). Since 0.27, a
 `native_parser` above 0 says the extension takes [native-only calls](#native-only-calls), and
 which version of core's parsers it parses them with.
 
@@ -349,7 +348,8 @@ event as for `generate`.
 
 ```json
 {"type": "models.result", "models": {"owned_by": "openai", "from": "account", "models": [
-  {"id": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "created": 1794268800, "context_length": 400000, "max_completion_tokens": 128000}
+  {"id": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "created": 1794268800, "context_length": 400000, "max_completion_tokens": 128000,
+   "capabilities": {"tools": true, "structured_output": true, "vision": true, "pdf": false, "reasoning": true, "reasoning_levels": ["low", "medium", "high", "xhigh", "max"]}}
 ]}}
 ```
 
@@ -366,6 +366,7 @@ event as for `generate`.
 | model `context_length`, `max_completion_tokens` | Its context window and longest reply, in tokens. |
 | model `input_token_limit`, `output_token_limit` | Gemini's names for the same limits, where the provider gives them apart. Default: the two above. |
 | model `generation_methods`, `input_modalities`, `output_modalities` | Gemini's `supportedGenerationMethods`, `supportedInputModalities` and `supportedOutputModalities`. |
+| model `capabilities` | Optional, since 0.24: what the model supports and when it was deprecated — `tools`, `structured_output`, `vision`, `pdf`, `reasoning` (booleans), `reasoning_levels` (optional list from `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` when `reasoning` is true), and `deprecated_at` (optional Unix seconds). For an extension below 0.24, core ignores `capabilities` and fills them from its catalogue only. |
 
 Every field but `id` is optional and shown only where a client's list has a place for it. Core
 renames, leaves out and prefixes the listed models by the account's naming rules (its `models`,
@@ -757,7 +758,7 @@ stream or request with an error instead.
 
 A request is an ordered list of typed items plus options. It is modelled on the prompt types of
 Vercel's AI SDK Language Model Specification and on the items of Open Responses, kept small for
-version 0. A [native-only call](#native-only-calls) (since 0.24) carries it without its `items`,
+version 0. A [native-only call](#native-only-calls) (since 0.27) carries it without its `items`,
 `tools` and `origin`, which the extension parses from `native.body`.
 
 ```json
@@ -848,7 +849,7 @@ the client's format cannot hold.
 
 ### Native-only calls
 
-Since 0.24. The parsed request (`items`, `tools`, `origin`) and `native.body` are the same content
+Since 0.27. The parsed request (`items`, `tools`, `origin`) and `native.body` are the same content
 twice, each about as large as the client's body, while an extension that sends `native.body`
 upstream needs only the body. So an extension may say in describe that it parses the body itself,
 and with which version of core's parsers: `native_parser`, an integer (`format.ParserVersion` in
@@ -874,9 +875,8 @@ are core's, not the body's: `model` (which core may have renamed), `stream`, `op
 parser for its format (the `next/format` packages; for `gemini.generate_content` with the
 request's `model` and `stream`), takes `items`, `tools` and `origin` from the result and keeps
 the call's other fields. The Go SDK does this before the handler runs (`nativeonly.Parse` in `next/protocol/nativeonly`),
-so a handler gets the same request as from a full call. An extension built with other parsers
-than core's gets what those make of the body. `count_tokens` and `endpoint` calls and session
-turns always carry the full request.
+so a handler gets the same request as from a full call. `count_tokens` and `endpoint` calls and
+session turns always carry the full request.
 
 ## Events
 
@@ -1472,7 +1472,7 @@ extension below 0.23 gets none: it cannot promise alive frames.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.24. An extension reports the minor version it
+raise the minor version: this document is version 0.27. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1503,9 +1503,10 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.21 | A manifest's optional `title`, `summary` and `kind`, and a [registry index](#registry-index) package's optional `title`, `summary`, `kind` and `tier`. No call or frame changes. |
 | 0.22 | The account's optional [`timeouts`](#timeouts). |
 | 0.23 | [Alive frames](#alive-frames): the call's and turn's `alive` and the `alive` frame; core's `extension_timeout`. |
-| 0.24 | [Native-only calls](#native-only-calls): describe's `native_parser` and the call's `native_only`. |
+| 0.24 | A model's `capabilities` ([`models`](#models)). |
+| 0.27 | [Native-only calls](#native-only-calls): describe's `native_parser` and the call's `native_only`. |
 
-## What version 0.24 leaves out
+## What version 0.27 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

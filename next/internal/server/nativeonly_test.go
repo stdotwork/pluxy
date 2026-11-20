@@ -29,7 +29,7 @@ type nativeOnlyRequest struct {
 }
 
 // TestNativeOnlyFrameGivesTheSameRequest is the differential test of native-only generate calls
-// (protocol minor 24): for every generate request the corpus cases send and every request body
+// (protocol minor 27): for every generate request the corpus cases send and every request body
 // the format packages' tests hold as a literal, a handler that gets it in a native-only call (core
 // leaves its items, tools and origin out and the extension parses its native body) gets the same
 // llm.Request, field for field, as one that gets the full call. Each request goes as core reads

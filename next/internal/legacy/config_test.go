@@ -485,7 +485,7 @@ func TestContainerSettings(t *testing.T) {
 }
 
 // A bcrypt hash of the management key cannot be used as the key: the translation says so and
-// leaves the key out (core refuses to serve the config; -import-auth still reads it).
+// leaves the key out (core refuses to serve the config; pluxy import cpa makes a new key).
 func TestHashedManagementKey(t *testing.T) {
 	r := translate(t, `remote-management: {secret-key: "$2a$10$abcdefghijklmnopqrstuuAbCdEfGhIjKlMnOpQrStUvWxYz01234"}`)
 	if _, ok := r.Config["management_key"]; ok || !r.HashedManagementKey {
@@ -906,7 +906,7 @@ openai-compatibility:
 // import keeps the first and names the alias and every member it drops; a model listed twice
 // loses nothing and is not named, and in the other sections, where today's core also takes the
 // first entry, nothing is named.
-func TestAliasPoolIsNamedOnImport(t *testing.T) {
+func TestAliasPoolBecomesAChain(t *testing.T) {
 	r := translate(t, `
 codex-api-key:
   - api-key: k1
@@ -927,18 +927,25 @@ openai-compatibility:
       - {name: plain}
 `)
 	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
+	// Each model of the pool is served under its own name, which the chain's steps name.
 	equalJSON(t, exts[OpenAICompatible].(map[string]any)["accounts"], `[{
-		"id": "compat", "models": [{"name": "deepseek-v3.1", "alias": "claude-opus-4.66"}, "plain"],
+		"id": "compat", "models": ["plain", "deepseek-v3.1", "glm-5", "kimi-k2.5"],
 		"settings": {"base_url": "https://compat.example.com/v1"},
 		"credential": {"kind": "api_key", "api_key": "k2"}
 	}]`)
+	equalJSON(t, asJSON(t, r.Config["routing"]).(map[string]any)["chains"], `{"claude-opus-4.66": [
+		{"model": "deepseek-v3.1", "provider": "pluxy/openai-compatible", "accounts": ["compat"]},
+		{"model": "glm-5", "provider": "pluxy/openai-compatible", "accounts": ["compat"]},
+		{"model": "kimi-k2.5", "provider": "pluxy/openai-compatible", "accounts": ["compat"]}
+	]}`)
 	n := notices(r)
-	for _, want := range []string{`openai-compatibility key compat`, `alias "claude-opus-4.66"`, `lists 3 upstream models`, `does not pool models yet`, `serves only the first, "deepseek-v3.1"`, `dropped: "glm-5", "kimi-k2.5"`} {
+	for _, want := range []string{`openai-compatibility key compat`, `alias "claude-opus-4.66"`, `lists 3 upstream models`, `fallback chain routing.chains.claude-opus-4.66`} {
 		if !strings.Contains(n, want) {
 			t.Errorf("notices lack %q:\n%s", want, n)
 		}
 	}
-	if strings.Count(n, "claude-opus-4.66") != 1 || strings.Contains(n, "plain") || strings.Contains(n, "pub-a") {
+	// Only openai-compatibility pools: today's core keeps the first entry elsewhere.
+	if strings.Contains(n, "plain") || strings.Contains(n, "pub-a") {
 		t.Errorf("notices name more than the one pool:\n%s", n)
 	}
 }
