@@ -485,7 +485,7 @@ func TestContainerSettings(t *testing.T) {
 }
 
 // A bcrypt hash of the management key cannot be used as the key: the translation says so and
-// leaves the key out (core refuses to serve the config; -import-auth still reads it).
+// leaves the key out (core refuses to serve the config; pluxy import cpa makes a new key).
 func TestHashedManagementKey(t *testing.T) {
 	r := translate(t, `remote-management: {secret-key: "$2a$10$abcdefghijklmnopqrstuuAbCdEfGhIjKlMnOpQrStUvWxYz01234"}`)
 	if _, ok := r.Config["management_key"]; ok || !r.HashedManagementKey {
