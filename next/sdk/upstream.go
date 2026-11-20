@@ -21,9 +21,15 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
-// Upstream wraps an extension's upstream transport. Without a proxy it delegates to base
-// unchanged, preserving its connection pool, HTTP versions and timeout settings, except for a
-// tracked request (see below). A call whose account has a proxy (Info.ProxyURL) goes through a
+// Upstream wraps an extension's upstream transport. Without a proxy it delegates to base,
+// preserving its connection pool, HTTP versions and timeout settings, except for a tracked
+// request (see below). One setting of base changes before its first use: when base sets
+// MaxIdleConns above 0 and leaves MaxIdleConnsPerHost at 0, Upstream sets MaxIdleConnsPerHost to
+// MaxIdleConns. net/http otherwise keeps only DefaultMaxIdleConnsPerHost (2) idle connections
+// per host, so a burst of concurrent requests to one upstream would close all but 2 of its
+// connections and dial new ones (and, on TLS, handshake again) for the next burst. A base that
+// sets MaxIdleConnsPerHost keeps its value, and a base with MaxIdleConns 0 keeps net/http's
+// default per-host limit. The per-proxy and tracked copies below inherit the setting. A call whose account has a proxy (Info.ProxyURL) goes through a
 // copy of base that sends every request through that proxy, one copy per proxy, kept for reuse. A call whose account has headers
 // (Info.Headers) sends each of them on every request, in place of any value the extension set
 // for the same name. A call with payload rules (Info.Payload, protocol minor version 14) has them
@@ -43,6 +49,9 @@ import (
 // base must be non-nil and must not be changed after use.
 func Upstream(base *http.Transport) http.RoundTripper {
 	upstreamUsed.Store(true)
+	if base.MaxIdleConnsPerHost == 0 && base.MaxIdleConns > 0 {
+		base.MaxIdleConnsPerHost = base.MaxIdleConns
+	}
 	return upstreamTransport{base: base, proxies: &proxyPool{}}
 }
 
@@ -79,7 +88,7 @@ func refuseUpstream(call protocol.Call) *llm.Error {
 		return nil
 	}
 	return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
-		Message: fmt.Sprintf("this extension sends no request through sdk.Upstream, so it cannot use %s account %q; the call was not sent", what, a.ID)}
+		Message: fmt.Sprintf("this extension sends no request through sdk.Upstream, so it cannot use %s the account; the call was not sent", what)}
 }
 
 type upstreamTransport struct {
@@ -102,6 +111,9 @@ func (t upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		}
 		return nil, err
 	}
+	if sink := aliveFrom(req.Context()); sink != nil {
+		rt = aliveTransport{next: rt, sink: sink}
+	}
 	if len(info.Headers) > 0 {
 		req = withHeaders(req, info.Headers)
 	}
@@ -109,6 +121,9 @@ func (t upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		if req, err = withPayload(req); err != nil {
 			return nil, err
 		}
+	}
+	if hasTimeouts(info) {
+		rt = timeoutTransport{next: rt, info: info}
 	}
 	if info.capture != nil {
 		return info.capture.roundTrip(rt, req)
@@ -436,6 +451,11 @@ type Info struct {
 	// version 14, 15 for a turn), which Upstream applies to each JSON request body and
 	// ApplyPayload to a message; nil for none. Read-only.
 	Payload *payload.Rules
+	// Stream is true when the call's model request asked for streaming.
+	Stream bool
+	// Timeouts holds the upstream timeouts core resolved for the account (minor version 19).
+	// Nil uses the SDK defaults when hasTimeouts is set.
+	Timeouts *protocol.Timeouts
 
 	capture *captureLog // the call's capture, when core asked for one
 }
@@ -478,10 +498,12 @@ func withUpstreamInfo(ctx context.Context, call protocol.Call) (context.Context,
 	if call.Account != nil {
 		info.AccountID, info.Settings, info.ProxyURL = call.Account.ID, call.Account.Settings, call.Account.ProxyURL
 		info.Headers = call.Account.Headers
+		info.Timeouts = call.Account.Timeouts
 	}
 	info.Payload = call.Payload
 	if call.Request != nil {
 		info.Model = call.Request.Model
+		info.Stream = call.Request.Stream
 		if call.Request.Native != nil {
 			info.Format = call.Request.Native.Format
 		}

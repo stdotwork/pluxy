@@ -226,7 +226,7 @@ These stay stable within a theme contract version:
 | `data-appearance="light"` or `"dark"` | Root element |
 | `class="dark"` | Root element, while the appearance is dark |
 | `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `routing`, `quota`, `logs`, `usage`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `routing`, `quota`, `logs`, `usage`, `setup`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root |
 | `data-part="nav"` | The navigation |
 | `data-part="nav-group"` | A group of navigation entries under its label; `data-group` is `operate`, `gateway`, `observe`, `control` or `extensions` (the extensions' pages) |
@@ -283,6 +283,10 @@ These stay stable within a theme contract version:
 | `data-part="account-edit-discard"` | The Edit form's question before unsaved changes are discarded. |
 | `data-part="subscription-end"` | The Quota card's line with the day a subscription ends. |
 | `data-part="privacy-toggle"` | The navigation's privacy mode switch; `aria-pressed="true"` while it masks account e-mail addresses and identifiers, and the root then has `data-privacy="on"`. |
+| `data-part="setup-found"` | The Setup page's list of what core found on its machine; `aria-busy="true"` while core looks again. |
+| `data-part="setup-pick"` | One provider on the Setup page's checklist; `data-state` is `offered`, `installed` or `failed`. |
+| `data-part="setup-client"` | One client on the Setup page; `data-state` is `not-configured`, `configured`, `needs-update`, `refused` or `not-found`. |
+| `data-part="setup-paste"` | The text to paste into a client's settings files, open under its client. |
 
 Some parts also carry the `data-slot` name that [T3 Code](https://github.com/pingdotgg/t3code)
 gives the same part, and the root's `dark` class is the one T3 Code uses. They exist so that the
@@ -310,7 +314,10 @@ On the Themes page:
 - **Add a theme** takes a theme file, or JSON pasted into the box. The UI checks it first: a file
   it refuses is not stored, and the page says why. A theme that is added is turned on at once.
 - **Export** saves the file of the theme that is on as `<name>.json`, a built-in theme's too. The
-  file holds the JSON that was added; its spacing and the order of its fields can differ.
+  file holds the JSON that was added; its spacing and the order of its fields can differ. The
+  panel downloads it; the desktop app saves it in your Downloads folder and says where. To add a
+  built-in theme's file back as a theme of your own, change its `id` first: the page refuses a
+  file with a built-in theme's ID.
 - **Remove** deletes the stored theme that is on from core, and the default theme comes back.
 
 A window follows a change made in another window or with `pluxy theme` when it next gets focus
@@ -331,10 +338,13 @@ pluxy theme clear                    # back to the default theme
 pluxy theme remove <id>
 ```
 
-`pluxy theme add` stores the file under `--id`, else under the file's own `id` when it is
-`publisher/name`, else under `t3/<file name>`. The command does not check the file as the UI
-does: a stored file the UI cannot read is listed on the Themes page with the reason and cannot be
-turned on. The built-in themes' IDs are `pluxy/default`, `pluxy/terminal` and `pluxy/paper`.
+`pluxy theme add` stores the file under `--id`. For a pluxy theme file with `theme_version`, it
+uses the file's own `id` when it is `publisher/name`, else `t3/<file name>`. For a T3 Code theme
+file with no `theme_version`, it uses `t3/<id>` when `id` is a valid T3 Code theme ID; otherwise it
+derives the part after `t3/` from `name` as the Themes page does. When neither `id` nor `name` is
+usable, it uses `t3/<file name>`. The command does not check the file as the UI does: a stored file
+the UI cannot read is listed on the Themes page with the reason and cannot be turned on. The
+built-in themes' IDs are `pluxy/default`, `pluxy/terminal` and `pluxy/paper`.
 
 ## Safe mode
 

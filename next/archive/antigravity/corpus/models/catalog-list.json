@@ -1,0 +1,81 @@
+{
+  "description": "An Antigravity login whose config lists no models lists today's catalog for it.",
+  "source": [
+    "core/sdk/cliproxy/service_models.go",
+    "core/internal/registry/models/models.json antigravity"
+  ],
+  "client": {
+    "method": "GET",
+    "path": "/v1/models"
+  },
+  "account_models": [
+    "claude-sonnet-5-5-high",
+    "gemini-3.8-flash-high"
+  ],
+  "old_core": {
+    "account": {
+      "models": null
+    }
+  },
+  "new_core": {
+    "account": {
+      "models": null
+    }
+  },
+  "unordered": [
+    "client.body.data"
+  ],
+  "exceptions": [
+    {
+      "path": "client.body.data",
+      "kind": "intended",
+      "reason": "The new core enriches GET /v1/models entries with context_length, max_output_tokens, capabilities and from merged across the account's list, core's models.dev catalogue and the extension's built-in list (with the smaller positive limit winning); today's core lists only id, object, created and owned_by.",
+      "want": [
+        {
+          "context_length": 1000000,
+          "from": "extension",
+          "id": "claude-sonnet-5-5-high",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "antigravity"
+        },
+        {
+          "context_length": 1048576,
+          "from": "extension",
+          "id": "gemini-3.8-flash-high",
+          "max_output_tokens": 65536,
+          "object": "model",
+          "owned_by": "antigravity"
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "data": [
+          {
+            "id": "claude-sonnet-5-5-high",
+            "object": "model",
+            "owned_by": "antigravity"
+          },
+          {
+            "id": "gemini-3.8-flash-high",
+            "object": "model",
+            "owned_by": "antigravity"
+          }
+        ],
+        "object": "list"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

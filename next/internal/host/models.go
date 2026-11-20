@@ -15,6 +15,10 @@ func ListsModels(info protocol.Info) bool {
 	return info.ProtocolMinor >= 3 && slices.Contains(info.Operations, protocol.OpModels)
 }
 
+// CapabilitiesMinor is the protocol minor version that adds a model's capabilities: core ignores
+// the capabilities of an extension that implements an earlier one.
+const CapabilitiesMinor = 24
+
 // MaxListedModels bounds how many models one models call may return; more is a protocol error.
 const MaxListedModels = 10000
 
@@ -55,6 +59,9 @@ func (e *Extension) Models(ctx context.Context, account protocol.Account) (*prot
 			if m.ID == "" {
 				return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s listed a model without an id", e.manifest.ID)}
 			}
+			if e.info.ProtocolMinor < CapabilitiesMinor {
+				m.Capabilities = nil
+			}
 			list.Models = append(list.Models, redactModel(redact, m))
 		}
 		return list, nil
@@ -72,6 +79,14 @@ func redactModel(r *protocol.Redactor, m protocol.Model) protocol.Model {
 		for i := range list {
 			list[i] = r.String(list[i])
 		}
+	}
+	if m.Capabilities != nil {
+		c := *m.Capabilities
+		c.ReasoningLevels = slices.Clone(c.ReasoningLevels)
+		for i := range c.ReasoningLevels {
+			c.ReasoningLevels[i] = r.String(c.ReasoningLevels[i])
+		}
+		m.Capabilities = &c
 	}
 	return m
 }

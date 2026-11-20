@@ -9,12 +9,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,7 +24,6 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/buildinfo"
 	"github.com/stdotwork/pluxy/next/internal/core"
 	"github.com/stdotwork/pluxy/next/internal/cred"
-	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/logfile"
 	"github.com/stdotwork/pluxy/next/internal/pages"
 	"github.com/stdotwork/pluxy/next/internal/panel"
@@ -38,6 +39,8 @@ func main() {
 		serve(args)
 	case args[0] == "serve":
 		serve(args[1:])
+	case args[0] == "init":
+		os.Exit(initConfig(args[1:], os.Stdout, os.Stderr))
 	default:
 		// Every other subcommand is a client of a running core's management API (cli.go).
 		os.Exit(runCLI(args, os.Stdout, os.Stderr, os.Getenv))
@@ -51,7 +54,6 @@ func serve(args []string) {
 	safeMode := fs.Bool("safe-mode", false, "start no extensions: client requests fail, the management API works")
 	watch := fs.Duration("watch-interval", time.Second, "how often to look for config file changes (0: do not watch)")
 	bundled := fs.String("bundled", "", "index of the registry of bundled packages (default: bundled/index.json beside this program, when it exists)")
-	importAuth := fs.String("import-auth", "", "copy the credential files of today's core's auth folder at this path into the credential store, then exit (run it while core is stopped)")
 	version := fs.Bool("version", false, "print the build's version, commit and build date, then exit")
 	listenFD := fs.Int("listen-fd", -1, "serve on the listening TCP socket inherited at this file descriptor instead of binding listen (for a program that starts core and keeps the socket)")
 	fs.Usage = func() {
@@ -67,62 +69,10 @@ func serve(args []string) {
 		fmt.Println(buildinfo.Line())
 		return
 	}
-	if *importAuth != "" {
-		if err := importAuthDir(*configPath, *importAuth); err != nil {
-			log.Print(err)
-			os.Exit(1)
-		}
-		return
-	}
 	if err := run(*configPath, *safeMode, *watch, *bundled, *listenFD); err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}
-}
-
-// importAuthDir copies the credential files in today's core's auth folder dir into the
-// credential store of the config at configPath, and says what it imported and skipped. The
-// config's notices (settings it ignores, a hashed management key) go to standard error, as
-// core's log does at start, so a script reading the counts on standard output does not see them.
-func importAuthDir(configPath, dir string) error {
-	cfg, err := server.LoadConfig(configPath)
-	if err != nil {
-		return core.ScrubConfigError(configPath, err)
-	}
-	for _, n := range cfg.Notices {
-		log.Print(n)
-	}
-	if err := legacy.CheckImportFolders(dir, cfg.CredentialsDir); err != nil {
-		return err
-	}
-	files, skipped, err := legacy.ReadAuthDir(dir, cfg.Import, time.Now())
-	if err != nil {
-		return fmt.Errorf("reading %s: %w", dir, err)
-	}
-	store, err := cred.Open(cred.FileBackend{Dir: cfg.CredentialsDir})
-	if err != nil {
-		return err
-	}
-	reserved := map[string]bool{}
-	for _, a := range cfg.Accounts() {
-		reserved[strings.ToLower(a.ID)] = true
-	}
-	imported, more, err := legacy.Import(store, files, func(id string) bool { return reserved[strings.ToLower(id)] })
-	for _, f := range imported {
-		line := fmt.Sprintf("imported %s as account %s (%s)", f.File, f.Record.ID, f.Record.Extension)
-		if len(f.Ignored) > 0 {
-			line += "; not supported yet, not imported: " + strings.Join(f.Ignored, ", ")
-		}
-		fmt.Println(line)
-	}
-	for _, s := range append(skipped, more...) {
-		fmt.Printf("skipped %s: %s\n", s.File, s.Reason)
-	}
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%d imported, %d skipped, into %s\n", len(imported), len(skipped)+len(more), cfg.CredentialsDir)
-	return nil
 }
 
 // listen binds addr, or with fd 0 or more serves on the listening TCP socket inherited at fd.
@@ -152,6 +102,72 @@ func listen(addr string, fd int) (net.Listener, error) {
 		return nil, fmt.Errorf("-listen-fd %d: not a TCP socket", fd)
 	}
 	return ln, nil
+}
+
+// initPortEnv names the port a config written at a first start listens on, in place of 8317 or
+// a free one; 0 is a free one. Only for tests, which must never take 8317 on the machine they
+// run on.
+const initPortEnv = "PLUXY_INIT_PORT"
+
+// firstStart writes a first config at configPath when there is no file there, and says where
+// it is: a new install starts with no config. It logs the file's path, never its keys.
+// With inherited set, core serves on a socket it was handed (-listen-fd), not on the address it
+// writes, so it does not name that address.
+func firstStart(configPath string, inherited bool) error {
+	if _, err := os.Stat(configPath); !errors.Is(err, fs.ErrNotExist) {
+		return nil // core reads it, and says what is wrong with it
+	}
+	port := -1
+	if v, ok := os.LookupEnv(initPortEnv); ok {
+		p, err := strconv.Atoi(v)
+		if err != nil || p < 0 || p > 65535 {
+			return fmt.Errorf("%s=%q is not a port", initPortEnv, v)
+		}
+		port = p
+	}
+	fc, err := core.WriteFirstConfig(configPath, port)
+	if errors.Is(err, fs.ErrExist) {
+		return nil // another first start wrote it in the meantime: core reads that one
+	}
+	if err != nil {
+		return fmt.Errorf("no config at %s, and a first one could not be written: %w", configPath, err)
+	}
+	if inherited {
+		log.Printf("first start: wrote a new config, %s, serving on the inherited socket; its client key and management key are in that file", fc.Path)
+		return nil
+	}
+	log.Printf("first start: wrote a new config, %s, listening on %s; its client key and management key are in that file", fc.Path, fc.Listen)
+	return nil
+}
+
+// initConfig is pluxy init: it writes a first config, as a first start does, without starting
+// core, and returns the exit code.
+func initConfig(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("pluxy init", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	configPath := fs.String("config", "config.json", "where to write the config file; an existing file is never replaced")
+	port := fs.Int("port", -1, "the port core listens on (default: 8317, or a free port when 8317 is taken; 0: a free port)")
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "usage: pluxy init [-config file] [-port n]   write a first config: listening on 127.0.0.1, with a new client key and management key")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return exitOK
+		}
+		return exitUsage
+	}
+	if fs.NArg() > 0 || *port < -1 || *port > 65535 {
+		fs.Usage()
+		return exitUsage
+	}
+	fc, err := core.WriteFirstConfig(*configPath, *port)
+	if err != nil {
+		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		return exitFailed
+	}
+	fmt.Fprintf(stdout, "wrote %s: core listens on %s; its client key and management key are in that file\n", fc.Path, fc.Listen)
+	return exitOK
 }
 
 // defaultBundled returns bundled/index.json beside the running program when it exists.
@@ -187,14 +203,22 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		}
 		ln = l
 	}
+	if err := firstStart(configPath, ln != nil); err != nil {
+		if ln != nil {
+			ln.Close()
+		}
+		return err
+	}
 	c, err := core.Start(core.Options{ConfigPath: configPath, SafeMode: safeMode, Bundled: bundled, Logs: logs})
 	if err != nil {
 		if ln != nil {
 			ln.Close()
 		}
-		// Safe mode opens the credential store too, so it is no way past the store's errors.
+		// Safe mode reads the config and opens the credential store too, so it is no way past
+		// their errors.
 		var store *cred.OpenError
-		if !safeMode && !errors.As(err, &store) {
+		var config *core.ConfigError
+		if !safeMode && !errors.As(err, &store) && !errors.As(err, &config) {
 			err = fmt.Errorf("%w (start with -safe-mode to run without extensions)", err)
 		}
 		return err
@@ -213,6 +237,7 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 			return err
 		}
 	}
+	c.SetListenAddr(ln.Addr().String())
 	// Extension pages have a listener of their own, so they are served on another site than
 	// the panel (next/ui/extension-pages/README.md).
 	pagesLn, err := net.Listen("tcp", cfg.ExtensionPages.Listen)
@@ -221,15 +246,14 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		return fmt.Errorf("extension_pages.listen: %w", err)
 	}
 	c.SetPagesPort(pagesLn.Addr().(*net.TCPAddr).Port)
-	managementOn := func() bool { return c.Config().ManagementKey != "" }
 	mux := http.NewServeMux()
 	mux.Handle(core.ManagementPrefix, c.Management())
-	// The panel is on while the management API is: it is a page for that API.
+	// The panel is a page for the management API.
 	assets := panel.Assets()
 	if !panel.Built(assets) {
 		log.Print("warning: this core was built without its panel (go generate ./internal/panel builds it)")
 	}
-	ui := panel.Handler(assets, managementOn, func(r *http.Request) string {
+	ui := panel.Handler(assets, func(r *http.Request) string {
 		origin, _ := c.PagesOrigin(r.Host) // none: the panel says why where it would show a page
 		return origin
 	})
@@ -248,7 +272,7 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		TLSConfig:         tlsConfig,
 	}
 	pagesSrv := &http.Server{
-		Handler:           pages.Handler(c.PagesFolder, managementOn),
+		Handler:           pages.Handler(c.PagesFolder),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 	scheme := "http"

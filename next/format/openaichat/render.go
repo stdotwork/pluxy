@@ -579,7 +579,9 @@ func (a *Aggregator) Response() ([]byte, error) {
 // reply has today's core's body.
 func ErrorResponse(e *llm.Error) (int, []byte) {
 	if u := e.UsageLimit; u != nil {
-		body, _ := json.Marshal(map[string]any{"error": u.ErrorObject()})
+		o := u.ErrorObject()
+		e.Pluxy(o)
+		body, _ := json.Marshal(map[string]any{"error": o})
 		return http.StatusTooManyRequests, body
 	}
 	status := e.Status
@@ -622,6 +624,8 @@ func ErrorResponse(e *llm.Error) (int, []byte) {
 	if msg == "" {
 		msg = fmt.Sprintf("%s (%d)", http.StatusText(status), status)
 	}
-	body, _ := json.Marshal(map[string]any{"error": map[string]string{"message": msg, "type": typ, "code": code}})
+	o := map[string]any{"message": msg, "type": typ, "code": code}
+	e.Pluxy(o)
+	body, _ := json.Marshal(map[string]any{"error": o})
 	return status, body
 }

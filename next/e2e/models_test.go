@@ -386,3 +386,135 @@ func TestClaudeAccountLiveModelList(t *testing.T) {
 		t.Errorf("/v1/models = %v, want [claude-e2e-live-1]", listed)
 	}
 }
+
+func TestCodexSubscriptionModelsWindowAndCapabilities(t *testing.T) {
+	t.Parallel()
+	const subToken = "codex-sub-e2e-token"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/backend-api/codex/models" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+subToken {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+			"models": [
+				{
+					"slug": "gpt-5.6-luna",
+					"display_name": "GPT-5.6-Luna",
+					"description": "Subscription model with 272k window",
+					"context_window": 272000,
+					"input_modalities": ["text", "image"],
+					"available_in_plans": ["plus", "pro"]
+				}
+			]
+		}`)
+	}))
+	t.Cleanup(up.Close)
+
+	base := runCore(t, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
+			"accounts": []any{
+				map[string]any{
+					"id":       "codex-plus",
+					"settings": map[string]any{"base_url": up.URL + "/backend-api/codex"},
+					"credential": map[string]any{
+						"kind":         "oauth",
+						"access_token": subToken,
+						"data":         map[string]any{"id_token": fakeIDToken("acct-e2e", "user@example.com")},
+					},
+				},
+			},
+		},
+	})
+
+	req, err := http.NewRequest(http.MethodGet, base+"/v1/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+clientKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/models: %d %s", resp.StatusCode, raw)
+	}
+
+	type modelEntry struct {
+		ID              string `json:"id"`
+		ContextLength   int    `json:"context_length"`
+		MaxOutputTokens int    `json:"max_output_tokens"`
+		From            string `json:"from"`
+		Capabilities    *struct {
+			Tools            bool     `json:"tools"`
+			StructuredOutput bool     `json:"structured_output"`
+			Vision           bool     `json:"vision"`
+			PDF              bool     `json:"pdf"`
+			Reasoning        bool     `json:"reasoning"`
+			ReasoningLevels  []string `json:"reasoning_levels"`
+		} `json:"capabilities"`
+	}
+	var listReply struct {
+		Data []modelEntry `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &listReply); err != nil {
+		t.Fatalf("decode /v1/models %s: %v", raw, err)
+	}
+	var found *modelEntry
+	for i := range listReply.Data {
+		if listReply.Data[i].ID == "gpt-5.6-luna" {
+			found = &listReply.Data[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("gpt-5.6-luna not found in /v1/models: %s", raw)
+	}
+	if found.ContextLength != 272000 {
+		t.Errorf("/v1/models gpt-5.6-luna context_length = %d, want 272000 (not 922000)", found.ContextLength)
+	}
+	if found.MaxOutputTokens != 128000 {
+		t.Errorf("/v1/models gpt-5.6-luna max_output_tokens = %d, want 128000", found.MaxOutputTokens)
+	}
+	if found.From != "account" {
+		t.Errorf("/v1/models gpt-5.6-luna from = %q, want account", found.From)
+	}
+	if found.Capabilities == nil || !found.Capabilities.Tools || !found.Capabilities.StructuredOutput ||
+		!found.Capabilities.Vision || !found.Capabilities.Reasoning || !slices.Contains(found.Capabilities.ReasoningLevels, "high") {
+		t.Errorf("/v1/models gpt-5.6-luna capabilities = %+v, want tools/structured_output/vision/reasoning with high level", found.Capabilities)
+	}
+
+	code, mraw := management(t, http.MethodGet, base, "/v0/management/models")
+	if code != http.StatusOK {
+		t.Fatalf("GET /v0/management/models: %d %s", code, mraw)
+	}
+	var mgmtReply struct {
+		Models []modelEntry `json:"models"`
+	}
+	if err := json.Unmarshal(mraw, &mgmtReply); err != nil {
+		t.Fatalf("decode /v0/management/models %s: %v", mraw, err)
+	}
+	var mfound *modelEntry
+	for i := range mgmtReply.Models {
+		if mgmtReply.Models[i].ID == "gpt-5.6-luna" {
+			mfound = &mgmtReply.Models[i]
+			break
+		}
+	}
+	if mfound == nil {
+		t.Fatalf("gpt-5.6-luna not found in /v0/management/models: %s", mraw)
+	}
+	if mfound.ContextLength != 272000 || mfound.MaxOutputTokens != 128000 || mfound.From != "account" || mfound.Capabilities == nil {
+		t.Errorf("/v0/management/models gpt-5.6-luna = %+v, want 272000/128000/account with capabilities", *mfound)
+	}
+}

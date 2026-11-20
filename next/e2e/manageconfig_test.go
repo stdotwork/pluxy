@@ -755,7 +755,8 @@ func TestManageSettings(t *testing.T) {
 			if f.yaml {
 				wantRounds = s.Routing.Retry.RequestRetry != nil && *s.Routing.Retry.RequestRetry == 0
 			}
-			if s.Routing.Strategy != "round-robin" || s.Routing.SessionAffinity || s.Routing.SessionAffinityTTL != "1h" || !wantRounds ||
+			// Session affinity is on in a JSON config and off in a config.yaml, which keeps today's default.
+			if s.Routing.Strategy != "round-robin" || s.Routing.SessionAffinity == f.yaml || s.Routing.SessionAffinityTTL != "1h" || !wantRounds ||
 				s.Routing.Retry.MaxRetryCredentials != 0 || s.Routing.Retry.MaxRetryInterval != 0 || s.Routing.Cooldown.DisableCooling || s.Routing.Cooldown.TransientErrorCooldownSeconds != 0 ||
 				s.Routing.Cooldown.QuotaResponseMode != "retryable" || s.TokenCountEstimate == nil || !*s.TokenCountEstimate {
 				t.Errorf("settings = %+v", s)
@@ -853,6 +854,9 @@ func TestManageSettings(t *testing.T) {
 			if c.settings(t).Routing.SessionAffinity {
 				t.Error("session affinity is still on")
 			}
+			if !f.yaml && !strings.Contains(c.file(t), `"enabled": false`) {
+				t.Errorf("config.json does not say session affinity is off:\n%s", c.file(t))
+			}
 		})
 	}
 }
@@ -888,8 +892,12 @@ func TestManageSettingsRefusals(t *testing.T) {
 				c.wantSame(t, before, name)
 			}
 			if !f.yaml {
-				// In the JSON config the ttl lives in session_affinity, so it needs affinity on.
-				code, b := c.call(t, http.MethodPatch, "/settings", `{"routing": {"session-affinity-ttl": "2h"}}`)
+				// Affinity is on in the JSON config until it says off, so a ttl alone is fine. Once
+				// it is off the ttl, which lives in session_affinity, needs it on.
+				c.expect(t, http.StatusOK, http.MethodPatch, "/settings", `{"routing": {"session-affinity-ttl": "2h"}}`)
+				c.expect(t, http.StatusOK, http.MethodPatch, "/settings", `{"routing": {"session-affinity": false}}`)
+				before = c.snap(t)
+				code, b := c.call(t, http.MethodPatch, "/settings", `{"routing": {"session-affinity-ttl": "3h"}}`)
 				if code != http.StatusBadRequest {
 					t.Errorf("ttl with affinity off: status %d: %s", code, b)
 				}

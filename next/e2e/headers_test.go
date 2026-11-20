@@ -120,8 +120,9 @@ func TestUpstreamHeadersEveryExtension(t *testing.T) {
 				return a
 			}
 			base := runCore(t, map[string]any{
-				"listen":      "127.0.0.1:0",
-				"client_keys": []string{clientKey},
+				"listen":         "127.0.0.1:0",
+				"client_keys":    []string{clientKey},
+				"management_key": managementKey,
 				"extension": map[string]any{
 					"manifest": filepath.Join(binDir, ext.manifest),
 					"accounts": []any{
@@ -163,8 +164,9 @@ func TestUpstreamHeadersEveryExtension(t *testing.T) {
 func TestUpstreamHeadersWebSocket(t *testing.T) {
 	u := newWSUpstream(t)
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
 			"accounts": []any{map[string]any{"id": "ws", "models": []string{"gpt-test"},
@@ -278,8 +280,9 @@ func TestUpstreamHeadersRefusedNames(t *testing.T) {
 	for _, name := range []string{"Host", "content-length", "Transfer-Encoding", "CONNECTION"} {
 		t.Run(name, func(t *testing.T) {
 			b, _ := json.Marshal(map[string]any{
-				"listen":      "127.0.0.1:0",
-				"client_keys": []string{clientKey},
+				"listen":         "127.0.0.1:0",
+				"client_keys":    []string{clientKey},
+				"management_key": managementKey,
 				"extension": map[string]any{
 					"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 					"accounts": []any{map[string]any{"id": "a", "headers": map[string]string{"X-Fine": "ok", name: value},
@@ -401,16 +404,6 @@ api-keys:
 	if err := os.WriteFile(path, cfg(freePort(t)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command(filepath.Join(binDir, "pluxy"), "-config", path, "-import-auth", authDir).CombinedOutput()
-	t.Logf("import:\n%s", out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"imported kimi-1.json as account kimi-1 (pluxy/kimi)", "imported kimi-2.json as account kimi-2 (pluxy/kimi)", "headers.X-Copy (a value taken from the client's request)"} {
-		if !strings.Contains(string(out), want) {
-			t.Errorf("import output lacks %q", want)
-		}
-	}
 	bundled := bundledRegistry(t, map[string]string{
 		"pluxy/openai-compatible": "openai-compatible",
 		"pluxy/claude":            filepath.Join("claude", "claude"),
@@ -418,6 +411,17 @@ api-keys:
 	})
 	base, _, logs := startOnFreePort(t, filepath.Join(binDir, "pluxy"), path, cfg, "-bundled", bundled)
 	logs.waitFor(t, "config revision 1 active")
+	installBundled(t, base, "pluxy/openai-compatible", "pluxy/claude", "pluxy/kimi")
+	// Today's auth files, added to the running core one at a time, as the panel uploads them.
+	for name, content := range map[string][]byte{"kimi-1.json": file, "kimi-2.json": file2} {
+		code, raw, _ := importAuthFile(t, base, managementKey, name, string(content))
+		if code != http.StatusOK || !strings.Contains(raw, `"id":"`+strings.TrimSuffix(name, ".json")+`"`) {
+			t.Fatalf("import %s: %d %s", name, code, raw)
+		}
+		if name == "kimi-1.json" && !strings.Contains(raw, "headers.X-Copy (a value taken from the client's request)") {
+			t.Errorf("import %s does not name the header it left out: %s", name, raw)
+		}
+	}
 
 	var replies []string
 	for _, r := range []struct{ id, model string }{{"gw-1", "m-headers"}, {"gw-2", "m-headers"}, {"compat", "m-compat"}, {"kimi-1", "kimi-k2.8"}} {

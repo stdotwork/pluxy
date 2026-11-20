@@ -9,6 +9,14 @@
   "new_core": {"account":{"models":[{"name":"up-model-a","alias":"pub-a"},"up-model-b"]}},
   "unordered": ["client.body.data"],
   "volatile": ["client.body.data[*].created"],
+  "exceptions": [
+    {
+      "path": "client.body.data[*].owned_by",
+      "kind": "intended",
+      "reason": "Model lists name the extension, not the account: an account ID can be an email address or a label, while the extension ID is who provides the model and already appears as the provider on replies.",
+      "want": "pluxy/openai-compatible"
+    }
+  ],
   "recorded_old_core": {
     "client": {
       "body": {

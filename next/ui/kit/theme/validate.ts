@@ -249,7 +249,7 @@ export function parseTheme(raw: unknown): ThemeResult {
     return parseT3Theme(raw);
   }
   if (typeof version !== "number" || !Number.isInteger(version) || version < 0) {
-    return { ok: false, error: "theme_version is missing or not a whole number" };
+    return { ok: false, error: "theme_version must be a whole number" };
   }
   if (version > THEME_VERSION) {
     return { ok: false, error: `theme_version ${version} is newer than this UI supports (${THEME_VERSION})` };
@@ -291,7 +291,7 @@ function parseT3Theme(raw: Record<string, unknown>): ThemeResult {
   const hasColorsOrSeeds = isObject(raw.colors) || (raw.canvas !== undefined && raw.accent !== undefined);
   const named = typeof name === "string" && name.trim().length > 0;
 
-  // A T3 Code file with no colours: say what it lacks, not that theme_version is missing.
+  // A T3 Code file with no colours: say what it lacks.
   if (named && (appearanceRaw === "light" || appearanceRaw === "dark") && !hasColorsOrSeeds) {
     return { ok: false, error: "a T3 Code theme file needs a colors object, or both canvas and accent" };
   }
@@ -301,7 +301,11 @@ function parseT3Theme(raw: Record<string, unknown>): ThemeResult {
     (appearanceRaw !== "light" && appearanceRaw !== "dark") ||
     !hasColorsOrSeeds
   ) {
-    return { ok: false, error: "theme_version is missing or not a whole number" };
+    return {
+      ok: false,
+      error:
+        'the file is not a theme file. A pluxy theme file has "theme_version"; a T3 Code theme file has "name", "appearance" ("light" or "dark"), and "colors" or both "canvas" and "accent"',
+    };
   }
   if (name.length > 64) {
     return { ok: false, error: "name must be 1 to 64 characters" };
