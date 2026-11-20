@@ -175,6 +175,12 @@ func (c *Client) Quota(ctx context.Context, id string) (QuotaReply, error) {
 	return v, c.get(ctx, "/accounts/"+url.PathEscape(id)+"/quota", nil, &v)
 }
 
+// AccountModels is GET /accounts/{id}/models.
+func (c *Client) AccountModels(ctx context.Context, id string) (AccountModelsReply, error) {
+	var v AccountModelsReply
+	return v, c.get(ctx, "/accounts/"+url.PathEscape(id)+"/models", nil, &v)
+}
+
 // Packages is GET /packages.
 func (c *Client) Packages(ctx context.Context) ([]Package, error) {
 	var v PackagesReply
