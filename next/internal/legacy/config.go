@@ -806,7 +806,7 @@ type translator struct {
 	res *Result
 
 	laterKeys, droppedKeys, unknownKeys []string
-	item                                string // the provider group being read, as its v8 path
+	item                                string   // the provider group being read, as its v8 path
 	notes                               []string // notices about one setting each
 
 	importing bool   // ImportConfig
