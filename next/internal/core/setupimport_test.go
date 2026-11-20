@@ -557,6 +557,47 @@ func TestSetupImportKeepsExtensionAccounts(t *testing.T) {
 	}
 }
 
+// The extensions row tallies the file's own block only: a new account of a provider section does
+// not make the row changed while the block's own account is one core keeps.
+func TestSetupImportExtensionRowCountsOwnBlock(t *testing.T) {
+	setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeTestFile(t, cfgPath, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"fake-mgmt-key",
+		"extensions":{"pluxy/claude":{"accounts":[{"id":"core-a","credential":{"kind":"api_key","api_key":"fake-0"}}]}}}`)
+	cpa := t.TempDir()
+	writeTestFile(t, filepath.Join(cpa, "config.yaml"), `extensions:
+  pluxy/claude:
+    accounts:
+      - {id: core-a, credential: {kind: api_key, api_key: fake-1}}
+claude-api-key:
+  - {api-key: fake-claude-key}
+`)
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+	code, rep, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: filepath.Join(cpa, "config.yaml")})
+	if code != http.StatusOK {
+		t.Fatalf("import: %d %s", code, body)
+	}
+	i := slices.IndexFunc(rep.NotBrought, func(r management.ImportRow) bool { return r.What == "extensions" })
+	if i < 0 || !strings.Contains(rep.NotBrought[i].Why, "core already has an account core-a") {
+		t.Errorf("the extensions row is not not_brought with the kept account: %s", body)
+	}
+	if j := slices.IndexFunc(rep.Brought, func(r management.ImportRow) bool { return r.What == "claude-api-key[0]" }); j < 0 {
+		t.Errorf("the provider section's new account is not under brought: %s", body)
+	}
+	ids := map[string]bool{}
+	for _, a := range c.Config().Accounts() {
+		ids[a.ID] = true
+	}
+	if !ids["core-a"] || !ids["claude-api-key-1"] {
+		t.Errorf("core has %v, want the kept and the new account", ids)
+	}
+}
+
 // A path that is not absolute, a missing file and a file that is not a config are refused, and
 // the refusal holds none of the file's secrets.
 func TestSetupImportRefusals(t *testing.T) {

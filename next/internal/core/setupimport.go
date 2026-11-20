@@ -405,7 +405,11 @@ func (c *Core) mergeImport(d *configdoc.Doc, p *importPlan) error {
 								continue
 							}
 							have[strings.ToLower(id)] = true
-							p.block.added++
+							// The block's row tallies the accounts of the file's own block: one of
+							// a provider section has its group's row.
+							if _, provider := p.res.Accounts[id]; !provider {
+								p.block.added++
+							}
 							if err := appendValue(d, a, "extensions", pkg, "accounts"); err != nil {
 								return err
 							}
