@@ -319,10 +319,33 @@ func (c *chatRequest) content(it llm.Item, path string) (string, []image, string
 	return strings.Join(texts, "\n"), images, dropped
 }
 
-// resultText returns a tool result's text. A result the client gave as content blocks (kept
-// beside the model, in content for Messages or output for Responses) keeps its text blocks,
-// joined by a line break; its other blocks, such as images, are dropped.
+// resultText returns a tool result's text. A result carried as parts keeps its text, in Output;
+// its other parts, such as images, and its error flag are dropped. A result the client gave as
+// content blocks that a core before protocol minor 25 kept beside the model (in content for
+// Messages or output for Responses) keeps its text blocks, joined by a line break, the same way.
 func (c *chatRequest) resultText(it llm.Item) string {
+	itemPath := ""
+	if it.Origin != nil {
+		itemPath = it.Origin.Path
+	}
+	if it.IsError {
+		c.lose(llm.LossDropped, joinPath(itemPath, "is_error"), "Devin has no error flag on a tool result")
+	}
+	if len(it.Content) > 0 {
+		for i, p := range it.Content {
+			if p.Type == llm.PartText {
+				c.kept(p.Origin)
+				continue
+			}
+			pp := fmt.Sprintf("%s[%d]", joinPath(itemPath, "content"), i)
+			if p.Origin != nil && p.Origin.Path != "" {
+				pp = p.Origin.Path
+			}
+			c.lose(llm.LossDropped, pp, "Devin takes only text in a tool result")
+		}
+		c.kept(it.Origin)
+		return it.Output
+	}
 	if it.Output != "" || it.Origin == nil {
 		c.kept(it.Origin)
 		return it.Output
