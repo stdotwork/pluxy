@@ -829,6 +829,9 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 		return ev, false
 	}
 	c.cur, c.acct, c.seq = s, a, seq
+	// The reply began, so the request is not sent again: keep only its model, which the rest
+	// of the call reads, and let its body and parsed form go while the reply streams.
+	c.req.LLM = llm.Request{Model: c.req.LLM.Model}
 	if r.affinity != nil && c.req.Session != "" {
 		r.affinity.bind(c.affinityKey(), a, r.now(), r.ttl)
 	}
