@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
@@ -26,12 +27,14 @@ var nativeParsers = map[string]func(req llm.Request) (llm.Request, error){
 }
 
 // CanBeNativeOnly reports whether a generate call may carry req native-only: it has a native
-// body in one of the native formats, and its items, tools and origin are what that format's
-// parser makes of the body (llm.Native.Parsed is the body). Core checks this before it leaves
-// them out.
+// body in one of the native formats, its items, tools and origin are what that format's parser
+// makes of the body (llm.Native.Parsed is the body), and the body is valid UTF-8. A frame
+// carries the parsed request's text as UTF-8, with each invalid byte replaced, so from a body
+// that is not, the extension's own parse could keep bytes the full call would have replaced.
+// Core checks this before it leaves them out.
 func CanBeNativeOnly(req llm.Request) bool {
 	n := req.Native
-	return n != nil && nativeParsers[n.Format] != nil && n.IsParsed()
+	return n != nil && nativeParsers[n.Format] != nil && n.IsParsed() && utf8.Valid(n.Body)
 }
 
 // NativeOnly returns req as a native-only call carries it: without its items, tools and origin,
