@@ -1237,7 +1237,8 @@ are the CLI's: the token twice as Basic credentials, Connect's version, a Sentry
 User-Agent and no compression. What Devin has no place for is reported as dropped (and refused
 under `drop_policy` `reject`): a client's fields kept beside the model (such as a Chat message's
 `name` or `seed`), parallel tool calls turned off, strict tool arguments, and parts other than
-text and base64 images. A tool result given as content blocks keeps its text. A user turn left
+text and base64 images. A tool result given as content blocks keeps its text; its images and
+error flag are reported as dropped. A user turn left
 with nothing once media Devin cannot take is dropped is refused, as today's core refuses it.
 
 The reply's frames become the reply's events as they arrive: reasoning, text, tool calls and
