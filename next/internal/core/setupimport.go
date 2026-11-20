@@ -326,10 +326,11 @@ func (c *Core) importNeeds(p *importPlan, imported []legacy.AuthFile) []manageme
 	return out
 }
 
-// mergeImport writes the import's config into d, core's config: its settings replace core's,
-// its client keys, accounts, aliases, excluded models and chains are added to core's, and listen
-// stays (it cannot change while core runs). An account or chain core already has one by the ID
-// or name of stays as it is, and p records it.
+// mergeImport writes the import's config into d, core's config: its settings are written field by
+// field, a field the file does not set keeping core's value, its client keys, accounts, aliases,
+// excluded models and chains are added to core's, and listen stays (it cannot change while core
+// runs). An account or chain core already has one by the ID or name of stays as it is, and p
+// records it.
 func (c *Core) mergeImport(d *configdoc.Doc, p *importPlan) error {
 	have := map[string]bool{}
 	for _, a := range c.Config().Accounts() {
