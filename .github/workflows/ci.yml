@@ -50,7 +50,6 @@ jobs:
     # run"): this job and gate take seconds but every group waits on both.
     runs-on: ${{ github.event_name == 'merge_group' && vars.PLUXY_GATE_RUNNER && fromJSON(vars.PLUXY_GATE_RUNNER) || 'ubuntu-latest' }}
     outputs:
-      app: ${{ steps.paths.outputs.app }}
       next-ci: ${{ steps.paths.outputs.next-ci }}
       next-app: ${{ steps.paths.outputs.next-app }}
       # Set by the paths step, or else by the go-packages step, which runs only when the paths
@@ -96,7 +95,7 @@ jobs:
           git diff --no-renames --name-only -z "${range[@]}" > "$RUNNER_TEMP/changed"
           echo "$(tr -cd '\0' < "$RUNNER_TEMP/changed" | wc -c) changed files"
           declare -A run=()
-          for w in app next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-wsl next-app-tools-pack; do run[$w]=false; done
+          for w in next-ci next-app next-app-platforms next-app-tools-platforms next-app-tools-wsl next-app-tools-pack; do run[$w]=false; done
           native=false
           while IFS= read -r -d '' path; do
             case $path in
@@ -110,7 +109,6 @@ jobs:
                 next/app-tools/lib/files/* | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock)
                 native=true ;;
             esac
-            case $path in extensions/app/* | .github/workflows/app-ci.yml | .github/actions/apt-install/*) run[app]=true ;; esac
             case $path in next/* | .github/workflows/next-ci.yml) run[next-ci]=true ;; esac
             case $path in next/* | .github/workflows/next-app.yml | .github/actions/apt-install/*) run[next-app]=true ;; esac
             case $path in
@@ -219,12 +217,6 @@ jobs:
           done < "$RUNNER_TEMP/next-other"
           echo "next-app-platforms=$hit" | tee -a "$GITHUB_OUTPUT"
 
-  app:
-    name: App CI
-    needs: changes
-    if: needs.changes.outputs.app == 'true'
-    uses: ./.github/workflows/app-ci.yml
-
   next-ci:
     name: Next CI
     needs: changes
@@ -271,7 +263,6 @@ jobs:
     if: always()
     needs:
       - changes
-      - app
       - next-ci
       - next-app
       - next-app-platforms

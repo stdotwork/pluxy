@@ -82,9 +82,8 @@ come later as data files of texts ([Texts and locales](../next/ui/README.md#text
 The table below is the glossary for them: use its terms when a locale is added. It covers the
 languages the old desktop app and the old web panel had.
 
-The old desktop app (`extensions/app`) has en, zh-CN, zh-TW and ja; its zh-TW text is converted
-from zh-CN by `extensions/app/src/i18n/traditional.ts`, so a zh-CN change reaches zh-TW only if the
-converter maps it. The old panel (removed) had en, zh-CN, zh-TW, ko, ru, tr and vi.
+The old desktop app (removed) had en, zh-CN, zh-TW and ja. The old panel (removed) had en, zh-CN,
+zh-TW, ko, ru, tr and vi.
 
 | Concept | zh-CN | zh-TW | ja | ko | ru | tr | vi |
 |---|---|---|---|---|---|---|---|
