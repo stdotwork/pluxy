@@ -1130,6 +1130,13 @@ func (x *translator) server() error {
 			}
 		}
 		x.out["tls"] = map[string]any{"enable": true, "cert": cert, "key": key}
+	} else {
+		// TLS off, as today's core used it: a certificate and key are not used then either.
+		for _, p := range []string{"server.tls.cert", "server.tls.key"} {
+			if _, set := get(x.t, p); set {
+				x.mark(NotBrought, p, Row{Why: "it does nothing while server.tls.enable is off, so nothing is lost"})
+			}
+		}
 	}
 
 	if v, ok := get(x.t, "server.trusted-proxies"); ok && v != nil {
@@ -1164,6 +1171,9 @@ func (x *translator) server() error {
 		}
 		if len(examples) > 0 {
 			x.mark(Changed, "access.api-keys", Row{As: as, Why: "left out the example config's public keys " + quoteAll(examples) + ", which anyone can read"})
+		} else if x.importing && len(keys) == 0 {
+			// An import adds keys; it never takes core's away.
+			x.mark(NotBrought, "access.api-keys", Row{Why: "it lists no client keys, and an import keeps the ones core has"})
 		} else {
 			x.mark(Brought, "access.api-keys", Row{As: as})
 		}
@@ -1506,7 +1516,8 @@ func (x *translator) providers(v8 tree) error {
 			if err != nil {
 				return err
 			}
-			if len(keys) == 0 && f.v8 == "openai-compatibility" && !disabled {
+			if len(keys) == 0 && !disabled {
+				// Every section: an upstream that needs no key is not supported yet.
 				x.keyless(path)
 				why = append(why, "it has no keys (an upstream that needs no key is not supported yet)")
 			}

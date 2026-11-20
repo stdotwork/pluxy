@@ -410,6 +410,69 @@ func TestSetupImportRefusedPool(t *testing.T) {
 	}
 }
 
+// The file's auth folder is read once: its row says core keeps no folder, so a later import needs
+// --auth-dir again.
+func TestSetupImportAuthDirNotKept(t *testing.T) {
+	setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeTestFile(t, cfgPath, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"fake-mgmt-key"}`)
+	cpa := t.TempDir()
+	writeTestFile(t, filepath.Join(cpa, "auths", "claude-a.json"), `{"type": "claude", "access_token": "fake"}`)
+	writeTestFile(t, filepath.Join(cpa, "config.yaml"), "auth-dir: auths\n")
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+	code, rep, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: filepath.Join(cpa, "config.yaml"), DryRun: true})
+	if code != http.StatusOK {
+		t.Fatalf("dry run: %d %s", code, body)
+	}
+	row := slices.IndexFunc(rep.Brought, func(r management.ImportRow) bool { return r.What == "auth-dir" })
+	if row < 0 || !strings.Contains(rep.Brought[row].Why, "not kept") || !strings.Contains(rep.Brought[row].Why, "--auth-dir") {
+		t.Errorf("the auth folder's row does not say it is not kept: %s", body)
+	}
+}
+
+// An account of the file's own extensions block that core already has is named as kept, like an
+// account of a provider section.
+func TestSetupImportKeepsExtensionAccounts(t *testing.T) {
+	setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeTestFile(t, cfgPath, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"fake-mgmt-key",
+		"extensions":{"pluxy/claude":{"accounts":[{"id":"core-a","credential":{"kind":"api_key","api_key":"fake-0"}}]}}}`)
+	cpa := t.TempDir()
+	writeTestFile(t, filepath.Join(cpa, "config.yaml"), `extensions:
+  pluxy/claude:
+    accounts:
+      - {id: core-a, credential: {kind: api_key, api_key: fake-1}}
+`)
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+	code, rep, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: filepath.Join(cpa, "config.yaml")})
+	if code != http.StatusOK {
+		t.Fatalf("import: %d %s", code, body)
+	}
+	i := slices.IndexFunc(rep.NotBrought, func(r management.ImportRow) bool { return r.What == "extensions" })
+	if i < 0 || !strings.Contains(rep.NotBrought[i].Why, "core already has an account core-a") {
+		t.Errorf("the extensions block's row does not name the account core keeps: %s", body)
+	}
+	var have int
+	for _, a := range c.Config().Accounts() {
+		if a.ID == "core-a" {
+			have++
+		}
+	}
+	if have != 1 {
+		t.Errorf("core has %d accounts named core-a, want 1", have)
+	}
+}
+
 // A path that is not absolute, a missing file and a file that is not a config are refused, and
 // the refusal holds none of the file's secrets.
 func TestSetupImportRefusals(t *testing.T) {

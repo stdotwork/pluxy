@@ -269,6 +269,31 @@ func TestLedgerCheck(t *testing.T) {
 	}
 }
 
+// A setting that writes nothing is named as not brought, with why: TLS files with TLS off, an
+// empty client-key list, and a provider group with no keys.
+func TestImportRowsThatWriteNothing(t *testing.T) {
+	res := importYAML(t, "server: {tls: {cert: c.pem, key: k.pem}}\n")
+	for _, k := range []string{"server.tls.cert", "server.tls.key"} {
+		if row, list := rowOf(t, res, k); list != NotBrought || !strings.Contains(row.Why, "server.tls.enable") {
+			t.Errorf("%s: %d %+v", k, list, row)
+		}
+	}
+	if res.Config["tls"] != nil {
+		t.Errorf("tls %v", res.Config["tls"])
+	}
+	res = importYAML(t, "api-keys: []\n")
+	if row, list := rowOf(t, res, "api-keys"); list != NotBrought || !strings.Contains(row.Why, "no client keys") {
+		t.Errorf("api-keys: []: %d %+v", list, row)
+	}
+	if _, ok := res.Config["client_keys"]; ok {
+		t.Errorf("api-keys: [] wrote %v", res.Config["client_keys"])
+	}
+	res = importYAML(t, "api-keys: {claude: [{name: a}]}\n")
+	if row, list := rowOf(t, res, "api-keys.claude[0]"); list != NotBrought || !strings.Contains(row.Why, "no keys") {
+		t.Errorf("a group with no keys: %d %+v", list, row)
+	}
+}
+
 func importYAML(t *testing.T, doc string) *Result {
 	t.Helper()
 	res, err := ImportConfig([]byte(doc), t.TempDir())

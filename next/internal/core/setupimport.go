@@ -34,6 +34,16 @@ type importPlan struct {
 	skipped map[string]bool
 	// chainsKept are the chains of the file core already has one by the name of.
 	chainsKept []string
+	// block is what the import did with the file's own extensions block.
+	block extBlock
+}
+
+// extBlock tallies the file's own extensions block, whose accounts core may already have: those
+// an import added, those it kept, and whether it wrote a setting of the block.
+type extBlock struct {
+	added int
+	kept  []string
+	wrote bool
 }
 
 // ImportCPA brings a CLIProxyAPI setup across (POST /setup/import): the config.yaml's settings
@@ -91,6 +101,12 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 			})
 		case err != nil:
 			return management.ImportReport{}, &editError{http.StatusBadRequest, "invalid_request", "auth folder: " + err.Error()}
+		}
+		if fromConfig && p.folder != nil {
+			// The folder's accounts go into core's credential store: core keeps no folder.
+			res.Ledger.Update(legacy.ConfigItem(authDirKey(res)), func(_ *int, row *legacy.Row) {
+				row.Why = "the folder is not kept: core keeps no auth folder, so a later import needs --auth-dir again"
+			})
 		}
 	}
 
@@ -258,6 +274,19 @@ func (c *Core) importRows(led *legacy.Ledger, p *importPlan) {
 			row.Why = strings.Join(slices.DeleteFunc([]string{row.Why, why}, func(s string) bool { return s == "" }), "; ")
 		})
 	}
+	if len(p.block.kept) > 0 {
+		slices.Sort(p.block.kept)
+		kept := p.block.kept
+		why := "core already has " + plural(len(kept), "an account", "accounts") + " " + strings.Join(kept, ", ") + ", which it keeps"
+		led.Update(legacy.ConfigItem("extensions"), func(list *int, row *legacy.Row) {
+			if p.block.added == 0 && !p.block.wrote {
+				*list, row.As = legacy.NotBrought, ""
+			} else {
+				*list = legacy.Changed
+			}
+			row.Why = strings.Join(slices.DeleteFunc([]string{row.Why, why}, func(s string) bool { return s == "" }), "; ")
+		})
+	}
 	for _, name := range p.chainsKept {
 		led.Add(legacy.NotBrought, "", legacy.Row{What: "routing.chains." + name, Why: "core already has a chain by this name, which it keeps"})
 	}
@@ -309,6 +338,9 @@ func (c *Core) mergeImport(d *configdoc.Doc, p *importPlan) error {
 	for _, r := range c.creds.Records() {
 		have[strings.ToLower(r.ID)] = true
 	}
+	// own are the accounts core had before the import: a file's account that repeats one of its
+	// own is not one the import kept.
+	own := maps.Clone(have)
 	cfg := p.res.Config
 	for _, k := range slices.Sorted(maps.Keys(cfg)) {
 		v := cfg[k]
@@ -363,18 +395,28 @@ func (c *Core) mergeImport(d *configdoc.Doc, p *importPlan) error {
 							id, _ := a.(map[string]any)["id"].(string)
 							if have[strings.ToLower(id)] {
 								p.skipped[id] = true
+								// An account of a provider section has its group's row; one of
+								// the file's own block is named by the block's row.
+								if own[strings.ToLower(id)] {
+									if _, provider := p.res.Accounts[id]; !provider {
+										p.block.kept = append(p.block.kept, id)
+									}
+								}
 								continue
 							}
 							have[strings.ToLower(id)] = true
+							p.block.added++
 							if err := appendValue(d, a, "extensions", pkg, "accounts"); err != nil {
 								return err
 							}
 						}
 					case "model_alias", "excluded_models":
+						p.block.wrote = true
 						if err := addMissing(d, sv, "extensions", pkg, sk); err != nil {
 							return err
 						}
 					default:
+						p.block.wrote = true
 						if err := setFields(d, sv, "extensions", pkg, sk); err != nil {
 							return err
 						}
