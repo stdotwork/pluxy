@@ -26,6 +26,10 @@ that arrives after leaving the tab waits in page state until the person returns 
 and only those calls carry the key. The desktop app implements the same interface over its own
 connection to core, holding the key in its native side.
 
+A page that saves a file (a theme file, a log, the usage table) calls `kit/save.tsx`, which
+downloads it as a browser does. A host whose window cannot download has `saveFile`: the desktop
+app's saves the file in the Downloads folder, and the page shows the path it answers.
+
 A build then picks its pages and mounts the shell:
 
 ```tsx
