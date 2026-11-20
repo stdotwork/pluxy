@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stdotwork/pluxy/next/extensions/antigravity/agtest"
+	"github.com/stdotwork/pluxy/next/archive/antigravity/agtest"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 

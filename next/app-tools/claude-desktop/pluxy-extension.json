@@ -2,6 +2,9 @@
   "manifest_version": 1,
   "id": "pluxy/claude-desktop",
   "version": "0.1.0",
+  "title": "Claude Desktop",
+  "summary": "Points the Claude desktop app at pluxy, with a backup to undo it.",
+  "kind": "client",
   "app": {
     "version": 0,
     "tier": "native",

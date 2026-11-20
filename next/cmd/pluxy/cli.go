@@ -52,6 +52,9 @@ type opts struct {
 	since, until, by, account, provider, clientKey string
 	after, before                                  string
 	limit                                          int
+	yes                                            bool
+	picks                                          stringSliceFlag
+	keyID                                          string
 	id                                             string
 }
 
@@ -62,7 +65,10 @@ type invocation struct {
 	args   []string
 	opts   opts
 	json   bool
+	stdin  io.Reader
 	stdout io.Writer
+	stderr io.Writer
+	tty    bool
 }
 
 // call makes one management call. With --json the reply's body goes to standard output as it
@@ -108,6 +114,10 @@ func yesNo(b bool) string {
 }
 
 func accountPath(id string) string { return "/accounts/" + url.PathEscape(id) }
+
+func init() {
+	commands = append(commands, setupCommands()...)
+}
 
 // commands are the client subcommands, in the order help lists them.
 var commands = []command{
@@ -204,17 +214,17 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.RegistriesReply
 			return x.call(http.MethodGet, "/registries", nil, nil, &r, func() {
-				rows := [][]string{{"REGISTRY", "PACKAGE", "VERSIONS"}}
+				rows := [][]string{{"REGISTRY", "PACKAGE", "TITLE", "KIND", "TIER", "VERSIONS"}}
 				for _, reg := range r.Registries {
 					if reg.Error != "" {
-						rows = append(rows, []string{reg.Name, "-", "error: " + reg.Error})
+						rows = append(rows, []string{reg.Name, "-", "-", "-", "-", "error: " + reg.Error})
 					}
 					for _, p := range reg.Packages {
 						var versions []string
 						for _, rel := range p.Releases {
 							versions = append(versions, rel.Version)
 						}
-						rows = append(rows, []string{reg.Name, p.ID, strings.Join(versions, ", ")})
+						rows = append(rows, []string{reg.Name, p.ID, dash(p.Title), dash(p.Kind), dash(p.Tier), strings.Join(versions, ", ")})
 					}
 				}
 				x.table(rows)
@@ -675,6 +685,9 @@ func printStatus(x *invocation, s management.Status) {
 		x.printf("; revision %d refused: %s", s.Desired.Revision, s.Desired.Error)
 	}
 	x.printf("\n")
+	if s.FirstRun {
+		x.printf("first run: setup has not been completed (run pluxy setup)\n")
+	}
 	if s.SafeMode {
 		x.printf("safe mode: no extension runs\n")
 	}
@@ -745,6 +758,7 @@ func find(args []string) (*command, []string) {
 // help writes the list of commands whose words start with prefix.
 func help(w io.Writer, prefix string) {
 	fmt.Fprintln(w, "usage: pluxy serve [-config file] [flags]   run core (pluxy with no subcommand does too)")
+	fmt.Fprintln(w, "       pluxy init [-config file] [-port n]  write a first config (pluxy serve does when there is none)")
 	fmt.Fprintln(w, "       pluxy <command> [--json] [--config file | --url address --key key]")
 	fmt.Fprintln(w)
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
@@ -763,6 +777,10 @@ func help(w io.Writer, prefix string) {
 
 // runCLI runs one client subcommand and returns its exit code.
 func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	return runCLIWithInput(args, os.Stdin, stdout, stderr, getenv, isInteractive(os.Stdin))
+}
+
+func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, tty bool) int {
 	if args[0] == "help" {
 		help(stdout, strings.Join(args[1:], " "))
 		return exitOK
@@ -817,33 +835,56 @@ func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string)
 	}
 	t, err := findCore(*configPath, cmpOr(*addr, getenv("PLUXY_URL")), cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY")))
 	if err != nil {
-		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		printError(stderr, *jsonOut, err)
 		return exitFailed
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	x := &invocation{ctx: ctx, client: &management.Client{URL: t.url, Key: t.key, HTTP: t.http}, args: pos, opts: o, json: *jsonOut, stdout: stdout}
+	x := &invocation{ctx: ctx, client: &management.Client{URL: t.url, Key: t.key, HTTP: t.http}, args: pos, opts: o, json: *jsonOut, stdin: stdin, stdout: stdout, stderr: stderr, tty: tty}
 	err = cmd.run(x)
 	if err == nil {
 		return exitOK
 	}
-	code := exitCode(err)
+	printError(stderr, *jsonOut, err)
+	return exitCode(err)
+}
+
+// printError writes a command's error to stderr: with --json, as the API's error object (the
+// reply's own body when core sent one), otherwise as a line of text.
+func printError(stderr io.Writer, asJSON bool, err error) {
+	if !asJSON {
+		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		return
+	}
 	var ae *management.APIError
-	if *jsonOut && errors.As(err, &ae) && json.Valid(ae.Body) {
+	if errors.As(err, &ae) && json.Valid(ae.Body) {
 		stderr.Write(ae.Body)
 		if !bytes.HasSuffix(ae.Body, []byte("\n")) {
 			fmt.Fprintln(stderr)
 		}
-	} else {
-		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		return
 	}
-	return code
+	code, msg := "failed", err.Error()
+	var ue usageError
+	switch {
+	case errors.As(err, &ae):
+		code, msg = ae.Code, ae.Message
+	case errors.As(err, &ue):
+		code = "invalid_request"
+	case management.IsUnreachable(err):
+		code = "unreachable"
+	}
+	b, _ := json.Marshal(map[string]any{"error": map[string]string{"code": code, "message": msg}})
+	fmt.Fprintf(stderr, "%s\n", b)
 }
 
 // exitCode is the exit code for a command's error.
 func exitCode(err error) int {
+	var ue usageError
 	var ae *management.APIError
 	switch {
+	case errors.As(err, &ue):
+		return exitUsage
 	case management.IsUnreachable(err):
 		return exitUnreachable
 	case errors.As(err, &ae):
