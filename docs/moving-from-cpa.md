@@ -90,8 +90,8 @@ names the file with `--config config.yaml`.
 ```
 
 `model list` shows the models clients can ask for and the accounts that serve each. `account test`
-sends one small request through an account and prints the reply. Your clients keep their settings when pluxy listens on the port
-CPA used and the client keys are the same.
+sends one small request through an account and prints the reply. Your clients keep their settings
+when pluxy listens on the port CPA used and the client keys are the same.
 
 ## What carries over
 
