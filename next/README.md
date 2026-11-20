@@ -237,6 +237,11 @@ The Codex CLI sends its requests to `POST /backend-api/codex/responses` and open
 both paths are aliases of `/v1/responses` and its WebSocket: the same handlers and the same client
 key check.
 
+The CLI's other calls to the ChatGPT backend (account, usage, tasks, settings, files, transcription
+and the plugin service) pass through to that account's ChatGPT backend with its token, on whichever
+account routing picks, and only the calls the CLI makes: `protocol/README.md`'s endpoint table
+lists them. An API key account has no such backend and does not serve them.
+
 When an upstream ends a Responses stream with a `response.completed`, `response.incomplete` or
 `response.failed` whose `output` is empty, core fills it with the items the stream's
 `response.output_item.done` events finished, as today's core does.
