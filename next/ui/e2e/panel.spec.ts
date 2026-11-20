@@ -224,7 +224,7 @@ test("themes are kept by core: added from a file and from pasted JSON, followed,
 
   // Removing the theme that is on asks first, then goes back to the default.
   await page.getByRole("button", { name: "Remove Nightfall" }).click();
-  await page.getByRole("button", { name: "Yes, remove nightfall" }).click();
+  await page.getByRole("button", { name: "Yes, remove Nightfall", exact: true }).click();
   await expect(picker.getByRole("radio", { name: "Nightfall" })).toHaveCount(0);
   await expect(picker.getByRole("radio", { name: "Default" })).toBeChecked();
   await expect.poll(() => variable("--px-color-bg")).toBe(defaultBg);
@@ -235,10 +235,113 @@ test("themes are kept by core: added from a file and from pasted JSON, followed,
 
   await picker.getByRole("radio", { name: "Dawn and Dusk" }).check();
   await page.getByRole("button", { name: "Remove Dawn and Dusk" }).click();
-  await page.getByRole("button", { name: "Yes, remove dawn and dusk" }).click();
+  await page.getByRole("button", { name: "Yes, remove Dawn and Dusk", exact: true }).click();
   await expect(picker.getByRole("radio")).toHaveCount(3);
   expect((await stored()).themes).toEqual([]);
   expect(problems).toEqual([]);
+});
+
+test("the Themes page says what is still true, and what to do about a file it cannot use", async ({
+  page,
+}) => {
+  const fixtures = join(import.meta.dirname, "..", "tests", "fixtures");
+  const picker = page.getByRole("radiogroup", { name: "Theme" });
+  const paste = page.getByLabel("Or paste a theme file's JSON");
+  const add = page.getByRole("button", { name: "Add", exact: true });
+  const alerts = page.getByRole("alert");
+  const ids = async () =>
+    (await core.mgmt<{ themes: { id: string }[] }>("GET", "/themes")).body.themes.map((t) => t.id);
+
+  const { problems } = await open(page);
+  await signIn(page, core);
+  await goTo(page, "Themes");
+
+  // Something that is not a theme: the reason says what a theme file has.
+  await paste.fill('{"foo": 1}');
+  await add.click();
+  await expect(alerts).toHaveText(
+    /^Not added: the file is not a theme file\. A pluxy theme file has "theme_version"/,
+  );
+  // The notice goes when the box is edited, and when a theme is picked.
+  await paste.pressSequentially(" ");
+  await expect(alerts).toHaveCount(0);
+  await add.click();
+  await expect(alerts).toHaveCount(1);
+  await picker.getByRole("radio", { name: "Terminal" }).check();
+  await expect(alerts).toHaveCount(0);
+
+  // A built-in theme's own file, as Export saves it: the reason says which field to change.
+  await paste.fill(readFileSync(join(import.meta.dirname, "..", "themes", "default.json"), "utf8"));
+  await add.click();
+  await expect(alerts).toHaveText(
+    'Not added: "id" is pluxy/default, a built-in theme\'s ID. Change "id" in the file to your own, such as my/default, and add it again',
+  );
+
+  // "Added" goes too once it is no longer the theme that is on.
+  await page
+    .getByLabel("Theme file", { exact: true })
+    .setInputFiles(join(fixtures, "t3-docs-nightfall.json"));
+  const added = page.getByText("Nightfall was added and turned on.");
+  await expect(added).toBeVisible();
+  await expect(alerts).toHaveCount(0);
+  await picker.getByRole("radio", { name: "Default" }).check();
+  await expect(added).toHaveCount(0);
+
+  // A theme removed somewhere else since this page read the list: removing it here just works.
+  await picker.getByRole("radio", { name: "Nightfall" }).check();
+  await core.mgmt("DELETE", "/themes/t3/nightfall");
+  await page.getByRole("button", { name: "Remove Nightfall" }).click();
+  await page.getByRole("button", { name: "Yes, remove Nightfall", exact: true }).click();
+  await expect(picker.getByRole("radio", { name: "Nightfall" })).toHaveCount(0);
+  await expect(picker.getByRole("radio", { name: "Default" })).toBeChecked();
+  await expect(alerts).toHaveCount(0);
+
+  // A stored file the page cannot use (`pluxy theme add` stores what it is given), turned on from
+  // elsewhere: the page says the file is what is wrong, keeps its theme, and offers to remove it.
+  expect((await core.mgmt("PUT", "/themes/me/broken", { name: "Broken Thing" })).status).toBe(200);
+  await core.mgmt("PUT", "/theme", { id: "me/broken" });
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(alerts).toHaveText(
+    /^me\/broken is turned on, but this page cannot use it: the file is not a theme file\..* Remove it, or pick another theme\.$/,
+  );
+  const broken = picker.locator('[data-part="card"][data-unusable]');
+  await expect(broken).toContainText("Broken Thing");
+  await expect(broken).toContainText("Cannot be used: the file is not a theme file.");
+  await expect(picker.getByRole("radio", { name: "Default" })).toBeChecked();
+  await broken.getByRole("button", { name: "Remove Broken Thing" }).click();
+  // The question keeps the name as written.
+  await broken.getByRole("button", { name: "Yes, remove Broken Thing", exact: true }).click();
+  await expect(broken).toHaveCount(0);
+  await expect(alerts).toHaveCount(0);
+  expect(await ids()).toEqual([]);
+  expect((await core.mgmt<{ current: string }>("GET", "/themes")).body.current).toBe("");
+  // The browser's own line for core's 404 to removing the theme that was already gone.
+  expect(problems).toEqual([
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)",
+  ]);
+});
+
+test("with the navigation on top in a narrow window, the current page's entry is in view and the bar shows there is more", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 700, height: 800 });
+  await open(page);
+  await signIn(page, core);
+  const bar = nav(page);
+  const themes = bar.getByRole("link", { name: "Themes", exact: true });
+  // The bar is wider than the window: its last entries start out of view.
+  expect(await bar.evaluate((n) => n.scrollWidth > n.clientWidth)).toBe(true);
+  await expect(themes).not.toBeInViewport();
+  // Opening the page by its address, not by a click on the entry (which would scroll to it).
+  await page.evaluate(() => {
+    location.hash = "#/themes";
+  });
+  await expect(page.getByRole("heading", { name: "Themes", level: 1 })).toBeVisible();
+  await expect(themes).toBeInViewport({ ratio: 1 });
+  // The cue at the edges: shadows that stay put while the entries scroll under them.
+  await expect(bar).toHaveCSS("background-attachment", /local.*scroll/);
+  await bar.getByRole("link", { name: "Dashboard", exact: true }).click();
+  await expect(bar.getByRole("link", { name: "Dashboard", exact: true })).toBeInViewport({ ratio: 1 });
 });
 
 test("screenshots in two themes", async ({ page }) => {
