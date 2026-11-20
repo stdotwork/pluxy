@@ -533,11 +533,35 @@ func TestErrorResponseGoogleShape(t *testing.T) {
 	}
 }
 
-// A response that holds more than content is sent whole, so fields such as error are not lost.
+// A response with an error key is a failed call whose output is the error's value; its other
+// fields still reach GenerateContent unchanged.
 func TestFunctionResponseWithMoreThanContentIsWhole(t *testing.T) {
-	req := mustParse(t, `{"contents":[{"role":"user","parts":[{"functionResponse":{"name":"f",`+
+	req := mustParse(t, `{"contents":[
+	 {"role":"model","parts":[{"functionCall":{"name":"f","args":{}}}]},
+	 {"role":"user","parts":[{"functionResponse":{"name":"f",`+
 		`"response":{"content":"partial","error":"permission denied"}}}]}]}`)
-	sameJSON(t, "Output", []byte(req.Items[0].Output), `{"content":"partial","error":"permission denied"}`)
+	it := req.Items[len(req.Items)-1]
+	if !it.IsError || it.Output != "permission denied" {
+		t.Fatalf("tool result = %+v, want the error value as output and is_error", it)
+	}
+	body, _, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Contents []struct {
+			Parts []struct {
+				FunctionResponse struct {
+					Response json.RawMessage `json:"response"`
+				} `json:"functionResponse"`
+			} `json:"parts"`
+		} `json:"contents"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, "functionResponse.response", got.Contents[1].Parts[0].FunctionResponse.Response,
+		`{"content":"partial","error":"permission denied"}`)
 }
 
 // Gemini Schema becomes JSON Schema: nullable as a null type, int64 limits written as strings as

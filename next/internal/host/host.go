@@ -642,6 +642,12 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		s.fail(perr)
 		return s
 	}
+	req, lost := downgradeToolResults(e.info.ProtocolMinor, e.manifest.ID, req)
+	if perr := refuseDowngrade(e.manifest.ID, e.info.ProtocolMinor, req, lost); perr != nil {
+		s := &Stream{}
+		s.fail(perr)
+		return s
+	}
 	redact := protocol.NewRedactor(append(e.holdAccount(account), proxy)...)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
@@ -651,7 +657,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		}
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not reachable: %v", e.manifest.ID, err))
 	}
-	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: redact, pieces: e.accountPieces(account), capture: capture(ctx, e.info), account: account.ID}
+	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: redact, pieces: e.accountPieces(account), capture: capture(ctx, e.info), account: account.ID, lost: lost}
 	alive := e.info.ProtocolMinor >= AliveMinor
 	if alive {
 		s.watch = watchdog(account.Timeouts, req.Stream)
@@ -705,6 +711,9 @@ type Stream struct {
 	// held is the call's capture, redacted, until the call ends: whether it ended in an error
 	// says how much of it loses the pieces (pieces.diagnostic).
 	held heldCapture
+	// lost is what core left out of the request for an extension too old to take it
+	// (downgradeToolResults); response.start's translation report gets it.
+	lost []llm.Loss
 }
 
 // Alives returns how many alive frames the extension has sent on the call so far. It may be
@@ -764,7 +773,7 @@ func (s *Stream) Next() llm.Event {
 		}
 		return ev
 	}
-	ev := s.ext.normalizeEvent(s.pieces.event(s.redact.Event(reply.Event)))
+	ev := withLosses(s.ext.normalizeEvent(s.pieces.event(s.redact.Event(reply.Event))), s.lost)
 	if ev.Terminal() {
 		if ev.Type == llm.EventFinish {
 			s.held.succeed()

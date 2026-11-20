@@ -208,7 +208,11 @@ type Item struct {
 	ID string `json:"id,omitempty"`
 
 	// message
-	Role    string `json:"role,omitempty"`
+	Role string `json:"role,omitempty"`
+	// Content is a message's parts. On a tool_result (protocol minor 25) it is the result's parts
+	// when the result holds more than text: images, files or parts core could not interpret, in
+	// the order the client gave them. Output then still holds the result's text parts joined, for
+	// an encoder or extension that can send only text.
 	Content []Part `json:"content,omitempty"`
 	// TextContent is true when the source gave the content as a plain string rather than a list
 	// of parts; an encoder that has both forms keeps the source's.
@@ -224,6 +228,8 @@ type Item struct {
 	Custom bool `json:"custom,omitempty"`
 	// tool_result
 	Output string `json:"output,omitempty"`
+	// IsError marks a tool result that reports the tool failed (protocol minor 25).
+	IsError bool `json:"is_error,omitempty"`
 	// reasoning: the reasoning text or summary the client replayed. Opaque reasoning data, such
 	// as an encrypted blob, stays in Origin.Raw.
 	Text string `json:"text,omitempty"`
