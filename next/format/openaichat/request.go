@@ -630,6 +630,11 @@ func encodeBody(out *outRequest) ([]byte, error) {
 		if i > 0 {
 			b = append(b, ',')
 		}
+		if m == nil {
+			// marshal gave nothing for it: the same null a marshal of the whole body writes.
+			b = append(b, "null"...)
+			continue
+		}
 		b = append(b, m...)
 	}
 	b = append(b, ']', ',')
