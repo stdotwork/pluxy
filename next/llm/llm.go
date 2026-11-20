@@ -139,7 +139,7 @@ type Native struct {
 	// Parsed is core's own record, never sent: the body the request's Items, Tools and Origin
 	// were parsed from, by Format's parser. While it is still Body (IsParsed), an extension that
 	// parses Body gets the same Items, Tools and Origin, so core can leave them out of the call
-	// (protocol minor version 24). Code that changes Body leaves Parsed alone, so the two differ
+	// (protocol minor version 27). Code that changes Body leaves Parsed alone, so the two differ
 	// and core sends them, unless the change cannot change what the parser makes of them.
 	Parsed json.RawMessage `json:"-"`
 }
