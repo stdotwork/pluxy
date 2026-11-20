@@ -6,14 +6,29 @@ import (
 	"encoding/json"
 	"slices"
 
+	"github.com/stdotwork/pluxy/next/internal/jsonscan"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Object reads raw as a JSON object, or returns nil when it is not one.
+// Object reads raw as a JSON object, or returns nil when it is not one, as json.Unmarshal into
+// a map reads it. The values are slices of raw (each with no room after it, so appending to one
+// copies it), or copies when a name sends the object to encoding/json: raw must not change while
+// they are in use, and a value must not be changed in place.
 func Object(raw []byte) map[string]json.RawMessage {
-	var m map[string]json.RawMessage
-	if json.Unmarshal(raw, &m) != nil {
+	members, ok := jsonscan.Object(raw)
+	if !ok {
 		return nil
+	}
+	m := make(map[string]json.RawMessage, len(members))
+	for _, mem := range members {
+		k, ok := jsonscan.Unquote(mem.Key)
+		if !ok {
+			// A name encoding/json repairs (invalid UTF-8): let it read the object.
+			var m map[string]json.RawMessage
+			_ = json.Unmarshal(raw, &m)
+			return m
+		}
+		m[k] = mem.Value
 	}
 	return m
 }

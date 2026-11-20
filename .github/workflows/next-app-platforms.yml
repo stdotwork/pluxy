@@ -138,9 +138,10 @@ jobs:
           [ "$ran" -eq "$expected" ]
       # A detached launch must leave the app's job. The runner's own job refuses that (the unit
       # tests check the refusal), so the check that it works runs the breakaway test, the
-      # lifetime tests and the stdin secret test (a detached launch with a piped stdin), whose
-      # detached launches then run and must be in no job, from a process outside that job:
-      # started by WMI, or failing that by the Task Scheduler.
+      # lifetime tests, the stdin secret test (a detached launch with a piped stdin) and the WSLENV
+      # test (a detached launch of wsl.exe gets WSLENV), whose detached launches then run and must
+      # be in no job, from a process outside that job: started by WMI, or failing that by the Task
+      # Scheduler.
       - name: Detached launch outside the runner's job
         if: runner.os == 'Windows'
         working-directory: next/app/src-tauri
@@ -156,7 +157,7 @@ jobs:
             Remove-Item "$dir\*" -Force -ErrorAction SilentlyContinue
             # The exit code goes first to a file of its own (a redirection before echo: `echo 0>`
             # would redirect stream 0), then into place, so done.txt never appears empty.
-            Set-Content "$dir\run.cmd" "@`"$exe`" outside_job lifetime_ a_launchs_stdin_secret_reaches_it_on_its_stdin_only --include-ignored --test-threads=1 > `"$dir\out.txt`" 2>&1`r`n@> `"$dir\done.tmp`" echo %ERRORLEVEL%`r`n@move /y `"$dir\done.tmp`" `"$dir\done.txt`" > nul"
+            Set-Content "$dir\run.cmd" "@`"$exe`" outside_job lifetime_ a_launchs_stdin_secret_reaches_it_on_its_stdin_only managed_and_detached_launches_of_wsl_exe_start_with_wslenv --include-ignored --test-threads=1 > `"$dir\out.txt`" 2>&1`r`n@> `"$dir\done.tmp`" echo %ERRORLEVEL%`r`n@move /y `"$dir\done.tmp`" `"$dir\done.txt`" > nul"
             if ($how -eq 'WMI') {
               $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "cmd.exe /c `"$dir\run.cmd`""; CurrentDirectory = $dir }
               if ($r.ReturnValue -ne 0) { return "WMI could not start it ($($r.ReturnValue))" }
@@ -169,7 +170,7 @@ jobs:
             if (-not (Test-Path "$dir\done.txt")) { return "$($how): no result within 120 s" }
             Get-Content "$dir\out.txt" | Write-Host
             $code = (Get-Content "$dir\done.txt").Trim()
-            if ($code -eq '0' -and (Select-String -Quiet -Path "$dir\out.txt" -Pattern '^test result: ok\. 10 passed')) { return 'ok' }
+            if ($code -eq '0' -and (Select-String -Quiet -Path "$dir\out.txt" -Pattern '^test result: ok\. 11 passed')) { return 'ok' }
             return "$($how): the test failed (exit $code)"
           }
           $why = @()

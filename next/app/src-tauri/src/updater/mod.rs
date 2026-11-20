@@ -1009,6 +1009,7 @@ fn confirm_rollback(
         native_tool: false,
         files: vec![],
         launch: None,
+        environment: None,
     };
     let id = {
         let mut c = st.confirmations.lock().unwrap();

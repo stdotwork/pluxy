@@ -835,6 +835,18 @@ model name (refused with 400; set `generation_config.thinking_level` instead), a
 that drops a thought step whose signature does not look like one Gemini issued. An
 `"interactions": true` account still serves Chat Completions, Responses, Messages and Gemini
 clients, through GenerateContent with the same key.
+
+**Compaction.** `POST /v1/responses/compact` (also `POST /backend-api/codex/responses/compact`) is
+served on every Gemini account (Gemini API keys, Vertex AI service accounts and express mode keys,
+without needing `interactions`). The Responses request is translated to `GenerateContent` with the
+extension's schema, turn and call-ID repairs, stop sequences and structured output cleared, tools
+kept with `toolConfig` in `NONE` mode so the model answers in text while keeping tool declarations
+for any tool history, and the Codex CLI's compaction prompt (`prompt.md`) appended as a user
+turn. The request runs once, not streamed; thought parts are excluded, and the summary comes back
+as OpenAI's `response.compaction` object carrying one user message with the Codex CLI's
+`summary_prefix.md` followed by a newline and the summary. An incomplete or empty summary fails as
+a non-retryable request error.
+
 **Turn fixes.** Google refuses some conversations that clients send, so the extension changes the
 turns of every GenerateContent request to the Gemini API or Vertex AI, as today's core does, a
 Gemini client's own request included. A first turn from the model gets an empty user turn
@@ -861,7 +873,7 @@ Today's core can also relay Gemini requests through a browser tab signed in to A
 connects to core over a WebSocket. This extension does not: the extension protocol gives a
 program no listener that outlives its calls, and core stops idle programs.
 
-**Quota and identity.** Gemini has no usage endpoint, so quota answers unsupported. A `service_account` login's grant carries `identity` `{"client_email"}`, the key's service account; an API key login has none.
+**Quota and identity.** Google offers no quota reading or rate-limit headers for Gemini API keys or Vertex AI accounts, so `quota` reports the last-seen values from the account's most recent HTTP 429 reply (`google.rpc.QuotaFailure`, `google.rpc.RetryInfo` or HTTP `Retry-After`, and `google.rpc.ErrorInfo`), kept in extension memory only (nothing is written to disk) and labelled with when the 429 was seen and that it is not a live reading; an account that has not received a 429 answers with an empty limit list stating that no rate-limit reply has been seen yet. A `service_account` login's grant carries `identity` `{"client_email"}`, the key's service account; an API key login has none.
 
 ## Kimi
 
