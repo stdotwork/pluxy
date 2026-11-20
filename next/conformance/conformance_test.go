@@ -34,6 +34,11 @@ func serveFakeModels(minor int) {
 	if err != nil {
 		os.Exit(1)
 	}
+	go func() {
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		_ = ln.Close()
+		os.Exit(0)
+	}()
 	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
 	for {
 		conn, err := ln.Accept()

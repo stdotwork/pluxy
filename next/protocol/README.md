@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.18
+# pluxy extension protocol, version 0.19
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -26,8 +26,9 @@ upstream JSON body that the config sets, fills in or removes. Version 0.15 has a
 them too. Version 0.16 adds an error's `dropped`: what a refusal under the `reject` drop policy
 could not carry. Version 0.17 adds a captured body's `body_stopped`: the extension did not read it
 to its end. Version 0.18 adds a model list's `from`: whether the list came from the account at the
-provider or from the extension's built-in catalog. It is deliberately small; later versions add
-capabilities and more operations without changing what is described here. An extension written for
+provider or from the extension's built-in catalog. Version 0.19 adds a model's `capabilities`:
+what the model supports and when it was deprecated. It is deliberately small; later versions add
+more capabilities and operations without changing what is described here. An extension written for
 version 0 works unchanged with a core that speaks 0.18 (see
 [Versioning](#versioning)).
 
@@ -324,7 +325,8 @@ event as for `generate`.
 
 ```json
 {"type": "models.result", "models": {"owned_by": "openai", "from": "account", "models": [
-  {"id": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "created": 1794268800, "context_length": 400000, "max_completion_tokens": 128000}
+  {"id": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "created": 1794268800, "context_length": 400000, "max_completion_tokens": 128000,
+   "capabilities": {"tools": true, "structured_output": true, "vision": true, "pdf": false, "reasoning": true, "reasoning_levels": ["low", "medium", "high", "xhigh", "max"]}}
 ]}}
 ```
 
@@ -341,6 +343,7 @@ event as for `generate`.
 | model `context_length`, `max_completion_tokens` | Its context window and longest reply, in tokens. |
 | model `input_token_limit`, `output_token_limit` | Gemini's names for the same limits, where the provider gives them apart. Default: the two above. |
 | model `generation_methods`, `input_modalities`, `output_modalities` | Gemini's `supportedGenerationMethods`, `supportedInputModalities` and `supportedOutputModalities`. |
+| model `capabilities` | Optional, since 0.19: what the model supports and when it was deprecated — `tools`, `structured_output`, `vision`, `pdf`, `reasoning` (booleans), `reasoning_levels` (optional list from `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` when `reasoning` is true), and `deprecated_at` (optional Unix seconds). For an extension below 0.19, core ignores `capabilities` and fills them from its catalogue only. |
 
 Every field but `id` is optional and shown only where a client's list has a place for it. Core
 renames, leaves out and prefixes the listed models by the account's naming rules (its `models`,
@@ -1352,7 +1355,7 @@ recorded.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.18. An extension reports the minor version it
+raise the minor version: this document is version 0.19. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1378,8 +1381,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.16 | An error's `dropped`. |
 | 0.17 | A captured body's `body_stopped` ([upstream capture](#upstream-capture)). |
 | 0.18 | A model list's `from` ([`models`](#models)). |
+| 0.19 | A model's `capabilities` ([`models`](#models)). |
 
-## What version 0.18 leaves out
+## What version 0.19 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

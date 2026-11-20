@@ -55,6 +55,9 @@ func (e *Extension) Models(ctx context.Context, account protocol.Account) (*prot
 			if m.ID == "" {
 				return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s listed a model without an id", e.manifest.ID)}
 			}
+			if e.info.ProtocolMinor < 19 {
+				m.Capabilities = nil
+			}
 			list.Models = append(list.Models, redactModel(redact, m))
 		}
 		return list, nil
@@ -72,6 +75,14 @@ func redactModel(r *protocol.Redactor, m protocol.Model) protocol.Model {
 		for i := range list {
 			list[i] = r.String(list[i])
 		}
+	}
+	if m.Capabilities != nil {
+		c := *m.Capabilities
+		c.ReasoningLevels = slices.Clone(c.ReasoningLevels)
+		for i := range c.ReasoningLevels {
+			c.ReasoningLevels[i] = r.String(c.ReasoningLevels[i])
+		}
+		m.Capabilities = &c
 	}
 	return m
 }

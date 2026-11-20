@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -690,7 +691,29 @@ func (k *kit) models(t *testing.T) {
 	}
 }
 
-func checkModelCapabilities(_ protocol.Model) error {
+var canonicalReasoningLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+func checkModelCapabilities(m protocol.Model) error {
+	c := m.Capabilities
+	if c == nil {
+		return nil
+	}
+	if c.DeprecatedAt < 0 {
+		return fmt.Errorf("negative deprecated_at %d", c.DeprecatedAt)
+	}
+	if len(c.ReasoningLevels) > 0 && !c.Reasoning {
+		return fmt.Errorf("reasoning_levels %v present with reasoning=false", c.ReasoningLevels)
+	}
+	seen := map[string]bool{}
+	for _, lvl := range c.ReasoningLevels {
+		if !slices.Contains(canonicalReasoningLevels, lvl) {
+			return fmt.Errorf("unknown reasoning level %q", lvl)
+		}
+		if seen[lvl] {
+			return fmt.Errorf("duplicate reasoning level %q", lvl)
+		}
+		seen[lvl] = true
+	}
 	return nil
 }
 

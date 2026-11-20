@@ -31,8 +31,8 @@ const Version = 0
 // minor 12 adds the account's headers; minor 13 adds upstream capture (Call.Capture and the
 // diagnostic frame); minor 14 adds payload rules (Call.Payload); minor 15 has a session turn
 // carry them too; minor 16 adds an error's dropped (llm.Error.Dropped); minor 17 adds a
-// captured body's BodyStopped; minor 18 adds ModelList.From.
-const Minor = 18
+// captured body's BodyStopped; minor 18 adds ModelList.From; minor 19 adds Model.Capabilities.
+const Minor = 19
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
