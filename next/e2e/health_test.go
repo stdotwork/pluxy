@@ -100,12 +100,29 @@ func TestUnbelievedResetIsChecked(t *testing.T) {
 	}
 	until := *h.Until
 
-	// The check finds no reading to make, so the next request may pass: next_check goes.
-	waitHealth(t, base, "acct", "the check", func(h mgmt.Health) bool { return h.NextCheck == nil })
-	if !time.Now().Before(until) {
-		t.Fatal("the check came after the hold ended, so the test cannot tell them apart; the machine is too slow for its timing")
+	// The check finds no usage reading to make, so it lets the next request through, and that
+	// request's outcome is the check's answer. The check is taken on a moment before it lets the
+	// request through (next_check goes when it is taken on), so a request sent in that moment is
+	// still refused with a cooldown, which reaches no upstream. Requests are sent until one is
+	// served, and it must be served before the hold ends: only the check lets one through while
+	// the block is live, so that is what tells the check from the hold simply ending.
+	served := false
+	for !served {
+		resp := post(t, context.Background(), base, clientKey, plainBody)
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		switch resp.StatusCode {
+		case http.StatusOK:
+			served = true
+		case http.StatusTooManyRequests:
+			time.Sleep(20 * time.Millisecond)
+		default:
+			t.Fatalf("status %d, want 200 or the cooldown's 429: %s", resp.StatusCode, raw)
+		}
 	}
-	postOK(t, base, plainBody)
+	if !time.Now().Before(until) {
+		t.Fatal("the request the check let through was served after the hold ended, so the test cannot tell the check from the hold ending; the machine is too slow for its timing")
+	}
 	if h := accountHealth(t, base, "acct"); h.State != mgmt.HealthOK {
 		t.Errorf("after the check's request was served: %+v, want ok", h)
 	}
