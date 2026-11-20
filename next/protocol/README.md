@@ -866,7 +866,7 @@ are core's, not the body's: `model` (which core may have renamed), `stream`, `op
 `drop_policy` and `caller`. On `native_only`, the extension parses `native.body` with core's
 parser for its format (the `next/format` packages; for `gemini.generate_content` with the
 request's `model` and `stream`), takes `items`, `tools` and `origin` from the result and keeps
-the call's other fields. The Go SDK does this before the handler runs (`protocol.ParseNative`),
+the call's other fields. The Go SDK does this before the handler runs (`nativeonly.Parse` in `next/protocol/nativeonly`),
 so a handler gets the same request as from a full call. An extension built with other parsers
 than core's gets what those make of the body. `count_tokens` and `endpoint` calls and session
 turns always carry the full request.

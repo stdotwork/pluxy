@@ -22,6 +22,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/protocol/nativeonly"
 	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
@@ -656,9 +657,9 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 	}
 	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req, Capture: s.capture != nil, Payload: rules, Alive: alive}
-	if op == protocol.OpGenerate && ParsesNative(e.info) && protocol.CanBeNativeOnly(req) {
+	if op == protocol.OpGenerate && ParsesNative(e.info) && nativeonly.Can(req) {
 		// The extension parses the native body itself: send the request's content once.
-		sent := protocol.NativeOnly(req)
+		sent := nativeonly.Strip(req)
 		call.Request, call.NativeOnly = &sent, true
 	}
 	if err := protocol.WriteFrame(conn, call); err != nil {

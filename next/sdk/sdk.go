@@ -21,6 +21,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/protocol/nativeonly"
 )
 
 // Call is one generate call.
@@ -385,7 +386,7 @@ func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none str
 		err = &llm.Error{Code: llm.CodeUnsupported, Message: none, Scope: llm.ScopeRequest}
 	} else if call.NativeOnly && call.Request != nil {
 		// Core left the request's parsed form out: it is what the native body parses to.
-		if perr := protocol.ParseNative(&c.Request); perr != nil {
+		if perr := nativeonly.Parse(&c.Request); perr != nil {
 			err = &llm.Error{Code: llm.CodeInternal, Message: "the request's native body does not parse: " + perr.Error()}
 		} else {
 			err = runHandler(ctx, h, c, out)

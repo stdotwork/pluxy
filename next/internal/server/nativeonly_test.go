@@ -19,6 +19,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/protocol/nativeonly"
 )
 
 // nativeOnlyRequest is one client request the differential test sends through both frames.
@@ -61,17 +62,17 @@ func TestNativeOnlyFrameGivesTheSameRequest(t *testing.T) {
 		} {
 			ran++
 			want := throughFrame(t, protocol.Call{Type: protocol.TypeCall, Op: protocol.OpGenerate, Request: &v.req})
-			if !host.ParsesNative(parses) || !protocol.CanBeNativeOnly(v.req) {
+			if !host.ParsesNative(parses) || !nativeonly.Can(v.req) {
 				continue
 			}
 			nativeOnly++
-			sent := protocol.NativeOnly(v.req)
+			sent := nativeonly.Strip(v.req)
 			call := throughFrame(t, protocol.Call{Type: protocol.TypeCall, Op: protocol.OpGenerate, Request: &sent, NativeOnly: true})
 			if !call.NativeOnly || len(call.Request.Items) != 0 || call.Request.Tools != nil || call.Request.Origin != nil {
 				t.Fatalf("%s (%s): the native-only frame carries the parsed request", c.name, v.name)
 			}
 			got := call.Request
-			if err := protocol.ParseNative(got); err != nil {
+			if err := nativeonly.Parse(got); err != nil {
 				t.Errorf("%s (%s): %v", c.name, v.name, err)
 				continue
 			}
@@ -102,25 +103,25 @@ func TestNativeOnlyLeavesChangedBodiesWhole(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: does not parse", c.name)
 		}
-		if req.Options.ThinkingSuffix == "" || protocol.CanBeNativeOnly(req) {
-			t.Errorf("%s: suffix %q, native-only %v; want a suffix and a full call", c.name, req.Options.ThinkingSuffix, protocol.CanBeNativeOnly(req))
+		if req.Options.ThinkingSuffix == "" || nativeonly.Can(req) {
+			t.Errorf("%s: suffix %q, native-only %v; want a suffix and a full call", c.name, req.Options.ThinkingSuffix, nativeonly.Can(req))
 		}
 	}
 	gemini, ok := readAsCore(t, nativeOnlyRequest{name: "gemini", path: "/v1beta/models/g:generateContent",
 		body: []byte(`{"model":"g","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)})
-	if !ok || !protocol.CanBeNativeOnly(gemini) {
-		t.Fatalf("gemini as read: parsed %v, native-only %v; want both", ok, ok && protocol.CanBeNativeOnly(gemini))
+	if !ok || !nativeonly.Can(gemini) {
+		t.Fatalf("gemini as read: parsed %v, native-only %v; want both", ok, ok && nativeonly.Can(gemini))
 	}
-	if protocol.CanBeNativeOnly(route.Renamed(gemini, "other")) {
+	if nativeonly.Can(route.Renamed(gemini, "other")) {
 		t.Errorf("a Gemini body whose own model was renamed goes native-only")
 	}
 	invalid, ok := readAsCore(t, nativeOnlyRequest{name: "invalid UTF-8", path: "/v1/messages",
 		body: []byte("{\"model\":\"m\",\"max_tokens\":5,\"messages\":[{\"role\":\"user\",\"content\":\"a\xffb\"}]}")})
-	if !ok || protocol.CanBeNativeOnly(invalid) {
+	if !ok || nativeonly.Can(invalid) {
 		t.Errorf("a body that is not valid UTF-8: parsed %v, goes native-only", ok)
 	}
 	chat, _ := readAsCore(t, nativeOnlyRequest{name: "chat", path: "/v1/chat/completions", body: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)})
-	if !protocol.CanBeNativeOnly(route.Renamed(chat, "other")) {
+	if !nativeonly.Can(route.Renamed(chat, "other")) {
 		t.Errorf("a renamed Chat body does not go native-only")
 	}
 }

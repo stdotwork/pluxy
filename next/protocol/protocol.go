@@ -53,6 +53,10 @@ const (
 // when it is set; an extension honours such settings only when it holds it (sdk.TestLoginHost).
 const EnvTestLoginHosts = "PLUXY_TEST_LOGIN_HOSTS"
 
+// NativeOnlyMinor is the minor version that adds native-only generate calls (Call.NativeOnly;
+// package nativeonly holds their rule).
+const NativeOnlyMinor = 24
+
 // HandshakeMarker starts the handshake line.
 const HandshakeMarker = "pluxy"
 
@@ -159,7 +163,7 @@ type Call struct {
 	// NativeOnly says core left the request's items, tools and origin out of a generate call
 	// (minor version 24), to an extension that describes itself with Info.ParsesNative: they are
 	// what the parser of the request's native format makes of its native body, which the
-	// extension parses itself (ParseNative). The request's other fields are as in any call.
+	// extension parses itself (nativeonly.Parse). The request's other fields are as in any call.
 	NativeOnly bool `json:"native_only,omitempty"`
 }
 
