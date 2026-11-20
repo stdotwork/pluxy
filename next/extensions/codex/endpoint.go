@@ -42,6 +42,8 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return compact(ctx, call, out)
 	case llm.FormatCodexAlphaSearch:
 		return alphaSearch(ctx, call, out)
+	case llm.FormatCodexBackend:
+		return backend(ctx, call, out)
 	case llm.FormatOpenAIImagesGenerations:
 		return images(ctx, call, out, "/images/generations")
 	case llm.FormatOpenAIImagesEdits:

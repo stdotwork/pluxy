@@ -181,6 +181,12 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 	}
 	req := llm.Request{Model: model, Stream: string(fields["stream"]) == "true", Native: &llm.Native{Format: ep.format, Body: body}}
 	takeThinkingSuffix(&req)
+	routeEndpoint(w, r, g, ep, f, req, body, arrived)
+}
+
+// routeEndpoint routes an endpoint call to the accounts that serve it and writes the reply. body
+// is the client's request body, which request tracing keeps; arrived is when the request came.
+func routeEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep endpoint, f clientFormat, req llm.Request, body []byte, arrived time.Time) {
 	clientFormat{headers: ep.headers}.nativeHeaders(r, &req)
 
 	r, t := requestTrace(r)

@@ -171,8 +171,8 @@ type Source interface {
 // src when it starts and keeps it until it ends.
 func NewHandler(src Source) http.Handler {
 	mux := http.NewServeMux()
-	handle := func(path string, f clientFormat, h func(w http.ResponseWriter, r *http.Request, g *Generation)) {
-		mux.HandleFunc("POST "+path, accessLog(func(w http.ResponseWriter, r *http.Request) {
+	handleAs := func(pattern string, f clientFormat, h func(w http.ResponseWriter, r *http.Request, g *Generation)) {
+		mux.HandleFunc(pattern, accessLog(func(w http.ResponseWriter, r *http.Request) {
 			g, release := src.Acquire()
 			defer release()
 			if e := refused(g.Config, r, f.googleKeys); e != nil {
@@ -181,6 +181,9 @@ func NewHandler(src Source) http.Handler {
 			}
 			logged(w, r, g, func(w http.ResponseWriter, r *http.Request) { h(w, r, g) })
 		}))
+	}
+	handle := func(path string, f clientFormat, h func(w http.ResponseWriter, r *http.Request, g *Generation)) {
+		handleAs("POST "+path, f, h)
 	}
 	// The Codex CLI sends its requests to /backend-api/codex/responses when its chatgpt_base_url
 	// points at core; as in today's core, that path is an alias of /v1/responses.
@@ -194,6 +197,11 @@ func NewHandler(src Source) http.Handler {
 	handle("/v1beta/models/{action...}", geminiFormat, geminiAction)
 	for path, ep := range endpointRoutes {
 		handle(path, clientFormat{googleKeys: ep.googleKeys, errorBody: ep.errorBody}, func(w http.ResponseWriter, r *http.Request, g *Generation) { serveEndpoint(w, r, g, ep) })
+	}
+	// The Codex CLI's other calls to the ChatGPT backend: only those it makes (codexBackendRoutes).
+	for _, route := range codexBackendRoutes {
+		method, path, _ := strings.Cut(route, " ")
+		handleAs(method+" "+codexBackendRoot+path, clientFormat{}, serveCodexBackend)
 	}
 	// The WebSocket, on /v1/responses and on the Codex CLI's alias of it (see above).
 	for _, path := range []string{"/v1/responses", "/backend-api/codex/responses"} {
