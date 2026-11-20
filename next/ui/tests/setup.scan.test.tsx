@@ -1,6 +1,6 @@
-// The Setup page while core scans: its re-reads, the person's ticks, leaving, looking again,
-// and a failed re-read. These drive the real page through Preact's DOM renderer against a fake
-// host, using a small DOM that carries only the nodes and events Preact needs.
+// The Setup page while core scans: its re-reads, leaving, looking again, and a failed re-read.
+// These drive the real page through Preact's DOM renderer against a fake host, using a small DOM
+// that carries only the nodes and events Preact needs.
 import { afterEach, expect, jest, test } from "bun:test";
 import { render } from "preact";
 import { act } from "preact/test-utils";
@@ -289,10 +289,6 @@ function button(root: FakeNode, label: string) {
   return all(root, "button").find((node) => node.textContent === label);
 }
 
-function row(root: FakeNode, title: string) {
-  return all(root, "li").find((node) => node.textContent.includes(title));
-}
-
 async function tick(milliseconds: number) {
   await act(async () => {
     jest.advanceTimersByTime(milliseconds);
@@ -335,6 +331,7 @@ test("while scanning, the page reads about once a second, stops, and shows what 
   expect(setupReads()[2]!.at - setupReads()[1]!.at).toBeLessThan(1300);
   expect(fake.text()).toContain("Claude Code 2.4.1");
   expect(fake.text()).not.toContain("pluxy is looking at this machine.");
+  expect(jest.getTimerCount()).toBe(0);
 
   await tick(5000);
   expect(setupReads()).toHaveLength(3);
@@ -351,7 +348,9 @@ test("leaving while core scans stops the re-reads", async () => {
 
   await tickUntil(() => setupCalls() === 2);
   expect(setupCalls()).toBe(2);
+  expect(jest.getTimerCount()).toBe(1);
   await fake.unmount();
+  expect(jest.getTimerCount()).toBe(0);
   await tick(5000);
   expect(setupCalls()).toBe(2);
 });
