@@ -161,7 +161,10 @@ fn first(c: &mut Checks, app: &AppHandle) {
     }
     let r = core(app, "GET", "/packages");
     c.check(
-        r["status"] == 200 && r["body"]["packages"].as_array().is_some_and(|p| p.is_empty()),
+        r["status"] == 200
+            && r["body"]["packages"]
+                .as_array()
+                .is_some_and(|p| p.is_empty()),
         format!("GET /packages through the app's host lists nothing installed at first ({r})"),
     );
     let found = until(
@@ -203,11 +206,16 @@ fn first(c: &mut Checks, app: &AppHandle) {
     .unwrap_or_else(|| client_buttons(app));
     c.check(
         buttons == json!(["Set up", "Show what to paste"]),
-        format!("the Claude Code client row has \"Set up\" beside \"Show what to paste\" ({buttons})"),
+        format!(
+            "the Claude Code client row has \"Set up\" beside \"Show what to paste\" ({buttons})"
+        ),
     );
     shot("found");
 
-    if !c.check(press(app, "Start", "Start"), "Start is there, enabled, and pressed") {
+    if !c.check(
+        press(app, "Start", "Start"),
+        "Start is there, enabled, and pressed",
+    ) {
         return;
     }
     let installed = until(
@@ -234,7 +242,10 @@ fn first(c: &mut Checks, app: &AppHandle) {
     );
     shot("started");
 
-    if !c.check(press(app, "Finish", "Finish"), "Finish is there, enabled, and pressed") {
+    if !c.check(
+        press(app, "Finish", "Finish"),
+        "Finish is there, enabled, and pressed",
+    ) {
         return;
     }
     c.check(
@@ -280,7 +291,10 @@ fn second(c: &mut Checks, app: &AppHandle) {
     ) == Some(json!(true));
     c.check(
         dashboard && stayed,
-        format!("the next launch opens on the Dashboard, not Setup ({})", page(app)),
+        format!(
+            "the next launch opens on the Dashboard, not Setup ({})",
+            page(app)
+        ),
     );
 
     let _ = main_eval(app, "(location.hash = '#/setup', true)");

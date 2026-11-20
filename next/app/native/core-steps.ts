@@ -190,7 +190,10 @@ export function firstRunSource(dir: string, program: string, testext: string): C
     JSON.stringify({ registry_version: 0, packages: { [manifest.id]: offer } }),
   );
   const index = join(dir, "index.json");
-  writeFileSync(index, JSON.stringify({ format: 1, releases: [release(dir, "2.0.0", folder, privateKey, keyId)] }));
+  writeFileSync(
+    index,
+    JSON.stringify({ format: 1, releases: [release(dir, "2.0.0", folder, privateKey, keyId)] }),
+  );
   const jwk = publicKey.export({ format: "jwk" });
   return {
     index,

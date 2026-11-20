@@ -43,7 +43,10 @@ export function buildFirstRunFixtures(root: string, home: string): FirstRun {
   const file = pack(root, p, placeholder);
   const f: Fixture = { file, id: p.id, version: p.version, tier: "native" };
   const curatedFile = join(root, "curated.json");
-  writeFileSync(curatedFile, JSON.stringify(index([[p, artifact(root, file, f, publicKey, privateKey as KeyObject).entry]])));
+  writeFileSync(
+    curatedFile,
+    JSON.stringify(index([[p, artifact(root, file, f, publicKey, privateKey as KeyObject).entry]])),
+  );
   const nonce = writeTrustProfile(home, [curatedFile], publicKey);
   return { registries: [{ name: "curated", url: curatedFile }], nonce, bin };
 }

@@ -174,11 +174,11 @@ pub use ingress::{
 };
 #[path = "native_privacy.rs"]
 pub mod privacy;
-#[path = "native_themes.rs"]
-mod themes;
 #[cfg(target_os = "linux")]
 #[path = "native_setup.rs"]
 mod setup;
+#[path = "native_themes.rs"]
+mod themes;
 #[cfg(target_os = "linux")]
 #[path = "native_window.rs"]
 pub mod window;
