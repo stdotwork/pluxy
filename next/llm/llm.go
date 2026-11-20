@@ -170,6 +170,9 @@ const (
 	// mask[image_url] as mask.file_id and mask.image_url) and each file a data URL, the images
 	// (image[] or image) appended to images[].image_url and the mask as mask.image_url.
 	FormatOpenAIImagesEdits = "openai.images.edits"
+	// FormatOpenAIEmbeddings is OpenAI's Embeddings API, POST /v1/embeddings: a JSON body,
+	// answered with one JSON object.
+	FormatOpenAIEmbeddings = "openai.embeddings"
 )
 
 // EndpointReply is the Raw of an endpoint call's response.start: how to send the reply's body,
