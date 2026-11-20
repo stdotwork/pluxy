@@ -336,3 +336,15 @@ func TestTimeoutWebSocketUpgradePreservesRWC(t *testing.T) {
 		t.Fatalf("101 resp.Body does not implement io.ReadWriteCloser (%T)", resp.Body)
 	}
 }
+
+// Core finds an upstream timeout in an extension's failure by the phrase in the message (the
+// protocol has no field for it), so every kind of timeoutError must carry it.
+func TestTimeoutMessagesCarryThePhrase(t *testing.T) {
+	for _, kind := range []string{timeoutHeader, timeoutIdle, timeoutTotal} {
+		err := fmt.Errorf("upstream unreachable: %w", &timeoutError{kind: kind, limit: time.Minute})
+		e := &llm.Error{Code: llm.CodeUnavailable, Message: err.Error()}
+		if !e.IsTimeout() {
+			t.Errorf("%s: %q is not recognised as a timeout", kind, e.Message)
+		}
+	}
+}

@@ -5,7 +5,7 @@ import type { VNode } from "preact";
 import { useCallback, useEffect, useId, useMemo, useState } from "preact/hooks";
 import { api } from "./api";
 import { ExtensionPage, type ExtensionPageProps } from "./extensions/page";
-import type { Host } from "./host";
+import type { Host, Reply } from "./host";
 import { PrivacyContext, type PrivacyState, privacyMasks } from "./privacy";
 import { strings } from "./strings";
 import type { ThemeState } from "./theme/state";
@@ -71,6 +71,22 @@ const leaveGuards = new Set<LeaveGuard>();
 export function guardLeave(guard: LeaveGuard): () => void {
   leaveGuards.add(guard);
   return () => leaveGuards.delete(guard);
+}
+
+/** The Setup page's ID: the one page the shell opens by itself, and hides when core lacks its calls. */
+export const SETUP_PAGE = "setup";
+
+/**
+ * What the shell does with core's answer to GET /setup once signed in. offered: the Setup page
+ * is in the navigation; a core without the call (404) gets none. open: Setup opens in place of
+ * the first page, on a first run when the address (hash) names no page.
+ */
+export function setupGate(
+  reply: Reply<{ first_run: boolean }>,
+  hash: string,
+): { offered: boolean; open: boolean } {
+  if (reply.status === 404) return { offered: false, open: false };
+  return { offered: true, open: reply.body?.first_run === true && hash.replace(/^#\/?/, "") === "" };
 }
 
 function currentId(pages: PageDef[]): string {
@@ -216,7 +232,29 @@ export function Shell(props: {
     uiVersion,
     props.extensionPage ?? ExtensionPage,
   );
-  const pages = useMemo(() => [...props.pages, ...extPages], [props.pages, extPages]);
+  // The shell does not wait for this answer: the first page may show for an instant.
+  const hasSetup = props.pages.some((p) => p.id === SETUP_PAGE);
+  const [setupOffered, setSetupOffered] = useState(true);
+  useEffect(() => {
+    if (!signedIn || !hasSetup) return;
+    let live = true;
+    kit.api.setup().then((r) => {
+      if (!live) return;
+      // A refused key is left to the page that loads next: this read is the shell's own, and
+      // signing out here could undo a sign-in that is under way in the desktop app.
+      if (r.status === 401) return;
+      const gate = setupGate(r, location.hash);
+      setSetupOffered(gate.offered);
+      if (gate.open) location.replace(`#/${SETUP_PAGE}`);
+    });
+    return () => {
+      live = false;
+    };
+  }, [signedIn, hasSetup, kit]);
+  const pages = useMemo(
+    () => [...props.pages.filter((p) => setupOffered || p.id !== SETUP_PAGE), ...extPages],
+    [props.pages, extPages, setupOffered],
+  );
   const [page, setPage] = useState(() => currentId(pages));
 
   useEffect(() => {

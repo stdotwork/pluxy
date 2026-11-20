@@ -306,6 +306,26 @@ func TestCLISetupAndClientShow(t *testing.T) {
 			w.Write([]byte(`{"first_run":false}`))
 		case "GET /v0/management/client-keys":
 			w.Write([]byte(`{"keys":[{"id":"k1","masked":"sk******ab"}]}`))
+		case "GET /v0/management/setup/clients/claude-code/paste", "GET /v0/management/setup/clients/codex/paste",
+			"GET /v0/management/setup/clients/opencode/paste", "GET /v0/management/setup/clients/pi/paste",
+			"GET /v0/management/setup/clients/omp/paste":
+			key := "<client-key>"
+			switch r.URL.Query().Get("key_id") {
+			case "":
+			case "k1":
+				key = "<client-key:k1 (sk******ab)>"
+			default:
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte(`{"error":{"code":"not_found","message":"no client key with that id"}}`))
+				return
+			}
+			tool := strings.Split(strings.TrimPrefix(r.URL.Path, "/v0/management/setup/clients/"), "/")[0]
+			snip, _ := core.ClientSnippetFor(tool, "http://"+r.Host, key)
+			reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: "http://" + r.Host, Key: key, Note: snip.Note}
+			for _, f := range snip.Files {
+				reply.Files = append(reply.Files, management.ClientPasteFile{Path: f.Path, Content: f.Content})
+			}
+			json.NewEncoder(w).Encode(reply)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(`{"error":{"code":"not_found","message":"nope"}}`))
@@ -452,16 +472,36 @@ func TestUsageCLI(t *testing.T) {
 }
 
 func TestResolveThemeID(t *testing.T) {
-	if got := resolveThemeID("acme/custom", "/tmp/Foo.json", []byte(`{"id":"other/id"}`)); got != "acme/custom" {
-		t.Errorf("flag wins: got %q", got)
+	tests := []struct {
+		name     string
+		flagID   string
+		path     string
+		raw      string
+		expected string
+	}{
+		{"flag wins", "acme/custom", "/tmp/Foo.json", `{"id":"other/id"}`, "acme/custom"},
+		{"pluxy file id", "", "/tmp/Foo.json", `{"theme_version":0,"id":"acme/from-file"}`, "acme/from-file"},
+		{"pluxy file invalid id", "", "/tmp/Foo.json", `{"theme_version":0,"id":"ok-id","name":"X Y"}`, "t3/foo"},
+		{"T3 file id without name", "", "/tmp/Foo.json", `{"id":"ok-id","name":""}`, "t3/ok-id"},
+		{"T3 file name", "", "/tmp/Foo.json", `{"name":"Nightfall"}`, "t3/nightfall"},
+		{"T3 file name trimmed", "", "/tmp/Foo.json", `{"name":"  My Theme!! "}`, "t3/my-theme"},
+		{"T3 file long name", "", "/tmp/Foo.json", `{"name":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`, "t3/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{"T3 file hashed name", "", "/tmp/Foo.json", `{"name":"日本語"}`, "t3/theme-nbamha"},
+		{"T3 file hashed UTF-16 name", "", "/tmp/Foo.json", `{"name":"😀"}`, "t3/theme-1kdnhdk"},
+		{"T3 file invalid id", "", "/tmp/Foo.json", `{"id":"Bad_ID","name":"X Y"}`, "t3/x-y"},
+		{"T3 file publisher id", "", "/tmp/Foo.json", `{"id":"acme/from-file","name":"X Y"}`, "t3/x-y"},
+		{"T3 file no id or name", "", "/tmp/My Theme_v2.JSON", `{}`, "t3/my-theme-v2"},
+		{"T3 file empty name", "", "/tmp/Fallback Name.json", `{"name":""}`, "t3/fallback-name"},
+		{"non-ascii filename", "", "/tmp/Café.json", `{}`, "t3/caf-"},
 	}
-	if got := resolveThemeID("", "/tmp/Foo.json", []byte(`{"id":"acme/from-file"}`)); got != "acme/from-file" {
-		t.Errorf("valid file id: got %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveThemeID(tt.flagID, tt.path, []byte(tt.raw)); got != tt.expected {
+				t.Errorf("resolveThemeID(%q, %q, %s) = %q, want %q", tt.flagID, tt.path, tt.raw, got, tt.expected)
+			}
+		})
 	}
-	if got := resolveThemeID("", "/tmp/My Theme_v2.JSON", []byte(`{"id":"not-two-parts"}`)); got != "t3/my-theme-v2" {
-		t.Errorf("fallback from filename: got %q", got)
-	}
-	if got := resolveThemeID("", "/tmp/Café.json", []byte(`{"name":"No ID"}`)); got != "t3/caf-" {
-		t.Errorf("non-ascii filename: got %q", got)
+	if got := themeIDFromName(""); got != "custom-theme" {
+		t.Errorf("themeIDFromName(%q) = %q, want %q", "", got, "custom-theme")
 	}
 }

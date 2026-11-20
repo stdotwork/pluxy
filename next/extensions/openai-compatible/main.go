@@ -442,9 +442,8 @@ var formatNames = map[string]string{
 }
 
 // buildBody returns the upstream request body for req in format target and how it was built. A
-// request in the upstream's own format is sent unchanged. Requests are translated to Chat from any
-// client format, to Responses from Messages and Gemini, and to Messages from Gemini; under the
-// reject drop policy a translation that drops anything is refused.
+// request in the upstream's own format is sent unchanged; every other client format is translated
+// to the target. Under the reject drop policy a translation that drops anything is refused.
 func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: target}
 	if n := req.Native; n != nil {
@@ -455,26 +454,18 @@ func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error)
 		}
 	}
 	var encode func(llm.Request) ([]byte, []llm.Loss, error)
-	switch {
-	case target == llm.FormatOpenAIChat:
+	switch target {
+	case llm.FormatOpenAIChat:
 		encode = openaichat.EncodeRequest
-	case target == llm.FormatOpenAIResponses && (tr.From == llm.FormatAnthropicMessages || tr.From == llm.FormatGeminiGenerate):
-		// shortcut: only Messages and Gemini requests are rebuilt as Responses; Chat requests
-		// have no corpus cases for it yet. Allow them once they do.
+	case llm.FormatOpenAIResponses:
 		encode = openairesponses.EncodeRequest
-	case target == llm.FormatAnthropicMessages && tr.From == llm.FormatGeminiGenerate:
-		// shortcut: only Gemini requests are rebuilt as Messages here; the Claude extension
-		// rebuilds Chat and Responses requests too. Allow them here once this extension's
-		// Messages accounts have corpus cases for them.
+	case llm.FormatAnthropicMessages:
 		encode = anthropicmessages.EncodeRequest
+	case llm.FormatGeminiGenerate:
+		encode = geminigenerate.EncodeRequest
 	default:
-		// shortcut: nothing else is rebuilt as Messages here (the Claude extension does it for
-		// Claude), and nothing is rebuilt as GenerateContent (the Gemini provider brings that).
-		// The refusal is about this account's upstream, not the request: an account that speaks
-		// the client's format can still serve it, so core may try one (scope credential,
-		// retryable: nothing reached the upstream).
 		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
-			Message: "this account's upstream speaks " + formatNames[target] + "; requests in " + tr.From + " are not translated to it"}
+			Message: "the upstream speaks an unknown format " + strconv.Quote(target)}
 	}
 	body, losses, err := encode(req)
 	if err != nil {

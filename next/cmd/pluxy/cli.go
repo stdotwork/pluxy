@@ -19,6 +19,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf16"
 
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/management"
@@ -672,12 +673,30 @@ func resolveThemeID(flagID, filePath string, raw []byte) string {
 	if flagID != "" {
 		return flagID
 	}
-	var doc struct {
-		ID string `json:"id"`
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) == nil {
+		var id, name string
+		if err := json.Unmarshal(fields["id"], &id); err != nil {
+			id = ""
+		}
+		if err := json.Unmarshal(fields["name"], &name); err != nil {
+			name = ""
+		}
+		if _, pluxyFile := fields["theme_version"]; !pluxyFile {
+			if validT3ThemeID(id) {
+				return "t3/" + id
+			}
+			if strings.TrimSpace(name) != "" {
+				return "t3/" + themeIDFromName(name)
+			}
+		} else if validThemeID(id) {
+			return id
+		}
 	}
-	if json.Unmarshal(raw, &doc) == nil && validThemeID(doc.ID) {
-		return doc.ID
-	}
+	return themeFileID(filePath)
+}
+
+func themeFileID(filePath string) string {
 	base := filepath.Base(filePath)
 	if len(base) >= 5 && strings.EqualFold(base[len(base)-5:], ".json") {
 		base = base[:len(base)-5]
@@ -694,6 +713,53 @@ func resolveThemeID(flagID, filePath string, raw []byte) string {
 		}
 	}
 	return "t3/" + b.String()
+}
+
+func validT3ThemeID(id string) bool {
+	if len(id) < 1 || len(id) > 48 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (i > 0 && c == '-') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// themeIDFromName matches themeIdFromName in next/ui/kit/theme/t3.ts.
+func themeIDFromName(name string) string {
+	label := strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	hyphen := false
+	for _, r := range label {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			hyphen = false
+		} else if b.Len() > 0 && !hyphen {
+			b.WriteByte('-')
+			hyphen = true
+		}
+	}
+	normalized := strings.Trim(b.String(), "-")
+	if len(normalized) > 48 {
+		normalized = normalized[:48]
+	}
+	if normalized != "" {
+		return normalized
+	}
+	if label == "" {
+		return "custom-theme"
+	}
+
+	hash := uint32(2166136261)
+	for _, unit := range utf16.Encode([]rune(label)) {
+		hash ^= uint32(unit)
+		hash *= 16777619
+	}
+	return "theme-" + strconv.FormatUint(uint64(hash), 36)
 }
 
 func validThemeID(id string) bool {
