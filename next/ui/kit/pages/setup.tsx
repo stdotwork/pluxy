@@ -133,11 +133,16 @@ const t = strings("setup", {
   nothingTicked:
     "Nothing is ticked, so pluxy will run with no provider. You can add one later on the Extensions page.",
   nothingMore: "Nothing more to install.",
+  stillLooking: "pluxy is still looking at this machine. What it suggests shows here in a few seconds.",
   allInstalled: "Every provider on the list is installed.",
 
   account: "Connect an account",
   accountHint: "An account is your sign-in with a provider. pluxy sends requests through it.",
   accountAfter: "This comes after {button}: an account signs in through a provider.",
+  accountTick: "This comes after a provider: tick one above and press {button}.",
+  accountNoProvider:
+    "This comes after a provider, and pluxy runs none yet. Install one on the {extensions} page.",
+  extensions: "Extensions",
   accountsConnected: { one: "{count} account connected.", other: "{count} accounts connected." },
   accountsLink: "See them on Accounts",
   accountSkip: "You can skip this and add an account later on the Add Account page.",
@@ -637,6 +642,9 @@ export function Start(props: {
         {button}
       </Button>
     );
+  } else if (!props.provider && setup.first_run && scanState(setup) === "first") {
+    // What to tick comes with the first scan's end: until then an empty list is not a choice.
+    line = t("stillLooking");
   } else if (!props.provider && setup.first_run) {
     line = t("nothingTicked");
     action = (
@@ -664,6 +672,7 @@ export function Start(props: {
 /** The Add Account page's sign-in, once a provider is installed and core has no account. */
 export function Account(props: {
   setup: Setup;
+  choices: Choices;
   results: Results;
   count?: number;
   provider: boolean;
@@ -672,6 +681,16 @@ export function Account(props: {
 }) {
   const { setup } = props;
   const button = setup.first_run ? t("start") : t("install");
+  // What leads to an account while core runs no provider: the button, when it would install one;
+  // a tick first, when providers are offered; another page, when none is.
+  const before =
+    toInstall(setup, props.choices, props.results).length > 0
+      ? t("accountAfter", { button })
+      : providerPicks(setup).length > 0
+        ? t("accountTick", { button })
+        : rich(t("accountNoProvider"), {
+            extensions: <a href="#/extensions">{t("extensions")}</a>,
+          });
   return (
     <Card title={t("account")}>
       {props.error && <Notice tone="danger">{props.error}</Notice>}
@@ -681,7 +700,7 @@ export function Account(props: {
         </p>
       ) : !props.provider ? (
         <p class="muted setup-hint">
-          {t("accountHint")} {t("accountAfter", { button })}
+          {t("accountHint")} {before}
         </p>
       ) : (
         <>
@@ -874,6 +893,10 @@ export function SetupPage(props: { options?: SetupOptions }) {
     location.hash = "#/";
   });
 
+  // The page after this one opens at its top. The window keeps its scroll position from one page
+  // to the next, and this page's ways out (Finish, a client's button, its links) are far down it.
+  useEffect(() => () => window.scrollTo(0, 0), []);
+
   // While core scans, read its answer again every second, as long as the page is visible.
   const scanning = setup?.scanning === true;
   useEffect(() => {
@@ -1054,6 +1077,7 @@ export function SetupView(props: {
         />
         <Account
           setup={setup}
+          choices={choices}
           results={results}
           count={props.accounts}
           provider={props.provider}
