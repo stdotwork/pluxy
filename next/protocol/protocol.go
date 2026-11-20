@@ -33,9 +33,10 @@ const Version = 0
 // carry them too; minor 16 adds an error's dropped (llm.Error.Dropped); minor 17 adds a
 // captured body's BodyStopped; minor 18 adds ModelList.From; minor 19 adds a quota limit's
 // Feature; minor 20 adds llm.CodeAccountClosed; minor 21 adds what a package is (title, summary,
-// kind) to the manifest and registry index, and changes no call; minor 22 adds
-// Model.Capabilities.
-const Minor = 22
+// kind) to the manifest and registry index, and changes no call; minor 22 adds the account's
+// timeouts (Account.Timeouts); minor 23 is reserved for the next change in the queue; minor 24
+// adds Model.Capabilities.
+const Minor = 24
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -171,6 +172,18 @@ type Account struct {
 	// 12), set over the extension's own headers of the same names. Values of headers whose names
 	// are about authentication are secret.
 	Headers map[string]string `json:"headers,omitempty"`
+	// Timeouts bounds how long an upstream request waits for response headers, gaps between
+	// raw body bytes or completion (minor version 18). Nil fields use core's defaults; 0 turns a
+	// limit off.
+	Timeouts *Timeouts `json:"timeouts,omitempty"`
+}
+
+// Timeouts bounds how long an upstream request waits for response headers, gaps between raw
+// body bytes or completion (minor version 18). Zero turns a limit off.
+type Timeouts struct {
+	HeaderMS *int64 `json:"header_ms,omitempty"`
+	IdleMS   *int64 `json:"idle_ms,omitempty"`
+	TotalMS  *int64 `json:"total_ms,omitempty"`
 }
 
 // ParseProxyURL parses an account's ProxyURL: an http, https, socks5 or socks5h URL with a
@@ -382,11 +395,11 @@ type Model struct {
 	GenerationMethods []string `json:"generation_methods,omitempty"`
 	InputModalities   []string `json:"input_modalities,omitempty"`
 	OutputModalities  []string `json:"output_modalities,omitempty"`
-	// Capabilities is what the model supports and when it was deprecated (minor version 22).
+	// Capabilities is what the model supports and when it was deprecated (minor version 24).
 	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
 }
 
-// ModelCapabilities is what a model supports and when it was deprecated (minor version 22).
+// ModelCapabilities is what a model supports and when it was deprecated (minor version 24).
 type ModelCapabilities struct {
 	Tools            bool     `json:"tools"`
 	StructuredOutput bool     `json:"structured_output"`

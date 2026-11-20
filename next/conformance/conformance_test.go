@@ -18,11 +18,11 @@ import (
 
 func TestMain(m *testing.M) {
 	switch os.Getenv("PLUXY_CONFORMANCE_TEST_MODE") {
-	case "minor-21":
-		serveFakeModels(21)
+	case "minor-23":
+		serveFakeModels(23)
 		return
-	case "minor-22":
-		serveFakeModels(22)
+	case "minor-24":
+		serveFakeModels(24)
 		return
 	}
 	os.Exit(m.Run())
@@ -114,8 +114,8 @@ func fakeCapabilitiesManifest(t *testing.T, mode string) string {
 }
 
 func TestConformanceModelCapabilities(t *testing.T) {
-	if protocol.Minor < 22 {
-		t.Errorf("protocol.Minor = %d, want >= 22", protocol.Minor)
+	if protocol.Minor < 24 {
+		t.Errorf("protocol.Minor = %d, want >= 24", protocol.Minor)
 	}
 
 	// 1. Conformance validation of ModelCapabilities fields.
@@ -162,14 +162,14 @@ func TestConformanceModelCapabilities(t *testing.T) {
 		}
 	}
 
-	// 2. Wire round-trip and minor version 22 gating: minor 21 drops extension-sent capabilities,
-	// minor 22 preserves them and passes checkModelCapabilities.
+	// 2. Wire round-trip and minor version 24 gating: minor 23 drops extension-sent capabilities,
+	// minor 24 preserves them and passes checkModelCapabilities.
 	for _, tc := range []struct {
 		mode    string
 		wantCap bool
 	}{
-		{"minor-21", false},
-		{"minor-22", true},
+		{"minor-23", false},
+		{"minor-24", true},
 	} {
 		ext, err := host.Start(fakeCapabilitiesManifest(t, tc.mode), host.Options{Log: io.Discard})
 		if err != nil {
@@ -186,12 +186,12 @@ func TestConformanceModelCapabilities(t *testing.T) {
 		got := list.Models[0].Capabilities
 		if !tc.wantCap {
 			if got != nil {
-				t.Errorf("%s: Capabilities = %+v, want nil below minor 22", tc.mode, got)
+				t.Errorf("%s: Capabilities = %+v, want nil below minor 24", tc.mode, got)
 			}
 			continue
 		}
 		if got == nil {
-			t.Fatalf("%s: Capabilities = nil, want non-nil at minor 22", tc.mode)
+			t.Fatalf("%s: Capabilities = nil, want non-nil at minor 24", tc.mode)
 		}
 		if !got.Tools || !got.StructuredOutput || !got.Vision || got.PDF || !got.Reasoning ||
 			!slices.Equal(got.ReasoningLevels, []string{"low", "medium", "high"}) || got.DeprecatedAt != 1770000000 {

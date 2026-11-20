@@ -17,7 +17,7 @@ func ListsModels(info protocol.Info) bool {
 
 // CapabilitiesMinor is the protocol minor version that adds a model's capabilities: core ignores
 // the capabilities of an extension that implements an earlier one.
-const CapabilitiesMinor = 22
+const CapabilitiesMinor = 24
 
 // MaxListedModels bounds how many models one models call may return; more is a protocol error.
 const MaxListedModels = 10000

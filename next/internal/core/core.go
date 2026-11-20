@@ -152,6 +152,12 @@ func Start(opts Options) (*Core, error) {
 		}
 		return ""
 	}
+	c.opts.Host.Timeouts = func() *protocol.Timeouts {
+		if s := c.cur.Load(); s != nil {
+			return s.Config.Routing.Timeouts
+		}
+		return nil
+	}
 	// ... and the payload rules of that config.
 	c.opts.Host.Payload = func() *payload.Rules {
 		if s := c.cur.Load(); s != nil {
