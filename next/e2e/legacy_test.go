@@ -262,7 +262,7 @@ func TestImportCPA(t *testing.T) {
 	before := folderDigest(t, authDir)
 
 	// Today's example config, changed only where a test must. Its host stays "": every
-	// interface, which the import changes to 127.0.0.1.
+	// interface, which today's core listened on; the import keeps core's own listen and says so.
 	example, err := os.ReadFile("../internal/legacy/testdata/config.example.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -352,7 +352,8 @@ openai-compatibility:
 		}
 		return nil
 	}
-	if h := find(rep.Changed, "server.host", ""); h == nil || h.To != "127.0.0.1" || !strings.Contains(h.KeepWith, "0.0.0.0:8317") {
+	// core listens on 127.0.0.1 with a free port, and the row says it keeps that address.
+	if h := find(rep.Changed, "server.host", ""); h == nil || !strings.HasPrefix(h.To, "127.0.0.1:") || !strings.Contains(h.Why, "core keeps listening on "+h.To) || !strings.Contains(h.KeepWith, "0.0.0.0:8317") {
 		t.Errorf("server.host row %+v", h)
 	}
 	if a := find(rep.NotBrought, "auth file", "antigravity-user@example.com.json"); a == nil || !strings.Contains(a.Why, "Antigravity") {
