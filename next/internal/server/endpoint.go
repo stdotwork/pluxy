@@ -121,6 +121,9 @@ var endpointRoutes = map[string]endpoint{
 	"/backend-api/codex/alpha/search":      alphaSearchEndpoint,
 	"/v1/images/generations":               imagesGenerationsEndpoint,
 	"/v1/images/edits":                     imagesEditsEndpoint,
+	"/v1/audio/speech":                     audioSpeechEndpoint,
+	"/v1/audio/transcriptions":             audioTranscriptionsEndpoint,
+	"/v1/audio/translations":               audioTranslationsEndpoint,
 	"/v1beta/interactions":                 interactionsEndpoint,
 }
 
@@ -224,6 +227,7 @@ func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, f
 		return
 	}
 	sse := strings.HasPrefix(reply.ContentType, "text/event-stream")
+	binary := audioBodyIsBase64(format, reply.ContentType)
 	w.Header().Set("Content-Type", reply.ContentType)
 	if sse {
 		w.Header().Set("Cache-Control", "no-cache")
@@ -245,7 +249,17 @@ func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, f
 				m.fail(e, http.StatusOK)
 				return
 			}
-			if _, err := io.WriteString(w, chunk); err != nil {
+			data := []byte(chunk)
+			if binary {
+				var err error
+				if data, err = decodeAudioBody(chunk); err != nil {
+					e := &llm.Error{Code: llm.CodeExtensionProtocol, Message: "a binary audio reply's body piece is not base64"}
+					logFailure(r, e)
+					m.fail(e, http.StatusOK)
+					return
+				}
+			}
+			if _, err := w.Write(data); err != nil {
 				m.fail(&llm.Error{Code: llm.CodeCancelled}, http.StatusOK) // the client went away
 				return
 			}
