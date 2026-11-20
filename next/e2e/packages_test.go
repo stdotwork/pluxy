@@ -37,30 +37,35 @@ func TestCommonAppManifestInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range cases {
+		// Each case's fake and canary are made here, before its subtest runs in parallel:
+		// codextest.New sets an environment variable, which a parallel subtest may not, and
+		// running a just-written program while other tests start processes can fail with "text
+		// file busy" (a forked child briefly holds the file open for writing).
+		srv := codextest.New(t)
+		marker := filepath.Join(t.TempDir(), "app-was-run")
+		canary := []byte("#!/bin/sh\nprintf ran > '" + marker + "'\nexit 99\n")
+		// Positive control: the executable really writes the marker if started.
+		control := filepath.Join(t.TempDir(), "app-canary")
+		if err := os.WriteFile(control, canary, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := exec.Command(control).Run(); err == nil {
+			t.Fatal("canary should exit 99")
+		}
+		if b, err := os.ReadFile(marker); err != nil || string(b) != "ran" {
+			t.Fatalf("canary control: %q, %v", b, err)
+		}
+		if err := os.Remove(marker); err != nil {
+			t.Fatal(err)
+		}
 		t.Run(tc.File, func(t *testing.T) {
+			t.Parallel()
 			m, err := os.ReadFile(filepath.Join(fixtureDir, tc.File))
 			if err != nil {
 				t.Fatal(err)
 			}
 			m = bytes.ReplaceAll(m, []byte("linux/amd64"), []byte(platform))
-			marker := filepath.Join(t.TempDir(), "app-was-run")
-			canary := []byte("#!/bin/sh\nprintf ran > '" + marker + "'\nexit 99\n")
-			// Positive control: the executable really writes the marker if started.
-			control := filepath.Join(t.TempDir(), "app-canary")
-			if err := os.WriteFile(control, canary, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := exec.Command(control).Run(); err == nil {
-				t.Fatal("canary should exit 99")
-			}
-			if b, err := os.ReadFile(marker); err != nil || string(b) != "ran" {
-				t.Fatalf("canary control: %q, %v", b, err)
-			}
-			if err := os.Remove(marker); err != nil {
-				t.Fatal(err)
-			}
 			u := answeringUpstream(t)
-			srv := codextest.New(t)
 			index := writeRegistry(t, manifestArchive(t, m, canary), "")
 			// App-only releases omit provider protocol metadata in the index too.
 			if strings.HasPrefix(tc.File, "app-only-") && !tc.ProviderIndex {
@@ -151,7 +156,9 @@ func manifestArchive(t *testing.T, m []byte, canary ...[]byte) []byte {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
+	// Stored, not compressed: compressing a built extension in this race-instrumented test
+	// process took about 2.5 s per archive, and core reads either.
+	gz, _ := gzip.NewWriterLevel(&buf, gzip.NoCompression)
 	tw := tar.NewWriter(gz)
 	type archiveFile struct {
 		name string

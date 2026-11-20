@@ -106,6 +106,20 @@ func (t *Translation) Dropped() bool {
 	return false
 }
 
+// DroppedPaths returns the paths of the losses that are drops, in order.
+func (t *Translation) DroppedPaths() []string {
+	if t == nil {
+		return nil
+	}
+	var paths []string
+	for _, l := range t.Losses {
+		if l.Kind == LossDropped {
+			paths = append(paths, l.Path)
+		}
+	}
+	return paths
+}
+
 // Native is a body kept in its original format.
 type Native struct {
 	Format string          `json:"format"`
@@ -424,6 +438,7 @@ const (
 	CodeInvalidRequest = "invalid_request"
 	CodeAuth           = "auth"
 	CodePermission     = "permission"
+	CodeAccountClosed  = "account_closed"
 	CodeNotFound       = "not_found"
 	CodeRateLimit      = "rate_limit"
 	CodeQuota          = "quota"
@@ -464,6 +479,10 @@ type Error struct {
 	// QuotaWindowMinutes is, for a quota error, the length in minutes of the usage window that
 	// is used up, when the upstream said (protocol 0.6).
 	QuotaWindowMinutes int64 `json:"quota_window_minutes,omitempty"`
+	// Dropped is set only on a refusal under the reject drop policy: the paths of the request's
+	// parts the upstream's format cannot carry (protocol 0.16). Core tells such a refusal from an
+	// account that cannot serve the call by it.
+	Dropped []string `json:"dropped,omitempty"`
 	// UsageLimit, set only by core, marks the final usage-limit reply: every account for the
 	// request is out of quota until a reset the upstream named (routing's usage-limit quota
 	// response mode). It never travels over the protocol.

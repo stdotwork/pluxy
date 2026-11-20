@@ -32,12 +32,16 @@
 //!   and the file keeps its old bytes;
 //! - left open: a writer that does not end a journal it is told of is refused its start, and the
 //!   journal stays open;
+//! - remove: the window removes the secret; the list no longer names it, and the window's call
+//!   naming it is refused before any confirmation, the writer writing nothing;
 //! - audit: neither canary reached the window's or the page's webview (DOM, storage, callbacks,
 //!   messages); the runner checks the app's stdout and stderr for them too.
 //!
 //! One line on stderr: `native-test: vault <JSON>`.
 
-use super::admission::{dialog_text, ok, press, require, settle, start, x};
+#[cfg(target_os = "linux")]
+use super::admission::x;
+use super::admission::{dialog_text, ok, press, require, settle, start};
 use super::key_entry_test::{clean_webview, watch};
 use super::routing::{call, enable, install, showing, Page};
 use super::{log, wait_for};
@@ -54,6 +58,7 @@ const REDACTED: &str = "[redacted]";
 
 /// Types key into the native key entry titled title, and accepts it. The bytes go to xdotool on
 /// its stdin, never in argv.
+#[cfg(target_os = "linux")]
 pub(super) fn type_key(title: &str, key: &str) -> Result<(), String> {
     let id = wait_for("the native secret entry", || {
         x(&["search", "--onlyvisible", "--name", &format!("^{title}$")])
@@ -80,6 +85,17 @@ pub(super) fn type_key(title: &str, key: &str) -> Result<(), String> {
         "xdotool type failed",
     )?;
     x(&["key", "--clearmodifiers", "alt+o"]).map(|_| ())
+}
+
+/// Types key into the native key entry titled title, and accepts it, through the UI driver
+/// (`ui_driver.rs`), as the dialogs session types the management key.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn type_key(title: &str, key: &str) -> Result<(), String> {
+    use crate::key_entry::text;
+    let app = super::admission::app()?;
+    super::ui::wait_shown(app, title)?;
+    super::ui::type_text(app, title, key)?;
+    super::ui::press(app, title, super::key_entry_test::access(text::OK))
 }
 
 /// The text of the native confirmation showing now that contains every one of needles.
@@ -608,6 +624,45 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 open_journals(main)?.len() == 1,
                 "the journal left open is not open",
             )
+        })(),
+    )?;
+
+    // ---- remove: the window removes the secret; it leaves the list, and a call naming it is
+    // refused before any confirmation, and the writer gets nothing
+    step(
+        "remove",
+        (|| {
+            ok(main, "vault_secret_remove", json!({"id": secret}))?;
+            let list = ok(main, "vault_secrets", json!({}))?;
+            require(
+                list["secrets"]
+                    .as_array()
+                    .is_some_and(|a| !a.iter().any(|s| s["id"] == secret.as_str())),
+                format!("the vault's list after the removal: {list}"),
+            )?;
+            let file = at("config-removed");
+            let (r, asked) = unasked(|| {
+                let slot = start(
+                    main,
+                    "program_call",
+                    json!({"package": WRITER, "op": "apply",
+                        "input": {"key": secret, "file": file}}),
+                )?;
+                settle(main, &slot)
+            });
+            let r = r?;
+            require(
+                !asked,
+                "a call naming a removed secret asked a native confirmation",
+            )?;
+            require(
+                r["ok"] == false
+                    && r["error"]
+                        .as_str()
+                        .is_some_and(|e| e.contains("names no secret in the vault")),
+                format!("a call naming the removed secret: {r}"),
+            )?;
+            require(!file.exists(), "the writer wrote with a removed secret")
         })(),
     )?;
 

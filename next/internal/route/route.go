@@ -188,9 +188,10 @@ type Router struct {
 	gen      uint64    // this router's generation, from state (see State.Retain)
 	created  time.Time // when the router was made: the created time of models accounts list themselves
 
-	mu       sync.RWMutex // guards accounts, creds and catalog
+	mu       sync.RWMutex // guards accounts, creds, readings and catalog
 	accounts []*Account
 	creds    Credentials
+	readings Readings
 	catalog  CatalogFunc
 	lists    catalogs // the accounts' model lists from catalog
 
@@ -248,8 +249,9 @@ func accountList(accounts []Account, gen uint64, state *State) ([]*Account, erro
 }
 
 // SetAccounts replaces the accounts requests are routed over. Requests already routing keep
-// the set they started with. Routing state of an account that leaves the set is dropped, so an
-// account added again later under the same ID starts clean. So is the state of an account that
+// the set they started with. Routing state of an account that leaves the set is dropped (its
+// blocks, last error and session bindings), so an account added again later under the same ID
+// starts clean. So is the state of an account that
 // stays but that same (as in State.Retain; nil: every account that stays is the same) reports
 // changed, as on a reload: its blocks, last error and session bindings, and blocks on an
 // endpoint that no unchanged account names. Outcomes that requests already routing see on its
@@ -260,6 +262,12 @@ func (r *Router) SetAccounts(accounts []Account, same func(old, cur *Account) bo
 		return err
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	// The new copies take their revisions here, under r.mu with the forgets below, so a
+	// SetAccounts running at the same time cannot give a copy a revision its forget has passed.
+	for _, a := range list {
+		a.rev = r.state.revision(a.ID)
+	}
 	old := r.accounts
 	var changed, fresh []*Account
 	kept := map[string]bool{} // the endpoints of the accounts that stay unchanged
@@ -278,8 +286,7 @@ func (r *Router) SetAccounts(accounts []Account, same func(old, cur *Account) bo
 	r.state.restart(changed, fresh, kept)
 	r.accounts = list
 	r.picker.setOrder(list)
-	r.lists.clear()
-	r.mu.Unlock()
+	r.lists.retain(list, changed, same == nil)
 	for _, a := range old {
 		if !slices.ContainsFunc(list, func(b *Account) bool { return b.ID == a.ID }) {
 			r.state.forget(a.ID)
@@ -486,6 +493,9 @@ func (c *call) attempts() llm.Event {
 		more := false
 		busy := false
 		for _, a := range capable {
+			if r.state.IsBanned(a.ID) {
+				continue
+			}
 			if rounded && limit(a) < rounds {
 				continue // past its own rounds
 			}
@@ -815,20 +825,24 @@ func (r *Router) cooling(a *Account) bool {
 // failure records the failed attempt with sequence number seq on account a for model in the
 // routing state, by the router's cooldown settings.
 func (r *Router) failure(a *Account, model string, seq uint64, e *llm.Error) {
-	if !r.cooling(a) {
+	if (e == nil || e.Code != llm.CodeAccountClosed) && !r.cooling(a) {
 		return
 	}
 	r.state.failure(a, model, seq, e, r.now(), time.Duration(r.cfg.TransientErrorCooldownMS)*time.Millisecond)
 }
 
 // retrySafe reports whether a failed attempt may be tried again elsewhere: the extension says
-// the upstream certainly did not run it, and the failure is about the account (so the account
-// is now blocked and the next attempt goes to another one, or waits). An account that cannot
-// serve this request (unsupported, about the account rather than the request) is not blocked:
-// it was tried this round, so the next attempt goes to another account.
+// the upstream certainly did not run it, and the failure is not about the request itself.
+// account_closed moves on to sibling accounts when retryable is true unless its scope is
+// request (the refusal is about this request's content). An account that cannot serve this
+// request (unsupported, about the account rather than the request) is not blocked: it was tried
+// this round, so the next attempt goes to another account.
 func retrySafe(e *llm.Error) bool {
 	if e == nil || !e.Retryable {
 		return false
+	}
+	if e.Code == llm.CodeAccountClosed {
+		return e.Scope != llm.ScopeRequest
 	}
 	if e.Code == llm.CodeUnsupported {
 		return e.Scope != "" && e.Scope != llm.ScopeRequest

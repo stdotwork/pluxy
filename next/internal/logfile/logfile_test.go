@@ -159,6 +159,54 @@ func TestReadPagesAndTails(t *testing.T) {
 	}
 }
 
+// A reader that pages forward with Latest never misses a line: not one written in the same
+// millisecond as the newest line it read, and not one a limit cut off from a write's other lines.
+func TestPagingForwardLosesNothing(t *testing.T) {
+	l, c := newFiles(t) // the clock never moves, so every write is in the same millisecond
+	l.Configure(true, 0)
+	fmt.Fprint(l, "pluxy: first\n")
+	r, _ := l.Read(0, 10)
+	if r.Count != 1 {
+		t.Fatalf("first read: %v", r.Lines)
+	}
+	fmt.Fprint(l, "pluxy: second\n")
+	next, _ := l.Read(r.Latest, 10)
+	if next.Count != 1 || !strings.HasSuffix(next.Lines[0], "second") {
+		t.Fatalf("a line written in the millisecond of the newest line read: %v", next.Lines)
+	}
+	if next.Latest <= r.Latest {
+		t.Fatalf("latest %v did not move past %v", next.Latest, r.Latest)
+	}
+
+	// A clock that goes back does not put a line before the one read.
+	c.t = c.t.Add(-time.Hour)
+	fmt.Fprint(l, "pluxy: third\n")
+	if back, _ := l.Read(next.Latest, 10); back.Count != 1 || !strings.HasSuffix(back.Lines[0], "third") {
+		t.Fatalf("a line written after the clock went back: %v", back.Lines)
+	}
+
+	// One write's lines share a time: a limit that ends inside them returns the rest too.
+	l2, _ := newFiles(t)
+	l2.Configure(true, 0)
+	fmt.Fprint(l2, "pluxy: a\nb\nc\n")
+	fmt.Fprint(l2, "pluxy: d\n")
+	var got []string
+	after := 1.0 // before every line; 0 would read the newest line only
+	for range 10 {
+		page, _ := l2.Read(after, 1)
+		if page.Count == 0 {
+			break
+		}
+		for _, s := range page.Lines {
+			got = append(got, s[len(s)-1:])
+		}
+		after = page.Latest
+	}
+	if strings.Join(got, "") != "abcd" {
+		t.Fatalf("paging by 1 line read %q, want abcd", got)
+	}
+}
+
 // Rotations in the same millisecond keep every file, read back in order; a link at main.log is
 // refused; one write never makes a file larger than the limit.
 func TestRotationEdges(t *testing.T) {

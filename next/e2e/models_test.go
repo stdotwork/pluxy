@@ -2,10 +2,14 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +20,7 @@ import (
 // not to those added with an API key, as today's oauth-model-alias and oauth-excluded-models
 // skip API keys; the model list shows each account's names.
 func TestLoginDefaultsSkipAPIKeys(t *testing.T) {
+	t.Parallel()
 	srv := oauthtest.New(t)
 	base := runCore(t, map[string]any{
 		"listen":          "127.0.0.1:0",
@@ -178,4 +183,206 @@ func listModels(t *testing.T, base string) []string {
 		ids = append(ids, m.ID)
 	}
 	return ids
+}
+
+// Worst-case Model lists: an OpenAI-compatible upstream adds a model; after
+// POST /v0/management/models/refresh it is in /v1/models and served with no restart; when the
+// upstream list call then returns 500 or an empty list, the model stays listed and served. An
+// account whose config names models falls back to them when its upstream list cannot be read.
+func TestModelListRefreshAndKeepLastGood(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		models = []string{"m-one"}
+		status = http.StatusOK
+		empty  = false
+	)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+upstreamKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/models":
+			mu.Lock()
+			st, em := status, empty
+			cur := append([]string(nil), models...)
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			if st != http.StatusOK {
+				w.WriteHeader(st)
+				io.WriteString(w, `{"error":{"message":"boom","type":"server_error"}}`)
+				return
+			}
+			data := []map[string]any{}
+			if !em {
+				for _, id := range cur {
+					data = append(data, map[string]any{"id": id, "object": "model", "owned_by": "test-upstream"})
+				}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/chat/completions":
+			var req struct {
+				Model string `json:"model"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":%q,"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, req.Model)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(up.Close)
+
+	base := runCore(t, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+			"accounts": []any{
+				map[string]any{
+					"id":         "upstream-1",
+					"settings":   map[string]any{"base_url": up.URL + "/v1"},
+					"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey},
+				},
+				map[string]any{
+					"id":         "cfg-1",
+					"models":     []string{"cfg-model"},
+					"settings":   map[string]any{"base_url": "http://127.0.0.1:1/v1"},
+					"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey},
+				},
+			},
+		},
+	})
+
+	wantInitial := []string{"cfg-model", "m-one"}
+	if got := listModels(t, base); !slices.Equal(got, wantInitial) {
+		t.Fatalf("initial /v1/models = %v, want %v", got, wantInitial)
+	}
+
+	// Upstream adds a model; refresh picks it up without a restart.
+	mu.Lock()
+	models = []string{"m-one", "m-two"}
+	mu.Unlock()
+	if code := manage(t, base, "POST", "/models/refresh", nil, nil); code != http.StatusOK {
+		t.Fatalf("POST /models/refresh: status %d", code)
+	}
+	wantRefreshed := []string{"cfg-model", "m-one", "m-two"}
+	if got := listModels(t, base); !slices.Equal(got, wantRefreshed) {
+		t.Fatalf("after refresh /v1/models = %v, want %v", got, wantRefreshed)
+	}
+	resp := post(t, t.Context(), base, clientKey, `{"model":"m-two","messages":[{"role":"user","content":"hi"}]}`)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /v1/chat/completions for m-two after refresh: status %d", resp.StatusCode)
+	}
+
+	// Upstream list call fails (500): model stays listed and served.
+	mu.Lock()
+	status = http.StatusInternalServerError
+	mu.Unlock()
+	if code := manage(t, base, "POST", "/models/refresh", map[string]string{"account": "upstream-1"}, nil); code != http.StatusOK {
+		t.Fatalf("POST /models/refresh (500 upstream): status %d", code)
+	}
+	if got := listModels(t, base); !slices.Equal(got, wantRefreshed) {
+		t.Fatalf("after 500 refresh /v1/models = %v, want %v", got, wantRefreshed)
+	}
+	resp = post(t, t.Context(), base, clientKey, `{"model":"m-two","messages":[{"role":"user","content":"hi"}]}`)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /v1/chat/completions for m-two after 500 refresh: status %d", resp.StatusCode)
+	}
+
+	// Upstream returns an empty list: last good list stays.
+	mu.Lock()
+	status = http.StatusOK
+	empty = true
+	mu.Unlock()
+	if code := manage(t, base, "POST", "/models/refresh", nil, nil); code != http.StatusOK {
+		t.Fatalf("POST /models/refresh (empty upstream): status %d", code)
+	}
+	if got := listModels(t, base); !slices.Equal(got, wantRefreshed) {
+		t.Fatalf("after empty refresh /v1/models = %v, want %v", got, wantRefreshed)
+	}
+
+	// Unknown account returns 404.
+	if code := manage(t, base, "POST", "/models/refresh", map[string]string{"account": "nobody"}, nil); code != http.StatusNotFound {
+		t.Fatalf("POST /models/refresh unknown account = %d, want 404", code)
+	}
+}
+
+func TestClaudeAccountLiveModelList(t *testing.T) {
+	t.Parallel()
+	const liveKey = "sk-ant-api-e2e-live"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("X-Api-Key") != liveKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("Anthropic-Version") != "2023-06-01" {
+			t.Errorf("Anthropic-Version = %q, want 2023-06-01", r.Header.Get("Anthropic-Version"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+			"data": [
+				{
+					"type": "model",
+					"id": "claude-e2e-live-1",
+					"display_name": "Claude E2E Live 1",
+					"created_at": "2026-11-01T00:00:00Z",
+					"max_input_tokens": 400000,
+					"max_tokens": 32000
+				}
+			],
+			"has_more": false
+		}`)
+	}))
+	t.Cleanup(up.Close)
+
+	base := runCore(t, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "claude", "pluxy-extension.json"),
+			"accounts": []any{
+				map[string]any{
+					"id":         "live-claude",
+					"settings":   map[string]any{"base_url": up.URL},
+					"credential": map[string]any{"kind": "api_key", "api_key": liveKey},
+				},
+			},
+		},
+	})
+
+	code, raw := management(t, http.MethodGet, base, "/v0/management/accounts/live-claude/models")
+	if code != http.StatusOK {
+		t.Fatalf("GET /v0/management/accounts/live-claude/models: %d %s", code, raw)
+	}
+	var got struct {
+		From   string `json:"from"`
+		Models []struct {
+			ID                  string `json:"id"`
+			DisplayName         string `json:"display_name"`
+			ContextLength       int    `json:"context_length"`
+			MaxCompletionTokens int    `json:"max_completion_tokens"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode reply %s: %v", raw, err)
+	}
+	if got.From != "account" {
+		t.Errorf("from = %q, want account (body: %s)", got.From, raw)
+	}
+	if len(got.Models) != 1 || got.Models[0].ID != "claude-e2e-live-1" ||
+		got.Models[0].ContextLength != 400000 || got.Models[0].MaxCompletionTokens != 32000 {
+		t.Fatalf("models = %+v, want claude-e2e-live-1 with limits", got.Models)
+	}
+	if listed := listModels(t, base); !slices.Equal(listed, []string{"claude-e2e-live-1"}) {
+		t.Errorf("/v1/models = %v, want [claude-e2e-live-1]", listed)
+	}
 }

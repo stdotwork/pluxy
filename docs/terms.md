@@ -1,9 +1,10 @@
 # UI terms
 
-The desktop app (`extensions/app`) and the web panel (`next/ui`) show the same things:
-quota cards, limits, resets, auth files, cooldowns and usage. This page lists the words both use for
-them, so every provider and every locale says the same thing the same way. When you add or change a
-UI string, use these terms. If a term here is wrong, change it here first, then in both UIs.
+The desktop app (`next/app`) and the web panel, both built from the UI kit in `next/ui`, show the
+same things: quota cards, limits, resets, auth files, cooldowns and usage. This page lists the
+words both use for them, so every provider and every locale says the same thing the same way. When
+you add or change a UI string, use these terms. If a term here is wrong, change it here first, then
+in both UIs.
 
 Status: first version. Terms marked "owner to confirm" are a recommendation that the project owner
 has not confirmed yet. The non-English terms other than Chinese still need a native speaker's check.
@@ -76,9 +77,14 @@ string is touched for another reason; there is no repo-wide casing pass.
 
 ## Other languages
 
-The app has en, zh-CN, zh-TW and ja; its zh-TW text is converted from zh-CN by
-`extensions/app/src/i18n/traditional.ts`, so a zh-CN change reaches zh-TW only if the converter maps
-it. The old panel (removed) had en, zh-CN, zh-TW, ko, ru, tr and vi; the panel in `next/ui` ships English only.
+The UI kit in `next/ui`, and so the panel and the desktop app, ships English only. Other locales
+come later as data files of texts ([Texts and locales](../next/ui/README.md#texts-and-locales)).
+The table below is the glossary for them: use its terms when a locale is added. It covers the
+languages the old desktop app and the old web panel had.
+
+The old desktop app (`extensions/app`) has en, zh-CN, zh-TW and ja; its zh-TW text is converted
+from zh-CN by `extensions/app/src/i18n/traditional.ts`, so a zh-CN change reaches zh-TW only if the
+converter maps it. The old panel (removed) had en, zh-CN, zh-TW, ko, ru, tr and vi.
 
 | Concept | zh-CN | zh-TW | ja | ko | ru | tr | vi |
 |---|---|---|---|---|---|---|---|

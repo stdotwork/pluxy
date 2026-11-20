@@ -12,6 +12,11 @@
 //! run by the app with arguments (as a confirmed launch, never as a tool, which gets none), it
 //! runs a launch mode (`launch_windows.rs`, `launch_macos.rs`) instead of serving operations.
 
+#[cfg(target_os = "macos")]
+mod checked;
+#[cfg(windows)]
+#[path = "checked_windows.rs"]
+mod checked;
 #[cfg(all(unix, any(target_os = "macos", test)))]
 mod handover;
 #[cfg(target_os = "macos")]
@@ -85,7 +90,81 @@ fn shape(_: &Value) -> (bool, bool) {
 /// environment, input, secret or managed lifetime: the system starts the app with its own).
 fn launch_fits(input: &Value) -> Result<(), Error> {
     let (terminal, app) = shape(input);
-    fits(input, terminal, app)
+    fits(input, terminal, app)?;
+    #[cfg(not(windows))]
+    program_fits(input, program_at(input, terminal)?)?;
+    Ok(())
+}
+
+/// Where a terminal launch's program must be in its argv, the argument its terminal runs, or None
+/// for a launch that is not a terminal's: on Linux right after the exec flag of a terminal of
+/// `recipe::TERMINALS`, when argv starts with that flag (a launch of such a terminal whose argv
+/// does not, and that names no program, runs no command of the launch's: a direct launch of the
+/// terminal); on macOS right after `--`. The host checks the program a launch names as the file
+/// its terminal runs.
+#[cfg(target_os = "linux")]
+fn program_at(input: &Value, _: bool) -> Result<Option<usize>, Error> {
+    let executable = std::path::Path::new(input["executable"].as_str().unwrap_or_default());
+    let Some(t) = recipe::TERMINALS
+        .iter()
+        .find(|t| executable.file_name().is_some_and(|n| n == t.id))
+    else {
+        return Ok(None);
+    };
+    let argv = input["argv"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    if argv.len() < t.flags.len() || argv.iter().zip(t.flags).any(|(a, f)| a != f) {
+        if input.get("program").is_none() {
+            return Ok(None);
+        }
+        return Err(Error::invalid_request(format!(
+            "a launch of {} runs its program after {}",
+            t.id,
+            t.flags.join(" ")
+        )));
+    }
+    Ok(Some(t.flags.len()))
+}
+
+#[cfg(target_os = "macos")]
+fn program_at(input: &Value, terminal: bool) -> Result<Option<usize>, Error> {
+    if !terminal {
+        return Ok(None);
+    }
+    let argv = input["argv"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    match argv.iter().position(|a| a == "--") {
+        Some(i) => Ok(Some(i + 1)),
+        None => Err(Error::invalid_request(
+            "a terminal launch runs its program after --",
+        )),
+    }
+}
+
+/// Refused unless a terminal launch (at: where its program must be) names as its program the
+/// argument at at, and a launch that is not a terminal's (None) names no program.
+#[cfg(not(windows))]
+fn program_fits(input: &Value, at: Option<usize>) -> Result<(), Error> {
+    let program = input.get("program");
+    match at {
+        Some(i) => {
+            let named = program.and_then(Value::as_str);
+            if named.is_none() || input["argv"].get(i).and_then(Value::as_str) != named {
+                return Err(Error::invalid_request(
+                    "a terminal launch names as its program the argument its terminal runs",
+                ));
+            }
+            Ok(())
+        }
+        None if program.is_some() => Err(Error::invalid_request(
+            "only a terminal launch names a program: the one its terminal runs",
+        )),
+        None => Ok(()),
+    }
 }
 
 fn fits(input: &Value, terminal: bool, app: bool) -> Result<(), Error> {
@@ -145,6 +224,25 @@ mod platform_tests;
 #[cfg(test)]
 #[path = "fits_tests.rs"]
 mod fits_tests;
+
+/// A name for a test's own folder that no other folder of this test run has: the process, the
+/// time and a count. The time alone is not enough: on macOS it moves in whole microseconds, so two
+/// tests that start at once read the same time and, named by it, share a folder, which the first
+/// to finish removes under the other.
+#[cfg(test)]
+pub(crate) fn test_folder_name(prefix: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{prefix}-{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        COUNT.fetch_add(1, Ordering::Relaxed)
+    )
+}
 
 fn main() -> std::io::Result<()> {
     // A launch mode: the app runs this program as a confirmed launch with arguments; as a tool it

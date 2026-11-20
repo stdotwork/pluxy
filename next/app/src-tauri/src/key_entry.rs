@@ -194,5 +194,5 @@ pub(crate) fn request_as(
     _: String,
     _: bool,
 ) -> Result<Option<Input>, &'static str> {
-    Err("native key entry is currently supported on Linux only")
+    Err("native key entry is supported on Linux, Windows and macOS only")
 }

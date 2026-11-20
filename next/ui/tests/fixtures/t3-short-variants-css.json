@@ -1,0 +1,18 @@
+{
+  "name": "Dawn and Dusk",
+  "appearance": "light",
+  "canvas": "#f6f1e7",
+  "accent": "#9a3412",
+  "colors": {
+    "sidebar": "#efe7d8"
+  },
+  "variants": {
+    "dark": {
+      "canvas": "#1c1814",
+      "surface": "#241f1a",
+      "text": "#efe6d8",
+      "accent": "#f0a36b"
+    }
+  },
+  "css": ".dark [data-slot=\"sidebar\"] { border-right-width: 2px; }\n[data-slot=\"button\"] { font-weight: 600; }"
+}

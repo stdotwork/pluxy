@@ -14,15 +14,18 @@ import (
 	"strings"
 )
 
-// ClientKey is the key the corpus client sends; both cores are configured to accept it.
+// ClientKey is the key the corpus client sends; the core is configured to accept it.
 const ClientKey = "corpus-client-key"
 
-// ManagementKey is the management key both cores are configured with in a case that calls their
+// ManagementKey is the management key the core is configured with in a case that calls its
 // management API. Not a secret.
 const ManagementKey = "corpus-management-key"
 
-// UpstreamKey is the API key both cores send to the fake upstream. Not a secret.
-const UpstreamKey = "sk-corpus-upstream"
+// UpstreamKey is the API key the core sends to the fake upstream. Not a secret. Like the corpus's
+// other fake account secrets it holds no word: the new core removes from an error every run of
+// text that shares 4 characters with one (protocol.RemovePieces), so a word such as "upstream" in
+// it would vanish from the errors the cores are compared on.
+const UpstreamKey = "sk-Cq7Vx2Np9Lw4Zr8"
 
 // UpstreamKeys returns the keys of n accounts: UpstreamKey for the first, then
 // UpstreamKey-2, UpstreamKey-3 and so on. Not secrets.
@@ -58,39 +61,11 @@ var client = &http.Client{Transport: &http.Transport{DisableCompression: true}}
 // upstream received. It is plain JSON data so it can be recorded and compared path by path.
 type Observation map[string]any
 
-// Run sends the case's client request to a core at base and returns the observation. The
-// fake upstream must be the one the core points at.
+// Run sends the case's client request, then its Then requests, to a core at base and returns
+// the observation. The fake upstream must be the one the core points at.
 func Run(ctx context.Context, c *Case, base string, up *FakeUpstream) (Observation, error) {
-	return run(ctx, c, base, up, false)
-}
-
-// RunOld is Run for the old core: a case with OldClient sends OldClient and OldClientMore, in
-// order, instead of Client. The first reply is the observation's client, the others its
-// client_more.
-func RunOld(ctx context.Context, c *Case, base string, up *FakeUpstream) (Observation, error) {
-	return run(ctx, c, base, up, true)
-}
-
-func run(ctx context.Context, c *Case, base string, up *FakeUpstream, old bool) (Observation, error) {
 	var reply map[string]any
-	var more []any
 	switch {
-	case old && c.OldClient != nil:
-		reqs, err := expandOldRequests(ctx, c, base, up.URL)
-		if err != nil {
-			return nil, err
-		}
-		for i, r := range reqs {
-			rep, err := send(ctx, r, base)
-			if err != nil {
-				return nil, err
-			}
-			if i == 0 {
-				reply = rep
-			} else {
-				more = append(more, rep)
-			}
-		}
 	case len(c.Client.WebSocket) > 0:
 		var err error
 		if reply, err = runClientWebSocket(ctx, c, base, up); err != nil {
@@ -136,9 +111,6 @@ func run(ctx context.Context, c *Case, base string, up *FakeUpstream, old bool) 
 	if then != nil {
 		obs["then"] = then
 	}
-	if more != nil {
-		obs["client_more"] = more
-	}
 	return normalize(obs)
 }
 
@@ -156,19 +128,16 @@ func send(ctx context.Context, cr ClientRequest, base string) (map[string]any, e
 	return observeReply(resp), nil
 }
 
-// The placeholders of the old core's requests (Case.OldClient).
-const (
-	placeholderUpstream  = "{{upstream}}"
-	placeholderAuthIndex = "{{auth_index}}"
-)
+// placeholderUpstream stands, in a request's body_text, for the fake upstream's base URL.
+const placeholderUpstream = "{{upstream}}"
 
 // placeholderPrivateKey stands, in a request's body_text, for the RSA private key the corpus
 // makes for the run (corpusRSA), written as the inside of a JSON string, so a case can send a
 // service account key file without holding a key.
 const placeholderPrivateKey = "{{private_key}}"
 
-// expandBodyText replaces the placeholders in a request's body_text, for either core:
-// {{upstream}} with the fake upstream's base URL and {{private_key}} with the run's RSA key.
+// expandBodyText replaces the placeholders in a request's body_text: {{upstream}} with the
+// fake upstream's base URL and {{private_key}} with the run's RSA key.
 func expandBodyText(cr ClientRequest, upstreamURL string) ClientRequest {
 	if cr.BodyText == nil {
 		return cr
@@ -177,60 +146,6 @@ func expandBodyText(cr ClientRequest, upstreamURL string) ClientRequest {
 	s := strings.NewReplacer(placeholderUpstream, upstreamURL, placeholderPrivateKey, string(key[1:len(key)-1])).Replace(*cr.BodyText)
 	cr.BodyText = &s
 	return cr
-}
-
-// expandOldRequests returns the old core's requests for the case with the placeholders replaced:
-// the fake upstream's URL, and the auth_index the old core at base gives its one auth file (it
-// hashes the file's path, which changes every run, so the runner asks for it).
-func expandOldRequests(ctx context.Context, c *Case, base, upstreamURL string) ([]ClientRequest, error) {
-	reqs := c.oldRequests()
-	authIndex := ""
-	for _, r := range reqs {
-		if b, _ := json.Marshal(r); bytes.Contains(b, []byte(placeholderAuthIndex)) {
-			var err error
-			if authIndex, err = oldAuthIndex(ctx, base); err != nil {
-				return nil, err
-			}
-			break
-		}
-	}
-	out := make([]ClientRequest, len(reqs))
-	for i, r := range reqs {
-		// Replacing in the JSON text is safe: a URL and an auth_index need no escaping.
-		b, _ := json.Marshal(r)
-		b = bytes.ReplaceAll(b, []byte(placeholderUpstream), []byte(upstreamURL))
-		b = bytes.ReplaceAll(b, []byte(placeholderAuthIndex), []byte(authIndex))
-		if err := json.Unmarshal(b, &out[i]); err != nil {
-			return nil, err
-		}
-		out[i] = expandBodyText(out[i], upstreamURL)
-	}
-	return out, nil
-}
-
-// oldAuthIndex asks the old core for the auth_index of its only auth file.
-func oldAuthIndex(ctx context.Context, base string) (string, error) {
-	req, err := buildRequest(ctx, ClientRequest{Method: http.MethodGet, Path: "/v0/management/auth-files", Auth: AuthManagementKey}, base)
-	if err != nil {
-		return "", err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	var list struct {
-		Files []struct {
-			AuthIndex string `json:"auth_index"`
-		} `json:"files"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
-		return "", fmt.Errorf("the old core's auth-files list: %w", err)
-	}
-	if len(list.Files) != 1 || list.Files[0].AuthIndex == "" {
-		return "", fmt.Errorf("the old core lists %d auth files with an auth_index, want exactly 1", len(list.Files))
-	}
-	return list.Files[0].AuthIndex, nil
 }
 
 func buildRequest(ctx context.Context, cr ClientRequest, base string) (*http.Request, error) {

@@ -23,6 +23,16 @@
 // An account check (core's check call) reads the upstream's model list, GET {base_url}/models,
 // with the key sent the same way; it costs the account nothing. An upstream without that list
 // (404) leaves the account not checked.
+//
+// Quota (core's quota call) reads the vendor's normal-key usage or balance endpoint when one
+// exists: OpenRouter's GET /api/v1/key ("quota": "openrouter") or DeepSeek's GET /user/balance
+// ("quota": "deepseek"). When "quota" is unset, it is chosen from base_url's host (openrouter.ai
+// or api.deepseek.com), and any other host (or "quota": "none") answers unsupported.
+//
+// Responses compaction (core's endpoint call for POST /v1/responses/compact) passes the client's
+// body through to POST {base_url}/responses/compact on a Responses account, summarizes through
+// POST {base_url}/chat/completions on a Chat account, and answers unsupported on a Messages or
+// Gemini account (compact.go).
 package main
 
 import (
@@ -56,7 +66,7 @@ const (
 )
 
 func main() {
-	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Check: check}); err != nil {
+	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check, Quota: quota, Endpoint: compact}); err != nil {
 		fmt.Fprintln(os.Stderr, "openai-compatible:", err)
 		os.Exit(1)
 	}
@@ -68,6 +78,9 @@ type settings struct {
 	// ReasoningLevels are the reasoning efforts the upstream accepts; an effort outside them
 	// moves to the nearest. Default low, medium and high.
 	ReasoningLevels []string `json:"reasoning_levels"`
+	// Quota names the vendor quota endpoint to read ("openrouter", "deepseek" or "none");
+	// when empty, it is chosen from base_url's host.
+	Quota string `json:"quota"`
 }
 
 // Wire APIs.
@@ -152,6 +165,9 @@ func account(call sdk.Call) (settings, wireInfo, string, error) {
 	if !ok {
 		return s, wireInfo{}, "", &llm.Error{Code: llm.CodeInvalidRequest, Message: fmt.Sprintf("account setting wire_api must be %q, %q, %q or %q", wireChat, wireResponses, wireMessages, wireGemini), Scope: llm.ScopeCredential}
 	}
+	if _, err := quotaVendor(s); err != nil {
+		return s, wireInfo{}, "", err
+	}
 	cred := call.Account.Credential
 	if cred == nil || cred.Kind != protocol.CredentialAPIKey || cred.APIKey == "" {
 		return s, wireInfo{}, "", &llm.Error{Code: llm.CodeAuth, Message: "account has no API key", Scope: llm.ScopeCredential}
@@ -198,6 +214,67 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 	}
 	return nil
+}
+
+// listModels reads the account's model list from GET {base_url}/models (OpenAI's list shape)
+// with the account's key. An error lets core fall back to the models the account's config
+// names, or to serving any model when the config names none.
+func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, error) {
+	s, wire, key, err := account(sdk.Call{ID: call.ID, Account: call.Account})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.BaseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	setKey(req, wire, key, nil)
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, upstreamError(resp, "")
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream model list: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	var payload struct {
+		Data []struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+			Created     int64  `json:"created"`
+			OwnedBy     string `json:"owned_by"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.Data == nil {
+		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "upstream model list is not an OpenAI list", Scope: llm.ScopeEndpoint}
+	}
+	models := make([]protocol.Model, 0, len(payload.Data))
+	seen := map[string]bool{}
+	for _, item := range payload.Data {
+		id := strings.TrimSpace(item.ID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		models = append(models, protocol.Model{
+			ID:          id,
+			DisplayName: strings.TrimSpace(item.DisplayName),
+			Created:     item.Created,
+			OwnedBy:     strings.TrimSpace(item.OwnedBy),
+		})
+	}
+	return &protocol.ModelList{Models: models}, nil
 }
 
 // check reads the upstream's model list, GET {base_url}/models: free for the account, and refused
@@ -408,14 +485,9 @@ func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error)
 	}
 	tr.Losses = losses
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
-		var paths []string
-		for _, l := range losses {
-			if l.Kind == llm.LossDropped {
-				paths = append(paths, l.Path)
-			}
-		}
+		paths := tr.DroppedPaths()
 		// Another account may speak the client's format and carry it whole.
-		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
 			Message: formatNames[target] + " cannot carry parts of this request: " + strings.Join(paths, ", ")}
 	}
 	return body, tr, nil

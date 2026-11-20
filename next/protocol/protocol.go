@@ -30,8 +30,10 @@ const Version = 0
 // minor 10 adds the subscription's end time to quota; minor 11 adds the account's proxy_url;
 // minor 12 adds the account's headers; minor 13 adds upstream capture (Call.Capture and the
 // diagnostic frame); minor 14 adds payload rules (Call.Payload); minor 15 has a session turn
-// carry them too.
-const Minor = 15
+// carry them too; minor 16 adds an error's dropped (llm.Error.Dropped); minor 17 adds a
+// captured body's BodyStopped; minor 18 adds ModelList.From; minor 19 adds a quota limit's
+// Feature; minor 20 adds llm.CodeAccountClosed.
+const Minor = 20
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -329,6 +331,12 @@ const (
 // budget as the maximum total identity value bytes (16 fields of 512 bytes).
 const MaxGrantSettings = MaxIdentityFields * MaxIdentityValue
 
+// ModelList sources (ModelList.From, minor version 18).
+const (
+	ModelListFromAccount   = "account"
+	ModelListFromExtension = "extension"
+)
+
 // ModelList is the result of a models call: the models an account serves.
 type ModelList struct {
 	// Models are the account's models, by the names its upstream knows them by. Empty when the
@@ -337,6 +345,9 @@ type ModelList struct {
 	// OwnedBy names who provides the account's models, for a model list's owned_by: for models
 	// the account's configuration names itself, and for those in Models that name none.
 	OwnedBy string `json:"owned_by,omitempty"`
+	// From says where the list came from (minor version 18): "account" (read from the provider
+	// using the account's credential), "extension" (the extension's built-in list), or omitted.
+	From string `json:"from,omitempty"`
 }
 
 // Model is one model an account serves, with what model lists show about it. Only ID is
@@ -415,6 +426,11 @@ type QuotaLimit struct {
 	WindowSeconds int64 `json:"window_seconds,omitempty"`
 	// Models are the models the limit applies to, when not all of the account's.
 	Models []string `json:"models,omitempty"`
+	// Feature is true when the limit counts one feature of the plan (code review, another
+	// app's allowance, a credit pool for one product) rather than the account's requests to its
+	// models (minor version 18). Core never holds an account or a model on such a limit. A
+	// feature's limit lists no Models.
+	Feature bool `json:"feature,omitempty"`
 }
 
 // Diagnostic is what a captured call reports about its upstream exchanges (minor version 13),
@@ -483,6 +499,10 @@ type CapturedBody struct {
 	BodyEnd string `json:"body_end,omitempty"`
 	// BodySize is the body's full length in bytes; for a response, as much as had been read.
 	BodySize int64 `json:"body_size,omitempty"`
+	// BodyStopped is true when the body was not read to its end (minor version 17): the reader
+	// stopped, a read failed, or the frame was sent first. Its last bytes may then be the start
+	// of a secret cut off there.
+	BodyStopped bool `json:"body_stopped,omitempty"`
 }
 
 // Reply is a frame an extension sends: an event, the result of describe, models, check or quota,

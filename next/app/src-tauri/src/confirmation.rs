@@ -46,6 +46,10 @@ pub struct Launch {
     /// resolved, shown and bound, so a link to or a replacement by another file is refused.
     pub opens: Option<(PathBuf, PathBuf)>,
     pub terminal_adapter: Package,
+    /// The launching package's own program. On Windows a launch that opens a file runs
+    /// `pluxy/execution`'s own program in its `open` mode, and only that program starts with no
+    /// console, in its `open` or `app` mode (`confirmation_open::executions_own`).
+    pub adapter_program: Option<PathBuf>,
     pub environment_revision: String,
     /// Names and non-secret changed values only; no secret bytes.
     pub environment_review: Vec<(String, Option<String>)>,
@@ -60,6 +64,9 @@ pub struct Action {
     pub native_tool: bool,
     pub files: Vec<PathBuf>,
     pub launch: Option<Launch>,
+    /// Where the action runs when that is not this computer (`environments::Record::
+    /// confirmation_line`): shown above the review, and part of what a remembered approval names.
+    pub environment: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Metadata {
@@ -100,7 +107,8 @@ impl Metadata {
 }
 
 /// Whether the opened regular file at path with metadata m is a program: on Unix, any execute
-/// bit; on Windows, which has none, its extension (`confirmation_windows.rs`).
+/// bit; on Windows, which has none, a `.exe` or `.com` name and first bytes `MZ`
+/// (`confirmation_windows.rs`).
 fn runnable(path: &Path, m: &Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -264,6 +272,8 @@ struct ExactAction {
     native_tool: bool,
     files: Vec<Target>,
     launch: Option<ExactLaunch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    environment: Option<String>,
 }
 // Supersede an earlier approval for this launch recipe even after executable metadata,
 // environment policy or terminal-adapter revision changes; those still require fresh review.
@@ -309,15 +319,16 @@ pub struct Prepared {
     cwd: Option<OpenTarget>,
     program: Option<OpenTarget>,
     /// The file a launch opens and its folder, held open.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     opens: Option<(OpenTarget, OpenTarget)>,
+    /// On Windows, a confirmed launch of `pluxy/execution`'s own program in its `open` or `app`
+    /// mode, which starts with no console (`confirmation_open::windowless`).
+    windowless: bool,
 }
 impl Prepared {
     fn check(&self) -> Result<(), String> {
         for f in &self.files {
             f.check()?;
         }
-        #[cfg(target_os = "linux")]
         if let (Some((file, within)), Some(x)) = (
             &self.opens,
             self.exact.launch.as_ref().and_then(|l| l.opens.as_ref()),
@@ -392,13 +403,22 @@ impl Prepared {
         // What a launch that opens a file opens, with which program, from the resolved paths.
         if let Some(l) = &self.exact.launch {
             if let Some(o) = &l.opens {
-                let line = escape_format_characters(&format!(
+                #[cfg(target_os = "linux")]
+                let line = format!(
                     "Opens the file {} ({}, inside {}) with {}.",
                     o.file.canonical.display(),
                     o.content_type,
                     o.within.canonical.display(),
                     l.executable.canonical.display()
-                ));
+                );
+                #[cfg(not(target_os = "linux"))]
+                let line = open_os::review_line(
+                    &o.file.canonical,
+                    &o.content_type,
+                    &o.within.canonical,
+                    &l.executable.canonical,
+                );
+                let line = escape_format_characters(&line);
                 s.insert_str(0, &format!("{line}\n\n"));
             }
         }
@@ -409,6 +429,10 @@ impl Prepared {
 
 ",
             );
+        }
+        // Where it runs, when that is not this computer, first of all.
+        if let Some(line) = &self.exact.environment {
+            s.insert_str(0, &format!("{}\n\n", escape_format_characters(line)));
         }
         Ok(s)
     }
@@ -527,25 +551,35 @@ fn open_file_rules(f: &OpenTarget, w: &OpenTarget) -> Result<String, String> {
     }
     Ok(t)
 }
+/// The home-folder rule for a launch's within folder, given its resolved path and the home folder
+/// as resolved (`None` when it could not be): the folder is neither `/`, the home folder nor a
+/// folder above it. With no home folder to check against, the rule refuses rather than passes.
+#[cfg(target_os = "linux")]
+fn within_home_rule(within: &Path, home: Option<&Path>) -> Result<(), String> {
+    let Some(home) = home else {
+        return Err(
+            "the home folder could not be found, so a launch's within folder cannot be checked against it"
+                .into(),
+        );
+    };
+    if within == Path::new("/") || home.starts_with(within) {
+        return Err(
+            "a launch's within folder cannot be /, the home folder or a folder above it".into(),
+        );
+    }
+    Ok(())
+}
 /// A launch's file to open and the folder it must be inside, both opened and resolved, each named
-/// by its resolved path: the folder neither `/`, the home folder nor a folder above it, the file
-/// as `open_file_rules` says.
+/// by its resolved path: the folder neither `/`, the home folder nor a folder above it (refused
+/// too when the home folder cannot be found), the file as `open_file_rules` says.
 #[cfg(target_os = "linux")]
 fn open_within(file: &Path, within: &Path) -> Result<(OpenTarget, OpenTarget, String), String> {
     let w = OpenTarget::open(within)?;
     if !w.file.metadata().map_err(|e| e.to_string())?.is_dir() {
         return Err("a launch's within folder is not a folder".into());
     }
-    let home = std::env::var_os("HOME").and_then(|h| fs::canonicalize(h).ok());
-    if w.identity.canonical == Path::new("/")
-        || home
-            .as_ref()
-            .is_some_and(|h| h.starts_with(&w.identity.canonical))
-    {
-        return Err(
-            "a launch's within folder cannot be /, the home folder or a folder above it".into(),
-        );
-    }
+    let home = std::env::home_dir().and_then(|h| fs::canonicalize(h).ok());
+    within_home_rule(&w.identity.canonical, home.as_deref())?;
     let f = OpenTarget::open(file)?;
     let t = open_file_rules(&f, &w)?;
     if f.identity.selected != f.identity.canonical || w.identity.selected != w.identity.canonical {
@@ -557,14 +591,23 @@ fn open_within(file: &Path, within: &Path) -> Result<(OpenTarget, OpenTarget, St
 }
 /// The rules again for a confirmed open x, with its file and folder held open: the same file and
 /// folder, its metadata unchanged (no write, no change of mode), the same content type.
-#[cfg(target_os = "linux")]
 fn open_rules(f: &OpenTarget, w: &OpenTarget, x: &ExactOpen) -> Result<(), String> {
     f.check()?;
     w.check()?;
+    // The change time is part of it. On Windows, setting a folder's access list through
+    // `SetNamedSecurityInfo`, as `icacls` does, also goes through what is inside the folder, and
+    // moves a file's change time there even when its own permissions stay the same (a
+    // GitHub-hosted runner showed it; an inheritable entry changes them too): a permissions
+    // change on a folder above the file between confirming and launching refuses the open, and
+    // the person confirms it again. Kept so: it fails closed.
     if Metadata::read(&f.file)? != x.metadata {
         return Err("the file to open changed since it was confirmed; review again".into());
     }
-    if open_file_rules(f, w)? != x.content_type {
+    #[cfg(target_os = "linux")]
+    let t = open_file_rules(f, w)?;
+    #[cfg(not(target_os = "linux"))]
+    let t = open_os::file_rules(f, w)?;
+    if t != x.content_type {
         return Err("the file to open changed its type since it was confirmed".into());
     }
     Ok(())
@@ -667,6 +710,19 @@ impl Authorized {
     pub fn cwd(&self) -> Option<&File> {
         self.prepared.cwd.as_ref().map(|e| &e.file)
     }
+    /// Whether it starts with no window of its own (Windows: `confirmation_open::windowless`).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(crate) fn windowless(&self) -> bool {
+        self.prepared.windowless
+    }
+    /// The program a terminal runs, as opened and as the launch names it.
+    #[cfg_attr(not(native_stack), allow(dead_code))]
+    pub fn program(&self) -> Option<(&File, &Path)> {
+        self.prepared
+            .program
+            .as_ref()
+            .map(|p| (&p.file, p.identity.selected.as_path()))
+    }
     /// Refused once a reviewed target changed since it was confirmed: the executable replaced or
     /// written in place (its metadata), or the cwd replaced.
     #[cfg_attr(not(native_stack), allow(dead_code))]
@@ -731,6 +787,12 @@ fn private_file(file: &File) -> Result<(), String> {
             "settings must be a regular file owned by this user and not group/world-writable"
                 .into(),
         );
+    }
+    // macOS: an extended access list entry could let another user change it whatever the mode
+    // (`private_macos.rs`).
+    #[cfg(target_os = "macos")]
+    if crate::private_macos::has_entries(file).map_err(|e| e.to_string())? {
+        return Err("settings must have no extended access list".into());
     }
     Ok(())
 }
@@ -811,6 +873,10 @@ fn secure_parent(path: &Path, create: bool) -> Result<(), String> {
         f.set_permissions(fs::Permissions::from_mode(0o700))
             .map_err(|e| e.to_string())?;
     }
+    // macOS: no extended access list entry either, so no one else may change it through one and
+    // the settings file inherits none (`private_macos.rs`).
+    #[cfg(target_os = "macos")]
+    crate::private_macos::clear_entries(&f).map_err(|e| format!("settings folder: {e}"))?;
     Ok(())
 }
 /// Windows: the folder and any folders missing above it made private as they are made, and the
@@ -999,6 +1065,7 @@ impl Confirmations {
                 native_tool: false,
                 files: vec![],
                 launch: None,
+                environment: None,
             },
             Origin::Main,
         )?;
@@ -1041,6 +1108,8 @@ impl Confirmations {
         let mut cwd = None;
         let mut program = None;
         let mut opens = None;
+        #[allow(unused_mut)]
+        let mut windowless = false;
         let launch = if let Some(l) = action.launch {
             let mut e = OpenTarget::open(&l.executable)?;
             if !e.file.metadata().map_err(|e| e.to_string())?.is_file() {
@@ -1081,14 +1150,27 @@ impl Confirmations {
                 None => None,
             };
             let exact_opens = match &l.opens {
-                // Opening a file needs the desktop's opener and its file types: Linux's only, for
-                // now (xdg-open or gio, shared-mime-info).
+                // Windows and macOS: the type by extension and a fixed opener.
                 #[cfg(not(target_os = "linux"))]
-                Some(_) => {
-                    let _ = &mut opens;
-                    return Err(
-                        "a launch that opens a file is supported on Linux only for now".into(),
-                    );
+                Some((file, within)) => {
+                    let (f, w, content_type) = open_os::within(file, within)?;
+                    open_os::shape(
+                        &e.identity,
+                        l.adapter_program.as_deref(),
+                        &l.terminal_adapter.id,
+                        &l.argv,
+                        &c.identity.canonical,
+                        l.program.as_ref(),
+                        &f.identity.canonical,
+                    )?;
+                    let x = ExactOpen {
+                        file: f.identity.clone(),
+                        metadata: Metadata::read(&f.file)?,
+                        content_type,
+                        within: w.identity.clone(),
+                    };
+                    opens = Some((f, w));
+                    Some(x)
                 }
                 #[cfg(target_os = "linux")]
                 Some((file, within)) => {
@@ -1112,6 +1194,15 @@ impl Confirmations {
                 }
                 None => None,
             };
+            #[cfg(windows)]
+            {
+                windowless = open_os::windowless(
+                    &e.identity,
+                    l.adapter_program.as_deref(),
+                    &l.terminal_adapter.id,
+                    &l.argv,
+                );
+            }
             let exact = ExactLaunch {
                 executable: e.identity.clone(),
                 metadata: m,
@@ -1141,12 +1232,14 @@ impl Confirmations {
                 native_tool: action.native_tool,
                 files: files.iter().map(|f| f.identity.clone()).collect(),
                 launch,
+                environment: action.environment,
             },
             files,
             executable,
             cwd,
             program,
             opens,
+            windowless,
         };
         p.check()?;
         Ok(p)
@@ -1730,6 +1823,9 @@ pub fn page_start(app: &tauri::AppHandle, prepared: Prepared) -> Result<String, 
     Ok(id)
 }
 
+#[cfg(not(target_os = "linux"))]
+#[path = "confirmation_open.rs"]
+mod open_os;
 #[cfg(windows)]
 #[path = "confirmation_windows.rs"]
 mod windows_files;

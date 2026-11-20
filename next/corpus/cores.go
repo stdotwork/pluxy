@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -38,26 +37,21 @@ func (c *Core) Stop() { c.stop() }
 // Logs returns what the core wrote to stdout and stderr.
 func (c *Core) Logs() string { return c.logs.String() }
 
-// Provider tells the runner how to point each core at the fake upstream for one provider
+// Provider tells the runner how to point the new core at the fake upstream for one provider
 // directory under cases/<format>/.
 type Provider struct {
-	// OldCore returns the old core's api-keys block for the provider, given the fake upstream
-	// URL, the models the cases use and one upstream key per account.
-	OldCore func(upstreamURL string, models, keys []string) map[string]any
 	// NewCore returns the new core's extension name (a key of NewCoreExtensions) and its
 	// accounts for the provider, one per key. models is empty when the accounts serve any
 	// model.
 	NewCore func(upstreamURL string, models, keys []string) (extension string, accounts []any)
-	// OldCoreAuthFiles, when set, returns auth files to write into the old core's auth folder,
-	// by file name, one account per key. proxyURL is the intercepting proxy the files must name
-	// when Intercept is set; upstreamURL is the fake upstream, for a file that names its base URL.
-	OldCoreAuthFiles func(proxyURL, upstreamURL string, models, keys []string) map[string]any
-	// Intercept runs the old core through the intercepting proxy (see InterceptHosts), for a
-	// provider whose upstream host no setting moves.
-	Intercept bool
-	// Aside, when set, answers the requests a core makes on its own, outside the case (such as
-	// a model list it fetches when it loads an account), so they are not recorded and use up no
-	// scripted reply.
+	// CatalogModels makes the new core's accounts list no models unless a case sets
+	// account_models: the extension serves its own catalog. Without it the accounts list the
+	// request's model (see newCoreModels). Set for the providers the old core took from auth
+	// files rather than from its api-keys block.
+	CatalogModels bool
+	// Aside, when set, answers the requests the new core makes on its own, outside the case (such
+	// as a model list it fetches when it loads an account), so they are not recorded and use up
+	// no scripted reply.
 	Aside func(r *http.Request) (Reply, bool)
 	// Proto, when set, decodes the provider's protobuf requests over Connect into JSON for
 	// comparison (see connect.go).
@@ -70,22 +64,6 @@ type Provider struct {
 // Providers maps a provider directory name to its setup. Later slices add theirs here.
 var Providers = map[string]Provider{
 	"openai-compatible": {
-		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
-			var ms []any
-			for _, m := range models {
-				ms = append(ms, map[string]any{"name": m, "alias": m})
-			}
-			var ks []any
-			for _, k := range keys {
-				ks = append(ks, map[string]any{"api-key": k})
-			}
-			return map[string]any{"openai-compatibility": []any{map[string]any{
-				"name":     "corpus",
-				"base-url": upstreamURL + "/v1",
-				"keys":     ks,
-				"models":   ms,
-			}}}
-		},
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -111,22 +89,6 @@ var Providers = map[string]Provider{
 	// Responses upstream; the closest is a Codex API key with a custom base URL, with the
 	// Codex client identity (cloaking) turned off.
 	"openai-responses": {
-		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
-			var ms []any
-			for _, m := range models {
-				ms = append(ms, map[string]any{"name": m, "alias": m})
-			}
-			var ks []any
-			for _, k := range keys {
-				ks = append(ks, map[string]any{"api-key": k, "disable-codex-cloaking": true})
-			}
-			return map[string]any{"codex": []any{map[string]any{
-				"name":     "corpus",
-				"base-url": upstreamURL + "/v1",
-				"keys":     ks,
-				"models":   ms,
-			}}}
-		},
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -151,22 +113,6 @@ var Providers = map[string]Provider{
 	// the Codex client identity on (the default) in today's core. Both send requests to
 	// {base_url}/responses.
 	"codex": {
-		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
-			var ms []any
-			for _, m := range models {
-				ms = append(ms, map[string]any{"name": m, "alias": m})
-			}
-			var ks []any
-			for _, k := range keys {
-				ks = append(ks, map[string]any{"api-key": k})
-			}
-			return map[string]any{"codex": []any{map[string]any{
-				"name":     "corpus",
-				"base-url": upstreamURL + "/v1",
-				"keys":     ks,
-				"models":   ms,
-			}}}
-		},
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -192,22 +138,6 @@ var Providers = map[string]Provider{
 	// codex-api-key entry whose key has "websockets": true. Turns of a WebSocket client go to
 	// {base_url}/responses over a WebSocket; other requests over HTTP as for "codex".
 	"codex-ws": {
-		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
-			var ms []any
-			for _, m := range models {
-				ms = append(ms, map[string]any{"name": m, "alias": m})
-			}
-			var ks []any
-			for _, k := range keys {
-				ks = append(ks, map[string]any{"api-key": k, "websockets": true})
-			}
-			return map[string]any{"codex": []any{map[string]any{
-				"name":     "corpus",
-				"base-url": upstreamURL + "/v1",
-				"keys":     ks,
-				"models":   ms,
-			}}}
-		},
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -234,28 +164,7 @@ var Providers = map[string]Provider{
 	// core's account points base_url at the same path on the fake upstream. The tokens are fake
 	// JWTs that expire in 2100, so neither core tries to renew them.
 	"codex-oauth": {
-		Intercept: true,
-		OldCore:   func(string, []string, []string) map[string]any { return map[string]any{} },
-		OldCoreAuthFiles: func(proxyURL, _ string, models, keys []string) map[string]any {
-			files := map[string]any{}
-			for i, k := range keys {
-				t := corpusTokens(k)
-				f := map[string]any{
-					"type":          "codex",
-					"email":         t.email,
-					"account_id":    t.accountID,
-					"plan_type":     "plus",
-					"access_token":  t.access,
-					"id_token":      t.id,
-					"refresh_token": t.refresh,
-					"expired":       "2100-01-01T00:00:00Z",
-					"last_refresh":  "2026-01-01T00:00:00Z",
-					"proxy_url":     proxyURL,
-				}
-				files[fmt.Sprintf("codex-corpus-%d.json", i+1)] = f
-			}
-			return files
-		},
+		CatalogModels: true,
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -287,42 +196,7 @@ var Providers = map[string]Provider{
 	// the fake upstream's /v1. The SIWC access token differs from the outer one, so an
 	// observation shows which of them went upstream.
 	"codex-siwc": {
-		Intercept: true,
-		OldCore:   func(string, []string, []string) map[string]any { return map[string]any{} },
-		OldCoreAuthFiles: func(proxyURL, _ string, models, keys []string) map[string]any {
-			files := map[string]any{}
-			for i, k := range keys {
-				t := corpusTokens(k)
-				s := corpusSIWCTokens(k)
-				f := map[string]any{
-					"type":          "codex",
-					"email":         t.email,
-					"account_id":    t.accountID,
-					"plan_type":     "plus",
-					"access_token":  t.access,
-					"id_token":      t.id,
-					"refresh_token": t.refresh,
-					"expired":       "2100-01-01T00:00:00Z",
-					"last_refresh":  "2026-01-01T00:00:00Z",
-					"proxy_url":     proxyURL,
-					"use_siwc":      true,
-					"siwc": map[string]any{
-						"access_token":  s.access,
-						"id_token":      s.id,
-						"refresh_token": s.refresh,
-						"client_id":     corpusSIWCClientID,
-						"device_id":     corpusSIWCDeviceID,
-						"scope":         corpusSIWCScope,
-						"scopes":        strings.Split(corpusSIWCScope, " "),
-						"expired":       "2100-01-01T00:00:00Z",
-						"expires_at":    "2100-01-01T00:00:00Z",
-						"last_refresh":  "2026-01-01T00:00:00Z",
-					},
-				}
-				files[fmt.Sprintf("codex-corpus-%d.json", i+1)] = f
-			}
-			return files
-		},
+		CatalogModels: true,
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -350,22 +224,6 @@ var Providers = map[string]Provider{
 	// OpenAI-compatible extension with wire_api "messages"; today's core uses a Claude API key
 	// with a custom base URL.
 	"anthropic": {
-		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
-			var ms []any
-			for _, m := range models {
-				ms = append(ms, map[string]any{"name": m, "alias": m})
-			}
-			var ks []any
-			for _, k := range keys {
-				ks = append(ks, map[string]any{"api-key": k})
-			}
-			return map[string]any{"claude": []any{map[string]any{
-				"name":     "corpus",
-				"base-url": upstreamURL,
-				"keys":     ks,
-				"models":   ms,
-			}}}
-		},
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -391,22 +249,6 @@ var Providers = map[string]Provider{
 	// subscription login at a fake upstream (its OAuth accounts always call api.anthropic.com),
 	// so subscription behaviour is checked by the e2e tests instead.
 	"claude": {
-		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
-			var ms []any
-			for _, m := range models {
-				ms = append(ms, map[string]any{"name": m, "alias": m})
-			}
-			var ks []any
-			for _, k := range keys {
-				ks = append(ks, map[string]any{"api-key": k})
-			}
-			return map[string]any{"claude": []any{map[string]any{
-				"name":     "corpus",
-				"base-url": upstreamURL,
-				"keys":     ks,
-				"models":   ms,
-			}}}
-		},
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -433,21 +275,7 @@ var Providers = map[string]Provider{
 	// api-call relay and the new core's quota call (base_url), reach the fake upstream.
 	// The tokens are fake and expire in 2100, so neither core renews them.
 	"claude-oauth": {
-		OldCore: func(string, []string, []string) map[string]any { return map[string]any{} },
-		OldCoreAuthFiles: func(_, _ string, models, keys []string) map[string]any {
-			files := map[string]any{}
-			for i, k := range keys {
-				files[fmt.Sprintf("claude-corpus-%d.json", i+1)] = map[string]any{
-					"type":          "claude",
-					"access_token":  k,
-					"refresh_token": k + "-refresh",
-					"email":         fmt.Sprintf("corpus-%d@example.com", i+1),
-					"expired":       "2100-01-01T00:00:00Z",
-					"last_refresh":  "2026-01-01T00:00:00Z",
-				}
-			}
-			return files
-		},
+		CatalogModels: true,
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -474,7 +302,6 @@ var Providers = map[string]Provider{
 	// later); today's core uses a Gemini API key with a custom base URL. Both send requests to
 	// {upstream}/v1beta/models/{model}:{method}.
 	"gemini": {
-		OldCore: oldCoreGeminiAPIKey,
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -499,7 +326,6 @@ var Providers = map[string]Provider{
 	// provider, both with a custom base URL. Both send requests to
 	// {upstream}/v1beta/models/{model}:{method} with the key in x-goog-api-key.
 	"gemini-api-key": {
-		OldCore: oldCoreGeminiAPIKey,
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -524,9 +350,6 @@ var Providers = map[string]Provider{
 	// against today's interactions api-keys group, both with a custom base URL. Both send
 	// Interactions requests to {upstream}/v1beta/interactions with the key in x-goog-api-key.
 	"interactions": {
-		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
-			return map[string]any{"interactions": oldCoreGeminiAPIKey(upstreamURL, models, keys)["gemini"]}
-		},
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -551,22 +374,6 @@ var Providers = map[string]Provider{
 	// today's vertex-api-key entry, both with a custom base URL. Both send requests to
 	// {upstream}/v1/publishers/google/models/{model}:{method} with the key in x-goog-api-key.
 	"vertex-api-key": {
-		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
-			var ms []any
-			for _, m := range models {
-				ms = append(ms, map[string]any{"name": m, "alias": m})
-			}
-			var ks []any
-			for _, k := range keys {
-				ks = append(ks, map[string]any{"api-key": k})
-			}
-			return map[string]any{"vertex": []any{map[string]any{
-				"name":     "corpus",
-				"base-url": upstreamURL,
-				"keys":     ks,
-				"models":   ms,
-			}}}
-		},
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -595,23 +402,8 @@ var Providers = map[string]Provider{
 	// (the project is in its settings). The upstream's first reply in each case
 	// is therefore the token endpoint's. The key is an RSA key made for the run.
 	"vertex": {
-		Intercept:      true,
+		CatalogModels:  true,
 		TestLoginHosts: true, // the key's token_uri is the fake upstream's
-		OldCore:        func(string, []string, []string) map[string]any { return map[string]any{} },
-		OldCoreAuthFiles: func(proxyURL, _ string, models, keys []string) map[string]any {
-			files := map[string]any{}
-			for i := range keys {
-				files[fmt.Sprintf("vertex-corpus-%d.json", i+1)] = map[string]any{
-					"type":            "vertex",
-					"project_id":      corpusVertexProject,
-					"email":           corpusServiceAccountEmail(i),
-					"location":        "global",
-					"service_account": corpusServiceAccount(i, ""),
-					"proxy_url":       proxyURL,
-				}
-			}
-			return files
-		},
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i := range keys {
@@ -638,24 +430,7 @@ var Providers = map[string]Provider{
 	// https://api.kimi.com/coding). The tokens are fake and expire in 2100, so neither core
 	// renews them; today's core serves a subscription only the models in its catalog.
 	"kimi": {
-		OldCore: func(string, []string, []string) map[string]any { return map[string]any{} },
-		OldCoreAuthFiles: func(_, upstreamURL string, models, keys []string) map[string]any {
-			files := map[string]any{}
-			for i, k := range keys {
-				files[fmt.Sprintf("kimi-corpus-%d.json", i+1)] = map[string]any{
-					"type":          "kimi",
-					"access_token":  k,
-					"refresh_token": k + "-refresh",
-					"token_type":    "Bearer",
-					"timestamp":     1767225600000,
-					"domain":        "kimi.com",
-					"base_url":      upstreamURL + "/coding",
-					"expired":       "2100-01-01T00:00:00Z",
-					"device_id":     corpusKimiDeviceID,
-				}
-			}
-			return files
-		},
+		CatalogModels: true,
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -683,28 +458,7 @@ var Providers = map[string]Provider{
 	// The tokens are fake and expire in 2100, so neither core renews them or looks up the
 	// project; today's core serves an Antigravity login only the models in its catalog.
 	"antigravity": {
-		OldCore: func(string, []string, []string) map[string]any { return map[string]any{} },
-		OldCoreAuthFiles: func(_, upstreamURL string, models, keys []string) map[string]any {
-			files := map[string]any{}
-			for i, k := range keys {
-				files[fmt.Sprintf("antigravity-corpus-%d.json", i+1)] = map[string]any{
-					"type":          "antigravity",
-					"access_token":  k,
-					"refresh_token": k + "-refresh",
-					"expires_in":    3599,
-					"timestamp":     1767225600000,
-					"expired":       "2100-01-01T00:00:00Z",
-					"email":         fmt.Sprintf("corpus-%d@example.com", i+1),
-					"project_id":    corpusAntigravityProject,
-					"base_url":      upstreamURL,
-					// Today's core serves an Antigravity login only the models its
-					// fetchAvailableModels probe found; a saved probe result stands in for it.
-					"antigravity_capability_hints": map[string]any{
-						"project_id": corpusAntigravityProject, "endpoint": upstreamURL, "model_ids": models},
-				}
-			}
-			return files
-		},
+		CatalogModels: true,
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -725,9 +479,9 @@ var Providers = map[string]Provider{
 			}
 			return "antigravity", accounts
 		},
-		// Today's core asks Cloud Code which models each Antigravity login has
-		// (fetchAvailableModels) when it loads the account and again in the background; the
-		// answer lists the models the cases use.
+		// The new core asks Cloud Code which models each Antigravity login has
+		// (fetchAvailableModels) when it loads the account; the answer lists the models the cases
+		// use. The recordings hold no such request: the old core's were answered the same way.
 		Aside: func(r *http.Request) (Reply, bool) {
 			if r.URL.Path != "/v1internal:fetchAvailableModels" {
 				return Reply{}, false
@@ -742,23 +496,7 @@ var Providers = map[string]Provider{
 	// https://api.meta.ai/v1). The key is already minted, so neither core calls Meta's key
 	// endpoint; today's core serves a login only the models in its catalog.
 	"meta": {
-		OldCore: func(string, []string, []string) map[string]any { return map[string]any{} },
-		OldCoreAuthFiles: func(_, upstreamURL string, models, keys []string) map[string]any {
-			files := map[string]any{}
-			for i, k := range keys {
-				files[fmt.Sprintf("meta-corpus-%d.json", i+1)] = map[string]any{
-					"type":         "meta",
-					"auth_kind":    "oauth",
-					"access_token": k,
-					"api_key":      k,
-					"dca_token":    "dca:" + k,
-					"token_type":   "Bearer",
-					"base_url":     upstreamURL + "/v1",
-					"email":        fmt.Sprintf("corpus-%d@example.com", i+1),
-				}
-			}
-			return files
-		},
+		CatalogModels: true,
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -785,21 +523,7 @@ var Providers = map[string]Provider{
 	// core; both send Devin's protobuf chat request over Connect to
 	// {base_url}/exa.api_server_pb.ApiServerService/GetChatMessage.
 	"devin": {
-		OldCore: func(string, []string, []string) map[string]any { return map[string]any{} },
-		OldCoreAuthFiles: func(_, upstreamURL string, models, keys []string) map[string]any {
-			files := map[string]any{}
-			for i, k := range keys {
-				files[fmt.Sprintf("devin-corpus-%d.json", i+1)] = map[string]any{
-					"type":          "devin",
-					"auth_kind":     "oauth",
-					"api_key":       k,
-					"session_token": k,
-					"user_name":     fmt.Sprintf("corpus-%d", i+1),
-					"base_url":      upstreamURL,
-				}
-			}
-			return files
-		},
+		CatalogModels: true,
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -819,14 +543,6 @@ var Providers = map[string]Provider{
 			}
 			return "devin", accounts
 		},
-		// Today's core asks for the account's plan and quota on its own (GetUserStatus).
-		Aside: func(r *http.Request) (Reply, bool) {
-			if strings.HasSuffix(r.URL.Path, "/GetUserStatus") {
-				empty := ""
-				return Reply{Headers: map[string]string{"Content-Type": "application/proto"}, BodyText: &empty}, true
-			}
-			return Reply{}, false
-		},
 		Proto: &ProtoSchema{
 			Messages: []string{"1", "3", "3.6", "3.10", "8", "10", "15"},
 			Repeated: []string{"3", "3.6", "3.10", "10"},
@@ -835,22 +551,6 @@ var Providers = map[string]Provider{
 	// A Meta API key: the Meta extension with an api_key credential, a meta group in today's
 	// core's api-keys, both sending Responses requests to {base_url}/responses.
 	"meta-api-key": {
-		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
-			var ms []any
-			for _, m := range models {
-				ms = append(ms, map[string]any{"name": m, "alias": m})
-			}
-			var ks []any
-			for _, k := range keys {
-				ks = append(ks, map[string]any{"api-key": k})
-			}
-			return map[string]any{"meta": []any{map[string]any{
-				"name":     "corpus",
-				"base-url": upstreamURL + "/v1",
-				"keys":     ks,
-				"models":   ms,
-			}}}
-		},
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -877,22 +577,7 @@ var Providers = map[string]Provider{
 	// oauth in today's core. Both point base_url at the fake upstream, so neither sends to the
 	// Grok CLI's endpoint; today's core then sends the standard headers, the extension the CLI's.
 	"xai-cli": {
-		OldCore: func(string, []string, []string) map[string]any { return map[string]any{} },
-		OldCoreAuthFiles: func(_, upstreamURL string, models, keys []string) map[string]any {
-			files := map[string]any{}
-			for i, k := range keys {
-				files[fmt.Sprintf("xai-corpus-%d.json", i+1)] = map[string]any{
-					"type":          "xai",
-					"auth_kind":     "oauth",
-					"access_token":  k,
-					"refresh_token": "refresh-" + k,
-					"expired":       "2100-01-01T00:00:00Z",
-					"email":         fmt.Sprintf("corpus-%d@example.com", i+1),
-					"base_url":      upstreamURL + "/v1",
-				}
-			}
-			return files
-		},
+		CatalogModels: true,
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -914,22 +599,6 @@ var Providers = map[string]Provider{
 		},
 	},
 	"xai": {
-		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
-			var ms []any
-			for _, m := range models {
-				ms = append(ms, map[string]any{"name": m})
-			}
-			var ks []any
-			for _, k := range keys {
-				ks = append(ks, map[string]any{"api-key": k})
-			}
-			return map[string]any{"xai": []any{map[string]any{
-				"name":     "corpus",
-				"base-url": upstreamURL + "/v1",
-				"keys":     ks,
-				"models":   ms,
-			}}}
-		},
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -950,24 +619,6 @@ var Providers = map[string]Provider{
 			return "xai", accounts
 		},
 	},
-}
-
-// oldCoreGeminiAPIKey is today's core's Gemini API-key block, with a custom base URL.
-func oldCoreGeminiAPIKey(upstreamURL string, models, keys []string) map[string]any {
-	var ms []any
-	for _, m := range models {
-		ms = append(ms, map[string]any{"name": m, "alias": m})
-	}
-	var ks []any
-	for _, k := range keys {
-		ks = append(ks, map[string]any{"api-key": k})
-	}
-	return map[string]any{"gemini": []any{map[string]any{
-		"name":     "corpus",
-		"base-url": upstreamURL,
-		"keys":     ks,
-		"models":   ms,
-	}}}
 }
 
 // NewCoreExtensions maps an extension name to its package, relative to the next module root.
@@ -1010,18 +661,6 @@ func BuildNewCore(moduleRoot, dir string) error {
 		if err := os.WriteFile(filepath.Join(dir, out+".pluxy-extension.json"), b, 0o644); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-// BuildOldCore builds today's core from coreDir (the repository's core/ folder) to out. The
-// old core's plugin host needs cgo.
-func BuildOldCore(coreDir, out string) error {
-	cmd := exec.Command("go", "build", "-o", out, "./cmd/server")
-	cmd.Dir = coreDir
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=1")
-	if b, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("building the old core: %v\n%s", err, b)
 	}
 	return nil
 }
@@ -1078,24 +717,6 @@ func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []
 	return startProcess(cmd, regexp.MustCompile(`pluxy: listening on (http://\S+)`), "")
 }
 
-// OldCoreSetup holds the inputs for one old-core run.
-type OldCoreSetup struct {
-	Binary      string
-	WorkDir     string // empty temporary folder: config, auth folder and HOME go here
-	Provider    string
-	UpstreamURL string
-	Models      []string
-	Keys        []string // one upstream key per account
-	// ProxyURL and CAFile are the intercepting proxy and the test authority's certificate, for
-	// a provider with Intercept set.
-	ProxyURL string
-	CAFile   string
-	// Override adds the case's settings to the generated config.
-	Override *CoreOverride
-	// ManagementKey, when set, turns the management API on with this key.
-	ManagementKey string
-}
-
 // roundTrip returns a deep copy of m, so merging it into several places shares nothing.
 func roundTrip(m map[string]any) map[string]any {
 	if m == nil {
@@ -1107,142 +728,11 @@ func roundTrip(m map[string]any) map[string]any {
 	return out
 }
 
-// StartOldCore starts today's core on a free local port with a generated config: the client
-// key, one provider entry with one key per account pointed at the fake upstream, no extra retry
-// rounds, no waits and no cooldowns, management and the bundled panel off, and the
-// embedded model catalog. HOME, the auth folder and the working folder are all inside
-// WorkDir, and outbound proxies point at a closed port so the old core's background version
-// checks cannot reach the internet; the fake upstream is on loopback, which is never proxied.
-func StartOldCore(s OldCoreSetup) (*Core, error) {
-	p, ok := Providers[s.Provider]
-	if !ok || p.OldCore == nil {
-		return nil, fmt.Errorf("no old-core setup for provider %q", s.Provider)
-	}
-	port, err := freePort()
-	if err != nil {
-		return nil, err
-	}
-	authDir := filepath.Join(s.WorkDir, "auths")
-	if err := os.MkdirAll(authDir, 0o700); err != nil {
-		return nil, err
-	}
-	if p.OldCoreAuthFiles != nil {
-		for name, f := range p.OldCoreAuthFiles(s.ProxyURL, s.UpstreamURL, s.Models, s.Keys) {
-			if m, ok := f.(map[string]any); ok && s.Override != nil {
-				f = Merge(m, roundTrip(s.Override.Account))
-			}
-			b, _ := json.Marshal(f)
-			if err := os.WriteFile(filepath.Join(authDir, name), b, 0o600); err != nil {
-				return nil, err
-			}
-		}
-	}
-	cfg := map[string]any{
-		"config-version": 8,
-		"server": map[string]any{
-			"host":                 "127.0.0.1",
-			"port":                 port,
-			"response-compression": map[string]any{"enabled": false},
-		},
-		"management": map[string]any{"secret-key": s.ManagementKey, "disable-control-panel": true, "disable-auto-update-panel": true},
-		"access":     map[string]any{"api-keys": []string{ClientKey}},
-		"routing": map[string]any{
-			"retry":    map[string]any{"request-retry": 0, "max-retry-interval": 0},
-			"cooldown": map[string]any{"disable-cooling": true},
-		},
-		"oauth":         map[string]any{"auth-dir": authDir},
-		"api-keys":      p.OldCore(s.UpstreamURL, s.Models, s.Keys),
-		"observability": map[string]any{"usage": map[string]any{"usage-statistics-enabled": false}},
-		"plugins":       map[string]any{"enabled": false},
-	}
-	if s.Override != nil {
-		for _, groups := range cfg["api-keys"].(map[string]any) {
-			list, _ := groups.([]any)
-			for _, g := range list {
-				if m, ok := g.(map[string]any); ok {
-					Merge(m, roundTrip(s.Override.Account))
-				}
-			}
-			// The n-th key: the n-th entry, or the n-th of a lone group's keys.
-			if len(list) == 1 {
-				if g, ok := list[0].(map[string]any); ok {
-					if keys, ok := g["keys"].([]any); ok {
-						list = keys
-					}
-				}
-			}
-			for i, over := range s.Override.Accounts {
-				if i < len(list) {
-					if m, ok := list[i].(map[string]any); ok {
-						Merge(m, roundTrip(over))
-					}
-				}
-			}
-		}
-		Merge(cfg, roundTrip(s.Override.Config))
-	}
-	// YAML is a superset of JSON, so the old core reads this as its YAML config.
-	path := filepath.Join(s.WorkDir, "config.yaml")
-	b, _ := json.Marshal(cfg)
-	if err := os.WriteFile(path, b, 0o600); err != nil {
-		return nil, err
-	}
-	cmd := exec.Command(s.Binary, "-config", path, "-local-model")
-	cmd.Dir = s.WorkDir
-	cmd.Env = isolatedEnv(s.WorkDir)
-	if p.Intercept {
-		cmd.Env = append(cmd.Env, "SSL_CERT_FILE="+s.CAFile)
-	}
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	core, err := startProcess(cmd, regexp.MustCompile(`API server started successfully on: (\S+)`), "http://"+addr)
-	if err != nil || p.OldCoreAuthFiles == nil {
-		return core, err
-	}
-	// The old core loads auth files after it reports that it started; wait until it serves the
-	// case's model.
-	if err := waitModel(core.URL, s.Models); err != nil {
-		core.Stop()
-		return nil, fmt.Errorf("%w\ncore output:\n%s", err, core.Logs())
-	}
-	return core, nil
-}
-
-// waitModel waits until the core at url lists every model in models.
-func waitModel(url string, models []string) error {
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		req, _ := http.NewRequest(http.MethodGet, url+"/v1/models", nil)
-		req.Header.Set("Authorization", "Bearer "+ClientKey)
-		if resp, err := http.DefaultClient.Do(req); err == nil {
-			var list struct {
-				Data []struct {
-					ID string `json:"id"`
-				} `json:"data"`
-			}
-			_ = json.NewDecoder(resp.Body).Decode(&list)
-			resp.Body.Close()
-			seen := map[string]bool{}
-			for _, m := range list.Data {
-				seen[m.ID] = true
-			}
-			all := true
-			for _, m := range models {
-				all = all && seen[m]
-			}
-			if all {
-				return nil
-			}
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("the old core did not list %v within 15s of starting", models)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
 // isolatedEnv is the environment for a core under test: nothing from the caller's
-// environment except PATH, and HOME inside the test's folder. TZ is fixed to UTC: the old core
-// formats times in the host's zone, so a recording made or compared on another zone would differ.
+// environment except PATH, and HOME inside the test's folder. TZ is fixed to UTC, the zone the
+// recordings were made in: the old core formatted times in the host's zone. Outbound proxies
+// point at a closed local port, so a core's background requests cannot reach the internet; the
+// fake upstream is on loopback, which is never proxied.
 func isolatedEnv(dir string) []string {
 	home := filepath.Join(dir, "home")
 	_ = os.MkdirAll(home, 0o700)
@@ -1258,43 +748,6 @@ func isolatedEnv(dir string) []string {
 		"HTTPS_PROXY=http://127.0.0.1:9",
 		"NO_PROXY=127.0.0.1,localhost",
 	}
-}
-
-// Ports for the old core, which takes its port from its config and cannot report one the
-// system chose. They lie below the system's ephemeral range (from 32768 on Linux, from 49152 on
-// macOS and Windows), where every other listener in the run gets its port: the fake upstreams
-// and the new core bind port 0. A port checked free here therefore stays free until the old
-// core binds it. A port from the ephemeral range could be handed to a parallel case's listener
-// in between; the old core then fails to bind but still reports that it started, and the case
-// talks to the other case's server.
-const (
-	oldCorePortMin = 20000
-	oldCorePortMax = 32767
-)
-
-var (
-	portMu    sync.Mutex
-	portsUsed = map[int]bool{} // handed out in this run, never handed out again
-)
-
-// freePort returns a free local port for the old core from below the ephemeral range.
-func freePort() (int, error) {
-	portMu.Lock()
-	defer portMu.Unlock()
-	for range 1000 {
-		port := oldCorePortMin + rand.IntN(oldCorePortMax-oldCorePortMin+1)
-		if portsUsed[port] {
-			continue
-		}
-		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err != nil {
-			continue
-		}
-		l.Close()
-		portsUsed[port] = true
-		return port, nil
-	}
-	return 0, errors.New("corpus: no free port for the old core")
 }
 
 // startProcess starts cmd and waits until a line of its output matches ready. The first
@@ -1403,21 +856,23 @@ func (l *logBuffer) String() string {
 const corpusTokenExpiry = 4102444800
 
 // fakeTokens are a fake ChatGPT sign-in for one corpus account: unsigned JWTs with the claims
-// both cores read, deterministic so recordings stay stable. Nothing checks their signatures.
+// the new core's extensions read, deterministic so they match the recordings. Nothing checks
+// their signatures.
 type fakeTokens struct {
 	access, id, refresh, accountID, email string
 }
 
-// corpusJWT makes an unsigned JWT with the claims.
+// corpusJWT makes an unsigned JWT with the claims. Its signature, like the refresh tokens below,
+// holds no word (see UpstreamKey).
 func corpusJWT(claims map[string]any) string {
 	h := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
 	b, _ := json.Marshal(claims)
-	return h + "." + base64.RawURLEncoding.EncodeToString(b) + ".corpus"
+	return h + "." + base64.RawURLEncoding.EncodeToString(b) + ".Zx8Kp3Qa"
 }
 
 func corpusTokens(key string) fakeTokens {
 	jwt := corpusJWT
-	t := fakeTokens{accountID: "acct-" + key, email: key + "@example.invalid", refresh: "corpus-refresh-" + key}
+	t := fakeTokens{accountID: "acct-" + key, email: key + "@example.invalid", refresh: "rt-Wd4Fj7Ug2-" + key}
 	t.access = jwt(map[string]any{"exp": corpusTokenExpiry, "sub": "corpus|" + key})
 	t.id = jwt(map[string]any{"exp": corpusTokenExpiry, "email": t.email,
 		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": t.accountID, "chatgpt_plan_type": "plus"}})
@@ -1436,7 +891,7 @@ const (
 // corpusTokens' but with a different subject, so an upstream request shows which token it carried.
 func corpusSIWCTokens(key string) fakeTokens {
 	t := corpusTokens(key)
-	t.refresh = "corpus-siwc-refresh-" + key
+	t.refresh = "rt-Yh6Bn1Ve5-" + key
 	t.access = corpusJWT(map[string]any{"exp": corpusTokenExpiry, "sub": "corpus-siwc|" + key})
 	t.id = corpusJWT(map[string]any{"exp": corpusTokenExpiry, "email": t.email,
 		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": t.accountID, "chatgpt_plan_type": "plus"}})
@@ -1467,22 +922,6 @@ func corpusRSA() string {
 
 func corpusServiceAccountEmail(i int) string {
 	return fmt.Sprintf("corpus-%d@%s.iam.gserviceaccount.com", i+1, corpusVertexProject)
-}
-
-// corpusServiceAccount returns service account i's whole JSON key, as today's core's auth file
-// holds it, with tokenURI as its token_uri when set (Google's default endpoint otherwise).
-func corpusServiceAccount(i int, tokenURI string) map[string]any {
-	sa := map[string]any{
-		"type":           "service_account",
-		"project_id":     corpusVertexProject,
-		"private_key_id": "corpus",
-		"private_key":    corpusRSA(),
-		"client_email":   corpusServiceAccountEmail(i),
-	}
-	if tokenURI != "" {
-		sa["token_uri"] = tokenURI
-	}
-	return sa
 }
 
 // corpusKimiDeviceID is the device ID of the corpus's Kimi accounts.

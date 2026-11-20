@@ -113,6 +113,17 @@ impl Package {
         r: &'a Release,
         roots: &dyn Roots,
     ) -> Result<&'a Signed, String> {
+        self.curated_signature_for(id, r, roots, &platform())
+    }
+
+    /// `curated_signature_of`, for release r's archive for platform (a Linux build for WSL).
+    pub(super) fn curated_signature_for<'a>(
+        &self,
+        id: &str,
+        r: &'a Release,
+        roots: &dyn Roots,
+        platform: &str,
+    ) -> Result<&'a Signed, String> {
         let s = r
             .signed
             .as_ref()
@@ -133,7 +144,7 @@ impl Package {
             ));
         }
         let sig = artifact::decode_hex::<64>(&s.signature)?;
-        let v = artifact::verify_descriptor(&key, s.descriptor.as_bytes(), &sig, &platform())
+        let v = artifact::verify_descriptor(&key, s.descriptor.as_bytes(), &sig, platform)
             .map_err(|e| format!("{id}: {e}"))?;
         let d = v.descriptor();
         if d.id != id
@@ -313,6 +324,7 @@ impl Admitted {
             native_tool: true,
             files: vec![self.program.clone()],
             launch: None,
+            environment: None,
         }
     }
 }
@@ -444,19 +456,21 @@ pub(super) fn verify(
     ))
 }
 
-/// Fills in a signed native release staged in staged: its program for this computer, which
-/// must be an executable file in the package, its declarations and the digest of every file.
+/// Fills in a signed native release staged in staged: its program for platform (this
+/// computer's, or a Linux build's for WSL), which must be an executable file in the package, its
+/// declarations and the digest of every file. executables: the files the archive's modes let run.
 pub(super) fn native_release(
     r: &mut Release,
     app: &App,
     staged: &Path,
     signed: Signed,
+    platform: &str,
+    executables: &BTreeSet<String>,
 ) -> Result<(), String> {
-    let platform = platform();
     let program = app
         .programs
         .as_ref()
-        .and_then(|p| p.get(&platform))
+        .and_then(|p| p.get(platform))
         .ok_or_else(|| format!("{} has no program for {platform}", r.version))?;
     if !store_path(program) {
         return Err(format!(
@@ -465,21 +479,29 @@ pub(super) fn native_release(
     }
     r.tree = hash_files(staged, MAX_ENTRIES, MAX_UNPACKED, "the package")?;
     let meta = fs::symlink_metadata(staged.join(program));
+    // A Linux build for WSL runs in Linux: its program is a file the archive's mode lets run,
+    // whatever this computer's file system keeps.
+    let foreign = platform != super::platform();
+    let linux = platform.starts_with("linux/")
+        && meta.as_ref().is_ok_and(|m| m.is_file())
+        && executables.contains(program.as_str());
     #[cfg(unix)]
-    let executable = meta.is_ok_and(|m| {
-        use std::os::unix::fs::PermissionsExt;
-        m.is_file() && m.permissions().mode() & 0o111 != 0
-    });
+    let executable = !foreign
+        && meta.is_ok_and(|m| {
+            use std::os::unix::fs::PermissionsExt;
+            m.is_file() && m.permissions().mode() & 0o111 != 0
+        });
     // Windows starts programs only (`.exe` or `.com`, starting `MZ`), never a script by its name.
     #[cfg(windows)]
-    let executable = meta.is_ok_and(|m| m.is_file()) && {
+    let executable = !foreign && meta.is_ok_and(|m| m.is_file()) && {
         let path = staged.join(program);
         let f = fs::File::open(&path).map_err(|e| format!("program {program}: {e}"))?;
         crate::owned::windows::image(&f, &path)?;
         true
     };
     #[cfg(not(any(unix, windows)))]
-    let executable = meta.is_ok_and(|m| m.is_file());
+    let executable = !foreign && meta.is_ok_and(|m| m.is_file());
+    let executable = if foreign { linux } else { executable };
     if !r.tree.contains_key(program) || !executable {
         return Err(format!(
             "program {program} is not an executable file in the package"
@@ -509,6 +531,7 @@ pub(super) fn native_release(
         version: s.version,
         readable_versions: s.readable_versions.clone(),
     });
+    r.environments = app.environments.clone().unwrap_or_default();
     Ok(())
 }
 
@@ -546,10 +569,22 @@ impl Catalog {
         r: &Release,
         roots: &dyn Roots,
     ) -> Result<(Admitted, Tree), String> {
+        self.release_record_for(id, p, r, roots, &platform())
+    }
+
+    /// `release_record`, for release r's archive for platform (a Linux build for WSL).
+    fn release_record_for(
+        &self,
+        id: &str,
+        p: &Package,
+        r: &Release,
+        roots: &dyn Roots,
+        platform: &str,
+    ) -> Result<(Admitted, Tree), String> {
         if r.tier != "native" {
             return Err(format!("{id} is not a native tool"));
         }
-        let s = p.curated_signature_of(id, r, roots)?;
+        let s = p.curated_signature_for(id, r, roots, platform)?;
         if !r.host_versions.contains(&HOST_CONTRACT) {
             return Err(format!(
                 "{id} {} needs app host contract {:?}; this app speaks host contract {HOST_CONTRACT}",
@@ -564,7 +599,13 @@ impl Catalog {
             .program
             .as_ref()
             .and_then(|x| r.tree.get(x).map(|h| (x, h.clone())))
-            .ok_or_else(|| format!("{id} {} has no program for this computer", r.version))?;
+            .ok_or_else(|| {
+                if platform == super::platform() {
+                    format!("{id} {} has no program for this computer", r.version)
+                } else {
+                    format!("{id} {} has no program for {platform}", r.version)
+                }
+            })?;
         let dir = self.dirs.store().join(&r.sha256);
         let a = Admitted {
             id: id.into(),
@@ -725,4 +766,304 @@ pub fn native_candidate_unlocked(
     roots: &dyn Roots,
 ) -> Result<Admitted, String> {
     checked_unlocked(catalog, |c| c.native_candidate_record(id, roots))
+}
+
+// ---- A native tool's Linux build, to run it in WSL ----
+
+/// The platforms a WSL distribution runs, whose Linux build a native tool may have.
+const WSL_PLATFORMS: &[&str] = &["linux/amd64", "linux/arm64"];
+
+/// What staging native tool id's Linux build for platform starts from: its active release,
+/// source and signer as the catalog has them now (`Catalog::linux_target`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinuxTarget {
+    id: String,
+    platform: String,
+    source: Source,
+    active: Release,
+    signed: Signed,
+}
+
+/// A native tool's Linux build, checked and staged, waiting for the person's native
+/// confirmation and `Catalog::commit_linux`. Dropped, it leaves nothing.
+#[derive(Debug)]
+pub struct LinuxCandidate {
+    target: LinuxTarget,
+    pub(super) candidate: Candidate,
+}
+
+impl LinuxCandidate {
+    /// The package ID.
+    pub fn id(&self) -> &str {
+        &self.target.id
+    }
+    /// `linux/amd64` or `linux/arm64`.
+    pub fn platform(&self) -> &str {
+        &self.target.platform
+    }
+    /// The release's version, the active release's.
+    pub fn version(&self) -> &str {
+        &self.candidate.release.version
+    }
+    /// SHA-256 of the Linux archive, in lower-case hex.
+    pub fn sha256(&self) -> &str {
+        &self.candidate.release.sha256
+    }
+
+    /// The native confirmation installing it shows: the main window as the requester; the
+    /// package, with its Linux archive's digest, as the executor; its version and platform.
+    #[cfg(native_stack)]
+    pub fn confirmation(&self) -> crate::confirmation::Action {
+        let r = &self.candidate.release;
+        let s = &self.target.signed;
+        crate::confirmation::Action {
+            what: format!(
+                "Install the Linux build of {} {} ({}, SHA-256 {}) to run it in WSL",
+                self.target.id, r.version, self.target.platform, r.sha256
+            ),
+            chain: vec![main_window()],
+            executor: crate::confirmation::Package {
+                id: self.target.id.clone(),
+                source: format!("registry {} ({})", self.target.source.name, s.source),
+                digest: r.sha256.clone(),
+                signer: format!("{} key {} ({})", s.publisher, s.key_id, s.public_key),
+                contract: format!("app host {HOST_CONTRACT}; app {}", r.app_version),
+                generation: r.installed_at,
+            },
+            // What it installs runs with full access to the account it runs as.
+            native_tool: true,
+            files: vec![],
+            launch: None,
+            environment: None,
+        }
+    }
+}
+
+/// Whether two releases of one package declare the same: operations, state, imports, exports,
+/// jobs, environments and app contribution version. A Linux build declaring more than the
+/// release the person enabled would get what they never confirmed.
+fn same_declarations(a: &Release, b: &Release) -> bool {
+    (
+        a.app_version,
+        &a.operations,
+        &a.state,
+        &a.imports,
+        &a.exports,
+        &a.produces,
+        &a.consumes,
+        &a.environments,
+    ) == (
+        b.app_version,
+        &b.operations,
+        &b.state,
+        &b.imports,
+        &b.exports,
+        &b.produces,
+        &b.consumes,
+        &b.environments,
+    )
+}
+
+/// Whether s and t name the same signer: publisher, key ID and source.
+fn same_signer(s: &Signed, t: &Signed) -> bool {
+    (&s.publisher, &s.key_id, &s.source) == (&t.publisher, &t.key_id, &t.source)
+}
+
+/// Fetches native tool t.id's Linux build for t.platform from the registry it was installed
+/// from, the active release's version, and checks it before anything is recorded: its curated
+/// signature for that platform, by the active release's signer; its size and digest; its
+/// entries; its manifest (the same ID and version, a native tool for this host contract running
+/// in WSL, declaring what the active release declares, with an executable program for the
+/// platform); and the digest of every file. Hold no catalog lock while it runs.
+pub fn stage_linux(
+    dirs: &Dirs,
+    roots: &dyn Roots,
+    t: &LinuxTarget,
+) -> Result<LinuxCandidate, String> {
+    let (id, platform, version) = (&t.id, &t.platform, &t.active.version);
+    let name = &t.source.name;
+    let r = registries(dirs)?
+        .into_iter()
+        .find(|r| &r.name == name && t.source.index.as_deref() == Some(r.url.as_str()))
+        .ok_or_else(|| {
+            format!("registry {name} no longer has the index {id} was installed from")
+        })?;
+    let (index, base) = read_index(&r)?;
+    let a = index
+        .packages
+        .get(id.as_str())
+        .and_then(|p| p.releases.iter().find(|x| &x.version == version))
+        .and_then(|x| x.artifacts.get(platform.as_str()))
+        .ok_or_else(|| format!("registry {name} lists no {id} {version} for {platform}"))?;
+    let l = to_verify(roots, &r, id, version, a)?.ok_or_else(|| {
+        format!("{id} {version} for {platform}: registry {name} lists no curated signature for it")
+    })?;
+    let bytes = fetch_artifact(&base, a)?;
+    let (signing, bytes) = verify(roots, &r.url, &l, platform, (id, version), bytes)?;
+    if !same_signer(&signing.signed, &t.signed) {
+        return Err(format!(
+            "{id} {version} for {platform} is signed by {} key {}, not by the signer of the installed release",
+            signing.signed.publisher, signing.signed.key_id
+        ));
+    }
+    let c = stage_signed(
+        dirs,
+        &bytes,
+        t.source.clone(),
+        Some(&Expect {
+            id: id.clone(),
+            version: version.clone(),
+            sha256: a.sha256.to_ascii_lowercase(),
+            size: a.size,
+        }),
+        Some(signing),
+        roots,
+        platform,
+    )?;
+    let rel = &c.release;
+    if rel.tier != "native" {
+        return Err(format!(
+            "{id} {version} for {platform} is not a native tool"
+        ));
+    }
+    if !rel.environments.iter().any(|e| e == "wsl") {
+        return Err(format!("{id} {version} for {platform} does not run in WSL"));
+    }
+    if !same_declarations(rel, &t.active) {
+        return Err(format!(
+            "{id} {version} for {platform} declares other operations, state, imports, exports, jobs or environments than the installed release"
+        ));
+    }
+    Ok(LinuxCandidate {
+        target: t.clone(),
+        candidate: c,
+    })
+}
+
+impl Catalog {
+    /// Whether native tool id's active release declares that it runs in WSL.
+    pub fn runs_in_wsl(&self, id: &str) -> bool {
+        self.packages
+            .get(id)
+            .is_some_and(|p| p.active.environments.iter().any(|e| e == "wsl"))
+    }
+
+    /// What staging native tool id's Linux build for platform starts from (`stage_linux`): an
+    /// enabled tool the person confirmed for its active release, which runs in WSL.
+    pub fn linux_target(
+        &self,
+        id: &str,
+        platform: &str,
+        roots: &dyn Roots,
+    ) -> Result<LinuxTarget, String> {
+        if !WSL_PLATFORMS.contains(&platform) {
+            return Err(format!(
+                "{platform} is not a platform WSL runs (linux/amd64 or linux/arm64)"
+            ));
+        }
+        if self.safe_mode {
+            return Err("the app runs in safe mode: no native tool is admitted".into());
+        }
+        let p = self
+            .packages
+            .get(id)
+            .ok_or_else(|| format!("{id} is not installed on this device"))?;
+        if !self.runs_in_wsl(id) {
+            return Err(format!("{id} does not run in WSL"));
+        }
+        let (a, _) = self.admitted_record(id, roots)?;
+        Ok(LinuxTarget {
+            id: id.into(),
+            platform: platform.into(),
+            source: p.source.clone(),
+            active: p.active.clone(),
+            signed: a.signed,
+        })
+    }
+
+    /// Records Linux build c of its package, after its native confirmation, while the package
+    /// is still the release, source and signer it was staged for and its staged files are
+    /// unchanged. A build for the same platform it replaces goes.
+    pub fn commit_linux(&mut self, c: LinuxCandidate, roots: &dyn Roots) -> Result<(), String> {
+        let result = self.commit_linux_inner(&c, roots);
+        // The staged folder is either in the store now or no longer needed.
+        if let Err(e) = remove_tree(&c.candidate.staged) {
+            self.cleanup.push(format!("could not delete {e}"));
+        }
+        if result.is_err() {
+            self.collect();
+        }
+        result
+    }
+
+    fn commit_linux_inner(&mut self, c: &LinuxCandidate, roots: &dyn Roots) -> Result<(), String> {
+        let (id, platform) = (c.id(), c.platform());
+        if self.linux_target(id, platform, roots)? != c.target {
+            return Err(format!(
+                "{id} changed while its Linux build was being confirmed; install it again"
+            ));
+        }
+        verify_tree(&c.candidate.staged, &c.candidate.release.tree)?;
+        self.place(&c.candidate)?;
+        let p = self.packages.get_mut(id).unwrap();
+        let was = p.linux.insert(platform.into(), c.candidate.release.clone());
+        if let Err(e) = self.save() {
+            let p = self.packages.get_mut(id).unwrap();
+            match was {
+                Some(r) => p.linux.insert(platform.into(), r),
+                None => p.linux.remove(platform),
+            };
+            return Err(e);
+        }
+        self.collect();
+        Ok(())
+    }
+
+    /// `admitted_record`, for native tool id's Linux build for platform: the tool runs in WSL,
+    /// is enabled and confirmed for its active release, and has a Linux build of that version
+    /// and signer whose curated signature verifies for platform now.
+    pub(super) fn admitted_linux_record(
+        &self,
+        id: &str,
+        platform: &str,
+        roots: &dyn Roots,
+    ) -> Result<(Admitted, Tree), String> {
+        if self.safe_mode {
+            return Err("the app runs in safe mode: no native tool is admitted".into());
+        }
+        let p = self
+            .packages
+            .get(id)
+            .ok_or_else(|| format!("{id} is not installed on this device"))?;
+        if !self.runs_in_wsl(id) {
+            return Err(format!("{id} does not run in WSL"));
+        }
+        let (active, _) = self.admitted_record(id, roots)?;
+        let r = p
+            .linux
+            .get(platform)
+            .filter(|r| r.version == p.active.version)
+            .ok_or_else(|| {
+                format!("{id}'s Linux build for {platform} is not installed: install it for WSL")
+            })?;
+        let (a, tree) = self.release_record_for(id, p, r, roots, platform)?;
+        if !same_signer(&a.signed, &active.signed) {
+            return Err(format!(
+                "{id}'s Linux build for {platform} is not signed by the signer of its active release: install it for WSL again"
+            ));
+        }
+        Ok((a, tree))
+    }
+}
+
+/// Native tool id's Linux build for platform, as the program host runs it in WSL: checked as
+/// `Catalog::admitted_linux_record` says, and every file of it hashed again without the
+/// catalog's lock (`checked_unlocked`).
+pub fn admitted_linux_unlocked(
+    catalog: &std::sync::Mutex<Catalog>,
+    id: &str,
+    platform: &str,
+    roots: &dyn Roots,
+) -> Result<Admitted, String> {
+    checked_unlocked(catalog, |c| c.admitted_linux_record(id, platform, roots))
 }

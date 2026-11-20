@@ -1,8 +1,30 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { LAYOUT, MAX_THEME_BYTES, PARTS, THEME_VERSION, TOKENS, tokenProperty } from "../kit/theme/contract";
-import { type Choices, DEFAULT_CHOICES, resolve, tokensCss } from "../kit/theme/engine";
+import {
+  LAYOUT,
+  MAX_THEME_BYTES,
+  PARTS,
+  SLOTS,
+  THEME_VERSION,
+  TOKENS,
+  tokenProperty,
+  tokenValueProblem,
+} from "../kit/theme/contract";
+import { type Choices, DEFAULT_CHOICES, resolve, ThemeApplier, tokensCss } from "../kit/theme/engine";
+import {
+  APP_THEME_VARIABLES,
+  T3_COLOR_ROLES,
+  T3_ROLE_TO_TOKEN,
+  type T3Appearance,
+  type T3ColorRole,
+} from "../kit/theme/t3";
+import {
+  createVividThemeColors,
+  parseThemeColor,
+  themeOklchToRgb,
+  themeRelativeLuminance,
+} from "../kit/theme/t3palette";
 import { parseTheme, parseThemeText } from "../kit/theme/validate";
 
 const themesDir = join(import.meta.dir, "..", "themes");
@@ -66,6 +88,42 @@ describe("the README and the code agree", () => {
     expect(documented).toEqual([...PARTS]);
   });
 
+  test("every T3 Code data-slot name, and the kit sets each one", () => {
+    const documented = rows("### Hooks you can rely on")
+      .map(([hook]) => hook?.match(/^`data-slot="([^"]+)"`/)?.[1])
+      .filter((h) => h !== undefined);
+    expect(documented).toEqual([...SLOTS]);
+    expect(readme).toContain('| `class="dark"` | Root element, while the appearance is dark |');
+    const kit = join(import.meta.dir, "..", "kit");
+    const source = (readdirSync(kit, { recursive: true }) as string[])
+      .filter((f) => f.endsWith(".tsx"))
+      .map((f) => readFileSync(join(kit, f), "utf8"))
+      .join("\n");
+    for (const slot of SLOTS) expect(source).toContain(`data-slot="${slot}"`);
+  });
+
+  test("a token's default is a value a theme could set, and follows only tokens that exist", () => {
+    for (const [name, def] of Object.entries(TOKENS)) {
+      for (const value of [def.light, "dark" in def ? def.dark : def.light]) {
+        expect(tokenValueProblem(name, value)).toBeUndefined();
+        for (const [, property] of value.matchAll(/var\((--px-[a-z-]+)\)/g)) {
+          expect(Object.keys(TOKENS).map(tokenProperty)).toContain(property as string);
+        }
+      }
+    }
+  });
+
+  test("every colour token is used by the kit's CSS", () => {
+    const kit = join(import.meta.dir, "..", "kit");
+    const css = (readdirSync(kit, { recursive: true }) as string[])
+      .filter((f) => f.endsWith(".css"))
+      .map((f) => readFileSync(join(kit, f), "utf8"))
+      .join("\n");
+    for (const name of Object.keys(TOKENS).filter((n) => n.startsWith("color."))) {
+      expect(css).toContain(`var(${tokenProperty(name)})`);
+    }
+  });
+
   test("account list controls expose theme hooks", () => {
     for (const part of ["toolbar", "tabs", "tab", "pager", "select", "batch", "account-meta"] as const) {
       expect(PARTS).toContain(part);
@@ -87,6 +145,18 @@ describe("the README and the code agree", () => {
 
   test("the version the README describes", () => {
     expect(readme).toContain(`# Theme contract, version ${THEME_VERSION}`);
+  });
+
+  test("the T3 Code role-to-token table and variable-only roles agree with the code", () => {
+    const documented = Object.fromEntries(
+      rows("## T3 Code themes").map(([role, token]) => [role?.replace(/`/g, ""), token?.replace(/`/g, "")]),
+    );
+    expect(documented).toEqual(T3_ROLE_TO_TOKEN as Record<string, string>);
+    for (const role of T3_COLOR_ROLES) {
+      expect(readme).toContain(`\`${role}\``);
+    }
+    expect(APP_THEME_VARIABLES.terminalSelection).toBe("--app-theme-terminal-selection-background");
+    expect(readme).toContain(APP_THEME_VARIABLES.terminalSelection);
   });
 });
 
@@ -129,6 +199,21 @@ describe("reading a theme", () => {
     expect(parseThemeText("{").ok).toBe(false);
     const huge = JSON.stringify({ ...base, description: "x".repeat(MAX_THEME_BYTES) });
     expect(parseThemeText(huge).ok).toBe(false);
+  });
+
+  test("a T3 Code file with no colours says what it needs; other files without theme_version do not", () => {
+    const why = (raw: unknown) => {
+      const r = parseTheme(raw);
+      return r.ok ? "accepted" : r.error;
+    };
+    const needs = "a T3 Code theme file needs a colors object, or both canvas and accent";
+    expect(why({ name: "No colours", appearance: "dark" })).toBe(needs);
+    expect(why({ name: "No colours", appearance: "light", canvas: "#ffffff" })).toBe(needs);
+    const missing = "theme_version is missing or not a whole number";
+    expect(why({ name: "No colours" })).toBe(missing);
+    expect(why({ name: "No colours", appearance: "sepia" })).toBe(missing);
+    expect(why({ name: " ", appearance: "dark" })).toBe(missing);
+    expect(why({ appearance: "dark", colors: {} })).toBe(missing);
   });
 
   test("keeps what it can, with a warning for each part it ignores", () => {
@@ -217,8 +302,414 @@ describe("resolving", () => {
     expect(resolve(theme, choose({}), { ...env, reducedMotion: true }).tokens["motion.duration"]).toBe("0ms");
   });
 
+  test("the newer colour tokens follow the older ones until a theme sets them", () => {
+    const plain = resolve(ok(base).theme, DEFAULT_CHOICES, env).tokens;
+    expect(plain["color.nav"]).toBe("var(--px-color-surface)");
+    expect(plain["color.code-bg"]).toBe("var(--px-color-surface-raised)");
+    expect(plain["color.danger-surface"]).toBe("color-mix(in srgb, var(--px-color-danger) 8%, transparent)");
+    const set = resolve(ok({ ...base, tokens: { "color.nav": "#102030" } }).theme, DEFAULT_CHOICES, env);
+    expect(set.tokens["color.nav"]).toBe("#102030");
+    expect(tokensCss(set.tokens)).toContain("--px-color-nav:#102030;");
+  });
+
+  test("the root has class dark only while the appearance is dark", () => {
+    const g = globalThis as { CSSStyleSheet?: unknown };
+    const had = g.CSSStyleSheet;
+    g.CSSStyleSheet = class {
+      replaceSync() {}
+    };
+    try {
+      const classes = new Set<string>();
+      const doc = {
+        documentElement: {
+          dataset: {} as Record<string, string>,
+          style: {} as Record<string, string>,
+          classList: {
+            toggle: (name: string, on: boolean) => (on ? classes.add(name) : classes.delete(name)),
+          },
+        },
+        adoptedStyleSheets: [] as unknown[],
+      };
+      const applier = new ThemeApplier(doc as unknown as Document);
+      applier.apply(resolve(theme, choose({ appearance: "dark" }), env));
+      expect(doc.documentElement.dataset.appearance).toBe("dark");
+      expect([...classes]).toEqual(["dark"]);
+      applier.apply(resolve(theme, choose({ appearance: "light" }), env));
+      expect([...classes]).toEqual([]);
+    } finally {
+      g.CSSStyleSheet = had;
+    }
+  });
+
   test("tokens become custom properties", () => {
     expect(tokenProperty("color.surface-raised")).toBe("--px-color-surface-raised");
     expect(tokensCss({ "color.bg": "#fff", density: "1" })).toBe(":root{--px-color-bg:#fff;--px-density:1;}");
+  });
+});
+
+const fixturePath = (name: string) => join(import.meta.dir, "fixtures", name);
+const readFixture = <T = unknown>(name: string): T =>
+  JSON.parse(readFileSync(fixturePath(name), "utf8")) as T;
+
+// tests/fixtures/t3-vivid-oracle.json was recorded by running T3 Code's createVividThemeColors
+// and helpers unchanged from pingdotgg/t3code apps/web/src/themePalette.ts at commit
+// 2a411317d9b7341547e5acb3e9bceb7e6195c5a2 with culori (getDefaultThemeColors stubbed to {}).
+interface OracleEntry {
+  appearance: T3Appearance;
+  canvas: string;
+  accent: string;
+  colors: Record<T3ColorRole, string>;
+}
+
+describe("T3 Code palette generator", () => {
+  test("matches T3 Code's own output across all reference inputs", () => {
+    const oracle = readFixture<OracleEntry[]>("t3-vivid-oracle.json");
+    expect(oracle).toHaveLength(6);
+    for (const entry of oracle) {
+      const actual = createVividThemeColors(entry.appearance, entry.canvas, entry.accent);
+      expect(actual).toEqual(entry.colors);
+    }
+  });
+
+  test("parses hex, rgb()/rgba(), and oklch() forms and rejects unsupported forms", () => {
+    for (const seed of [
+      "#123",
+      "#1238",
+      "#1a1b26",
+      "#1a1b26cc",
+      "rgb(26, 27, 38)",
+      "rgba(26, 27, 38, 0.5)",
+      "rgb(26 27 38 / 50%)",
+      "rgb(10% 20% 30%)",
+      "oklch(0.62 0.2 280)",
+      "oklch(62% 50% 0.5turn / 50%)",
+      "oklch(0.62 0.2 280deg / none)",
+    ]) {
+      expect(parseThemeColor(seed)).not.toBeNull();
+    }
+    for (const unsupported of [
+      "hsl(220 20% 10%)",
+      "rebeccapurple",
+      "transparent",
+      "color-mix(in srgb, #fff 50%, #000)",
+      "oklch(0.5 0.1 180); body{}",
+      "",
+      123,
+    ]) {
+      expect(parseThemeColor(unsupported)).toBeNull();
+    }
+  });
+
+  test("enforces WCAG contrast floors and status hue bounds (ported from T3 Code)", () => {
+    const rgbOf = (color: string) => {
+      const parsed = parseThemeColor(color);
+      if (!parsed) throw new Error(`unparsed color: ${color}`);
+      return themeOklchToRgb(parsed.color);
+    };
+    const contrast = (a: string, b: string) => {
+      const la = themeRelativeLuminance(rgbOf(a));
+      const lb = themeRelativeLuminance(rgbOf(b));
+      return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+    };
+    const seeds: ReadonlyArray<[T3Appearance, string, string]> = [
+      ["dark", "#101a2c", "#4f8fe8"],
+      ["dark", "#211a23", "#df5398"],
+      ["light", "#fdf6ec", "#c2571b"],
+      ["light", "#111827", "#8ab4f8"],
+      ["dark", "#f5ecf5", "#a84370"],
+    ];
+    for (const [appearance, canvas, accent] of seeds) {
+      const colors = createVividThemeColors(appearance, canvas, accent);
+      expect(colors.canvas).toMatch(/^oklch\(/);
+      expect(colors.accent).toMatch(/^oklch\(/);
+      expect(contrast(colors.text, colors.canvas)).toBeGreaterThanOrEqual(7);
+      expect(contrast(colors.textMuted, colors.canvas)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(colors.textMuted, colors.canvas)).toBeLessThan(5.5);
+      expect(contrast(colors.mutedForeground, colors.muted)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(colors.mutedForeground, colors.muted)).toBeLessThan(
+        contrast(colors.text, colors.muted),
+      );
+      expect(contrast(colors.placeholder, colors.surfaceRaised)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(colors.placeholder, colors.surfaceRaised)).toBeLessThan(
+        contrast(colors.text, colors.surfaceRaised),
+      );
+      expect(colors.secondaryLabel).toBe(colors.textMuted);
+      expect(contrast(colors.accentForeground, colors.accent)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(colors.searchMatchForeground, colors.searchMatchBackground)).toBeGreaterThanOrEqual(
+        4.5,
+      );
+      expect(
+        contrast(colors.searchMatchActiveForeground, colors.searchMatchActiveBackground),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(colors.messageActionForeground, colors.messageAction)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(colors.messageForeground, colors.messageSurface)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(colors.secondaryForeground, colors.secondary)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(colors.sidebarForeground, colors.sidebar)).toBeGreaterThanOrEqual(4.5);
+      expect(colors.messageAction).not.toBe(colors.accent);
+      const err = rgbOf(colors.error);
+      expect(err.r).toBeGreaterThan(err.g * 2);
+      expect(err.r).toBeGreaterThan(err.b * 2);
+      expect(contrast(colors.error, "#ffffff")).toBeGreaterThanOrEqual(2.5);
+      expect(contrast(colors.errorForeground, colors.errorSurface)).toBeGreaterThanOrEqual(4.5);
+      const warn = rgbOf(colors.warning);
+      expect(warn.r).toBeGreaterThan(warn.b);
+      expect(warn.g).toBeGreaterThan(warn.b);
+    }
+  });
+});
+
+describe("T3 Code themes", () => {
+  const choose = (c: Partial<Choices>): Choices => ({ ...DEFAULT_CHOICES, ...c });
+
+  test("loads the short file from T3 Code docs unchanged", () => {
+    const text = readFileSync(fixturePath("t3-docs-nightfall.json"), "utf8");
+    const r = parseThemeText(text);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.warnings).toEqual([]);
+    expect(r.theme.id).toBe("t3/nightfall");
+    expect(r.theme.appearance).toBe("dark");
+
+    const resolved = resolve(r.theme, choose({ appearance: "light" }), env);
+    expect(resolved.appearance).toBe("dark");
+    const expected = createVividThemeColors("dark", "#1a1b26", "#7aa2f7");
+    expect(resolved.tokens["color.bg"]).toBe(expected.canvas);
+    expect(resolved.tokens["color.accent"]).toBe(expected.accent);
+    expect(resolved.tokens["color.nav"]).toBe(expected.sidebar);
+    expect(resolved.tokens["color.danger"]).toBe(expected.errorForeground);
+    // Unmapped roles keep pluxy defaults.
+    expect(resolved.tokens["color.ok"]).toBe(TOKENS["color.ok"].dark);
+    expect(resolved.tokens["color.diff-add"]).toBe(TOKENS["color.diff-add"].dark);
+    // Explicit overrides win in --app-theme-* and generated roles keep generated values.
+    expect(resolved.variables["--app-theme-terminal-selection-background"]).toBe("#292e42");
+    expect(resolved.variables["--app-theme-error"]).toBe("#f7768e");
+    expect(resolved.variables["--app-theme-error-foreground"]).toBe(expected.errorForeground);
+    expect(Object.keys(resolved.variables)).toHaveLength(T3_COLOR_ROLES.length);
+  });
+
+  test("loads an exported GROVE_THEME file with all 61 roles and variants.dark", () => {
+    const raw = readFixture<{
+      colors: Record<T3ColorRole, string>;
+      variants: { dark: Record<T3ColorRole, string> };
+    }>("t3-grove-exported.json");
+    const r = parseTheme(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.warnings).toEqual([]);
+    expect(r.theme.id).toBe("t3/grove");
+    expect(r.theme.appearance).toBe("both");
+
+    const light = resolve(r.theme, choose({ appearance: "light" }), env);
+    expect(light.appearance).toBe("light");
+    expect(light.tokens["color.bg"]).toBe(raw.colors.canvas);
+    expect(light.tokens["color.surface"]).toBe(raw.colors.surface);
+    expect(light.tokens["color.nav-selected"]).toBe(raw.colors.sidebarRowSelected);
+    expect(light.variables["--app-theme-chrome"]).toBe(raw.colors.chrome);
+    expect(light.variables["--app-theme-terminal-selection-background"]).toBe(raw.colors.terminalSelection);
+    expect(Object.keys(light.variables)).toHaveLength(T3_COLOR_ROLES.length);
+
+    const dark = resolve(r.theme, choose({ appearance: "dark" }), env);
+    expect(dark.appearance).toBe("dark");
+    expect(dark.tokens["color.bg"]).toBe(raw.variants.dark.canvas);
+    expect(dark.tokens["color.accent"]).toBe(raw.variants.dark.accent);
+    expect(dark.tokens["color.nav"]).toBe(raw.variants.dark.sidebar);
+    expect(dark.variables["--app-theme-terminal-cursor"]).toBe(raw.variants.dark.terminalCursor);
+    expect(Object.keys(dark.variables)).toHaveLength(T3_COLOR_ROLES.length);
+  });
+
+  test("loads a short file with variants and css, and swaps --app-theme-* cleanly", () => {
+    const raw = readFixture<{ css: string }>("t3-short-variants-css.json");
+    const r = parseTheme(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.warnings).toEqual([]);
+    expect(r.theme.id).toBe("t3/dawn-and-dusk");
+    expect(r.theme.appearance).toBe("both");
+
+    const light = resolve(r.theme, choose({ appearance: "light" }), env);
+    const lightGen = createVividThemeColors("light", "#f6f1e7", "#9a3412");
+    expect(light.tokens["color.bg"]).toBe(lightGen.canvas);
+    expect(light.tokens["color.nav"]).toBe("#efe7d8");
+    expect(light.variables["--app-theme-sidebar"]).toBe("#efe7d8");
+    expect(light.variables["--app-theme-surface"]).toBe(lightGen.surface);
+    expect(light.css).toEqual([raw.css]);
+
+    // The dark variant sets only what variants.dark declares; other roles keep pluxy dark defaults.
+    const dark = resolve(r.theme, choose({ appearance: "dark" }), env);
+    expect(dark.appearance).toBe("dark");
+    expect(dark.tokens["color.bg"]).toBe("#1c1814");
+    expect(dark.tokens["color.surface"]).toBe("#241f1a");
+    expect(dark.tokens["color.text"]).toBe("#efe6d8");
+    expect(dark.tokens["color.accent"]).toBe("#f0a36b");
+    expect(dark.tokens["color.nav"]).toBe(TOKENS["color.nav"].light);
+    expect(dark.tokens["color.border"]).toBe(TOKENS["color.border"].dark);
+    expect(dark.variables).toEqual({
+      "--app-theme-canvas": "#1c1814",
+      "--app-theme-surface": "#241f1a",
+      "--app-theme-text": "#efe6d8",
+      "--app-theme-accent": "#f0a36b",
+    });
+
+    const cssOut = tokensCss(dark.tokens, dark.variables);
+    expect(cssOut).toContain("--px-color-bg:#1c1814;");
+    expect(cssOut).toContain("--app-theme-canvas:#1c1814;");
+
+    // Switching back to a non-T3 theme removes all --app-theme-* declarations.
+    const plain = resolve(ok(base).theme, choose({}), env);
+    expect(plain.variables).toEqual({});
+    expect(tokensCss(plain.tokens, plain.variables)).not.toContain("--app-theme-");
+
+    const g = globalThis as { CSSStyleSheet?: unknown };
+    const had = g.CSSStyleSheet;
+    g.CSSStyleSheet = class {
+      text = "";
+      replaceSync(text: string) {
+        this.text = text;
+      }
+    };
+    try {
+      const doc = {
+        documentElement: {
+          dataset: {} as Record<string, string>,
+          style: {} as Record<string, string>,
+          classList: { toggle: () => {} },
+        },
+        adoptedStyleSheets: [] as Array<{ text: string }>,
+      };
+      const applier = new ThemeApplier(doc as unknown as Document);
+      applier.apply(dark);
+      expect(doc.adoptedStyleSheets[0]?.text).toContain("--app-theme-accent:#f0a36b;");
+      expect(doc.adoptedStyleSheets[1]?.text).toBe(raw.css);
+      applier.apply(plain);
+      expect(doc.adoptedStyleSheets[0]?.text).not.toContain("--app-theme-");
+      expect(doc.adoptedStyleSheets).toHaveLength(1);
+    } finally {
+      g.CSSStyleSheet = had;
+    }
+  });
+
+  test("mixes both dialects in either direction and lets tokens win over roles", () => {
+    const t3WithTokens = ok({
+      name: "Hybrid T3",
+      appearance: "light",
+      canvas: "#faf5fa",
+      accent: "#a84370",
+      colors: { text: "#201020" },
+      variants: { dark: { canvas: "#121212" } },
+      tokens: { "color.bg": "#fdfdfd", "font.mono": "JetBrains Mono, monospace" },
+      dark: { "color.bg": "#050505" },
+      layout: { nav: "rail" },
+      collection: { id: "c", label: "Custom" },
+      managed: true,
+    });
+    expect(t3WithTokens.warnings).toEqual([]);
+    expect(t3WithTokens.theme.appearance).toBe("both");
+    const lightT3 = resolve(t3WithTokens.theme, choose({ appearance: "light" }), env);
+    expect(lightT3.tokens["color.bg"]).toBe("#fdfdfd");
+    expect(lightT3.tokens["color.text"]).toBe("#201020");
+    expect(lightT3.tokens["font.mono"]).toBe("JetBrains Mono, monospace");
+    expect(lightT3.layout.nav).toBe("rail");
+    const darkT3 = resolve(t3WithTokens.theme, choose({ appearance: "dark" }), env);
+    expect(darkT3.tokens["color.bg"]).toBe("#050505");
+
+    const pluxyWithT3 = ok({
+      ...base,
+      canvas: "#1a1b26",
+      accent: "#7aa2f7",
+      colors: { surface: "#222436" },
+      tokens: { "color.surface": "#33354a" },
+    });
+    expect(pluxyWithT3.warnings).toEqual([]);
+    const darkPluxy = resolve(pluxyWithT3.theme, choose({ appearance: "dark" }), env);
+    expect(darkPluxy.tokens["color.surface"]).toBe("#33354a");
+    expect(darkPluxy.tokens["color.accent"]).toBe(
+      createVividThemeColors("dark", "#1a1b26", "#7aa2f7").accent,
+    );
+    expect(darkPluxy.variables["--app-theme-surface"]).toBe("#222436");
+  });
+
+  test("existing built-in themes resolve identically to the pre-change baseline", () => {
+    const baseline = readFixture<
+      Record<string, { light: Record<string, string>; dark: Record<string, string> }>
+    >("builtin-resolved-baseline.json");
+    for (const file of readdirSync(themesDir).filter((f) => f.endsWith(".json"))) {
+      const parsed = ok(JSON.parse(readFileSync(join(themesDir, file), "utf8")));
+      const id = parsed.theme.id;
+      expect(baseline[id]).toBeDefined();
+      for (const appearance of ["light", "dark"] as const) {
+        const resolved = resolve(parsed.theme, choose({ appearance }), env);
+        expect(resolved.tokens).toEqual(baseline[id]?.[appearance] as Record<string, string>);
+        expect(resolved.variables).toEqual({});
+      }
+    }
+  });
+
+  test("refuses unusable T3-like files and derives IDs safely", () => {
+    expect(parseTheme({ appearance: "dark", canvas: "#1a1b26", accent: "#7aa2f7" }).ok).toBe(false);
+    expect(
+      parseTheme({
+        name: "Both without version",
+        appearance: "both",
+        canvas: "#1a1b26",
+        accent: "#7aa2f7",
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseTheme({
+        version: 2,
+        name: "Future",
+        appearance: "dark",
+        canvas: "#1a1b26",
+        accent: "#7aa2f7",
+      }).ok,
+    ).toBe(false);
+
+    const nonAscii = ok({
+      name: "日本語",
+      appearance: "dark",
+      colors: { canvas: "#111" },
+    });
+    expect(nonAscii.warnings).toEqual([]);
+    expect(nonAscii.theme.id).toMatch(/^t3\/theme-[a-z0-9]+$/);
+
+    const badId = ok({
+      id: "Not_Valid/Id",
+      name: "Bad Id",
+      appearance: "light",
+      colors: { canvas: "#fff" },
+    });
+    expect(badId.theme.id).toBe("t3/bad-id");
+    expect(badId.warnings).toHaveLength(1);
+  });
+
+  test("keeps valid T3 fields and warns on bad roles, values, seeds, and variants", () => {
+    const r = ok({
+      name: "Noisy",
+      appearance: "dark",
+      canvas: "hsl(220 20% 10%)",
+      accent: "#7aa2f7",
+      colors: {
+        canvas: "#101010",
+        unknownRole: "#ffffff",
+        text: "red; } body { display: none",
+      },
+      variants: {
+        dark: { surface: "#000000" },
+        sepia: { surface: "#f0e6d2" },
+        light: { surface: "#ffffff" },
+      },
+    });
+    expect(r.theme.appearance).toBe("both");
+    // Unsupported seed -> 1 warning, no generated palette; bad role & unknown role & repeating/unknown variant -> 1 each.
+    expect(r.warnings).toHaveLength(5);
+
+    const lightResolved = resolve(r.theme, choose({ appearance: "light" }), env);
+    expect(lightResolved.tokens["color.surface"]).toBe("#ffffff");
+
+    const darkResolved = resolve(r.theme, choose({ appearance: "dark" }), env);
+    expect(darkResolved.tokens["color.bg"]).toBe("#101010");
+    // No generated palette + rejected text role -> keeps pluxy dark defaults.
+    expect(darkResolved.tokens["color.text"]).toBe(TOKENS["color.text"].dark);
+    expect(darkResolved.tokens["color.accent"]).toBe(TOKENS["color.accent"].dark);
   });
 });

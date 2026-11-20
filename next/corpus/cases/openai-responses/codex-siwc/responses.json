@@ -42,6 +42,12 @@
   ],
   "exceptions": [
     {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Codex's own request has no metadata field, so the new core's Codex extension does not send the client's metadata; today's core sends it on.",
+      "absent": true
+    },
+    {
       "path": "upstream[*].headers.Accept-Encoding",
       "kind": "intended",
       "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
@@ -104,7 +110,7 @@
         "headers": {
           "Accept": "text/event-stream",
           "Accept-Encoding": "gzip, deflate, br, zstd",
-          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1cy1zaXdjfHNrLWNvcnB1cy11cHN0cmVhbSJ9.corpus",
+          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1cy1zaXdjfHNrLUNxN1Z4Mk5wOUx3NFpyOCJ9.Zx8Kp3Qa",
           "Content-Type": "application/json",
           "User-Agent": "CLIProxyAPI (linux; amd64)"
         },

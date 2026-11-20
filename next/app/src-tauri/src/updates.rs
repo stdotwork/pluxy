@@ -127,6 +127,7 @@ pub fn release_source_set(webview: Webview, source: Option<String>) -> Result<()
             native_tool: false,
             files: vec![],
             launch: None,
+            environment: None,
         };
         let id = {
             let mut c = st.confirmations.lock().unwrap();
@@ -189,8 +190,8 @@ fn notes_url() -> Url {
 }
 
 /// Opens an https address in the person's browser; any other address is refused here too,
-/// whatever its caller checked.
-fn open_external(app: &AppHandle, url: String) {
+/// whatever its caller checked, before anything else.
+pub(crate) fn open_external(app: &AppHandle, url: String) {
     let url = match release::https_url(&url) {
         Ok(u) => u,
         Err(e) => {
@@ -209,11 +210,55 @@ fn open_external(app: &AppHandle, url: String) {
             }
         });
     }
-    #[cfg(not(target_os = "linux"))]
+    // The shell's `open` verb on the address, with the https class's handler (the person's
+    // browser), on the main thread, which the window's event loop has set up for COM.
+    #[cfg(windows)]
     {
-        let _ = app;
-        eprintln!("pluxy-app: opening {url} in the browser is supported on Linux only for now");
+        let _ = app.run_on_main_thread(move || {
+            if let Err(e) = shell_open(&url) {
+                eprintln!("pluxy-app: could not open {url}: {e}");
+            }
+        });
     }
+    // The person's default browser, through LaunchServices, on the main thread.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.run_on_main_thread(move || {
+            use objc2_app_kit::NSWorkspace;
+            use objc2_foundation::{NSString, NSURL};
+            let opened = NSURL::URLWithString(&NSString::from_str(&url))
+                .is_some_and(|u| NSWorkspace::sharedWorkspace().openURL(&u));
+            if !opened {
+                eprintln!("pluxy-app: could not open {url}");
+            }
+        });
+    }
+}
+
+/// Opens https address url with the `open` verb of the `https` class (the person's browser):
+/// `ShellExecuteExW`, which takes the address as one string, with no dialog of its own.
+#[cfg(windows)]
+fn shell_open(url: &str) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_CLASSNAME, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC,
+        SHELLEXECUTEINFOW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (verb, file, class) = (wide("open"), wide(url), wide("https"));
+    // SAFETY: an all-zero SHELLEXECUTEINFOW is its documented empty value.
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI | SEE_MASK_CLASSNAME;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpClass = class.as_ptr();
+    info.nShow = SW_SHOWNORMAL;
+    // SAFETY: every pointer in info outlives the call.
+    if unsafe { ShellExecuteExW(&mut info) } == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
 }
 
 /// Opens a webview over rect of the window (the part of the notes area that shows; none: hidden),
@@ -354,7 +399,12 @@ pub fn release_notes_place(
     )
 }
 
-#[tauri::command]
+/// Closes a notes webview. Off Linux it runs as an async command, off the main thread: there a
+/// close while another webview is being made waits for good (`close_webviews` in lib.rs says
+/// why), and from another thread the close is posted until that webview is made. On Linux it
+/// stays on the main thread.
+#[cfg_attr(target_os = "linux", tauri::command)]
+#[cfg_attr(not(target_os = "linux"), tauri::command(async))]
 pub fn release_notes_close(
     webview: Webview,
     state: tauri::State<App>,
@@ -424,6 +474,10 @@ mod tests {
         "WindowBuilder::new(",
     ];
 
+    /// What closes a webview: on Windows a close on the main thread while another webview is
+    /// being made there waits for good (`close_webviews` in lib.rs says why).
+    const CLOSES: &[&str] = &["w.close()", "w?.close()", "webview.close()"];
+
     /// The top-level functions of a file: name, the attributes just above it, and its text up to
     /// the next top-level item.
     fn functions(text: &str) -> Vec<(String, String, String)> {
@@ -464,11 +518,12 @@ mod tests {
         out
     }
 
-    // A command that creates a webview or a window, itself or through the functions it calls,
-    // runs off the main thread on Windows and macOS (`tauri::command(async)`), as `page_open`
-    // does: on Windows a synchronous one hangs the window (its webview answers nothing more).
+    // A command that creates a webview or a window, or closes a webview, itself or through the
+    // functions it calls, runs off the main thread on Windows and macOS
+    // (`tauri::command(async)`), as `page_open` and `page_close` do: on Windows a synchronous
+    // one can hang the window (its webview answers nothing more).
     #[test]
-    fn a_command_that_creates_a_webview_is_async_off_linux() {
+    fn a_command_that_creates_or_closes_a_webview_is_async_off_linux() {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut all: BTreeMap<String, (String, String)> = BTreeMap::new();
         for e in std::fs::read_dir(&src).unwrap().flatten() {
@@ -484,15 +539,20 @@ mod tests {
             }
         }
         assert!(
-            ["release_notes_open", "page_open", "add_page"]
-                .iter()
-                .all(|f| all.contains_key(*f)),
+            [
+                "release_notes_open",
+                "release_notes_close",
+                "page_open",
+                "add_page"
+            ]
+            .iter()
+            .all(|f| all.contains_key(*f)),
             "the scan did not find the functions it checks"
         );
         // The functions that create one, then every function that calls one of those.
         let mut reach: BTreeSet<String> = all
             .iter()
-            .filter(|(_, (_, body))| CREATES.iter().any(|c| body.contains(c)))
+            .filter(|(_, (_, body))| CREATES.iter().chain(CLOSES).any(|c| body.contains(c)))
             .map(|(f, _)| f.clone())
             .collect();
         loop {
@@ -525,7 +585,8 @@ mod tests {
             .collect();
         assert!(
             sync.is_empty(),
-            "commands that create a webview or a window but run on the main thread on Windows: \
+            "commands that create a webview or a window, or close a webview, but run on the main \
+             thread on Windows: \
              {sync:?} (reached from {reach:?})"
         );
     }

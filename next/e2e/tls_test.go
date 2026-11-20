@@ -88,6 +88,7 @@ func tlsClient(pool *x509.CertPool) *http.Client {
 // serves a renewed certificate written over the same files without a restart, refuses plain
 // HTTP on that port, and refuses a reload that changes the tls section.
 func TestTLSListener(t *testing.T) {
+	t.Parallel()
 	u := newUpstream(t)
 	u.respond = u.streamReply
 	close(u.release) // stream the whole reply at once
