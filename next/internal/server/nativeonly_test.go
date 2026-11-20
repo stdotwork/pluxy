@@ -3,18 +3,15 @@ package server
 import (
 	"bytes"
 	"encoding/json"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/stdotwork/pluxy/next/corpus"
+	"github.com/stdotwork/pluxy/next/format"
+	"github.com/stdotwork/pluxy/next/format/formattest"
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -44,7 +41,7 @@ func TestNativeOnlyFrameGivesTheSameRequest(t *testing.T) {
 	reqs = append(reqs, nativeOnlyEdgeRequests("a<b>&c\u2028d\u2029e\\ud800f\\u0000g\U0001F600 \\\"q\\\"")...)
 	reqs = append(reqs, nativeOnlyEdgeRequests("a<b>&c\xff\xfeg")...)
 
-	parses := protocol.Info{ProtocolMinor: protocol.Minor, ParsesNative: true}
+	parses := protocol.Info{ProtocolMinor: protocol.Minor, NativeParser: format.ParserVersion}
 	ran, nativeOnly := 0, 0
 	read := map[string]int{}
 	for _, c := range reqs {
@@ -194,27 +191,11 @@ func throughFrame(t *testing.T, call protocol.Call) protocol.Call {
 // the case files hold them. readAsCore keeps those to generate routes.
 func corpusGenerateRequests(t *testing.T) []nativeOnlyRequest {
 	t.Helper()
-	cases, err := corpus.LoadCases(filepath.Join("..", "..", "corpus", "cases"))
+	reqs, err := formattest.CorpusRequests(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out []nativeOnlyRequest
-	for _, c := range cases {
-		for i, cr := range append([]corpus.ClientRequest{c.Client}, c.Then...) {
-			if cr.WebSocket != nil || (cr.Method != "" && cr.Method != http.MethodPost) {
-				continue
-			}
-			body := []byte(cr.Body)
-			if cr.BodyText != nil {
-				body = []byte(*cr.BodyText)
-			}
-			out = append(out, nativeOnlyRequest{src: "corpus", name: c.Format + "/" + c.Provider + "/" + c.Name + "#" + strconv.Itoa(i), path: cr.Path, headers: cr.Headers, body: body})
-		}
-	}
-	if len(out) < 100 {
-		t.Fatalf("only %d corpus requests", len(out))
-	}
-	return out
+	return asNativeOnlyRequests(reqs)
 }
 
 // formatTestRequests returns every string literal in the format packages' tests that is a JSON
@@ -222,39 +203,17 @@ func corpusGenerateRequests(t *testing.T) []nativeOnlyRequest {
 // are not requests).
 func formatTestRequests(t *testing.T) []nativeOnlyRequest {
 	t.Helper()
-	paths := map[string][]string{
-		"openaichat":        {"/v1/chat/completions", "/v1/completions"},
-		"openairesponses":   {"/v1/responses"},
-		"anthropicmessages": {"/v1/messages"},
-		"geminigenerate":    {"/v1beta/models/gemini-x:generateContent", "/v1beta/models/gemini-x:streamGenerateContent"},
+	reqs, err := formattest.LiteralRequests(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
 	}
-	var out []nativeOnlyRequest
-	for pkg, routes := range paths {
-		files, err := filepath.Glob(filepath.Join("..", "..", "format", pkg, "*_test.go"))
-		if err != nil || len(files) == 0 {
-			t.Fatalf("no tests in format/%s: %v", pkg, err)
-		}
-		for _, file := range files {
-			fset := token.NewFileSet()
-			f, err := parser.ParseFile(fset, file, nil, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			ast.Inspect(f, func(n ast.Node) bool {
-				lit, ok := n.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					return true
-				}
-				s, err := strconv.Unquote(lit.Value)
-				if err != nil || !strings.HasPrefix(strings.TrimSpace(s), "{") || !json.Valid([]byte(s)) {
-					return true
-				}
-				for _, p := range routes {
-					out = append(out, nativeOnlyRequest{src: "format tests", name: fset.Position(lit.Pos()).String() + " " + p, path: p, body: []byte(s)})
-				}
-				return true
-			})
-		}
+	return asNativeOnlyRequests(reqs)
+}
+
+func asNativeOnlyRequests(reqs []formattest.Request) []nativeOnlyRequest {
+	out := make([]nativeOnlyRequest, len(reqs))
+	for i, r := range reqs {
+		out[i] = nativeOnlyRequest{src: r.Source, name: r.Name, path: r.Path, headers: r.Headers, body: r.Body}
 	}
 	return out
 }

@@ -145,14 +145,19 @@ extension decoded both, though an extension that sends the client's body upstrea
 reads the parsed form. Later profiles put the largest remaining cost of a request in that
 encoding and decoding, on both sides of the socket.
 
-Since protocol 0.24 an extension can say it parses the body itself (the SDK does), and core then
-leaves the parsed form out whenever the body is still the one it parsed. The extension parses
-the body with the same parsers core uses, so its handler gets the same request as before. The
+Since protocol 0.24 an extension can say it parses the body itself, and with which version of
+core's parsers (the SDK does, with its own release's `format.ParserVersion`), and core then
+leaves the parsed form out whenever the body is still the one it parsed and the extension's
+parser version is core's. The extension parses the body with the same parsers core uses, so its
+handler gets the same request as before; an extension from another release whose parsers differ
+gets the full request. A test hashes what the parsers make of every corpus and format-test
+request, and fails until the version is raised when that changes. The
 tradeoff: core no longer encodes the parsed form for such a call, but the extension parses the
 body in place of decoding it, also when it only passes the body through, since a handler's
 request is a plain value that cannot be filled only when it is read. Core still sends the full
 request when the body changed after parsing (a thinking suffix taken off its model), when the
-body is not valid UTF-8, and to an extension that does not say it parses. The protocol's README
+body is not valid UTF-8, and to an extension that does not say it parses, or parses with another
+version. The protocol's README
 describes the rule (`next/protocol/README.md`, "Native-only calls").
 
 ## The budget check

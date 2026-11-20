@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/stdotwork/pluxy/next/format"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/protocol/nativeonly"
@@ -321,7 +322,7 @@ func (s *server) handle(conn net.Conn) {
 			Event: llm.Event{Type: protocol.TypeDescribeResult},
 			Info: &protocol.Info{
 				ID: s.ext.ID, Version: s.ext.Version, Protocol: protocol.Version, ProtocolMinor: protocol.Minor,
-				Operations: s.ext.operations(), LoginMethods: s.ext.LoginMethods, ParsesNative: true,
+				Operations: s.ext.operations(), LoginMethods: s.ext.LoginMethods, NativeParser: format.ParserVersion,
 			},
 		})
 	case protocol.OpGenerate:

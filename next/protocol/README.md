@@ -263,7 +263,7 @@ Core opens a connection and writes one call frame:
 | `capture` | Since 0.13, for `generate`, `count_tokens` and `endpoint`: true when core asks for the call's [upstream capture](#upstream-capture). Absent: false. |
 | `payload` | Since 0.14, for `generate`, `count_tokens` and `endpoint`, and since 0.15 for a `session.turn`: the [payload rules](#payload-rules) that apply to the call or turn. Absent: none. |
 | `alive` | Since 0.23, for `generate`, `count_tokens` and `endpoint`: true when core takes [alive frames](#alive-frames) on the call. Absent: false. |
-| `native_only` | Since 0.24, for `generate`, to an extension whose describe says `parses_native`: true when core left the request's `items`, `tools` and `origin` out, for the extension to parse from `native.body` (see [Native-only calls](#native-only-calls)). Absent: false. |
+| `native_only` | Since 0.24, for `generate`, to an extension whose describe's `native_parser` is core's: true when core left the request's `items`, `tools` and `origin` out, for the extension to parse from `native.body` (see [Native-only calls](#native-only-calls)). Absent: false. |
 
 An extension that gets an `op` it does not know replies with an `error` event whose code is
 `unsupported`.
@@ -284,8 +284,9 @@ accounts, `session` when it holds [sessions](#sessions), `count_tokens` when it
 `check` when it [checks](#check) its accounts, `quota` when it reads their [quota](#quota), and
 `endpoint` when it serves [endpoint calls](#endpoint). An
 extension that lists `login` also
-lists its `login_methods` (see [Login and refresh](#login-and-refresh)). Since 0.24,
-`parses_native: true` says the extension takes [native-only calls](#native-only-calls).
+lists its `login_methods` (see [Login and refresh](#login-and-refresh)). Since 0.24, a
+`native_parser` above 0 says the extension takes [native-only calls](#native-only-calls), and
+which version of core's parsers it parses them with.
 
 ### `generate`
 
@@ -848,10 +849,15 @@ the client's format cannot hold.
 
 Since 0.24. The parsed request (`items`, `tools`, `origin`) and `native.body` are the same content
 twice, each about as large as the client's body, while an extension that sends `native.body`
-upstream needs only the body. So an extension may say in describe that it parses the body itself
-(`parses_native: true`), and core then sends a `generate` call's request without its parsed form,
-with the call's `native_only: true`, when all of these hold:
+upstream needs only the body. So an extension may say in describe that it parses the body itself,
+and with which version of core's parsers: `native_parser`, an integer (`format.ParserVersion` in
+`next/format`, which the format packages raise whenever a parser makes something else of a body it
+already read). Core sends a `generate` call's request without its parsed form, with the call's
+`native_only: true`, when all of these hold:
 
+- the extension's `native_parser` equals core's own parser version, so both parse the body into
+  the same `items`, `tools` and `origin`. An extension from another release whose parsers differ,
+  older or newer, gets full calls; 0 or absent means it does not parse;
 - `native.format` is `openai.chat`, `openai.responses`, `anthropic.messages` or
   `gemini.generate_content`;
 - `native.body` is the body core parsed the request from, or that body with its top-level `model`
@@ -1496,7 +1502,7 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.21 | A manifest's optional `title`, `summary` and `kind`, and a [registry index](#registry-index) package's optional `title`, `summary`, `kind` and `tier`. No call or frame changes. |
 | 0.22 | The account's optional [`timeouts`](#timeouts). |
 | 0.23 | [Alive frames](#alive-frames): the call's and turn's `alive` and the `alive` frame; core's `extension_timeout`. |
-| 0.24 | [Native-only calls](#native-only-calls): describe's `parses_native` and the call's `native_only`. |
+| 0.24 | [Native-only calls](#native-only-calls): describe's `native_parser` and the call's `native_only`. |
 
 ## What version 0.24 leaves out
 

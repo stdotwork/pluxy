@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/format"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/protocol/nativeonly"
@@ -576,9 +577,9 @@ const nativeOnlyMinor = 24
 
 // ParsesNative reports whether an extension that described itself with info takes native-only
 // generate calls (protocol.Call.NativeOnly): it implements minor version 24 or later and says
-// it parses a request's native body itself.
+// it parses a request's native body itself, with the parsers core has (format.ParserVersion).
 func ParsesNative(info protocol.Info) bool {
-	return info.ProtocolMinor >= nativeOnlyMinor && info.ParsesNative
+	return info.ProtocolMinor >= nativeOnlyMinor && info.NativeParser == format.ParserVersion
 }
 
 // ServesEndpoints reports whether an extension that described itself with info serves endpoint

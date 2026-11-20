@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/format"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -56,7 +57,7 @@ func nativeOnlyCall(body string, nativeOnly bool) protocol.Call {
 	}
 }
 
-func TestDescribeParsesNative(t *testing.T) {
+func TestDescribeNativeParser(t *testing.T) {
 	socket, stdin, _ := startServe(t, Extension{ID: "test/sdk", Version: "0.0.0", Generate: func(context.Context, Call, *Stream) error { return nil }})
 	defer stdin.Close()
 	conn := dial(t, socket)
@@ -66,8 +67,8 @@ func TestDescribeParsesNative(t *testing.T) {
 	if err := protocol.ReadFrame(conn, &r); err != nil || r.Info == nil {
 		t.Fatalf("describe: %+v, %v", r, err)
 	}
-	if !r.Info.ParsesNative || r.Info.ProtocolMinor < 24 { // minor 24 adds native-only calls
-		t.Errorf("info = %+v, want parses_native and minor >= 24", r.Info)
+	if r.Info.NativeParser != format.ParserVersion || r.Info.ProtocolMinor < 24 { // minor 24 adds native-only calls
+		t.Errorf("info = %+v, want native_parser %d and minor >= 24", r.Info, format.ParserVersion)
 	}
 }
 

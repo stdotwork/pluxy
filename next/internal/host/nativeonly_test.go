@@ -24,10 +24,10 @@ type nativeOnlyFrame struct {
 	Native     bool `json:"native"`
 }
 
-// nativeOnlyExtension answers describe with the given minor (and parses_native when parses), and
+// nativeOnlyExtension answers describe with the given minor and native_parser, and
 // every generate and count_tokens call with an internal error whose message is the JSON of what
 // the call frame held.
-func nativeOnlyExtension(minor int, parses bool) {
+func nativeOnlyExtension(minor, parser int) {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
@@ -50,7 +50,7 @@ func nativeOnlyExtension(minor int, parses bool) {
 					Event: llm.Event{Type: protocol.TypeDescribeResult},
 					Info: &protocol.Info{
 						ID: os.Getenv(protocol.EnvExtensionID), Version: "0.0.0",
-						Protocol: protocol.Version, ProtocolMinor: minor, ParsesNative: parses,
+						Protocol: protocol.Version, ProtocolMinor: minor, NativeParser: parser,
 						Operations: []string{protocol.OpGenerate, protocol.OpCountTokens},
 					},
 				})
@@ -89,7 +89,7 @@ func nativeOnlyRequest(t *testing.T, parsed bool) llm.Request {
 }
 
 // Core leaves a generate request's items, tools and origin out of the frame only for an
-// extension at minor 24 or later that says parses_native, and only when the request's native
+// extension at minor 24 or later whose native_parser is core's, and only when the request's native
 // body is the one it was parsed from; count_tokens always gets the full request.
 func TestNativeOnlyFrame(t *testing.T) {
 	for _, tc := range []struct {
@@ -102,6 +102,7 @@ func TestNativeOnlyFrame(t *testing.T) {
 		{"minor 24 parses native", "native-only-24-parses", true, false, true},
 		{"minor 23 parses native", "native-only-23-parses", true, false, false},
 		{"minor 24 without parses native", "native-only-24", true, false, false},
+		{"minor 24 parses with another parser version", "native-only-24-skew", true, false, false},
 		{"parsed unset", "native-only-24-parses", false, false, false},
 		{"count tokens", "native-only-24-parses", true, true, false},
 	} {

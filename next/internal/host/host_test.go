@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/format"
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -107,10 +108,18 @@ func fakeExtension(mode string) {
 		return
 	}
 	if rest, ok := strings.CutPrefix(mode, "native-only-"); ok {
-		// native-only-<minor>[-parses]: describes that minor, with parses_native when asked.
+		// native-only-<minor>[-parses|-skew]: describes that minor, with core's native_parser
+		// (parses) or another one (skew).
 		minor, parses, _ := strings.Cut(rest, "-")
 		n, _ := strconv.Atoi(minor)
-		nativeOnlyExtension(n, parses == "parses")
+		parser := 0
+		switch parses {
+		case "parses":
+			parser = format.ParserVersion
+		case "skew":
+			parser = format.ParserVersion + 1
+		}
+		nativeOnlyExtension(n, parser)
 		return
 	}
 	if mode == "echo-pieces" {

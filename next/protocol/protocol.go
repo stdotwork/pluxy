@@ -35,7 +35,7 @@ const Version = 0
 // Feature; minor 20 adds llm.CodeAccountClosed; minor 21 adds what a package is (title, summary,
 // kind) to the manifest and registry index, and changes no call; minor 22 adds the account's
 // timeouts (Account.Timeouts); minor 23 adds alive frames (Call.Alive and TypeAlive); minor 24
-// adds native-only generate calls (Info.ParsesNative and Call.NativeOnly).
+// adds native-only generate calls (Info.NativeParser and Call.NativeOnly).
 const Minor = 24
 
 // MaxFrame is the largest frame either side may send.
@@ -157,7 +157,7 @@ type Call struct {
 	// at all for as long as the account's timeouts let the upstream stay quiet, plus a minute.
 	Alive bool `json:"alive,omitempty"`
 	// NativeOnly says core left the request's items, tools and origin out of a generate call
-	// (minor version 24), to an extension that describes itself with Info.ParsesNative: they are
+	// (minor version 24), to an extension that parses with core's parsers (Info.NativeParser): they are
 	// what the parser of the request's native format makes of its native body, which the
 	// extension parses itself (nativeonly.Parse). The request's other fields are as in any call.
 	NativeOnly bool `json:"native_only,omitempty"`
@@ -269,10 +269,12 @@ type Info struct {
 	// ProtocolMinor is the minor version of Protocol the extension implements; 0 when absent.
 	ProtocolMinor int      `json:"protocol_minor,omitempty"`
 	Operations    []string `json:"operations"`
-	// ParsesNative says the extension takes native-only generate calls (Call.NativeOnly,
+	// NativeParser says the extension takes native-only generate calls (Call.NativeOnly,
 	// minor version 24): it parses a request's items, tools and origin from its native body
-	// itself, so core need not send them twice.
-	ParsesNative bool `json:"parses_native,omitempty"`
+	// itself, so core need not send them twice, with the format parsers of this version
+	// (format.ParserVersion). Core sends native-only calls only when it equals core's own
+	// version; 0 or absent: the extension does not parse.
+	NativeParser int `json:"native_parser,omitempty"`
 	// LoginMethods are the ways login can add an account; present when Operations includes
 	// login.
 	LoginMethods []LoginMethod `json:"login_methods,omitempty"`
