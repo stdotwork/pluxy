@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/internal/jsonscan"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -49,11 +50,50 @@ func sessionKey(r *http.Request, body []byte) string {
 			return h + ":" + v
 		}
 	}
+	if k := promptCacheKey(body); k != "" {
+		return "prompt_cache_key:" + k
+	}
+	return ""
+}
+
+// promptCacheKey returns the body's prompt_cache_key as json.Unmarshal reads it into a struct
+// with that one string field: the last member named so in any letter case, or "" when the body
+// is not a JSON object or such a member holds neither a string nor null. It reads only the top
+// level of the body, without decoding the rest.
+func promptCacheKey(body []byte) string {
+	members, ok := jsonscan.Object(body)
+	if !ok {
+		return ""
+	}
+	key := ""
+	for _, m := range members {
+		name, ok := jsonscan.Unquote(m.Key)
+		if !ok {
+			return promptCacheKeyDecoded(body) // a name encoding/json repairs: let it read the body
+		}
+		if !strings.EqualFold(name, "prompt_cache_key") {
+			continue
+		}
+		switch {
+		case jsonscan.IsNull(m.Value):
+		case jsonscan.IsString(m.Value):
+			if key, ok = jsonscan.Unquote(m.Value); !ok {
+				return promptCacheKeyDecoded(body)
+			}
+		default:
+			return "" // json.Unmarshal fails on the type
+		}
+	}
+	return key
+}
+
+// promptCacheKeyDecoded is promptCacheKey by json.Unmarshal.
+func promptCacheKeyDecoded(body []byte) string {
 	var b struct {
 		PromptCacheKey string `json:"prompt_cache_key"`
 	}
-	if json.Unmarshal(body, &b) == nil && b.PromptCacheKey != "" {
-		return "prompt_cache_key:" + b.PromptCacheKey
+	if json.Unmarshal(body, &b) != nil {
+		return ""
 	}
-	return ""
+	return b.PromptCacheKey
 }

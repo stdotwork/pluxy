@@ -16,6 +16,7 @@ import (
 // request in another format is rebuilt as GenerateContent and counted whole: for the Gemini API
 // under generateContentRequest, for Vertex AI as its contents, system instruction and tools.
 func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
+	ctx = withAccountID(ctx, call.Account.ID)
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
 		return err

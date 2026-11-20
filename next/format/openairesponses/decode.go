@@ -370,13 +370,15 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 }
 
 // OpaqueOutput lists, by path in the Response, the output data a client in another format has no
-// place for: a reasoning item's encrypted content and the annotations on output text. raw is an
-// output_item.done event, a terminal event or a Response object.
+// place for: a reasoning item's encrypted content, an assistant message's phase (commentary or
+// final_answer, which Codex asks clients to send back) and the annotations on output text. raw is
+// an output_item.done event, a terminal event or a Response object.
 func OpaqueOutput(raw json.RawMessage) []string {
 	var out []string
 	outputItems(raw, func(i int, item json.RawMessage) {
 		var it struct {
 			EncryptedContent string `json:"encrypted_content"`
+			Phase            string `json:"phase"`
 			Content          []struct {
 				Annotations []json.RawMessage `json:"annotations"`
 			} `json:"content"`
@@ -386,6 +388,9 @@ func OpaqueOutput(raw json.RawMessage) []string {
 		}
 		if it.EncryptedContent != "" {
 			out = append(out, fmt.Sprintf("output[%d].encrypted_content", i))
+		}
+		if it.Phase != "" {
+			out = append(out, fmt.Sprintf("output[%d].phase", i))
 		}
 		for j, c := range it.Content {
 			if len(c.Annotations) > 0 {

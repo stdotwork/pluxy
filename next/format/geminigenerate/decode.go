@@ -33,7 +33,8 @@ type chunk struct {
 		Content *struct {
 			Parts []json.RawMessage `json:"parts"`
 		} `json:"content"`
-		FinishReason string `json:"finishReason"`
+		FinishReason  string `json:"finishReason"`
+		FinishMessage string `json:"finishMessage"`
 	} `json:"candidates"`
 	PromptFeedback *struct {
 		BlockReason string `json:"blockReason"`
@@ -90,7 +91,7 @@ var contentFilterReasons = map[string]bool{
 
 // finishOf maps a Gemini finish reason; RawReason keeps Gemini's own value, so SAFETY,
 // RECITATION and the rest stay distinct. A STOP with function calls in the reply is a tool-call
-// stop.
+// stop. MALFORMED_FUNCTION_CALL never becomes a finish: the decoders end that reply with an error.
 func finishOf(reason string, calls bool) llm.Finish {
 	f := llm.Finish{Reason: llm.FinishOther, RawReason: reason}
 	switch {
@@ -154,6 +155,13 @@ type StreamDecoder struct {
 	calls   bool
 	finish  *llm.Finish
 	usage   *llm.Usage
+	// idPrefix is the reply's part of the IDs made for calls that come without one; set at the
+	// first such call.
+	idPrefix   string
+	responseID string
+	// malformed is set when the reply ended with MALFORMED_FUNCTION_CALL, with Gemini's message.
+	malformed     bool
+	malformedText string
 }
 
 // NewStreamDecoder returns a decoder for one stream.
@@ -204,6 +212,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 
 // decode adds the events chunk c produces to out.
 func (d *StreamDecoder) decode(c chunk, out []llm.Event) []llm.Event {
+	if d.responseID == "" {
+		d.responseID = c.ResponseID
+	}
 	if !d.started {
 		d.started = true
 		out = append(out, llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: c.ResponseID, Model: c.ModelVersion, Format: format}})
@@ -222,6 +233,9 @@ func (d *StreamDecoder) decode(c chunk, out []llm.Event) []llm.Event {
 			for _, pr := range cand.Content.Parts {
 				out = d.part(pr, out)
 			}
+		}
+		if cand.FinishReason == MalformedFunctionCall {
+			d.malformed, d.malformedText = true, cand.FinishMessage
 		}
 		if cand.FinishReason != "" {
 			f := finishOf(cand.FinishReason, d.calls)
@@ -279,9 +293,12 @@ func (d *StreamDecoder) part(raw json.RawMessage, out []llm.Event) []llm.Event {
 		var idx int
 		id := call.ID
 		if id == "" {
-			// Gemini's call id is optional; the model needs one. The raw chunk keeps the
-			// call as it came.
-			id = fmt.Sprintf("call_%d", d.next)
+			// Gemini's call id is optional; the model needs one, unique across the replies
+			// of a conversation. The raw chunk keeps the call as it came.
+			if d.idPrefix == "" {
+				d.idPrefix = callIDPrefix(d.responseID)
+			}
+			id = fmt.Sprintf("call_%s_%d", d.idPrefix, d.next)
 		}
 		idx, out = d.open(llm.ItemToolCall, out, llm.ItemStart{CallID: id, Name: call.Name})
 		return append(out,
@@ -323,12 +340,16 @@ func (d *StreamDecoder) withUsage(e *llm.Error) *llm.Error {
 }
 
 // Close is called when the upstream stream ends. A stream that ends before any finish reason is
-// an error: the reply may have been cut short.
+// an error: the reply may have been cut short. So is one that ended with MALFORMED_FUNCTION_CALL
+// (IsMalformedCall), with Gemini's finish message.
 func (d *StreamDecoder) Close() ([]llm.Event, error) {
 	if d.done {
 		return nil, nil
 	}
 	d.done = true
+	if d.malformed {
+		return nil, d.withUsage(malformedCall(d.malformedText))
+	}
 	if d.finish == nil {
 		return nil, d.withUsage(&llm.Error{Code: llm.CodeUpstream, Message: "upstream stream ended before the reply finished"})
 	}
@@ -341,7 +362,8 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 // DecodeResponse turns an upstream non-streamed GenerateContentResponse into the events a stream
 // of it would have produced. The first event carries the whole body in Raw, so a Gemini client
 // gets it unchanged. A reply holding an error object becomes an *llm.Error; a reply with neither
-// a finish reason nor a prompt block counts as finished with reason other.
+// a finish reason nor a prompt block counts as finished with reason other, and one that ended with
+// MALFORMED_FUNCTION_CALL is the error Close gives it.
 func DecodeResponse(body []byte) ([]llm.Event, error) {
 	var c chunk
 	if err := json.Unmarshal(body, &c); err != nil || rawjson.Object(body) == nil {
@@ -356,7 +378,10 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	if d.finish == nil {
 		d.finish = &llm.Finish{Reason: llm.FinishOther}
 	}
-	end, _ := d.Close()
+	end, err := d.Close()
+	if err != nil {
+		return nil, err
+	}
 	return append(out, end...), nil
 }
 

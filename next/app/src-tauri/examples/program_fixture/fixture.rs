@@ -160,6 +160,14 @@ struct Mode {
     describe_vault: Option<Value>,
     /// Adds to `summary`'s output what it holds at this descriptor or handle number (`probe`).
     probe: Option<u64>,
+    /// Its first this many starts in this folder end at once as `wsl.exe` ends a start WSL 1
+    /// refused: its error text, in UTF-16, on stderr (on stdout with `wsl_refuse_stdout`).
+    wsl_refuse: u64,
+    wsl_refuse_stdout: bool,
+    /// With `wsl_refuse`, on Unix: it ends at once, and the text reaches stdout 300 ms later
+    /// from a process it leaves in a session of its own, after it has been reaped.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    wsl_refuse_late: bool,
 }
 
 impl Mode {
@@ -198,6 +206,9 @@ impl Mode {
             exit_after_describe: v["exit_after_describe"] == true,
             describe_vault: v.get("describe_vault").cloned(),
             probe: v["probe"].as_u64(),
+            wsl_refuse: v["wsl_refuse"].as_u64().unwrap_or_default(),
+            wsl_refuse_stdout: v["wsl_refuse_stdout"] == true,
+            wsl_refuse_late: v["wsl_refuse_late"] == true,
         }
     }
 }
@@ -1371,6 +1382,39 @@ pub fn main() -> ! {
         }
     }
     let mode = Mode::read();
+    if mode.wsl_refuse > 0 {
+        let count = "wsl-refused";
+        let n: u64 = std::fs::read_to_string(count)
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or_default();
+        if n < mode.wsl_refuse {
+            let _ = std::fs::write(count, (n + 1).to_string());
+            let text: Vec<u8> = "Error: 0xd0000225\r\nError code: Wsl/Service/0xd0000225\r\n"
+                .encode_utf16()
+                .flat_map(|u| u.to_le_bytes())
+                .collect();
+            #[cfg(unix)]
+            if mode.wsl_refuse_late {
+                // SAFETY: nothing else runs in this process yet; the child only sleeps, writes
+                // and ends.
+                if unsafe { libc::fork() } == 0 {
+                    unsafe { libc::setsid() };
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    let _ = std::io::stdout().write_all(&text);
+                    let _ = std::io::stdout().flush();
+                    unsafe { libc::_exit(0) };
+                }
+                std::process::exit(1);
+            }
+            if mode.wsl_refuse_stdout {
+                let _ = std::io::stdout().write_all(&text);
+            } else {
+                let _ = std::io::stderr().write_all(&text);
+            }
+            std::process::exit(1);
+        }
+    }
     let manifest: Value = std::fs::read("pluxy-extension.json")
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
