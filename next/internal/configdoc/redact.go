@@ -9,11 +9,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +25,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/stdotwork/pluxy/next/internal/legacy"
+	"github.com/stdotwork/pluxy/next/internal/private"
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -55,44 +58,44 @@ func NewRedactor() *Redactor {
 	return &Redactor{key: key}
 }
 
-// LoadKeyID returns a Redactor backed by the key stored at path, creating path (mode 0600)
-// with a new random key when it does not exist yet. A key kept on disk makes client key IDs
-// stable across restarts.
+// LoadKeyID returns a Redactor backed by the key stored at path, creating path with a new random
+// key when it does not exist yet. The state folder and key are readable only by core's user (and,
+// on Windows, SYSTEM): modes 0700 and 0600 on unix, and a protected access list on Windows. A key
+// kept on disk makes client key IDs stable across restarts.
 func LoadKeyID(path string) (*Redactor, error) {
-	if key, err := readKeyID(path); err == nil {
+	dir, name := filepath.Dir(path), filepath.Base(path)
+	if key, err := readKeyID(dir, name); err == nil {
 		return &Redactor{key: key}, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
 
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	root, err := openKeyRoot(dir, true)
+	if err != nil {
 		return nil, err
 	}
-	_ = os.Chmod(dir, 0o700)
+	defer root.Close()
 
 	key := make([]byte, KeyIDSize)
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
 	}
-	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	f, tmp, err := private.CreateTemp(root, dir, "."+name+".tmp-")
 	if err != nil {
 		return nil, err
 	}
-	tmp := f.Name()
 	cleanup := true
 	defer func() {
 		if cleanup {
-			_ = os.Remove(tmp)
+			_ = root.Remove(tmp)
 		}
 	}()
-	if _, err := f.Write(key); err != nil {
+	if n, err := f.Write(key); err != nil || n != len(key) {
 		_ = f.Close()
-		return nil, err
-	}
-	if err := f.Chmod(0o600); err != nil {
-		_ = f.Close()
-		return nil, err
+		if err != nil {
+			return nil, err
+		}
+		return nil, io.ErrShortWrite
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
@@ -102,46 +105,113 @@ func LoadKeyID(path string) (*Redactor, error) {
 		return nil, err
 	}
 
-	err = os.Link(tmp, path)
+	err = root.Link(tmp, name)
 	switch {
 	case err == nil:
-		_ = os.Remove(tmp)
+		_ = root.Remove(tmp)
 		cleanup = false
-		if d, derr := os.Open(dir); derr == nil {
-			_ = d.Sync()
-			_ = d.Close()
+		if err := private.SyncDir(root); err != nil {
+			return nil, err
 		}
 		return &Redactor{key: key}, nil
 	case errors.Is(err, fs.ErrExist):
-		existing, rerr := readKeyID(path)
+		existing, rerr := readKeyIDIn(root, dir, name)
 		if rerr != nil {
 			return nil, rerr
 		}
 		return &Redactor{key: existing}, nil
 	default:
 		// Filesystems without hardlink support fall back to atomic rename.
-		if rerr := os.Rename(tmp, path); rerr != nil {
+		if rerr := root.Rename(tmp, name); rerr != nil {
 			return nil, rerr
 		}
 		cleanup = false
+		if err := private.SyncDir(root); err != nil {
+			return nil, err
+		}
 		return &Redactor{key: key}, nil
 	}
 }
 
-func readKeyID(path string) ([]byte, error) {
-	info, err := os.Lstat(path)
+// openKeyRoot checks the state folder, makes it private, and opens it as a root.
+func openKeyRoot(dir string, create bool) (*os.Root, error) {
+	d := private.Dir{Path: dir}
+	checked, err := d.Open(create)
+	if err != nil {
+		return nil, err
+	}
+	if runtime.GOOS != "windows" {
+		if err := checked.Chmod(private.DirMode); err != nil {
+			checked.Close()
+			return nil, err
+		}
+	}
+	root, err := d.Root(checked)
+	checked.Close()
+	return root, err
+}
+
+func readKeyID(dir, name string) ([]byte, error) {
+	root, err := openKeyRoot(dir, false)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return readKeyIDIn(root, dir, name)
+}
+
+// readKeyIDIn reads name from root. A key whose own access list is not private, or whose unix
+// mode is wider than 0600, is written again as a private file before it is returned.
+func readKeyIDIn(root *os.Root, dir, name string) ([]byte, error) {
+	path := filepath.Join(dir, name)
+	info, err := root.Lstat(name)
 	if err != nil {
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
-	key, err := os.ReadFile(path)
+	f, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	if ok, owner, err := private.Owner(f); err != nil {
+		f.Close()
+		return nil, err
+	} else if !ok {
+		f.Close()
+		return nil, fmt.Errorf("%s is owned by %s, not by this user", path, owner)
+	}
+	filePrivate, err := private.FilePrivate(f)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	key, err := io.ReadAll(io.LimitReader(f, KeyIDSize+1))
+	if err == nil {
+		err = f.Close()
+	} else {
+		_ = f.Close()
+	}
 	if err != nil {
 		return nil, err
 	}
 	if len(key) != KeyIDSize {
 		return nil, fmt.Errorf("%s: expected %d-byte key, got %d bytes", path, KeyIDSize, len(key))
+	}
+	if !filePrivate || runtime.GOOS != "windows" && st.Mode().Perm() != private.FileMode {
+		if err := private.WriteFile(root, dir, "."+name+".tmp-", name, key); err != nil {
+			return nil, fmt.Errorf("making %s private: %w", path, err)
+		}
 	}
 	return key, nil
 }

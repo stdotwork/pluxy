@@ -11,9 +11,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/stdotwork/pluxy/next/internal/private"
 )
 
 const (
@@ -118,8 +121,19 @@ func openStore(opts Options, now func() time.Time, writeLine func(day string, li
 	s.keepDays.Store(int64(keepDays))
 
 	if s.dir != "" {
-		if info, err := os.Stat(s.dir); err == nil && !info.IsDir() {
-			return nil, fmt.Errorf("usage: %s is not a directory", s.dir)
+		// Check an existing folder before reading from it, and make it private on Windows. A
+		// missing folder is made when the first event is written.
+		checked, err := private.Dir{Path: s.dir}.Open(false)
+		if err == nil {
+			if runtime.GOOS != "windows" {
+				if err := checked.Chmod(private.DirMode); err != nil {
+					checked.Close()
+					return nil, err
+				}
+			}
+			checked.Close()
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
 		}
 		initialDay := s.now().UTC().Format(dayLayout)
 		s.prune()
@@ -381,6 +395,7 @@ type dayWriter struct {
 	dir           string
 	day           string
 	file          *os.File
+	root          *os.Root
 	lastPrunedDay string
 	writeLine     func(day string, line []byte) error
 	prune         func()
@@ -390,8 +405,12 @@ func (w *dayWriter) close() {
 	if w.file != nil {
 		_ = w.file.Close()
 		w.file = nil
-		w.day = ""
 	}
+	if w.root != nil {
+		_ = w.root.Close()
+		w.root = nil
+	}
+	w.day = ""
 }
 
 func (w *dayWriter) append(day string, line []byte) error {
@@ -404,11 +423,11 @@ func (w *dayWriter) append(day string, line []byte) error {
 			w.prune()
 		}
 		w.lastPrunedDay = day
-		f, err := openAppendFile(w.dir, filepath.Join(w.dir, day+daySuffix))
+		f, root, err := openAppendFile(w.dir, day+daySuffix)
 		if err != nil {
 			return err
 		}
-		w.file, w.day = f, day
+		w.file, w.root, w.day = f, root, day
 	}
 	n, err := w.file.Write(line)
 	if err != nil || n != len(line) {
@@ -421,54 +440,73 @@ func (w *dayWriter) append(day string, line []byte) error {
 	return nil
 }
 
-func openAppendFile(dir, path string) (*os.File, error) {
-	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("usage: %s is not a regular file", path)
+// openAppendFile opens name in the usage folder for appending. The folder is checked and made
+// private, and a new file is private from the moment it exists. The returned root keeps later
+// operations in that folder as it was checked.
+func openAppendFile(dir, name string) (*os.File, *os.Root, error) {
+	d := private.Dir{Path: dir}
+	checked, err := d.Open(true)
+	if err != nil {
+		return nil, nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if errors.Is(err, fs.ErrNotExist) {
-		if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
-			return nil, mkErr
+	if runtime.GOOS != "windows" {
+		if err := checked.Chmod(private.DirMode); err != nil {
+			checked.Close()
+			return nil, nil, err
 		}
-		_ = os.Chmod(dir, 0o700)
-		f, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	}
+	root, err := d.Root(checked)
+	checked.Close()
+	if err != nil {
+		return nil, nil, err
+	}
+	path := filepath.Join(dir, name)
+	if info, err := root.Lstat(name); err == nil && !info.Mode().IsRegular() {
+		root.Close()
+		return nil, nil, fmt.Errorf("usage: %s is not a regular file", path)
+	}
+	f, err := private.Create(root, dir, name)
+	if errors.Is(err, fs.ErrExist) {
+		f, err = root.OpenFile(name, os.O_RDWR|os.O_APPEND, 0)
+		if err == nil && runtime.GOOS != "windows" {
+			err = f.Chmod(private.FileMode)
+		}
 	}
 	if err != nil {
-		return nil, err
+		root.Close()
+		return nil, nil, err
 	}
 	st, err := f.Stat()
 	if err == nil {
 		var at os.FileInfo
-		if at, err = os.Lstat(path); err == nil && (!at.Mode().IsRegular() || !os.SameFile(st, at)) {
+		if at, err = root.Lstat(name); err == nil && (!at.Mode().IsRegular() || !os.SameFile(st, at)) {
 			err = fmt.Errorf("usage: %s is not a regular file", path)
 		}
 	}
 	if err == nil {
-		err = f.Chmod(0o600)
+		// One another account owns (put there before the folder was private) could be read by it.
+		var ok bool
+		var owner string
+		if ok, owner, err = private.Owner(f); err == nil && !ok {
+			err = fmt.Errorf("usage: %s is owned by %s, not by this user; move it away", path, owner)
+		}
 	}
 	if err != nil {
-		_ = f.Close()
-		return nil, err
+		f.Close()
+		root.Close()
+		return nil, nil, err
 	}
 	// If a prior crash left a partial last line without a trailing newline, terminate it once
 	// so the next appended event starts on a line of its own.
-	if st.Size() > 0 && !endsWithNewline(path) {
+	if st.Size() > 0 && !endsWithNewline(f, st.Size()) {
 		_, _ = f.Write([]byte{'\n'})
 	}
-	return f, nil
+	return f, root, nil
 }
 
-func endsWithNewline(path string) bool {
-	r, err := os.Open(path)
-	if err != nil {
-		return true
-	}
-	defer r.Close()
-	if _, err := r.Seek(-1, io.SeekEnd); err != nil {
-		return true
-	}
+func endsWithNewline(f *os.File, size int64) bool {
 	var buf [1]byte
-	if _, err := io.ReadFull(r, buf[:]); err != nil {
+	if _, err := f.ReadAt(buf[:], size-1); err != nil {
 		return true
 	}
 	return buf[0] == '\n'
@@ -695,22 +733,31 @@ func writeSummaryFileAtomic(sumDir, finalPath string, ds *daySummaryFile) error 
 		return err
 	}
 	b = append(b, '\n')
-	if err := os.MkdirAll(sumDir, 0o700); err != nil {
-		return err
-	}
-	_ = os.Chmod(sumDir, 0o700)
-	tmp, err := os.CreateTemp(sumDir, ds.Day+".json.tmp-*")
+	d := private.Dir{Path: sumDir}
+	checked, err := d.Open(true)
 	if err != nil {
 		return err
 	}
-	tmpPath := tmp.Name()
+	if runtime.GOOS != "windows" {
+		if err := checked.Chmod(private.DirMode); err != nil {
+			checked.Close()
+			return err
+		}
+	}
+	root, err := d.Root(checked)
+	checked.Close()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	name := filepath.Base(finalPath)
+	tmp, tmpName, err := private.CreateTemp(root, sumDir, "."+name+".tmp-")
+	if err != nil {
+		return err
+	}
 	cleanup := func() {
 		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		cleanup()
-		return err
+		_ = root.Remove(tmpName)
 	}
 	if n, err := tmp.Write(b); err != nil || n != len(b) {
 		cleanup()
@@ -720,14 +767,14 @@ func writeSummaryFileAtomic(sumDir, finalPath string, ds *daySummaryFile) error 
 		return io.ErrShortWrite
 	}
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
+		_ = root.Remove(tmpName)
 		return err
 	}
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		_ = os.Remove(tmpPath)
+	if err := root.Rename(tmpName, name); err != nil {
+		_ = root.Remove(tmpName)
 		return err
 	}
-	return nil
+	return private.SyncDir(root)
 }
 
 func (s *Store) collectTodayEvents(todayDay string, todayStart time.Time, incompleteToday bool, openSeq uint64, ringEvents []Event) []Event {
