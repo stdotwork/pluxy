@@ -475,7 +475,7 @@ Account `settings`, all optional:
 | `codex_identity` | Default `true`: send the Codex client's `User-Agent` and `originator`. |
 | `image_generation_tool` | Default `true`: offer the hosted `image_generation` tool, as today's core does (never to a free plan or a `-spark` model). |
 | `image_generation_off_models` | Default none: model names, or patterns with `*` and `?` (any case), that are not offered the `image_generation` tool. A tool the client lists itself stays. |
-| `codex_client_version` | Default `0.154.0`: the version the Codex client's `User-Agent` names when `codex_identity` is on. |
+| `codex_client_version` | Default `0.159.0`: the version in the Codex client's `User-Agent` when `codex_identity` is on, and in the ChatGPT model list's `client_version`. |
 | `prompt_cache_retention_passthrough` | Default `false`: send the client's `prompt_cache_retention` on, for an upstream that takes it (neither today's core nor the Codex client sends it to the ChatGPT backend, and a SIWC sign-in never sends it). |
 | `callback_listen` | Default `true`: let a browser or SIWC sign-in listen on port 1455. |
 | `images` | Default `true`: serve the Images API on the account (below). |

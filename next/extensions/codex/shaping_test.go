@@ -324,11 +324,11 @@ func TestCodexClientVersionSetting(t *testing.T) {
 		setIdentity(h, nil, s, account{})
 		return h.Get("User-Agent")
 	}
-	if got := ua(settings{}); !strings.HasPrefix(got, "codex-tui/0.154.0 (") || !strings.HasSuffix(got, "(codex-tui; 0.154.0)") {
+	if got := ua(settings{}); !strings.HasPrefix(got, "codex-tui/0.159.0 (") || !strings.HasSuffix(got, "(codex-tui; 0.159.0)") {
 		t.Errorf("default User-Agent %q", got)
 	}
 	got := ua(settingsFrom(t, `{"codex_client_version":"0.201.3-beta.1"}`))
-	if !strings.HasPrefix(got, "codex-tui/0.201.3-beta.1 (") || !strings.HasSuffix(got, "(codex-tui; 0.201.3-beta.1)") || strings.Contains(got, "0.154.0") {
+	if !strings.HasPrefix(got, "codex-tui/0.201.3-beta.1 (") || !strings.HasSuffix(got, "(codex-tui; 0.201.3-beta.1)") || strings.Contains(got, "0.159.0") {
 		t.Errorf("configured User-Agent %q", got)
 	}
 	for _, bad := range []string{`"0.1 2"`, `"1.0\r\nX: y"`, `"a/b"`, `" "`} {
