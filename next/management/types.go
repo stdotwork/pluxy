@@ -115,6 +115,23 @@ type RegistriesReply struct {
 	Registries []Registry `json:"registries"`
 }
 
+// Health is an account's health (Account.Health; the README's "Accounts").
+type Health = route.Health
+
+// Health states (Health.State) and where a block's end came from (Health.Source).
+const (
+	HealthOK         = route.HealthOK
+	HealthCooling    = route.HealthCooling
+	HealthExhausted  = route.HealthExhausted
+	HealthNeedsLogin = route.HealthNeedsLogin
+	HealthBanned     = route.HealthBanned
+	HealthDisabled   = route.HealthDisabled
+
+	SourceProvider   = route.SourceProvider
+	SourceBackoff    = route.SourceBackoff
+	SourceUnverified = route.SourceUnverified
+)
+
 // Account is an account as the management API lists it. It never holds a secret.
 type Account struct {
 	ID string `json:"id"`
@@ -160,6 +177,10 @@ type Account struct {
 	// fraction, a very large or very small exponent, an integer past 2^53), which a client that
 	// reads JSON numbers as float64, as a browser does, would write back changed.
 	SettingsInexact bool `json:"settings_inexact,omitempty"`
+
+	// Health is the account's state in one word, with when and why (route.Health): ok,
+	// cooling, exhausted, needs_login, banned or disabled.
+	Health Health `json:"health"`
 
 	// What routing knows about the account now (route.Runtime). An account that receives no
 	// requests (disabled, or waiting for a new login) has none of it.

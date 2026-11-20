@@ -674,6 +674,8 @@ func upstreamError(resp *http.Response, model string, modelLevelCooling bool) *l
 		// A redirect sameOrigin refused to follow.
 		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
 		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
+	case isAccountClosed(s, parsed.Error.Type, e.Message):
+		e.Code, e.Scope, e.Retryable = llm.CodeAccountClosed, llm.ScopeCredential, true
 	case s == http.StatusUnauthorized:
 		e.Code, e.Scope, e.Retryable = llm.CodeAuth, llm.ScopeCredential, true
 	case s == http.StatusForbidden:
@@ -724,4 +726,31 @@ func retryAfter(v string, now time.Time) int64 {
 		}
 	}
 	return 0
+}
+
+// isAccountClosed reports whether a 400, 401 or 403 reply says the organization or account has
+// been disabled, deactivated or suspended rather than refusing a single request.
+func isAccountClosed(status int, errType, msg string) bool {
+	if strings.EqualFold(strings.TrimSpace(errType), "account_deactivated") {
+		return true
+	}
+	if status != http.StatusBadRequest && status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return false
+	}
+	m := strings.ToLower(msg)
+	for _, s := range []string{
+		"organization has been disabled",
+		"account has been disabled",
+		"account has been deactivated",
+		"this account is deactivated",
+		"your account has been suspended",
+		"credential has been disabled",
+		"user has been disabled",
+		"account_deactivated",
+	} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
 }

@@ -1366,6 +1366,26 @@ the same scope leaves no block and no last error. Among eligible accounts, core 
 session's account (with session affinity on), then the highest `priority`, then picks by
 strategy.
 
+A reset the upstream names is used when it is between 1 second and 8 days away (the longest usage
+window of any supported provider is 7 days). A shorter one is held for 1 second. A longer one is
+not believed: the account is held for 30 minutes and checked after 15. The upstream's newest word
+replaces the block's end, sooner or later; a backoff core chose itself only moves a block later.
+A rate limit or quota block on an account or one of its models with more than 15 minutes left is
+checked every 15 minutes. The check reads the account's usage from its provider (the extension's
+`quota` call). A usage window covers a block on the whole account when it counts every request on
+the account, and a block on one model when it does that or counts that model's requests; a window
+that counts other models only, or a feature of the plan such as code review, covers neither (the
+extension says which; see `protocol/README.md`, "quota"). When no window that covers the block is
+full, the block ends; otherwise it lasts until the covering full window that resets last resets. An account with no usage reading, such as an API key, lets one
+request through at the check instead, and that request's outcome decides. A real request is never
+the check where a reading exists. A check that cannot be made leaves the block and is made again
+15 minutes later. Quota blocks are saved to `state/routing.json` beside the config file (mode
+0600) and read back at start, where each is checked at once, so a restart sends no requests to
+accounts whose usage ran out. A file core cannot read, or that another version wrote, is not
+loaded and is left as it is until a block must be saved; it is then moved to `routing.json.bad`. `pluxy account clear` (`POST /accounts/{id}/cooldown/reset`)
+still clears an account's blocks at once. Each account's `health` in `GET /accounts` sums this
+up in one word (see `management/README.md`, "Accounts").
+
 When every account is blocked, the reply tells the client how long is left in whole seconds,
 rounded up and at least 1 while anything is left: the message's "try again in 1s" (or `1m1s`),
 `Retry-After`, and the usage-limit reply's `reset_time`, `reset_seconds` and "reset after" all
@@ -1756,7 +1776,7 @@ send it as a bearer token. With a management key set, the config may set no acco
 | Request | Does |
 | --- | --- |
 | `GET /accounts` | Lists every account (`source` `config` or `login`), its credential `kind`, `state` (`active`, or `reauth_required` when the provider refused the grant), `disabled`, `expires_at`, the last renewal error and the last [account check](#account-checks); its routing fields (`priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `endpoint`), its own `proxy_url`, with `redacted` in place of a user name and password, and its
-[`headers`](#upstream-headers), with a placeholder in place of each secret value; and what routing knows about it now: `cooldowns` (each live block's `scope`, `credential`, `model` with its `model`, or `endpoint`; `kind`, `rate_limit`, `quota` or `cooldown` for failures without a reset time; `until`; `backoff_level`; and the `error` that set it), `cooldown_until` (when the latest block on the whole account ends; model blocks do not count), `last_error` and `last_error_at` (the latest failure that set a block, until a request on the account that started after it succeeds; like a cooldown, it is not cleared by a request that started earlier, and a failure from a request that started before a success on the account sets none) and `active_requests`. An account that gets no requests (disabled, or waiting for a login) has no routing state. An account added by login also shows its `settings`, with each secret replaced by a placeholder in the same form as `GET /config` (see [Changing the config through management](#changing-the-config-through-management)), by the same rules made stricter: everything below a key named like a secret is a secret, however deep; `settings_inexact` is `true` when they hold a number that a client reading numbers as float64 and writing back the shortest decimal for each, as a browser does, would change (such as `0.10000000000000001`, `1e-400` or `9007199254740993`). Never a secret. |
+[`headers`](#upstream-headers), with a placeholder in place of each secret value; its `health` (`state` `ok`, `cooling`, `exhausted`, `needs_login`, `banned` or `disabled`, with `until`, `why`, `source` and `next_check`; see `management/README.md`, "Accounts"); and what routing knows about it now: `cooldowns` (each live block's `scope`, `credential`, `model` with its `model`, or `endpoint`; `kind`, `rate_limit`, `quota` or `cooldown` for failures without a reset time; `until`; `backoff_level`; and the `error` that set it), `cooldown_until` (when the latest block on the whole account ends; model blocks do not count), `last_error` and `last_error_at` (the latest failure that set a block, until a request on the account that started after it succeeds; like a cooldown, it is not cleared by a request that started earlier, and a failure from a request that started before a success on the account sets none) and `active_requests`. An account that gets no requests (disabled, or waiting for a login) has no routing state. An account added by login also shows its `settings`, with each secret replaced by a placeholder in the same form as `GET /config` (see [Changing the config through management](#changing-the-config-through-management)), by the same rules made stricter: everything below a key named like a secret is a secret, however deep; `settings_inexact` is `true` when they hold a number that a client reading numbers as float64 and writing back the shortest decimal for each, as a browser does, would change (such as `0.10000000000000001`, `1e-400` or `9007199254740993`). Never a secret. |
 | `POST /accounts` | Starts a login that adds an account: `{"id": "work", "extension": "pluxy/codex", "method": "device", "input": {...}, ...}` plus any account fields from the config (`settings`, `models`, `priority`, ...). `extension` names the extension that signs in and owns the account; it may be left out while only one extension runs. Replies 202 with the login, usually carrying its first prompt (a URL or a device code). |
 | `GET /logins/{id}` | The login's state (`pending`, `done`, `failed`, `cancelled`), prompt or error. |
 | `POST /logins/{id}/input` | `{"input": {...}}`: what the user entered for the prompt, such as the redirect URL of a browser login. |

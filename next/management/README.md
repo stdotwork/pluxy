@@ -193,7 +193,13 @@ Every key of the config and every file of the auth folder is in exactly one of `
 
 `source` is `provider` when `until` is the provider's own word, `backoff` when core chose it, and
 `unverified` when the provider named a time core does not believe (more than 8 days away); such a block is
-checked within 15 minutes.
+held 30 minutes and checked within 15. A block on one of the account's models counts too, and `why` then
+names the model, except a model the account does not have (a 404), which says nothing about the account;
+the blocks themselves, that one too, stay in `cooldowns`. When several blocks hold the account, an
+`exhausted` one decides, then the one that ends last. `next_check` is when core next reads the account's
+usage from its provider; it is absent when no check is due, and while a check of an account without a usage
+reading waits for the one request it lets through. `pluxy account list` shows `state` (with
+`(unverified)`), `until` and `why` as its HEALTH, UNTIL and WHY columns.
 
 ### Models
 

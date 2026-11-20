@@ -179,3 +179,38 @@ func TestCacheBreakpoints(t *testing.T) {
 		}
 	}
 }
+
+// Disabled Claude account/organization replies map to account_closed (retryable,
+// credential-scoped) while per-request 403/400/401 refusals keep their own codes.
+func TestAccountClosedMapping(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		status    int
+		body      string
+		code      string
+		scope     string
+		retryable bool
+	}{
+		// Captured reply: https://github.com/router-for-me/CLIProxyAPI/issues/2442 (also #3409).
+		{"400 org disabled (captured, CLIProxyAPI #2442)", 400, `{"type":"error","error":{"type":"invalid_request_error","message":"This organization has been disabled."},"request_id":"req_011CZam6yhqAXwtsQmHZ4Yuc"}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
+		// From OmniRoute's classifier tests (tests/unit/anthropic-request-not-allowed-cooldown-escalation.test.ts:259), not a captured reply.
+		{"403 org disabled (from OmniRoute's classifier tests)", 403, `{"type":"error","error":{"type":"permission_error","message":"Your organization has been disabled."}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
+		// From CLIProxyAPI PR #3268 tests (https://github.com/router-for-me/CLIProxyAPI/pull/3268), not a captured reply.
+		{"400 account disabled (CLIProxyAPI PR #3268 tests)", 400, `{"type":"error","error":{"type":"invalid_request_error","message":"Account has been disabled"}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
+		// Guard: Anthropic OAuth 403 "Request not allowed" (from OmniRoute's classifier tests, authTerminalStatus.ts) is NOT a ban.
+		{"403 request not allowed guard", 403, `{"type":"error","error":{"type":"permission_error","message":"Request not allowed"}}`, llm.CodePermission, llm.ScopeCredential, true},
+		{"400 plain invalid request guard", 400, `{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}`, llm.CodeInvalidRequest, llm.ScopeRequest, false},
+		{"401 bad key guard", 401, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`, llm.CodeAuth, llm.ScopeCredential, true},
+	} {
+		e := upstreamError(response(c.status, nil, c.body), "claude-sonnet-4-5", false)
+		if e.Code != c.code || e.Scope != c.scope || e.Retryable != c.retryable {
+			t.Errorf("%s: got code=%s scope=%s retryable=%v, want code=%s scope=%s retryable=%v",
+				c.name, e.Code, e.Scope, e.Retryable, c.code, c.scope, c.retryable)
+		}
+	}
+	// Fast mode does not downgrade account_closed to scope request.
+	e := fastFailure(upstreamError(response(400, nil, `{"type":"error","error":{"type":"invalid_request_error","message":"This organization has been disabled."}}`), "claude-sonnet-4-5", false))
+	if e.Code != llm.CodeAccountClosed || e.Scope != llm.ScopeCredential {
+		t.Errorf("fastFailure(account_closed): got %+v, want account_closed on credential", e)
+	}
+}

@@ -243,17 +243,17 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.AccountsReply
 			return x.call(http.MethodGet, "/accounts", nil, nil, &r, func() {
-				rows := [][]string{{"ID", "EXTENSION", "SOURCE", "STATE", "COOLING UNTIL"}}
+				rows := [][]string{{"ID", "EXTENSION", "SOURCE", "HEALTH", "UNTIL", "WHY"}}
 				for _, a := range r.Accounts {
-					state := a.State
-					if a.Disabled {
-						state = "disabled"
+					health := dash(a.Health.State)
+					if a.Health.Source == management.SourceUnverified {
+						health += " (unverified)"
 					}
 					until := "-"
-					if a.CooldownUntil != nil {
-						until = a.CooldownUntil.Local().Format(time.DateTime)
+					if a.Health.Until != nil {
+						until = a.Health.Until.Local().Format(time.DateTime)
 					}
-					rows = append(rows, []string{a.ID, dash(a.Extension), a.Source, state, until})
+					rows = append(rows, []string{a.ID, dash(a.Extension), a.Source, health, until, dash(a.Health.Why)})
 				}
 				x.table(rows)
 			})

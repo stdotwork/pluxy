@@ -102,6 +102,8 @@ type Core struct {
 
 	checks *checks // each account's last check
 
+	routing *routing // routing's checks and saved blocks, from start
+
 	usage  *usage.Store   // the usage record, kept across reloads
 	logs   *logfile.Files // the logs folder
 	themes *themeStore    // stored UI themes and selected theme ID in state/themes
@@ -167,6 +169,7 @@ func Start(opts Options) (*Core, error) {
 		bgCancel()
 		return nil, err
 	}
+	c.initRouting()
 	if err := c.reload(true, "start"); err != nil {
 		bgCancel()
 		c.checks.stop()
@@ -178,6 +181,7 @@ func Start(opts Options) (*Core, error) {
 	c.creds.OnChange(c.accountsChanged)
 	c.creds.OnCredentialChange(c.credentialChanged)
 	c.startModelRefresh()
+	c.startRouting()
 	return c, nil
 }
 
@@ -585,9 +589,10 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 			c.discard(next, prev)
 			return nil, err
 		}
-		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved})
+		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved, OnReauth: func(id string) { c.state.Unban(id) }, OnRemove: func(id string) { c.state.Unban(id) }})
 	}
 	router.UseCredentials(c.creds)
+	router.UseReadings(readings{c})
 	pp, err := openPprof(cfg, prev)
 	if err != nil {
 		c.discard(next, prev)
@@ -655,6 +660,7 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	if prev != nil {
 		next.Router.CarryLists(prev.Router, sameAccountAndCred)
 		c.state.Retain(prev.Router, next.Router, sameAccount)
+		c.state.RetainBans(func(id string) bool { _, ok := c.account(next, id); return ok })
 	}
 	for id, g := range next.exts {
 		g.SetPolicy(policy(c.extensionConfig(next, id)))
@@ -678,6 +684,9 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	}
 	c.draining = append(c.draining, old...)
 	c.mu.Unlock()
+	if prev == nil && c.routing != nil {
+		c.loadRouting(c.routing)
+	}
 	swapPprof(next, prev)
 	c.checkAccounts(next, accounts)
 	for _, g := range old {
@@ -818,6 +827,7 @@ func (c *Core) Stop() {
 	c.stopped = true
 	c.bgCancel()
 	c.checks.stop()
+	c.stopRouting()
 	c.mu.Lock()
 	gens := append([]*host.Managed(nil), c.draining...)
 	c.mu.Unlock()
