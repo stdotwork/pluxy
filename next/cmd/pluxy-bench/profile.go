@@ -230,7 +230,11 @@ func RunProfileMode(ctx context.Context, nextRoot, dir string, specs []ScenarioS
 			return nil, err
 		}
 
-		res, runErr := RunSide(ctx, spec, true, proc.BaseURL, benchClientKey, "bench-messages", mock)
+		model := "bench-messages"
+		if spec.Translate {
+			model = "bench-chat"
+		}
+		res, runErr := RunSide(ctx, spec, true, proc.BaseURL, benchClientKey, model, mock)
 		for _, stop := range []string{coreStop, extStop} {
 			if err := os.WriteFile(stop, nil, 0o600); err != nil && runErr == nil {
 				runErr = fmt.Errorf("stopping %s profile: %w", spec.Name, err)
