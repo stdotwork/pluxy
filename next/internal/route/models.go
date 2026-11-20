@@ -560,10 +560,6 @@ func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 			if catalogue != nil {
 				if cm, ok := catalogue(a.Extension, a.Settings, n.Upstream); ok {
 					catModel = &cm
-				} else if n.Public != n.Upstream {
-					if cm, ok := catalogue(a.Extension, a.Settings, n.Public); ok {
-						catModel = &cm
-					}
 				}
 			}
 			m, maxOut, from := MergeModel(acctModel, catModel, extModel)

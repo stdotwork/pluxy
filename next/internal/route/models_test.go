@@ -514,3 +514,27 @@ func TestDevinModelsDoNotBorrowOpenAICatalogueData(t *testing.T) {
 		t.Errorf("devin/gpt-6-luna = %+v, want only its extension's 1000000/64000 limits and no capabilities", got)
 	}
 }
+
+func TestAccountAliasDoesNotUsePublicCatalogueEntry(t *testing.T) {
+	h := newHarness(t, Config{}, Account{
+		ID:        "local",
+		Extension: "pluxy/openai-compatible",
+		Models:    []ModelEntry{{Name: "my-local-llama", Alias: "gpt-5.6-luna"}},
+	})
+	h.r.UseCatalogue(catalogue.New(catalogue.Options{}).LookupFor)
+
+	var got *ServedModel
+	for _, m := range h.r.ServedModels(context.Background()) {
+		if m.ID == "gpt-5.6-luna" {
+			m := m
+			got = &m
+			break
+		}
+	}
+	if got == nil {
+		t.Fatal("gpt-5.6-luna alias missing from ServedModels")
+	}
+	if got.ContextLength != 0 || got.MaxOutputTokens != 0 || got.MaxCompletionTokens != 0 || got.Capabilities != nil || got.From != "" {
+		t.Errorf("gpt-5.6-luna alias = %+v, want no catalogue limits, capabilities or from", got)
+	}
+}
