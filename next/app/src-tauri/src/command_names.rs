@@ -70,4 +70,5 @@ pub const COMMANDS: &[&str] = &[
     "window_close",
     "privacy_get",
     "privacy_set",
+    "file_save",
 ];

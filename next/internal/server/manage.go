@@ -67,9 +67,11 @@ func setFields(v *AccountView, a route.Account, state *route.State, hold route.H
 	}
 	now := time.Now()
 	if state == nil {
-		v.Health = route.NewState().Health(a, now, hold)
+		state = route.NewState()
+		v.Health, v.PublicID = state.Health(a, now, hold), state.PublicID(a.ID)
 		return
 	}
+	v.PublicID = state.PublicID(a.ID)
 	v.Health = state.Health(a, now, hold)
 	rt := state.Runtime(a, now)
 	if !rt.CooldownUntil.IsZero() {
