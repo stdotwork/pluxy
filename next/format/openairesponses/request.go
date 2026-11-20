@@ -186,13 +186,54 @@ func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
 		return nil
 	}
 	var o struct {
-		Type string `json:"type"`
-		Name string `json:"name"`
+		Type  string                 `json:"type"`
+		Name  string                 `json:"name"`
+		Mode  string                 `json:"mode"`
+		Tools []responsesAllowedTool `json:"tools"`
 	}
-	if json.Unmarshal(raw, &o) == nil && o.Type == "function" && o.Name != "" && len(rawjson.Object(raw)) == 2 {
+	if json.Unmarshal(raw, &o) != nil {
+		return nil
+	}
+	if o.Type == "allowed_tools" {
+		return allowedToolChoice(o.Mode, o.Tools)
+	}
+	if o.Type == "function" && o.Name != "" && len(rawjson.Object(raw)) == 2 {
 		return &llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: o.Name}
 	}
 	return nil
+}
+
+// responsesAllowedTool is one entry of a tool choice's allowed_tools list: a function tool, named
+// in name, as Responses writes it. Responses writes the name flat, but function.name is read too,
+// as clients that share code with Chat write it.
+type responsesAllowedTool struct {
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
+}
+
+// allowedToolChoice reads a tool choice's allowed_tools list: its mode (auto or required) and the
+// function tools it names, as the model's allowed list. One that names anything else, or no tool,
+// is nil, so the choice stays whole in the request's fields rather than losing the entries the
+// model has no place for.
+func allowedToolChoice(mode string, tools []responsesAllowedTool) *llm.ToolChoice {
+	if len(tools) == 0 || (mode != llm.ToolChoiceAuto && mode != llm.ToolChoiceRequired) {
+		return nil
+	}
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		name := t.Name
+		if name == "" {
+			name = t.Function.Name
+		}
+		if t.Type != "function" || name == "" {
+			return nil
+		}
+		names = append(names, name)
+	}
+	return &llm.ToolChoice{Mode: mode, Allowed: names}
 }
 
 func parseTextFormat(raw json.RawMessage) *llm.ResponseFormat {

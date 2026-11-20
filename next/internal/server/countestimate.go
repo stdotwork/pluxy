@@ -70,6 +70,7 @@ func estimateText(req llm.Request) string {
 	}
 	if c := req.Options.ToolChoice; c != nil {
 		add(c.Mode, c.Name)
+		add(c.Allowed...)
 	}
 	return strings.Join(segs, "\n")
 }

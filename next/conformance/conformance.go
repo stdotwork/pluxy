@@ -1,7 +1,8 @@
 // Package conformance is the extension conformance kit, version 0. It starts a provider
 // extension exactly as core does and checks it against the extension protocol
 // (../protocol/README.md): the handshake, streamed and unstreamed replies, that a tool result
-// with media and an error flag is accepted and the call still finishes, cancellation, a crash,
+// with media and an error flag and a tool choice naming the tools the model may call are accepted
+// and the call still finishes, cancellation, a crash,
 // shutdown and structured errors; for an extension that
 // signs in to accounts, login and
 // credential refresh; for one that lists models, its model list; and, when its fixture arranges
@@ -189,6 +190,7 @@ func Run(t *testing.T, target Target) {
 	t.Run("stream", func(t *testing.T) { k.text(t, true) })
 	t.Run("no_stream", func(t *testing.T) { k.text(t, false) })
 	t.Run("tool_result", k.toolResult)
+	t.Run("allowed_tools", k.allowedTools)
 	t.Run("cancel", k.cancel)
 	t.Run("errors/rate_limited", func(t *testing.T) {
 		k.wantError(t, ScenarioRateLimited, llm.Error{Code: llm.CodeRateLimit, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 20000}, llm.ScopeModel)
@@ -368,6 +370,37 @@ func (k *kit) toolResult(t *testing.T) {
 				{Type: llm.PartText, Text: "Saved."},
 				{Type: llm.PartImage, URL: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="},
 			}})
+	s := ext.Generate(context.Background(), setup.Account, req)
+	defer s.Close()
+	evs := collect(t, s)
+	last := evs[len(evs)-1]
+	if last.Type != llm.EventFinish {
+		t.Fatalf("ended with %s: %v", last.Type, last.Error)
+	}
+	var text strings.Builder
+	for _, ev := range evs {
+		if ev.Type == llm.EventTextDelta {
+			text.WriteString(ev.Delta)
+		}
+	}
+	if text.String() != ReplyText {
+		t.Errorf("text = %q, want %q", text.String(), ReplyText)
+	}
+}
+
+// allowedTools checks that an extension accepts a tool choice that names the tools the model may
+// call (the allowed list protocol 0.26 added) with functions defined beside it, and the call still
+// finishes with the normal reply. The kit cannot see the extension's upstream request, so it does
+// not check that the list reaches it.
+func (k *kit) allowedTools(t *testing.T) {
+	ext := k.start(t)
+	setup := k.target.Prepare(t, ScenarioText)
+	req := request(true)
+	req.Tools = []llm.Tool{
+		{Name: "get_weather", Parameters: json.RawMessage(`{"type":"object"}`)},
+		{Name: "get_time", Parameters: json.RawMessage(`{"type":"object"}`)},
+	}
+	req.Options.ToolChoice = &llm.ToolChoice{Mode: llm.ToolChoiceRequired, Allowed: []string{"get_weather", "get_time"}}
 	s := ext.Generate(context.Background(), setup.Account, req)
 	defer s.Close()
 	evs := collect(t, s)

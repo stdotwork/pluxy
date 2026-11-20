@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.25
+# pluxy extension protocol, version 0.26
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -39,7 +39,8 @@ Version 0.24 adds a model's `capabilities`: what the model supports and when it 
 is deliberately small; later versions add more capabilities and operations without changing what
 is described here. An extension written for version 0 works unchanged with a core that speaks 0.24
 (see [Versioning](#versioning)). Version 0.25 adds a [tool result](#the-request)'s `content` parts
-and its `is_error` flag.
+and its `is_error` flag. Version 0.26 adds a [tool choice](#the-request)'s allowed tool list: the
+tools the model may choose from, where the client named a set rather than one tool.
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -781,10 +782,10 @@ version 0.
 | `stream` | Whether the client asked for a streamed reply. Core always receives events; this only tells the extension how the client is being served, in case the upstream call should match. |
 | `items` | The conversation, in order. |
 | `tools` | Function tools the model may call. `parameters` is a JSON Schema. |
-| `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it), `thinking_suffix` (version 0.2; see below). |
+| `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`; since 0.26 `allowed`: the tool names the model may choose from, with `mode` `auto` or `required`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it), `thinking_suffix` (version 0.2; see below). An extension below 0.26 cannot read `tool_choice.allowed`: core sends the choice without the list and keeps only the function tools the list names in `tools`, so the model can still call only those, and refuses the request as invalid when the list names none of them. |
 | `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`, and the headers the client names itself with: `user-agent`, `x-app`, `anthropic-dangerous-direct-browser-access`, `x-claude-code-session-id`, `x-client-request-id`, the `x-stainless-*` headers of Anthropic's SDKs, `x-client-app` and `x-anthropic-additional-protection`; and Claude Code's subagent, request and remote-session headers (`x-claude-code-agent-id`, `x-claude-code-parent-agent-id`, `x-claude-code-agent-type`, `x-claude-code-request-class`, `x-claude-code-prev-tool-durations`, `x-claude-code-compaction`, `x-claude-code-context-compacted`, `x-claude-remote-container-id`, `x-claude-remote-session-id`), which an extension should send upstream only for a request that names itself as Claude Code (`anthropicmessages.IsClaudeCode`: `x-app: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta); for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version`, `originator` and `user-agent`). |
 | `origin` | The request's top-level fields that have no place in the model (see Origin below). |
-| `drop_policy` | What to do when building a request would drop part of this one, whether core is building it for an extension below 0.25 or the extension is building the upstream request: `report` (default: send what can be sent and report the losses) or `reject` (refuse with `unsupported`; since 0.16 the error's `dropped` names what could not be carried, which the message may name too). |
+| `drop_policy` | What to do when building a request would drop part of this one, whether core is building it for an extension below a minor version it needs (0.25's tool result parts) or the extension is building the upstream request: `report` (default: send what can be sent and report the losses) or `reject` (refuse with `unsupported`; since 0.16 the error's `dropped` names what could not be carried, which the message may name too). |
 | `caller` | Version 0.8. A value that stands for the client key the request came with: the same for every request with that key to this extension, different for another key or another extension, and not derivable from the key (core derives it with a secret it makes each time it starts, so it changes when core restarts). Absent when the client sent no key. Core sends it with `generate`, `count_tokens` and `endpoint` calls, to every extension. An extension that keeps state from replies across requests, such as reasoning to put back into a later turn, keys that state by `caller`, so one client never gets another's. |
 
 Item types:
@@ -1437,7 +1438,7 @@ extension below 0.23 gets none: it cannot promise alive frames.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.25. An extension reports the minor version it
+raise the minor version: this document is version 0.26. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1470,8 +1471,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.23 | [Alive frames](#alive-frames): the call's and turn's `alive` and the `alive` frame; core's `extension_timeout`. |
 | 0.24 | A model's `capabilities` ([`models`](#models)). |
 | 0.25 | A [tool result](#the-request)'s `content` parts and `is_error`. |
+| 0.26 | A [tool choice](#the-request)'s `allowed` tool list. |
 
-## What version 0.25 leaves out
+## What version 0.26 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

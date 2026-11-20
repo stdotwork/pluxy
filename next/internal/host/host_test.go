@@ -46,6 +46,11 @@ func fakeExtension(mode string) {
 		toolResultEcho(minor)
 		return
 	}
+	if m, ok := strings.CutPrefix(mode, "allowed-tools-"); ok {
+		minor, _ := strconv.Atoi(m)
+		toolChoiceEcho(minor)
+		return
+	}
 	if mode == "echo-credential" {
 		echoCredential()
 		return

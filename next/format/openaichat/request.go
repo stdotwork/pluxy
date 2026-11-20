@@ -205,6 +205,16 @@ func parseTool(raw json.RawMessage, path string) (llm.Tool, error) {
 	}, nil
 }
 
+// chatAllowedTool is one entry of a tool choice's allowed_tools list: a function, named in
+// function.name as Chat writes it or, as some clients write it, in name.
+type chatAllowedTool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
+	Name string `json:"name"`
+}
+
 func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
@@ -219,12 +229,47 @@ func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
 		Function struct {
 			Name string `json:"name"`
 		} `json:"function"`
+		AllowedTools *struct {
+			Mode  string            `json:"mode"`
+			Tools []chatAllowedTool `json:"tools"`
+		} `json:"allowed_tools"`
 	}
-	if json.Unmarshal(raw, &o) == nil && o.Type == "function" && o.Function.Name != "" && len(rawjson.Object(raw)) == 2 &&
+	if json.Unmarshal(raw, &o) != nil {
+		return nil
+	}
+	if o.Type == "allowed_tools" {
+		return allowedToolChoice(o.AllowedTools)
+	}
+	if o.Type == "function" && o.Function.Name != "" && len(rawjson.Object(raw)) == 2 &&
 		len(rawjson.Object(rawjson.Object(raw)["function"])) == 1 {
 		return &llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: o.Function.Name}
 	}
 	return nil
+}
+
+// allowedToolChoice reads a tool choice's allowed_tools object: its mode (auto or required) and
+// the function tools it names, as the model's allowed list. One that names anything else, or no
+// tool, is nil, so the choice stays whole in the request's fields rather than losing the entries
+// the model has no place for.
+func allowedToolChoice(o *struct {
+	Mode  string            `json:"mode"`
+	Tools []chatAllowedTool `json:"tools"`
+}) *llm.ToolChoice {
+	if o == nil || len(o.Tools) == 0 || (o.Mode != llm.ToolChoiceAuto && o.Mode != llm.ToolChoiceRequired) {
+		return nil
+	}
+	names := make([]string, 0, len(o.Tools))
+	for _, t := range o.Tools {
+		name := t.Function.Name
+		if name == "" {
+			name = t.Name
+		}
+		if t.Type != "function" || name == "" {
+			return nil
+		}
+		names = append(names, name)
+	}
+	return &llm.ToolChoice{Mode: o.Mode, Allowed: names}
 }
 
 func parseResponseFormat(raw json.RawMessage) *llm.ResponseFormat {
@@ -832,6 +877,13 @@ func joinReasoning(have, next string) string {
 }
 
 func encodeToolChoice(tc *llm.ToolChoice) any {
+	if len(tc.Allowed) > 0 {
+		tools := make([]any, 0, len(tc.Allowed))
+		for _, name := range tc.Allowed {
+			tools = append(tools, map[string]any{"type": "function", "function": map[string]string{"name": name}})
+		}
+		return map[string]any{"type": "allowed_tools", "allowed_tools": map[string]any{"mode": tc.Mode, "tools": tools}}
+	}
 	if tc.Mode == llm.ToolChoiceTool {
 		return map[string]any{"type": "function", "function": map[string]string{"name": tc.Name}}
 	}

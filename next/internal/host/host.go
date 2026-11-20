@@ -648,6 +648,12 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		s.fail(perr)
 		return s
 	}
+	req, allowedErr := downgradeAllowedTools(e.info.ProtocolMinor, req)
+	if allowedErr != nil {
+		s := &Stream{}
+		s.fail(allowedErr)
+		return s
+	}
 	redact := protocol.NewRedactor(append(e.holdAccount(account), proxy)...)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
