@@ -330,6 +330,11 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 		fail(ev.Error)
 		return
 	}
+	if g.RequestLog == nil || !g.RequestLog.All {
+		// The reply began: unless every request is logged, its log no longer needs the body,
+		// which would otherwise stay in memory while the reply streams.
+		t.body = nil
+	}
 	var request *llm.Translation
 	if ev.Type == llm.EventResponseStart {
 		request = ev.Response.Translation
