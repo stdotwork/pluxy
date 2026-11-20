@@ -2130,8 +2130,9 @@ WebSocket turns. A WebSocket warmup (`generate: false`) that core answers itself
 upstream and is not recorded. Token counts (`count_tokens`, `:countTokens`) generate nothing
 and are not recorded. An event holds the request's trace ID (`id`, the `X-CPA-TRACE-ID` of its reply),
 when it arrived, the `endpoint`, whether it streamed, the `model` the client asked for (without a
-thinking suffix) and the account's own name for it when that differs (`upstream_model`: an alias
-or prefix resolved), the `provider` (extension) and `account` its last attempt went to, the
+thinking suffix), the account's own name for it when that differs (`upstream_model`: an alias
+or prefix resolved) and the model the upstream reply says served it when the reply names one
+(`served_model`), the `provider` (extension) and `account` its last attempt went to, the
 client key's `key_id` (the `id` `GET /client-keys` lists it under, never the key), the
 `client_ip` it came from (the connection's peer, or the client a trusted proxy names; see
 `trusted_proxies`), whether it `failed` with which `error_code`, the HTTP `status` of the reply, `latency_ms`, and the `tokens`

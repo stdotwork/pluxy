@@ -265,7 +265,7 @@ reading waits for the one request it lets through. `pluxy account list` shows `s
 | Call | Command | What it does |
 | --- | --- | --- |
 | `GET /usage` | `pluxy usage [--since 7d] [--until t] [--by model\|account\|key\|provider] [--model m] [--account a] [--client-key k]` | Totals, breakdowns (`by` + `breakdown` alongside `models`, `providers`, `accounts`, `keys`) and a time series (`1h` buckets for ranges up to 2 days / 48 hours, `24h` beyond, unless `bucket` is given; `1m` / 60 steps when no range is given). **Changed**: reaches back across all usage files kept on disk (`usage.keep_days`, default 90), reading closed UTC days from hourly `usage/summary/YYYY-MM-DD.json` files (stays when `.jsonl` files are pruned) and today from memory / `usage/YYYY-MM-DD.jsonl`. Also accepts `key` as an alias for `key_id` |
-| `GET /usage/events` | `pluxy usage events [--after seq \| --before [seq]] [--limit n] [--since t] [--until t] [--model m] [--account a] [--provider p] [--client-key k]` | The recorded requests, oldest first with `after` or newest first with `before`. **new** fields per event: `attempts`, `chain_step` |
+| `GET /usage/events` | `pluxy usage events [--after seq \| --before [seq]] [--limit n] [--since t] [--until t] [--model m] [--account a] [--provider p] [--client-key k]` | The recorded requests, oldest first with `after` or newest first with `before`. Each event names the requested `model`, the routed account's `upstream_model` when it differs, and the `served_model` the upstream reply names, when it names one. **new** fields per event: `attempts`, `chain_step` |
 
 Closed days are counted by whole UTC hours, so a `since` or `until` inside an hour on a closed day counts that whole hour.
 

@@ -35,6 +35,7 @@ type usageEvent struct {
 	Stream        bool        `json:"stream"`
 	Model         string      `json:"model"`
 	UpstreamModel string      `json:"upstream_model"`
+	ServedModel   string      `json:"served_model"`
 	Provider      string      `json:"provider"`
 	Account       string      `json:"account"`
 	KeyID         string      `json:"key_id"`
@@ -177,13 +178,14 @@ func TestUsageRecordsRequests(t *testing.T) {
 	}
 	plain, streamed, refused := p.Events[0], p.Events[1], p.Events[2]
 	if plain.ID != trace || plain.Endpoint != "/v1/chat/completions" || plain.Stream || plain.Model != "gpt-4o" ||
-		plain.UpstreamModel != "" || plain.Provider != "pluxy/openai-compatible" || plain.Account != "upstream-1" ||
+		plain.UpstreamModel != "" || plain.ServedModel != "gpt-test-upstream" || plain.Provider != "pluxy/openai-compatible" || plain.Account != "upstream-1" ||
 		plain.KeyID != id1 || plain.ClientIP != "127.0.0.1" || plain.Failed || plain.Status != 200 || plain.ErrorCode != "" ||
 		!i64Is(plain.Tokens.Input, 9) || !i64Is(plain.Tokens.Output, 3) || !i64Is(plain.Tokens.Total, 12) ||
 		plain.Timestamp.Before(start) || plain.Timestamp.After(time.Now()) || plain.LatencyMS < 0 {
 		t.Errorf("plain request's event: %+v", plain)
 	}
-	if !streamed.Stream || streamed.KeyID != id2 || streamed.ClientIP != "127.0.0.1" || streamed.Failed || streamed.Status != 200 || !i64Is(streamed.Tokens.Total, 12) ||
+	if !streamed.Stream || streamed.KeyID != id2 || streamed.ClientIP != "127.0.0.1" || streamed.Failed || streamed.Status != 200 ||
+		streamed.Model != "gpt-4o" || streamed.ServedModel != "gpt-test-upstream" || !i64Is(streamed.Tokens.Total, 12) ||
 		streamed.Seq <= plain.Seq {
 		t.Errorf("streamed request's event: %+v", streamed)
 	}
