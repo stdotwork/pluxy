@@ -2,6 +2,7 @@ package openaichat
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -36,7 +37,14 @@ func TestAllowedToolsParsedAndWrittenBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"function","function":{"name":"get_weather"}}]}}`
-	if string(out.ToolChoice) != compactJSON(t, want) {
+	var got, w any
+	if err := json.Unmarshal(out.ToolChoice, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(want), &w); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, w) {
 		t.Errorf("tool_choice = %s, want %s", out.ToolChoice, want)
 	}
 }

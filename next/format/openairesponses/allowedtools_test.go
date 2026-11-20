@@ -2,6 +2,7 @@ package openairesponses
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -36,7 +37,14 @@ func TestAllowedToolsParsedAndWrittenBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"get_weather"}]}`
-	if string(out.ToolChoice) != want {
+	var got, w any
+	if err := json.Unmarshal(out.ToolChoice, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(want), &w); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, w) {
 		t.Errorf("tool_choice = %s, want %s", out.ToolChoice, want)
 	}
 }
