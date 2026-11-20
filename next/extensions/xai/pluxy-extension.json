@@ -2,6 +2,8 @@
   "manifest_version": 0,
   "id": "pluxy/xai",
   "version": "0.1.0",
+  "title": "Grok (xAI)",
+  "summary": "xAI's Grok models with an xAI API key or a Grok account.",
   "protocol": [0],
   "programs": {
     "linux/amd64": "xai",

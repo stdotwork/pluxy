@@ -242,8 +242,9 @@ func TestClaudeAPIKey(t *testing.T) {
 	srv := claudetest.New(t)
 	key := srv.IssueKey()
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "claude", "pluxy-extension.json"),
 			"accounts": []any{map[string]any{

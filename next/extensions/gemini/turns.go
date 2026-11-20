@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+
+	"github.com/stdotwork/pluxy/next/format/geminigenerate"
 )
 
 // emptyUserTurn is the turn Google needs where a request has no user turn to start or end with.
@@ -16,6 +18,10 @@ const emptyUserTurn = `{"role":"user","parts":[{"text":""}]}`
 //   - a request whose last turn is the model's gets an empty user turn after it, except a last
 //     turn made of function responses, which Google answers; a function response that carries an
 //     image or file is not answered, so it gets the user turn too;
+//   - function responses go in the order of the calls they answer, and one with no name takes its
+//     call's name (geminigenerate.OrderFunctionResponses): Gemini matches them by position. A
+//     translated request has this from geminigenerate.EncodeRequest; a Gemini client's own gets
+//     it here;
 //   - on Vertex AI, trailing model turns made only of thoughts (a replayed reasoning item) are
 //     dropped first, keeping at least one turn. In a request translated from another format, a
 //     replayed reasoning item reaches Google as an empty text part carrying only its thought
@@ -37,7 +43,7 @@ func fixTurns(body []byte, vertex, stream, translated bool) []byte {
 	if json.Unmarshal(m["contents"], &contents) != nil || len(contents) == 0 {
 		return body
 	}
-	changed := false
+	contents, changed := geminigenerate.OrderFunctionResponses(contents)
 	lead := func() {
 		if turnRole(contents[0]) == "model" {
 			contents = append([]json.RawMessage{json.RawMessage(emptyUserTurn)}, contents...)

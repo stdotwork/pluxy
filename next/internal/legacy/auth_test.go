@@ -122,7 +122,7 @@ func TestReadAuthDir(t *testing.T) {
 	for _, f := range files {
 		got[f.Record.ID] = f
 	}
-	if len(got) != 9 {
+	if len(got) != 8 {
 		t.Fatalf("read %d accounts, want 9: %v", len(got), got)
 	}
 
@@ -170,18 +170,6 @@ func TestReadAuthDir(t *testing.T) {
 	// replies, so plain fields such as the project would be cut out of model output.
 	equalJSON(t, v.Record.Credential.Data, `{"client_email": "sa@my-project.iam.gserviceaccount.com", "private_key": `+mustJSON(key)+`}`)
 
-	ag := got["antigravity-user-example.com"]
-	if ag.Record.Extension != Antigravity || ag.Record.Label != "user@example.com" {
-		t.Errorf("antigravity record: %+v", ag.Record)
-	}
-	agc := ag.Record.Credential
-	if agc.Kind != protocol.CredentialOAuth || agc.AccessToken != "fake-ag-access" || agc.RefreshToken != "fake-ag-refresh" ||
-		agc.ExpiresAt != exp.Unix() || agc.RefreshAt != exp.Add(-30*time.Minute).Unix() {
-		t.Errorf("antigravity credential: %+v", agc)
-	}
-	equalJSON(t, agc.Data, `{"project_id": "proj-1"}`)
-	equalJSON(t, ag.Record.Account.Settings, `{"base_url": "http://127.0.0.1:2"}`)
-
 	x := got["xai-user-ab12"]
 	xc := x.Record.Credential
 	if x.Record.Extension != XAI || x.Record.Label != "grok@example.com" || xc.Kind != protocol.CredentialOAuth ||
@@ -217,17 +205,18 @@ func TestReadAuthDir(t *testing.T) {
 		reasons[s.File] = s.Reason
 	}
 	for file, want := range map[string]string{
-		"devin-empty.json": "it holds no token",
-		"gemini-old.json":  "today's core does not load it either",
-		"notype.json":      "today's core does not load it either",
-		"broken.json":      "not a JSON object",
-		"codex-empty.json": "it holds no token",
+		"antigravity-user@example.com.json": "pluxy no longer ships the Antigravity provider",
+		"devin-empty.json":                  "it holds no token",
+		"gemini-old.json":                   "today's core does not load it either",
+		"notype.json":                       "today's core does not load it either",
+		"broken.json":                       "not a JSON object",
+		"codex-empty.json":                  "it holds no token",
 	} {
 		if reasons[file] != want {
 			t.Errorf("%s skipped for %q, want %q", file, reasons[file], want)
 		}
 	}
-	if len(skipped) != 5 {
+	if len(skipped) != 6 {
 		t.Errorf("skipped %v", skipped)
 	}
 }

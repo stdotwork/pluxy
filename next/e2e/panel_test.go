@@ -121,14 +121,3 @@ func TestPanelIsServedWithTheManagementAPI(t *testing.T) {
 		t.Errorf("GET /panelx: status %d, want 404", resp.StatusCode)
 	}
 }
-
-// Without a management key the management API is off, and so is the panel.
-func TestPanelIsOffWithoutManagementKey(t *testing.T) {
-	needPanel(t)
-	base := startCore(t, answeringUpstream(t))
-	for _, p := range []string{"/panel", "/panel/"} {
-		if resp, _ := get(t, "GET", base+p); resp.StatusCode != http.StatusNotFound {
-			t.Errorf("GET %s without a management key: status %d, want 404", p, resp.StatusCode)
-		}
-	}
-}

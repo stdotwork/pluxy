@@ -2,6 +2,9 @@
   "manifest_version": 1,
   "id": "pluxy/omp-setup",
   "version": "0.1.0",
+  "title": "Oh My Pi",
+  "summary": "Points Oh My Pi at pluxy by editing its model and config files, with a backup to undo it.",
+  "kind": "client",
   "app": {
     "version": 0,
     "tier": "native",

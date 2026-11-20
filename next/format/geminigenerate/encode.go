@@ -74,7 +74,8 @@ type outContent struct {
 // returns what it could not carry over. System and developer messages become the system
 // instruction; consecutive items of one role become one content (assistant items are the model's);
 // tool calls become functionCall parts and their results functionResponse parts named after the
-// call. A function call Gemini did not issue carries SkipSignature. Reasoning from another
+// call, in the order of the calls they answer. A function call Gemini did not issue carries
+// SkipSignature. Reasoning from another
 // provider cannot be replayed (Gemini checks thought signatures), so it is dropped and reported,
 // as is the reasoning effort (thinking settings depend on the model; the Gemini provider sets
 // them). It does not look at req.Native; callers that can pass the native body through do so
@@ -256,6 +257,11 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		}
 	}
 	flush()
+	for i := 1; i < len(contents); i++ {
+		if contents[i-1].role == "model" && contents[i].role != "model" {
+			contents[i].parts, _ = orderResponses(callsOf(contents[i-1].parts), contents[i].parts)
+		}
+	}
 	if len(system) > 0 {
 		out["systemInstruction"] = map[string]any{"parts": system}
 	}

@@ -15,7 +15,7 @@ import (
 // An extension timing too large for a time.Duration is refused, not wrapped into a negative
 // duration.
 func TestConfigRefusesHugeTimings(t *testing.T) {
-	cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"extension":{"manifest":"m.json","accounts":[{"id":"a"}],"restart":{"stable_ms":9223372036855}}}`
+	cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","extension":{"manifest":"m.json","accounts":[{"id":"a"}],"restart":{"stable_ms":9223372036855}}}`
 	if _, err := ParseConfig([]byte(cfg), "/tmp/config.json"); err == nil || !strings.Contains(err.Error(), "timings") {
 		t.Errorf("ParseConfig = %v, want an error about the timings", err)
 	}
@@ -26,7 +26,7 @@ func TestConfigRefusesHugeTimings(t *testing.T) {
 // twice, and one name per model, still load.
 func TestConfigRefusesRepeatedModelAlias(t *testing.T) {
 	cfg := func(models string) string {
-		return `{"listen":"127.0.0.1:0","client_keys":["k"],"extension":{"manifest":"m.json","accounts":[{"id":"pool","models":` + models + `}]}}`
+		return `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","extension":{"manifest":"m.json","accounts":[{"id":"pool","models":` + models + `}]}}`
 	}
 	_, err := ParseConfig([]byte(cfg(`[{"name":"up-a","alias":"pub"},{"name":"up-b","alias":"pub"}]`)), "/tmp/config.json")
 	if err == nil || !strings.Contains(err.Error(), `"pub"`) || !strings.Contains(err.Error(), `"pool"`) {
@@ -45,7 +45,7 @@ func TestConfigRefusesRepeatedModelAlias(t *testing.T) {
 // token_count_estimate is on unless the config turns it off, in a JSON config and, under the same
 // name, in a config.yaml. A value that is not a boolean is refused.
 func TestConfigTokenCountEstimate(t *testing.T) {
-	const base = `"listen":"127.0.0.1:0","client_keys":["k"],"extension":{"manifest":"m.json","accounts":[{"id":"a"}]}`
+	const base = `"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","extension":{"manifest":"m.json","accounts":[{"id":"a"}]}`
 	for _, c := range []struct {
 		name, file, cfg string
 		want, bad       bool
@@ -53,8 +53,8 @@ func TestConfigTokenCountEstimate(t *testing.T) {
 		{"absent", "config.json", `{` + base + `}`, true, false},
 		{"on", "config.json", `{` + base + `,"token_count_estimate":true}`, true, false},
 		{"off", "config.json", `{` + base + `,"token_count_estimate":false}`, false, false},
-		{"off in a config.yaml", "config.yaml", "api-keys: [k]\nclaude-api-key: [{api-key: x}]\ntoken_count_estimate: false\n", false, false},
-		{"absent in a config.yaml", "config.yaml", "api-keys: [k]\nclaude-api-key: [{api-key: x}]\n", true, false},
+		{"off in a config.yaml", "config.yaml", "api-keys: [k]\nremote-management: {secret-key: m}\nclaude-api-key: [{api-key: x}]\ntoken_count_estimate: false\n", false, false},
+		{"absent in a config.yaml", "config.yaml", "api-keys: [k]\nremote-management: {secret-key: m}\nclaude-api-key: [{api-key: x}]\n", true, false},
 		{"not a boolean", "config.json", `{` + base + `,"token_count_estimate":"no"}`, false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -114,6 +114,7 @@ func TestConfigYAMLWithTodaysNames(t *testing.T) {
 host: 127.0.0.1
 port: 9100
 api-keys: [client-a]
+remote-management: {secret-key: m}
 auth-dir: ~/old-auths
 claude-api-key:
   - api-key: k
@@ -140,18 +141,20 @@ claude-api-key:
 		t.Errorf("routing %+v, want today's defaults: request_retry 0, max_wait_ms 0", r)
 	}
 
-	// A relative auth-dir is relative to the config file; with it, the config needs no
-	// account and no management key.
-	c, err = ParseConfig([]byte("auth-dir: auths\napi-keys: [k]\n"), "/srv/pluxy/config.yml")
+	// A relative auth-dir is relative to the config file.
+	c, err = ParseConfig([]byte("auth-dir: auths\napi-keys: [k]\nremote-management: {secret-key: m}\n"), "/srv/pluxy/config.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.AuthDir != "/srv/pluxy/auths" {
 		t.Errorf("auth dir %q", c.AuthDir)
 	}
-	// Without it, the usual check applies.
-	if _, err := ParseConfig([]byte("port: 9100\napi-keys: [k]\n"), "/srv/pluxy/config.yaml"); err == nil {
-		t.Error("a config.yaml with no account, no management key and no auth-dir was accepted")
+	// A config needs a management key, and no account: accounts can be added by login.
+	if _, err := ParseConfig([]byte("auth-dir: auths\napi-keys: [k]\n"), "/srv/pluxy/config.yaml"); err == nil || !strings.Contains(err.Error(), "remote-management: {secret-key:") {
+		t.Errorf("a config.yaml with no management key: %v, want a refusal saying how to add one", err)
+	}
+	if _, err := ParseConfig([]byte("port: 9100\napi-keys: [k]\nremote-management: {secret-key: m}\n"), "/srv/pluxy/config.yaml"); err != nil {
+		t.Errorf("a config.yaml with a management key and no account: %v", err)
 	}
 	// A JSON config is not read as YAML.
 	if _, err := ParseConfig([]byte("port: 9100\n"), "/srv/pluxy/config.json"); err == nil {
@@ -166,6 +169,7 @@ claude-api-key:
 func TestConfigYAMLPayloadText(t *testing.T) {
 	cfg := `
 api-keys: [k]
+remote-management: {secret-key: m}
 auth-dir: auths
 payload:
   override:
@@ -223,7 +227,7 @@ func TestConfigYAMLPayloadLikeOldCore(t *testing.T) {
 		{"raw null", "override-raw:\n    - models: [{name: m}]\n      params: {p: ~, q: 1}\n", `{"q":1}`, `payload.override-raw[0].params["p"]`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			cfg, err := ParseConfig([]byte("api-keys: [k]\nauth-dir: auths\npayload:\n  "+c.rules), "/srv/pluxy/config.yaml")
+			cfg, err := ParseConfig([]byte("api-keys: [k]\nremote-management: {secret-key: m}\nauth-dir: auths\npayload:\n  "+c.rules), "/srv/pluxy/config.yaml")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -274,7 +278,7 @@ func TestConfigYAMLPayloadNonJSONLikeOldCore(t *testing.T) {
 		{"a filter not-match with .inf excludes nothing", "filter:\n    - models: [{name: m, not-match: [{a: .inf}]}]\n      params: [a]\n", `{"a":1}`, `{}`, `requests.payload.filter[0].models[0]`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			cfg, err := ParseConfig([]byte("api-keys: [k]\nauth-dir: auths\npayload:\n  "+c.rules), "/srv/pluxy/config.yaml")
+			cfg, err := ParseConfig([]byte("api-keys: [k]\nremote-management: {secret-key: m}\nauth-dir: auths\npayload:\n  "+c.rules), "/srv/pluxy/config.yaml")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -333,7 +337,7 @@ func TestConfigNeedsAClientKey(t *testing.T) {
 }
 
 func TestConfigUsageKeepDays(t *testing.T) {
-	const base = `"listen":"127.0.0.1:0","client_keys":["k"],"extension":{"manifest":"m.json","accounts":[{"id":"a"}]}`
+	const base = `"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","extension":{"manifest":"m.json","accounts":[{"id":"a"}]}`
 	for _, tc := range []struct {
 		name, extra string
 		want        int
