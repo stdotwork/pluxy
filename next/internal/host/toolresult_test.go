@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -78,6 +79,21 @@ func richResult(policy string) llm.Request {
 	}}
 }
 
+// nextWithin returns next's event, failing the test if it takes longer than 10 seconds, the way
+// the conformance kit fails instead of waiting: a stream that never ends is a bug, not a wait.
+func nextWithin(t *testing.T, what string, next func() llm.Event) llm.Event {
+	t.Helper()
+	ch := make(chan llm.Event, 1)
+	go func() { ch <- next() }()
+	select {
+	case ev := <-ch:
+		return ev
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s: no event within 10s", what)
+		return llm.Event{}
+	}
+}
+
 // An extension before protocol minor 25 gets a tool result's text alone, and the reply's
 // translation report lists the image and the error flag as dropped beside the extension's own
 // losses; under the reject drop policy the request is refused before it is sent. From minor 25
@@ -102,28 +118,33 @@ func TestToolResultPartsDowngrade(t *testing.T) {
 			t.Fatalf("OpenSession: %+v", e)
 		}
 		defer sess.Close()
-		// first returns a call's first event, having read it to its end.
-		first := func(next func() llm.Event, close func()) llm.Event {
+		// first returns a call's first event, having read it to its end, and fails the test if
+		// an event does not come within 10 seconds: the fake extension answers one session
+		// turn only, so a change that lets a tool result's parts through leaves the second
+		// turn unanswered, and the test must fail there rather than hang.
+		first := func(name string, next func() llm.Event, close func()) llm.Event {
 			defer close()
-			ev := next()
-			for e := ev; !e.Terminal(); e = next() {
+			ev := nextWithin(t, name, next)
+			for e := ev; !e.Terminal(); e = nextWithin(t, name, next) {
 			}
 			return ev
 		}
 		for _, call := range []struct {
 			name string
-			next func(llm.Request) func() llm.Event
+			next func(llm.Request, string) llm.Event
 		}{
-			{"generate", func(r llm.Request) func() llm.Event {
-				return func() llm.Event { s := ext.Generate(ctx, acct, r); return first(s.Next, s.Close) }
+			{"generate", func(r llm.Request, name string) llm.Event {
+				s := ext.Generate(ctx, acct, r)
+				return first(name, s.Next, s.Close)
 			}},
-			{"session", func(r llm.Request) func() llm.Event {
-				return func() llm.Event { s := sess.Turn(ctx, acct, r); return first(s.Next, s.Close) }
+			{"session", func(r llm.Request, name string) llm.Event {
+				s := sess.Turn(ctx, acct, r)
+				return first(name, s.Next, s.Close)
 			}},
 		} {
 			name := fmt.Sprintf("%s at minor %d", call.name, c.minor)
 			req := richResult(llm.DropReport)
-			ev := call.next(req)()
+			ev := call.next(req, name)
 			if ev.Type != llm.EventResponseStart {
 				t.Fatalf("%s: first event %+v, want response.start", name, ev)
 			}
@@ -149,7 +170,7 @@ func TestToolResultPartsDowngrade(t *testing.T) {
 				t.Errorf("%s: the caller's request was changed: %+v", name, req.Items[1])
 			}
 			if c.minor < 25 {
-				ev := call.next(richResult(llm.DropReject))()
+				ev := call.next(richResult(llm.DropReject), name)
 				if ev.Type != llm.EventError || ev.Error.Code != llm.CodeUnsupported || !ev.Error.Retryable ||
 					!reflect.DeepEqual(ev.Error.Dropped, c.wantLosses[1:]) {
 					t.Errorf("%s, reject policy: %+v, want unsupported naming the dropped paths", name, ev)
