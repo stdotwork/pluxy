@@ -307,6 +307,14 @@ func startCoreBin(t *testing.T, bin, path string, args ...string) (string, *core
 // startCoreArgv is startCoreBin with the program's whole command line after its name.
 func startCoreArgv(t *testing.T, bin string, argv ...string) (string, *coreLog, error) {
 	t.Helper()
+	addr, logs, _, err := startCoreStoppable(t, bin, argv...)
+	return addr, logs, err
+}
+
+// startCoreStoppable is startCoreArgv that also returns a function that stops core and waits for
+// it to exit, as the test's cleanup does when it was not called.
+func startCoreStoppable(t *testing.T, bin string, argv ...string) (string, *coreLog, func(), error) {
+	t.Helper()
 	logs := &coreLog{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, bin, argv...)
@@ -337,7 +345,7 @@ func startCoreArgv(t *testing.T, bin string, argv ...string) (string, *coreLog, 
 		close(addr) // core exited
 		close(exited)
 	}()
-	t.Cleanup(func() {
+	stop := sync.OnceFunc(func() {
 		// A connection the client dialled but never sent a request on counts as busy to
 		// core's http.Server.Shutdown until it is 5 s old; closing the idle ones lets core
 		// stop at once.
@@ -345,14 +353,15 @@ func startCoreArgv(t *testing.T, bin string, argv ...string) (string, *coreLog, 
 		cancel()
 		<-exited
 	})
+	t.Cleanup(stop)
 	select {
 	case a, ok := <-addr:
 		if !ok {
-			return "", logs, errors.New("core exited before listening")
+			return "", logs, stop, errors.New("core exited before listening")
 		}
-		return a, logs, nil
+		return a, logs, stop, nil
 	case <-time.After(15 * time.Second):
-		return "", logs, errors.New("core did not report its listening address")
+		return "", logs, stop, errors.New("core did not report its listening address")
 	}
 }
 

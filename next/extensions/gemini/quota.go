@@ -154,6 +154,16 @@ func (g *googleError) reason() string {
 	return ""
 }
 
+// hasReason reports whether any entry in the error's details carries ErrorInfo reason r.
+func (g *googleError) hasReason(r string) bool {
+	for _, d := range g.Error.Details {
+		if d.Reason == r {
+			return true
+		}
+	}
+	return false
+}
+
 // retryDelay returns the RetryInfo delay (or ErrorInfo metadata.quotaResetDelay fallback) in
 // milliseconds, or 0.
 func (g *googleError) retryDelay() int64 {

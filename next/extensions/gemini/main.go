@@ -563,6 +563,10 @@ func upstreamErrorFor(ctx context.Context, resp *http.Response, model string, re
 		// A redirect sameOrigin refused to follow.
 		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
 		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
+	case s == http.StatusForbidden && parsed.hasReason("CONSUMER_SUSPENDED"):
+		e.Code, e.Scope, e.Retryable = llm.CodeAccountClosed, llm.ScopeCredential, true
+	case isAccountClosed(s, e.Message):
+		e.Code, e.Scope, e.Retryable = llm.CodeAccountClosed, llm.ScopeCredential, true
 	case s == http.StatusUnauthorized:
 		e.Code, e.Scope, e.Retryable = llm.CodeAuth, llm.ScopeCredential, true
 	case s == http.StatusBadRequest && (parsed.reason() == "API_KEY_INVALID" || strings.Contains(e.Message, "API key not valid")):
@@ -619,4 +623,25 @@ func retryAfter(v string, now time.Time) int64 {
 		}
 	}
 	return 0
+}
+
+// isAccountClosed reports whether a 401 or 403 reply says the account itself has been
+// deactivated, disabled or suspended (distinct from VALIDATION_REQUIRED verification prompts).
+func isAccountClosed(status int, msg string) bool {
+	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return false
+	}
+	m := strings.ToLower(msg)
+	for _, s := range []string{
+		"account_deactivated",
+		"account has been deactivated",
+		"this account is deactivated",
+		"account has been disabled",
+		"your account has been suspended",
+	} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
 }

@@ -104,15 +104,39 @@ func getJSON(ctx context.Context, cred *protocol.Credential, url string) (json.R
 }
 
 // usageWindows are the usage reply's named windows, in the order the old panel shows them. Claude
-// gives the length of none: the 5-hour window is named so, the others are weekly.
-var usageWindows = []struct{ key, id, label string }{
-	{"five_hour", "five_hour", "5-hour limit"},
-	{"seven_day", "seven_day", "Weekly limit"},
-	{"seven_day_oauth_apps", "seven_day_oauth_apps", "Weekly OAuth apps limit"},
-	{"seven_day_opus", "seven_day_opus", "Weekly Opus limit"},
-	{"seven_day_sonnet", "seven_day_sonnet", "Weekly Sonnet limit"},
-	{"seven_day_cowork", "seven_day_cowork", "Weekly Cowork limit"},
-	{"iguana_necktie", "seven_day_fable", "Weekly Fable limit"},
+// gives the length of none: the 5-hour window is named so, the others are weekly. What a window
+// counts: the shared 5-hour and weekly windows count every request on the account; a model
+// family's window counts the requests to that family's models (family); the OAuth apps' and
+// Cowork's windows count a feature of the plan (feature), not the account's requests in general.
+var usageWindows = []struct {
+	key, id, label string
+	family         string
+	feature        bool
+}{
+	{"five_hour", "five_hour", "5-hour limit", "", false},
+	{"seven_day", "seven_day", "Weekly limit", "", false},
+	{"seven_day_oauth_apps", "seven_day_oauth_apps", "Weekly OAuth apps limit", "", true},
+	{"seven_day_opus", "seven_day_opus", "Weekly Opus limit", "opus", false},
+	{"seven_day_sonnet", "seven_day_sonnet", "Weekly Sonnet limit", "sonnet", false},
+	{"seven_day_cowork", "seven_day_cowork", "Weekly Cowork limit", "", true},
+	{"iguana_necktie", "seven_day_fable", "Weekly Fable limit", "fable", false},
+}
+
+// familyModels returns the models of the catalogue (models.json) whose ID names family, such as
+// "sonnet": the models a weekly window of that family counts. A model outside the catalogue is
+// not among them, so routing does not hold it on the family's window.
+func familyModels(family string) []string {
+	var list protocol.ModelList
+	if json.Unmarshal(modelsJSON, &list) != nil {
+		return nil
+	}
+	var out []string
+	for _, m := range list.Models {
+		if strings.Contains(strings.ToLower(m.ID), family) {
+			out = append(out, m.ID)
+		}
+	}
+	return out
 }
 
 const (
@@ -134,7 +158,8 @@ type usageWindow struct {
 var dollarFields = []string{"limit_dollars", "used_dollars", "remaining_dollars", "utilization", "resets_at"}
 
 // usageLimits maps the usage reply to limits: the named windows, any other window counted in
-// dollars, and extra usage.
+// dollars, and extra usage. A window counted in dollars is a credit pool for one product (cloud
+// sessions and the like): a feature's limit.
 func usageLimits(u map[string]json.RawMessage) []protocol.QuotaLimit {
 	out := []protocol.QuotaLimit{}
 	known := map[string]bool{"extra_usage": true}
@@ -145,7 +170,7 @@ func usageLimits(u map[string]json.RawMessage) []protocol.QuotaLimit {
 		if !ok {
 			continue
 		}
-		id, label := w.id, w.label
+		id, label, family, feature := w.id, w.label, w.family, w.feature
 		secs := int64(weekSeconds)
 		if w.key == "five_hour" {
 			secs = fiveHourSeconds
@@ -153,18 +178,23 @@ func usageLimits(u map[string]json.RawMessage) []protocol.QuotaLimit {
 		if w.key == "iguana_necktie" {
 			if dollars {
 				// A credit pool: its amounts are dollars, and it is not a window of a known length.
-				id, label, secs = "cloud_session_credits", "Cloud session credits", 0
+				id, label, secs, family, feature = "cloud_session_credits", "Cloud session credits", 0, "", true
 			} else if fable != nil {
 				// The reply's list of scoped limits has the Fable window, with its own reset.
 				continue
 			}
 		}
-		out = append(out, win.limit(id, label, secs, dollars))
+		l := win.limit(id, label, secs, dollars)
+		l.Feature = feature
+		if family != "" {
+			l.Models = familyModels(family)
+		}
+		out = append(out, l)
 	}
 	if fable != nil {
 		used := clampPercent(*fable.Percent)
 		out = append(out, protocol.QuotaLimit{ID: "seven_day_fable", Label: "Weekly Fable limit", UsedPercent: &used,
-			ResetsAt: parseTime(fable.ResetsAt), WindowSeconds: weekSeconds})
+			ResetsAt: parseTime(fable.ResetsAt), WindowSeconds: weekSeconds, Models: familyModels("fable")})
 	}
 	// Other windows counted in dollars are listed by the name Claude gives them.
 	var keys []string
@@ -176,7 +206,9 @@ func usageLimits(u map[string]json.RawMessage) []protocol.QuotaLimit {
 	sort.Strings(keys)
 	for _, k := range keys {
 		if win, dollars, ok := readWindow(u[k]); ok && dollars {
-			out = append(out, win.limit(k, k, 0, true))
+			l := win.limit(k, k, 0, true)
+			l.Feature = true
+			out = append(out, l)
 		}
 	}
 	if l, ok := extraUsage(u["extra_usage"]); ok {
