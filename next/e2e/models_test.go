@@ -310,3 +310,79 @@ func TestModelListRefreshAndKeepLastGood(t *testing.T) {
 		t.Fatalf("POST /models/refresh unknown account = %d, want 404", code)
 	}
 }
+
+func TestClaudeAccountLiveModelList(t *testing.T) {
+	t.Parallel()
+	const liveKey = "sk-ant-api-e2e-live"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("X-Api-Key") != liveKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("Anthropic-Version") != "2023-06-01" {
+			t.Errorf("Anthropic-Version = %q, want 2023-06-01", r.Header.Get("Anthropic-Version"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+			"data": [
+				{
+					"type": "model",
+					"id": "claude-e2e-live-1",
+					"display_name": "Claude E2E Live 1",
+					"created_at": "2026-11-01T00:00:00Z",
+					"max_input_tokens": 400000,
+					"max_tokens": 32000
+				}
+			],
+			"has_more": false
+		}`)
+	}))
+	t.Cleanup(up.Close)
+
+	base := runCore(t, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "claude", "pluxy-extension.json"),
+			"accounts": []any{
+				map[string]any{
+					"id":         "live-claude",
+					"settings":   map[string]any{"base_url": up.URL},
+					"credential": map[string]any{"kind": "api_key", "api_key": liveKey},
+				},
+			},
+		},
+	})
+
+	code, raw := management(t, http.MethodGet, base, "/v0/management/accounts/live-claude/models")
+	if code != http.StatusOK {
+		t.Fatalf("GET /v0/management/accounts/live-claude/models: %d %s", code, raw)
+	}
+	var got struct {
+		From   string `json:"from"`
+		Models []struct {
+			ID                  string `json:"id"`
+			DisplayName         string `json:"display_name"`
+			ContextLength       int    `json:"context_length"`
+			MaxCompletionTokens int    `json:"max_completion_tokens"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode reply %s: %v", raw, err)
+	}
+	if got.From != "account" {
+		t.Errorf("from = %q, want account (body: %s)", got.From, raw)
+	}
+	if len(got.Models) != 1 || got.Models[0].ID != "claude-e2e-live-1" ||
+		got.Models[0].ContextLength != 400000 || got.Models[0].MaxCompletionTokens != 32000 {
+		t.Fatalf("models = %+v, want claude-e2e-live-1 with limits", got.Models)
+	}
+	if listed := listModels(t, base); !slices.Equal(listed, []string{"claude-e2e-live-1"}) {
+		t.Errorf("/v1/models = %v, want [claude-e2e-live-1]", listed)
+	}
+}

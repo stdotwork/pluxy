@@ -51,9 +51,9 @@ extern "C" {
 
 /// What runs the opened file f: macOS cannot execute a descriptor, so the path f has now
 /// (`F_GETPATH`, links resolved), once only root, this user and the `admin` group can change any
-/// folder on it, and only root and this user the file, by its mode or its access list (`secure`),
-/// and that path still names f (the same device and inode, with the size, mode and times f has
-/// now). A file put at the path f was opened from never runs: f runs by its own path, wherever it
+/// folder on it, and only root and this user the file, by its mode or its access list, each on a
+/// volume that keeps ownership (`secure`), and that path still names f (the same device and
+/// inode, with the size, mode and times f has now). A file put at the path f was opened from never runs: f runs by its own path, wherever it
 /// was renamed to, or is refused. Only a process of this user, or of an admin account, could swap
 /// it between this check and the exec.
 pub fn exec_target(f: &File) -> Result<PathBuf, String> {
@@ -105,6 +105,12 @@ const BY_PATH: &str =
 /// are read together (`status`), from `/` down to the file: a folder is read before what is below
 /// it, so a user who could swap something below it is refused for that folder, or, should they
 /// give up that right first, the swap is read as it is. A part that is not there is an error.
+///
+/// Each part must also be on a volume that keeps ownership (`ownership_ignored`): on one that
+/// ignores it, every owner, mode and access list read there is meaningless. The file's own volume
+/// is the one that matters most, but a folder above it on such a volume is refused too, even when
+/// the file is on a volume mounted below that folder: any user could rename the folder, or what it
+/// holds, and put another path in its place.
 pub fn secure(path: &Path) -> Result<(), String> {
     // SAFETY: geteuid has no preconditions.
     let me = unsafe { libc::geteuid() };
@@ -127,6 +133,9 @@ pub fn secure(path: &Path) -> Result<(), String> {
         if kind == libc::S_IFLNK {
             return refuse(p, "is a link");
         }
+        if let Some(volume) = ownership_ignored(p).map_err(|e| format!("{}: {e}", p.display()))? {
+            return Err(ownership_refusal(p, &volume));
+        }
         if !trusted_owner(sb.st_uid) {
             return refuse(p, "belongs to another user");
         }
@@ -144,7 +153,8 @@ pub fn secure(path: &Path) -> Result<(), String> {
             }
             if others_write(&sb) && !admins_write(&sb) {
                 let sticky = sb.st_mode & 0o1000 != 0;
-                let below = std::fs::symlink_metadata(parts[i + 1]).map_err(|e| e.to_string())?;
+                let below = std::fs::symlink_metadata(parts[i + 1])
+                    .map_err(|e| format!("{}: {e}", parts[i + 1].display()))?;
                 if !(sticky && trusted_owner(below.uid())) {
                     return refuse(p, "may be changed by other users");
                 }
@@ -156,6 +166,46 @@ pub fn secure(path: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The mount point of the volume that holds path when that volume ignores ownership, or None:
+/// `MNT_IGNORE_OWNERSHIP` in `statfs`'s `f_flags`, which Finder's "Ignore ownership on this
+/// volume" sets (on by default for many external drives) and `hdiutil attach -owners off` too.
+/// There macOS shows each file as owned by the volume's owner, or, when it has none, by user 99
+/// (`_unknown`), which it reports to whoever asks as their own number, and lets them change the
+/// file as its owner (xnu's `vnode_attr_handle_uid_and_gid`): no owner, mode or access list read
+/// there says who can change it. A link in path is followed (`statfs`); `secure` refuses links
+/// before it asks. As the app's (`owned/unix.rs`).
+fn ownership_ignored(path: &Path) -> io::Result<Option<PathBuf>> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: an all-zero statfs is a valid one to fill.
+    let mut s: libc::statfs = unsafe { std::mem::zeroed() };
+    // SAFETY: c is NUL-terminated; s is a statfs to fill.
+    if unsafe { libc::statfs(c.as_ptr(), &mut s) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if s.f_flags & libc::MNT_IGNORE_OWNERSHIP as u32 == 0 {
+        return Ok(None);
+    }
+    let on: Vec<u8> = s
+        .f_mntonname
+        .iter()
+        .take_while(|c| **c != 0)
+        .map(|c| *c as u8)
+        .collect();
+    Ok(Some(PathBuf::from(std::ffi::OsString::from_vec(on))))
+}
+
+/// Why `secure` refuses part, on the volume mounted at volume, which ignores ownership
+/// (`ownership_ignored`).
+fn ownership_refusal(part: &Path, volume: &Path) -> String {
+    let v = shell_quoted(volume);
+    format!(
+        "{} is on the volume at {v}, which ignores ownership, so any user may change it: {BY_PATH}; turn ownership on for that volume (in Finder, Get Info on it and clear \"Ignore ownership on this volume\", or run `sudo diskutil enableOwnership {v}`), or move the program to a volume that keeps ownership",
+        shell_quoted(part)
+    )
 }
 
 /// Why `secure` refuses path for an entry of its access list (a file's, or with folder a

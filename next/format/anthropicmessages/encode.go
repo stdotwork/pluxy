@@ -371,8 +371,8 @@ func source(p llm.Part) map[string]any {
 // encrypted_content, or "" when it carries none. The Responses writer puts a Claude signature
 // there unchanged; OpenAI's own encrypted content is a Fernet token, which starts with "g".
 //
-// shortcut: a Claude signature is told apart by its shape (base64 starting with "E" or "R", as
-// today's core checks); an origin record that travels with the item would be exact.
+// shortcut: a Claude signature is told apart by its shape (claudeSignature); an origin record that
+// travels with the item would be exact.
 func replayedSignature(it llm.Item) string {
 	if it.Origin == nil || it.Origin.Format != llm.FormatOpenAIResponses {
 		return ""
@@ -383,14 +383,26 @@ func replayedSignature(it llm.Item) string {
 	if json.Unmarshal(it.Origin.Raw, &r) != nil {
 		return ""
 	}
-	sig := r.EncryptedContent
-	if sig == "" || (sig[0] != 'E' && sig[0] != 'R') {
+	if !claudeSignature(r.EncryptedContent) {
 		return ""
 	}
-	if _, err := base64.StdEncoding.DecodeString(sig); err != nil {
-		if _, err := base64.RawStdEncoding.DecodeString(sig); err != nil {
-			return ""
+	return r.EncryptedContent
+}
+
+// claudeSignature reports whether sig has the shape of a thinking signature Claude issues: base64
+// of a protobuf message. The older forms start with E (first byte 0x12, field 2) or R (base64 of
+// such a string), as today's core checks. Claude 5 models issue a newer envelope that starts with C:
+// field 1, a one-byte version varint, then field 2 (0x08, version, 0x12), the layout CLIProxyAPI
+// describes for it (internal/signature/claude_validation.go, "CAIS envelope").
+func claudeSignature(sig string) bool {
+	if sig == "" || (sig[0] != 'E' && sig[0] != 'R' && sig[0] != 'C') {
+		return false
+	}
+	b, err := base64.StdEncoding.DecodeString(sig)
+	if err != nil {
+		if b, err = base64.RawStdEncoding.DecodeString(sig); err != nil {
+			return false
 		}
 	}
-	return sig
+	return sig[0] != 'C' || (len(b) > 2 && b[0] == 0x08 && b[1] < 0x80 && b[2] == 0x12)
 }

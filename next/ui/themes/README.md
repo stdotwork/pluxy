@@ -101,6 +101,24 @@ anything.
 | `color.chart-failure` | Failed requests in the Dashboard's traffic chart | `var(--px-color-danger)` |
 | `color.diff-add` | Added lines in a diff | `#1f7a3d` / `#5cc98a` |
 | `color.diff-remove` | Removed lines in a diff | `#b42318` / `#ff7b72` |
+| `color.nav` | Navigation background | `var(--px-color-surface)` |
+| `color.nav-text` | The product name in the navigation, and a hovered entry's text | `var(--px-color-text)` |
+| `color.nav-muted` | Navigation entries and group labels | `var(--px-color-text-muted)` |
+| `color.nav-hover` | Background of a hovered navigation entry | `var(--px-color-surface-raised)` |
+| `color.nav-selected` | Background of the current navigation entry; its text is `color.accent` | `color-mix(in srgb, var(--px-color-accent) 14%, transparent)` |
+| `color.nav-border` | The navigation's border, and the lines between its groups | `var(--px-color-border)` |
+| `color.overlay` | Dialog background | `var(--px-color-surface)` |
+| `color.input-border` | Border of text inputs, selects and text areas | `var(--px-color-border)` |
+| `color.placeholder` | Placeholder text in an empty input | `var(--px-color-text-muted)` |
+| `color.selected` | Background of a selected table row and of the selected tab | `var(--px-color-surface-raised)` |
+| `color.selected-text` | Text of a selected list item | `var(--px-color-text)` |
+| `color.danger-surface` | Background of an error notice | `color-mix(in srgb, var(--px-color-danger) 8%, transparent)` |
+| `color.warn-surface` | Background of a warning notice | `color-mix(in srgb, var(--px-color-warn) 8%, transparent)` |
+| `color.code-bg` | Background of the configuration source editor, log views and diffs | `var(--px-color-surface-raised)` |
+| `color.code-text` | Their text | `var(--px-color-text)` |
+
+A default written as `var(--px-…)` follows another token, so a theme that sets only the older
+tokens looks as it did before these existed.
 
 ### Type
 
@@ -198,6 +216,7 @@ These stay stable within a theme contract version:
 | Hook | Where |
 | --- | --- |
 | `data-appearance="light"` or `"dark"` | Root element |
+| `class="dark"` | Root element, while the appearance is dark |
 | `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
 | `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `routing`, `quota`, `logs`, `usage`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root |
@@ -256,6 +275,19 @@ These stay stable within a theme contract version:
 | `data-part="account-edit-discard"` | The Edit form's question before unsaved changes are discarded. |
 | `data-part="subscription-end"` | The Quota card's line with the day a subscription ends. |
 | `data-part="privacy-toggle"` | The navigation's privacy mode switch; `aria-pressed="true"` while it masks account e-mail addresses and identifiers, and the root then has `data-privacy="on"`. |
+
+Some parts also carry the `data-slot` name that [T3 Code](https://github.com/pingdotgg/t3code)
+gives the same part, and the root's `dark` class is the one T3 Code uses. They exist so that the
+CSS of a theme written for T3 Code matches the parts both UIs have:
+
+| T3 Code's name | Where |
+| --- | --- |
+| `data-slot="button"` | A button (`data-part="button"`) |
+| `data-slot="input"` | A text, password, number or search input |
+| `data-slot="switch"` | The track of a switch |
+| `data-slot="select-trigger"` | A select |
+| `data-slot="dialog-popup"` | A dialog window (`data-part="dialog"`) |
+| `data-slot="sidebar"` | The navigation (`data-part="nav"`), in every `nav` layout |
 
 Every other class name, element and attribute can change in any release.
 

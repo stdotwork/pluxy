@@ -24,17 +24,8 @@ type LoginMethods struct {
 	Methods   []protocol.LoginMethod `json:"methods"`
 }
 
-// AccountModel is one model an account serves, as GET /accounts/{id}/models lists it: the
-// model by its upstream name, with what the extension says about it, and the names clients ask
-// for it by after the account's exclusions, aliases and prefix.
-type AccountModel struct {
-	protocol.Model
-	// Names are the names clients use for the model on this account; empty when the account's
-	// excluded_models leave it out.
-	Names []string `json:"names"`
-	// Excluded is true when the account's excluded_models leave the model out.
-	Excluded bool `json:"excluded,omitempty"`
-}
+// AccountModel is one model an account serves, as GET /accounts/{id}/models lists it.
+type AccountModel = management.AccountModel
 
 // TestResult is the outcome of POST /accounts/{id}/test.
 type TestResult = management.TestResult
@@ -82,12 +73,12 @@ func (c *Core) handleAccounts(m *server.Management) {
 	m.Handle("GET /accounts/{id}/models", func(w http.ResponseWriter, r *http.Request) {
 		s, release := c.acquire()
 		defer release()
-		models, err := c.accountModels(r.Context(), s, r.PathValue("id"))
+		reply, err := c.accountModels(r.Context(), s, r.PathValue("id"))
 		if err != nil {
 			writeAccountError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"models": models})
+		writeJSON(w, http.StatusOK, reply)
 	})
 	m.Handle("GET /accounts/{id}/quota", func(w http.ResponseWriter, r *http.Request) {
 		s, release := c.acquire()
@@ -176,12 +167,15 @@ func (c *Core) credential(ctx context.Context, a route.Account) (*protocol.Crede
 
 // accountModels returns the models account id serves: its config's models when it lists them,
 // else the ones its extension lists for it.
-func (c *Core) accountModels(ctx context.Context, s *snapshot, id string) ([]AccountModel, error) {
+func (c *Core) accountModels(ctx context.Context, s *snapshot, id string) (management.AccountModelsReply, error) {
 	a, ok := c.account(s, id)
 	if !ok {
-		return nil, fmt.Errorf("%w %q", errNoAccount, id)
+		return management.AccountModelsReply{}, fmt.Errorf("%w %q", errNoAccount, id)
 	}
-	var list []protocol.Model
+	var (
+		list []protocol.Model
+		from string
+	)
 	if len(a.Models) > 0 {
 		for _, m := range a.Models {
 			list = append(list, protocol.Model{ID: m.Name})
@@ -189,9 +183,10 @@ func (c *Core) accountModels(ctx context.Context, s *snapshot, id string) ([]Acc
 	} else {
 		cl, err := c.listModels(ctx, s, a)
 		if err != nil {
-			return nil, err
+			return management.AccountModelsReply{}, err
 		}
 		list = cl.Models
+		from = cl.From
 		for i := range list {
 			if list[i].OwnedBy == "" {
 				list[i].OwnedBy = cl.OwnedBy
@@ -223,7 +218,7 @@ func (c *Core) accountModels(ctx context.Context, s *snapshot, id string) ([]Acc
 		}
 		out = append(out, AccountModel{Model: m, Names: names, Excluded: len(names) == 0})
 	}
-	return out, nil
+	return management.AccountModelsReply{Models: out, From: from}, nil
 }
 
 // listModels returns account a's model list from the list routing keeps when a is routed
@@ -281,11 +276,11 @@ func (c *Core) testAccount(ctx context.Context, s *snapshot, id, model string) (
 		return TestResult{}, fmt.Errorf("%w %q", errNoAccount, id)
 	}
 	if model == "" {
-		models, err := c.accountModels(ctx, s, id)
+		reply, err := c.accountModels(ctx, s, id)
 		if err != nil {
 			return TestResult{}, err
 		}
-		for _, m := range models {
+		for _, m := range reply.Models {
 			if !m.Excluded {
 				model = m.ID
 				break

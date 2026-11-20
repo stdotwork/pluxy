@@ -411,7 +411,12 @@ tokens four days before they expire (tokens that last less than that, five minut
 
 Every request goes to `{base_url}/responses` as Codex takes it: streamed, not stored, with the
 reasoning's encrypted content included, sampling settings removed, and the Codex terminal
-client's `User-Agent` and `originator` (turn off with `"codex_identity": false`). Chat
+client's `User-Agent` and `originator` (turn off with `"codex_identity": false`). The client's
+`metadata` is not sent (Codex's own request has none), an integer output budget under 16, which the
+endpoint refuses, is raised to 16, and a reasoning effort the model does not take (by the model's
+levels in the Codex catalog) is changed to the nearest level it does, below the effort when there is
+one, and reported as a loss. A Claude Code request's prompt cache key follows its session and agent
+(`X-Claude-Code-Session-Id` and `X-Claude-Code-Agent-Id`, or the session in `metadata.user_id`). Chat
 Completions, Messages and Gemini requests are translated to Responses. A Messages client (such as
 Claude Code) gets each reasoning item's encrypted content as its thinking block's signature, and
 replaying the block sends the reasoning back, so it carries over between turns. Codex refuses IDs
@@ -446,6 +451,9 @@ Account `settings`, all optional:
 | `base_url` | Default `https://api.openai.com/v1` for an API key and a SIWC sign-in, `https://chatgpt.com/backend-api/codex` for a subscription. |
 | `codex_identity` | Default `true`: send the Codex client's `User-Agent` and `originator`. |
 | `image_generation_tool` | Default `true`: offer the hosted `image_generation` tool, as today's core does (never to a free plan or a `-spark` model). |
+| `image_generation_off_models` | Default none: model names, or patterns with `*` and `?` (any case), that are not offered the `image_generation` tool. A tool the client lists itself stays. |
+| `codex_client_version` | Default `0.154.0`: the version the Codex client's `User-Agent` names when `codex_identity` is on. |
+| `prompt_cache_retention_passthrough` | Default `false`: send the client's `prompt_cache_retention` on, for an upstream that takes it (neither today's core nor the Codex client sends it to the ChatGPT backend, and a SIWC sign-in never sends it). |
 | `callback_listen` | Default `true`: let a browser or SIWC sign-in listen on port 1455. |
 | `images` | Default `true`: serve the Images API on the account (below). |
 | `signin_with_chatgpt_identifier` | Default `pluxy`: the name a SIWC sign-in gives this program, shown on the sign-in page (`agent_name_hint`) and starting its requests' `User-Agent`. Today's core calls it `codex.signin-with-chatgpt-identifier`, with the default `CLIProxyAPI`. |
@@ -518,7 +526,8 @@ five minutes before they expire. The account's requests follow today's core's SI
 to `{base_url}/responses` (default `https://api.openai.com/v1`) with the SIWC token and the
 `User-Agent` `<identifier> (<GOOS>; <GOARCH>)`, the session (when there is one) as `session_id`
 and `X-Client-Request-Id`, and none of the Codex client's headers, `Originator`,
-`Chatgpt-Account-Id` or routing hint; `codex_identity` and `image_generation_tool` do not apply,
+`Chatgpt-Account-Id` or routing hint; `codex_identity`, `codex_client_version`, `image_generation_tool`,
+`image_generation_off_models` and `prompt_cache_retention_passthrough` do not apply,
 and no image tool is offered. `configuration_update` input items, which the OpenAI API refuses on
 such a token, are removed and the last one's reasoning effort becomes the request's (a thinking
 suffix's effort wins); `temperature`, `prompt_cache_retention`, `prompt_cache_options` and
@@ -577,7 +586,26 @@ after the client's betas. Chat Completions, Responses and Gemini requests are
 translated to Messages; their reasoning effort becomes adaptive thinking with that effort on
 Claude 4.6 and later, and a thinking budget from Claude 3.7 to 4.5 (low 1024, medium 8192, high
 24576 tokens); a model name the extension does not know as a Claude model gets no thinking
-settings, and the effort is reported as dropped. The extension never changes how a client presents itself: a client that is
+settings, and the effort is reported as dropped. A Responses client's `reasoning.summary` becomes
+`thinking.display` (`auto`, `concise` and `detailed` as `summarized`, `none` as `omitted`).
+
+**Thinking settings.** Every request, a Messages client's own included, has its thinking settings
+made ones the model takes, by Anthropic's per-model tables, and each change is reported:
+
+- Effort `xhigh` goes as `xhigh` from Claude 4.7 on, and as `max` to Claude 4.6, which has no
+  `xhigh`; `minimal` goes as `low`.
+- Thinking off (`none`, or `thinking` `disabled` or `between_tools`) goes as each model turns it
+  off: Fable, Mythos and Opus 5.5 always think, so it goes without `thinking`, at effort `low`
+  unless one is set; Sonnet 5.5 takes `between_tools`; Opus 5 and Haiku 5.5 take `disabled` at
+  effort `high` or below, so a higher effort goes as `high`; older models take `disabled`.
+- A thinking budget goes to Claude 4.7 and later as adaptive thinking at the effort it falls in.
+- A forced tool choice (`any` or a named tool) goes as `auto` to Opus 5.5, Sonnet 5.5, and Fable
+  and Mythos 5.1 and later, which refuse one; with a thinking budget it goes without thinking.
+- `top_k` is left out on Claude 4.7 and later, and on older models while thinking is on.
+- With a thinking budget, a tool result whose assistant turn has no thinking block, in a
+  conversation that has none, goes with adaptive thinking on Claude 4.6 and without thinking on
+  older models. On Claude 4.5 and older, a conversation that ends on an assistant turn loses that
+  turn while thinking is on, and with thinking off loses the reasoning it ends on. The extension never changes how a client presents itself: a client that is
 not Claude Code is not made to look like Claude Code.
 
 **Sampling options.** A translated request's `temperature` and `top_p` reach Claude only where

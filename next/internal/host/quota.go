@@ -12,7 +12,7 @@ import (
 )
 
 // featureMinor is the protocol minor version that adds a quota limit's feature.
-const featureMinor = 18
+const featureMinor = 19
 
 // ReportsQuota reports whether an extension that described itself with info reads its accounts'
 // quota: it implements minor version 5 or later and lists the quota operation.
