@@ -50,7 +50,8 @@
       "want": {
         "code": "invalid_request",
         "message": "input[0]: nothing in this user turn can be sent to Chat Completions",
-        "type": "invalid_request_error"
+        "type": "invalid_request_error",
+        "pluxy": "(volatile)"
       }
     }
   ]

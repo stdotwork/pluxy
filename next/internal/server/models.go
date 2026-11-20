@@ -134,7 +134,7 @@ func serveCodexModels(w http.ResponseWriter, r *http.Request, g *Generation) {
 	req := llm.Request{Native: &llm.Native{Format: "codex.models", Body: body}}
 	// The catalog uses no credential and bypasses routing, reservations, renewal and usage.
 	stream := g.Endpoint(r.Context(), "pluxy/codex", *account, req)
-	writeEndpointReply(w, r, stream, "codex.models", chatFormat, nil)
+	writeEndpointReply(w, r, stream, "codex.models", chatFormat, nil, false)
 }
 
 // anthropicClient reports whether a model list request comes from an Anthropic client: it sends

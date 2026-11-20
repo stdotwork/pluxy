@@ -118,6 +118,53 @@ func TestListModels(t *testing.T) {
 	t.Error("gpt-6.1-terra is not listed")
 }
 
+// TestCodexClientVersionMatchesModelList checks that the model-list client_version and the
+// User-Agent claiming the Codex identity name the same client version, by default and when the
+// account sets codex_client_version.
+func TestCodexClientVersionMatchesModelList(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		setting string
+		want    string
+	}{
+		{name: "default", want: "0.159.0"},
+		{name: "account setting", setting: "0.201.3-beta.1", want: "0.201.3-beta.1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var clientVersion, userAgent string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				clientVersion = r.URL.Query().Get("client_version")
+				userAgent = r.Header.Get("User-Agent")
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, `{"models":[{"slug":"gpt-test"}]}`)
+			}))
+			defer srv.Close()
+
+			raw, err := json.Marshal(map[string]string{
+				"base_url":             srv.URL,
+				"codex_client_version": tc.setting,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cred := subscriptionWith(idTokenWithPlan("plus"))
+			if _, err := listModels(context.Background(), sdk.ModelsCall{
+				Account: protocol.Account{Settings: raw, Credential: cred},
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			if clientVersion != tc.want {
+				t.Errorf("client_version = %q, want %q", clientVersion, tc.want)
+			}
+			if !strings.HasPrefix(userAgent, "codex-tui/"+tc.want+" (") ||
+				!strings.Contains(userAgent, "(codex-tui; "+tc.want+")") {
+				t.Errorf("User-Agent = %q, want codex-tui/%s", userAgent, tc.want)
+			}
+		})
+	}
+}
+
 func TestListModelsSubscriptionLive(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

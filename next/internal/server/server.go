@@ -179,6 +179,10 @@ func NewHandler(src Source) http.Handler {
 				f.writeError(w, e)
 				return
 			}
+			// Every reply to a request that may use the API has the trace ID, also one sent before
+			// the request reaches routing (a body that does not parse, no account for the model).
+			r, t := requestTrace(r)
+			w.Header().Set(TraceHeader, t.id)
 			logged(w, r, g, func(w http.ResponseWriter, r *http.Request) { h(w, r, g) })
 		}))
 	}
@@ -327,20 +331,20 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 	m := g.newMeter(r, arrived, req, clientToken(r, f.googleKeys))
 	rr := routeRequest(r, req, body)
 	rr.Attempting = func(a route.Attempt) {
-		t.account = a.Account
+		t.attempt(a)
 		m.attempt(a, t.id)
 	}
 	stream := meterStream(g.Router.Generate(host.WithPayloadClient(r.Context(), req.Model, r.Header), rr), m)
 	defer stream.Close()
 	fail := func(e *llm.Error) {
 		logFailure(r, e)
-		m.fail(e, f.writeError(w, e))
+		m.fail(e, f.writeError(w, t.explained(e)))
 	}
 
 	// Nothing is sent to the client until the first event, so an error before it becomes a
 	// proper HTTP error response. By then the request has gone to its account, if any.
 	ev := stream.Next()
-	t.setHeader(w)
+	t.setHeaders(w, g.Config.Routing.ExplainOn())
 	if ev.Type == llm.EventError {
 		fail(ev.Error)
 		return

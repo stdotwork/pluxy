@@ -24,7 +24,8 @@
       "want": {
         "code": "invalid_api_key",
         "message": "Incorrect API key provided.",
-        "type": "authentication_error"
+        "type": "authentication_error",
+        "pluxy": "(volatile)"
       }
     }
   ],

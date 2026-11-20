@@ -556,7 +556,9 @@ func status(e *llm.Error) int {
 // Anthropic's.
 func ErrorResponse(e *llm.Error) (int, []byte) {
 	if u := e.UsageLimit; u != nil {
-		b, _ := json.Marshal(obj{"error": u.ErrorObject()})
+		o := u.ErrorObject()
+		e.Pluxy(o)
+		b, _ := json.Marshal(obj{"error": o})
 		return http.StatusTooManyRequests, b
 	}
 	st := status(e)
@@ -579,6 +581,7 @@ func ErrorResponse(e *llm.Error) (int, []byte) {
 			body["details"] = g.Error.Details
 		}
 	}
+	e.Pluxy(body)
 	b, _ := json.Marshal(obj{"error": body})
 	return st, b
 }

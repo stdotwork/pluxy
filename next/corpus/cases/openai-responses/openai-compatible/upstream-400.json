@@ -74,7 +74,8 @@
       "want": {
         "code": "invalid_value",
         "message": "Invalid value for 'temperature'.",
-        "type": "invalid_request_error"
+        "type": "invalid_request_error",
+        "pluxy": "(volatile)"
       }
     }
   ]
