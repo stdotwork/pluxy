@@ -3,7 +3,6 @@ package server
 import (
 	"cmp"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -134,12 +133,12 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 		f.writeError(w, &llm.Error{Code: llm.CodeNotFound, Status: http.StatusNotFound, Message: "this endpoint is not served"})
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRequestBody))
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			f.writeError(w, &llm.Error{Code: llm.CodeInvalidRequest, Message: "request body is too large", Status: http.StatusRequestEntityTooLarge})
-		}
+	body, e, ok := readRequestBody(w, r)
+	if !ok {
+		return
+	}
+	if e != nil {
+		f.writeError(w, e)
 		return
 	}
 	keepBody(r, body)
@@ -224,6 +223,7 @@ func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, f
 		return
 	}
 	sse := strings.HasPrefix(reply.ContentType, "text/event-stream")
+	comments := sse && format != llm.FormatGeminiInteractions
 	w.Header().Set("Content-Type", reply.ContentType)
 	if sse {
 		w.Header().Set("Cache-Control", "no-cache")
@@ -234,6 +234,15 @@ func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, f
 		m.sent = http.StatusOK
 	}
 	rc := http.NewResponseController(w)
+	// out is where the body goes: through keep-alive comments on a non-Gemini stream.
+	var out io.Writer = w
+	flush := rc.Flush
+	var ka *keepAlive
+	if comments {
+		ka = startKeepAlive(w, rc)
+		defer ka.stop()
+		out, flush = ka, ka.Flush
+	}
 	for {
 		ev = stream.Next()
 		switch ev.Type {
@@ -245,27 +254,33 @@ func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, f
 				m.fail(e, http.StatusOK)
 				return
 			}
-			if _, err := io.WriteString(w, chunk); err != nil {
+			if _, err := io.WriteString(out, chunk); err != nil {
 				m.fail(&llm.Error{Code: llm.CodeCancelled}, http.StatusOK) // the client went away
 				return
 			}
 			if sse {
-				if err := rc.Flush(); err != nil {
+				if err := flush(); err != nil {
 					m.fail(&llm.Error{Code: llm.CodeCancelled}, http.StatusOK)
 					return
 				}
 			}
 		case llm.EventFinish:
+			if ka != nil {
+				ka.finish()
+			}
 			m.finish(ev)
 			return
 		case llm.EventError:
 			// The reply has started: a stream gets the error as its last event; any other body
 			// ends where it broke off.
+			if ka != nil {
+				ka.finish()
+			}
 			logFailure(r, ev.Error)
 			if sse {
 				_, body := openaichat.ErrorResponse(ev.Error)
-				_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", body)
-				_ = rc.Flush()
+				_, _ = fmt.Fprintf(out, "event: error\ndata: %s\n\n", body)
+				_ = flush()
 			}
 			m.fail(ev.Error, http.StatusOK)
 			return

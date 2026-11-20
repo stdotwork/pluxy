@@ -1,7 +1,7 @@
 # pluxy UI kit and panel
 
-One UI kit, two builds. The **panel** is the kit's browser build: core embeds it and serves it at
-`/panel/` while the management API is on. The desktop app ([`../app`](../app/README.md)) is the
+One UI kit, two builds. The **panel** is the kit's browser build: core embeds it and always serves it
+at `/panel/`; the management API is always on. The desktop app ([`../app`](../app/README.md)) is the
 kit's second build, with more pages. Both read the same theme files ([theme contract](themes/README.md)) and put shared
 pages in the same places. Core keeps the themes a person adds and which theme is on
 ([where themes are kept](themes/README.md#where-themes-are-kept)), so both builds show the same ones.
@@ -73,6 +73,18 @@ opens the Source tab with that account's ID selected; an account's "Edit in Conf
 there. An account from a provider key section of `config.yaml` opens the Source tab with nothing
 selected, because the file does not hold its ID: core makes the ID when it reads the file.
 
+The Setup page (`#/setup`) is the one page the panel opens by itself. Once signed in, the
+shell asks core for `GET /setup`: on a first run (`first_run`), when the address names no page,
+Setup opens in place of the Dashboard. The shell does not wait for the answer, so the Dashboard
+may show for an instant. A core without the call (it answers 404) gets no Setup page and nothing
+opens by itself. The page stays in the navigation after setup, as a status of the same things.
+
+A host can add one button to each client the page lists as found:
+`corePages({ setup: { clientAction, clientActionHint } })` (`SetupOptions` in `kit/pages/setup.tsx`). `clientAction` takes the client's ID from core's
+scan and returns a label and the ID of the host's page the button opens, or nothing; the hint is
+one sentence shown while a client has a button. The panel passes none; the desktop app offers
+"Set up" for the clients it can set up on its own computer.
+
 | Page (ID) | Group | Replaces (old route) |
 | --- | --- | --- |
 | Dashboard (`status`) | Operate | Dashboard (`/`) |
@@ -82,6 +94,7 @@ selected, because the file does not hold its ID: core makes the ID when it reads
 | Quota Management (`quota`) | Observe | Quota Management (`/quota`) |
 | Logs Viewer (`logs`) | Observe | Logs Viewer (`/logs`) |
 | Usage (`usage`) | Observe | No old panel page: the old desktop app's list of recorded requests |
+| Set up pluxy (`setup`) | Control | No old page |
 | Config Panel (`config`) | Control | Config Panel (`/config`; `/settings` and `/api-keys` led there) |
 | System (`system`) | Control | Management Center Info (`/system`) |
 | Extensions (`extensions`) | Control | Plugins (`/plugins`) and Plugin Store (`/plugin-store`) |
@@ -333,8 +346,8 @@ before it builds and tests core, so its tests always run against the panel of th
 
 ## What core serves
 
-`/panel/` and its files, only while the config sets `management_key` (the panel is a page for the
-management API; without the key, `/panel/` is not found, as the API is). Every reply carries a
+`/panel/` and its files. The panel is a page for the management API, and the management API is always
+on: a config without `management_key` is refused at start and on a reload. Every reply carries a
 Content Security Policy that allows scripts, styles and requests only to core itself, images
 and fonts also from `data:` URLs, and frames only from the extension pages site. The page itself is revalidated on each load; the other files
 have content-hashed names and are cached.

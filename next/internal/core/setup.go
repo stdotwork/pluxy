@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net"
@@ -367,6 +368,37 @@ func (c *Core) handleSetup(m *server.Management) {
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", err.Error())
 			return
+		}
+		writeJSON(w, http.StatusOK, reply)
+	})
+	m.Handle("GET /setup/clients/{id}/paste", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if _, ok := ClientSnippetFor(id, "", ""); !ok {
+			writeError(w, http.StatusNotFound, "not_found",
+				fmt.Sprintf("no settings to paste for client tool %q (supported: %s)", id, strings.Join(ClientSnippetTools, ", ")))
+			return
+		}
+		key := "<client-key>"
+		if keyID := r.URL.Query().Get("key_id"); keyID != "" {
+			keys := c.Config().ClientKeys
+			i := slices.IndexFunc(keys, func(k string) bool { return c.keyView(k).ID == keyID })
+			if i < 0 {
+				writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no client key with id %q", keyID))
+				return
+			}
+			v := c.keyView(keys[i])
+			key = fmt.Sprintf("<client-key:%s (%s)>", v.ID, v.Masked)
+		}
+		listen, tlsEnable := c.setupCoreTarget()
+		baseURL, err := server.LocalURL(listen, tlsEnable)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "core's own address is not known: "+err.Error())
+			return
+		}
+		snip, _ := ClientSnippetFor(id, baseURL, key)
+		reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: baseURL, Key: key, Note: snip.Note}
+		for _, f := range snip.Files {
+			reply.Files = append(reply.Files, management.ClientPasteFile{Path: f.Path, Content: f.Content})
 		}
 		writeJSON(w, http.StatusOK, reply)
 	})

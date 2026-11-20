@@ -2,7 +2,8 @@
 // extension exactly as core does and checks it against the extension protocol
 // (../protocol/README.md): the handshake, streamed and unstreamed replies, cancellation, a crash,
 // shutdown and structured errors; for an extension that signs in to accounts, login and
-// credential refresh; and, for one that lists models, its model list.
+// credential refresh; for one that lists models, its model list; and, when its fixture arranges
+// a quiet upstream, its alive frames.
 //
 // The kit cannot know how to make an extension's upstream behave, so the extension's test gives
 // it a fixture: for each Scenario, the account that makes the extension act it out. See
@@ -55,6 +56,13 @@ const (
 	// suspended or deactivated. The extension must report code account_closed, retryable, scope
 	// credential.
 	ScenarioAccountClosed Scenario = "account_closed"
+	// ScenarioQuiet: the upstream starts a streamed reply with some text, then until the request
+	// is cancelled sends only bytes that carry nothing the extension passes on (such as SSE
+	// comments or pings), at least every 2 seconds. The alive check cancels once an alive frame
+	// arrives, about 10 seconds after the quiet starts. An extension that reports protocol 0.23
+	// must send core alive frames meanwhile (sdk.Upstream does). Only used when Target.Quiet is
+	// set.
+	ScenarioQuiet Scenario = "quiet"
 )
 
 // What ScenarioText must produce.
@@ -129,6 +137,8 @@ type Target struct {
 	// PrepareAccountClosed returns the setup for ScenarioAccountClosed when the extension maps
 	// closed-account replies. Optional: extensions that do not supply it skip that check.
 	PrepareAccountClosed func(t *testing.T) Setup
+	// Quiet says Prepare arranges ScenarioQuiet; the alive check runs only then.
+	Quiet bool
 }
 
 // Each check waits at most this long for something that should happen at once.
@@ -193,6 +203,7 @@ func Run(t *testing.T, target Target) {
 	t.Run("models", k.models)
 	t.Run("check", k.check)
 	t.Run("quota", k.quota)
+	t.Run("alive", k.alive)
 }
 
 type kit struct {
@@ -821,5 +832,75 @@ func (k *kit) quota(t *testing.T) {
 		if l.Feature && len(l.Models) > 0 {
 			t.Errorf("limits[%d] (%s) is a feature's limit and lists models %v; a feature's limit lists none", i, l.ID, l.Models)
 		}
+	}
+}
+
+// aliveWait is how long the alive check waits for an alive frame: the SDK sends one once the
+// call has sent core nothing for 10 seconds.
+const aliveWait = 20 * time.Second
+
+// aliveMinorError says an extension is too old for a target that promised ScenarioQuiet. Such a
+// target cannot skip the check: its fixture opted into it, and only a protocol minor that carries
+// alive frames can pass.
+func aliveMinorError(info protocol.Info, quiet bool) error {
+	if !quiet || info.ProtocolMinor >= host.AliveMinor {
+		return nil
+	}
+	return fmt.Errorf("the extension reports protocol 0.%d; a quiet target must report at least 0.%d for alive frames", info.ProtocolMinor, host.AliveMinor)
+}
+
+// alive checks that a quiet target's extension reports the alive minor or later and sends an alive
+// frame while its upstream sends bytes the extension passes nothing on for, then that cancelling
+// the call ends the reply with the cancelled error. It does not check what else the extension sends
+// in the quiet.
+func (k *kit) alive(t *testing.T) {
+	ext := k.start(t)
+	if !k.target.Quiet {
+		t.Skip("the fixture does not arrange ScenarioQuiet (Target.Quiet)")
+	}
+	if err := aliveMinorError(ext.Info(), k.target.Quiet); err != nil {
+		t.Fatal(err)
+	}
+	setup := k.target.Prepare(t, ScenarioQuiet)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := ext.Generate(ctx, setup.Account, request(true))
+	defer s.Close()
+	text := make(chan struct{})
+	events := make(chan llm.Event, 64)
+	go func() {
+		defer close(events)
+		sawText := false
+		for {
+			ev := s.Next()
+			if ev.Type == llm.EventTextDelta && !sawText {
+				sawText = true
+				close(text)
+			}
+			events <- ev
+			if ev.Terminal() {
+				return
+			}
+		}
+	}()
+	select {
+	case <-text:
+	case <-time.After(wait):
+		t.Fatal("the quiet reply sent no text")
+	}
+	deadline := time.Now().Add(aliveWait)
+	for s.Alives() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("no alive frame within %s of quiet upstream bytes", aliveWait)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+	var last llm.Event
+	for ev := range events {
+		last = ev
+	}
+	if last.Type != llm.EventError || last.Error.Code != llm.CodeCancelled {
+		t.Errorf("after cancelling, the quiet reply ended with %s, want error %s", jsonString(last), llm.CodeCancelled)
 	}
 }

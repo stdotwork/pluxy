@@ -102,6 +102,9 @@ func (t upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		}
 		return nil, err
 	}
+	if sink := aliveFrom(req.Context()); sink != nil {
+		rt = aliveTransport{next: rt, sink: sink}
+	}
 	if len(info.Headers) > 0 {
 		req = withHeaders(req, info.Headers)
 	}

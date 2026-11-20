@@ -82,8 +82,7 @@ func setFields(v *AccountView, a route.Account, state *route.State, hold route.H
 }
 
 // Management is the management API, version 0. Every call needs the management key of the
-// config active when it arrives, as a bearer token; while that config sets none, the API is not
-// served.
+// config active when it arrives, as a bearer token.
 type Management struct {
 	mux   *http.ServeMux
 	cfg   func() *Config
@@ -157,10 +156,6 @@ func (m *Management) Handle(pattern string, h http.HandlerFunc) {
 
 func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cfg := m.cfg()
-	if cfg.ManagementKey == "" {
-		http.NotFound(w, r)
-		return
-	}
 	// The gate comes first, so calls it refuses are not counted for the lockout.
 	if !cfg.ManagementAllowRemote && !FromThisMachine(r) {
 		writeManagementError(w, http.StatusForbidden, "remote_disabled",

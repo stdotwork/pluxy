@@ -99,7 +99,9 @@ proposes what to install. Nothing is installed until asked.
 | `POST /setup/apply` | `pluxy setup apply [--pick id]... [--yes]` | `{"picks": ["pluxy/claude", ...]}`: installs and enables each. Returns `{"results": [{"id", "status", "package", "error"}]}` with one result per pick (`done`, or `error`); one failure does not undo the others |
 | **new** `POST /setup/import` | `pluxy import cpa <config.yaml> [--auth-dir <dir>] [--dry-run]` | Brings a CLIProxyAPI setup across and returns the import report (below). With `dry_run` nothing is written |
 | `POST /setup/done` | `pluxy setup done` | Ends first run (`{"first_run": false}`): the panel and app stop opening on setup |
-| — | `pluxy client show <tool> [--key-id id]` | Prints what to paste into that client tool's config to point it at this core (address and a client key placeholder; never prints the management key) |
+| `GET /setup/clients/{id}/paste` | `pluxy client show <tool> [--key-id id]` | What to paste into that client tool's config to point it at this core: its files, the address, and a client key placeholder. `id` is the tool's ID (`claude-code`, `codex`, `opencode`, `pi`, `omp`) or another name for it (`oh-my-pi`, `codex-cli`, a setup package's ID such as `pluxy/pi-setup`, with the `/` escaped as `%2F`). Optional `key_id` names a client key from `GET /client-keys`; the placeholder then names it. 404 for a tool core has no text for, and for a `key_id` core does not hold |
+
+The reply to `GET /setup/clients/{id}/paste`: `tool` (the canonical ID), `name`, `base_url` (core's address as a program on core's machine reaches it), `key` (`<client-key>`, or with `key_id` `<client-key:ID (MASKED)>`: never a key's value, never the management key), `files` (`path` from the home folder, and `content`) and `note` (what the files need besides themselves; left out when empty). The command prints the files as they are, and with `--json` the reply body.
 
 `found`:
 

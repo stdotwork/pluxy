@@ -18,13 +18,15 @@ export const SHARDS: Record<string, readonly string[]> = {
   // omp 0.9.
   agents: ["codex", "claude-desktop", "opencode", "omp", "grok", "hermes", "pi"],
   // About 7.7 minutes: managed 1.9, local 1.1, remote 1.1, packaged 1.0, access 0.9, update 0.8,
-  // window 0.4, startup 0.3, early exit and instances 0.2, window-no-tray 0.1, privacy 0.1.
+  // window 0.4, startup 0.3, early exit and instances 0.2, window-no-tray 0.1, privacy 0.1; and
+  // setup, added later, about 1.5 on a Namespace devbox (not yet measured on GitHub's runners).
   app: [
     "managed",
     "startup",
     "window",
     "window-no-tray",
     "privacy",
+    "setup",
     "access",
     "early exit",
     "instances",

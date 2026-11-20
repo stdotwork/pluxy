@@ -1,5 +1,6 @@
-//! The reader against Codex homes built here, after the old app's tests
-//! (`extensions/app/src-tauri/src/codex_sessions.rs` and `codex_sessions/context.rs`).
+//! The reader against Codex homes built here, after the old app's tests (in
+//! router-for-me/EasyCLIProxyAPI, https://github.com/router-for-me/EasyCLIProxyAPI:
+//! `src-tauri/src/codex_sessions.rs` and `src-tauri/src/codex_sessions/context.rs`).
 
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
