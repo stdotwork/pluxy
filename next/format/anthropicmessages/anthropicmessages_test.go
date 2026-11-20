@@ -78,7 +78,6 @@ func TestTranslationToChatReportsLosses(t *testing.T) {
 		"approximated messages[1].content[0]",          // thinking text becomes reasoning_content
 		"dropped messages[1].content[0].signature",     // only Anthropic can check it
 		"dropped messages[1].content[1]",               // redacted thinking
-		"dropped messages[2].content[1].is_error",      // no error flag on a Chat tool message
 		"dropped messages[2].content[2].cache_control", // no cache breakpoints in Chat
 		"dropped metadata",
 		"dropped system[1].cache_control",
@@ -118,7 +117,6 @@ func TestTranslationToResponsesReportsLosses(t *testing.T) {
 	want := []string{
 		"dropped messages[1].content[0]", // thinking
 		"dropped messages[1].content[1]", // redacted thinking
-		"dropped messages[2].content[1].is_error",
 		"dropped messages[2].content[2].cache_control",
 		"dropped metadata",
 		"dropped system[1].cache_control",

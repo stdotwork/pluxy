@@ -21,22 +21,45 @@ write the same types.
 - **Wrong keys.** Five wrong keys in a row from one address block that address for 30 minutes (403
   `blocked`, `Retry-After`). A call with no key at all is a 401 and does not count. A call from this
   machine is never blocked, so the person at the keyboard can always get back in.
-- **Bodies.** JSON in, JSON out, UTF-8. Unknown fields in a request are a 400. Times are RFC 3339 UTC;
-  durations are whole milliseconds in fields ending `_ms`.
+- **Bodies.** JSON in, JSON out, UTF-8. These calls refuse unknown fields with 400 `invalid_request`:
+  `POST /models/refresh`, `POST /config/validate`, `PUT /config`, `PATCH /settings`,
+  `POST /setup/apply`, `POST /setup/import`, `PUT /chains/{name}`, `PUT /theme` and
+  `PATCH /accounts/{id}`, which takes `disabled`, `settings` and an account's routing fields. The
+  other calls that read a body ignore the fields they do not know: `POST /packages`,
+  `PATCH /extensions/{id}/config`, `POST /accounts`, `POST /accounts/{id}/login`,
+  `POST /logins/{id}/input`, `POST /accounts/{id}/test` and `POST /accounts/import`.
+  `POST /vertex/import` reads multipart form data and ignores the parts it does not use, and
+  `PUT /themes/{publisher}/{name}` stores any valid JSON object. A call that takes no body ignores
+  one. A body is read up to 1 MiB, 4 MiB for `POST /accounts/import` and 256 KiB for a stored theme;
+  a larger one is 413 `invalid_request` from `POST /accounts`, `PATCH /accounts/{id}`,
+  `POST /accounts/{id}/login`, `POST /logins/{id}/input`, `POST /accounts/import`,
+  `POST /vertex/import` and `PUT /themes/{publisher}/{name}`, and 400 `invalid_request` from the
+  other calls that read one. Times are RFC 3339 UTC; durations are whole milliseconds in fields
+  ending `_ms`.
 - **Errors.** Every failure is `{"error": {"code": "...", "message": "..."}}` with the HTTP status that
   fits; `code` is stable and `message` is for a person. An error about an upstream account may add
   `status`, `provider_code`, `retryable`, `retry_after_ms`.
 
   | Status | Codes | Meaning |
   | --- | --- | --- |
-  | 400 | `invalid_request` | The request does not parse or names a field or value the call does not take |
-  | 401 | `unauthorized` | No key |
-  | 403 | `forbidden`, `remote_disabled`, `blocked` | Wrong key, another machine, or blocked |
-  | 404 | `not_found` | No such account, package, chain, key or log |
+  | 400 | `invalid_request` | The request does not parse, lacks a required member, names a field or value the call does not take, or is larger than core reads |
+  | 400 | `file_required`, `invalid_json`, `invalid_service_account`, `project_id_missing` | `POST /vertex/import` did not get a usable service account key |
+  | 401 | `unauthorized` | No key, or the wrong key |
+  | 403 | `remote_disabled` | The call came from another machine while `management_allow_remote` is off |
+  | 403 | `blocked` | Too many wrong keys came from the caller's address; `Retry-After` says for how long |
+  | 404 | `not_found` | No such account, package, chain, key, log, theme or login |
   | 409 | `conflict` | The thing changed since it was read, or the change would leave core unusable (the last client key) |
+  | 413 | `invalid_request` | The body is larger than core reads |
+  | 413 | `log_too_large` | A log file is larger than 2 MiB and `format=json` was asked for |
+  | 422 | `invalid_config` | A config document or an extension's settings do not parse or fail their checks |
+  | 422 | `invalid_request` | An account test names no model, and the account lists none |
   | 422 | `refused` | Core checked the change and will not apply it; `message` says why; nothing was changed |
-  | 502 | `upstream` | A registry or provider could not be reached |
-  | 503 | `unavailable` | The extension that would answer is not running |
+  | 422 | `unsupported` | The extension that would answer does not take that account call |
+  | 500 | `internal` | Core could not finish the call, because of its own error rather than the request's |
+  | 502 | `fetch_failed` | A package registry could not be fetched |
+  | 502 | `account_closed`, `auth`, `cancelled`, `extension_crashed`, `extension_protocol`, `extension_timeout`, `extension_unavailable`, `internal`, `invalid_request`, `not_found`, `permission`, `quota`, `rate_limit`, `unavailable`, `unsupported`, `upstream` | An account, login or import call ended on an extension's or a provider's error, with that error's code; the body may add `status`, `provider_code`, `retryable`, `retry_after_ms` |
+  | 503 | `extension_unavailable` | The extension that would answer an account models, quota or test call is not running |
+  | 504 | `unavailable` | The service account login in `POST /vertex/import` did not finish in time |
 
 - **Secrets.** No reply holds a credential, a client key or the management key, except the one reply that
   creates a key. Account IDs and labels are shown.
@@ -97,7 +120,7 @@ proposes what to install. Nothing is installed until asked.
 | `GET /setup` | `pluxy setup` | The last scan, at once (it is kept on disk): `first_run`; `scanning`; `scanned_at`; `found` (below); `picks` (below). The command prints it and, on a terminal, offers to apply the picks marked `suggested` (`--yes` applies without asking) |
 | `POST /setup/scan` | `pluxy setup scan` | Looks again. Returns at once with `scanning: true`; read `GET /setup` until it is false (each probe has 4 seconds) |
 | `POST /setup/apply` | `pluxy setup apply [--pick id]... [--yes]` | `{"picks": ["pluxy/claude", ...]}`: installs and enables each. Returns `{"results": [{"id", "status", "package", "error"}]}` with one result per pick (`done`, or `error`); one failure does not undo the others |
-| **new** `POST /setup/import` | `pluxy import cpa <config.yaml> [--auth-dir <dir>] [--dry-run]` | `{"config": "<path>", "auth_dir": "<path>", "dry_run": true}`: brings a CLIProxyAPI setup on core's machine across and returns the import report (below). `config` is an absolute path (or starts with `~`); `auth_dir` defaults to the config's `oauth.auth-dir`; the command makes a relative path absolute from the current folder. The config's settings, client keys, API-key accounts, aliases and chains go into core's config file in one change, and the auth folder's accounts into its credential store; `listen` stays, since it cannot change while core runs. An account or chain core already has one by that ID or name stays as it is. With `dry_run` nothing is written. 400 for a path that is not absolute or a file that cannot be read; 422 for a file core refuses (the message has the file's secrets taken out) or a credential store inside the auth folder; 409 for an import (not a dry run) into a core that runs on a config.yaml |
+| **new** `POST /setup/import` | `pluxy import cpa <config.yaml> [--auth-dir <dir>] [--dry-run]` | `{"config": "<path>", "auth_dir": "<path>", "dry_run": true}`: brings a CLIProxyAPI setup on core's machine across and returns the import report (below). `config` is an absolute path (or starts with `~`); `auth_dir` defaults to the config's `oauth.auth-dir`; the command makes a relative path absolute from the current folder. The config's settings, client keys, API-key accounts, aliases and chains go into core's config file in one change, and the auth folder's accounts into its credential store; `listen` stays, since it cannot change while core runs, and so does the management key, which is not brought (a plain one or a bcrypt hash): core keeps its own. An account or chain core already has one by that ID or name stays as it is. With `dry_run` nothing is written. 400 for a path that is not absolute or a file that cannot be read; 422 for a file core refuses (the message has the file's secrets taken out) or a credential store inside the auth folder; 409 for an import (not a dry run) into a core that runs on a config.yaml |
 | `POST /setup/done` | `pluxy setup done` | Ends first run (`{"first_run": false}`): the panel and app stop opening on setup |
 | `GET /setup/clients/{id}/paste` | `pluxy client show <tool> [--key-id id]` | What to paste into that client tool's config to point it at this core: its files, the address, and a client key placeholder. `id` is the tool's ID (`claude-code`, `codex`, `opencode`, `pi`, `omp`) or another name for it (`oh-my-pi`, `codex-cli`, a setup package's ID such as `pluxy/pi-setup`, with the `/` escaped as `%2F`). Optional `key_id` names a client key from `GET /client-keys`; the placeholder then names it. 404 for a tool core has no text for, and for a `key_id` core does not hold |
 
@@ -159,8 +182,9 @@ provider section's entry is one key (`api-keys.codex[0]`) whose row names the ac
 gets a row for it (today's core then listened on every interface), and every listen row, that one included,
 says core keeps listening on its own address while it runs, with the file's reach in `from` and core's in
 `to`. `needs` lists the provider packages
-the imported accounts need that core has not installed; core installs nothing by itself. A bcrypt management
-key's `changed` row holds the new key in `to`, once, in the reply that made it (a dry run makes none).
+the imported accounts need that core has not installed; core installs nothing by itself. A `management.secret-key`
+is not brought, plain or bcrypt: core keeps its own management key, and its row says so and names
+`POST /management-key/rotate` to change it.
 
 ### Extensions
 

@@ -20,6 +20,8 @@ const t = strings("shell", {
   navigation: "Main",
   signOut: "Sign out",
   signOutShort: "Out",
+  safeAddress:
+    "If custom CSS hides the panel, add ?safe to the end of its address to open it without custom CSS.",
   privacy: "Privacy mode",
   privacyShort: "Priv",
   privacyEnable: "Turn on privacy mode to hide account emails and identifiers",
@@ -134,7 +136,7 @@ function useExtensionPages(on: boolean, kit: Kit, version: number, View: Extensi
   return defs;
 }
 
-function SignIn(props: { host: Host; onDone: () => void; reason?: string }) {
+function SignIn(props: { host: Host; onDone: () => void; reason?: string; safeAddress?: boolean }) {
   const [key, setKey] = useState("");
   const [remember, setRemember] = useState(false);
   const [error, setError] = useState(props.reason);
@@ -174,6 +176,7 @@ function SignIn(props: { host: Host; onDone: () => void; reason?: string }) {
         <Button type="submit" variant="primary" disabled={busy || key === ""}>
           {t("signIn")}
         </Button>
+        {props.safeAddress && <small class="hint">{t("safeAddress")}</small>}
       </form>
     </main>
   );
@@ -203,6 +206,11 @@ export function Shell(props: {
    * in a webview of its own. Default: a sandboxed frame in the page area.
    */
   extensionPage?: ExtensionPageView;
+  /**
+   * The host opens without custom CSS when its address ends in ?safe (the panel does): the
+   * sign-in page says so, where custom CSS applies too.
+   */
+  safeAddress?: boolean;
 }) {
   const { host, themes, privacy } = props;
   const privacyOn = usePrivacyOn(privacy);
@@ -275,6 +283,15 @@ export function Shell(props: {
     return () => window.removeEventListener("hashchange", onHash);
   }, [pages]);
 
+  // A change of page opens the new page at its top: the window keeps its scroll position from one
+  // page to the next. A change inside a page (a tab or a filter in the address) keeps it.
+  const shownPage = useRef(page);
+  useEffect(() => {
+    if (shownPage.current === page) return;
+    shownPage.current = page;
+    window.scrollTo(0, 0);
+  }, [page]);
+
   const active = pages.find((p) => p.id === page);
   const navId = useId();
   // Laid out as a bar (the theme's top navigation, or any navigation in a narrow window), the
@@ -312,6 +329,7 @@ export function Shell(props: {
         <SignIn
           host={host}
           reason={reason}
+          safeAddress={props.safeAddress}
           onDone={() => {
             setReason(undefined);
             setSignedIn(true);
@@ -385,6 +403,8 @@ export function Shell(props: {
               <button
                 type="button"
                 class="nav-item signout"
+                aria-label={t("signOut")}
+                title={t("signOut")}
                 onClick={() => {
                   host.signOut();
                   setSignedIn(false);

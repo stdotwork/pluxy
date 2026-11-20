@@ -25,6 +25,6 @@ if (url.searchParams.has("safe")) {
 }
 
 render(
-  <Shell host={host} themes={themes} privacy={privacy} pages={corePages()} extensionPages />,
+  <Shell host={host} themes={themes} privacy={privacy} pages={corePages()} extensionPages safeAddress />,
   document.body,
 );

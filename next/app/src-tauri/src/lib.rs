@@ -16,6 +16,8 @@ pub static PLUXY_TEST_BUILD: [u8; 31] = *b"PLUXY_TEST_BUILD_DO_NOT_RELEASE";
 
 pub mod access;
 pub mod artifact;
+pub mod bundled_core;
+pub mod bundled_manifest;
 pub mod client;
 #[cfg(native_stack)]
 mod client_keys;
@@ -3375,7 +3377,21 @@ pub fn run() {
                 });
             });
             let window_prefs = window::Store::open(config.join("window.json"));
-            let conn = Connection::open_at_startup(
+            // A version an update installed accepts itself, which the earlier one waits for:
+            // before the managed core starts and before anything reads the core that came with
+            // the app, which the update replaced with the app. It reads no app state, which is
+            // managed below; `updater::accepted` finishes once it is.
+            let accepting = updater::accept(app.handle());
+            // The core that came with the app, if this build has one (`bundled_core.rs`).
+            let bundled = bundled_core::compiled().and_then(|m| {
+                let exe = std::env::current_exe().ok()?;
+                Some(bundled_core::Bundled {
+                    manifest: m.clone(),
+                    place: bundled_core::place(&exe, &app.package_info().name)?,
+                    app_version: app.package_info().version.to_string(),
+                })
+            });
+            let conn = Connection::open_with_bundled(
                 Dirs {
                     config: secrets,
                     core,
@@ -3383,6 +3399,7 @@ pub fn run() {
                 },
                 Some(on_exit),
                 preferences.start_core_on_launch,
+                bundled,
             );
             #[cfg(feature = "native-test")]
             native_test::hold_for_early_exit();
@@ -3542,8 +3559,7 @@ pub fn run() {
             } else {
                 show_in_dock(&handle, false);
             }
-            // A version an update installed accepts itself, which the earlier one waits for.
-            updater::accept(&handle);
+            updater::accepted(&handle, accepting);
             updater::record_started_from(&handle);
             #[cfg(feature = "native-test")]
             native_test::start(handle);

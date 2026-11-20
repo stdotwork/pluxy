@@ -2,7 +2,8 @@
 //! real app as the person would and probes what each webview can call:
 //!
 //! 0. with `PLUXY_APP_TEST_CORE_SOURCE`, a session runs only the core steps (`native_core.rs`):
-//!    install, update, rollback, adopt, then quits;
+//!    install, update, rollback, adopt, then quits; with `PLUXY_APP_TEST_BUNDLED`, it reports
+//!    only the core that came with the app (`bundled_native.rs`), then quits;
 //! 1. in the window's webview, calls each app command with no arguments, leaving out the two
 //!    that take none and would act: each must get past the command check (and the ones that
 //!    need arguments then fail on those); then gets core's status through the app;
@@ -80,6 +81,8 @@ mod admission;
 #[cfg(target_os = "linux")]
 #[path = "backups_native.rs"]
 mod backups;
+#[path = "bundled_native.rs"]
+mod bundled;
 #[cfg(target_os = "linux")]
 #[path = "chooser_native.rs"]
 mod chooser;
@@ -1424,6 +1427,8 @@ pub fn start(app: AppHandle) {
     std::thread::spawn(move || {
         let result = if std::env::var_os("PLUXY_APP_TEST_EARLY_EXIT").is_some() {
             early_exit(&app)
+        } else if let Ok(what) = std::env::var("PLUXY_APP_TEST_BUNDLED") {
+            bundled::run(&app, &what)
         } else if std::env::var_os("PLUXY_APP_TEST_INSTANCES").is_some() {
             instances(&app)
         } else {

@@ -199,11 +199,6 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 	}
 
 	c.importRows(led, p)
-	if res.NewManagementKey != "" && !req.DryRun {
-		for _, it := range []string{"management.secret-key", "remote-management.secret-key", "secret-key"} {
-			led.Update(legacy.ConfigItem(it), func(_ *int, row *legacy.Row) { row.To = res.NewManagementKey })
-		}
-	}
 	lists, err := led.Report()
 	if err != nil {
 		return management.ImportReport{}, &editError{http.StatusInternalServerError, "internal", err.Error()}
@@ -358,10 +353,6 @@ func (c *Core) mergeImport(d *configdoc.Doc, p *importPlan) error {
 						return err
 					}
 				}
-			}
-		case "management_key":
-			if err := d.SetManagementKey(v.(string)); err != nil {
-				return err
 			}
 		case "routing":
 			for _, rk := range slices.Sorted(maps.Keys(v.(map[string]any))) {

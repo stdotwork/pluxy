@@ -163,3 +163,47 @@ test("filters, downloads and logging-off guidance follow the selected theme", as
     await expect(page.getByRole("switch", { name: "Log to File", exact: true })).not.toBeChecked();
   }
 });
+
+test("a trace with no request log says that request logging was off and where to switch it on", async ({
+  page,
+}) => {
+  expect(
+    (await core.mgmt("PATCH", "/settings", { observability: { logs: { "request-log": false } } })).status,
+  ).toBe(200);
+  const answered = await fetch(`${core.base}/v1/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${core.clientKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "fake-model", messages: [{ role: "user", content: "hi" }] }),
+  });
+  expect(answered.status).toBe(200);
+  const id = answered.headers.get("X-CPA-TRACE-ID") as string;
+  await answered.text();
+  await openPanel(page, core, `/panel/#/logs/${id}`);
+  await signIn(page, core);
+  const requestLog = page.getByRole("region", { name: "Request log", exact: true });
+  await expect(requestLog).toContainText("no request log has this trace ID");
+  await expect(requestLog).toContainText(
+    "A request has a log of its own only when request logging was on while it ran.",
+  );
+  await requestLog.getByRole("link", { name: "Config Panel — Logging", exact: true }).click();
+  await expect(page.getByLabel("Enable request logging")).toBeVisible();
+});
+
+test("a request log with long lines scrolls inside its frame", async ({ page }) => {
+  expect(
+    (await core.mgmt("PATCH", "/settings", { observability: { logs: { "request-log": true } } })).status,
+  ).toBe(200);
+  const answered = await fetch(`${core.base}/v1/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${core.clientKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "fake-model", messages: [{ role: "user", content: "long ".repeat(200) }] }),
+  });
+  expect(answered.status).toBe(200);
+  const id = answered.headers.get("X-CPA-TRACE-ID") as string;
+  await answered.text();
+  await openPanel(page, core, `/panel/#/logs/${id}`);
+  await signIn(page, core);
+  const requestLog = page.getByRole("region", { name: `View log for request ${id}`, exact: true });
+  await expect(requestLog).toContainText("=== REQUEST INFO ===");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
+});

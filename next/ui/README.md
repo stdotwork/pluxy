@@ -70,6 +70,10 @@ panel that `extensions/panel` held) that each one replaces. A page's ID is its a
 (`#/<id>`) and its theme hook `data-page`. Why the pages have these names, and the other
 decisions behind them, is in [docs/panel.md](../../docs/panel.md).
 
+A change of page opens the new page at its top: the shell scrolls the window there, so a page
+opened from a button far down another one shows from its start. A change inside a page (a tab or
+a filter in its address) keeps the place.
+
 Two pages add to their address. `#/logs/<trace ID>` opens that request's log in the Logs Viewer.
 `#/config/<tab>` opens a tab of the Config Panel: `common` (what `#/config` opens),
 `connectivity`, `network`, `logging`, `advanced` or `source`. `#/config/source?account=<id>`
@@ -82,6 +86,19 @@ shell asks core for `GET /setup`: on a first run (`first_run`), when the address
 Setup opens in place of the Dashboard. The shell does not wait for the answer, so the Dashboard
 may show for an instant. A core without the call (it answers 404) gets no Setup page and nothing
 opens by itself. The page stays in the navigation after setup, as a status of the same things.
+
+When core's scan found a CLIProxyAPI setup, its row on the page has "Bring it across". The button
+sends `POST /setup/import` as a dry run and shows core's report in its three lists (what comes
+across, what is different in pluxy, what does not come across and why), with the provider packages
+the accounts need; nothing is written until the person confirms. After the import the page reads
+Setup, the accounts and the packages again and ticks the providers the report says are needed, so
+Start installs them. The row also names the command that does the same, `pluxy import cpa`. A
+refusal is shown in the row with what to do about it; a core without the call (404) gets the
+command only. An import can change core's management key: the page then keeps the report on
+screen, shows a new key once if core made one, and offers to sign in again. A host without the
+`signOut` feature keeps the key itself and could not follow the change (the desktop app running
+its own core): there the page shows the dry run and does not offer the import while the report
+has a management key row.
 
 A host can add one button to each client the page lists as found:
 `corePages({ setup: { clientAction, clientActionHint } })` (`SetupOptions` in `kit/pages/setup.tsx`). `clientAction` takes the client's ID from core's
@@ -220,7 +237,8 @@ feature, it keeps the old label, unless the label named something this core does
   `config.yaml`, where it sets both on the file's Codex accounts.
 - "Host Address", "Port", "OAuth Credential Directory", "Enable TLS" and its paths, "Trusted
   proxies" and "Allow Remote Access": core runs them, but they set where core listens, who may
-  reach it, or the folder `-import-auth` reads, and core's settings call does not change them.
+  reach it, or the folder an import reads (`pluxy import cpa`, or "Bring it across" on the Setup
+  page), and core's settings call does not change them.
   They are edited in the Source tab.
 - Typing or pasting a client key, "Generate" and the "API key strength" meter: core makes every
   new key itself, at random. A specific key that a client already uses can be written in the

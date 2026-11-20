@@ -158,7 +158,24 @@ A Chat or Responses account sends a reasoning effort the upstream may not take a
 it does, as today's core does: `"reasoning_levels"` in its `settings` lists the efforts the
 upstream accepts (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`), by default `low`,
 `medium` and `high`, so `xhigh` and `max` go as `high`, `minimal` and `none` as `low`, and `auto`
-as `medium`. Today's core refuses `minimal` with a 400 instead.
+as `medium`. Today's core refuses `minimal` with a 400 instead. A client that asked for an effort the
+account moved is told in the translation report: an approximated loss naming the effort asked and
+the effort sent.
+
+A Chat account shapes the requests it sends with three more settings, for upstreams stricter than
+OpenAI's own. `"developer_role"` is `"developer"` (the default) or `"system"`, the role a developer
+message goes as. `"string_content"`, when true, sends a message whose content is only text parts as
+one string. `"reasoning_passback"` decides what happens to the `reasoning_content` of earlier assistant
+turns: true sends it back (for DeepSeek's thinking mode with tools, which answers 400 to a turn
+without it, a blank one is sent for a turn that kept none, reported as an approximated loss; a
+request without tools or with `thinking` disabled is left alone), false sends none, and unset leaves
+what the client sent. A setting left unset takes its vendor's preset by `base_url` host, and a
+setting you give always wins: `api.deepseek.com` takes `developer_role` `"system"`,
+`string_content` true and `reasoning_passback` true (its messages have no developer role, a system or
+assistant message's content is a string, and thinking mode wants the reasoning back);
+`api.mistral.ai` takes `developer_role` `"system"` and `reasoning_passback` false (its messages have
+no developer role and an assistant message takes no `reasoning_content`). Other hosts, OpenRouter and
+Groq included, have no preset: their documentation names nothing they need shaped.
 
 For an OpenAI-compatible account whose vendor offers a usage or balance endpoint for a normal API
 key, `GET /v0/management/accounts/{id}/quota` reads it: OpenRouter's `GET /api/v1/key` (reporting
@@ -1298,7 +1315,8 @@ are the CLI's: the token twice as Basic credentials, Connect's version, a Sentry
 User-Agent and no compression. What Devin has no place for is reported as dropped (and refused
 under `drop_policy` `reject`): a client's fields kept beside the model (such as a Chat message's
 `name` or `seed`), parallel tool calls turned off, strict tool arguments, and parts other than
-text and base64 images. A tool result given as content blocks keeps its text. A user turn left
+text and base64 images. A tool result given as content blocks keeps its text; its images and
+error flag are reported as dropped. A user turn left
 with nothing once media Devin cannot take is dropped is refused, as today's core refuses it.
 
 The reply's frames become the reply's events as they arrive: reasoning, text, tool calls and
@@ -1393,13 +1411,16 @@ An account is eligible when it serves the model, no block covers it and it is un
 concurrency limit. Refusals block what they are about, for as long as the upstream said
 (`Retry-After`) or else by backoff: a rate limit or quota on one model (a plain 429, as today's
 core cools only the model that answered) or on the whole credential (when the provider says the
-account's allowance is used up, such as a subscription's usage window), a refused key for 30 minutes, a missing model for 12 hours, a failing endpoint with backoff up
-to a minute. Results count in the order their requests started on the account: a success
-clears the blocks that failures of earlier-started requests left on its account (its credential,
-its model and its endpoint), and a failure that ends after a later-started request succeeded on
-the same scope leaves no block and no last error. Among eligible accounts, core prefers the
-session's account (session affinity is on unless the config turns it off), then the highest `priority`, then picks by
-strategy.
+account's allowance is used up, such as a subscription's usage window) backs off from 1 second,
+doubling, to 30 minutes; a failing endpoint or other transient upstream failure back off from 1
+second, doubling, to 1 minute; a refused key is left alone for 30 minutes, and a missing model for
+12 hours. Results count in the order their requests started on the account: a success clears the
+blocks that failures of earlier-started requests left on its account (its credential, its model
+and its endpoint), and a failure that ends after a later-started request succeeded on the same
+scope leaves no block and no last error. Clearing a block clears its backoff step too; a scope
+with no live block for an hour is forgotten, and its step with it. Among eligible accounts, core
+prefers the session's account (session affinity is on unless the config turns it off), then the
+highest `priority`, then picks by strategy.
 
 A reset the upstream names is used when it is between 1 second and 8 days away (the longest usage
 window of any supported provider is 7 days). A shorter one is held for 1 second. A longer one is
@@ -1416,10 +1437,16 @@ request through at the check instead, and that request's outcome decides. A real
 the check where a reading exists. A check that cannot be made leaves the block and is made again
 15 minutes later. Quota blocks are saved to `state/routing.json` beside the config file (mode
 0600) and read back at start, where each is checked at once, so a restart sends no requests to
-accounts whose usage ran out. A file core cannot read, or that another version wrote, is not
-loaded and is left as it is until a block must be saved; it is then moved to `routing.json.bad`. `pluxy account clear` (`POST /accounts/{id}/cooldown/reset`)
-still clears an account's blocks at once. Each account's `health` in `GET /accounts` sums this
-up in one word (see `management/README.md`, "Accounts").
+accounts whose usage ran out. Bans are saved in the same file and read back at start too: for
+each, the account, the provider's reason and when it was banned. A saved ban whose account the
+config no longer has is dropped, at start and on a reload; one for an account that is only out of
+routing for now, such as an extension that is stopped or a login still due, is kept. A ban has no
+expiry: it ends when the account signs in again, is removed, or is turned back on (`pluxy account
+enable`), and `pluxy account clear` does not lift it. A file core cannot read, or that another
+version wrote, is not loaded and is left as it is until a block must be saved; it is then moved to
+`routing.json.bad`. `pluxy account clear` (`POST /accounts/{id}/cooldown/reset`) still clears an
+account's blocks at once. Each account's `health` in `GET /accounts` sums this up in one word (see
+`management/README.md`, "Accounts").
 
 When every account is blocked, the reply tells the client how long is left in whole seconds,
 rounded up and at least 1 while anything is left: the message's "try again in 1s" (or `1m1s`),
@@ -1724,6 +1751,15 @@ any request:
 | `GET /v1beta/models` | Gemini's list, `{"models": [...]}`: each model's `name` (`models/{id}`), `displayName`, `description`, token limits and `supportedGenerationMethods` (`["generateContent"]` when not known). |
 | `GET /v1beta/models/{name}` | One model, named with or without `models/`, or a 404. |
 
+For each name, core merges what the account's upstream list, its `models.dev` catalogue and the
+extension's built-in list say, taking the smallest positive token limit, read in that order so
+that an equal limit stays with the earlier source. Every other field, such as the display name,
+description, owner, version and modalities, comes from the first source that sets it, the
+account's list before the extension's list and that before the catalogue, except the capabilities,
+which come from the first of the account's list, the catalogue and the extension that has any, a
+later source adding only the reasoning levels and deprecation time an earlier one lacked. `from`
+names the source that gave the context limit, else the output limit, else the capabilities.
+
 A list holds each model the accounts serve, once under each name a client can ask for it by,
 and the name of each fallback chain no account serves, sorted by name. An account whose config lists `models` lists those. An account without `models`
 lists the models its extension says the account serves (the protocol's `models` operation, from
@@ -1734,7 +1770,8 @@ account serves is refused without calling an upstream, as today's core refuses i
 one, or one it could not read within 15 seconds serves any model, and core asks again a minute
 later. Core asks again for each known list every 30 minutes with jitter, when an account's
 credential is renewed or it signs in again, and on `POST /v0/management/models/refresh`; a
-refresh that fails, times out or comes back empty keeps the last good list.
+refresh that fails, times out or comes back empty keeps the last good list, and so does one that
+falls back to the extension's built-in list when the account's list was read from the provider.
 
 ### Codex client catalog
 
@@ -2013,7 +2050,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
 | `GET /v0/management/models` | The models `GET /v1/models` lists, as one list in the same order: `models`, each with `id` (the name clients use), what the account, the catalogue and the extension say about the model (`owned_by`, `display_name`, `context_length`, `max_output_tokens`, `capabilities`, `from`, ...), `upstream` (its name upstream), `extension` (the extension of the account whose entry the list shows) and `accounts` (the IDs of the accounts a request for the name uses, as routing chooses them: one provider's, or with a fallback chain each step's in step order, highest priority first within a step). An account that serves any model because its list is not known adds no name, but is among the accounts of the names its provider serves; a fallback chain that only such accounts serve is listed as the first of them, with its step's model as `upstream`. Under the `weighted` strategy an account of `weight` 0 is in no entry. A name whose accounts all wait for a login or are turned off is left out. Never a credential. |
-| `POST /v0/management/models/refresh` | Ask providers for their model lists again now; optional JSON body `{"account": "<id>"}` for one account. Returns the updated `models` list and per-account `accounts` results (`models`, `kept`, `error`). A read that fails, times out or comes back empty keeps the last good list. |
+| `POST /v0/management/models/refresh` | Ask providers for their model lists again now; optional JSON body `{"account": "<id>"}` for one account. Returns the updated `models` list and per-account `accounts` results (`models`, `kept`, `error`). A read that fails, times out, comes back empty or falls back to the extension's built-in list keeps the last good list (the last live one, when it was read from the provider). |
 | `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate`, this core's own, under its own name (below). |
 | `PATCH /v0/management/settings` | Changes the settings the body names (`{"routing": {"strategy": "fill-first"}}`) and replies with them all. 400 for a name or value it does not take. |
 
@@ -2460,9 +2497,10 @@ before anything is written.
 
 A migrated config needs its management key set again once. Today's core writes a bcrypt hash over
 `management.secret-key` in the file after it reads the key, and this core cannot use a hash: it
-refuses the config and says so. Replace the hash with the key itself, in plain text, or bring the
-setup across with `pluxy import cpa`, which makes a new key. A config with no management key at all
-is refused too, with a message saying how to add one.
+refuses the config and says so. Replace the hash with the key itself, in plain text. A config with
+no management key at all is refused too, with a message saying how to add one. `pluxy import cpa`
+does not bring the file's management key, plain or hashed: core keeps its own (see
+[moving from CLIProxyAPI](#moving-from-cliproxyapi-pluxy-import-cpa)).
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
 `extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir` and `cors`
@@ -2636,11 +2674,14 @@ What the import changes, each under **changed**:
   `keep_with` gives the `"listen"` value to write and restart core with. A file with no
   `server.host` (or an empty one) is one of these: today's core listened on every interface then,
   and pluxy listens on `127.0.0.1` unless told otherwise.
-- A `management.secret-key` that today's core replaced with its bcrypt hash cannot be used: the import
-  makes a new management key, which the row shows once. The `pluxy` command reads it from the config
-  file.
 - The example config's public client keys (`your-api-key-1` and the rest) are left out.
 - Pooled models become fallback chains, as [Provider key sections](#provider-key-sections) describes.
+
+A `management.secret-key` is not brought, neither a plain key nor the bcrypt hash today's core may
+have written over it: core keeps its own management key, which guards every client of it, the
+desktop app's core among them, so an import does not change who may manage core. Its **not
+brought** row says so. Change core's key with `POST /v0/management/management-key/rotate`, which
+returns the new key once.
 
 Each file of the auth folder becomes an account added by login, with the file's name (less
 `.json`) as its ID. A file whose account ID the config or the store already uses is not brought,

@@ -41,6 +41,11 @@ func TestMain(m *testing.M) {
 // fakeExtension misbehaves during startup. It writes its process ID to the file "pid" in its
 // working folder (the package folder) so the test can check it was reaped.
 func fakeExtension(mode string) {
+	if m, ok := strings.CutPrefix(mode, "tool-result-"); ok {
+		minor, _ := strconv.Atoi(m)
+		toolResultEcho(minor)
+		return
+	}
 	if mode == "echo-credential" {
 		echoCredential()
 		return
@@ -306,6 +311,20 @@ func TestLateHandshakeFailsWithTheStartLimitError(t *testing.T) {
 			t.Fatalf("run %d: error = %q, want the start limit's error with the handshake readable", i, msg)
 		}
 	}
+}
+
+// A program that is slow to start (on Windows, a new program scanned before it runs took over 10s
+// in CI) still gets the whole limit for its handshake and describe: the limit counts from the
+// program running.
+func TestStartLimitCountsFromTheProgramRunning(t *testing.T) {
+	const startTimeout = 2 * time.Second
+	dir := fakePackage(t, "serve")
+	slow := func() { time.Sleep(startTimeout + 500*time.Millisecond) }
+	ext, err := Start(filepath.Join(dir, ManifestFile), Options{StartTimeout: startTimeout, Log: io.Discard, beforeProgramStart: slow})
+	if err != nil {
+		t.Fatalf("Start of a program slow to start: %v", err)
+	}
+	ext.Stop()
 }
 
 // fakePackage writes a package folder whose program is this test binary.
@@ -731,7 +750,7 @@ func accountClosedExtension(minor int) {
 
 // Core acts on account_closed only from an extension whose describe reports minor 20 or later;
 // from an older extension it is downgraded to permission.
-func TestAccountClosedRequiresProtocolMinor19(t *testing.T) {
+func TestAccountClosedRequiresProtocolMinor20(t *testing.T) {
 	for _, c := range []struct {
 		mode string
 		want string

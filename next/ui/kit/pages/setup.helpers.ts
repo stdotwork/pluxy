@@ -32,6 +32,15 @@ export function toInstall(setup: Setup, choices: Choices, results: Results): str
     .map((pick) => pick.id);
 }
 
+/**
+ * Whether "nothing is installed until you press Start" holds: providers are offered and none of
+ * them is installed yet.
+ */
+export function startInstalls(setup: Setup, results: Results): boolean {
+  const picks = providerPicks(setup);
+  return picks.length > 0 && !picks.some((pick) => isInstalled(pick, results));
+}
+
 /** The results after a reply: each pick it names takes its new outcome, the others keep theirs. */
 export function withResults(results: Results, reply: SetupApplyResult[]): Results {
   const next = { ...results };

@@ -77,6 +77,30 @@
     white-space: pre;
   }
 
+  .setup-report > details > summary {
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .setup-report-rows {
+    list-style: none;
+    margin: calc(var(--s) * 2) 0 0;
+    padding: 0;
+    display: grid;
+    gap: calc(var(--s) * 2);
+  }
+
+  .setup-report-rows > li {
+    display: grid;
+    gap: calc(var(--s) * 0.5);
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .setup-code-how {
+    margin-top: calc(var(--s) * 2);
+  }
+
   .setup-paste {
     margin-top: calc(var(--s) * 2);
     min-width: 0;

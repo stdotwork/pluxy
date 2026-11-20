@@ -54,7 +54,9 @@ export const api = (host: Host) => ({
 export type Api = ReturnType<typeof api>;
 
 const t = strings("api", {
-  unreachable: "core could not be reached",
+  // One sentence with no full stop: pages put it after their own words ("Not saved: ...").
+  unreachable:
+    "core could not be reached: pluxy is not running or the address is wrong, so start it, then try again",
   answered: "core answered {status}",
 });
 
