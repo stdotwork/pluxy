@@ -56,6 +56,7 @@ func TestChainServesFromTheNextStep(t *testing.T) {
 		}}}},
 	}, "-bundled", bundledRegistry(t, map[string]string{"pluxy/codex": filepath.Join("codex", "codex")}))
 	logs.waitFor(t, "config revision 1 active")
+	installBundled(t, base, "pluxy/codex")
 	env := []string{"PLUXY_URL=" + base, "PLUXY_MANAGEMENT_KEY=" + managementKey}
 
 	const body = `{"model":"claude-opus-5-5","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
@@ -196,6 +197,7 @@ func TestNeedsLoginKeepsTheProvider(t *testing.T) {
 		}}}},
 	}, "-bundled", bundledRegistry(t, map[string]string{"pluxy/codex": filepath.Join("codex", "codex")}))
 	logs.waitFor(t, "config revision 1 active")
+	installBundled(t, base, "pluxy/codex")
 
 	resp := postPath(t, context.Background(), base, "/v1/messages", clientKey, `{"model":"claude-opus-5-5","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
 	raw, _ := io.ReadAll(resp.Body)
@@ -255,6 +257,7 @@ func TestDisabledFreeCodexLoginKeepsProModelOnClaude(t *testing.T) {
 		"extensions": map[string]any{"pluxy/codex": map[string]any{"accounts": []any{}}},
 	}, "-bundled", bundledRegistry(t, map[string]string{"pluxy/codex": filepath.Join("codex", "codex")}))
 	logs.waitFor(t, "config revision 1 active")
+	installBundled(t, base, "pluxy/codex")
 
 	const body = `{"model":"gpt-6.1-sol","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
 	ask := func(when string) {
