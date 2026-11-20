@@ -259,13 +259,14 @@ type Router struct {
 	gen      uint64    // this router's generation, from state (see State.Retain)
 	created  time.Time // when the router was made: the created time of models accounts list themselves
 
-	mu       sync.RWMutex // guards accounts, known, creds, readings and catalog
-	accounts []*Account   // the accounts requests are routed over
-	known    []*Account   // accounts and the held accounts (Account.Held), in the order given
-	creds    Credentials
-	readings Readings
-	catalog  CatalogFunc
-	lists    catalogs // the known accounts' model lists from catalog
+	mu        sync.RWMutex // guards accounts, known, creds, readings, catalog and catalogue
+	accounts  []*Account   // the accounts requests are routed over
+	known     []*Account   // accounts and the held accounts (Account.Held), in the order given
+	creds     Credentials
+	readings  Readings
+	catalog   CatalogFunc
+	catalogue CatalogueFunc
+	lists     catalogs // the known accounts' model lists from catalog
 
 	// For tests: the clock, the wait, the source of jitter, and a hook run after an account
 	// is chosen and before it is reserved.
@@ -427,6 +428,12 @@ func (r *Router) catalogFunc() CatalogFunc {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.catalog
+}
+
+func (r *Router) catalogueFunc() CatalogueFunc {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.catalogue
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

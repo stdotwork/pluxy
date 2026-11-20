@@ -23,6 +23,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/management"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // Exit codes of the client subcommands (next/management/README.md).
@@ -445,9 +446,20 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.ModelsReply
 			return x.call(http.MethodGet, "/models", nil, nil, &r, func() {
-				rows := [][]string{{"MODEL", "EXTENSION", "UPSTREAM", "ACCOUNTS"}}
+				rows := [][]string{{"MODEL", "EXTENSION", "UPSTREAM", "CONTEXT", "MAX OUTPUT", "CAPABILITIES", "FROM", "ACCOUNTS"}}
 				for _, m := range r.Models {
-					rows = append(rows, []string{m.ID, dash(m.Extension), dash(m.Upstream), strings.Join(m.Accounts, ",")})
+					ctxStr, outStr := "-", "-"
+					if m.ContextLength > 0 {
+						ctxStr = strconv.Itoa(m.ContextLength)
+					}
+					maxOut := m.MaxOutputTokens
+					if maxOut == 0 {
+						maxOut = m.MaxCompletionTokens
+					}
+					if maxOut > 0 {
+						outStr = strconv.Itoa(maxOut)
+					}
+					rows = append(rows, []string{m.ID, dash(m.Extension), dash(m.Upstream), ctxStr, outStr, formatCapabilities(m.Capabilities), dash(m.From), strings.Join(m.Accounts, ",")})
 				}
 				x.table(rows)
 			})
@@ -963,6 +975,35 @@ func printFlat(x *invocation, v any) {
 	walk("", tree)
 	sort.Slice(rows, func(i, j int) bool { return rows[i][0] < rows[j][0] })
 	x.table(rows)
+}
+
+func formatCapabilities(c *protocol.ModelCapabilities) string {
+	if c == nil {
+		return "-"
+	}
+	var parts []string
+	if c.Tools {
+		parts = append(parts, "tools")
+	}
+	if c.StructuredOutput {
+		parts = append(parts, "structured_output")
+	}
+	if c.Vision {
+		parts = append(parts, "vision")
+	}
+	if c.PDF {
+		parts = append(parts, "pdf")
+	}
+	if c.Reasoning {
+		parts = append(parts, "reasoning")
+	}
+	if c.DeprecatedAt > 0 {
+		parts = append(parts, "deprecated")
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ",")
 }
 
 // argsUsage is how help and usage errors write cmd's arguments.

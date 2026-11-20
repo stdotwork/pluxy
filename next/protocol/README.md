@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.23
+# pluxy extension protocol, version 0.24
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -34,10 +34,11 @@ manifest's `title`, `summary` and `kind`, and in a [registry index](#registry-in
 the registry's `tier`. Version 0.22 adds the account's
 [`timeouts`](#timeouts): upstream request limits for response headers, stream byte gaps and
 non-streamed completion. Version 0.23 adds [alive frames](#alive-frames): the extension tells core
-its upstream is still sending, and core ends a call that sends nothing at all for too long. It is
-deliberately small; later versions add capabilities and more operations
-without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.23 (see
+its upstream is still sending, and core ends a call that sends nothing at all for too long.
+Version 0.24 adds a model's `capabilities`: what the model supports and when it was deprecated. It
+is deliberately small; later versions add more capabilities and operations without changing what
+is described here. An extension written for version 0 works unchanged with a core that speaks 0.24
+(see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -343,7 +344,8 @@ event as for `generate`.
 
 ```json
 {"type": "models.result", "models": {"owned_by": "openai", "from": "account", "models": [
-  {"id": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "created": 1794268800, "context_length": 400000, "max_completion_tokens": 128000}
+  {"id": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "created": 1794268800, "context_length": 400000, "max_completion_tokens": 128000,
+   "capabilities": {"tools": true, "structured_output": true, "vision": true, "pdf": false, "reasoning": true, "reasoning_levels": ["low", "medium", "high", "xhigh", "max"]}}
 ]}}
 ```
 
@@ -360,6 +362,7 @@ event as for `generate`.
 | model `context_length`, `max_completion_tokens` | Its context window and longest reply, in tokens. |
 | model `input_token_limit`, `output_token_limit` | Gemini's names for the same limits, where the provider gives them apart. Default: the two above. |
 | model `generation_methods`, `input_modalities`, `output_modalities` | Gemini's `supportedGenerationMethods`, `supportedInputModalities` and `supportedOutputModalities`. |
+| model `capabilities` | Optional, since 0.24: what the model supports and when it was deprecated — `tools`, `structured_output`, `vision`, `pdf`, `reasoning` (booleans), `reasoning_levels` (optional list from `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` when `reasoning` is true), and `deprecated_at` (optional Unix seconds). For an extension below 0.24, core ignores `capabilities` and fills them from its catalogue only. |
 
 Every field but `id` is optional and shown only where a client's list has a place for it. Core
 renames, leaves out and prefixes the listed models by the account's naming rules (its `models`,
@@ -1433,7 +1436,7 @@ extension below 0.23 gets none: it cannot promise alive frames.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.23. An extension reports the minor version it
+raise the minor version: this document is version 0.24. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1464,8 +1467,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.21 | A manifest's optional `title`, `summary` and `kind`, and a [registry index](#registry-index) package's optional `title`, `summary`, `kind` and `tier`. No call or frame changes. |
 | 0.22 | The account's optional [`timeouts`](#timeouts). |
 | 0.23 | [Alive frames](#alive-frames): the call's and turn's `alive` and the `alive` frame; core's `extension_timeout`. |
+| 0.24 | A model's `capabilities` ([`models`](#models)). |
 
-## What version 0.23 leaves out
+## What version 0.24 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

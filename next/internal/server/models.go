@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -23,7 +24,7 @@ const (
 // or Anthropic's for an Anthropic client; GET /v1beta/models and /v1beta/models/{name} in
 // Gemini's. Each lists the models the accounts serve now, under every name a client can use.
 func serveModels(mux *http.ServeMux, src Source) {
-	list := func(google bool, write func(w http.ResponseWriter, r *http.Request, models []protocol.Model)) http.HandlerFunc {
+	list := func(google bool, write func(w http.ResponseWriter, r *http.Request, models []route.ServedModel)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			g, release := src.Acquire()
 			defer release()
@@ -39,12 +40,19 @@ func serveModels(mux *http.ServeMux, src Source) {
 				serveCodexModels(w, r, g)
 				return
 			}
-			write(w, r, g.Router.Models(r.Context()))
+			write(w, r, g.Router.ServedModels(r.Context()))
 		}
 	}
-	mux.HandleFunc("GET /v1/models", accessLog(list(false, func(w http.ResponseWriter, r *http.Request, models []protocol.Model) {
+	toModels := func(served []route.ServedModel) []protocol.Model {
+		out := make([]protocol.Model, len(served))
+		for i, m := range served {
+			out[i] = m.Model
+		}
+		return out
+	}
+	mux.HandleFunc("GET /v1/models", accessLog(list(false, func(w http.ResponseWriter, r *http.Request, models []route.ServedModel) {
 		if anthropicClient(r) {
-			writeList(w, http.StatusOK, anthropicList(models))
+			writeList(w, http.StatusOK, anthropicList(toModels(models)))
 			return
 		}
 		data := make([]map[string]any, len(models))
@@ -53,11 +61,11 @@ func serveModels(mux *http.ServeMux, src Source) {
 		}
 		writeList(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 	})))
-	mux.HandleFunc("GET /v1/models/{model...}", accessLog(list(false, func(w http.ResponseWriter, r *http.Request, models []protocol.Model) {
+	mux.HandleFunc("GET /v1/models/{model...}", accessLog(list(false, func(w http.ResponseWriter, r *http.Request, models []route.ServedModel) {
 		id := r.PathValue("model")
 		var items []map[string]any
 		if anthropicClient(r) {
-			items = anthropicList(models)["data"].([]map[string]any)
+			items = anthropicList(toModels(models))["data"].([]map[string]any)
 		} else {
 			for _, m := range models {
 				items = append(items, openAIModel(m))
@@ -72,20 +80,20 @@ func serveModels(mux *http.ServeMux, src Source) {
 		writeList(w, http.StatusNotFound, map[string]any{"error": map[string]string{
 			"message": "Model not found", "type": "invalid_request_error", "code": "model_not_found"}})
 	})))
-	mux.HandleFunc("GET /v1beta/models", accessLog(list(true, func(w http.ResponseWriter, _ *http.Request, models []protocol.Model) {
+	mux.HandleFunc("GET /v1beta/models", accessLog(list(true, func(w http.ResponseWriter, _ *http.Request, models []route.ServedModel) {
 		out := make([]map[string]any, len(models))
 		for i, m := range models {
-			out[i] = geminiModel(m, true)
+			out[i] = geminiModel(m.Model, true)
 		}
 		writeList(w, http.StatusOK, map[string]any{"models": out})
 	})))
-	mux.HandleFunc("GET /v1beta/models/{name...}", accessLog(list(true, func(w http.ResponseWriter, r *http.Request, models []protocol.Model) {
+	mux.HandleFunc("GET /v1beta/models/{name...}", accessLog(list(true, func(w http.ResponseWriter, r *http.Request, models []route.ServedModel) {
 		// As in today's core: the name matches with or without "models/" before it, against
 		// the model's resource name as it is held.
 		name := r.PathValue("name")
 		for _, m := range models {
 			if n := cmp.Or(m.Name, m.ID); n == name || n == "models/"+name {
-				writeList(w, http.StatusOK, geminiModel(m, false))
+				writeList(w, http.StatusOK, geminiModel(m.Model, false))
 				return
 			}
 		}
@@ -135,10 +143,22 @@ func anthropicClient(r *http.Request) bool {
 	return r.Header.Get("Anthropic-Version") != "" || strings.HasPrefix(r.Header.Get("User-Agent"), "claude-cli")
 }
 
-func openAIModel(m protocol.Model) map[string]any {
+func openAIModel(m route.ServedModel) map[string]any {
 	out := map[string]any{"id": m.ID, "object": "model", "owned_by": m.OwnedBy}
 	if m.Created > 0 {
 		out["created"] = m.Created
+	}
+	if m.ContextLength > 0 {
+		out["context_length"] = m.ContextLength
+	}
+	if m.MaxOutputTokens > 0 {
+		out["max_output_tokens"] = m.MaxOutputTokens
+	}
+	if m.Capabilities != nil {
+		out["capabilities"] = m.Capabilities
+	}
+	if m.From != "" {
+		out["from"] = m.From
 	}
 	return out
 }

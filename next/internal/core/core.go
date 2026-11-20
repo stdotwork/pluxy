@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/buildinfo"
+	"github.com/stdotwork/pluxy/next/internal/catalogue"
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/extconfig"
@@ -107,9 +108,11 @@ type Core struct {
 
 	routing *routing // routing's checks and saved blocks, from start
 
-	usage  *usage.Store   // the usage record, kept across reloads
-	logs   *logfile.Files // the logs folder
-	themes *themeStore    // stored UI themes and selected theme ID in state/themes
+	usage        *usage.Store         // the usage record, kept across reloads
+	logs         *logfile.Files       // the logs folder
+	themes       *themeStore          // stored UI themes and selected theme ID in state/themes
+	catalogue    *catalogue.Catalogue // the models.dev snapshot and refresh
+	catalogueNow func() time.Time     // tests can move the refresh clock
 
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
@@ -141,7 +144,7 @@ func Start(opts Options) (*Core, error) {
 	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(),
-		bgCtx: bgCtx, bgCancel: bgCancel}
+		bgCtx: bgCtx, bgCancel: bgCancel, catalogueNow: time.Now}
 	c.loadPublicKey()
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {
@@ -189,6 +192,9 @@ func Start(opts Options) (*Core, error) {
 		c.logs = logfile.New(LogsDir(opts.ConfigPath))
 	}
 	c.themes = newThemeStore(filepath.Join(StateDir(opts.ConfigPath), "themes"))
+	c.catalogue = catalogue.New(catalogue.Options{
+		StatePath: filepath.Join(StateDir(opts.ConfigPath), "catalogue.json"),
+	})
 	c.pkgDir = cfg.Packages.Dir
 	// No publisher's folder can be called .settings: IDs start with a letter or digit.
 	c.settings = extconfig.NewStore(filepath.Join(c.pkgDir, ".settings"))
@@ -615,6 +621,9 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 	if err != nil {
 		c.discard(next, prev)
 		return nil, fmt.Errorf("config: %w", err)
+	}
+	if c.catalogue != nil {
+		router.UseCatalogue(c.catalogue.LookupFor)
 	}
 	if !c.opts.SafeMode {
 		router.UseCatalog(catalog(next.exts))
