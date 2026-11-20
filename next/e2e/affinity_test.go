@@ -100,7 +100,7 @@ func TestConfigYAMLKeepsAffinityOffUntilAsked(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			u := okUpstream(t)
 			cfg := func(port int) []byte {
-				return []byte("host: 127.0.0.1\nport: " + strconv.Itoa(port) + "\n" + c.routing + `
+				return []byte("host: 127.0.0.1\nport: " + strconv.Itoa(port) + "\nremote-management: {secret-key: " + managementKey + "}\n" + c.routing + `
 access:
   api-keys:
     - "` + clientKey + `"
@@ -119,6 +119,7 @@ openai-compatibility:
 			path := filepath.Join(t.TempDir(), "config.yaml")
 			base, _, logs := startOnFreePort(t, filepath.Join(binDir, "pluxy"), path, cfg, "-bundled", bundled)
 			logs.waitFor(t, "config revision 1 active")
+			installBundled(t, base, "pluxy/openai-compatible")
 			for range 3 {
 				sessionPost(t, base, "session-1")
 			}
