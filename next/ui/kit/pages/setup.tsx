@@ -164,6 +164,8 @@ const t = strings("setup", {
   pasteLoading: "Loading the text…",
   pasteInto: "Put this in {path}:",
   pasteAddress: "The text uses {address}, the address of pluxy on its own machine.",
+  pasteModel:
+    "Where the text says {placeholder}, a model's name goes: one your accounts serve. An account's Models button on Accounts lists them, and so does {command}.",
   copy: "Copy",
   copied: "Copied",
   copyFailed: "Could not copy. Select the text and copy it yourself.",
@@ -737,6 +739,9 @@ export interface SetupOptions {
   clientActionHint?: string;
 }
 
+/** What core's paste text holds where a model's name goes (next/internal/core/setup_clients.go). */
+const MODEL_PLACEHOLDER = "<model-id>";
+
 /** The files to paste for one client, and a button that makes the client key they need. */
 function PasteText(props: { client: SetupClient }) {
   const { api, unauthorized } = useKit();
@@ -777,6 +782,14 @@ function PasteText(props: { client: SetupClient }) {
           <small class="hint">
             {rich(t("pasteAddress"), { address: <span class="mono">{data.base_url}</span> })}
           </small>
+          {data.files.some((file) => file.content.includes(MODEL_PLACEHOLDER)) && (
+            <small class="hint">
+              {rich(t("pasteModel"), {
+                placeholder: <span class="mono">{MODEL_PLACEHOLDER}</span>,
+                command: <span class="mono">pluxy model list</span>,
+              })}
+            </small>
+          )}
           {error && <Notice tone="danger">{error}</Notice>}
           {key ? (
             <>

@@ -42,4 +42,8 @@
   [data-page="logs"] .detail {
     min-width: 0;
   }
+  /* A request's log sits in a card that is a grid: without this its long lines widen the page. */
+  [data-page="logs"] .card > [data-part="card"] {
+    min-width: 0;
+  }
 }
