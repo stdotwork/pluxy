@@ -16,6 +16,8 @@ interface Call {
   at: number;
 }
 
+let clock = 0;
+
 const core = { listen: "127.0.0.1:8317", reachable_from_network: false };
 const pick = (id: string, title: string, more: Partial<Setup["picks"][number]> = {}) => ({
   id,
@@ -79,11 +81,11 @@ class FakeNode {
     this.namespaceURI = namespaceURI;
   }
 
-  get firstChild() {
+  get firstChild(): FakeNode | null {
     return this.childNodes[0] ?? null;
   }
 
-  get nextSibling() {
+  get nextSibling(): FakeNode | null {
     if (!this.parentNode) return null;
     const at = this.parentNode.childNodes.indexOf(this);
     return this.parentNode.childNodes[at + 1] ?? null;
@@ -201,6 +203,7 @@ class FakeDocument {
 
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
 afterEach(() => {
+  clock = 0;
   if (jest.isFakeTimers()) {
     jest.clearAllTimers();
     jest.useRealTimers();
@@ -219,7 +222,7 @@ function fakeHost(answer: (call: Call) => Reply<unknown>) {
   const calls: Call[] = [];
   const host: Host = {
     call: async <T,>(method: Method, path: string, body?: unknown) => {
-      calls.push({ method, path, body, at: jest.now() });
+      calls.push({ method, path, body, at: clock });
       return answer({ method, path, body }) as Reply<T>;
     },
     signedIn: () => true,
@@ -304,6 +307,7 @@ function nextSetup(scans: Setup[]): Setup {
 }
 
 async function tick(milliseconds: number) {
+  clock += milliseconds;
   await act(async () => {
     jest.advanceTimersByTime(milliseconds);
     for (let i = 0; i < 20; i++) await Promise.resolve();
