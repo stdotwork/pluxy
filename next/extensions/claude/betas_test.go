@@ -36,7 +36,13 @@ func TestBodyBetas(t *testing.T) {
 		{"betas of mixed items", `{"betas":["b1",7,null,"",{"x":1},["b9"],true," b2 ","bad\nbeta"]}`, false, []string{"b1", "7", "true", "b2"}},
 		{"not an object", `["advisor_"]`, false, nil},
 		{"not JSON", `{"tools":[{"type":"advisor_x"`, false, nil},
-		{"odd shapes", `{"tools":"advisor_x","system":"s \"1h\"","messages":[{"role":"user","content":"\"1h\""}],"thinking":"block_binding"}`, false, nil},
+		{"odd shapes", `{"tools":"advisor_x","system":"s \"1h\"","messages":[{"role":"user","content":"\"1h\""},{"role":"user","content":"tool_addition"}],"thinking":"block_binding"}`, false, nil},
+		{"top-level 1h needs no beta", `{"cache_control":{"type":"ephemeral","ttl":"1h"},"messages":[{"role":"user","content":"hi"}]}`, false, nil},
+		{"tool_addition by ref", `{"messages":[{"role":"user","content":"hi"},{"role":"system","content":[{"type":"tool_addition","name":"foo"}]}]}`, false, []string{midConversationToolChangesBeta}},
+		{"tool_removal", `{"messages":[{"role":"user","content":"hi"},{"role":"system","content":[{"type":"tool_removal","name":"foo"}]}]}`, false, []string{midConversationToolChangesBeta}},
+		{"inline tool_addition by type", `{"messages":[{"role":"user","content":"hi"},{"role":"system","content":[{"type":"tool_addition","tool":{"type":"tool_definition","name":"foo","input_schema":{}}}]}]}`, false, []string{inlineToolsBeta}},
+		{"inline tool_addition by definition", `{"messages":[{"role":"user","content":"hi"},{"role":"system","content":[{"type":"tool_addition","tool":{"definition":{"name":"foo"}}}]}]}`, false, []string{inlineToolsBeta}},
+		{"mixed inline and removal", `{"messages":[{"role":"user","content":"hi"},{"role":"system","content":[{"type":"tool_removal","name":"bar"},{"type":"tool_addition","tool":{"type":"tool_definition","name":"foo","input_schema":{}}}]}]}`, false, []string{inlineToolsBeta}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, got := bodyBetas([]byte(c.body), c.count)
@@ -127,12 +133,13 @@ func TestPostClaudeCodeHeadersOnlyFromClaudeCode(t *testing.T) {
 		want    bool
 	}{
 		{"Claude Code", claudeCode, true},
+		{"Claude Code background", map[string]string{"x-app": "cli-bg", "user-agent": claudeCode["user-agent"], "anthropic-beta": claudeCode["anthropic-beta"]}, true},
 		{"no X-App", map[string]string{"user-agent": claudeCode["user-agent"], "anthropic-beta": claudeCode["anthropic-beta"]}, false},
 		{"another User-Agent", map[string]string{"x-app": "cli", "user-agent": "my-app/1.0", "anthropic-beta": claudeCode["anthropic-beta"]}, false},
 		{"no claude-code beta", map[string]string{"x-app": "cli", "user-agent": claudeCode["user-agent"], "anthropic-beta": "interleaved-thinking-2025-05-14"}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			h := map[string]string{"x-client-app": "app", "x-claude-code-agent-id": "agent-1", "x-claude-remote-session-id": "remote-1"}
+			h := map[string]string{"x-client-app": "app", "x-claude-code-agent-id": "agent-1", "x-claude-code-prompt-id": "prompt-1", "x-claude-remote-session-id": "remote-1"}
 			for k, v := range c.headers {
 				h[k] = v
 			}
@@ -150,10 +157,44 @@ func TestPostClaudeCodeHeadersOnlyFromClaudeCode(t *testing.T) {
 			if got.Get("X-Client-App") != "app" {
 				t.Errorf("X-Client-App = %q, want the client's", got.Get("X-Client-App"))
 			}
-			sent := got.Get("X-Claude-Code-Agent-Id") == "agent-1" && got.Get("X-Claude-Remote-Session-Id") == "remote-1"
-			none := got.Get("X-Claude-Code-Agent-Id") == "" && got.Get("X-Claude-Remote-Session-Id") == ""
+			sent := got.Get("X-Claude-Code-Agent-Id") == "agent-1" && got.Get("X-Claude-Code-Prompt-Id") == "prompt-1" && got.Get("X-Claude-Remote-Session-Id") == "remote-1"
+			none := got.Get("X-Claude-Code-Agent-Id") == "" && got.Get("X-Claude-Code-Prompt-Id") == "" && got.Get("X-Claude-Remote-Session-Id") == ""
 			if (c.want && !sent) || (!c.want && !none) {
-				t.Errorf("agent id %q, remote session %q; want them sent: %v", got.Get("X-Claude-Code-Agent-Id"), got.Get("X-Claude-Remote-Session-Id"), c.want)
+				t.Errorf("agent id %q, prompt id %q, remote session %q; want them sent: %v", got.Get("X-Claude-Code-Agent-Id"), got.Get("X-Claude-Code-Prompt-Id"), got.Get("X-Claude-Remote-Session-Id"), c.want)
+			}
+		})
+	}
+}
+
+func TestPostToolChangeBetas(t *testing.T) {
+	srv := claudetest.New(t)
+	s, err := readSettings(srv.Settings(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: srv.IssueKey()}
+	for _, c := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"tool_addition by ref", `{"model":"claude-test","max_tokens":5,"messages":[{"role":"user","content":"hi"},{"role":"system","content":[{"type":"tool_addition","name":"foo"}]}]}`, "mid-conversation-tool-changes-2026-07-01"},
+		{"tool_removal", `{"model":"claude-test","max_tokens":5,"messages":[{"role":"user","content":"hi"},{"role":"system","content":[{"type":"tool_removal","name":"foo"}]}]}`, "mid-conversation-tool-changes-2026-07-01"},
+		{"inline tool_addition", `{"model":"claude-test","max_tokens":5,"messages":[{"role":"user","content":"hi"},{"role":"system","content":[{"type":"tool_addition","tool":{"type":"tool_definition","name":"foo","input_schema":{"type":"object"}}}]}]}`, "inline-tools-2026-09-15"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			call := sdk.Call{
+				Account: protocol.Account{ID: "a", Credential: cred},
+				Request: llm.Request{Model: "claude-test", Native: &llm.Native{Format: llm.FormatAnthropicMessages}},
+			}
+			n := len(srv.Requests())
+			resp, err := post(context.Background(), call, s, "/v1/messages", []byte(c.body), true, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if got := srv.Requests()[n].Header.Get("Anthropic-Beta"); got != c.want {
+				t.Errorf("Anthropic-Beta = %q, want %q", got, c.want)
 			}
 		})
 	}

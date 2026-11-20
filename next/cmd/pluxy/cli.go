@@ -48,10 +48,11 @@ type command struct {
 
 // opts are the values of the commands' own flags.
 type opts struct {
-	model, version, registry               string
-	since, until, account, provider, after string
-	limit                                  int
-	id                                     string
+	model, version, registry                       string
+	since, until, by, account, provider, clientKey string
+	after, before                                  string
+	limit                                          int
+	id                                             string
 }
 
 // invocation is one run of a command.
@@ -243,17 +244,17 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.AccountsReply
 			return x.call(http.MethodGet, "/accounts", nil, nil, &r, func() {
-				rows := [][]string{{"ID", "EXTENSION", "SOURCE", "STATE", "COOLING UNTIL"}}
+				rows := [][]string{{"ID", "EXTENSION", "SOURCE", "HEALTH", "UNTIL", "WHY"}}
 				for _, a := range r.Accounts {
-					state := a.State
-					if a.Disabled {
-						state = "disabled"
+					health := dash(a.Health.State)
+					if a.Health.Source == management.SourceUnverified {
+						health += " (unverified)"
 					}
 					until := "-"
-					if a.CooldownUntil != nil {
-						until = a.CooldownUntil.Local().Format(time.DateTime)
+					if a.Health.Until != nil {
+						until = a.Health.Until.Local().Format(time.DateTime)
 					}
-					rows = append(rows, []string{a.ID, dash(a.Extension), a.Source, state, until})
+					rows = append(rows, []string{a.ID, dash(a.Extension), a.Source, health, until, dash(a.Health.Why)})
 				}
 				x.table(rows)
 			})
@@ -292,6 +293,39 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.QuotaReply
 			return x.call(http.MethodGet, accountPath(x.args[0])+"/quota", nil, nil, &r, func() { printFlat(x, r.Quota) })
+		}},
+	{words: "account models", args: []string{"id"}, routes: []string{"GET /accounts/{id}/models"}, summary: "the models an account serves",
+		run: func(x *invocation) error {
+			var r management.AccountModelsReply
+			return x.call(http.MethodGet, accountPath(x.args[0])+"/models", nil, nil, &r, func() {
+				if r.From != "" {
+					x.printf("from: %s\n", r.From)
+				}
+				rows := [][]string{{"ID", "NAMES", "OWNED BY", "CONTEXT", "MAX OUTPUT", "EXCLUDED"}}
+				for _, m := range r.Models {
+					names := strings.Join(m.Names, ",")
+					if names == "" {
+						names = "-"
+					}
+					ctxLen := m.ContextLength
+					if ctxLen == 0 {
+						ctxLen = m.InputTokenLimit
+					}
+					maxOut := m.MaxCompletionTokens
+					if maxOut == 0 {
+						maxOut = m.OutputTokenLimit
+					}
+					ctxStr, outStr := "-", "-"
+					if ctxLen > 0 {
+						ctxStr = strconv.Itoa(ctxLen)
+					}
+					if maxOut > 0 {
+						outStr = strconv.Itoa(maxOut)
+					}
+					rows = append(rows, []string{m.ID, names, dash(m.OwnedBy), ctxStr, outStr, yesNo(m.Excluded)})
+				}
+				x.table(rows)
+			})
 		}},
 	{words: "model list", routes: []string{"GET /models"}, summary: "every model clients can ask for, and the accounts that serve it",
 		run: func(x *invocation) error {
@@ -334,17 +368,27 @@ var commands = []command{
 				x.table(rows)
 			})
 		}},
-	{words: "usage", routes: []string{"GET /usage"}, summary: "request and token totals, by model",
+	{words: "usage", routes: []string{"GET /usage"}, summary: "request and token totals, broken down by model, account, key or provider",
 		flags: func(fs *flag.FlagSet, o *opts) {
-			fs.StringVar(&o.since, "since", "", "from this time (RFC 3339) or this long ago (such as 24h)")
+			fs.StringVar(&o.since, "since", "", "from this time (RFC 3339) or this long ago (such as 24h or 7d)")
 			fs.StringVar(&o.until, "until", "", "up to this time (RFC 3339)")
+			fs.StringVar(&o.by, "by", "", "breakdown to show: model, account, key or provider (default: model)")
 			fs.StringVar(&o.model, "model", "", "only this model")
 			fs.StringVar(&o.account, "account", "", "only this account")
 			fs.StringVar(&o.provider, "provider", "", "only this provider (extension)")
+			fs.StringVar(&o.clientKey, "client-key", "", "only this client key ID")
 		},
 		run: func(x *invocation) error {
 			q := url.Values{}
-			for k, v := range map[string]string{"since": x.opts.since, "until": x.opts.until, "model": x.opts.model, "account": x.opts.account, "provider": x.opts.provider} {
+			for k, v := range map[string]string{
+				"since":    x.opts.since,
+				"until":    x.opts.until,
+				"by":       x.opts.by,
+				"model":    x.opts.model,
+				"account":  x.opts.account,
+				"provider": x.opts.provider,
+				"key":      x.opts.clientKey,
+			} {
 				if v != "" {
 					q.Set(k, v)
 				}
@@ -355,13 +399,109 @@ var commands = []command{
 					x.printf("usage is not recorded (usage-statistics-enabled is off)\n")
 				}
 				x.printf("%d requests, %d failed, %d input and %d output tokens\n", u.Requests, u.Failure, u.Tokens.Input, u.Tokens.Output)
-				if len(u.Models) == 0 {
+				header := "MODEL"
+				groups := u.Models
+				switch u.By {
+				case "account":
+					header = "ACCOUNT"
+					groups = u.Breakdown
+				case "key":
+					header = "KEY"
+					groups = u.Breakdown
+				case "provider":
+					header = "PROVIDER"
+					groups = u.Breakdown
+				case "model":
+					header = "MODEL"
+					groups = u.Breakdown
+				}
+				if len(groups) == 0 {
 					return
 				}
-				rows := [][]string{{"MODEL", "REQUESTS", "FAILED", "INPUT", "OUTPUT"}}
-				for _, g := range u.Models {
-					rows = append(rows, []string{g.Name, strconv.FormatInt(g.Requests, 10), strconv.FormatInt(g.Failure, 10),
-						strconv.FormatInt(g.Tokens.Input, 10), strconv.FormatInt(g.Tokens.Output, 10)})
+				var rows [][]string
+				if header == "ACCOUNT" {
+					rows = [][]string{{"ACCOUNT", "PROVIDER", "REQUESTS", "FAILED", "INPUT", "OUTPUT"}}
+					for _, g := range groups {
+						rows = append(rows, []string{g.Name, dash(g.Provider), strconv.FormatInt(g.Requests, 10), strconv.FormatInt(g.Failure, 10),
+							strconv.FormatInt(g.Tokens.Input, 10), strconv.FormatInt(g.Tokens.Output, 10)})
+					}
+				} else {
+					rows = [][]string{{header, "REQUESTS", "FAILED", "INPUT", "OUTPUT"}}
+					for _, g := range groups {
+						rows = append(rows, []string{g.Name, strconv.FormatInt(g.Requests, 10), strconv.FormatInt(g.Failure, 10),
+							strconv.FormatInt(g.Tokens.Input, 10), strconv.FormatInt(g.Tokens.Output, 10)})
+					}
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "usage events", routes: []string{"GET /usage/events"}, summary: "recorded requests, oldest first or newest first with --before",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			fs.StringVar(&o.after, "after", "", "oldest first: only events with seq above this")
+			fs.StringVar(&o.before, "before", "", "newest first: only events with seq below this (0 or no value for the latest page)")
+			fs.IntVar(&o.limit, "limit", 0, "at most this many events (default: core's, 100)")
+			fs.StringVar(&o.since, "since", "", "from this time (RFC 3339) or this long ago (such as 24h or 7d)")
+			fs.StringVar(&o.until, "until", "", "up to this time (RFC 3339)")
+			fs.StringVar(&o.model, "model", "", "only this model")
+			fs.StringVar(&o.account, "account", "", "only this account")
+			fs.StringVar(&o.provider, "provider", "", "only this provider (extension)")
+			fs.StringVar(&o.clientKey, "client-key", "", "only this client key ID")
+		},
+		run: func(x *invocation) error {
+			q := url.Values{}
+			for k, v := range map[string]string{
+				"after":    x.opts.after,
+				"before":   x.opts.before,
+				"since":    x.opts.since,
+				"until":    x.opts.until,
+				"model":    x.opts.model,
+				"account":  x.opts.account,
+				"provider": x.opts.provider,
+				"key":      x.opts.clientKey,
+			} {
+				if v != "" {
+					q.Set(k, v)
+				}
+			}
+			if x.opts.limit > 0 {
+				q.Set("limit", strconv.Itoa(x.opts.limit))
+			}
+			var r management.UsageEventsReply
+			return x.call(http.MethodGet, "/usage/events", q, nil, &r, func() {
+				if !r.Enabled {
+					x.printf("usage is not recorded (usage-statistics-enabled is off)\n")
+				}
+				if len(r.Events) == 0 {
+					x.printf("no matching events\n")
+					return
+				}
+				rows := [][]string{{"SEQ", "TIME", "MODEL", "ACCOUNT", "KEY", "STATUS", "LATENCY", "TOKENS"}}
+				for _, ev := range r.Events {
+					status := strconv.Itoa(ev.Status)
+					if ev.Status == 0 {
+						status = "-"
+					}
+					if ev.Failed {
+						if ev.ErrorCode != "" {
+							status = status + " (" + ev.ErrorCode + ")"
+						} else {
+							status = status + " (failed)"
+						}
+					}
+					tokens := "-"
+					if ev.Tokens.Total != nil {
+						tokens = strconv.FormatInt(*ev.Tokens.Total, 10)
+					}
+					rows = append(rows, []string{
+						strconv.FormatUint(ev.Seq, 10),
+						ev.Timestamp.Local().Format(time.DateTime),
+						dash(ev.Model),
+						dash(ev.Account),
+						dash(ev.KeyID),
+						status,
+						fmt.Sprintf("%dms", ev.LatencyMS),
+						tokens,
+					})
 				}
 				x.table(rows)
 			})
@@ -493,6 +633,19 @@ func cmpOr(a, b string) string {
 		return a
 	}
 	return b
+}
+
+func normalizeOptionalFlagValue(args []string, name, def string) []string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i, a := range out {
+		if a == "--"+name || a == "-"+name {
+			if i+1 == len(out) || strings.HasPrefix(out[i+1], "-") {
+				out[i] = a + "=" + def
+			}
+		}
+	}
+	return out
 }
 
 func packageVerb(verb, summary string) command {
@@ -636,6 +789,9 @@ func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string)
 	key := fs.String("key", "", "the management key (default: $PLUXY_MANAGEMENT_KEY, else from the config)")
 	if cmd.flags != nil {
 		cmd.flags(fs, &o)
+	}
+	if cmd.words == "usage events" {
+		rest = normalizeOptionalFlagValue(rest, "before", "0")
 	}
 	// Flags may come before, between and after the arguments.
 	var pos []string

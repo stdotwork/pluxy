@@ -1131,7 +1131,10 @@ and then waits for Enter (`console`) or stays at a `cmd.exe /D` or `powershell.e
 -NoProfile` prompt, both from the System32 folder Windows reports (never the launch's
 `SystemRoot`). There is no Windows Terminal kind:
 `wt.exe` splits its command line its own way, so the arguments confirmed would not be the ones
-it runs.
+it runs. In the native test's build (feature `native-test`) nobody is at the window, so the
+`console` window does not wait for Enter, and the shell after the program runs one fixed command
+that writes its working folder to `pluxy-after-exit` in that folder, then exits; a normal build
+does neither.
 
 Windows cannot run an open file, so the execution program runs the program by its path, and
 first holds it: it opens the program and every folder above it so that none of them can be
@@ -1184,7 +1187,8 @@ output, so an app that gives no descriptor (one older than this execution progra
 terminal launches start and no window open. A terminal launch must name as its `program` the
 argument right after `--`.
 In the window, that file runs, by the path it has then, once no other user but a member of
-`admin` can change it or a folder above it and that path still names it (the rule the app holds
+`admin` can change it or a folder above it, each on a volume that keeps ownership (not one with
+Finder's "Ignore ownership on this volume"), and that path still names it (the rule the app holds
 a direct launch's program to); otherwise the window says which path another user could change,
 and nothing runs. A file put at the program's path since the app checked it never runs. The
 program runs with the launch's environment and the window's own `TERM…`, `LC_TERMINAL…` and

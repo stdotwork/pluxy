@@ -193,6 +193,9 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 	default:
 		// Core redacts the key as the user entered it; this one is trimmed, so remove it here.
 		e := upstreamError(resp, "", false)
+		if e.Code == llm.CodeAccountClosed {
+			return nil, refused("Anthropic refused the key")
+		}
 		if e.Status >= 500 {
 			// A model request that Anthropic refused with a 503 or 529 is safe to try again; a login
 			// call that got a 5xx is not, because it reached Anthropic and may have run.

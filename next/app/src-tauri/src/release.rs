@@ -1056,6 +1056,26 @@ mod tests {
         assert_eq!(https_url(&normal).unwrap(), normal);
     }
 
+    /// What the browser may be given (`updates::open_external` checks it before any system call):
+    /// an https address with a host and no user, nothing else.
+    #[test]
+    fn only_https_addresses_reach_the_browser() {
+        assert_eq!(
+            https_url("https://example.com/notes").unwrap(),
+            "https://example.com/notes"
+        );
+        for refused in [
+            "http://example.com/",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "ms-settings:defaultapps",
+            "https://user:secret@example.com/",
+            "notes.example.com",
+        ] {
+            assert!(https_url(refused).is_err(), "{refused}");
+        }
+    }
+
     #[test]
     fn an_oversized_feed_is_not_called_offline() {
         let p = body_problem(ureq::Error::BodyExceedsLimit(MAX_FEED + 1));
