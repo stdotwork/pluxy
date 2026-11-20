@@ -497,6 +497,7 @@ func (c *call) attempts() llm.Event {
 	tried := map[string]bool{} // this round
 	used := map[string]bool{}  // this round
 	attempts, rounds := 0, 0
+	timeouts := 0 // attempts that ended in a timeout before any reply byte
 	// Today's request-retry rounds, set for routing or for an account. limit is how many rounds
 	// after the first an account takes part in: its own count, else routing's, else none.
 	rounded := r.cfg.RequestRetry != nil || slices.ContainsFunc(capable, func(a *Account) bool { return a.RequestRetry != nil })
@@ -596,6 +597,14 @@ func (c *call) attempts() llm.Event {
 			}
 			if !retrySafe(last) {
 				return ev
+			}
+			if last.IsTimeout() {
+				// A timeout before any reply byte costs the client the whole limit: the request
+				// moves on to one more account, not through every account.
+				timeouts++
+				if timeouts > 1 {
+					return errorEvent(last)
+				}
 			}
 			continue
 		}

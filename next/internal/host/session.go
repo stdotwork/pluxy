@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -187,6 +189,10 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 		return refuse(perr)
 	}
 	s.ext.resolveTimeouts(&account)
+	alive := s.ext.info.ProtocolMinor >= AliveMinor
+	if alive {
+		t.watch = watchdog(account.Timeouts, req.Stream)
+	}
 	rules, perr := s.ext.payload(ctx, account.ID, req, payloadTurnMinor)
 	if perr != nil {
 		return refuse(perr)
@@ -226,7 +232,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	}
 	t.stop = context.AfterFunc(ctx, s.Close)
 	s.writeMu.Lock()
-	err := protocol.WriteFrame(s.conn, protocol.Call{Type: protocol.TypeSessionTurn, Account: &account, Request: &req, Capture: t.capture != nil, Payload: rules})
+	err := protocol.WriteFrame(s.conn, protocol.Call{Type: protocol.TypeSessionTurn, Account: &account, Request: &req, Capture: t.capture != nil, Payload: rules, Alive: alive})
 	s.writeMu.Unlock()
 	if err != nil {
 		if errors.Is(err, protocol.ErrFrameTooLarge) {
@@ -319,7 +325,15 @@ type SessionStream struct {
 	// capture receives the turn's diagnostic frames; nil when the turn is not captured.
 	capture CaptureFunc
 	account string
+	// watch, started and alives are as for Stream.
+	watch   time.Duration
+	started bool
+	alives  atomic.Int64
 }
+
+// Alives returns how many alive frames the extension has sent on the turn so far. It may be
+// called while Next runs.
+func (t *SessionStream) Alives() int { return int(t.alives.Load()) }
 
 func (t *SessionStream) fail(e *llm.Error) {
 	ev := llm.Event{Type: llm.EventError, Error: e}
@@ -359,7 +373,22 @@ func (t *SessionStream) Next() llm.Event {
 	}
 	s := t.s
 	var f sessionFrame
+	var timer *time.Timer
+	var timeout <-chan time.Time
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 	for {
+		if t.watch > 0 {
+			if timer == nil {
+				timer = time.NewTimer(t.watch)
+				timeout = timer.C
+			} else {
+				timer.Reset(t.watch)
+			}
+		}
 		select {
 		case f = <-s.frames:
 		case <-s.done:
@@ -368,6 +397,16 @@ func (t *SessionStream) Next() llm.Event {
 			t.end()
 			t.fail((&Stream{ctx: t.ctx, ext: s.ext}).readError(net.ErrClosed))
 			return *t.final
+		case <-timeout:
+			// Closing the session cancels the turn in the extension.
+			s.Close()
+			t.end()
+			t.fail(s.ext.timedOut(t.account, t.watch, t.started))
+			return *t.final
+		}
+		if f.reply.Type == protocol.TypeAlive {
+			t.alives.Add(1)
+			continue
 		}
 		if f.reply.Type != protocol.TypeDiagnostic {
 			break
@@ -381,6 +420,9 @@ func (t *SessionStream) Next() llm.Event {
 		t.end()
 		t.fail(redacted(t.redact, s.ext.protocolError(err.Error())))
 		return *t.final
+	}
+	if f.reply.Type == llm.EventResponseStart {
+		t.started = true
 	}
 	ev := t.s.ext.normalizeEvent(t.pieces.event(t.redact.Event(f.reply.Event)))
 	if ev.Terminal() {

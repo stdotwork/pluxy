@@ -7,7 +7,10 @@
 // model; the extension protocol carries it on the wire (see ../protocol/README.md).
 package llm
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Request is a model request in pluxy's internal form.
 type Request struct {
@@ -452,6 +455,9 @@ const (
 	CodeExtensionCrashed     = "extension_crashed"
 	CodeExtensionProtocol    = "extension_protocol"
 	CodeExtensionUnavailable = "extension_unavailable"
+	// CodeExtensionTimeout: the extension sent core nothing at all on a call for longer than
+	// it promised to (as long as the account's timeouts let the upstream stay quiet, plus a minute).
+	CodeExtensionTimeout = "extension_timeout"
 )
 
 // Error scopes: what a failure is about.
@@ -497,6 +503,26 @@ func RawJSON(b []byte) json.RawMessage {
 	}
 	s, _ := json.Marshal(string(b))
 	return s
+}
+
+// UpstreamTimeoutPhrase is in the message of a failure that an SDK upstream timeout caused
+// ("upstream response header timeout after 1m0s"). The protocol carries such a failure as an
+// ordinary unavailable error, so core finds it by this phrase.
+const UpstreamTimeoutPhrase = " timeout after "
+
+// IsTimeout reports whether e is a timeout: core's extension_timeout, or an upstream failure
+// whose message names an SDK upstream timeout.
+func (e *Error) IsTimeout() bool {
+	if e == nil {
+		return false
+	}
+	switch e.Code {
+	case CodeExtensionTimeout:
+		return true
+	case CodeUnavailable, CodeUpstream:
+		return strings.Contains(e.Message, UpstreamTimeoutPhrase)
+	}
+	return false
 }
 
 func (e *Error) Error() string {

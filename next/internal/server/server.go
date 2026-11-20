@@ -59,6 +59,9 @@ type clientFormat struct {
 	// googleKeys accepts the client key where Google's clients send it: in x-goog-api-key or
 	// the key query parameter.
 	googleKeys bool
+	// noKeepAlive keeps keep-alive comments off the format's streams: Google's clients read
+	// every SSE line as JSON, and Google's API never sends a comment.
+	noKeepAlive bool
 }
 
 // bodyOnly adapts a parser for a format whose request is all in its body.
@@ -128,10 +131,11 @@ var geminiFormat = clientFormat{
 		}
 		return geminigenerate.ParseRequest(model, method == "streamGenerateContent", body)
 	},
-	stream:     func(w io.Writer, _ llm.Request) eventWriter { return geminigenerate.NewStreamWriter(w) },
-	aggregate:  func(llm.Request) aggregator { return geminigenerate.NewAggregator() },
-	errorBody:  geminigenerate.ErrorResponse,
-	googleKeys: true,
+	stream:      func(w io.Writer, _ llm.Request) eventWriter { return geminigenerate.NewStreamWriter(w) },
+	aggregate:   func(llm.Request) aggregator { return geminigenerate.NewAggregator() },
+	errorBody:   geminigenerate.ErrorResponse,
+	googleKeys:  true,
+	noKeepAlive: true,
 }
 
 // Generation is what one request runs on from start to end: a config snapshot and the router
@@ -403,15 +407,26 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 		m.sent = http.StatusOK
 	}
 	rc := http.NewResponseController(w)
-	sw := f.stream(w, req)
+	var out io.Writer = w
+	flush := rc.Flush
+	var ka *keepAlive
+	if !f.noKeepAlive {
+		ka = startKeepAlive(w, rc)
+		defer ka.stop()
+		out, flush = ka, ka.Flush
+	}
+	sw := f.stream(out, req)
 	defer func() { logTranslation(r, request, sw) }()
 	for {
 		// Writes block while the client is slow, and the next event is not read until the
 		// write is done: that is the backpressure path to the extension.
+		if ev.Terminal() && ka != nil {
+			ka.finish()
+		}
 		if err := sw.Write(ev); err != nil {
 			return
 		}
-		if err := rc.Flush(); err != nil {
+		if err := flush(); err != nil {
 			return
 		}
 		if ev.Terminal() {
