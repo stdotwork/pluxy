@@ -60,7 +60,8 @@ export const PLATFORM_SHARDS: Record<string, readonly string[]> = {
   // runs a test core, and its route restarts the app four times. Its session is not "update",
   // which names the Linux one in the app shard: a session is named once across all shards. The
   // install session (Windows: the per-user setup program, installed, updated in place by the app
-  // and uninstalled) shares it, since it needs the same test package and test core.
+  // and uninstalled; macOS: the disk image, its bundle copied out, updated and rolled back)
+  // shares it, since it needs the same test package and test core.
   update: ["app update", "install"],
 };
 

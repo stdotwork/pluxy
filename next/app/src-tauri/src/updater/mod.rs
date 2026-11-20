@@ -16,8 +16,8 @@
 //!   program installed (the app's program, the core beside it and its packages, `set.rs`), part by
 //!   part, each part renamed aside (a running program can be renamed, not replaced) and the new
 //!   one renamed into its place;
-//! - macOS (`app.rs`): the `.app` bundle, unpacked from its `.app.tar.gz` next to it and swapped
-//!   with it in one step.
+//! - macOS (`app.rs`): the `.app` bundle, unpacked from its `.app.tar.gz` into a staging folder
+//!   (private to the app where the bundle's volume allows) and swapped with it in one step.
 //!
 //! Before that, the running version's copy is kept, pinned by its digest: rolling back restores
 //! only such a copy, after a native confirmation. Installing ends with the app stopping as Quit
@@ -37,10 +37,14 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Webview};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(test, unix)))]
+mod acl;
+#[cfg(any(target_os = "macos", all(test, unix)))]
 mod app;
 #[cfg(target_os = "linux")]
 mod appimage;
+#[cfg(any(target_os = "macos", all(test, unix)))]
+mod applications;
 #[cfg(any(target_os = "macos", all(test, unix)))]
 mod bundle;
 #[cfg(windows)]
@@ -261,8 +265,14 @@ fn private_dir(path: &Path) -> Result<(), String> {
 /// manager or another user keeps is not this updater's to replace.
 #[cfg(unix)]
 fn check_owned(path: &Path, folder: bool) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
     let m = fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    owned_as(&m, path, folder)
+}
+
+/// `check_owned` on m, what was read of path (through an open descriptor, say).
+#[cfg(unix)]
+fn owned_as(m: &fs::Metadata, path: &Path, folder: bool) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
     let kind_ok = if folder { m.is_dir() } else { m.is_file() };
     // SAFETY: geteuid has no preconditions.
     let me = unsafe { libc::geteuid() };
@@ -545,7 +555,7 @@ fn install(
     }
     let dir = dir(app)?;
     // The verified bytes, checked as this format's and made ready to put in place (on macOS,
-    // unpacked next to the bundle, in a folder recorded in dir).
+    // unpacked into a staging folder recorded in dir).
     let staged = format::stage(installed, bytes, &release.version, &dir)?;
     if st.updater.cancel.load(Ordering::SeqCst) {
         return Err("cancelled".into());
@@ -925,10 +935,11 @@ fn supervise(app: &AppHandle, r: &Restart) {
 
 /// At startup, after the profile lock: the version an install started accepts itself once the
 /// installed copy is the one it pinned, which the waiting earlier version reads. What an earlier
-/// install recorded that it left beside the installed copy (`leftovers.rs`) is removed once the
-/// earlier version has ended; nothing else there is looked at. On Windows, first, a replace of
-/// the program set that stopped part way is undone or finished (`recover`): before that cleanup,
-/// and before this version's start digest is taken (`record_started_from`, called after this).
+/// install recorded that it left (`leftovers.rs`: on macOS its staging folders, on Windows what it
+/// left beside the installed copy) is removed once the earlier version has ended; nothing else is
+/// looked at. On Windows, first, a replace of the program set that stopped part way is undone or
+/// finished (`recover`): before that cleanup, and before this version's start digest is taken
+/// (`record_started_from`, called after this).
 pub fn accept(app: &AppHandle) {
     #[cfg(windows)]
     recover(app);
@@ -1390,6 +1401,9 @@ pub(super) mod tests {
     #[test]
     fn restore_puts_back_only_a_copy_with_its_pinned_digest() {
         let tmp = temp("restore");
+        // The staging folder's home folder (`app.rs`'s private staging).
+        #[cfg(target_os = "macos")]
+        format::tests::home_at(&tmp);
         let dir = tmp.join("updates");
         let image = installed(&tmp, "old");
         let old = format::digest(&image).unwrap();
