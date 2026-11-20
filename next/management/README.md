@@ -21,22 +21,36 @@ write the same types.
 - **Wrong keys.** Five wrong keys in a row from one address block that address for 30 minutes (403
   `blocked`, `Retry-After`). A call with no key at all is a 401 and does not count. A call from this
   machine is never blocked, so the person at the keyboard can always get back in.
-- **Bodies.** JSON in, JSON out, UTF-8. Unknown fields in a request are a 400. Times are RFC 3339 UTC;
-  durations are whole milliseconds in fields ending `_ms`.
+- **Bodies.** JSON in, JSON out, UTF-8. These calls reject unknown top-level JSON fields with 400
+  `invalid_request`: `PATCH /accounts/{id}`, `POST /models/refresh`, `POST /config/validate`,
+  `PUT /config`, `PATCH /settings` and `PUT /theme`. The other JSON request bodies ignore unknown
+  fields: `POST /accounts`, `POST /accounts/{id}/login`, `POST /logins/{id}/input`,
+  `POST /accounts/import`, `POST /packages`, `PATCH /extensions/{publisher}/{name}/config` and
+  `POST /accounts/{id}/test`. `PUT /themes/{publisher}/{name}` stores any valid JSON object.
+  `POST /vertex/import` is multipart and ignores parts it does not use. A call that takes no body
+  ignores one. Times are RFC 3339 UTC; durations are whole milliseconds in fields ending `_ms`.
 - **Errors.** Every failure is `{"error": {"code": "...", "message": "..."}}` with the HTTP status that
   fits; `code` is stable and `message` is for a person. An error about an upstream account may add
   `status`, `provider_code`, `retryable`, `retry_after_ms`.
 
   | Status | Codes | Meaning |
   | --- | --- | --- |
-  | 400 | `invalid_request` | The request does not parse or names a field or value the call does not take |
-  | 401 | `unauthorized` | No key |
-  | 403 | `forbidden`, `remote_disabled`, `blocked` | Wrong key, another machine, or blocked |
-  | 404 | `not_found` | No such account, package, chain, key or log |
+  | 400 | `invalid_request` | The request does not parse, lacks a required member, or names a value the call does not take |
+  | 400 | `file_required`, `invalid_json`, `invalid_service_account`, `project_id_missing` | `POST /vertex/import` did not get a usable service-account file |
+  | 401 | `unauthorized` | No key, or the wrong key |
+  | 403 | `remote_disabled`, `blocked` | The call came from another machine while remote management is off, or too many wrong keys came from its address |
+  | 404 | `not_found` | No such account, package, chain, key, log, theme or login |
   | 409 | `conflict` | The thing changed since it was read, or the change would leave core unusable (the last client key) |
+  | 413 | `invalid_request`, `log_too_large` | The request body is too large, or a log file is too large for `format=json` |
+  | 422 | `invalid_config` | The config document or extension settings do not parse or fail their checks |
+  | 422 | `invalid_request` | An account test names no model, and the account lists none |
   | 422 | `refused` | Core checked the change and will not apply it; `message` says why; nothing was changed |
-  | 502 | `upstream` | A registry or provider could not be reached |
-  | 503 | `unavailable` | The extension that would answer is not running |
+  | 422 | `unsupported` | The extension does not support that account call |
+  | 500 | `internal` | Core could not finish the call because of an internal error |
+  | 502 | `fetch_failed` | A package registry could not be fetched |
+  | 502 | `invalid_request`, `auth`, `permission`, `account_closed`, `not_found`, `rate_limit`, `quota`, `unsupported`, `upstream`, `unavailable`, `cancelled`, `internal`, `extension_crashed`, `extension_protocol`, `extension_unavailable` | An account or Vertex import call passed on an extension or provider error; its body may add `status`, `provider_code`, `retryable` and `retry_after_ms` |
+  | 503 | `extension_unavailable` | The extension that would answer an account models, quota or test call is not running |
+  | 504 | `unavailable` | The service-account login in `POST /vertex/import` did not finish in time |
 
 - **Secrets.** No reply holds a credential, a client key or the management key, except the one reply that
   creates a key. Account IDs and labels are shown.
