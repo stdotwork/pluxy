@@ -46,6 +46,11 @@ type Result struct {
 	NewManagementKey    string
 	// Ledger accounts for every key of the file in an import report.
 	Ledger *Ledger
+	// OldListen is the address today's core listened on: every interface (0.0.0.0) without a host.
+	OldListen string
+	// ListenKeys are the report items of the keys of the file that make up listen (server.host
+	// and server.port, in whichever spelling the file uses).
+	ListenKeys []string
 	// Accounts maps each account the config's provider sections become to the item of the report
 	// that names it (ConfigItem).
 	Accounts map[string]string
@@ -1077,6 +1082,7 @@ func (x *translator) server() error {
 		return fmt.Errorf("server.port %d is not a port", port)
 	}
 	host = strings.TrimSpace(host)
+	x.res.OldListen = net.JoinHostPort(cmp.Or(host, "0.0.0.0"), strconv.Itoa(port))
 	if x.importing && host == "" {
 		// Today's core listens on every interface then; pluxy only on this machine (T6).
 		from := "(not set: every interface)"
@@ -1086,9 +1092,14 @@ func (x *translator) server() error {
 		host = "127.0.0.1"
 		x.mark(Changed, "server.host", Row{From: from, To: host,
 			Why:      "pluxy listens on this machine only unless told otherwise",
-			KeepWith: fmt.Sprintf(`"listen": "0.0.0.0:%d" in pluxy's config file, then restart core`, port)})
+			KeepWith: fmt.Sprintf(`"listen": %q in pluxy's config file, then restart core`, x.res.OldListen)})
 	}
 	x.out["listen"] = net.JoinHostPort(host, strconv.Itoa(port))
+	for _, p := range []string{"server.host", "server.port"} {
+		if _, ok := get(x.t, p); ok {
+			x.res.ListenKeys = append(x.res.ListenKeys, ConfigItem(x.fileKey(p)))
+		}
+	}
 
 	if on, err := flag(x.t, "server.tls.enable"); err != nil {
 		return err

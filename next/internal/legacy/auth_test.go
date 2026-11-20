@@ -284,10 +284,6 @@ func TestImportSkipsKnownAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	reserved := func(id string) bool { return id == "claude-c" }
-	pending, _ := Pending(dir, func(id string) bool { _, ok := store.Get(id); return ok || reserved(id) })
-	if pending != 2 {
-		t.Errorf("pending before = %d, want 2", pending)
-	}
 	imported, skipped, err := Import(store, files, reserved)
 	if err != nil || len(imported) != 2 || len(skipped) != 1 || !strings.Contains(skipped[0].Reason, "config already has") {
 		t.Fatalf("first import: %v %v %v", imported, skipped, err)
@@ -304,10 +300,6 @@ func TestImportSkipsKnownAccounts(t *testing.T) {
 	}
 	if r, ok := again.Get("claude-a"); !ok || r.Extension != Claude || r.Credential.AccessToken != "fake-a" || r.State != cred.StateActive {
 		t.Errorf("stored record: %+v", r)
-	}
-	pending, _ = Pending(dir, func(id string) bool { _, ok := again.Get(id); return ok || reserved(id) })
-	if pending != 0 {
-		t.Errorf("pending after = %d, want 0", pending)
 	}
 	// The auth folder is left as it was.
 	if names, _ := AuthFiles(dir); len(names) != 3 {

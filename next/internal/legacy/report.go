@@ -7,8 +7,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-
-	"github.com/stdotwork/pluxy/next/management"
 )
 
 // The lists of an import report (management.ImportReport).
@@ -18,8 +16,23 @@ const (
 	NotBrought
 )
 
-// Row is one row of an import report.
-type Row = management.ImportRow
+// Row is one row of an import report: a key of the config (What is its path in the file) or a
+// file of the auth folder (What is "auth file", Name its name). It has the fields of
+// management.ImportRow.
+type Row struct {
+	What     string `json:"what"`
+	Name     string `json:"name,omitempty"`
+	As       string `json:"as,omitempty"`
+	From     string `json:"from,omitempty"`
+	To       string `json:"to,omitempty"`
+	Why      string `json:"why,omitempty"`
+	KeepWith string `json:"keep_with,omitempty"`
+}
+
+// Lists are a report's three lists.
+type Lists struct {
+	Brought, Changed, NotBrought []Row
+}
 
 // Entry is a row of a report, the list it is in and the item it accounts for: a key of the
 // config ("config.yaml: server.host") or a file of the auth folder ("auth folder: a.json").
@@ -95,9 +108,9 @@ func (l *Ledger) Check() error {
 	return nil
 }
 
-// Report returns the ledger as a report, after Check.
-func (l *Ledger) Report(dryRun bool) (management.ImportReport, error) {
-	r := management.ImportReport{DryRun: dryRun, Brought: []Row{}, Changed: []Row{}, NotBrought: []Row{}, Needs: []management.ImportNeed{}}
+// Report returns the ledger's rows in their lists, after Check.
+func (l *Ledger) Report() (Lists, error) {
+	r := Lists{Brought: []Row{}, Changed: []Row{}, NotBrought: []Row{}}
 	if err := l.Check(); err != nil {
 		return r, err
 	}
