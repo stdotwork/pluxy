@@ -222,8 +222,9 @@ function fakeHost(answer: (call: Call) => Reply<unknown>) {
   const calls: Call[] = [];
   const host: Host = {
     call: async <T,>(method: Method, path: string, body?: unknown) => {
-      calls.push({ method, path, body, at: clock });
-      return answer({ method, path, body }) as Reply<T>;
+      const call = { method, path, body, at: clock };
+      calls.push(call);
+      return answer(call) as Reply<T>;
     },
     signedIn: () => true,
     signIn: async () => undefined,
