@@ -527,6 +527,28 @@ type SetupDoneReply struct {
 	FirstRun bool `json:"first_run"`
 }
 
+// ClientPaste is GET /setup/clients/{id}/paste's reply: what to paste into a client tool's
+// config files to point it at this core.
+type ClientPaste struct {
+	// Tool is the tool's canonical ID (SetupClient.ID), whatever name the call used.
+	Tool string `json:"tool"`
+	Name string `json:"name"`
+	// BaseURL is core's address as a program on core's machine reaches it.
+	BaseURL string `json:"base_url"`
+	// Key is a placeholder for a client key, never its value.
+	Key   string            `json:"key"`
+	Files []ClientPasteFile `json:"files"`
+	// Note says what the files need besides themselves; left out when nothing.
+	Note string `json:"note,omitempty"`
+}
+
+// ClientPasteFile is one file of a ClientPaste: where it goes (from the home folder, ~) and
+// the settings to put in it.
+type ClientPasteFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
 // ThemeSummary describes one theme stored by core, as GET /themes lists it and PUT returns it.
 type ThemeSummary struct {
 	ID    string `json:"id"`

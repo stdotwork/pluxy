@@ -226,7 +226,7 @@ These stay stable within a theme contract version:
 | `data-appearance="light"` or `"dark"` | Root element |
 | `class="dark"` | Root element, while the appearance is dark |
 | `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `routing`, `quota`, `logs`, `usage`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `routing`, `quota`, `logs`, `usage`, `setup`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root |
 | `data-part="nav"` | The navigation |
 | `data-part="nav-group"` | A group of navigation entries under its label; `data-group` is `operate`, `gateway`, `observe`, `control` or `extensions` (the extensions' pages) |
@@ -283,6 +283,10 @@ These stay stable within a theme contract version:
 | `data-part="account-edit-discard"` | The Edit form's question before unsaved changes are discarded. |
 | `data-part="subscription-end"` | The Quota card's line with the day a subscription ends. |
 | `data-part="privacy-toggle"` | The navigation's privacy mode switch; `aria-pressed="true"` while it masks account e-mail addresses and identifiers, and the root then has `data-privacy="on"`. |
+| `data-part="setup-found"` | The Setup page's list of what core found on its machine; `aria-busy="true"` while core looks again. |
+| `data-part="setup-pick"` | One provider on the Setup page's checklist; `data-state` is `offered`, `installed` or `failed`. |
+| `data-part="setup-client"` | One client on the Setup page; `data-state` is `not-configured`, `configured`, `needs-update`, `refused` or `not-found`. |
+| `data-part="setup-paste"` | The text to paste into a client's settings files, open under its client. |
 
 Some parts also carry the `data-slot` name that [T3 Code](https://github.com/pingdotgg/t3code)
 gives the same part, and the root's `dark` class is the one T3 Code uses. They exist so that the
