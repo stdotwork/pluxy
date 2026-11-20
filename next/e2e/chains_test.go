@@ -170,7 +170,9 @@ func TestNeedsLoginKeepsTheProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Priority 1: with a tie, the config's Codex account would come first and take the name.
-	if _, err := store.Create(cred.Record{ID: "claude-login", Extension: "pluxy/claude", State: cred.StateReauth, Account: route.Account{Priority: 1},
+	if _, err := store.Create(cred.Record{ID: "claude-login", Extension: "pluxy/claude", State: cred.StateReauth, Account: route.Account{
+		Priority: 1, Models: []route.ModelEntry{{Name: "claude-opus-5-5"}},
+	},
 		Reason: "the provider refused the sign-in", Credential: protocol.Credential{Kind: protocol.CredentialOAuth}}); err != nil {
 		t.Fatal(err)
 	}
