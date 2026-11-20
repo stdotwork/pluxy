@@ -248,7 +248,8 @@ socket. `response.append`,
 The Codex CLI sends its requests to `POST /backend-api/codex/responses` and opens its WebSocket on
 `GET /backend-api/codex/responses` when its `chatgpt_base_url` points at core. As in today's core,
 both paths are aliases of `/v1/responses` and its WebSocket: the same handlers and the same client
-key check.
+key check. The bare `/responses` (and its WebSocket) is the same alias, for clients such as Droid's
+OpenAI provider that post to it.
 
 When an upstream ends a Responses stream with a `response.completed`, `response.incomplete` or
 `response.failed` whose `output` is empty, core fills it with the items the stream's
