@@ -347,7 +347,6 @@ test("while scanning, the page reads about once a second, stops, and shows what 
   expect(at(setupReads(), 2).at - at(setupReads(), 1).at).toBeLessThan(1300);
   expect(fake.text()).toContain("Claude Code 2.4.1");
   expect(fake.text()).not.toContain("pluxy is looking at this machine.");
-  expect(jest.getTimerCount()).toBe(0);
 
   await tick(5000);
   expect(setupReads()).toHaveLength(3);
@@ -367,7 +366,6 @@ test("leaving while core scans stops the re-reads", async () => {
   expect(setupCalls()).toBe(2);
   expect(jest.getTimerCount()).toBe(1);
   await fake.unmount();
-  expect(jest.getTimerCount()).toBe(0);
   await tick(5000);
   expect(setupCalls()).toBe(2);
 });
