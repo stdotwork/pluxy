@@ -315,7 +315,9 @@ On the Themes page:
   it refuses is not stored, and the page says why. A theme that is added is turned on at once.
 - **Export** saves the file of the theme that is on as `<name>.json`, a built-in theme's too. The
   file holds the JSON that was added; its spacing and the order of its fields can differ. The
-  panel downloads it; the desktop app saves it in your Downloads folder and says where.
+  panel downloads it; the desktop app saves it in your Downloads folder and says where. To add a
+  built-in theme's file back as a theme of your own, change its `id` first: the page refuses a
+  file with a built-in theme's ID.
 - **Remove** deletes the stored theme that is on from core, and the default theme comes back.
 
 A window follows a change made in another window or with `pluxy theme` when it next gets focus
