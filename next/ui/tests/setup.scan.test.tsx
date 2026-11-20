@@ -283,10 +283,7 @@ async function mount(answer: (call: Call) => Reply<unknown>) {
 }
 
 function all(root: FakeNode, tag: string): FakeNode[] {
-  return [
-    ...(root.localName === tag ? [root] : []),
-    ...root.childNodes.flatMap((child) => all(child, tag)),
-  ];
+  return [...(root.localName === tag ? [root] : []), ...root.childNodes.flatMap((child) => all(child, tag))];
 }
 
 function button(root: FakeNode, label: string) {
