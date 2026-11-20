@@ -295,4 +295,7 @@ func TestResolveThemeID(t *testing.T) {
 			}
 		})
 	}
+	if got := themeIDFromName(""); got != "custom-theme" {
+		t.Errorf("themeIDFromName(%q) = %q, want %q", "", got, "custom-theme")
+	}
 }
