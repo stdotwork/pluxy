@@ -297,7 +297,7 @@
     {
       "path": "client.events",
       "kind": "intended",
-      "reason": "The new core writes a Chat stream from a Gemini reply as OpenAI's API does: content \"\" with the role in the first chunk, only the delta fields that are set (today's core sends content, reasoning_content and tool_calls as null and a non-standard native_finish_reason), every text part (today's core loses text that shares a chunk with a part carrying a thought signature), the finish reason in its own chunk, tool call ids as call_<n> when Gemini sends none, and usage only when the client asks for it with stream_options.include_usage (today's core always adds it).",
+      "reason": "The new core writes a Chat stream from a Gemini reply as OpenAI's API does: content \"\" with the role in the first chunk, only the delta fields that are set (today's core sends content, reasoning_content and tool_calls as null and a non-standard native_finish_reason), every text part (today's core loses text that shares a chunk with a part carrying a thought signature), the finish reason in its own chunk, tool call ids as call_<responseId>_<n>, unique across replies, when Gemini sends none, and usage only when the client asks for it with stream_options.include_usage (today's core always adds it).",
       "want": [
         {
           "data": {

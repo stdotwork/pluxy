@@ -2,6 +2,9 @@
   "manifest_version": 1,
   "id": "pluxy/grok-setup",
   "version": "0.1.0",
+  "title": "Grok Build",
+  "summary": "Points Grok Build at pluxy by editing its config file, with a backup to undo it.",
+  "kind": "client",
   "app": {
     "version": 0,
     "tier": "native",

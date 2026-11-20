@@ -724,6 +724,13 @@ fn shrunk_page_steps(
 fn run(app: &AppHandle) -> Result<(), String> {
     #[cfg(native_stack)]
     admission::set_app(app);
+    // Every session but the startup ones and the core steps (which start with no core, or test
+    // how one starts) first installs the bundled test packages, as setup would.
+    if std::env::var_os("PLUXY_APP_TEST_STARTUP").is_none()
+        && std::env::var_os("PLUXY_APP_TEST_CORE_SOURCE").is_none()
+    {
+        install_bundled(app)?;
+    }
     #[cfg(target_os = "linux")]
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_ACCESS_STAGE") {
         return access::run(app, &stage);
@@ -1122,6 +1129,71 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
     log("quit", json!({}));
     crate::quit(app);
+    Ok(())
+}
+
+/// A core's first start installs nothing. In managed mode the session installs the packages of
+/// the bundled registry beside the core's program (panelcore's test packages), as setup would,
+/// before the steps that use them. An adopted program is copied without them: nothing to do. The
+/// window reads the extensions' pages once, as it loads, so it is loaded again after an install.
+fn install_bundled(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<App>();
+    let (managed, caller) = {
+        let mut conn = state.conn.lock().unwrap();
+        let managed =
+            conn.view().mode == Some(crate::conn::Mode::Managed) && conn.core_pid().is_some();
+        (managed, conn.caller())
+    };
+    if !managed {
+        return Ok(());
+    }
+    let registries = wait_for("the core's registries", || {
+        let r = caller.call("GET", "/registries", None);
+        (r.status == 200).then_some(r.body).flatten()
+    })?;
+    let installed = caller
+        .call("GET", "/packages", None)
+        .body
+        .unwrap_or_default();
+    let have = |id: &str| {
+        installed["packages"]
+            .as_array()
+            .is_some_and(|ps| ps.iter().any(|p| p["id"] == id))
+    };
+    let mut done = vec![];
+    for reg in registries["registries"].as_array().into_iter().flatten() {
+        if reg["name"] != "bundled" {
+            continue;
+        }
+        for p in reg["packages"].as_array().into_iter().flatten() {
+            let id = p["id"].as_str().unwrap_or_default();
+            if id.is_empty() || have(id) {
+                continue;
+            }
+            let body = json!({"id": id, "registry": "bundled", "enable": true});
+            let r = caller.call("POST", "/packages", Some(&body));
+            if r.status != 200 {
+                return Err(format!("installing {id} from the bundled registry: {r:?}"));
+            }
+            done.push(id.to_string());
+        }
+    }
+    if !done.is_empty() {
+        let main = wait_for("the window", || app.get_webview(MAIN))?;
+        // The window lists extension pages once, when it loads. Wait for the new page: a step
+        // that ran on the old one would have its command answered into a page that is gone.
+        main.eval("window.__beforeReload = true; location.reload()")
+            .map_err(|e| e.to_string())?;
+        wait_for("the window to load again", || {
+            (eval(
+                &main,
+                "window.__beforeReload === undefined && document.readyState === 'complete' \
+                 && typeof window.__TAURI_INTERNALS__?.invoke === 'function'",
+            ) == Some(json!(true)))
+            .then_some(())
+        })?;
+    }
+    log("bundled_installed", json!({ "ids": done }));
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.20
+# pluxy extension protocol, version 0.22
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -29,9 +29,13 @@ to its end. Version 0.18 adds a model list's `from`: whether the list came from 
 provider or from the extension's built-in catalog. Version 0.19 adds a quota limit's `feature`: the
 limit counts a feature of the plan, not the account's requests to its models. Version 0.20 adds the
 error code `account_closed`: the provider closed, suspended or deactivated the account, or refused it
-for a breach of terms. It is deliberately small; later versions add capabilities and more operations
+for a breach of terms. Version 0.21 adds what a package is, for someone who does not know its ID: a
+manifest's `title`, `summary` and `kind`, and in a [registry index](#registry-index) the same with
+the registry's `tier`. Version 0.22 adds the account's
+[`timeouts`](#timeouts): upstream request limits for response headers, stream byte gaps and
+non-streamed completion. It is deliberately small; later versions add capabilities and more operations
 without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.20 (see
+core that speaks 0.22 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -82,6 +86,9 @@ An extension ships as a folder with a manifest named `pluxy-extension.json`:
 | `programs` | Program to run per platform, keyed by Go's `GOOS/GOARCH`. Paths are relative to the manifest's folder and may not leave it. |
 | `ui` | Optional: pages the panel shows for the extension, with their own `version`. See [extension pages](../ui/extension-pages/README.md#ui). |
 | `config` | Optional: the schema of the extension's settings, with its own `version`; the panel draws a form from it. See [extension pages](../ui/extension-pages/README.md#config). |
+| `title` | Since 0.21; core does not need it, `pluxy-pack` refuses to pack a provider extension without it (and an app tool that sets `summary` or `"kind": "client"` without it): the package's name for people, a few words such as `Claude`. One line, at most 80 characters. |
+| `summary` | Since 0.21; needed by `pluxy-pack` as `title` is: one sentence saying what it adds, for someone who does not know the provider. One line, at most 300 characters. |
+| `kind` | Since 0.21, optional: what the package adds. `provider` (the default for a manifest with `protocol`), or `client` for an app tool that points a coding client at core. Later versions add kinds. |
 
 The package version, manifest version, protocol version and the versions of `ui` and `config`
 are separate on purpose: each can change without the others. Later versions add more optional
@@ -116,6 +123,10 @@ newest first, each pinned to its archives' SHA-256 digests and sizes:
   "registry_version": 0,
   "packages": {
     "pluxy/codex": {
+      "title": "Codex and ChatGPT",
+      "summary": "OpenAI's Codex models with a ChatGPT subscription or an OpenAI API key.",
+      "kind": "provider",
+      "tier": "pick",
       "releases": [
         {
           "version": "0.1.0",
@@ -138,6 +149,8 @@ newest first, each pinned to its archives' SHA-256 digests and sizes:
 | --- | --- |
 | `registry_version` | Version of this index format. Version 0 is described here. |
 | `packages` | Packages by ID (the manifest's `id`). |
+| `title`, `summary`, `kind` | Since 0.21, optional: what the package is, as its manifest says ([Package manifest](#package-manifest)). Core shows them in management's `GET /registries`. A title or summary that is not one line within its length, or a kind that is not a lower-case word, makes the index invalid. A kind core does not know is shown as it is. |
+| `tier` | Since 0.21, optional: how far the registry vouches for the package. `pick`: offered when a new install is set up; `verified`: reviewed by the registry's maintainers; `unverified`: listed only. Absent means `unverified`. Core shows it and enforces nothing by it. |
 | `releases` | Releases offered, newest first. A release's `version` appears once per package. |
 | `protocol` | Protocol versions the release's program speaks, so core can pick a release it can run before downloading it. |
 | `artifacts` | The release's archives by platform (`GOOS/GOARCH`). |
@@ -566,6 +579,7 @@ the endpoint (or does not serve it for this account's credential) answers with c
 | `credential` | The credential for this call (below). |
 | `proxy_url` | Since 0.11, optional: the proxy every upstream request of this call goes through (below). Absent: no proxy. |
 | `headers` | Since 0.12, optional: extra HTTP headers every upstream request of this call carries, an object of header name to value (below). Absent: none. |
+| `timeouts` | Since 0.22, optional: upstream request limits in milliseconds (`header_ms`, `idle_ms`, `total_ms`; below). Absent: extension defaults. |
 
 An extension only ever receives its own accounts: core stores each credential with the ID of the
 extension that created it and never sends it to another.
@@ -714,6 +728,21 @@ whose names are secret, including a value the extension set itself under such a 
 them; the other headers stay. As with a proxy, the SDK answers a call that carries headers with
 `unsupported` (scope `credential`, retryable) and never runs the handler when the extension
 process has not created any `sdk.Upstream` transport.
+
+### Timeouts
+
+From version 0.22 an account may carry `timeouts`, an object with `header_ms`, `idle_ms` and
+`total_ms` in milliseconds. Each is optional; `0` turns that limit off. On a streamed upstream
+request, `header_ms` (default 60000) bounds the wait for HTTP response headers and `idle_ms`
+(default 300000) bounds the gap between raw upstream body bytes (and between messages on an
+upstream WebSocket turn). On a request that is not streamed, `total_ms` (default 600000) bounds
+the whole upstream request from start to finish. Core resolves each limit from the account's
+override and `routing.timeouts`, and sends `timeouts` only to extensions whose `protocol_minor`
+is 18 or more.
+
+A timeout that fires before any upstream response byte arrives is retry-safe so core can move the
+request to another account; once response headers or reply bytes have arrived, it ends the
+stream or request with an error instead.
 
 ## The request
 
@@ -1235,8 +1264,8 @@ Rules:
   message: connecting the upstream socket for it makes no second one, so the rules apply once per
   turn.
 - Paths are relative to the model request. An extension whose body carries the request inside
-  another object applies them inside it: the Antigravity extension's body is
-  `{"project": ..., "request": {...}}`, and its rules apply inside `request`, as in today's core.
+  another object applies them inside it: if an extension's body is
+  `{"project": ..., "request": {...}}`, its rules apply inside `request`.
 - In this order, checking each rule's conditions on the body as it is when the rule's turn comes:
   `default`, then `default-raw`, each rule in order, each of its params in sorted path order,
   writing a value only where the body has none and no earlier default wrote one (the first
@@ -1368,7 +1397,7 @@ recorded.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.20. An extension reports the minor version it
+raise the minor version: this document is version 0.22. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1396,8 +1425,10 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.18 | A model list's `from` ([`models`](#models)). |
 | 0.19 | A [quota](#quota) limit's `feature`. |
 | 0.20 | Error code [`account_closed`](#errors). |
+| 0.21 | A manifest's optional `title`, `summary` and `kind`, and a [registry index](#registry-index) package's optional `title`, `summary`, `kind` and `tier`. No call or frame changes. |
+| 0.22 | The account's optional [`timeouts`](#timeouts). |
 
-## What version 0.20 leaves out
+## What version 0.22 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

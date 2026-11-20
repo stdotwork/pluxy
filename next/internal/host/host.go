@@ -53,6 +53,9 @@ type Options struct {
 	// ProxyURL returns core's global proxy_url setting, read at each call: the proxy of every
 	// account without one of its own (proxyurl.Resolve). Nil: none.
 	ProxyURL func() string
+	// Timeouts returns core's global routing.timeouts setting, read at each call: the defaults
+	// for every account that does not override a limit. Nil: use the protocol defaults.
+	Timeouts func() *protocol.Timeouts
 	// Payload returns core's payload rules, read at each generate, count_tokens and endpoint
 	// call and each session turn: the call carries those that match it (protocol minor version
 	// 14, 15 for a session turn). Nil: none.
@@ -620,6 +623,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		s.fail(perr)
 		return s
 	}
+	e.resolveTimeouts(&account)
 	rules, perr := e.payload(ctx, account.ID, req, payloadMinor)
 	if perr != nil {
 		s := &Stream{}

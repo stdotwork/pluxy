@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -146,7 +148,7 @@ func runMain() error {
 		latencyFlag        = flag.Duration("latency", 0, "override non-streamed reply latency")
 		bodyKBFlag         = flag.Int("body-kb", 100, "request body size in KB for standard scenarios")
 		tlsFlag            = flag.Bool("tls", false, "attempt TLS upstream (note: extensions clear env and do not inherit SSL_CERT_FILE)")
-		profileDirFlag     = flag.String("profile", "", "write CPU and heap pprof files for agents and throughput into DIR using go build -overlay")
+		profileDirFlag     = flag.String("profile", "", "write CPU and heap pprof files for the selected scenarios (default agents and throughput) into DIR using go build -overlay")
 		jsonFileFlag       = flag.String("json", "", "write full report including raw per-run values as JSON to FILE")
 		proxyURLFlag       = flag.String("proxy-url", "", "measure an already-running proxy at URL instead of starting pluxy")
 		proxyKeyFlag       = flag.String("proxy-key", "", "API key for -proxy-url")
@@ -194,8 +196,13 @@ func runMain() error {
 	}
 	defer mock.Close()
 
+	specs := buildScenarios(*checkFlag, *bodyKBFlag, setFlags, *ttftFlag, *chunksFlag, *intervalFlag, *latencyFlag)
 	if *profileDirFlag != "" {
-		written, err := RunProfileMode(ctx, nextRoot, *profileDirFlag, *bodyKBFlag, mock)
+		specs, err = selectProfileScenarios(specs, *scenariosFlag)
+		if err != nil {
+			return err
+		}
+		written, err := RunProfileMode(ctx, nextRoot, *profileDirFlag, specs, mock)
 		if err != nil {
 			return err
 		}
@@ -204,17 +211,14 @@ func runMain() error {
 			fmt.Printf("  %s\n", p)
 		}
 		return nil
-	}
-
-	host := CollectHostInfo(repoRoot)
-
-	specs := buildScenarios(*checkFlag, *bodyKBFlag, setFlags, *ttftFlag, *chunksFlag, *intervalFlag, *latencyFlag)
-	if *scenariosFlag != "" {
+	} else if *scenariosFlag != "" {
 		specs, err = filterScenarios(specs, *scenariosFlag)
 		if err != nil {
 			return err
 		}
 	}
+
+	host := CollectHostInfo(repoRoot)
 
 	var (
 		proxyURL     = strings.TrimRight(*proxyURLFlag, "/")
@@ -904,9 +908,16 @@ func writeExtensionManifest(binDir string) error {
 }
 
 func writeCoreConfig(cfgPath, manifestPath, mockBaseURL string) error {
+	// Core always has a management key; the bench never calls the management API, so a random
+	// one made for this run is enough.
+	mgmt := make([]byte, 16)
+	if _, err := rand.Read(mgmt); err != nil {
+		return err
+	}
 	cfg := map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{benchClientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{benchClientKey},
+		"management_key": hex.EncodeToString(mgmt),
 		"extension": map[string]any{
 			"manifest": manifestPath,
 			"accounts": []any{

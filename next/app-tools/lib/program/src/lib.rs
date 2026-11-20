@@ -179,7 +179,8 @@ impl Identity {
     /// From the host's environment: `PLUXY_APP_CONTRACT_VERSIONS` must list this contract,
     /// `PLUXY_EXTENSION_ID` and `PLUXY_APP_ARTIFACT_SHA256` name the release. When
     /// `PLUXY_ENVIRONMENT` names a WSL distribution and user, this must run in that distribution as
-    /// that user ([`environment::check`]); otherwise the program stops before it says hello.
+    /// that user, with the user ID and home `PLUXY_ENVIRONMENT_ACCOUNT` names
+    /// ([`environment::check`]); otherwise the program stops before it says hello.
     pub fn from_env() -> Result<Identity, String> {
         let var = |name: &str| {
             std::env::var(name)
@@ -201,7 +202,15 @@ impl Identity {
             let env = env
                 .to_str()
                 .ok_or("PLUXY_ENVIRONMENT is not UTF-8: start this program from pluxy's app")?;
-            environment::check(env)?;
+            let account = std::env::var_os("PLUXY_ENVIRONMENT_ACCOUNT")
+                .filter(|v| !v.is_empty())
+                .ok_or(
+                    "PLUXY_ENVIRONMENT_ACCOUNT is not set: start this program from pluxy's app",
+                )?;
+            let account = account.to_str().ok_or(
+                "PLUXY_ENVIRONMENT_ACCOUNT is not UTF-8: start this program from pluxy's app",
+            )?;
+            environment::check(env, account)?;
         }
         Ok(Identity {
             id: var("PLUXY_EXTENSION_ID")?,
