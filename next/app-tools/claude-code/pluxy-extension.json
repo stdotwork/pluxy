@@ -8,6 +8,9 @@
     "host_versions": [
       0
     ],
+    "environments": [
+      "wsl"
+    ],
     "programs": {
       "darwin/amd64": "bin/claude-code",
       "darwin/arm64": "bin/claude-code",

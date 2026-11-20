@@ -21,11 +21,27 @@ import (
 )
 
 // Codex client identity: the User-Agent and originator of the Codex terminal client, which
-// today's core sends in place of the client's own (its "cloaking").
+// today's core sends in place of the client's own (its "cloaking"). The version in the User-Agent
+// is the account's codex_client_version, else defaultCodexVersion.
 const (
-	codexUserAgent  = "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
-	codexOriginator = "codex-tui"
+	defaultCodexVersion = "0.154.0"
+	codexOriginator     = "codex-tui"
 )
+
+// codexUserAgent is the User-Agent of an account that sets no codex_client_version.
+var codexUserAgent = codexUserAgentFor(defaultCodexVersion)
+
+func codexUserAgentFor(version string) string {
+	return "codex-tui/" + version + " (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; " + version + ")"
+}
+
+// userAgent returns the User-Agent the Codex identity sends.
+func (s settings) userAgent() string {
+	if s.CodexClientVersion == "" {
+		return codexUserAgent
+	}
+	return codexUserAgentFor(s.CodexClientVersion)
+}
 
 // passedHeaders are the Codex client's request headers sent on to the upstream as they came
 // (lower-case, as the request's native headers name them); originator goes by the identity rule
@@ -75,21 +91,50 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL(s, a)+"/responses", bytes.NewReader(ur.body))
+	resp, err := post(ctx, call.Request, ur, ur.body, s, a)
 	if err != nil {
-		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+		return err
 	}
-	setHeaders(req.Header, call.Request, ur, s, a)
-	resp, err := client.Do(req)
-	if err != nil {
-		return requestFailed(ctx, err)
+	if failed(resp) {
+		e := statusError(resp, ur.model)
+		resp.Body.Close()
+		// Encrypted reasoning another account made, which this account cannot read: one more try
+		// without it, unless the client asked for refusal over loss.
+		if !foreignReasoning(e) || call.Request.DropPolicy == llm.DropReject {
+			return e
+		}
+		body, ok := ur.dropForeignReasoning()
+		if !ok {
+			return e
+		}
+		if resp, err = post(ctx, call.Request, ur, body, s, a); err != nil {
+			return err
+		}
+		if failed(resp) {
+			defer resp.Body.Close()
+			return statusError(resp, ur.model)
+		}
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return statusError(resp, ur.model)
-	}
 	return relay(ctx, resp, renamer{&reporting{Stream: out, tr: ur.tr}, ur.names}, ur.repairs())
 }
+
+// post sends body, the request ur built (or that request changed for a retry), to the account's
+// Responses endpoint.
+func post(ctx context.Context, cr llm.Request, ur *upstreamRequest, body []byte, s settings, a account) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL(s, a)+"/responses", bytes.NewReader(body))
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	setHeaders(req.Header, cr, ur, s, a)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, requestFailed(ctx, err)
+	}
+	return resp, nil
+}
+
+func failed(resp *http.Response) bool { return resp.StatusCode < 200 || resp.StatusCode > 299 }
 
 // setHeaders sets the upstream request's headers.
 func setHeaders(h http.Header, req llm.Request, ur *upstreamRequest, s settings, a account) {
@@ -151,7 +196,7 @@ func setClientHeaders(h http.Header, req llm.Request, ur *upstreamRequest, s set
 func setIdentity(h http.Header, client map[string]string, s settings, a account) {
 	switch {
 	case s.identity():
-		h.Set("User-Agent", codexUserAgent)
+		h.Set("User-Agent", s.userAgent())
 		h.Set("Originator", codexOriginator)
 	case client["originator"] != "":
 		h.Set("Originator", client["originator"])

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -91,5 +92,67 @@ func TestFilesWindowsRefusesAFolderAnotherAccountOwns(t *testing.T) {
 	fmt.Fprint(l, "pluxy: secret line\n")
 	if names := pt.Names(t, l.Dir()); len(names) != 0 {
 		t.Errorf("the refused folder holds %v, want nothing", names)
+	}
+}
+
+// A main.log removed between its making and its opening is made private again, not made with
+// the folder's list by the opening.
+func TestFilesWindowsMakesARemovedMainLogPrivateAgain(t *testing.T) {
+	l, _ := newFiles(t)
+	removed := false
+	afterCreate = func(dir string) {
+		if !removed {
+			removed = true
+			if err := os.Remove(filepath.Join(dir, Main)); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	t.Cleanup(func() { afterCreate = func(string) {} })
+	if err := l.Configure(true, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer l.Configure(false, 0)
+	if !removed {
+		t.Fatal("setup: main.log was not removed")
+	}
+	pt.CheckPrivate(t, "main.log made again", filepath.Join(l.Dir(), Main), false)
+}
+
+// A logs folder swapped for a link (here a junction) to another folder while main.log is
+// rotated is not renamed through: the other folder's main.log stays as it was, and logging to
+// file stops.
+func TestFilesWindowsRotationRefusesAFolderSwappedForALink(t *testing.T) {
+	l, _ := newFiles(t)
+	if err := l.Configure(true, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer l.Configure(false, 0)
+	fmt.Fprint(l, "pluxy: first\n")
+	other := filepath.Join(t.TempDir(), "other")
+	if err := os.Mkdir(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, Main), []byte("other\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	beforeRotate = func(dir string) {
+		if err := os.Rename(dir, dir+"-old"); err != nil {
+			t.Fatal(err)
+		}
+		pt.Junction(t, dir, other)
+	}
+	t.Cleanup(func() { beforeRotate = func(string) {} })
+	l.mu.Lock()
+	l.rotate()
+	l.mu.Unlock()
+	if names := pt.Names(t, other); !slices.Equal(names, []string{Main}) {
+		t.Errorf("the folder the link points to holds %v, want only %s", names, Main)
+	}
+	if b, err := os.ReadFile(filepath.Join(other, Main)); err != nil || string(b) != "other\n" {
+		t.Errorf("its %s holds %q, %v", Main, b, err)
+	}
+	if l.f != nil {
+		t.Error("logging to file went on through the link")
 	}
 }

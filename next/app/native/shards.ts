@@ -50,7 +50,10 @@ export const PLATFORM_SHARDS: Record<string, readonly string[]> = {
   // The signed tool sessions in the real app (native/platform-tools.ts), on the build with
   // artifact-test-trust: a job of its own, since it builds that app, the fixture tool and the
   // execution program, and starts a test core.
-  tools: ["admission", "program", "routing", "launcher"],
+  tools: ["admission", "program", "routing", "launcher", "vault"],
+  // The open session of native/platform-tools.ts, on the same build as the tools shard: a job of
+  // its own, as the tools shard's sessions take most of its time limit.
+  open: ["open"],
   // The application update (update-cases.ts): a job of its own, since it builds the test package,
   // runs a test core, and its route restarts the app four times. Its session is not "update",
   // which names the Linux one in the app shard: a session is named once across all shards.

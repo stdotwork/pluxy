@@ -238,6 +238,10 @@ func TestInteractionsStreamArrivesIncrementally(t *testing.T) {
 	readFirst := make(chan struct{})
 	var timedOut atomic.Bool
 	up := newFakeGemini(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != interactionsPath {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fl := w.(http.Flusher)
 		io.WriteString(w, "event: content.delta\ndata: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Hel\"}}\n\n")
@@ -399,6 +403,10 @@ func TestInteractionsAccountWithoutTheSettingIsRefused(t *testing.T) {
 // final error event; the reply had started, so its status stays 200.
 func TestInteractionsStreamBreaksMidway(t *testing.T) {
 	up := newFakeGemini(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != interactionsPath {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		io.WriteString(w, "event: content.delta\ndata: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Hel\"}}\n\n")
 		w.(http.Flusher).Flush()

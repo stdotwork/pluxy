@@ -969,7 +969,7 @@ func (l *lineLogger) longLine() {
 }
 
 // accountClosedMinor is the protocol minor version that adds llm.CodeAccountClosed.
-const accountClosedMinor = 19
+const accountClosedMinor = 20
 
 // normalizeEvent downgrades error codes that require a newer protocol minor version than e
 // reported in describe.

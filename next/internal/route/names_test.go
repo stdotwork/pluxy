@@ -156,7 +156,7 @@ func TestRoutingUsesUpstreamNames(t *testing.T) {
 
 func TestRouterModels(t *testing.T) {
 	h := newHarness(t, Config{ForceModelPrefix: true},
-		Account{ID: "cfg", Models: []ModelEntry{{Name: "up-a", Alias: "pub-a"}, {Name: "shared"}}},
+		Account{ID: "cfg", Extension: "pluxy/test", Models: []ModelEntry{{Name: "up-a", Alias: "pub-a"}, {Name: "shared"}}},
 		Account{ID: "cat", Prefix: "team", ModelAlias: []ModelAlias{{Name: "gemini-x", Alias: "gx", DisplayName: "GX"}}},
 		Account{ID: "broken", Models: []ModelEntry{{Name: "shared"}}},
 	)
@@ -186,9 +186,9 @@ func TestRouterModels(t *testing.T) {
 		gb, _ := json.MarshalIndent(got, "", " ")
 		t.Errorf("models:\n%s", gb)
 	}
-	// Without a catalog, accounts list the models their config names, owned by the account.
+	// Without a catalog, accounts list the models their config names, owned by the extension.
 	h.r.UseCatalog(nil)
-	if got := h.r.Models(context.Background()); len(got) != 2 || got[0].OwnedBy != "cfg" {
+	if got := h.r.Models(context.Background()); len(got) != 2 || got[0].OwnedBy != "pluxy/test" {
 		t.Errorf("models without a catalog: %+v", got)
 	}
 }

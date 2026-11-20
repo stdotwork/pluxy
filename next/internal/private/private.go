@@ -167,3 +167,20 @@ func SyncDir(root *os.Root) error {
 // owners. On Windows the owner must be this user, the token's default owner or SYSTEM; another
 // account may have put the file there before the folder was private.
 func Owner(f *os.File) (ok bool, owner string, err error) { return fileOwner(f) }
+
+// FilePrivate reports whether f, a file in a private folder, can be read only by core's user
+// (and, on Windows, SYSTEM) by its own access. On unix it reports true: the folder's mode keeps
+// everyone else out whatever a file's mode. On Windows the file's access list must be private as
+// the folder's check judges a folder's: protected, its allow entries only this user's and
+// SYSTEM's. Making the folder private does not reach a file with a list of its own, such as one
+// made before the folder was private, or one moved in from another folder on the same volume,
+// and Windows lets every user reach a file in a folder they cannot open, so a caller rewrites
+// such a file (WriteFile).
+func FilePrivate(f *os.File) (bool, error) { return filePrivate(f) }
+
+// CopyAccess gives the file dst the access list of the file src: the same entries, and
+// protected or inheriting from its folder as src is. On unix it does nothing; a caller sets the
+// mode. A writer that replaces a file outside a private folder with a file it made private
+// (Create) calls it before the rename, so the new file is neither more open than the old one
+// while it is written nor tighter after it.
+func CopyAccess(src, dst string) error { return copyAccess(src, dst) }
