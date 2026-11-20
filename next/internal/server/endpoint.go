@@ -60,6 +60,10 @@ var compactEndpoint = endpoint{
 	},
 }
 
+// embeddingsEndpoint is OpenAI's Embeddings API. Its body and reply are the upstream's own; the
+// extension that serves it makes the call.
+var embeddingsEndpoint = endpoint{format: llm.FormatOpenAIEmbeddings}
+
 // alphaSearchEndpoint is Codex's search endpoint. Its body is Codex's own shape, which core passes
 // on as it came; the model is optional. The headers are those today's core passes on.
 var alphaSearchEndpoint = endpoint{
@@ -120,6 +124,7 @@ var endpointRoutes = map[string]endpoint{
 	"/backend-api/codex/alpha/search":      alphaSearchEndpoint,
 	"/v1/images/generations":               imagesGenerationsEndpoint,
 	"/v1/images/edits":                     imagesEditsEndpoint,
+	"/v1/embeddings":                       embeddingsEndpoint,
 	"/v1beta/interactions":                 interactionsEndpoint,
 }
 

@@ -179,6 +179,17 @@ message with the Codex CLI's `summary_prefix.md` followed by a newline and the s
 is excluded, and an empty or cut-off summary is an error on the request); a `"messages"` or
 `"gemini"` account answers unsupported so core tries another account.
 
+The Images API (`POST /v1/images/generations` and `POST /v1/images/edits`) is served on
+OpenAI-compatible accounts whose `wire_api` is Chat or Responses, for any model the account lists.
+Core routes the request by its model,
+and the extension sends it to `POST {base_url}/images/generations` or
+`POST {base_url}/images/edits` with the account's bearer key and the model renamed for the
+account. A generation is sent as JSON. Core turns a multipart edit into its JSON form before the
+extension sees it, with uploaded files as data URLs; the extension rebuilds multipart from that
+form, keeping every field value and file byte, and sends it with a new multipart boundary. A JSON
+edit stays JSON. The upstream's reply body and content type come back as they came, including
+server-sent events for a streamed reply.
+
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
 (a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.
 
@@ -2558,7 +2569,7 @@ are accepted silently.
 | The keys' `models[]` `is-compat`, `use-max-completion-tokens` | | Dropped: single-provider quirks, no need found |
 | The keys' `models[]` `force-mapping` | A reply carries the upstream's model name, not the alias the client asked for. | Later: built when a client needs a reply's model to be the alias it asked for |
 | The keys' `models[]` `openapi`; Vertex keys' `openapi`, `openapi-location` | | Later: built when someone calls Vertex partner models (Claude, Llama, Mistral) through a key |
-| The keys' `models[]` `image` (openai-compatibility) | Images are served for Codex accounts only. | Dropped: no use of OpenAI-compatible image models was found |
+| The keys' `models[]` `image` (openai-compatibility) | A Chat or Responses OpenAI-compatible account serves the Images API for any model it lists; the old per-model flag is not imported. | Dropped: the model list already decides which Images requests route to the account |
 | The keys' `models[]` `support-configuration-update` | | Dropped: an off-by-default prompt-cache saving for one kind of relay, no need found |
 | xAI keys' `websockets` | xAI is served over HTTP. | Dropped: HTTP gives the same replies |
 | openai-compatibility's `support-prompt-cache-key` | A [payload rule](#payload-rules) can set a fixed `prompt_cache_key`. | Dropped: no need found |

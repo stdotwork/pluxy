@@ -318,7 +318,7 @@ var rules = map[string]rule{
 	"api-keys.*[].models[].force-mapping":                      {later, "built when a client needs a reply's model to be the alias it asked for"},
 	"api-keys.*[].models[].is-compat":                          {dropped, "a single-provider quirk, no need found"},
 	"api-keys.*[].models[].thinking":                           {dropped, "the thinking suffix and extensions cover it"},
-	"api-keys.*[].models[].image":                              {dropped, "images are served for Codex accounts only, and no use of OpenAI-compatible image models was found"},
+	"api-keys.*[].models[].image":                              {dropped, "a Chat or Responses OpenAI-compatible account serves the Images API for any model it lists"},
 	"api-keys.*[].models[].input-modalities":                   {dropped, "list metadata only, no need found"},
 	"api-keys.*[].models[].output-modalities":                  {dropped, "list metadata only, no need found"},
 	"api-keys.*[].models[].use-max-completion-tokens":          {dropped, "a single-provider quirk, no need found"},
