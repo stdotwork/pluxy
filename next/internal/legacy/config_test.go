@@ -497,7 +497,7 @@ func TestHashedManagementKey(t *testing.T) {
 func TestStrategyNames(t *testing.T) {
 	for in, want := range map[string]any{
 		"round-robin": nil, "fillfirst": "fill-first", "ff": "fill-first", "wrr": "weighted",
-		"weighted": "weighted", "least-active": "least-active", "nonsense": nil,
+		"weighted": "weighted", "least-active": "least-active", "soonest-reset": "soonest-reset", "nonsense": nil,
 	} {
 		r := translate(t, "routing: {strategy: "+in+"}")
 		got := asJSON(t, r.Config["routing"])

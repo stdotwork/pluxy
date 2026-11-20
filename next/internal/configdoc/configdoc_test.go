@@ -671,7 +671,7 @@ func TestApplySettingsJSON(t *testing.T) {
 		}
 	})
 	t.Run("strategy names", func(t *testing.T) {
-		for in, want := range map[string]string{"round-robin": "round-robin", "fill-first": "fill-first", " FF ": "fill-first", "wrr": "weighted", "Weighted": "weighted", "least-active": "least-active"} {
+		for in, want := range map[string]string{"round-robin": "round-robin", "fill-first": "fill-first", " FF ": "fill-first", "wrr": "weighted", "Weighted": "weighted", "least-active": "least-active", "soonest-reset": "soonest-reset"} {
 			got := edited(t, editJSON, false, func(d *Doc) error {
 				return d.ApplySettings(SettingsPatch{Routing: &RoutingPatch{Strategy: str(in)}})
 			})

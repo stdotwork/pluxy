@@ -1421,7 +1421,8 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
 
 | Field | Meaning |
 | --- | --- |
-| `strategy` | `round-robin` (default; takes turns after the account picked last), `weighted` (by `weight`, interleaved), `fill-first` (first eligible account in order), `least-active` (fewest running requests). |
+| `strategy` | `round-robin` (default; takes turns after the account picked last), `weighted` (by `weight`, interleaved), `fill-first` (first eligible account in order), `least-active` (fewest running requests), `soonest-reset` (below). |
+| `quota_refresh_ms` | For `soonest-reset`: how often core reads every enabled account's usage from its provider (the extension's `quota` call), in the background and never on a request's path; the first comes a minute after core starts. Default 1800000 (30 minutes); 0 turns the readings off, and accounts are then ranked only by the readings core takes when it checks a long block. Accounts whose provider has no usage reading (API keys) are never read. |
 | `max_attempts` | Upstream attempts per request, counting the first. 0: no fixed limit; each account is tried once per round. |
 | `max_accounts` | Distinct accounts one request may try in a round, as today's `max-retry-credentials` limits them; each round gets its own count, and an account the limit left out takes part in a later round. 0: no limit. |
 | `max_wait_ms` | Longest a request waits, in total, for a blocked account; with `request_retry`, before each round. 0 (default): never; when every account is blocked the request fails at once with a 429 and `retry_after_ms`. A request never tries an account before the time the upstream gave. |
@@ -1438,6 +1439,15 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
 | account `max_concurrency` | Requests running at once on the account. 0: no limit. |
 | account `request_retry` | Rounds after the first that the account takes part in, in place of `request_retry` (today's per-key `request-retry`): the account leaves a request's rounds past its own count, and a count above routing's runs more rounds with only the accounts whose count reaches them. Setting it on an account runs rounds even when routing sets none; accounts without one then take part in the first only. |
 | account `endpoint` | Accounts naming the same endpoint share its outages. Default: the account's ID. |
+
+`soonest-reset` spends allowance that is about to reset before it is lost: among the eligible
+accounts of the top priority, a new request goes to the account whose longest usage window (a
+Codex or Claude account's weekly window) resets soonest, by its provider's own usage reading.
+Reset times are rounded to the hour, so accounts whose windows end minutes apart tie and take
+turns. Accounts with no known reset come after those with one, and an account whose reading shows
+a full window comes last until that window resets; a blocked account is never picked, whatever
+its reset. Priority comes first, and session affinity still keeps a session on its account.
+`pluxy route <model>` shows the reset each account was ranked by. It is not the default.
 
 A client can pin a request to one account with the `X-Pluxy-Account: <id>` header, naming the
 account by its ID or its public ID (the one replies give). A pinned request never goes to another
@@ -2021,7 +2031,7 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 
 | Setting | JSON config | Values |
 | --- | --- | --- |
-| `routing.strategy` | `routing.strategy` (`weighted` for `weighted-round-robin`) | `round-robin`, `fill-first`, `weighted-round-robin`, `least-active`; today's other spellings (`wrr`, `ff`, ...) are taken too. |
+| `routing.strategy` | `routing.strategy` (`weighted` for `weighted-round-robin`) | `round-robin`, `fill-first`, `weighted-round-robin`, `least-active`, `soonest-reset`; today's other spellings (`wrr`, `ff`, ...) are taken too. |
 | `routing.session-affinity` | `routing.session_affinity.enabled` | `true` or `false`. A `config.yaml` keeps today's default, `false`; a JSON config has it on until it says `false`. |
 | `routing.session-affinity-ttl` | `routing.session_affinity.ttl_ms` | A duration such as `1h` (default) or `30m`. In a JSON config it needs session affinity on. |
 | `routing.force-model-prefix` | `routing.force_model_prefix` | `true`: an account with a `prefix` serves its models only under the prefix. |
@@ -2475,7 +2485,7 @@ are accepted silently.
 | `server.commercial-mode` (`commercial-mode`) | | Dropped: it turns off features this core does not have |
 | `server.discovery.*` (`discovery`) | | Dropped: no client here reads the advertisement |
 | `server.discovery.advertise-management` | | Dead |
-| `routing.strategy` | `routing.strategy`: `round-robin`, `fill-first` (also `fillfirst`, `ff`), `weighted-round-robin` (also `weightedroundrobin`, `wrr`; this core's `weighted`); this core's `weighted` and `least-active` work too. A name today's core does not know is `round-robin`, as there, and the log says so. | Supported |
+| `routing.strategy` | `routing.strategy`: `round-robin`, `fill-first` (also `fillfirst`, `ff`), `weighted-round-robin` (also `weightedroundrobin`, `wrr`; this core's `weighted`); this core's `weighted`, `least-active` and `soonest-reset` work too. A name today's core does not know is `round-robin`, as there, and the log says so. | Supported |
 | `routing.session-affinity`, `routing.session-affinity-ttl` | `routing.session_affinity` with `ttl_ms` from the duration (default `1h`). A `config.yaml` without `session-affinity: true` has it off, as today's core does, though a JSON config has it on by default. | Supported |
 | `routing.session-affinity-subagents` | A Claude Code subagent sends its session's `X-Claude-Code-Session-Id`, so with `routing.session-affinity` it stays on the session's account, as today's default `true` keeps it. `false` (spread subagents over the pool) is not built, and the log names it. | Dropped: a subagent stays on its session's account, and no need was found to spread subagents over the pool |
 | `routing.session-affinity-rebind-on` | | Dropped: no need found |
