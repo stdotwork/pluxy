@@ -104,10 +104,11 @@ var requestFields = []string{"model", "messages", "system", "max_tokens", "strea
 
 // ParseRequest reads a Messages request body. The result keeps body as its Native form, and every
 // item, part and tool keeps the fields the model has no place for (cache_control, signatures,
-// citations and the like) in its Origin. Errors are *llm.Error with code invalid_request.
+// citations and the like) in its Origin. The result refers to body rather than copying it, so
+// body must not change afterwards. Errors are *llm.Error with code invalid_request.
 func ParseRequest(body []byte) (llm.Request, error) {
 	var in request
-	if err := json.Unmarshal(body, &in); err != nil {
+	if err := rawjson.Unmarshal(body, &in); err != nil {
 		return llm.Request{}, invalid("request body is not valid JSON: %v", err)
 	}
 	if in.Model == "" {
@@ -117,7 +118,7 @@ func ParseRequest(body []byte) (llm.Request, error) {
 	req := llm.Request{
 		Model:  in.Model,
 		Stream: in.Stream,
-		Native: &llm.Native{Format: format, Body: append(json.RawMessage(nil), body...)},
+		Native: &llm.Native{Format: format, Body: body},
 		Options: llm.Options{
 			MaxOutputTokens: in.MaxTokens,
 			Temperature:     in.Temperature,
@@ -162,7 +163,7 @@ func parseTool(raw json.RawMessage, path string) llm.Tool {
 		InputSchema json.RawMessage `json:"input_schema"`
 		Strict      *bool           `json:"strict"`
 	}
-	if json.Unmarshal(raw, &t) != nil || (t.Type != "" && t.Type != "custom") || t.Name == "" || len(t.InputSchema) == 0 {
+	if rawjson.Unmarshal(raw, &t) != nil || (t.Type != "" && t.Type != "custom") || t.Name == "" || len(t.InputSchema) == 0 {
 		// Server tools (web search, code execution, ...) and versioned client tools (bash,
 		// text editor, ...) are not function tools; they survive whole.
 		return llm.Tool{Type: llm.ToolNative, Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)}}
@@ -180,7 +181,7 @@ func parseToolChoice(raw json.RawMessage) (*llm.ToolChoice, *bool, json.RawMessa
 		Name                   string `json:"name"`
 		DisableParallelToolUse *bool  `json:"disable_parallel_tool_use"`
 	}
-	if m == nil || json.Unmarshal(raw, &tc) != nil {
+	if m == nil || rawjson.Unmarshal(raw, &tc) != nil {
 		return nil, nil, raw
 	}
 	var choice *llm.ToolChoice
@@ -227,11 +228,11 @@ func reasoningEffort(thinkingRaw, configRaw json.RawMessage) (effort string, thi
 		Type   string `json:"type"`
 		Budget *int   `json:"budget_tokens"`
 	}
-	if th == nil || json.Unmarshal(thinkingRaw, &t) != nil {
+	if th == nil || rawjson.Unmarshal(thinkingRaw, &t) != nil {
 		return "", thinkingRest, configRest
 	}
 	var explicit string
-	_ = json.Unmarshal(cfg["effort"], &explicit)
+	_ = rawjson.Unmarshal(cfg["effort"], &explicit)
 	explicit = strings.ToLower(strings.TrimSpace(explicit))
 	useExplicit := func() {
 		effort = explicit
@@ -275,7 +276,7 @@ func parseSystem(raw json.RawMessage) (*llm.Item, error) {
 		return nil, nil
 	}
 	var s string
-	if json.Unmarshal(raw, &s) == nil {
+	if rawjson.Unmarshal(raw, &s) == nil {
 		if s == "" {
 			return nil, nil
 		}
@@ -283,7 +284,7 @@ func parseSystem(raw json.RawMessage) (*llm.Item, error) {
 			Content: []llm.Part{{Type: llm.PartText, Text: s}}, Origin: &llm.Origin{Format: format, Path: "system"}}, nil
 	}
 	var blocks []json.RawMessage
-	if err := json.Unmarshal(raw, &blocks); err != nil {
+	if err := rawjson.Unmarshal(raw, &blocks); err != nil {
 		return nil, invalid("system must be a string or a list of text blocks")
 	}
 	it := &llm.Item{Type: llm.ItemTypeMessage, Role: llm.RoleSystem, Origin: &llm.Origin{Format: format, Path: "system"}}
@@ -328,7 +329,7 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	}
-	if err := json.Unmarshal(raw, &head); err != nil {
+	if err := rawjson.Unmarshal(raw, &head); err != nil {
 		return nil, err
 	}
 	// A system message in the conversation is a system item where it stands; today's core passes
@@ -341,7 +342,7 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 	}
 	origin := rawjson.Origin(format, path, m, []string{"role", "content"}, nil)
 	var s string
-	if json.Unmarshal(head.Content, &s) == nil {
+	if rawjson.Unmarshal(head.Content, &s) == nil {
 		it := llm.Item{Type: llm.ItemTypeMessage, Role: head.Role, TextContent: true, Origin: origin}
 		if s != "" {
 			it.Content = []llm.Part{{Type: llm.PartText, Text: s}}
@@ -349,7 +350,7 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 		return []llm.Item{it}, nil
 	}
 	var blocks []json.RawMessage
-	if err := json.Unmarshal(head.Content, &blocks); err != nil {
+	if err := rawjson.Unmarshal(head.Content, &blocks); err != nil {
 		return nil, fmt.Errorf("content must be a string or a list of content blocks")
 	}
 	var items []llm.Item
@@ -370,7 +371,7 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 		bp := fmt.Sprintf("%s.content[%d]", path, i)
 		bm := rawjson.Object(rb)
 		var b block
-		if bm == nil || json.Unmarshal(rb, &b) != nil {
+		if bm == nil || rawjson.Unmarshal(rb, &b) != nil {
 			return nil, fmt.Errorf("content[%d] must be an object", i)
 		}
 		item := func(it llm.Item) {
@@ -436,7 +437,7 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 func parsePart(raw json.RawMessage, path string) (llm.Part, error) {
 	m := rawjson.Object(raw)
 	var b block
-	if m == nil || json.Unmarshal(raw, &b) != nil {
+	if m == nil || rawjson.Unmarshal(raw, &b) != nil {
 		return llm.Part{}, fmt.Errorf("content block must be an object")
 	}
 	native := llm.Part{Type: llm.PartNative, Format: format, Data: append(json.RawMessage(nil), raw...), Origin: &llm.Origin{Format: format, Path: path}}
@@ -490,18 +491,18 @@ func textResult(raw json.RawMessage) (string, bool) {
 		return "", true
 	}
 	var s string
-	if json.Unmarshal(raw, &s) == nil {
+	if rawjson.Unmarshal(raw, &s) == nil {
 		return s, true
 	}
 	var blocks []json.RawMessage
-	if json.Unmarshal(raw, &blocks) != nil {
+	if rawjson.Unmarshal(raw, &blocks) != nil {
 		return "", false
 	}
 	texts := make([]string, 0, len(blocks))
 	for _, rb := range blocks {
 		m := rawjson.Object(rb)
 		var b block
-		if len(m) != 2 || json.Unmarshal(rb, &b) != nil || b.Type != "text" || m["text"] == nil {
+		if len(m) != 2 || rawjson.Unmarshal(rb, &b) != nil || b.Type != "text" || m["text"] == nil {
 			return "", false
 		}
 		texts = append(texts, b.Text)
