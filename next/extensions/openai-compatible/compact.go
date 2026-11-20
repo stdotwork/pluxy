@@ -108,11 +108,9 @@ func compactChat(ctx context.Context, call sdk.Call, s settings, wire wireInfo, 
 	if err != nil {
 		return err
 	}
-	body, _, err := buildBody(req, wire.format)
+	// The compaction request is shaped for the vendor like any Chat request (shaping.go).
+	body, _, err := upstreamBody(req, wire.format, s)
 	if err != nil {
-		return err
-	}
-	if body, err = applyReasoning(body, req, wire.format, s.ReasoningLevels); err != nil {
 		return err
 	}
 	call.Request = req
