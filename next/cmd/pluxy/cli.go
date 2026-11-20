@@ -61,6 +61,8 @@ type opts struct {
 	picks                                          stringSliceFlag
 	keyID                                          string
 	id                                             string
+	authDir                                        string
+	dryRun                                         bool
 }
 
 // invocation is one run of a command.

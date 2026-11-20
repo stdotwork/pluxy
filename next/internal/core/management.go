@@ -122,6 +122,7 @@ func (c *Core) Management() *server.Management {
 		writeJSON(w, http.StatusOK, management.ModelsReply{Models: s.Router.ServedModels(r.Context())})
 	})
 	c.handleSetup(m)
+	c.handleSetupImport(m)
 	m.Handle("POST /models/refresh", func(w http.ResponseWriter, r *http.Request) {
 		var req management.RefreshModelsRequest
 		if !readOptionalJSON(w, r, &req) {

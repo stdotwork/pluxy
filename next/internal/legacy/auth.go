@@ -641,14 +641,88 @@ func Import(store Creator, files []AuthFile, reserved func(id string) bool) (imp
 	return imported, skipped, nil
 }
 
-// Pending counts the files in dir that would import as accounts whose IDs has does not know.
-func Pending(dir string, has func(id string) bool) (int, error) {
-	files, _, err := ReadAuthDir(dir, DefaultImportOptions, time.Now())
-	n := 0
-	for _, f := range files {
-		if !has(f.Record.ID) {
-			n++
+// AuthFolder is today's auth folder read for an import: every entry of the folder, and the
+// accounts of its credential files.
+type AuthFolder struct {
+	// Entries are the names of every entry of the folder, sorted.
+	Entries []string
+	// Files are the accounts the credential files become, Skipped those that become none.
+	Files   []AuthFile
+	Skipped []Skipped
+	// read are the entries today's core reads as credential files (AuthFiles).
+	read []string
+}
+
+// ReadAuthFolder reads today's auth folder dir for an import, as ReadAuthDir does, and lists
+// every entry of the folder, so the report can name each.
+func ReadAuthFolder(dir string, opts ImportOptions, now time.Time) (*AuthFolder, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	a := &AuthFolder{}
+	for _, e := range entries {
+		a.Entries = append(a.Entries, e.Name())
+	}
+	slices.Sort(a.Entries)
+	if a.read, err = AuthFiles(dir); err != nil {
+		return nil, err
+	}
+	a.Files, a.Skipped, err = ReadAuthDir(dir, opts, now)
+	return a, err
+}
+
+// Ledger returns the report rows of the folder, one per entry: imported are the accounts the
+// import added (or, in a dry run, would add) and taken the accounts it skipped (legacy.Import).
+func (a *AuthFolder) Ledger(imported []AuthFile, taken []Skipped) *Ledger {
+	l := &Ledger{}
+	for _, name := range a.Entries {
+		item := AuthItem(name)
+		l.Expect(item)
+		row := Row{What: "auth file", Name: name}
+		if !slices.Contains(a.read, name) {
+			row.Why = "today's core reads only the .json files at the top of its auth folder"
+			l.Add(NotBrought, item, row)
+			continue
+		}
+		var made, why []string
+		ext := ""
+		for _, f := range imported {
+			if f.File == name {
+				made = append(made, f.Record.ID)
+				ext = f.Record.Extension
+				why = append(why, notBrought(f.Ignored)...)
+			}
+		}
+		for _, s := range append(slices.Clone(a.Skipped), taken...) {
+			if s.File == name {
+				why = append(why, s.Reason)
+			}
+		}
+		switch {
+		case len(made) == 0:
+			if len(why) == 0 {
+				why = []string{"it could not be read"}
+			}
+			row.Why = joinWhy(why)
+			l.Add(NotBrought, item, row)
+		default:
+			row.As = ext + " " + plural(len(made), "account", "accounts") + " " + strings.Join(made, ", ")
+			row.Why = joinWhy(why)
+			list := Brought
+			if len(why) > 0 {
+				list = Changed
+			}
+			l.Add(list, item, row)
 		}
 	}
-	return n, err
+	return l
+}
+
+func notBrought(ignored []string) []string {
+	var out []string
+	for _, s := range ignored {
+		out = append(out, s+" not brought")
+	}
+	return out
 }

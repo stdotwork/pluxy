@@ -97,7 +97,7 @@ proposes what to install. Nothing is installed until asked.
 | `GET /setup` | `pluxy setup` | The last scan, at once (it is kept on disk): `first_run`; `scanning`; `scanned_at`; `found` (below); `picks` (below). The command prints it and, on a terminal, offers to apply the picks marked `suggested` (`--yes` applies without asking) |
 | `POST /setup/scan` | `pluxy setup scan` | Looks again. Returns at once with `scanning: true`; read `GET /setup` until it is false (each probe has 4 seconds) |
 | `POST /setup/apply` | `pluxy setup apply [--pick id]... [--yes]` | `{"picks": ["pluxy/claude", ...]}`: installs and enables each. Returns `{"results": [{"id", "status", "package", "error"}]}` with one result per pick (`done`, or `error`); one failure does not undo the others |
-| **new** `POST /setup/import` | `pluxy import cpa <config.yaml> [--auth-dir <dir>] [--dry-run]` | Brings a CLIProxyAPI setup across and returns the import report (below). With `dry_run` nothing is written |
+| **new** `POST /setup/import` | `pluxy import cpa <config.yaml> [--auth-dir <dir>] [--dry-run]` | `{"config": "<path>", "auth_dir": "<path>", "dry_run": true}`: brings a CLIProxyAPI setup on core's machine across and returns the import report (below). `config` is an absolute path (or starts with `~`); `auth_dir` defaults to the config's `oauth.auth-dir`; the command makes a relative path absolute from the current folder. The config's settings, client keys, API-key accounts, aliases and chains go into core's config file in one change, and the auth folder's accounts into its credential store; `listen` stays, since it cannot change while core runs. An account or chain core already has one by that ID or name stays as it is. With `dry_run` nothing is written. 400 for a path that is not absolute or a file that cannot be read; 422 for a file core refuses (the message has the file's secrets taken out) or a credential store inside the auth folder; 409 for an import (not a dry run) into a core that runs on a config.yaml |
 | `POST /setup/done` | `pluxy setup done` | Ends first run (`{"first_run": false}`): the panel and app stop opening on setup |
 | `GET /setup/clients/{id}/paste` | `pluxy client show <tool> [--key-id id]` | What to paste into that client tool's config to point it at this core: its files, the address, and a client key placeholder. `id` is the tool's ID (`claude-code`, `codex`, `opencode`, `pi`, `omp`) or another name for it (`oh-my-pi`, `codex-cli`, a setup package's ID such as `pluxy/pi-setup`, with the `/` escaped as `%2F`). Optional `key_id` names a client key from `GET /client-keys`; the placeholder then names it. 404 for a tool core has no text for, and for a `key_id` core does not hold |
 
@@ -141,16 +141,26 @@ The import report:
 ```json
 {
   "dry_run": true,
-  "brought": [{"what": "account", "name": "codex-work@example.com", "as": "pluxy/codex account codex-work"}],
-  "changed": [{"what": "server.host", "from": "(not set: every interface)", "to": "127.0.0.1",
-               "why": "pluxy listens on this machine only unless told otherwise", "keep_with": "server.host: 0.0.0.0"}],
-  "not_brought": [{"what": "auth file", "name": "gemini-user.json", "why": "pluxy has no Gemini CLI sign-in"}],
+  "brought": [{"what": "auth file", "name": "codex-work@example.com.json", "as": "pluxy/codex account codex-work-example.com"},
+              {"what": "routing.strategy"}],
+  "changed": [{"what": "server.host", "from": "(not set: every interface)", "to": "127.0.0.1:8317",
+               "why": "core keeps listening on 127.0.0.1:8317: listen cannot change while core runs",
+               "keep_with": "\"listen\": \"0.0.0.0:8317\" in pluxy's config file, then restart core"}],
+  "not_brought": [{"what": "auth file", "name": "gemini-user.json", "why": "today's core does not load it either"}],
   "needs": [{"pick": "pluxy/codex", "why": "3 accounts need it"}]
 }
 ```
 
 Every key of the config and every file of the auth folder is in exactly one of `brought`, `changed` and
-`not_brought`. An import whose report could not account for an item fails instead of dropping it.
+`not_brought`. An import whose report could not account for an item fails instead of dropping it. A key is
+named by its path in the file (`server.port`, or `port` in the older spelling); a list is one key, and a
+provider section's entry is one key (`api-keys.codex[0]`) whose row names the accounts it became. Every
+`not_brought` row says why. A row may also name a key the file does not set: a file with no `server.host`
+gets a row for it (today's core then listened on every interface), and every listen row, that one included,
+says core keeps listening on its own address while it runs, with the file's reach in `from` and core's in
+`to`. `needs` lists the provider packages
+the imported accounts need that core has not installed; core installs nothing by itself. A bcrypt management
+key's `changed` row holds the new key in `to`, once, in the reply that made it (a dry run makes none).
 
 ### Extensions
 

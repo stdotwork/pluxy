@@ -459,29 +459,13 @@ func LoadConfig(path string) (*Config, error) {
 	return ParseConfig(b, path)
 }
 
-// LoadImportConfig reads and validates a config file for -import-auth, which imports accounts
-// and exits, serving nothing: a config with no usable management key is read too, so that a
-// config.yaml whose key today's core hashed can still bring its accounts across. Serving it is
-// still refused.
-func LoadImportConfig(path string) (*Config, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return parseConfig(b, path, false)
-}
-
-// exampleClientKeys are the client keys of today's example config (config.example.yaml). They
-// are public, so a config that still holds one has not set up access.
-var exampleClientKeys = []string{"your-api-key-1", "your-api-key-2", "your-api-key-3"}
-
 // ExampleClientKeys returns the client keys that are the example config's, once each in the
 // order the config lists them; today's core ignores spaces around a key when it checks.
 func (c *Config) ExampleClientKeys() []string {
 	var found []string
 	for _, k := range c.ClientKeys {
 		k = strings.TrimSpace(k)
-		if slices.Contains(exampleClientKeys, k) && !slices.Contains(found, k) {
+		if slices.Contains(legacy.ExampleClientKeys, k) && !slices.Contains(found, k) {
 			found = append(found, k)
 		}
 	}
@@ -499,12 +483,6 @@ func IsYAML(path string) bool {
 // it are relative to path's folder. A config.yaml (IsYAML) is read with today's core's key
 // names (package legacy) and then checked as the JSON config is.
 func ParseConfig(b []byte, path string) (*Config, error) {
-	return parseConfig(b, path, true)
-}
-
-// parseConfig is ParseConfig; with needKey false a config with no usable management key is
-// read too (LoadImportConfig).
-func parseConfig(b []byte, path string, needKey bool) (*Config, error) {
 	c := Config{Import: legacy.DefaultImportOptions}
 	hashed := false
 	if IsYAML(path) {
@@ -528,13 +506,10 @@ func parseConfig(b []byte, path string, needKey bool) (*Config, error) {
 		// Today's core serves anyone without a key then; this core refuses to.
 		return nil, errors.New("config: client_keys is empty (access.api-keys in a config.yaml): set at least one client key; core serves no client without one")
 	}
-	if hashed && !needKey {
-		c.Notices = append(c.Notices, "config.yaml: remote-management.secret-key is a bcrypt hash: replace it with a new key (pluxy cannot use a bcrypt hash) before core serves this config")
-	}
-	if c.ManagementKey == "" && hashed && needKey {
+	if c.ManagementKey == "" && hashed {
 		return nil, fmt.Errorf("config %s: remote-management.secret-key is a bcrypt hash: replace it with a new key (pluxy cannot use a bcrypt hash); core always has a management key, so the panel and the pluxy command can manage it", path)
 	}
-	if c.ManagementKey == "" && needKey {
+	if c.ManagementKey == "" {
 		// Today's core turned its management API and panel off without one, silently.
 		where := `"management_key": "<a long random secret>"`
 		if IsYAML(path) {

@@ -111,7 +111,6 @@ providers you use from the bundled registry ([Packages](#packages)) or the panel
 - `-watch-interval`: how often core looks for changes to the config file; `0` turns the watch off (default `1s`).
 - `-bundled`: the index of the bundled packages (default `bundled/index.json` beside the program, when it exists); see [Packages](#packages).
 - `-listen-fd`: serve on the listening TCP socket inherited at this file descriptor instead of binding `listen` (which must still be set). A program that starts core, such as the desktop app in managed mode, binds the socket, hands it over and keeps its own copy, so no other program can take the port while core stops or after it exits.
-- `-import-auth`: copy the credential files of today's core's auth folder into the credential store, then exit; see [config.yaml with today's key names](#configyaml-with-todays-key-names).
 
 A running core answers `curl http://127.0.0.1:8400/healthz` with `ok`.
 
@@ -1807,7 +1806,7 @@ An account names its models with these fields, applied in this order:
 
 | Field | Meaning |
 | --- | --- |
-| account `models` | The only models the account serves. Each is the upstream's name, or `{"name": ..., "alias": ...}` to serve the model `name` under the name `alias` only. One name clients use maps to one upstream model: the config check refuses an entry whose name or alias another entry already uses for a different upstream model, naming the alias and the account (in the config file, and as a 400 from `PATCH /accounts/{id}`, which the panel uses). Listing the same model twice passes. Today's core pools such entries in `openai-compatibility`; this core does not pool models yet. |
+| account `models` | The only models the account serves. Each is the upstream's name, or `{"name": ..., "alias": ...}` to serve the model `name` under the name `alias` only. One name clients use maps to one upstream model: the config check refuses an entry whose name or alias another entry already uses for a different upstream model, naming the alias and the account (in the config file, and as a 400 from `PATCH /accounts/{id}`, which the panel uses). Listing the same model twice passes. Today's core pools such entries in `openai-compatibility`; a `config.yaml` makes such a pool a [fallback chain](#provider-key-sections). |
 | account `excluded_models` | Models the account does not serve: names, or patterns with `*` for any text (`gpt-5-*`, `*-mini`, `*preview*`), whatever their case. They match the name clients use for an entry of `models` (its `alias`, when it has one, as in today's core), and for any other model its name before `model_alias` renames it. |
 | account `model_alias` | Renames: a request for `alias` (exactly as written) goes to the model `name` (any case). Without `fork` the model is served only as `alias`; with `"fork": true` under both names. `display_name` replaces the model's display name in lists. |
 | account `prefix` | The account also serves each model as `{prefix}/{model}`, so a client can ask for a model on that account alone. No `/` in it. |
@@ -1866,7 +1865,7 @@ at start and on a reload. Send it as a bearer token. The config may set no accou
 | `POST /accounts/{id}/login` | Signs in to an existing account again (`{"method": ..., "input": ...}`), replacing its credential. The login must sign in to the same upstream account: when the provider reports who signed in (the grant's [`identity`](protocol/README.md#login), such as an e-mail address and an account ID), every field core stored for the account must match, letter case aside; an account stored without one is checked by its `label`. Otherwise the login ends `failed` with code `invalid_request` and the account keeps its credential, as today's core refuses with "Authenticated account does not match target credential". To use the other account, add it as a new one. |
 | `POST /accounts/{id}/refresh` | Renews the account's credential now. |
 | `POST /vertex/import` | Adds a Vertex AI account from a Google service account key file, as today's `POST /v0/management/vertex/import` does: `multipart/form-data` with the key in `file` and an optional `location` (a form field, else a query parameter; default `us-central1`), at most 1 MiB in all. It runs the Gemini extension's [`service_account` login](#gemini) with the account ID `vertex-<project_id>` (`/`, `\` and `:` in the project ID become `_`, spaces `-`), the settings `vertex.project` and `vertex.location`, and the label `<project_id> (<client_email>)`, waits for it (one token fetch, at the key's `token_uri`) and answers once: 200 `{"status": "ok", "account", "project_id", "email", "location"}`. Errors have the usual `{"error": {"code", "message"}}` shape: 400 `file_required`, `invalid_json`, `project_id_missing` and `invalid_service_account` (also when the token endpoint refuses the key), 400 `invalid_request` for a location or project ID the extension refuses, 409 `conflict` for an account of that ID in the config, 413 for a larger request, 502 with the login's code (`unavailable`) when the token endpoint cannot be reached or fails, and 504 when it does not answer in 45 seconds. When a login added an account of that ID before, the import signs in to it again, so the key replaces the old one only when its `client_email` is the same service account (else 400 `invalid_request`, the account keeps its key) and a `location` the account does not have is a 409; today's core overwrote the file silently. It does not repair a key damaged by pasting (today's core rebuilds a mangled PEM); it takes the file Google gives. |
-| `POST /accounts/import` | Adds the accounts of one credential file of today's auth folder to the running core, read and added as [`-import-auth`](#importing-todays-auth-folder) reads and adds each file: `{"name": "<file name>.json", "content": "<the file's text>"}`. The content is the file itself, never a path on core's machine; `name` (a `.json` file name, no folder) gives the account ID, as the file's name does. The accounts serve at once, like an account a login adds. 200 `{"imported": [{"id", "extension", "ignored"}], "skipped": [...]}`: each account added, with the file's settings not supported yet that it left out (`ignored`), and why any other account of the file was skipped (a Codex file can hold two). Nothing added: 400 `invalid_request` for a file that is not JSON, of a type the import does not take or holding no token, with routing fields routing refuses once read (such as a `prefix` with a `/` inside, `a/b`; surrounding spaces and slashes are trimmed first), or a bad `name`; 409 `conflict` when the store or the config already has the account's ID, or a sign-in still running will take it (letter case aside); 413 for a file larger than 1 MiB. The message says why. Neither the reply nor core's log holds anything from the file but the account's ID. |
+| `POST /accounts/import` | Adds the accounts of one credential file of today's auth folder to the running core, read and added as [`pluxy import cpa`](#moving-from-cliproxyapi-pluxy-import-cpa) reads and adds each file of the folder: `{"name": "<file name>.json", "content": "<the file's text>"}`. The content is the file itself, never a path on core's machine; `name` (a `.json` file name, no folder) gives the account ID, as the file's name does. The accounts serve at once, like an account a login adds. 200 `{"imported": [{"id", "extension", "ignored"}], "skipped": [...]}`: each account added, with the file's settings not supported yet that it left out (`ignored`), and why any other account of the file was skipped (a Codex file can hold two). Nothing added: 400 `invalid_request` for a file that is not JSON, of a type the import does not take or holding no token, with routing fields routing refuses once read (such as a `prefix` with a `/` inside, `a/b`; surrounding spaces and slashes are trimmed first), or a bad `name`; 409 `conflict` when the store or the config already has the account's ID, or a sign-in still running will take it (letter case aside); 413 for a file larger than 1 MiB. The message says why. Neither the reply nor core's log holds anything from the file but the account's ID. |
 | `PATCH /accounts/{id}` | `disabled` (`true` or `false`; disabled accounts get no requests) and any of the routing fields `priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `proxy_url` and `headers`, checked as the config's are (a `proxy_url` sent back as `GET /accounts` shows it keeps the password it hides, and a header's placeholder sent back keeps its value; a placeholder that stands for no value the account has is a 400); `null` sets one back to its default. `settings` replaces the account's settings as a whole: an object, or `null` for none. A placeholder from `GET /accounts` keeps the secret it stands for: it is accepted only where that secret is now (an item of a list may move within its list; elsewhere 400), and only while the account's settings still hold that secret and core has not restarted (else 409, read the account again); to change a secret, send the new value. Core passes the settings to the extension as they are. An account whose `settings` change starts with fresh routing state, as on a reload: its blocks, cooldowns, last error and session bindings are dropped. A bad field changes nothing (400). Replies with the account. |
 | `POST /accounts/{id}/cooldown/reset` | Clears the account's cooldowns, on its credential, its models and its endpoint (which accounts naming the same endpoint share), with their backoff steps and its last error, so it serves again at once. Works for config accounts too. Replies with `cleared`, the number of live blocks it cleared, and the account. |
 | `GET /accounts/{id}/models` | The models the account serves: its config's `models` when it lists them, else the ones its extension lists for it (the protocol's [`models`](protocol/README.md#models)). Each has its upstream `id`, what the extension says about it, `names` (the names clients use for it after the account's exclusions, aliases and prefix, and its extension's defaults for logins) and `excluded` when `excluded_models` leaves it out. |
@@ -1894,7 +1893,7 @@ extension version they started with. A file core has already seen, or an empty o
 in the middle of saving), is skipped; the file watcher waits until the file has stopped changing.
 A reload that fails at any step, from broken JSON to an extension that does not start, leaves
 the running config in place, and management shows why. That reason, in the log, in status, and
-when core refuses to start or `-import-auth` refuses the config, has the config's secrets replaced by placeholders, as `GET
+when core refuses to start, has the config's secrets replaced by placeholders, as `GET
 /v0/management/config` shows them. `listen`, `tls`, `credentials_dir`,
 `packages.dir` and `extension_pages.listen` cannot change without a restart.
 
@@ -2447,13 +2446,16 @@ read, and a key in another letter case in the `payload` rules is dropped and nam
 `payload` rules that today's core skipped or dropped when it applied them (a `-raw` string that
 is not JSON, a `.inf` or `.nan`) are dropped and named too; the table row for `requests.payload.*`
 below lists them.
-[`-import-auth`](#importing-todays-auth-folder) prints the same lines on standard error before it
-imports, so a migration sees them before core ever starts.
+A setting today's core reads into a true-or-false field takes `yes`, `on`, `no` and `off` (and `y`,
+`n`, in lower, title or upper case) as today's core's YAML reader does.
+[`pluxy import cpa`](#moving-from-cliproxyapi-pluxy-import-cpa) reports each of these settings
+before anything is written.
 
 A migrated config needs its management key set again once. Today's core writes a bcrypt hash over
 `management.secret-key` in the file after it reads the key, and this core cannot use a hash: it
-refuses the config and says so. Replace the hash with the key itself, in plain text. A config with
-no management key at all is refused too, with a message saying how to add one.
+refuses the config and says so. Replace the hash with the key itself, in plain text, or bring the
+setup across with `pluxy import cpa`, which makes a new key. A config with no management key at all
+is refused too, with a message saying how to add one.
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
 `extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir` and `cors`
@@ -2483,9 +2485,15 @@ A group's `models` list becomes the account's `models`: each entry's `name` is t
 upstream knows, and its `alias` the name clients use; the account serves only those models. When
 entries share a name clients use, the first wins in every section, as in today's core, except
 `openai-compatibility`: there today's core treats them as a pool and rotates requests over them,
-and falls back to the next on a failure. This core does not pool models yet, so it keeps the
-first entry and names the alias and each dropped entry in the log (a model listed twice drops
-nothing and is not named). A group's or key's `prefix` is the account's
+and falls back to the next on a failure. This core makes the pool a fallback chain
+(`routing.chains`) named by the alias, with one step per upstream model in the order the group
+lists them, each served by the group's accounts; the account lists each model under its own name
+for the steps, and the log names the chain (a model listed twice adds no step). A name that
+accounts of more than one provider serve, by their `models` lists or an `oauth.model-alias` alias,
+which today's core shared among them, becomes a chain too, with one step per provider in the order
+core reads the provider sections (`codex`, `claude`, `gemini`, Vertex, `xai`,
+`openai-compatibility`, `interactions`), not the file's. A chain
+tries its steps in order rather than in turn: see [Fallback chains](#fallback-chains). A group's or key's `prefix` is the account's
 `prefix`, and its `excluded-models` its `excluded_models` (today's core has no
 `excluded-models` for `openai-compatibility`, so it is accepted there and does nothing). See
 [Model lists and model names](#model-lists-and-model-names). An account's ID is the group's `name`
@@ -2538,10 +2546,10 @@ are accepted silently.
 | `client.codex.enable-apply-patch` | Models without a Codex template are left out of the [Codex client catalog](#codex-client-catalog), so there is no entry to add `apply_patch` to. | Later: built when someone uses a non-Codex model through the Codex client and needs `apply_patch` on it |
 | `client.codex.optimize-multi-agent-v2` (`codex.optimize-multi-agent-v2`) | | Later: built when Codex multi-agent v2 sub-agents need to reach non-Codex providers |
 | `client.codex.web-search-result-cache.*`, `client.claude.show-codex-commentary` | | Dropped: off by default and no need found |
-| `upstream.codex.disable-codex-cloaking` (`codex.disable-codex-cloaking`) | `codex_identity: false` on the Codex subscription accounts `-import-auth` adds. It does not change accounts already imported. | Supported when importing |
+| `upstream.codex.disable-codex-cloaking` (`codex.disable-codex-cloaking`) | `codex_identity: false` on the Codex subscription accounts `pluxy import cpa` adds. It does not change accounts already imported. | Supported when importing |
 | `upstream.codex.websocket-compression` | Always on; `false` is named in the log. | Supported (fixed on) |
 | `upstream.codex.model-level-cooling` | Blocks are kept per model where the upstream says the limit is per model; usage limits remain account-wide. | Supported (fixed on) |
-| `upstream.claude.model-level-cooling` (`claude.model-level-cooling`) | `model_level_cooling: true` on the Claude keys' accounts and on the Claude subscription accounts `-import-auth` adds (see [Claude](#claude)). It does not change accounts already imported. | Supported |
+| `upstream.claude.model-level-cooling` (`claude.model-level-cooling`) | `model_level_cooling: true` on the Claude keys' accounts and on the Claude subscription accounts `pluxy import cpa` adds (see [Claude](#claude)). It does not change accounts already imported. | Supported |
 | `upstream.codex.upstream-request-compression`, `-min-bytes` | | Dropped: it needs a compression library this core does not carry, for an off-by-default saving no one has measured |
 | `upstream.codex.stream-bootstrap-buffering`, `stream-bootstrap-timeout` | The Codex extension does not move a turn that ends in an overload error to another account. | Later: built when pooled Codex accounts are seen failing on overload errors that moving the turn to another account would hide |
 | `upstream.codex.response-steering`, `upstream.codex.orphan-delegation-compatibility`, `oauth.providers.codex.header-defaults.*` (`codex-header-defaults`) | | Dropped: experimental or off by default, no need found |
@@ -2550,14 +2558,14 @@ are accepted silently.
 | `rebuild-mid-system-message` (Claude keys) | The account's `rebuild_mid_system_message`. | Supported |
 | `upstream.xai.inject-x-search` (`oauth.providers.xai.inject-x-search`, `xai.inject-x-search`) | xAI accounts get `inject_x_search`; applies to API keys and imported Grok logins | Supported |
 | `experimental-cch-signing` (Claude keys) | | Dead |
-| `oauth.auth-dir` (`auth-dir`) | The folder `-import-auth` reads (see below). Core never reads or writes it while it runs; at each load it logs how many credential files there are not imported yet. | Supported |
+| `oauth.auth-dir` (`auth-dir`) | The folder `pluxy import cpa` reads (see below). Core never reads or writes it while it runs. | Supported |
 | `oauth.auth-auto-refresh-workers` (`auth-auto-refresh-workers`) | Each account is renewed shortly before it expires. | Dropped: no need for a pool size |
 | `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`) | Each channel's rules become the `model_alias` and `excluded_models` of the package that serves its accounts, for the accounts added to it by a sign-in (not with an API key): `codex` is `pluxy/codex`, `claude` is `pluxy/claude`, `vertex` is `pluxy/gemini`, `kimi` (and `kimi-ai`, `kimi.ai`, `kimi.com`) is `pluxy/kimi`, `xai` is `pluxy/xai`, `meta` is `pluxy/meta`, `devin` is `pluxy/devin`. Rules for another channel are named in the log and ignored. An alias's `force-mapping` and `openapi` are later, as the same settings are on the keys' models below. | Supported |
 | `oauth.settings` (`oauth-settings`) | | Dropped: needs a model catalog, and no page uses it |
 | `oauth.request-scoped-errors` (`oauth-request-scoped-errors`) and every `request-scoped-errors` | | Dropped: a request-scoped error is already not the account's fault |
 | `oauth.providers.aistudio.ws-auth` (`ws-auth`) | | Dropped: the AI Studio relay needs a long-lived listener the extension protocol does not have |
 | `oauth.providers.codex.live-media-relay.*` | | Dropped: realtime and WebRTC are out of scope |
-| `oauth.providers.codex.signin-with-chatgpt-identifier` (`codex.signin-with-chatgpt-identifier`) | `signin_with_chatgpt_identifier` on the Sign in with ChatGPT (SIWC) accounts `-import-auth` adds. Left unset, they use the extension's default, `pluxy`. | Supported when importing |
+| `oauth.providers.codex.signin-with-chatgpt-identifier` (`codex.signin-with-chatgpt-identifier`) | `signin_with_chatgpt_identifier` on the Sign in with ChatGPT (SIWC) accounts `pluxy import cpa` adds. Left unset, they use the extension's default, `pluxy`. | Supported when importing |
 | `oauth.providers.devin.*` (`devin`) | Only `sensitive-words`. | Dropped: rewriting words to get past a content filter is out of scope |
 | `api-keys.meta` (`meta-api-key`) | | Dropped: the login is built; no need for a bare key |
 | Every `headers` on a group or key | The account's [`headers`](#upstream-headers): a key's own, else its group's (a key's `headers: {}` sends none), and an `openai-compatibility` group's for all its keys. Names and values are trimmed and empty ones dropped, as in today's core. A header whose value today's core takes from the client's request (`$` and a header name, or `$CPA-SESSION-ID`) is named in the log and not imported. A header this core refuses (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`) fails the load, where today's core sends it. | Supported |
@@ -2573,7 +2581,7 @@ are accepted silently.
 | The keys' `models[]` `support-configuration-update` | | Dropped: an off-by-default prompt-cache saving for one kind of relay, no need found |
 | xAI keys' `websockets` | xAI is served over HTTP. | Dropped: HTTP gives the same replies |
 | openai-compatibility's `support-prompt-cache-key` | A [payload rule](#payload-rules) can set a fixed `prompt_cache_key`. | Dropped: no need found |
-| `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `-import-auth` adds; `true` is also `images: false` there, which turns the Images API off on them (today's core answers its image routes 404). | Supported |
+| `multimedia.disable-image-generation` (`disable-image-generation`) | `true`, `"chat"` and `"passthrough"` are `image_generation_tool: false` on Codex accounts from the file and on those `pluxy import cpa` adds; `true` is also `images: false` there, which turns the Images API off on them (today's core answers its image routes 404). | Supported |
 | `multimedia.gpt-image-2-base-model`, `multimedia.video-result-auth-cache-ttl` (each also at the top level) | Images are served through the Codex upstream's Images API, the path today's core takes for its built-in image models; the Responses-based path this model sets is not built, and there are no video routes. | Dropped: the first names the model of a path that is not built, the second belongs to video routes that are not built |
 | `observability.logs.logging-to-file` (`logging-to-file`), `observability.logs.logs-max-total-size-mb` (`logs-max-total-size-mb`) | `logs.to_file` and `logs.max_total_size_mb`: [log files](#log-files). A negative cap is none, as in today's core. | Supported |
 | `observability.logs.debug` (`debug`) | | Dropped: this core writes no debug-level lines |
@@ -2588,21 +2596,48 @@ are accepted silently.
 Environment variables today's core reads (`MANAGEMENT_PASSWORD`, `PGSTORE_*`, `GITSTORE_*`,
 `OBJECTSTORE_*`, ...) and its `.env` file are not read.
 
-### Importing today's auth folder
+### Moving from CLIProxyAPI: pluxy import cpa
 
 ```bash
-./pluxy -config config.yaml -import-auth ~/.cli-proxy-api
+./pluxy import cpa ~/.cli-proxy-api/config.yaml --dry-run
+./pluxy import cpa ~/.cli-proxy-api/config.yaml [--auth-dir <dir>]
 ```
 
-`-import-auth` copies the credential files in today's auth folder (the JSON files at its top
-level, as today's core reads them) into core's credential store (`credentials_dir`), prints what
-it imported and skipped, and exits. Before that it prints the config's notices (the settings it
-ignores and a hashed management key, as in core's log) on standard error. Run it while core is
-stopped, then start core. Each file
-becomes an account added by login, with the file's name (less `.json`) as its ID, so running it
-again skips the files already imported. A file whose account ID the config or the store already
-uses is skipped, as is a file larger than 1 MiB. The import never changes the auth folder, and
-it refuses a `credentials_dir` that is the auth folder or inside it.
+`pluxy import cpa` brings a CLIProxyAPI setup (today's core's `config.yaml` and its auth folder)
+across to a running core, through the management API's
+[`POST /setup/import`](management/README.md#setup). Core reads both on its own machine. It prints
+three lists: what was **brought**, what was **changed** on the way (with what it was, what it is now,
+why, and how to keep the old behaviour), and what was **not brought** (with why). Together they name
+every key of the file and every file of the auth folder, each once; an import that cannot place an
+item fails, naming it, and writes nothing. `--dry-run` prints the same lists and writes nothing;
+`--json` prints the reply. The lists end with the provider packages the imported accounts need and
+core has not installed: install them with `pluxy ext install <id>`.
+
+The file's settings, client keys, API-key accounts, aliases and chains go into core's config file
+in one change, through the same checks as any change; the auth folder's accounts go into the
+credential store and serve at once. Core keeps its own `listen` (it cannot change while core runs),
+`credentials_dir`, `packages`, `extension` and `extension_pages`; an account or chain core already has by that ID
+or name stays as it is, and the lists say so, so running the import again adds nothing twice. The
+auth folder defaults to the file's `oauth.auth-dir`; the import never changes it, and refuses a
+`credentials_dir` that is the auth folder or inside it. A core that runs on a `config.yaml` itself
+takes dry runs only.
+
+What the import changes, each under **changed**:
+
+- `server.host` and `server.port`: core keeps its own `listen` while it runs, so every listen row
+  is under **changed**: it names the file's reach in `from` and core's address in `to`, and
+  `keep_with` gives the `"listen"` value to write and restart core with. A file with no
+  `server.host` (or an empty one) is one of these: today's core listened on every interface then,
+  and pluxy listens on `127.0.0.1` unless told otherwise.
+- A `management.secret-key` that today's core replaced with its bcrypt hash cannot be used: the import
+  makes a new management key, which the row shows once. The `pluxy` command reads it from the config
+  file.
+- The example config's public client keys (`your-api-key-1` and the rest) are left out.
+- Pooled models become fallback chains, as [Provider key sections](#provider-key-sections) describes.
+
+Each file of the auth folder becomes an account added by login, with the file's name (less
+`.json`) as its ID. A file whose account ID the config or the store already uses is not brought,
+nor is a file larger than 1 MiB, nor anything but a `.json` file at the top of the folder.
 
 To add one file to a running core instead, send it to the management API's
 [`POST /accounts/import`](#accounts-added-by-login) (the panel's "Upload File" on Accounts): it
@@ -2621,7 +2656,8 @@ use it from one core only, or sign in again in the other.
 | `xai` | `pluxy/xai` Grok login account | `access_token`, `refresh_token`, `expired`; `token_endpoint` stays with the credential and `base_url` is an account setting. |
 | `meta` | `pluxy/meta` Muse Code login account | `api_key` (else `access_token`) is the minted key and `dca_token` (else a `dca:` `access_token`) the device token that mints a new one; `base_url` stays with the credential. A file with only the device token mints its key on the first request. |
 | `devin` | `pluxy/devin` account with a session token | `session_token` (else `api_key`) is the credential; `base_url` is an account setting and `user_name` the label when the file has no `label` or `email`. |
-| anything else | Skipped, named in the output | Today's core does not load a file with no `type` or with `gemini` either. |
+| `antigravity` | Not brought | pluxy no longer ships the Antigravity provider. |
+| anything else | Not brought | Today's core does not load a file with no `type` or with `gemini` either. |
 
 From every file: `disabled: true` imports the account disabled, `priority` and `weight` are the
 account's, `disable_cooling` (or `disable-cooling`) is its `disable_cooling`, `request_retry`
@@ -2633,5 +2669,5 @@ today's core reads them. A file's `proxy_url` (or `proxy-url`) is the account's 
 whose value this core cannot use is skipped rather than imported without its proxy. A file's
 `headers` are the account's `headers`: text values only, trimmed, empty ones dropped, as today's
 core reads them; one whose value today's core takes from the client's request (`$` and a header
-name, or `$CPA-SESSION-ID`) is named in the output and not imported, and a file with a header this
+name, or `$CPA-SESSION-ID`) is named under **changed** and not brought, and a file with a header this
 core refuses is skipped rather than imported without it.
