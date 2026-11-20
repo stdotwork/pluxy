@@ -376,10 +376,10 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `access_revoke` | Revokes a grant, answering once the reads under it have finished |
 | `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given |
 | `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, its vault journals, open and recently ended, or why they cannot be read, and its managed runtimes, running, ended or `unknown` (left running by a run of the app that did not stop them) |
-| `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID (Linux) |
-| `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one (Linux) |
-| `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key (Linux) |
-| `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it (Linux) |
+| `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID |
+| `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one |
+| `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key |
+| `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it |
 | `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it (Linux) |
 | `launcher_state` | The launcher's state: whether the execution program can be used, the remembered launches with their source, the recent folders and the notice setting |
 | `launcher_terminals` | The terminals the execution program finds, Automatic first |
@@ -928,7 +928,9 @@ requester, action and outcome, including refusals. Page/Import pending entries h
 limit of 16; trusted requests have a separate limit of 64. Page dialogs focus Cancel and keep
 Confirm disabled for one second after mapping. (On macOS a button takes the keyboard focus only
 with full keyboard access turned on; Cancel is the default button there, which Return presses.)
-A launch that opens a file in the person's own app is refused before review off Linux. Non-UTF-8 paths are refused before review;
+A launch that opens a file in the person's own app takes the app the system picks: on Linux by
+the file's content type, on Windows and macOS by its extension
+([Launches and managed runtimes](app-host/README.md#launches-and-managed-runtimes)). Non-UTF-8 paths are refused before review;
 Unicode format characters (including bidi and zero-width characters), control characters and
 Pango line separators (U+2028/U+2029) are displayed as escaped Unicode.
 
@@ -1672,19 +1674,36 @@ app supported there:
 - The management key's native entry and rotation, and the native confirmations, have Win32
   dialogs on Windows and AppKit dialogs on macOS ([How the app reaches core](#how-the-app-reaches-core),
   [Native confirmations](#native-confirmations)).
-- Five parts of the native test run there:
+- Six parts of the native test run there:
   - the platform session (`native/platform.ts`, `PLATFORM_SHARDS` in `native/shards.ts`): one app
     per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
     Windows, a LaunchAgent on macOS), the tray and the close preference;
   - the package session: the test package and the release gate ([Packages](#packages));
   - the tools sessions (`native/platform-tools.ts`, the `tools` shard): the signed tool sessions
-    run.ts runs on Linux (admission, the program host with its swaps, routing with jobs), and a
-    launcher check that uses managed launches only (`src-tauri/src/launcher_platform_native.rs`),
-    in the app built with the test trust, in local mode against a test core. That check leaves out
-    what Linux checks with a detached agent, a terminal, key entry and the key consumers, and
-    its crash, chain, page, changed and idle steps, which wait for their own slices; on macOS its
-    tray step calls the menu's event handler with the item's ID, as no menu shows without a person
-    holding it open (on Windows it sends the menu's own command message);
+    run.ts runs on Linux (admission, the program host with its swaps, routing with jobs, the vault
+    with client keys), and a launcher check of its own
+    (`src-tauri/src/launcher_platform_native.rs`), in the app built with the test trust, in local
+    mode against a test core. The client keys are made on that test core, not on the app's own core
+    as on Linux. On Windows the client-key check reads the agent's command line from Windows, but
+    its environment is the agent's own report, as Windows gives no supported way to read another
+    process's. The launcher check starts a stand-in agent in each terminal kind (Console window,
+    Command Prompt and PowerShell on Windows; a real Terminal window on macOS), through an npm
+    command shim run by the runner's Node (Windows), directly with a vault secret by reference and
+    on its stdin, and managed; starts a remembered terminal launch from the tray; and checks the
+    refusals of Windows' program rules and of a terminal launch with stdin or a managed lifetime.
+    It leaves out Linux's key consumers and its crash, chain, page, changed and idle steps, which
+    wait for their own slices; on macOS its tray step calls the menu's event handler with the
+    item's ID, as no menu shows without a person holding it open (on Windows it sends the menu's
+    own command message);
+  - the open session (`native/platform-tools.ts`, the `open` shard, on the tools shard's build):
+    a tool's opening of a file through the system's own route
+    (`src-tauri/src/open_platform_native.rs`: on Windows the execution program's `open` mode, on
+    macOS `/usr/bin/open`) and the open rules' refusals, and the app's opening of an address in
+    the system's handler for https addresses (normally the default browser), with the session's
+    own https server on 127.0.0.1. It opens a `.txt` file
+    in Notepad or TextEdit, and on Windows a `.jsonl` file in the fixture program, through a
+    per-user file type of the check's own that it removes again; on macOS no app opens `.jsonl`
+    files on GitHub's image, so it checks that refusal there ([Limits](#limits));
   - the update session: the test package (a folder bundle on Windows, an app bundle on macOS)
     updates itself to its signed newer version and rolls back, and crafted installs are refused
     ([Application update](#application-update));
@@ -1696,7 +1715,8 @@ app supported there:
     repaired, the running version installed again), each change through the native confirmation,
     whose text is checked to show what will run; a core the runner started before the app must
     still answer afterwards, untouched. [Limits](#limits) says how its input is made.
-- The vault's private storage is built and unit tested there ([Limits](#limits)).
+- The vault's private storage is built there, and its unit tests and the tools shard's vault
+  session check it ([Limits](#limits)).
 - How the app starts, holds and stops processes is built there (`src-tauri/src/owned/`: a job
   object on Windows, a process group on macOS), and CI checks that each of its lifetime tests ran
   and passed ([Windows and macOS](app-host/README.md#windows-and-macos)). Native tools, their
@@ -1704,12 +1724,12 @@ app supported there:
   version, held until it accepts itself) reach it at run time there, and so does the app's own
   core ([The app's own core](#the-apps-own-core)), its changes confirmed natively.
 - Native tools run there as on Linux: enabling a package and its native imports, the router, the
-  program host, the launch service and the launcher, and the vault for tools' backups and
-  journals, with the differences [Windows and macOS](app-host/README.md#windows-and-macos) lists.
-  A client page reaches its writer tool only where that tool has a program for the system
-  ([app tools](../app-tools/README.md) says which do). Clippy, the Rust tests and the tools
-  sessions check this there; outside tests nothing can be installed to run, as there are no
-  production trust roots ([Limits](#limits)).
+  program host, the launch service and the launcher, and the vault for tools' backups and journals,
+  secret entry and client keys, with the differences
+  [Windows and macOS](app-host/README.md#windows-and-macos) lists. A client page reaches its writer
+  tool only where that tool has a program for the system ([app tools](../app-tools/README.md) says
+  which do). Clippy, the Rust tests and the tools sessions check this there; outside tests nothing
+  can be installed to run, as there are no production trust roots ([Limits](#limits)).
 - On Windows, the page document's address is `http://pluxy-page.localhost/`, and the app holds a
   page's frame to its site through WebView2's frame navigation event (`src-tauri/src/page_frames.rs`).
 - The app tools' readers, usage parsers and execution program, the writer library and the
@@ -1720,11 +1740,10 @@ Access gives no page anything there: approving a signer and making a grant are L
 signer or grant can be made. On Windows its commands and a page's Access calls are refused; on
 macOS its list, revocation and a page's calls answer, with nothing granted.
 
-Still refused at run time there: a native tool's `files` frames (saving a file), the vault's
-secret entry and list, client keys and core aliases, installing a package from a file, a launch
-that opens a file and opening an address in the browser. Changing the release feed works there
-through the native confirmation. The app updates itself, with test updater trust only, as an
-AppImage on Linux, as a folder bundle's program on Windows and as an app bundle on macOS
+Still refused at run time there: a native tool's `files` frames (saving a file), core aliases and
+installing a package from a file. Changing the release feed works there through the native
+confirmation. The app updates itself, with test updater trust only, as an AppImage on Linux, as a
+folder bundle's program on Windows and as an app bundle on macOS
 ([Application update](#application-update)).
 
 ## Limits
@@ -1766,8 +1785,7 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   has an entry of a kind the terminal does not read (such as a conditional entry) is refused
   too. Nothing stops your own processes, or an
   administrator's, from swapping the program before the terminal holds it.
-- Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
-  entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the
+- Vault: on Windows it is in the
   local data folder, private by its access list. Secrets are kept in a file only the user may read
   (0600 on Linux and macOS) in the app's data folder, not in the system keyring, and only exact
   values are redacted. On macOS, where an extended access list can let others in whatever the mode,
@@ -1788,20 +1806,43 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test runs on Linux, except its platform, package, tools, update and dialogs sessions,
+- The native test runs on Linux, except its platform, package, tools, open, update and dialogs sessions,
   which CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
   refuses there).
+- On Windows the launcher and open sessions start the app outside the job the runner's steps
+  run in, which lets no detached launch leave it: WMI's `Win32_Process.Create` starts the fixture
+  program, which starts the app as its child, with the app's output in files the session reads.
+  Its terminal launches run the execution program's test build, whose Console window does not wait
+  for Enter and whose Command Prompt or PowerShell after the agent runs one fixed command and exits,
+  so the session does not see the prompt a person gets there.
+- The open session runs only on GitHub-hosted runners, and its steps that change the machine (the
+  `.jsonl` file type, the browser, and on macOS the test certificate authority) fail anywhere
+  else. On macOS the browser asks for the session's address only from a server it
+  trusts, so the session adds a test authority made for the run to the System keychain's trust,
+  then deletes the authority's certificate; its trust setting stays, as removing that asks for a
+  password, but nothing can use it: the authority's key is never written down. The step closes
+  only the browser it started: on Windows the windows of the processes started with the session's
+  address, on macOS the default browser, which must not be running before. On Windows the opens
+  of `.txt` and `.jsonl` files are detached launches, which the app refuses while it runs in a
+  job that keeps what it starts, so the session starts the app outside the runner's job as the
+  launcher session does.
+- On Windows the execution program's `open` and `app` modes start with no console
+  (`CREATE_NO_WINDOW` instead of a console of their own), so none flashes. No test checks that
+  the flag reaches the process: the unit tests cannot start a detached launch inside the job
+  GitHub's runners run them in, and the native open session checks the app that opened the file,
+  not the opener's console.
 - On Windows the program session does not check which processes hold the tool's pipes, as it
   does on Linux and macOS: Windows lists no process's handles to an unprivileged one. It checks
   instead that the tool's three standard handles are pipes and that a file the app holds through
   an inheritable handle is not open in the tool.
 - The dialogs session runs only on disposable CI runners (`native/runner.ts`): on Windows the app's
   folders are the account's known folders, which no environment variable redirects, so it refuses to
-  start when they exist and removes only the ones it made. Its input does not come from a keyboard:
-  on Windows it is `SendInput` when the dialog has the foreground, otherwise the same key messages
-  posted to the focused control; on macOS key and mouse events made in the app and given to AppKit.
-  Both go through the app's real message handling and the dialogs' controls, but miss what only a
-  person at the machine would hit, such as another app taking the keyboard. The session's summary
+  start when they exist and removes only the ones it made. Its input, and the keys the tools shard's
+  vault session types into native key entry, do not come from a keyboard: on Windows they are
+  `SendInput` when the dialog has the foreground, otherwise the same key messages posted to the
+  focused control; on macOS key and mouse events made in the app and given to AppKit. Both go
+  through the app's real message handling and the dialogs' controls, but miss what only a person at
+  the machine would hit, such as another app taking the keyboard. The dialogs session's summary
   counts which way each input went.
 - No installer or bundled core yet: the only packages are the test AppImage, the test folder
   bundle (Windows) and the test app bundle (macOS), which are not for release.
@@ -1817,7 +1858,10 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   `updates/kept/` in the app's data folder in place of the installed one to run it again. On
   Windows a new version waits at most 120 seconds for the old one to end and free the profile,
   then exits.
-- Opening an address in the browser works on Linux only.
+- Opening an address in the system's handler for https addresses (normally the default browser; an
+  app that claims the address's domain may take it instead) works on all three systems: GIO on
+  Linux, the `https` class's `open` verb (`ShellExecuteExW`) on Windows, `NSWorkspace` on macOS;
+  only an https address reaches it.
 - Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
   the renderer writes alignment as inline style, which the notes' policy refuses.
 - The app's own core comes only from a local index file for now; an https source joins with the
@@ -1832,8 +1876,7 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.
 - Native key entry and confirmations have no webview entry fallback on any system
-  ([Platforms](#platforms) says where they run). Secret entry for the vault and client keys stays
-  Linux only, with the vault.
+  ([Platforms](#platforms) says where they run).
 - The native dialogs on Windows and macOS are not modal to the whole app: only key entry is modal,
   to the window. No dialog runs a modal loop of its own, which would hold the app's other work.
 - Hidden native entry keeps keys out of the webview API. It does not isolate them from another

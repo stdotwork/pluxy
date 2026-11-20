@@ -54,7 +54,7 @@ use crate::spawn::{self, Lifetime};
 use crate::vault::{Holder, Vault};
 use crate::App;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -853,6 +853,7 @@ fn run_job(
 fn launch_of(
     input: &Value,
     executor: &confirmation::Package,
+    adapter: &Path,
 ) -> Result<confirmation::Launch, CallError> {
     let path = |k: &str| {
         input[k]
@@ -946,6 +947,7 @@ fn launch_of(
         program,
         opens,
         terminal_adapter: executor.clone(),
+        adapter_program: Some(adapter.to_path_buf()),
         // The caller sets them from the launch's environment request (`spawn::parse`).
         environment_revision: String::new(),
         environment_review: vec![],
@@ -1013,7 +1015,7 @@ fn authorize(
                 "a launch's secret fields hold references only, never a secret's value",
             ));
         }
-        let mut l = launch_of(input, &executor)?;
+        let mut l = launch_of(input, &executor, grant.target.program())?;
         let (lifetime, mut request) = spawn::parse(input, &|f| filled.iter().any(|x| x.field == f))
             .map_err(|e| fail("invalid_request", e))?;
         // A launch that opens a file has a fixed shape (the confirmation checks the rest): the
@@ -1479,6 +1481,7 @@ mod tests {
                 &json!({"executable": "/usr/bin/xterm", "argv": argv, "cwd": "/",
                     "program": program}),
                 &executor,
+                Path::new("/test/execution"),
             )
         };
         #[cfg(target_os = "linux")]

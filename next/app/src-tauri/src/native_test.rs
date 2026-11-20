@@ -29,7 +29,8 @@
 //!    fixture parser (`usage_native.rs`); with `PLUXY_APP_TEST_LAUNCHER`, only the execution
 //!    program and the launcher (`launcher_native.rs`; on Windows and macOS
 //!    `launcher_platform_native.rs`); with `PLUXY_APP_TEST_OPEN`, only a tool's
-//!    opening of a file in the person's own app (`open_native.rs`); with
+//!    opening of a file in the person's own app (`open_native.rs`; on Windows and macOS
+//!    `open_platform_native.rs`, with the app's opening of an address in the browser); with
 //!    `PLUXY_APP_TEST_CLAUDE_CODE`, only the Claude Code setup and launcher
 //!    (`claude_code_native.rs`), with its backup browser (`backups_native.rs`) and Beginner Mode's
 //!    guided setup (`easy_mode_native.rs`); with
@@ -57,7 +58,8 @@
 //! that core again and quits.
 //!
 //! On Windows and macOS (`native/platform.ts`, `native/dialogs.ts`) the main run and the
-//! admission, program, routing and launcher sessions run; the other sessions are Linux's only.
+//! admission, program, routing, launcher and vault sessions run, and the open session; the other
+//! sessions are Linux's only.
 //!
 //! Each step prints one line on stderr: `native-test: <step> <JSON>`.
 
@@ -87,7 +89,7 @@ mod claude_code;
 #[cfg(target_os = "linux")]
 #[path = "claude_desktop_native.rs"]
 mod claude_desktop;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "client_key_native.rs"]
 mod client_key;
 #[cfg(target_os = "linux")]
@@ -114,7 +116,7 @@ mod jobs;
 #[cfg(target_os = "linux")]
 #[path = "launcher_native.rs"]
 mod launcher;
-// Off Linux, the launcher check that needs no detached agent, key entry or terminal.
+// Off Linux, the launcher check with this system's own terminal kinds and launch rules.
 #[cfg(all(native_stack, not(target_os = "linux")))]
 #[path = "launcher_platform_native.rs"]
 mod launcher;
@@ -123,6 +125,9 @@ mod launcher;
 mod omp;
 #[cfg(target_os = "linux")]
 #[path = "open_native.rs"]
+mod open;
+#[cfg(all(native_stack, not(target_os = "linux")))]
+#[path = "open_platform_native.rs"]
 mod open;
 #[cfg(target_os = "linux")]
 #[path = "opencode_native.rs"]
@@ -161,7 +166,7 @@ mod transactions;
 #[cfg(target_os = "linux")]
 #[path = "usage_native.rs"]
 mod usage;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "vault_native.rs"]
 mod vault;
 pub use ingress::{
@@ -782,7 +787,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
     // The vault, secret delivery and references, and journal recovery (vault_native.rs), in a
     // session of its own.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_VAULT") {
         vault::run(app, &main, dir.clone().into())?;
         // Native one-time client-key capture (client_key_native.rs), with the same tools.
@@ -812,8 +817,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
         crate::quit(app);
         return Ok(());
     }
-    // A tool's opening of a file in the person's own app (open_native.rs), in a session of its own.
-    #[cfg(target_os = "linux")]
+    // A tool's opening of a file in the person's own app (open_native.rs; off Linux
+    // open_platform_native.rs, with the browser), in a session of its own.
+    #[cfg(native_stack)]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_OPEN") {
         open::run(app, &main, dir.into())?;
         log("quit", json!({}));
