@@ -25,8 +25,9 @@ func TestClaudeResponsesCompact(t *testing.T) {
 			`"usage":{"input_tokens":0,"output_tokens":0,"iterations":[{"type":"compaction","input_tokens":144,"output_tokens":276}]}}`)
 	}
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "claude", "pluxy-extension.json"),
 			"accounts": []any{map[string]any{
