@@ -192,10 +192,7 @@ func generateTo(ctx context.Context, call sdk.Call, out interface{ Send(llm.Even
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		var op *net.OpError
-		dial := errors.As(err, &op) && op.Op == "dial"
-		// A failed dial never reached the upstream, so trying again is safe.
-		return &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: sdk.Retryable(err)}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {

@@ -220,23 +220,36 @@ func (s *wsSession) Turn(ctx context.Context, call sdk.Call, out *sdk.Stream) er
 // relay turns the upstream's messages into events until the turn's terminal message.
 func (s *wsSession) relay(ctx context.Context, c *wsConn, out eventSender, rep *repairs) error {
 	dec := openairesponses.NewStreamDecoder()
-	idle := time.NewTimer(wsIdleTimeout)
-	defer idle.Stop()
+	idleLimit := sdk.IdleTimeout(ctx, wsIdleTimeout)
+	var idle *time.Timer
+	var idleC <-chan time.Time
+	if idleLimit > 0 {
+		idle = time.NewTimer(idleLimit)
+		defer idle.Stop()
+		idleC = idle.C
+	}
+	accountID := ""
+	if info, ok := sdk.UpstreamInfo(ctx); ok {
+		accountID = info.AccountID
+	}
 	for {
 		var data []byte
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-idle.C:
+		case <-idleC:
 			// An upstream silent this long is taken as lost: the client hears so and may send
 			// the whole conversation again.
+			sdk.LogTimeout("idle", accountID, idleLimit)
 			s.drop(c)
 			return openairesponses.UpstreamWebsocketLost()
 		case data = <-c.msgs:
 		case <-c.ended:
 			return lostError(c.err)
 		}
-		idle.Reset(wsIdleTimeout)
+		if idle != nil {
+			idle.Reset(idleLimit)
+		}
 		repaired, err := rep.apply(data)
 		if err != nil {
 			return err
@@ -378,9 +391,7 @@ func (s *wsSession) dial(ctx context.Context, req llm.Request, ur *upstreamReque
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		var op *net.OpError
-		dial := errors.As(err, &op) && op.Op == "dial"
-		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream WebSocket unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream WebSocket unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: sdk.Retryable(err)}
 	}
 	conn.SetReadLimit(protocol.MaxFrame)
 	c := &wsConn{c: conn, msgs: make(chan []byte), ended: make(chan struct{})}

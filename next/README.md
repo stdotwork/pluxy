@@ -1371,12 +1371,14 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
 | `transient_error_cooldown_ms` | How long a failing upstream or endpoint (a 5xx or a broken connection) is blocked when it gave no `Retry-After`: 0 (default) backs off from a second to a minute, above 0 that long, below 0 not at all, `Retry-After` or not. |
 | `quota_response_mode` | What a client gets when every account that serves its model is out of quota until a reset the upstream named, the first of them more than 5 minutes away: `retryable` (default) a retryable 429 with `Retry-After`, as for any block; `usage-limit` the final usage-limit reply below. |
 | `session_affinity` | When present, requests of one session go to the same account while it is eligible. The session comes from the `X-Claude-Code-Session-Id`, `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`; bindings are per client key and model. |
+| `timeouts` | Upstream HTTP request timeouts in milliseconds: `header_ms` (default 60000) for response headers and `idle_ms` (default 300000) between raw upstream bytes on streamed requests, and `total_ms` (default 600000) in all on non-streamed requests; `0` turns a limit off. |
 | account `priority` | Higher first; lower accounts serve only while every higher one is blocked. Default 0. |
 | account `weight` | For `weighted`. Default 1; 0 leaves the account out. |
 | account `disable_cooling` | Overrides `disable_cooling` for the account. |
 | account `max_concurrency` | Requests running at once on the account. 0: no limit. |
 | account `request_retry` | Rounds after the first that the account takes part in, in place of `request_retry` (today's per-key `request-retry`): the account leaves a request's rounds past its own count, and a count above routing's runs more rounds with only the accounts whose count reaches them. Setting it on an account runs rounds even when routing sets none; accounts without one then take part in the first only. |
 | account `endpoint` | Accounts naming the same endpoint share its outages. Default: the account's ID. |
+| account `timeouts` | Overrides `routing.timeouts` (`header_ms`, `idle_ms`, `total_ms`) for the account; `0` turns a limit off. |
 
 A client can pin a request to one account with the `X-Pluxy-Account: <id>` header. A pinned
 request never goes to another account.
