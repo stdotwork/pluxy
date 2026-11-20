@@ -368,11 +368,24 @@ openai-compatibility:
 			t.Errorf("%s is not under brought", name)
 		}
 	}
-	// Everything the example sets is brought, or asks for nothing here.
+	// Everything the example sets is brought, or asks for nothing here. The management key is
+	// not brought: core keeps its own, so the file's key is named with that reason.
 	for _, n := range rep.NotBrought {
+		if n.What == "management.secret-key" {
+			if !strings.Contains(n.Why, "pluxy keeps its own management key") || !strings.Contains(n.Why, "POST /v0/management/management-key/rotate") {
+				t.Errorf("the management key's row: %+v", n)
+			}
+			continue
+		}
 		if n.What != "auth file" && n.What != "config-version" && !strings.Contains(n.Why, "nothing is lost") && !strings.Contains(n.Why, "did nothing") {
 			t.Errorf("the example's %s is not brought: %s", n.What, n.Why)
 		}
+	}
+	var cfgAfter struct {
+		ManagementKey string `json:"management_key"`
+	}
+	if b, _ := os.ReadFile(core); json.Unmarshal(b, &cfgAfter) != nil || cfgAfter.ManagementKey != managementKey {
+		t.Errorf("the import changed core's management key to %q", cfgAfter.ManagementKey)
 	}
 	if folderDigest(t, authDir) != before {
 		t.Error("the import changed today's auth folder")
@@ -460,9 +473,9 @@ type row struct {
 	KeepWith string `json:"keep_with"`
 }
 
-// A config whose management key today's core hashed comes across with a new key, shown once
-// in the reply, which the pluxy command then uses; a dropped setting is named, and nothing
-// prints the hash.
+// A config whose management key today's core hashed comes across without it: core keeps its own
+// key, which the report names as not brought with the way to change it; a dropped setting is
+// named too, and nothing prints the hash.
 func TestImportCPABcryptKey(t *testing.T) {
 	work := t.TempDir()
 	const hash = "$2a$10$abcdefghijklmnopqrstuuAbCdEfGhIjKlMnOpQrStUvWxYz01234"
@@ -479,24 +492,25 @@ func TestImportCPABcryptKey(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("import: %s", r)
 	}
-	for _, want := range []string{"server.max-request-body-bytes", "requests are capped at 24 MiB", "management.secret-key", "bcrypt"} {
+	for _, want := range []string{"server.max-request-body-bytes", "requests are capped at 24 MiB", "management.secret-key",
+		"pluxy keeps its own management key", "POST /v0/management/management-key/rotate"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("the report lacks %q:\n%s", want, r)
 		}
 	}
-	if strings.Contains(r.stdout+r.stderr, hash) {
-		t.Error("the output holds the hash")
+	if strings.Contains(r.stdout+r.stderr, hash) || strings.Contains(r.stdout, "bcrypt") {
+		t.Errorf("the output mentions the hash or its new key: %s", r)
 	}
 	b, _ := os.ReadFile(core)
 	var c struct {
 		ManagementKey string `json:"management_key"`
 	}
-	if err := json.Unmarshal(b, &c); err != nil || c.ManagementKey == managementKey || !strings.Contains(r.stdout, c.ManagementKey) {
-		t.Fatalf("the new key %q is not shown once: %v\n%s", c.ManagementKey, err, r)
+	if err := json.Unmarshal(b, &c); err != nil || c.ManagementKey != managementKey {
+		t.Fatalf("core's management key became %q, want the one it had: %v\n%s", c.ManagementKey, err, r)
 	}
-	// The pluxy command reads the new key from the config file.
+	// The pluxy command still manages core with its own key.
 	if s := runCLI(t, nil, "status", "--config", core); s.code != 0 {
-		t.Errorf("pluxy status with the new key: %s", s)
+		t.Errorf("pluxy status with core's own key: %s", s)
 	}
 }
 
