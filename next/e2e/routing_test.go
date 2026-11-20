@@ -204,12 +204,17 @@ func TestStaleFailureLeavesNoCooldown(t *testing.T) {
 	}
 }
 
-// An account whose upstream speaks another format refuses a request it cannot translate, but
-// that refusal is about the account, not the request: core moves the request on to an account
-// that serves the client's format instead of failing it.
-func TestAccountRefusingTheFormatRotates(t *testing.T) {
+// An account whose upstream speaks another format translates the request instead of rotating it.
+func TestAccountTranslatingTheFormatServesInPlace(t *testing.T) {
 	u := newUpstream(t)
-	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) { okReply(w) }
+	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if r.URL.Path != "/v1beta/models/gpt-test:generateContent" {
+			okReply(w)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`)
+	}
 	base := runCore(t, map[string]any{
 		"listen":      "127.0.0.1:0",
 		"client_keys": []string{clientKey},
@@ -231,7 +236,7 @@ func TestAccountRefusingTheFormatRotates(t *testing.T) {
 		},
 	})
 	postOK(t, base, plainBody)
-	if got, want := usedKeys(u), []string{"sk-chat"}; !slices.Equal(got, want) {
+	if got, want := usedKeys(u), []string{"sk-gemini"}; !slices.Equal(got, want) {
 		t.Errorf("upstream keys = %v, want %v", got, want)
 	}
 }
