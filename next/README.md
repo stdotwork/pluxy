@@ -92,14 +92,15 @@ unless the config names an extension directly. After starting core, open Setup i
 tick the providers you use, or install one by ID from the terminal with
 `./pluxy setup apply --pick pluxy/claude`.
 
-`pluxy -config config.json`, with no subcommand, serves too. With no file at the config's path,
-`pluxy serve` writes a first config there and starts on it: it listens on `127.0.0.1` port 8317,
-or a free port when 8317 is taken, with one new client key and a new management key, in a file
-only its user can read. Core logs the file's path and the address, never the keys; read them in
-the file. `pluxy init [-config file] [-port n]` writes the same config without starting core
-(`-port 0`: a free port), and never replaces a file. A config with no management key is refused
-at start, with a message saying how to add one. A first start installs no package: install the
-providers you use from the bundled registry ([Packages](#packages)) or the panel. Flags:
+`pluxy -config config.json -bundled dist/bundled/index.json`, with no subcommand, serves too.
+With no file at the config's path, `pluxy serve -bundled dist/bundled/index.json` writes a first
+config there and starts on it: it listens on `127.0.0.1` port 8317, or a free port when 8317 is
+taken, with one new client key and a new management key, in a file only its user can read. Core
+logs the file's path and the address, never the keys; read them in the file. `pluxy init
+[-config file] [-port n]` writes the same config without starting core (`-port 0`: a free port),
+and never replaces a file. A config with no management key is refused at start, with a message
+saying how to add one. A first start installs no package: install the providers you use from the
+bundled registry ([Packages](#packages)) or the panel. Flags:
 
 - `-config`: the config file (default `config.json`).
 - `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
