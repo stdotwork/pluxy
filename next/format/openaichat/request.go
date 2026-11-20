@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -88,6 +89,14 @@ type chatPart struct {
 		FileData string `json:"file_data"`
 		Filename string `json:"filename"`
 	} `json:"file"`
+	InputAudio *chatInputAudio `json:"input_audio"`
+}
+
+// chatInputAudio is Chat's input_audio part: the base64 bytes of an audio blob and the format
+// token that names them.
+type chatInputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format,omitempty"`
 }
 
 func invalid(msg string, args ...any) *llm.Error {
@@ -357,6 +366,11 @@ func parseContent(raw json.RawMessage, path string) (parts []llm.Part, textConte
 			file := rawjson.Rest(rawjson.Object(obj["file"]), "file_id", "file_data", "filename")
 			parts = append(parts, llm.Part{Type: llm.PartFile, FileID: p.File.FileID, FileData: p.File.FileData, Filename: p.File.Filename,
 				Origin: rawjson.Origin(format, pp, obj, []string{"type", "file"}, map[string]json.RawMessage{"file": file})})
+		case p.Type == "input_audio" && p.InputAudio != nil && p.InputAudio.Data != "":
+			audio := rawjson.Rest(rawjson.Object(obj["input_audio"]), "data", "format")
+			parts = append(parts, llm.Part{Type: llm.PartFile,
+				FileData: audioinput.DataURL(audioinput.MIME(p.InputAudio.Format), p.InputAudio.Data),
+				Origin:   rawjson.Origin(format, pp, obj, []string{"type", "input_audio"}, map[string]json.RawMessage{"input_audio": audio})})
 		default:
 			parts = append(parts, llm.Part{Type: llm.PartNative, Format: format, Data: append(json.RawMessage(nil), rp...),
 				Origin: &llm.Origin{Format: format, Path: pp}})
@@ -387,6 +401,7 @@ type outPart struct {
 		FileData string `json:"file_data,omitempty"`
 		Filename string `json:"filename,omitempty"`
 	} `json:"file,omitempty"`
+	InputAudio *chatInputAudio `json:"input_audio,omitempty"`
 }
 
 type outRequest struct {
@@ -877,6 +892,14 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 			out = append(out, marshal(op, e.kept(p.Origin)))
 			sendable = true
 		case llm.PartFile:
+			// Chat takes audio as input_audio, with its bytes inline; a file part holding audio
+			// is that audio however the client sent it.
+			if mediaType, data, ok := audioinput.Inline(p); ok {
+				op := outPart{Type: "input_audio", InputAudio: &chatInputAudio{Data: data, Format: audioinput.Format(mediaType)}}
+				out = append(out, marshal(op, e.kept(p.Origin)))
+				sendable = true
+				continue
+			}
 			if p.FileID == "" && p.FileData == "" {
 				// Chat Completions takes a file id or inline data, not a URL.
 				e.lose(llm.LossDropped, pp, "Chat Completions cannot take a file by URL")

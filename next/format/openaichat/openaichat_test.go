@@ -46,8 +46,8 @@ func TestParseThenEncodeRequest(t *testing.T) {
 	if got := len(req.Items); got != 7 {
 		t.Fatalf("got %d items, want 7 (system, user, assistant, 2 tool calls, 2 tool results)", got)
 	}
-	if p := req.Items[1].Content[2]; p.Type != llm.PartNative {
-		t.Fatalf("unknown part became %q, want native", p.Type)
+	if p := req.Items[1].Content[2]; p.Type != llm.PartFile || p.FileData != "data:audio/wav;base64,AAAA" {
+		t.Fatalf("input_audio became part %q with data %q, want a file part holding inline audio", p.Type, p.FileData)
 	}
 	out, _, err := EncodeRequest(req)
 	if err != nil {
@@ -65,6 +65,61 @@ func TestParseThenEncodeRequest(t *testing.T) {
 	 "tools":[{"type":"function","function":{"name":"get_weather","description":"Weather","parameters":{"type":"object"}}}]}`
 	if got, w := string(out), compactJSON(t, want); got != w {
 		t.Errorf("encoded:\n got %s\nwant %s", got, w)
+	}
+}
+
+// An input_audio part is carried as a file part whose inline data is audio, so that other
+// formats can take it, and Chat writes it back as input_audio with its bytes and its format.
+func TestInputAudioPart(t *testing.T) {
+	in := `{"model":"m","stream":false,"messages":[{"role":"user","content":[
+		{"type":"text","text":"Transcribe this."},
+		{"type":"input_audio","input_audio":{"data":"SUQzBA==","format":"mp3"}}]}]}`
+	req, err := ParseRequest([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := req.Items[0].Content[1]; p.Type != llm.PartFile || p.FileData != "data:audio/mpeg;base64,SUQzBA==" {
+		t.Errorf("input_audio became part %q with data %q, want a file part holding inline audio", p.Type, p.FileData)
+	}
+	out, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(losses) != 0 {
+		t.Errorf("same-format encode reported losses: %+v", losses)
+	}
+	var got, want any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(in), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("encoded:\n got %s\nwant %s", out, compactJSON(t, in))
+	}
+
+	// A file part carrying inline audio is Chat's audio input too: Chat's own file part is for
+	// documents, and audio goes in input_audio.
+	file, err := ParseRequest([]byte(`{"model":"m","messages":[{"role":"user","content":[
+		{"type":"file","file":{"file_data":"data:audio/wav;base64,UklGRg=="}}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err = EncodeRequest(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantJSON := `{"model":"m","stream":false,"messages":[{"role":"user","content":[
+		{"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}}]}]}`
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(wantJSON), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("an audio file part encoded as:\n got %s\nwant %s", out, wantJSON)
 	}
 }
 

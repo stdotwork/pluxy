@@ -71,6 +71,110 @@ func TestTranslationToChatReportsLosses(t *testing.T) {
 	}
 }
 
+// An input_audio part is carried as a file part whose inline data is audio: a Responses target
+// gets it back as the flat input_audio part the Responses API spells, and a Chat target as
+// Chat's nested one. An input_file carrying audio is audio input too.
+func TestInputAudioPart(t *testing.T) {
+	in := `{"model":"m","input":[{"role":"user","content":[
+		{"type":"input_text","text":"Transcribe this."},
+		{"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}}]}]}`
+	req, err := ParseRequest([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := req.Items[0].Content[1]; p.Type != llm.PartFile || p.FileData != "data:audio/wav;base64,UklGRg==" {
+		t.Errorf("input_audio became part %q with data %q, want a file part holding inline audio", p.Type, p.FileData)
+	}
+
+	body, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(losses) != 0 {
+		t.Errorf("same-format encode reported losses: %+v", losses)
+	}
+	var back struct {
+		Input []struct {
+			Content []json.RawMessage `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(body, &back); err != nil {
+		t.Fatal(err)
+	}
+	if len(back.Input) != 1 || len(back.Input[0].Content) != 2 {
+		t.Fatalf("Responses body = %s, want the text and the audio part", body)
+	}
+	if got, want := string(back.Input[0].Content[1]), `{"input_audio":{"data":"UklGRg==","format":"wav"},"type":"input_audio"}`; got != want {
+		t.Errorf("Responses part\n got %s\nwant %s", got, want)
+	}
+
+	chat, chatLosses, err := openaichat.EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chatLosses) != 0 {
+		t.Errorf("Chat encode reported losses: %+v", chatLosses)
+	}
+	var chatBody struct {
+		Messages []struct {
+			Content []json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(chat, &chatBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(chatBody.Messages) != 1 || len(chatBody.Messages[0].Content) != 2 {
+		t.Fatalf("Chat body = %s, want the text and the audio part", chat)
+	}
+	samePart(t, "Chat part", chatBody.Messages[0].Content[1], `{"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}}`)
+
+	// The flat spelling, and an input_file whose inline data is audio, are audio input too.
+	for name, in := range map[string]string{
+		"flat input_audio": `{"type":"input_audio","data":"UklGRg==","format":"wav"}`,
+		"input_file":       `{"type":"input_file","file_data":"data:audio/wav;base64,UklGRg==","filename":"a.wav"}`,
+	} {
+		req, err := ParseRequest([]byte(`{"model":"m","input":[{"role":"user","content":[` + in + `]}]}`))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if p := req.Items[0].Content[0]; p.Type != llm.PartFile || p.FileData != "data:audio/wav;base64,UklGRg==" {
+			t.Errorf("%s became part %q with data %q, want the audio file part", name, p.Type, p.FileData)
+			continue
+		}
+		body, _, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var out struct {
+			Input []struct {
+				Content []json.RawMessage `json:"content"`
+			} `json:"input"`
+		}
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(out.Input) != 1 || len(out.Input[0].Content) != 1 {
+			t.Fatalf("%s: body %s", name, body)
+		}
+		samePart(t, name, out.Input[0].Content[0], `{"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}}`)
+	}
+}
+
+// samePart compares two JSON values for equality, whatever their key order or spacing.
+func samePart(t *testing.T, what string, got []byte, want string) {
+	t.Helper()
+	var g, w any
+	if err := json.Unmarshal(got, &g); err != nil {
+		t.Fatalf("%s: %v: %s", what, err, got)
+	}
+	if err := json.Unmarshal([]byte(want), &w); err != nil {
+		t.Fatalf("%s: bad want: %v", what, err)
+	}
+	if !reflect.DeepEqual(g, w) {
+		t.Errorf("%s:\n got %s\nwant %s", what, got, want)
+	}
+}
+
 // Events of an upstream Responses stream keep the upstream event in Raw, events the model has no
 // place for become native events, and the stream follows the protocol's ordering rules.
 func TestStreamDecoderKeepsUpstreamEvents(t *testing.T) {

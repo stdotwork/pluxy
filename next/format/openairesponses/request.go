@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -355,6 +356,13 @@ func parseContent(raw json.RawMessage, path string) (parts []llm.Part, textConte
 			FileData string `json:"file_data"`
 			FileURL  string `json:"file_url"`
 			Filename string `json:"filename"`
+			// input_audio: the flat spelling, or data and format inside input_audio.
+			Data   string `json:"data"`
+			Format string `json:"format"`
+			Audio  *struct {
+				Data   string `json:"data"`
+				Format string `json:"format"`
+			} `json:"input_audio"`
 		}
 		if m == nil || json.Unmarshal(rp, &p) != nil {
 			return nil, false, fmt.Errorf("content[%d] must be an object", i)
@@ -375,6 +383,27 @@ func parseContent(raw json.RawMessage, path string) (parts []llm.Part, textConte
 		case "input_file":
 			parts = append(parts, llm.Part{Type: llm.PartFile, FileID: p.FileID, FileData: p.FileData, URL: p.FileURL, Filename: p.Filename,
 				Origin: rawjson.Origin(format, pp, m, []string{"type", "file_id", "file_data", "file_url", "filename"}, nil)})
+		case "input_audio":
+			data, audioFormat := p.Data, p.Format
+			if p.Audio != nil {
+				if data == "" {
+					data = p.Audio.Data
+				}
+				if audioFormat == "" {
+					audioFormat = p.Audio.Format
+				}
+			}
+			if data == "" {
+				// No bytes to carry; kept whole so a Responses target sends it as it came.
+				parts = append(parts, llm.Part{Type: llm.PartNative, Format: format, Data: append(json.RawMessage(nil), rp...),
+					Origin: &llm.Origin{Format: format, Path: pp}})
+				break
+			}
+			// OpenAI's InputAudio nests data and format inside input_audio, which is how the
+			// encoder writes it; the flat spelling today's clients also send is read too. The
+			// part's other fields are not kept.
+			parts = append(parts, llm.Part{Type: llm.PartFile, FileData: audioinput.DataURL(audioinput.MIME(audioFormat), data),
+				Origin: rawjson.Origin(format, pp, m, []string{"type", "data", "format", "input_audio"}, nil)})
 		default:
 			parts = append(parts, llm.Part{Type: llm.PartNative, Format: format, Data: append(json.RawMessage(nil), rp...),
 				Origin: &llm.Origin{Format: format, Path: pp}})
