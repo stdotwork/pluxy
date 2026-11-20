@@ -201,11 +201,10 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	if perr := refuseDowngrade(s.ext.manifest.ID, s.ext.info.ProtocolMinor, req, t.lost); perr != nil {
 		return refuse(perr)
 	}
-	req, allowedLost := downgradeAllowedTools(s.ext.info.ProtocolMinor, s.ext.manifest.ID, req)
-	if perr := refuseAllowedTools(s.ext.manifest.ID, s.ext.info.ProtocolMinor, req, allowedLost); perr != nil {
-		return refuse(perr)
+	req, allowedErr := downgradeAllowedTools(s.ext.info.ProtocolMinor, req)
+	if allowedErr != nil {
+		return refuse(allowedErr)
 	}
-	t.lost = append(t.lost, allowedLost...)
 	s.mu.Lock()
 	switch {
 	case s.closed:

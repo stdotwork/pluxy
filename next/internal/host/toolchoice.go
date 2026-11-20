@@ -2,6 +2,7 @@ package host
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -11,37 +12,42 @@ import (
 // (llm.ToolChoice.Allowed).
 const allowedToolsMinor = 26
 
-// allowedToolsPath is the request field an allowed tool list comes from, for a loss.
-const allowedToolsPath = "options.tool_choice.allowed"
-
 // downgradeAllowedTools returns req as an extension that implements protocol minor version minor
-// can take it. Before allowedToolsMinor a tool choice keeps its mode and name and loses the tools
-// the model may choose from, returned as a dropped loss: an extension that cannot read the list
-// would let the model call any tool it has without saying so. req's own choice is left as it is;
-// a changed request gets its own copy of it.
-func downgradeAllowedTools(minor int, id string, req llm.Request) (llm.Request, []llm.Loss) {
+// can take it. Before allowedToolsMinor a tool choice keeps its mode and name but loses the tools
+// the model may choose from, so core narrows the request the way a format without an allowed list
+// does: the request keeps only the function tools the list names, and every other tool goes,
+// hosted and native ones included. The model can then only call the allowed ones, which is what the
+// list asks for, so nothing is reported.
+//
+// A list naming no function tool of the request leaves nothing to narrow to, and sending the
+// request whole would let the model call any tool: it is an invalid request, refused before it is
+// sent. req's own choice and tools are left as they are; a narrowed request gets its own copies of
+// them.
+func downgradeAllowedTools(minor int, req llm.Request) (llm.Request, *llm.Error) {
 	tc := req.Options.ToolChoice
 	if minor >= allowedToolsMinor || tc == nil || len(tc.Allowed) == 0 {
 		return req, nil
 	}
-	detail := fmt.Sprintf("extension %s implements protocol 0.%d, which has no tool choice allowed list (0.%d adds it)", id, minor, allowedToolsMinor)
+	allowed := make(map[string]bool, len(tc.Allowed))
+	for _, name := range tc.Allowed {
+		allowed[name] = true
+	}
+	tools := make([]llm.Tool, 0, len(req.Tools))
+	for _, t := range req.Tools {
+		if t.Type == llm.ToolNative || !allowed[t.Name] {
+			continue
+		}
+		tools = append(tools, t)
+	}
+	if len(tools) == 0 {
+		// No function tool the list names is defined, so no narrowing carries it: every allowed
+		// name matches no tool of the request.
+		return req, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest,
+			Message: fmt.Sprintf("tool_choice allows no function tool this request defines: %s", strings.Join(tc.Allowed, ", "))}
+	}
 	choice := *tc
 	choice.Allowed = nil
+	req.Tools = tools
 	req.Options.ToolChoice = &choice
-	return req, []llm.Loss{{Kind: llm.LossDropped, Path: allowedToolsPath, Detail: detail}}
-}
-
-// refuseAllowedTools returns the error for a request whose tool choice lost its allowed list on
-// the way to an extension before allowedToolsMinor, when its drop policy is reject; otherwise nil.
-func refuseAllowedTools(id string, minor int, req llm.Request, lost []llm.Loss) *llm.Error {
-	if req.DropPolicy != llm.DropReject || len(lost) == 0 {
-		return nil
-	}
-	paths := make([]string, 0, len(lost))
-	for _, l := range lost {
-		paths = append(paths, l.Path)
-	}
-	return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
-		Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot carry the tools a tool choice allows (0.%d adds them): %s",
-			id, minor, allowedToolsMinor, strings.Join(paths, ", "))}
+	return req, nil
 }

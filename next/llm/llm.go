@@ -315,7 +315,9 @@ type ToolChoice struct {
 	// of one tool (OpenAI's allowed_tools, Gemini's allowedFunctionNames). Mode is then auto or
 	// required, and Name is empty. A format that has no allowed list carries the narrowing by
 	// defining only these tools. An extension below protocol minor 0.26 cannot read it: core
-	// sends the choice without the list and reports it as dropped (see internal/host).
+	// sends the choice without the list and cuts the request's tools to the function tools it
+	// names, so the narrowing still holds, and refuses the request as invalid when it names none
+	// of them (see internal/host).
 	Allowed []string `json:"allowed,omitempty"`
 }
 
