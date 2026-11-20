@@ -188,7 +188,7 @@ func (a *Account) prefixed(names []Name, forcePrefix bool) []Name {
 // alias without Fork.
 func (a *Account) resolve(model string, forcePrefix bool, catalog []string) (string, bool) {
 	for _, name := range a.unprefixed(model, forcePrefix) {
-		if len(a.Models) > 0 || len(catalog) > 0 {
+		if len(catalog) > 0 {
 			for _, n := range a.baseNames(catalog) {
 				if n.Public == name {
 					return n.Upstream, true

@@ -416,7 +416,7 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 			// The signature stays in Origin.Raw: it is opaque, and only a Messages upstream can
 			// check it.
 			item(llm.Item{Type: llm.ItemTypeReasoning, Text: b.Thinking, Origin: rawjson.Origin(format, bp, bm, []string{"type", "thinking"}, nil)})
-		case b.Type == "tool_use" && head.Role == llm.RoleAssistant && b.ID != "" && b.Name != "":
+		case b.Type == "tool_use" && head.Role == llm.RoleAssistant && b.ID != "":
 			args, err := compactJSON(b.Input)
 			if err != nil {
 				return nil, fmt.Errorf("content[%d]: tool_use input: %v", i, err)
