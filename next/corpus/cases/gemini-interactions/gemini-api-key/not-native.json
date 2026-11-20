@@ -31,7 +31,8 @@
         "error": {
           "code": "auth_not_found",
           "message": "no auth available",
-          "type": "server_error"
+          "type": "server_error",
+          "pluxy": "(volatile)"
         }
       },
       "reason": "Interactions clients are served only by native Interactions accounts (a Gemini key or Vertex account with interactions: true). Today's core translates them onto every other account (here a plain Gemini key, through generateContent); the new core does not carry those translators (about 10k lines in today's core), and the Interactions API's server-side state (previous_interaction_id, agents) cannot be carried to other providers. A request no account serves gets today's no-usable-account answer, 503 auth_not_found."

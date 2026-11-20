@@ -15,8 +15,7 @@ import (
 // A count refused under the reject drop policy names what was dropped in the error's Dropped,
 // before anything is sent, so core does not take the refusal for an account that cannot count. An
 // account whose upstream has no count endpoint (Chat Completions, Responses) answers unsupported
-// naming nothing, so core estimates; so does the refusal of a request this account does not
-// translate.
+// naming nothing, so core estimates.
 func TestCountTokensDropRefusalNamesDropped(t *testing.T) {
 	call := func(wire string, native string) sdk.Call {
 		return sdk.Call{
@@ -39,13 +38,14 @@ func TestCountTokensDropRefusalNamesDropped(t *testing.T) {
 		}
 		return e
 	}
-	if e := count(call("messages", llm.FormatGeminiGenerate)); !slices.Equal(e.Dropped, []string{"response_format"}) {
-		t.Errorf("Messages account: error %+v, want dropped [response_format]", e)
+	for _, native := range []string{llm.FormatGeminiGenerate, llm.FormatOpenAIChat} {
+		if e := count(call("messages", native)); !slices.Equal(e.Dropped, []string{"response_format"}) {
+			t.Errorf("Messages account, %s request: error %+v, want dropped [response_format]", native, e)
+		}
 	}
 	for _, c := range []struct{ wire, native string }{
 		{"chat", llm.FormatGeminiGenerate},
 		{"responses", llm.FormatGeminiGenerate},
-		{"messages", llm.FormatOpenAIChat},
 	} {
 		if e := count(call(c.wire, c.native)); e.Dropped != nil {
 			t.Errorf("%s account, %s request: error %+v, want nothing dropped", c.wire, c.native, e)

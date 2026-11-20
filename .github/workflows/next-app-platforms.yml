@@ -3,7 +3,8 @@ name: Next app platforms
 # Builds and unit-tests the desktop app's Rust crate on Windows and macOS, and runs the real app
 # there (next/app/native/platform.ts: a second launch raising the first, the login item, the
 # window and the tray; the test package and the release gate; the signed tool sessions, admission,
-# program, routing and launcher; next/app/native/dialogs.ts: native key entry, confirmations and
+# program, routing, launcher and open; the app's update; on Windows the per-user setup program, on
+# macOS the disk image's install; next/app/native/dialogs.ts: native key entry, confirmations and
 # key rotation). The rest of the Linux native test (Xvfb, portals) stays in next-app.yml.
 
 on:
@@ -138,9 +139,10 @@ jobs:
           [ "$ran" -eq "$expected" ]
       # A detached launch must leave the app's job. The runner's own job refuses that (the unit
       # tests check the refusal), so the check that it works runs the breakaway test, the
-      # lifetime tests and the stdin secret test (a detached launch with a piped stdin), whose
-      # detached launches then run and must be in no job, from a process outside that job:
-      # started by WMI, or failing that by the Task Scheduler.
+      # lifetime tests, the stdin secret test (a detached launch with a piped stdin) and the WSLENV
+      # test (a detached launch of wsl.exe gets WSLENV), whose detached launches then run and must
+      # be in no job, from a process outside that job: started by WMI, or failing that by the Task
+      # Scheduler.
       - name: Detached launch outside the runner's job
         if: runner.os == 'Windows'
         working-directory: next/app/src-tauri
@@ -156,7 +158,7 @@ jobs:
             Remove-Item "$dir\*" -Force -ErrorAction SilentlyContinue
             # The exit code goes first to a file of its own (a redirection before echo: `echo 0>`
             # would redirect stream 0), then into place, so done.txt never appears empty.
-            Set-Content "$dir\run.cmd" "@`"$exe`" outside_job lifetime_ a_launchs_stdin_secret_reaches_it_on_its_stdin_only --include-ignored --test-threads=1 > `"$dir\out.txt`" 2>&1`r`n@> `"$dir\done.tmp`" echo %ERRORLEVEL%`r`n@move /y `"$dir\done.tmp`" `"$dir\done.txt`" > nul"
+            Set-Content "$dir\run.cmd" "@`"$exe`" outside_job lifetime_ a_launchs_stdin_secret_reaches_it_on_its_stdin_only managed_and_detached_launches_of_wsl_exe_start_with_wslenv --include-ignored --test-threads=1 > `"$dir\out.txt`" 2>&1`r`n@> `"$dir\done.tmp`" echo %ERRORLEVEL%`r`n@move /y `"$dir\done.tmp`" `"$dir\done.txt`" > nul"
             if ($how -eq 'WMI') {
               $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "cmd.exe /c `"$dir\run.cmd`""; CurrentDirectory = $dir }
               if ($r.ReturnValue -ne 0) { return "WMI could not start it ($($r.ReturnValue))" }
@@ -169,7 +171,7 @@ jobs:
             if (-not (Test-Path "$dir\done.txt")) { return "$($how): no result within 120 s" }
             Get-Content "$dir\out.txt" | Write-Host
             $code = (Get-Content "$dir\done.txt").Trim()
-            if ($code -eq '0' -and (Select-String -Quiet -Path "$dir\out.txt" -Pattern '^test result: ok\. 10 passed')) { return 'ok' }
+            if ($code -eq '0' -and (Select-String -Quiet -Path "$dir\out.txt" -Pattern '^test result: ok\. 11 passed')) { return 'ok' }
             return "$($how): the test failed (exit $code)"
           }
           $why = @()
@@ -270,12 +272,15 @@ jobs:
   # are named in next/app/native/shards.ts (PLATFORM_SHARDS), one job per shard; the summary has
   # the counts.
   # The package and update shards build the test package first (package.ts test: a folder bundle
-  # on Windows, an app bundle on macOS, never an installer), then the dev app, since the package's
-  # builds rename the program they make in target/debug. The update shard also runs a test core
-  # (`go run ./e2e/panelcore`), so it sets up Go. The tools shard (native/platform-tools.ts) runs
-  # run.ts's admission, program, routing, launcher and vault sessions here, on the app built with
-  # the test trust (artifact-test-trust) against a test core it starts with `go run`, so it sets up
-  # Go too. The open shard runs platform-tools.ts's open session the same way, on the same build.
+  # and the per-user setup program on Windows, an app bundle and its disk image on macOS), then the
+  # dev app, since the package's builds rename the program they make in target/debug. The update
+  # shard also runs a test core (`go run ./e2e/panelcore`), so it sets up Go; on Windows its install
+  # session installs, updates and uninstalls the setup program's copy, and on macOS it attaches the
+  # disk image and installs, updates and rolls back the bundle copied out of it. The tools shard
+  # (native/platform-tools.ts) runs run.ts's admission, program, routing, launcher and vault sessions
+  # here, on the app built with the test trust (artifact-test-trust) against a test core it starts
+  # with `go run`, so it sets up Go too. The open shard runs platform-tools.ts's open session the
+  # same way, on the same build.
   # A schedule or manual run has no inputs: null is not true, so it runs these.
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})

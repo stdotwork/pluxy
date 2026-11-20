@@ -694,6 +694,79 @@ pub fn environment(
     env.into_iter().collect()
 }
 
+/// Whether named is Windows' own `wsl.exe` (`<system_root>\System32\wsl.exe`, compared as
+/// Windows compares paths: ignoring case, with or without `\\?\`).
+pub fn is_wsl_exe(named: &std::path::Path, system_root: Option<&std::path::Path>) -> bool {
+    let (Some(named), Some(root)) = (named.to_str(), system_root.and_then(|r| r.to_str())) else {
+        return false;
+    };
+    let plain = |p: &str| {
+        p.strip_prefix(r"\\?\")
+            .unwrap_or(p)
+            .trim_end_matches('\\')
+            .to_ascii_lowercase()
+    };
+    !root.is_empty() && plain(named) == format!(r"{}\system32\wsl.exe", plain(root))
+}
+
+/// `WSLENV`'s value for a launch through `wsl.exe` with request: each variable it sets or gives a
+/// secret in, passed on into the distribution unchanged (`/u`, Windows to Linux only); None when
+/// it names none. Requests never set `WSLENV` themselves (`NEVER_PLATFORM`).
+pub fn wslenv(request: &Request) -> Option<String> {
+    let names: Vec<String> = request
+        .set
+        .keys()
+        .chain(request.secrets.keys())
+        .map(|n| format!("{n}/u"))
+        .collect();
+    (!names.is_empty()).then(|| names.join(":"))
+}
+
+/// env, with `WSLENV` added for a launch of Windows' own `wsl.exe` in system_root (`wslenv`).
+fn with_wslenv(
+    mut env: Vec<(String, OsString)>,
+    l: &Launch,
+    system_root: Option<&std::path::Path>,
+) -> Vec<(String, OsString)> {
+    if is_wsl_exe(&l.named, system_root) {
+        if let Some(v) = wslenv(&l.request) {
+            env.retain(|(k, _)| !k.eq_ignore_ascii_case("WSLENV"));
+            env.push(("WSLENV".into(), OsString::from(v)));
+        }
+    }
+    env
+}
+
+/// The environment launch l runs with, its secrets' values resolved: the launch environment as
+/// its request asks (`environment`), and `WSLENV` for a launch of Windows' own `wsl.exe` in
+/// system_root (`with_wslenv`). Every launch, managed or detached, gets its environment here.
+fn launch_env(
+    l: &Launch,
+    secrets: &[(String, String)],
+    system_root: Option<&std::path::Path>,
+) -> Vec<(String, OsString)> {
+    with_wslenv(environment(snapshot(), &l.request, secrets), l, system_root)
+}
+
+/// Windows' folder (`SystemRoot`), whose System32 holds its own `wsl.exe`; None off Windows,
+/// where nothing runs in WSL.
+fn system_root() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(root) = TEST_SYSTEM_ROOT.lock().unwrap().clone() {
+        return Some(root);
+    }
+    if cfg!(windows) {
+        std::env::var_os("SystemRoot").map(PathBuf::from)
+    } else {
+        None
+    }
+}
+
+/// Windows' folder for `system_root` in tests on any system: a launch named as its own `wsl.exe`
+/// (the program run is still the test's) then gets `WSLENV` on every launch path.
+#[cfg(test)]
+pub(crate) static TEST_SYSTEM_ROOT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
 /// The folders people's command-line clients are installed in on macOS, under the home folder
 /// and then system-wide: npm, Bun, Cargo, Volta, pnpm and Homebrew put them there.
 #[cfg(target_os = "macos")]
@@ -1038,7 +1111,7 @@ fn feed(stdin: Option<impl std::io::Write + Send + 'static>, value: Option<Strin
 pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), String> {
     l.opened.recheck()?;
     let r = resolve(l, package, values)?;
-    let env = environment(snapshot(), &l.request, &r.env);
+    let env = launch_env(l, &r.env, system_root().as_deref());
     #[cfg(target_os = "linux")]
     let hold = Hold::new().ok();
     #[cfg(target_os = "linux")]
@@ -1074,7 +1147,7 @@ pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), St
 pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), String> {
     l.opened.recheck()?;
     let r = resolve(l, package, values)?;
-    let env = environment(snapshot(), &l.request, &r.env);
+    let env = launch_env(l, &r.env, system_root().as_deref());
     let mut cmd = command(l, env, r.holds())?;
     // Checked again now its executable and cwd are pinned (`command`): nothing can change them
     // after this, and a change made since the check above is seen here.
@@ -1538,7 +1611,7 @@ impl Runtimes {
         })?;
         self.0.live(&self.0.list.lock().unwrap(), package, id)?;
         let r = resolve(l, package, &*self.0.values)?;
-        let env = environment(snapshot(), &l.request, &r.env);
+        let env = launch_env(l, &r.env, system_root().as_deref());
         let token = {
             let mut t = self.0.tokens.lock().unwrap();
             *t += 1;

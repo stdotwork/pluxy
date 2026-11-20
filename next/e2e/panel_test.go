@@ -53,8 +53,8 @@ func get(t *testing.T, method, url string) (*http.Response, string) {
 	return resp, string(b)
 }
 
-// Core serves the panel at /panel/ while the management API is on: the page and its assets,
-// each under the panel's Content Security Policy, with nothing secret in them.
+// Core serves the panel at /panel/: the page and its assets, each under the panel's Content
+// Security Policy, with nothing secret in them.
 func TestPanelIsServedWithTheManagementAPI(t *testing.T) {
 	needPanel(t)
 	base := startCore(t, answeringUpstream(t), func(cfg map[string]any) { cfg["management_key"] = managementKey })
@@ -119,16 +119,5 @@ func TestPanelIsServedWithTheManagementAPI(t *testing.T) {
 	// The panel takes only its own path; other paths stay with the client API.
 	if resp, _ := get(t, "GET", base+"/panelx"); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("GET /panelx: status %d, want 404", resp.StatusCode)
-	}
-}
-
-// Without a management key the management API is off, and so is the panel.
-func TestPanelIsOffWithoutManagementKey(t *testing.T) {
-	needPanel(t)
-	base := startCore(t, answeringUpstream(t))
-	for _, p := range []string{"/panel", "/panel/"} {
-		if resp, _ := get(t, "GET", base+p); resp.StatusCode != http.StatusNotFound {
-			t.Errorf("GET %s without a management key: status %d, want 404", p, resp.StatusCode)
-		}
 	}
 }

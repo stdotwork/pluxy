@@ -10,6 +10,19 @@
 
   .nav {
     background: var(--px-color-nav);
+    /* For the navigation laid out as a bar, which scrolls sideways when it is wider than the
+       window: a shadow at an edge says there is more past it. The shadows stay at the bar's two
+       edges; the covers over them scroll with the entries, so each hides its shadow only when the
+       bar is scrolled to that end. */
+    --nav-more-shadow: color-mix(in srgb, var(--px-color-nav-text) 35%, transparent);
+    --nav-more:
+      linear-gradient(to right, var(--px-color-nav) 40%, transparent) left center / 3em 100% no-repeat local,
+      linear-gradient(to left, var(--px-color-nav) 40%, transparent) right center / 3em 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, var(--nav-more-shadow), transparent) left center / 0.9em 100%
+      no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, var(--nav-more-shadow), transparent) right center / 0.9em
+      100% no-repeat scroll,
+      var(--px-color-nav);
     border: 0 solid var(--px-color-nav-border);
     display: flex;
     gap: calc(var(--s) * 1);
@@ -168,6 +181,7 @@
     border-block-end-width: var(--px-shape-border);
     padding: calc(var(--s) * 1) calc(var(--s) * 3);
     overflow-x: auto;
+    background: var(--nav-more);
   }
 
   html[data-nav="top"] .privacy {
@@ -241,6 +255,7 @@
       border-inline-end-width: 0;
       border-block-end-width: var(--px-shape-border);
       overflow-x: auto;
+      background: var(--nav-more);
     }
 
     html:is([data-nav="sidebar"], [data-nav="rail"]) .nav ul {

@@ -13,11 +13,13 @@ go run ./cmd/pluxy-bench                 # every scenario, 5 runs, report on std
 go run ./cmd/pluxy-bench -runs 1         # one run (about 3 minutes)
 go run ./cmd/pluxy-bench -check          # what CI runs: the budget check (about 80 seconds)
 go run ./cmd/pluxy-bench -json out.json  # also write every number, per run, as JSON
-go run ./cmd/pluxy-bench -profile DIR    # CPU and heap profiles of core and the extension
+go run ./cmd/pluxy-bench -profile DIR    # CPU and heap profiles of the selected scenarios
+go run ./cmd/pluxy-bench -requests 500 -profile DIR -scenarios stream-translate  # more samples to read
 ```
 
 `go run ./cmd/pluxy-bench -h` lists the other flags: the mock's timings, the request body size,
-a subset of scenarios, and `-proxy-url` to measure another proxy that is already running against
+a subset of scenarios, `-requests` (the request count of the scenarios that send a fixed number:
+all but `agents` and `throughput`; refused with `-check`), and `-proxy-url` to measure another proxy that is already running against
 the same mock. The memory and CPU figures read `/proc`, so they are Linux only; elsewhere the
 report says they were not measured.
 
@@ -145,9 +147,10 @@ came from. CI runs the check in `next-ci.yml`'s `bench` job.
 Time budgets are ratios of the proxy to the direct path in the same run, so the mock's own
 timing and the client's costs cancel out and the check needs no absolute times. The machine's
 speed does not cancel out: a slower runner adds more on the proxy side. So each budget leaves
-room for two to three times today's overhead on CI's runner (for `stream-pass`, 1.25 against a
-measured 1.08, that is 25 ms against 8 ms): a change that adds about 20 ms or more to a request
-fails, the spread between runners does not. Chunk delay is bounded as a fraction of the mock's chunk interval, since the direct
+room for two to three times today's overhead on CI's runner (for `stream-pass`, 1.10 against
+measured ratios of 1.025 and 1.034, that is a 10 ms budget against 2.5 to 3.4 ms overhead in two
+CI runs): a change that adds about 7 ms or more to a request fails, the spread between runners
+does not. Chunk delay is bounded as a fraction of the mock's chunk interval, since the direct
 chunk delay is too close to zero to divide by. Memory budgets are in MB and KB per open stream.
 Binary sizes, start time and throughput are reported, not checked: new features grow them on
 purpose.

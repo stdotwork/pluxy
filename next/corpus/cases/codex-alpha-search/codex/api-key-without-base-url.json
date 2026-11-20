@@ -29,7 +29,8 @@
       "want": {
         "code": "auth_not_found",
         "message": "no auth available",
-        "type": "server_error"
+        "type": "server_error",
+        "pluxy": "(volatile)"
       },
       "reason": "Today's core answers {\"error\": \"<text>\"} (auth_not_found: no auth available); the new core answers with an OpenAI-style error object carrying the same status and code."
     },

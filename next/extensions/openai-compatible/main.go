@@ -32,7 +32,9 @@
 // Responses compaction (core's endpoint call for POST /v1/responses/compact) passes the client's
 // body through to POST {base_url}/responses/compact on a Responses account, summarizes through
 // POST {base_url}/chat/completions on a Chat account, and answers unsupported on a Messages or
-// Gemini account (compact.go).
+// Gemini account (compact.go). OpenAI's Images API (POST /v1/images/generations and
+// /v1/images/edits) passes through to the same paths under base_url on a Chat or Responses
+// account, with a multipart edit sent as multipart (images.go).
 package main
 
 import (
@@ -66,7 +68,7 @@ const (
 )
 
 func main() {
-	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check, Quota: quota, Endpoint: compact}); err != nil {
+	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check, Quota: quota, Endpoint: endpointCall}); err != nil {
 		fmt.Fprintln(os.Stderr, "openai-compatible:", err)
 		os.Exit(1)
 	}
@@ -352,10 +354,7 @@ func postBody(ctx context.Context, call sdk.Call, s settings, wire wireInfo, key
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		var op *net.OpError
-		dial := errors.As(err, &op) && op.Op == "dial"
-		// A failed dial never reached the upstream, so trying again is safe.
-		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: sdk.Retryable(err)}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()
@@ -445,9 +444,8 @@ var formatNames = map[string]string{
 }
 
 // buildBody returns the upstream request body for req in format target and how it was built. A
-// request in the upstream's own format is sent unchanged. Requests are translated to Chat from any
-// client format, to Responses from Messages and Gemini, and to Messages from Gemini; under the
-// reject drop policy a translation that drops anything is refused.
+// request in the upstream's own format is sent unchanged; every other client format is translated
+// to the target. Under the reject drop policy a translation that drops anything is refused.
 func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: target}
 	if n := req.Native; n != nil {
@@ -458,26 +456,18 @@ func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error)
 		}
 	}
 	var encode func(llm.Request) ([]byte, []llm.Loss, error)
-	switch {
-	case target == llm.FormatOpenAIChat:
+	switch target {
+	case llm.FormatOpenAIChat:
 		encode = openaichat.EncodeRequest
-	case target == llm.FormatOpenAIResponses && (tr.From == llm.FormatAnthropicMessages || tr.From == llm.FormatGeminiGenerate):
-		// shortcut: only Messages and Gemini requests are rebuilt as Responses; Chat requests
-		// have no corpus cases for it yet. Allow them once they do.
+	case llm.FormatOpenAIResponses:
 		encode = openairesponses.EncodeRequest
-	case target == llm.FormatAnthropicMessages && tr.From == llm.FormatGeminiGenerate:
-		// shortcut: only Gemini requests are rebuilt as Messages here; the Claude extension
-		// rebuilds Chat and Responses requests too. Allow them here once this extension's
-		// Messages accounts have corpus cases for them.
+	case llm.FormatAnthropicMessages:
 		encode = anthropicmessages.EncodeRequest
+	case llm.FormatGeminiGenerate:
+		encode = geminigenerate.EncodeRequest
 	default:
-		// shortcut: nothing else is rebuilt as Messages here (the Claude extension does it for
-		// Claude), and nothing is rebuilt as GenerateContent (the Gemini provider brings that).
-		// The refusal is about this account's upstream, not the request: an account that speaks
-		// the client's format can still serve it, so core may try one (scope credential,
-		// retryable: nothing reached the upstream).
 		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
-			Message: "this account's upstream speaks " + formatNames[target] + "; requests in " + tr.From + " are not translated to it"}
+			Message: "the upstream speaks an unknown format " + strconv.Quote(target)}
 	}
 	body, losses, err := encode(req)
 	if err != nil {

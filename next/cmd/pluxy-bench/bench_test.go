@@ -4,6 +4,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPercentileAndSummarize(t *testing.T) {
@@ -166,5 +167,71 @@ func TestPaddedDeltaMarkersAndFidelity(t *testing.T) {
 	}
 	if joined.String() != d0+d1 {
 		t.Fatalf("joined = %q, want %q", joined.String(), d0+d1)
+	}
+}
+
+func TestSelectProfileScenarios(t *testing.T) {
+	specs := []ScenarioSpec{
+		{Name: "agents"},
+		{Name: "throughput"},
+		{Name: "nonstream-pass", Latency: 250 * time.Millisecond},
+	}
+
+	got, err := selectProfileScenarios(specs, "")
+	if err != nil {
+		t.Fatalf("selectProfileScenarios default: %v", err)
+	}
+	if len(got) != 2 || got[0].Name != "agents" || got[1].Name != "throughput" {
+		t.Fatalf("selectProfileScenarios default = %+v, want agents and throughput", got)
+	}
+
+	got, err = selectProfileScenarios(specs, "nonstream-pass")
+	if err != nil {
+		t.Fatalf("selectProfileScenarios nonstream-pass: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "nonstream-pass" || got[0].Latency != 250*time.Millisecond {
+		t.Fatalf("selectProfileScenarios nonstream-pass = %+v, want the built scenario", got)
+	}
+
+	if _, err := selectProfileScenarios(specs, "missing"); err == nil {
+		t.Fatal("selectProfileScenarios missing: want an unknown-scenario error")
+	}
+}
+
+func TestBuildScenariosRequestsOverride(t *testing.T) {
+	set := map[string]bool{"requests": true}
+	specs := buildScenarios(false, 100, set, 0, 0, 0, 0, 200)
+	for _, s := range specs {
+		switch s.Name {
+		case "agents", "throughput":
+			if s.Requests != 0 {
+				t.Errorf("%s Requests = %d, want it left at 0", s.Name, s.Requests)
+			}
+		default:
+			if s.Requests != 200 {
+				t.Errorf("%s Requests = %d, want 200", s.Name, s.Requests)
+			}
+		}
+	}
+
+	for _, s := range buildScenarios(false, 100, map[string]bool{}, 0, 0, 0, 0, 200) {
+		if s.Requests != 0 && s.Requests == 200 {
+			t.Errorf("%s Requests = 200 without -requests", s.Name)
+		}
+	}
+}
+
+func TestCheckRequestsFlag(t *testing.T) {
+	if err := checkRequestsFlag(true, false, 0); err != nil {
+		t.Fatalf("-check alone: %v", err)
+	}
+	if err := checkRequestsFlag(false, true, 100); err != nil {
+		t.Fatalf("-requests alone: %v", err)
+	}
+	if err := checkRequestsFlag(true, true, 100); err == nil {
+		t.Fatal("-requests with -check: want an error")
+	}
+	if err := checkRequestsFlag(false, true, 0); err == nil {
+		t.Fatal("-requests 0: want an error")
 	}
 }

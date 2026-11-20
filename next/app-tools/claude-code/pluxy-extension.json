@@ -2,11 +2,17 @@
   "manifest_version": 1,
   "id": "pluxy/claude-code",
   "version": "0.1.0",
+  "title": "Claude Code",
+  "summary": "Points Claude Code at pluxy by editing its settings file, with a backup to undo it.",
+  "kind": "client",
   "app": {
     "version": 0,
     "tier": "native",
     "host_versions": [
       0
+    ],
+    "environments": [
+      "wsl"
     ],
     "programs": {
       "darwin/amd64": "bin/claude-code",

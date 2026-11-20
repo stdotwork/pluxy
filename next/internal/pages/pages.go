@@ -88,17 +88,16 @@ func CSP(folder string) string {
 		"form-action 'none'; base-uri 'none'"
 }
 
-// Handler serves the pages site while on returns true (core passes whether the management API
-// is on); otherwise everything is not found. Addresses are /{publisher}/{name}/{fp}/{file},
-// for an extension lookup finds.
-func Handler(lookup Lookup, on func() bool) http.Handler {
+// Handler serves the pages site. Addresses are /{publisher}/{name}/{fp}/{file}, for an extension
+// lookup finds.
+func Handler(lookup Lookup) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", errorCSP)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cache-Control", "no-store")
-		if !on() || !hostHeader.MatchString(r.Host) {
+		if !hostHeader.MatchString(r.Host) {
 			http.NotFound(w, r)
 			return
 		}

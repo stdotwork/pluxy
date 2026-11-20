@@ -48,9 +48,10 @@
 //! On Linux and macOS the updating app hands that version the lock's descriptor
 //! ([`LOCK_FD_ENV`]). A Windows lock cannot be handed on (a child given the handle is not given
 //! the lock), so there the updating app stops listening, writes a successor record
-//! (`instance/successor.json`: a nonce, the program and its SHA-256) and starts the new version
-//! with that nonce ([`SUCCESSOR_ENV`]). A launch that finds the lock held, its nonce in the
-//! record, and itself the program the record names, byte for byte, takes the record (it is used
+//! (`instance/successor.json`: a nonce, the program and the digest of its program set, as the
+//! updater pins it) and starts the new version with that nonce ([`SUCCESSOR_ENV`]). A launch that
+//! finds the lock held, its nonce in the record, and itself the program the record names, its
+//! program set having that digest, takes the record (it is used
 //! once) and is the app at once: it listens, so a later launch raises it, while a thread of its
 //! own waits for the lock, which the updating app holds until it ends. Without the lock within
 //! [`SUCCESSOR_WAIT`] it exits. Any other launch is an ordinary later launch.
@@ -261,11 +262,11 @@ fn start_with(dir: &Path, deadline: Instant, inherited: Option<i32>) -> Result<S
 }
 
 /// Whether this launch is the successor the record in the instance folder names (Windows; see
-/// the module): the record holds nonce, is fresh, and names this program, whose bytes have the
-/// record's SHA-256. The record is removed when it holds nonce, so it names one launch at most.
+/// the module): the record holds nonce, is fresh, and names this program, whose installed copy
+/// (its program set) has the record's digest. The record is removed when it holds nonce, so it
+/// names one launch at most.
 #[cfg(windows)]
 fn take_successor(d: &fsx::Dir, nonce: &str) -> bool {
-    use sha2::{Digest, Sha256};
     let Ok(Some(bytes)) = fsx::read_file(d, SUCCESSOR) else {
         return false;
     };
@@ -285,18 +286,16 @@ fn take_successor(d: &fsx::Dir, nonce: &str) -> bool {
     let me = std::env::current_exe().and_then(std::fs::canonicalize);
     let named = r["program"].as_str().map(std::fs::canonicalize);
     let same_program = matches!((&me, &named), (Ok(a), Some(Ok(b))) if a == b);
-    let same_bytes = me
-        .as_ref()
-        .ok()
-        .and_then(|p| std::fs::read(p).ok())
-        .is_some_and(|b| {
-            let digest: String = Sha256::digest(&b)
-                .iter()
-                .map(|x| format!("{x:02x}"))
-                .collect();
-            r["sha256"].as_str() == Some(digest.as_str())
-        });
-    fresh && same_program && same_bytes
+    // The digest the update pinned the installed copy by: on Windows the program set's, over
+    // this program's folder (`updater/set.rs`), so the whole set is the one it named.
+    let same_set = || {
+        me.as_ref()
+            .ok()
+            .and_then(|p| p.parent())
+            .and_then(|folder| crate::updater::digest(folder).ok())
+            .is_some_and(|digest| r["sha256"].as_str() == Some(digest.as_str()))
+    };
+    fresh && same_program && same_set()
 }
 
 /// A successor's wait for the profile lock (Windows): a thread that takes it into slot once the
@@ -406,7 +405,8 @@ impl Instance {
     }
 
     /// Names the version an update starts next as this app's successor (Windows; see the
-    /// module): its nonce, its program and the program's SHA-256.
+    /// module): its nonce, its program and the digest its installed copy is pinned by (the
+    /// program set's).
     #[cfg(windows)]
     pub fn name_successor(&self, nonce: &str, program: &Path, sha256: &str) -> io::Result<()> {
         let written = std::time::SystemTime::now()
