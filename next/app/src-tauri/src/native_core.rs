@@ -33,7 +33,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
 /// The confirmation's buttons: Confirm and Cancel (`confirmation::text`).
-const CONFIRM: Key = Key::Access('o');
+pub(super) const CONFIRM: Key = Key::Access('o');
 const CANCEL: Key = Key::Access('c');
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -58,7 +58,7 @@ fn invoke(main: &Webview, cmd: &str, args: Value) -> Result<Result<Value, String
     })
 }
 
-fn call(main: &Webview, cmd: &str, args: Value) -> Result<Value, String> {
+pub(super) fn call(main: &Webview, cmd: &str, args: Value) -> Result<Value, String> {
     invoke(main, cmd, args)?.map_err(|e| format!("{cmd}: {e}"))
 }
 
@@ -202,7 +202,7 @@ fn running(program: &Path) -> Vec<u64> {
 }
 
 /// Whether process pid runs a program in the app's core store dir.
-fn in_store(pid: u64, dir: &Path) -> bool {
+pub(super) fn in_store(pid: u64, dir: &Path) -> bool {
     let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.into());
     exe(pid).starts_with(dir)
 }
@@ -268,7 +268,7 @@ fn seq(main: &Webview) -> Result<u64, String> {
 
 /// Asks for a core action, checks that its native dialog shows each of shows (what will run),
 /// answers it with key, and returns its outcome.
-fn act(
+pub(super) fn act(
     main: &Webview,
     cmd: &str,
     args: Value,

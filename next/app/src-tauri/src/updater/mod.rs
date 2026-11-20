@@ -933,17 +933,46 @@ fn supervise(app: &AppHandle, r: &Restart) {
     }
 }
 
-/// At startup, after the profile lock: the version an install started accepts itself once the
-/// installed copy is the one it pinned, which the waiting earlier version reads. What an earlier
-/// install recorded that it left (`leftovers.rs`: on macOS its staging folders, on Windows what it
-/// left beside the installed copy) is removed once the earlier version has ended; nothing else is
-/// looked at. On Windows, first, a replace of the program set that stopped part way is undone or
-/// finished (`recover`): before that cleanup, and before this version's start digest is taken
-/// (`record_started_from`, called after this).
-pub fn accept(app: &AppHandle) {
+/// What `accept` found at startup that `accepted` acts on once the app's state exists.
+#[must_use = "pass it to `accepted` after the app's state is managed"]
+pub struct Accepting {
+    /// Windows: why this version takes no start digest (`recover`), if so.
     #[cfg(windows)]
-    recover(app);
+    not_started: Option<String>,
+}
+
+/// At startup, after the profile lock and before the app's state exists, the managed core starts
+/// or anything reads the core that came with the app: the version an install started accepts
+/// itself once the installed copy is the one it pinned, which the waiting earlier version reads.
+/// On Windows, first, a replace of the program set that stopped part way is undone or finished
+/// (`recover`), so the core beside the program is one set's. Nothing here reads the app's state;
+/// what needs it, `accepted` does once it is managed.
+pub fn accept(app: &AppHandle) -> Accepting {
+    #[cfg(windows)]
+    let accepting = Accepting {
+        not_started: recover(app),
+    };
+    #[cfg(not(windows))]
+    let accepting = Accepting {};
+    accept_pending(app);
+    accepting
+}
+
+/// At startup, once the app's state is managed and before this version's start digest is taken
+/// (`record_started_from`, called after this): on Windows, a replace `recover` could not finish
+/// keeps this version from taking a start digest. What an earlier install recorded that it left
+/// (`leftovers.rs`: on macOS its staging folders, on Windows what it left beside the installed
+/// copy) is removed once the earlier version has ended; nothing else is looked at.
+pub fn accepted(app: &AppHandle, accepting: Accepting) {
+    #[cfg(windows)]
+    if let Some(why) = accepting.not_started {
+        let _ = app.state::<App>().updater.started_from.set(Err(why));
+    }
+    #[cfg(not(windows))]
+    let Accepting {} = accepting;
     // An AppImage's replace leaves nothing beside it.
+    #[cfg(target_os = "linux")]
+    let _ = app;
     #[cfg(not(target_os = "linux"))]
     if gate(app).is_ok() && format::here(app).is_some() {
         if let Ok(dir) = dir(app) {
@@ -954,6 +983,10 @@ pub fn accept(app: &AppHandle) {
             });
         }
     }
+}
+
+/// The pending install's acceptance (`accept`), when this version is the one it installed.
+fn accept_pending(app: &AppHandle) {
     let Ok(dir) = dir(app) else { return };
     let Some(p) = read_json::<Pending>(&dir.join("pending.json")) else {
         return;
@@ -1043,15 +1076,14 @@ pub fn accept(app: &AppHandle) {
 /// Windows, at startup: what `pending.json` left part way for this install's program set, undone
 /// or finished by its move list (`set::recover`, which says when). Until a record of this
 /// install's that this start could not finish is resolved, this version takes no start digest,
-/// so nothing is kept or installed (the mixed set is not this version), and the page says why.
+/// so nothing is kept or installed (the mixed set is not this version), and the page says why:
+/// returned, for `accepted` to record once the app's state exists.
 #[cfg(windows)]
-fn recover(app: &AppHandle) {
+fn recover(app: &AppHandle) -> Option<String> {
     let (Ok(dir), Some(here)) = (dir(app), format::here(app)) else {
-        return;
+        return None;
     };
-    let Some(p) = read_json::<Pending>(&dir.join("pending.json")) else {
-        return;
-    };
+    let p = read_json::<Pending>(&dir.join("pending.json"))?;
     let exe = exe::program_name();
     let running = app.package_info().version.to_string();
     let r = set::recover(
@@ -1084,9 +1116,7 @@ fn recover(app: &AppHandle) {
             },
         );
     }
-    if let Some(why) = not_started {
-        let _ = app.state::<App>().updater.started_from.set(Err(why));
-    }
+    not_started
 }
 
 /// What a start says after `set::recover` (r, for the pending install p, running version

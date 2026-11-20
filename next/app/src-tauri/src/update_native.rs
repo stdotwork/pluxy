@@ -161,23 +161,29 @@ fn feed() -> Result<String, String> {
     std::env::var("PLUXY_APP_TEST_FEED").map_err(|_| "PLUXY_APP_TEST_FEED is not set".into())
 }
 
-/// The phase once it is one of want.
+/// The phase once it is one of want. A task that fails on the way (phase `failed`, once the phase
+/// has moved from the one shown at the start, which may be an earlier task's) fails the wait at
+/// once, with what the page shows, rather than when the wait runs out.
 fn phase(main: &Webview, what: &str, want: &[&str]) -> Result<String, String> {
-    wait_for(what, || {
-        update_attr(main, "phase")
-            .as_str()
-            .filter(|p| want.contains(p))
-            .map(str::to_string)
-    })
-    .map_err(|e| {
-        format!(
-            "{e}: the update shows {:?}",
-            eval(
-                main,
-                &format!("document.querySelector({})?.dataset ?? null", json!(UPDATE))
-            )
+    let first = update_attr(main, "phase");
+    let mut moved = false;
+    let shown = || {
+        eval(
+            main,
+            &format!("document.querySelector({})?.dataset ?? null", json!(UPDATE)),
         )
+    };
+    let r = wait_for(what, || {
+        let now = update_attr(main, "phase");
+        moved |= now != first;
+        match now.as_str() {
+            Some(p) if want.contains(&p) => Some(Ok(p.to_string())),
+            Some("failed") if moved => Some(Err(())),
+            _ => None,
+        }
     })
+    .map_err(|e| format!("{e}: the update shows {:?}", shown()))?;
+    r.map_err(|()| format!("{what} failed: the update shows {:?}", shown()))
 }
 
 /// The update's phase and error as the page shows them, read together: two reads could straddle

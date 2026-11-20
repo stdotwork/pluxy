@@ -155,8 +155,9 @@ test("a file the reader refuses never reaches core", async () => {
   await until(() => s.core.count("GET /themes") === 1);
   expect(await themes.addTheme("{ not json")).toBe("the file is not JSON");
   expect(await themes.addTheme(JSON.stringify({ name: "No colours", appearance: "dark" }))).toBeString();
+  // A built-in theme's exported file: the reason names the field to change.
   expect(await themes.addTheme(JSON.stringify({ ...defaultTheme }))).toBe(
-    "pluxy/default is a built-in theme's ID",
+    '"id" is pluxy/default, a built-in theme\'s ID. Change "id" in the file to your own, such as my/default, and add it again',
   );
   expect(s.core.calls.filter((c) => c.startsWith("PUT"))).toEqual([]);
   expect(themes.current.theme.id).toBe("pluxy/default");
@@ -210,7 +211,9 @@ test("a theme core cannot turn on goes back to the one before, and so does a fai
   themes.connect();
   await until(() => themes.listed.length === 3);
   s.core.instead = (method, path) => (method === "PUT" && path === "/theme" ? { status: 0 } : undefined);
-  expect(await themes.select("t3/nightfall")).toBe("core could not be reached");
+  expect(await themes.select("t3/nightfall")).toBe(
+    "core could not be reached: pluxy is not running or the address is wrong, so start it, then try again",
+  );
   expect(themes.current.theme.id).toBe("pluxy/default");
   expect(applied(s.kept).id).toBe("pluxy/default");
 
@@ -261,7 +264,9 @@ test("old prefs stay when core cannot be reached, for the next time", async () =
   const themes = s.state();
   themes.connect();
   await until(() => themes.problem !== undefined);
-  expect(themes.problem).toBe("core could not be reached");
+  expect(themes.problem).toBe(
+    "core could not be reached: pluxy is not running or the address is wrong, so start it, then try again",
+  );
   expect(s.kept.has("themes")).toBe(true);
   expect(themes.current.theme.id).toBe("pluxy/terminal");
 });
@@ -314,6 +319,61 @@ test("a stored file the reader refuses is listed with the reason and cannot be t
   expect(await themes.select("me/broken")).toBe(broken?.problem);
   expect(themes.current.theme.id).toBe("pluxy/default");
   expect(s.core.count("PUT /theme")).toBe(0);
+});
+
+test("a stored file the reader refuses that core has on is named apart from a failed read, and can be removed", async () => {
+  const s = setup();
+  s.core.files.set("pluxy/terminal-copy", terminal);
+  s.core.files.set("me/broken", { name: "Broken" });
+  s.core.current = "me/broken";
+  const themes = s.state();
+  themes.connect();
+  await until(() => themes.unusable !== undefined);
+  // Core answered: what is wrong is the file.
+  expect(themes.problem).toBeUndefined();
+  expect(themes.unusable).toEqual({
+    id: "me/broken",
+    problem: themes.listed.find((l) => l.id === "me/broken")?.problem ?? "",
+  });
+  expect(themes.unusable?.problem).toStartWith("the file is not a theme file.");
+  expect(themes.current.theme.id).toBe("pluxy/default");
+
+  // It stays named after another read, and goes when the theme is removed.
+  await themes.refresh();
+  expect(themes.unusable?.id).toBe("me/broken");
+  expect(await themes.removeTheme("me/broken")).toBeUndefined();
+  expect(themes.unusable).toBeUndefined();
+  expect(s.core.files.has("me/broken")).toBe(false);
+  expect(s.core.current).toBe("");
+  expect(themes.listed.map((l) => l.id)).not.toContain("me/broken");
+
+  // A read that fails is still core's fault, in `problem`.
+  s.core.current = "pluxy/terminal-copy";
+  s.core.instead = (method, path) =>
+    method === "GET" && path === "/themes/pluxy/terminal-copy" ? { status: 0 } : undefined;
+  await themes.refresh();
+  expect(themes.unusable).toBeUndefined();
+  expect(themes.problem).toBeString();
+});
+
+test("a theme core no longer stores says so when picked, leaves the list, and counts as removed", async () => {
+  const s = setup();
+  s.core.files.set("t3/nightfall", nightfall);
+  s.core.files.set("t3/dawn", dawn);
+  const themes = s.state();
+  themes.connect();
+  await until(() => themes.listed.length === 4);
+
+  // Removed somewhere else since this window read the list.
+  s.core.files.clear();
+  expect(await themes.select("t3/nightfall")).toBe("core does not store this theme any more");
+  expect(themes.listed.map((l) => l.id)).toEqual(["pluxy/default", "pluxy/terminal", "t3/dawn"]);
+  expect(themes.current.theme.id).toBe("pluxy/default");
+  expect(s.core.count("PUT /theme")).toBe(0);
+
+  // Removing one that is already gone is what the person asked for.
+  expect(await themes.removeTheme("t3/dawn")).toBeUndefined();
+  expect(themes.listed.map((l) => l.id)).toEqual(["pluxy/default", "pluxy/terminal"]);
 });
 
 test("a key core refuses signs the person out when they act, not when the state reads by itself", async () => {

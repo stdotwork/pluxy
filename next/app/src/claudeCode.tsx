@@ -52,7 +52,7 @@ import {
   useEnvironment,
 } from "./environmentBlock";
 import { connectionGet } from "./host";
-import { keptTerminal, useDeviceChanged } from "./startCli";
+import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("claudeCode", {
   title: "Claude Code",
@@ -258,8 +258,8 @@ function StartCli(props: { available: boolean; env: Environment }) {
           onChange={setTerminal}
         />
       )}
-      {!sel && terminals.error && <Notice tone="warn">{terminals.error}</Notice>}
-      {action.error && <Notice tone="danger">{action.error}</Notice>}
+      {!sel && terminals.error && <Notice tone="warn">{launcherProblem(terminals.error)}</Notice>}
+      {action.error && <Notice tone="danger">{launcherProblem(action.error)}</Notice>}
       <LinuxBuildOffer error={action.error} pkg={PACKAGE} record={env.record} />
       <Button
         variant="primary"

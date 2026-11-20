@@ -2,9 +2,17 @@
 import { expect, test } from "bun:test";
 import type { VNode } from "preact";
 import render from "preact-render-to-string";
-import { api, type Setup, type SetupApplyResult } from "../kit/api";
+import { api, type ImportReport, type Setup, type SetupApplyResult } from "../kit/api";
 import type { Feature, Host, Method, Reply } from "../kit/host";
-import { type SetupOptions, SetupView } from "../kit/pages/setup";
+import {
+  type ImportState,
+  importCommand,
+  importProblem,
+  neededPicks,
+  newManagementKey,
+  type SetupOptions,
+  SetupView,
+} from "../kit/pages/setup";
 import {
   type Choices,
   hasProvider,
@@ -152,6 +160,9 @@ function view(
     accounts?: number;
     remote?: boolean;
     options?: SetupOptions;
+    bringing?: ImportState | "offered";
+    /** The host has no sign-in of its own to give a new management key to. */
+    keyFixed?: boolean;
   } = {},
 ) {
   const results = more.results ?? {};
@@ -164,6 +175,15 @@ function view(
       results={results}
       provider={hasProvider(setup, results)}
       accounts={more.accounts ?? 0}
+      bring={
+        more.bringing && {
+          state: more.bringing === "offered" ? undefined : more.bringing,
+          onBring: nothing,
+          onClose: nothing,
+          onSignIn: nothing,
+          keyFixed: more.keyFixed,
+        }
+      }
       onLook={nothing}
       onTick={nothing}
       onStart={nothing}
@@ -191,11 +211,50 @@ test("a first run with nothing found offers every provider unticked, and may sta
   expect(page).toContain("pluxy will run with no provider");
   expect(primary(page)).toEqual(["Start without a provider"]);
   // An account comes after a provider; a client's text can be shown at once.
-  expect(page).toContain("This comes after Start");
+  expect(page).toContain("tick one above and press Start");
   expect(page).not.toContain("Sign-in methods");
   expect(page).toContain("No client was found on this machine.");
   expect(page).toContain("Other clients (5)");
   expect(page).toContain(">Finish</button>");
+});
+
+test("the account part says what leads to an account: Start, a tick first, or the Extensions page", () => {
+  const after = /This comes after (Start|Install)/;
+  // A provider is ticked: Start installs it, and the account comes after.
+  expect(view(found)).toContain("This comes after Start");
+  // Providers are offered and none is ticked: the button there ends setup, so the words say to tick.
+  const unticked = view(nothingFound);
+  expect(primary(unticked)).toEqual(["Start without a provider"]);
+  expect(unticked).not.toMatch(after);
+  expect(unticked).toContain("tick one above and press Start");
+  // No provider is offered: nothing on this page leads to an account, and the words say where to go.
+  const none = view({ ...nothingFound, picks: [] });
+  expect(none).not.toMatch(after);
+  expect(none).not.toContain("tick one above");
+  expect(none).toMatch(/Install one on the <a href="#\/extensions">Extensions<\/a> page/);
+  // After setup the page has no Install button until a provider is ticked.
+  const later = view({ ...nothingFound, first_run: false });
+  expect(later).not.toContain(">Install</button>");
+  expect(later).not.toMatch(after);
+  expect(later).toContain("tick one above and press Install");
+  expect(view({ ...nothingFound, first_run: false }, { choices: { "pluxy/codex": true } })).toContain(
+    "This comes after Install",
+  );
+  expect(view({ ...nothingFound, first_run: false, picks: [] })).toMatch(/<a href="#\/extensions">/);
+});
+
+test("while the first scan runs, Start waits for what pluxy will suggest", () => {
+  const page = view(scanningFirst);
+  // Suggestions come with the scan's end: until then nothing is ticked, and that is not a choice.
+  expect(page).not.toContain("pluxy will run with no provider");
+  expect(page).not.toContain("Start without a provider");
+  expect(primary(page)).toEqual([]);
+  expect(page).toContain("pluxy is still looking");
+  // Finish stays, and a provider the person ticks meanwhile can be started.
+  expect(page).toContain(">Finish</button>");
+  expect(primary(view(scanningFirst, { choices: { "pluxy/gemini": true } }))).toEqual(["Start"]);
+  // A later scan runs over a kept one, whose suggestions stand: Start does not wait for it.
+  expect(primary(view({ ...nothingFound, scanning: true }))).toEqual(["Start without a provider"]);
 });
 
 test("found clients, a sign-in and a CLIProxyAPI setup are named, and what they suggest is ticked", () => {
@@ -323,6 +382,36 @@ test("opened again after setup, the page is a status and offers no Finish", () =
   expect(view(more, { accounts: 2, choices: { "pluxy/gemini": true } })).toContain(">Install</button>");
 });
 
+test("once Start has installed what was ticked, its part goes and the first line stops promising it", () => {
+  const before = view(found);
+  expect(before).toContain(
+    "Nothing is installed until you press Start, and nothing on this page is required.",
+  );
+  expect(before).toContain("<h2>Start</h2>");
+  expect(before).toContain("Start installs: Codex, Claude.");
+
+  const done: Results = { "pluxy/codex": { status: "done" }, "pluxy/claude": { status: "done" } };
+  const after = view(found, { results: done });
+  expect(toInstall(found, {}, done)).toEqual([]);
+  expect(after).not.toContain("<h2>Start</h2>");
+  expect(after).not.toContain("Nothing more to install.");
+  expect(after).not.toContain("until you press Start");
+  expect(after).toContain(
+    "pluxy looks at this machine and offers what fits. Nothing on this page is required.",
+  );
+  expect(primary(after)).toEqual(["Finish"]);
+
+  // With no provider to offer, Start installs nothing either.
+  expect(view({ ...nothingFound, picks: [] })).not.toContain("until you press Start");
+});
+
+test("after setup, what Install will do is said in plain words", () => {
+  const more = { ...allSet, picks: [...allSet.picks, pick("pluxy/gemini", "Gemini")] };
+  const page = view(more, { accounts: 2, choices: { "pluxy/gemini": true } });
+  expect(page).toContain("This installs Gemini.");
+  expect(page).not.toContain("Install installs");
+});
+
 test("the paste text takes a new client key where its placeholder stood", () => {
   const content = '{"env": {"ANTHROPIC_AUTH_TOKEN": "<client-key>"}}';
   expect(withKey(content, "<client-key>")).toBe(content);
@@ -392,4 +481,174 @@ test("a host's client action adds its button and its sentence to the clients it 
   expect(none).not.toContain(hint);
   const other: SetupOptions = { ...options, clientAction: () => undefined };
   expect(view(found, { options: other })).not.toContain(hint);
+});
+
+/** A dry run's report as core writes one: its three lists, and a provider the accounts need. */
+const dryReport: ImportReport = {
+  dry_run: true,
+  brought: [
+    { what: "api-keys", as: "1 client key" },
+    { what: "auth file", name: "gemini-work.json", as: "pluxy/gemini account gemini-work" },
+  ],
+  changed: [
+    {
+      what: "port",
+      from: "0.0.0.0:8317",
+      to: "127.0.0.1:8317",
+      why: "core keeps listening on 127.0.0.1:8317: listen cannot change while core runs",
+      keep_with: '"listen": "0.0.0.0:8317" in pluxy\'s config file, then restart core',
+    },
+    {
+      what: "management.secret-key",
+      from: "(a bcrypt hash of the key)",
+      to: "(a new key, shown once when the import runs)",
+      why: "today's core keeps only a bcrypt hash of its management key, which pluxy cannot use",
+    },
+  ],
+  not_brought: [
+    { what: "debug", why: "this core writes no debug-level log lines" },
+    { what: "auth file", name: "claude-a.json", why: "core already has an account claude-a, which it keeps" },
+    { what: "auth file", name: "kiro-a.json", why: "pluxy has no provider for it" },
+  ],
+  needs: [
+    { pick: "pluxy/gemini", why: "1 account needs it" },
+    { pick: "example/other", why: "2 accounts need it" },
+  ],
+};
+const config = "~/.cli-proxy-api/config.yaml";
+
+test("a found CLIProxyAPI setup offers to bring it across, with the command beside it", () => {
+  const page = view(found, { bringing: "offered" });
+  expect(page).toContain(">Bring it across</button>");
+  expect(page).toContain("writes nothing until you confirm");
+  // The command does what the button does: it names the folder the accounts were counted in.
+  expect(page).toContain("<summary>Or use the command</summary>");
+  expect(importCommand(found.found.imports[0] as Setup["found"]["imports"][number])).toBe(
+    "pluxy import cpa ~/.cli-proxy-api/config.yaml --auth-dir ~/.cli-proxy-api",
+  );
+  expect(importCommand({ kind: "cliproxyapi", config, auth_dir: "~/.cli-proxy-api", accounts: 0 })).toBe(
+    "pluxy import cpa ~/.cli-proxy-api/config.yaml",
+  );
+  // The offer does not take the page's one primary button.
+  expect(primary(page)).toEqual(["Start"]);
+  expect(view(found, { bringing: { config, busy: "checking" } })).toContain(">Checking…</button>");
+});
+
+test("the dry run's report shows core's three lists with counts, what is needed, and asks before importing", () => {
+  const page = view(found, { bringing: { config, report: dryReport } });
+  expect(page).toContain("Nothing is written yet.");
+  expect(page).toContain("<summary>Comes across (2)</summary>");
+  expect(page).toContain("<summary>Different in pluxy (2)</summary>");
+  expect(page).toContain("<summary>Does not come across (3)</summary>");
+  expect(page).toContain('<strong class="mono">auth file gemini-work.json</strong>');
+  expect(page).toContain("pluxy/gemini account gemini-work");
+  expect(page).toContain("core already has an account claude-a, which it keeps");
+  expect(page).toContain("pluxy has no provider for it");
+  expect(page).toContain("&quot;listen&quot;: &quot;0.0.0.0:8317&quot; in pluxy's config file");
+  expect(page).toContain("Gemini is not installed, and 1 account needs it. You can install it once");
+  expect(page).toContain("example/other is not installed, and 2 accounts need it.");
+  expect(page).toContain("This replaces pluxy's management key");
+  expect(page).toContain(">Bring it across now</button>");
+  expect(page).toContain(">Cancel</button>");
+  // The row's own button and the command make way for the report.
+  expect(page).not.toContain(">Bring it across</button>");
+  expect(page).not.toContain("Or use the command");
+  // A plain management key is brought as it is: the page says what that does to the sign-in.
+  const plain = { ...dryReport, changed: [], brought: [{ what: "remote-management.secret-key" }] };
+  expect(view(found, { bringing: { config, report: plain } })).toContain("it becomes pluxy's management key");
+});
+
+test("after the import the report says what was brought, and where to install what the accounts need", () => {
+  const made = "made-up-management-key";
+  const report: ImportReport = {
+    ...dryReport,
+    dry_run: false,
+    changed: dryReport.changed.map((row) =>
+      row.what === "management.secret-key" ? { ...row, to: made } : row,
+    ),
+  };
+  expect(newManagementKey(dryReport)).toBeUndefined();
+  expect(newManagementKey(report)).toBe(made);
+  // Gemini is on the page's list, so it is ticked; a package the page does not offer is not.
+  expect(neededPicks(found, report)).toEqual({ "pluxy/gemini": true });
+
+  const page = view(found, { bringing: { config, report, done: true } });
+  expect(page).toContain("Done. This is what was brought across:");
+  expect(page).toContain("<summary>Brought across (2)</summary>");
+  expect(page).toContain("<summary>Not brought across (3)</summary>");
+  expect(page).toContain("It is ticked under Providers: press Start to install it.");
+  expect(page).toContain(
+    "example/other is not installed, and 2 accounts need it. Install it on the Extensions page.",
+  );
+  expect(page).toContain(">Close</button>");
+  expect(page).not.toContain("Bring it across now");
+  // The new key is never in the list. It is shown once, apart, when core stopped taking the old one.
+  expect(page).not.toContain(made);
+  expect(page).toContain("(the new management key, shown below)");
+  const changed = view(found, { bringing: { config, report, done: true, keyChanged: true } });
+  expect(changed.match(new RegExp(made, "g"))).toHaveLength(1);
+  expect(changed).toContain(`<code data-part="key-value">${made}</code>`);
+  expect(changed).toContain(">Sign in again</button>");
+  expect(changed).not.toContain(">Close</button>");
+  const plain = { ...report, changed: [] };
+  expect(view(found, { bringing: { config, report: plain, done: true, keyChanged: true } })).toContain(
+    "it is now the management key of the CLIProxyAPI setup",
+  );
+});
+
+test("each refusal is said in words a person can act on", () => {
+  const refused = (status: number, message: string, dryRun = true) =>
+    importProblem({ status, error: { code: "x", message } }, dryRun);
+  expect(importProblem({ status: 200, body: dryReport }, true)).toEqual({});
+  expect(refused(400, "open /home/a/.cli-proxy-api/config.yaml: no such file or directory").problem).toBe(
+    "pluxy could not read the CLIProxyAPI setup: open /home/a/.cli-proxy-api/config.yaml: no such file or directory. Check that the file is still there and that pluxy may read it, then press Look again. Nothing was changed.",
+  );
+  expect(refused(422, "config.yaml: port must be a number").problem).toBe(
+    "pluxy will not bring this setup across: config.yaml: port must be a number. Change that in the CLIProxyAPI setup, then try again. Nothing was changed.",
+  );
+  expect(refused(500, "disk full.").problem).toBe("pluxy could not bring the setup across: disk full.");
+  expect(importProblem({ status: 0 }, true).problem).toContain("nothing was read or changed");
+  expect(importProblem({ status: 0 }, false).problem).toContain("cannot tell whether the import ran");
+
+  // A core on a config.yaml takes no import: the page says how to get to one that does.
+  const yaml = refused(409, "core runs on a config.yaml", false);
+  expect(yaml.show).toBe("init");
+  const onYaml = view(found, { bringing: { config, ...yaml } });
+  expect(onYaml).toContain("This pluxy runs on a config.yaml");
+  expect(onYaml).toContain("<pre>pluxy init</pre>");
+  expect(onYaml).toContain(">Bring it across</button>");
+
+  // An older core has no such call: the row names the command, as it did before, and no button.
+  const old = refused(404, "not found");
+  expect(old.show).toBe("command");
+  const onOld = view(found, { bringing: { config, ...old } });
+  expect(onOld).toContain("This pluxy is an older one");
+  expect(onOld).toContain("run this where pluxy is installed:");
+  expect(onOld).toContain(
+    "<pre>pluxy import cpa ~/.cli-proxy-api/config.yaml --auth-dir ~/.cli-proxy-api</pre>",
+  );
+  expect(onOld).not.toContain(">Bring it across</button>");
+  expect(onOld).not.toContain("Or use the command");
+});
+
+test("a host that cannot sign in again does not offer an import that would replace the management key", () => {
+  // The desktop app running its own pluxy keeps the key itself: no sign-in could take a new one.
+  for (const report of [
+    dryReport,
+    { ...dryReport, changed: [], brought: [{ what: "remote-management.secret-key" }] },
+  ]) {
+    const page = view(found, { bringing: { config, report }, keyFixed: true });
+    expect(page).toContain("<summary>Comes across (");
+    expect(page).toContain("sets a management key (");
+    expect(page).toContain("the app could not reach pluxy afterwards");
+    expect(page).toContain("remove that line from the CLIProxyAPI config");
+    expect(page).not.toContain(">Bring it across now</button>");
+    expect(page).not.toContain("you sign in again");
+    expect(page).toContain(">Cancel</button>");
+  }
+  // A setup with no management key comes across there as anywhere.
+  const plain = { ...dryReport, changed: [] };
+  const page = view(found, { bringing: { config, report: plain }, keyFixed: true });
+  expect(page).toContain(">Bring it across now</button>");
+  expect(page).not.toContain("sets a management key");
 });

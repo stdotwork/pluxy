@@ -265,9 +265,15 @@ func parseItem(raw json.RawMessage, path string) (llm.Item, error) {
 		}
 		it := llm.Item{Type: llm.ItemTypeToolResult, ID: head.ID, CallID: o.CallID}
 		modelled := append([]string{"call_id"}, itemBookkeeping...)
-		// shortcut: an output given as a list of content parts stays in Origin.Raw (and is
-		// reported as dropped when translated); carry it as parts when a provider needs it.
 		if json.Unmarshal(m["output"], &it.Output) == nil {
+			modelled = append(modelled, "output")
+		} else if parts, text, ok := outputParts(m["output"], path+".output"); ok {
+			// A list of text parts with nothing else in them is the result's text; any other
+			// list is carried as parts too.
+			it.Output = text
+			if !plainTexts(parts) {
+				it.Content = parts
+			}
 			modelled = append(modelled, "output")
 		}
 		it.Origin = rawjson.Origin(format, path, m, modelled, nil)
@@ -297,6 +303,34 @@ func parseItem(raw json.RawMessage, path string) (llm.Item, error) {
 }
 
 // parseContent reads message content: a string (textContent true) or a list of parts.
+// outputParts reads a function_call_output's list of parts, with its text parts joined.
+func outputParts(raw json.RawMessage, path string) ([]llm.Part, string, bool) {
+	if len(bytes.TrimSpace(raw)) == 0 || bytes.TrimSpace(raw)[0] != '[' {
+		return nil, "", false
+	}
+	parts, _, err := parseContent(raw, path)
+	if err != nil {
+		return nil, "", false
+	}
+	var text strings.Builder
+	for _, p := range parts {
+		if p.Type == llm.PartText {
+			text.WriteString(p.Text)
+		}
+	}
+	return parts, text.String(), true
+}
+
+// plainTexts reports whether every part is text with no fields of its own beyond its text.
+func plainTexts(parts []llm.Part) bool {
+	for _, p := range parts {
+		if p.Type != llm.PartText || (p.Origin != nil && len(p.Origin.Raw) > 0) {
+			return false
+		}
+	}
+	return true
+}
+
 func parseContent(raw json.RawMessage, path string) (parts []llm.Part, textContent bool, err error) {
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return nil, false, nil

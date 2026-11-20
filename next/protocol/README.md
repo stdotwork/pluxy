@@ -38,9 +38,10 @@ its upstream is still sending, and core ends a call that sends nothing at all fo
 Version 0.24 adds a model's `capabilities`: what the model supports and when it was deprecated. It
 is deliberately small; later versions add more capabilities and operations without changing what
 is described here. An extension written for version 0 works unchanged with a core that speaks 0.24
-(see [Versioning](#versioning)). Version 0.27 adds [native-only calls](#native-only-calls): an
-extension that parses the client's body itself gets a `generate` call's request without its parsed
-form, so the request's content crosses the socket once.
+(see [Versioning](#versioning)). Version 0.25 adds a [tool result](#the-request)'s `content` parts
+and its `is_error` flag. Version 0.27 adds [native-only calls](#native-only-calls): an extension
+that parses the client's body itself gets a `generate` call's request without its parsed form, so
+the request's content crosses the socket once.
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -209,8 +210,9 @@ SDK's `sdk.TestLoginHost` applies the rule.
 If `PLUXY_PROTOCOL_VERSIONS` is not set, the program was not started by pluxy: it should say so on
 stderr and exit with a non-zero status.
 
-Core waits for the handshake line for a limited time (10 seconds by default); this startup check
-is the only timeout in the protocol. After the line, core sends a `describe` call and checks that
+Core waits for the handshake line for a limited time (10 seconds by default, counted from the
+program running, so the time the system takes to start it does not count); this startup check is
+the only timeout in the protocol. After the line, core sends a `describe` call and checks that
 the reply's `id` matches the manifest.
 
 Anything the extension writes to stderr goes to core's log, prefixed with the extension ID. Never
@@ -748,7 +750,7 @@ request, `header_ms` (default 60000) bounds the wait for HTTP response headers a
 upstream WebSocket turn). On a request that is not streamed, `total_ms` (default 600000) bounds
 the whole upstream request from start to finish. Core resolves each limit from the account's
 override and `routing.timeouts`, and sends `timeouts` only to extensions whose `protocol_minor`
-is 18 or more.
+is 22 or more.
 
 A timeout that fires before any upstream response byte arrives is retry-safe so core can move the
 request to another account, once (a second timeout ends the request, as with `extension_timeout` below); once response headers or reply bytes have arrived, it ends the
@@ -788,7 +790,7 @@ version 0. A [native-only call](#native-only-calls) (since 0.27) carries it with
 | `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it), `thinking_suffix` (version 0.2; see below). |
 | `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`, and the headers the client names itself with: `user-agent`, `x-app`, `anthropic-dangerous-direct-browser-access`, `x-claude-code-session-id`, `x-client-request-id`, the `x-stainless-*` headers of Anthropic's SDKs, `x-client-app` and `x-anthropic-additional-protection`; and Claude Code's subagent, request and remote-session headers (`x-claude-code-agent-id`, `x-claude-code-parent-agent-id`, `x-claude-code-agent-type`, `x-claude-code-request-class`, `x-claude-code-prev-tool-durations`, `x-claude-code-compaction`, `x-claude-code-context-compacted`, `x-claude-remote-container-id`, `x-claude-remote-session-id`), which an extension should send upstream only for a request that names itself as Claude Code (`anthropicmessages.IsClaudeCode`: `x-app: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta); for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version`, `originator` and `user-agent`). |
 | `origin` | The request's top-level fields that have no place in the model (see Origin below). |
-| `drop_policy` | What to do when building the upstream request would drop part of this one: `report` (default: send it and report the losses) or `reject` (refuse with `unsupported`; since 0.16 the error's `dropped` names what could not be carried, which the message may name too). |
+| `drop_policy` | What to do when building a request would drop part of this one, whether core is building it for an extension below 0.25 or the extension is building the upstream request: `report` (default: send what can be sent and report the losses) or `reject` (refuse with `unsupported`; since 0.16 the error's `dropped` names what could not be carried, which the message may name too). |
 | `caller` | Version 0.8. A value that stands for the client key the request came with: the same for every request with that key to this extension, different for another key or another extension, and not derivable from the key (core derives it with a secret it makes each time it starts, so it changes when core restarts). Absent when the client sent no key. Core sends it with `generate`, `count_tokens` and `endpoint` calls, to every extension. An extension that keeps state from replies across requests, such as reasoning to put back into a later turn, keys that state by `caller`, so one client never gets another's. |
 
 Item types:
@@ -797,7 +799,7 @@ Item types:
 | --- | --- |
 | `message` | `role` (`system`, `developer`, `user`, `assistant`), `content`: a list of parts; `text_content` is true when the client gave the content as a plain string. |
 | `tool_call` | `call_id`, `name`, `arguments` (the raw argument string, not parsed); `custom` (default false) marks a call to a custom (freeform) tool, whose `arguments` is the tool's raw input rather than JSON. |
-| `tool_result` | `call_id`, `output` (string). |
+| `tool_result` | `call_id`, `output` (string). Since 0.25, `content`: a list of parts as a message's, when the result holds more than text (images, files or parts core could not interpret), with `output` still holding its text parts joined; and `is_error`, true when the tool reported a failure. An extension below 0.25 cannot take them: core sends the result's text only, lists the `content` parts and `is_error` it left out as dropped losses, and refuses the request when its `drop_policy` is `reject`. |
 | `reasoning` | `text`: reasoning text or summary the client replayed. Opaque reasoning data (such as an OpenAI encrypted blob or an Anthropic thinking signature) stays in `origin.raw`. |
 | `native` | An item core could not interpret (for example a hosted tool call or Anthropic redacted thinking); `origin.raw` holds it whole, in its place in the conversation. |
 
@@ -1504,6 +1506,7 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.22 | The account's optional [`timeouts`](#timeouts). |
 | 0.23 | [Alive frames](#alive-frames): the call's and turn's `alive` and the `alive` frame; core's `extension_timeout`. |
 | 0.24 | A model's `capabilities` ([`models`](#models)). |
+| 0.25 | A [tool result](#the-request)'s `content` parts and `is_error`. |
 | 0.27 | [Native-only calls](#native-only-calls): describe's `native_parser` and the call's `native_only`. |
 
 ## What version 0.27 leaves out

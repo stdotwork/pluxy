@@ -567,7 +567,7 @@ func (p *parser) call(pm map[string]json.RawMessage, ci, pi int, path string) (l
 
 // response reads a functionResponse part. Without an id it pairs with the earliest waiting call
 // of the same name, or gets a made-up id when there is none. The output is the response as JSON
-// text, or its content when that is all it holds.
+// text, its content when that is all it holds, or its error's value when it reports a failure.
 func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string) (llm.Item, error) {
 	fm := object(pm["functionResponse"])
 	if fm == nil {
@@ -583,9 +583,12 @@ func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string
 	}
 	resp := fm["response"]
 	out := resp
-	// A response that holds only content is sent as that content, as today's core does; any
-	// other response is sent whole, so fields such as error are not lost.
-	if rm := rawjson.Object(resp); len(rm) == 1 && rm["content"] != nil {
+	rm := rawjson.Object(resp)
+	// A response that holds only content is sent as that content, as today's core does; a
+	// response with an "error" key is a failed call (FunctionResponse.response documents it),
+	// whose error value is the result's text; any other response is sent whole.
+	isError := rm["error"] != nil && !isNull(rm["error"])
+	if len(rm) == 1 && rm["content"] != nil {
 		out = rm["content"]
 	}
 	id := strings.TrimSpace(fr.ID)
@@ -604,13 +607,43 @@ func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string
 		id = syntheticID("response", ci, pi, fr.Name, out)
 	}
 	output := ""
-	if !isNull(out) {
+	switch {
+	case isError:
+		output = errorValue(rm["error"])
+	case !isNull(out):
 		output = string(out)
 	}
-	// The name is carried by the call the result pairs with.
-	nested := map[string]json.RawMessage{"functionResponse": rawjson.Rest(fm, "id", "name", "response")}
-	return llm.Item{Type: llm.ItemTypeToolResult, CallID: id, Output: output,
-		Origin: rawjson.Origin(format, path, pm, []string{"functionResponse"}, nested)}, nil
+	it := llm.Item{Type: llm.ItemTypeToolResult, CallID: id, Output: output, IsError: isError}
+	// The name is carried by the call the result pairs with. Media in the response's parts
+	// follow its text as the result's parts. A response whose error sits beside other fields
+	// keeps them unmodelled, so they go back unchanged beside the error.
+	modelled := []string{"id", "name"}
+	if !isError || len(rm) == 1 {
+		modelled = append(modelled, "response")
+	}
+	var media []json.RawMessage
+	if rawjson.Unmarshal(fm["parts"], &media) == nil && len(media) > 0 {
+		if output != "" {
+			it.Content = append(it.Content, llm.Part{Type: llm.PartText, Text: output})
+		}
+		for i, raw := range media {
+			it.Content = append(it.Content, parsePart(raw, object(raw), fmt.Sprintf("%s.functionResponse.parts[%d]", path, i)))
+		}
+		modelled = append(modelled, "parts")
+	}
+	nested := map[string]json.RawMessage{"functionResponse": rawjson.Rest(fm, modelled...)}
+	it.Origin = rawjson.Origin(format, path, pm, []string{"functionResponse"}, nested)
+	return it, nil
+}
+
+// errorValue returns a failed functionResponse's error value as the result's text: a string as it
+// is, any other JSON as its text. The encoder writes it back under the response's error key.
+func errorValue(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	return string(raw)
 }
 
 // parsePart reads a text, inlineData or fileData part. Inline data and file URIs are images when

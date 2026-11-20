@@ -49,7 +49,7 @@ func BenchmarkApplyReasoning(b *testing.B) {
 	b.Run("new", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			out, err := applyReasoning(body, req, llm.FormatOpenAIChat, nil)
+			out, _, err := applyReasoning(body, req, llm.FormatOpenAIChat, nil)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -61,7 +61,7 @@ func BenchmarkApplyReasoning(b *testing.B) {
 	b.Run("old", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			out, err := applyReasoningRef(body, req, llm.FormatOpenAIChat, nil)
+			out, _, err := applyReasoningRef(body, req, llm.FormatOpenAIChat, nil)
 			if err != nil {
 				b.Fatal(err)
 			}

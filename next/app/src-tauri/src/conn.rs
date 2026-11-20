@@ -10,8 +10,9 @@
 //! Nothing in this module needs Tauri, so the tests drive it against a real core.
 
 use crate::artifact::PublisherKeys;
+use crate::bundled_core::Bundled;
 use crate::client::{certificates, Client, Reply, ROTATE};
-use crate::cores::{self, ConfigSnapshot, Store};
+use crate::cores::{self, Chooser, ConfigSnapshot, Store};
 use crate::managed::{core_program, write_private, Gone, Hold, ManagedCore, OnExit};
 use crate::recovery::Recovery;
 use serde::{Deserialize, Serialize};
@@ -229,6 +230,18 @@ pub struct Versions {
     /// How the last install, rollback or adoption ended.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<Outcome>,
+    /// The core that came with the app, if it came with one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundled: Option<BundledView>,
+}
+
+/// The core that came with the app, as the window sees it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct BundledView {
+    pub version: String,
+    /// Why it was not installed: it is damaged, or the store holds its version with other files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
 }
 
 /// How a core change the person asked for ended.
@@ -351,6 +364,9 @@ pub struct Connection {
     error: Option<String>,
     outcome: Option<Outcome>,
     views: u64,
+    /// The core that came with the app, and why it was not installed at the last start.
+    bundled: Option<Bundled>,
+    bundled_refusal: Option<cores::BundledRefusal>,
 }
 
 /// Validated native destination, frozen before asking for a secret.
@@ -551,6 +567,18 @@ impl Connection {
         on_core_exit: Option<OnExit>,
         start_core: bool,
     ) -> Connection {
+        Self::open_with_bundled(dirs, on_core_exit, start_core, None)
+    }
+
+    /// As `open_at_startup`, for an app that came with a core of its own (`bundled_core.rs`): in
+    /// managed mode it is installed into the app's cores and, by the rules of `bundled_move`,
+    /// selected.
+    pub fn open_with_bundled(
+        dirs: Dirs,
+        on_core_exit: Option<OnExit>,
+        start_core: bool,
+        bundled: Option<Bundled>,
+    ) -> Connection {
         Settings::remove_stale_temps(&dirs.settings());
         let (settings, error) = match Settings::load(&dirs.settings()) {
             Ok(s) => (s, None),
@@ -570,6 +598,8 @@ impl Connection {
             error,
             outcome: None,
             views: 0,
+            bundled,
+            bundled_refusal: None,
         };
         if let Ok(store) = c.store() {
             store.clear_staging();
@@ -638,8 +668,28 @@ impl Connection {
     /// recorded as failed, and the version that worked before runs, as after a failed switch
     /// (when that switch repaired the selected version itself, the one before it, selected once
     /// it runs). With no version installed, the app runs no core.
+    ///
+    /// An app that came with a core installs it first (`Store::install_bundled`) and, when
+    /// `bundled_move` says so, switches to it as a switch the person asks for would, without a
+    /// confirmation: installing the app was the consent. A switch undone here moves nothing; the
+    /// next start does.
     fn start_core(&mut self) -> Result<(), String> {
         let store = self.store()?;
+        let mut copied = false;
+        let bundled = self.bundled.clone().filter(|b| {
+            match store.install_bundled(&b.manifest, &b.place, &b.app_version) {
+                Ok(now) => {
+                    copied = now;
+                    self.bundled_refusal = None;
+                    true
+                }
+                Err(r) => {
+                    eprintln!("pluxy-app: {}", r.message());
+                    self.bundled_refusal = Some(r);
+                    false
+                }
+            }
+        });
         let st = store.state()?;
         if let Some(c) = st.candidate.clone() {
             if let Some(kept) = ConfigSnapshot::kept(&store, &self.config_path())? {
@@ -672,8 +722,37 @@ impl Connection {
                 format!("{reason}; core {last} runs, but the app could not record that: {e}")
             });
         }
+        if let Some(b) = bundled {
+            let step = bundled_move(&st, b.version(), &b.app_version);
+            if step != BundledMove::Stay {
+                let switch = step == BundledMove::Switch;
+                let mut marked = st.clone();
+                marked.bundled_for = Some(b.app_version.clone());
+                if switch {
+                    marked.chosen_by = Some(Chooser::App);
+                }
+                // Recorded before the switch, so a bundled core that does not start (or a crash
+                // while it starts) is not tried again for this app version.
+                match store.save_state(&marked) {
+                    Ok(()) if switch => {
+                        return match self.switch(&store, b.version(), false, copied, Chooser::App) {
+                            Ok(()) => Ok(()),
+                            // The version that ran before runs again, and the failure is shown
+                            // with the versions.
+                            Err(_) if self.managed.is_some() => Ok(()),
+                            Err(e) => Err(e),
+                        };
+                    }
+                    Ok(()) => {}
+                    Err(e) => eprintln!("pluxy-app: not moving to the bundled core: {e}"),
+                }
+            }
+        }
         let Some(id) = st.selected else {
-            return Ok(());
+            return match &self.bundled_refusal {
+                Some(r) => Err(r.message().to_string()),
+                None => Ok(()),
+            };
         };
         self.run_version(&store, &id)
     }
@@ -764,8 +843,25 @@ impl Connection {
     pub fn prepare_adopt(&self) -> Result<(PathBuf, String, u64), String> {
         self.require_managed()?;
         let path = core_program(self.settings.core_path.as_deref())?;
+        self.refuse_bundled(&path)?;
         let (sha, size) = Store::inspect(&path)?;
         Ok((path, sha, size))
+    }
+
+    /// The program beside the app (path, when the person named none) is the core that came with
+    /// it, when it matches: the app installs that itself, so it is not adopted. A program the
+    /// person names still goes through Adopt.
+    fn refuse_bundled(&self, path: &Path) -> Result<(), String> {
+        if self.settings.core_path.as_deref().is_none_or(str::is_empty) {
+            if let Some(b) = self.bundled.as_ref().filter(|b| b.is_program(path)) {
+                return Err(format!(
+                    "{} is the core that came with the app, which the app installs itself as core {}",
+                    path.display(),
+                    b.version()
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Applies a core change the person confirmed: installs or copies in the version and runs
@@ -779,7 +875,7 @@ impl Connection {
                 let fresh = !store.installed(staged.version());
                 let version = staged.version().to_string();
                 let id = self.replacing(&store, &version, || store.install(staged))?;
-                self.switch(&store, &id, fresh, true)
+                self.switch(&store, &id, fresh, true, Chooser::Person)
             }
             CoreChange::Rollback(id) => {
                 if !store.installed(&id) {
@@ -787,7 +883,7 @@ impl Connection {
                         "core {id} is not installed: there is nothing to roll back to"
                     ));
                 }
-                self.switch(&store, &id, false, false)
+                self.switch(&store, &id, false, false, Chooser::Person)
             }
             CoreChange::Adopt { path, sha256, size } => {
                 let adopted = Store::adopted_id(&sha256);
@@ -804,7 +900,7 @@ impl Connection {
                     }
                     return Err(e);
                 }
-                let r = self.switch(&store, &id, fresh, copied);
+                let r = self.switch(&store, &id, fresh, copied, Chooser::Person);
                 if r.is_err() {
                     self.settings.core_path = pending;
                     let _ = self.settings.save(&self.dirs.settings());
@@ -908,6 +1004,7 @@ impl Connection {
         id: &str,
         fresh: bool,
         replaced: bool,
+        who: Chooser,
     ) -> Result<(), String> {
         self.revision += 1;
         let st = store.state()?;
@@ -948,6 +1045,7 @@ impl Connection {
                 done.previous = done.selected.take();
             }
             done.selected = Some(id.to_string());
+            done.chosen_by = Some(who);
             done.candidate = None;
             done.failed = None;
             store
@@ -957,7 +1055,9 @@ impl Connection {
         });
         let why = match started {
             Ok(done) => {
-                let keep: Vec<&str> = [done.selected.as_deref(), done.previous.as_deref()]
+                // The core that came with the app stays too, to switch back to.
+                let bundled = self.bundled.as_ref().map(|b| b.version());
+                let keep: Vec<&str> = [done.selected.as_deref(), done.previous.as_deref(), bundled]
                     .into_iter()
                     .flatten()
                     .collect();
@@ -1013,6 +1113,13 @@ impl Connection {
             outcome: self.outcome.clone(),
             ..Versions::default()
         };
+        v.bundled = self.bundled.as_ref().map(|b| BundledView {
+            version: b.version().to_string(),
+            problem: self
+                .bundled_refusal
+                .as_ref()
+                .map(|r| r.message().to_string()),
+        });
         match self.store() {
             Ok(store) => {
                 v.installed = store.list();
@@ -1574,9 +1681,41 @@ fn ended(
         if s.selected.as_deref() != Some(ran) {
             s.previous = s.selected.take().filter(|v| store.installed(v));
             s.selected = Some(ran.to_string());
+            // Who chose the one before is not recorded: it counts as the person's, which the
+            // app never moves.
+            s.chosen_by = None;
         }
     }
     s
+}
+
+/// What the app does at a start with the core that came with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BundledMove {
+    /// Nothing: this app version has applied it already.
+    Stay,
+    /// Only record that this app version applied it: the selection stays.
+    Record,
+    /// Record that, and switch to it.
+    Switch,
+}
+
+/// What the app does with the core that came with it (version bundled) at a start of app version
+/// app_version, given the store's state st.
+///
+/// The app moves only a selection it made (or none), and only once per change of its version,
+/// up or down: so a bundled core that did not start is not tried again for the same app version,
+/// an older app moves its own selection back to the core it came with, and a version the person
+/// chose (an install, an adoption, a rollback, to an earlier app's bundled core too) stays.
+pub fn bundled_move(st: &cores::State, bundled: &str, app_version: &str) -> BundledMove {
+    if st.bundled_for.as_deref() == Some(app_version) {
+        return BundledMove::Stay;
+    }
+    match (st.selected.as_deref(), st.chosen_by) {
+        (None, _) => BundledMove::Switch,
+        (Some(s), Some(Chooser::App)) if s != bundled => BundledMove::Switch,
+        _ => BundledMove::Record,
+    }
 }
 
 /// Whether a core the app just started is the one it asked for: it says it listens on this
@@ -2653,6 +2792,75 @@ mod tests {
             .unwrap()
             .contains("secret-key-123"));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Adopt refuses the program beside the app when it is the core that came with the app (the
+    /// app installs that itself, with no confirmation), by its size and SHA-256; another program
+    /// there, or a program the person names, is still adopted.
+    #[test]
+    fn adopt_refuses_the_bundled_core_beside_the_app_only() {
+        use crate::bundled_core::Place;
+        use crate::bundled_manifest::{Entry, Manifest};
+        let dir = std::env::temp_dir().join(format!(
+            "pluxy-adopt-bundled-{}",
+            crate::managed::random_key()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        // Programs the store reads on every system (on Windows a PE file): the real core, and
+        // the same with a byte added after it (a program runs with data after its image).
+        let program = dir.join(cores::PROGRAM);
+        fs::copy(crate::managed::real_core(), &program).unwrap();
+        let (sha256, size) = Store::inspect(&program).unwrap();
+        let bundled = Bundled {
+            manifest: Manifest {
+                version: "1.2.3".into(),
+                descriptor_sha256: "a".repeat(64),
+                files: vec![Entry {
+                    path: cores::PROGRAM.into(),
+                    size,
+                    sha256,
+                    executable: true,
+                }],
+            },
+            place: Place {
+                program: program.clone(),
+                bundled: dir.join("bundled"),
+            },
+            app_version: "0.1.0".into(),
+        };
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+            cores: dir.join("cores"),
+        };
+        let mut c = Connection::open_with_bundled(dirs, None, false, Some(bundled));
+        let e = c.refuse_bundled(&program).unwrap_err();
+        assert!(
+            e.contains("is the core that came with the app") && e.contains("core 1.2.3"),
+            "{e}"
+        );
+        // Another program beside the app: adopted as before.
+        let other = dir.join("other").join(cores::PROGRAM);
+        fs::create_dir_all(other.parent().unwrap()).unwrap();
+        fs::copy(&program, &other).unwrap();
+        {
+            use std::io::Write;
+            fs::OpenOptions::new()
+                .append(true)
+                .open(&other)
+                .unwrap()
+                .write_all(b"\0")
+                .unwrap();
+        }
+        c.refuse_bundled(&other).unwrap();
+        // The person named the program: adopted, even when it is the bundled core's.
+        c.settings.core_path = Some(program.display().to_string());
+        c.refuse_bundled(&program).unwrap();
+        // An app without a bundled core adopts it.
+        c.settings.core_path = None;
+        c.bundled = None;
+        c.refuse_bundled(&program).unwrap();
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 

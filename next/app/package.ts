@@ -20,6 +20,21 @@
 // {"appimage": <path>, "updater_pubkey": <key>, "binary": <path>,
 //  "update": {"appimage": <path>, "version": <version>, "signature": <signature>}}.
 //
+// Each build comes with a core of its own (src-tauri/src/bundled_core.rs): test builds the app's
+// version with the core version the app names (core-release.json) and UPDATE_VERSION with
+// UPDATE_CORE_VERSION, each a test-signed release made here (a core built with Go at that version,
+// with the test packages of `go run ./e2e/panelcore -probe -prepare` as its bundled/ packages),
+// signed with a publisher key made here whose private key stays in this process. Before each build
+// the bundle-core tool (src-tauri/examples/bundle-core.rs) checks the release against its signed
+// descriptor with that key and unpacks it; the build compiles the manifest it writes
+// (PLUXY_BUNDLED_CORE) and carries the files: on Linux and macOS the program as Tauri's
+// externalBin (beside the app's program) and bundled/ as the resource core/bundled (the AppImage's
+// usr/lib/<product>/core/bundled, the app bundle's Contents/Resources/core/bundled); on Windows
+// pluxy.exe beside the app's program and bundled\ beside it, as externalBin and the resource
+// bundled in the setup program, copied there in the folder bundle. test-package.json names them:
+// "bundled_core": {"version", "packages": <the IDs bundled/index.json lists>}, and the same for
+// the update in "update".
+//
 // On Windows and macOS test makes the same two debug builds with the same overlay: on macOS the
 // `app` bundle, and for the first build also the `dmg` (Tauri's disk image: the bundle and a link
 // to /Applications on an HFS+ volume, unsigned), copied to
@@ -27,16 +42,15 @@
 // per-user NSIS setup program (`nsis`, installMode currentUser, with the hooks in
 // src-tauri/nsis/hooks.nsh, no code signing), copied to
 // <out-dir>/pluxy-test_<version>_x64-setup.exe, and the second build is not bundled. The setup
-// installs the same program set, its stubs through Tauri's externalBin (pluxy.exe) and resources
+// installs the same program set, the core through Tauri's externalBin (pluxy.exe) and resources
 // (bundled\); the bundler's NSIS tools are put in its local tools folder (<target>/.tauri/NSIS)
 // first, from pinned copies (NSIS_TOOLS, each checked against its SHA-256), so it downloads
-// nothing; and the copies of the stubs Tauri's build script leaves beside the program in
+// nothing; and the copies of the core Tauri's build script leaves beside the program in
 // <target>/debug are removed again. Windows: each build's program goes into a folder of its own,
 // <out-dir>/pluxy Test/ and <out-dir>/update/pluxy Test/, a plain folder bundle holding the program
-// set the app's updater replaces (src-tauri/src/updater/set.rs): pluxy-app-test.exe, and until the
-// bundled core exists a stub pluxy.exe and bundled\ (text files saying the version, which nothing
-// runs); the update is the second folder's set as a .tar.gz made here (its parts at the top),
-// signed. macOS: each build's app bundle is copied
+// set the app's updater replaces (src-tauri/src/updater/set.rs): pluxy-app-test.exe, pluxy.exe
+// and bundled\, the build's core; the update is the second folder's set as a .tar.gz made here
+// (its parts at the top), signed. macOS: each build's app bundle is copied
 // to <out-dir>/pluxy Test.app and <out-dir>/update/pluxy Test.app; the update is the second
 // bundle as a .app.tar.gz the test makes itself (one top folder, no macOS metadata), signed; the
 // first bundle's program is also copied out of it to <out-dir>/pluxy-app-test. Both write
@@ -68,8 +82,10 @@
 // <reason>`; the exit code is 0 only for valid.
 
 import { spawnSync } from "node:child_process";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import {
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -83,6 +99,7 @@ import {
 import { arch, homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { appImageHeader, type Pin, pinnedBytes, runtimeBytes } from "./native/appimage";
+import { release as coreRelease } from "./native/core-steps";
 import { signUpdate, updaterKey } from "./native/minisign";
 import { setArchive } from "./native/set-archive";
 
@@ -105,6 +122,109 @@ function run(cmd: string, args: string[], cwd: string, env?: Record<string, stri
 
 /** The version of the update the test package is built at too (newer than the app's). */
 const UPDATE_VERSION = "0.2.0";
+/** The core version the app names (core-release.json), which it comes with. */
+const CORE_VERSION: string = JSON.parse(readFileSync(join(app, "core-release.json"), "utf8")).version;
+/** The core version the update build comes with: a test version, as the update is. */
+const UPDATE_CORE_VERSION = "0.2.0";
+const next = resolve(app, "..");
+const coreProgram = process.platform === "win32" ? "pluxy.exe" : "pluxy";
+
+/** One test build's core: its manifest, the checked files, and the packages its index lists. */
+interface BundledCore {
+  version: string;
+  manifest: string;
+  /** The program and bundled/, as the release unpacked. */
+  dir: string;
+  packages: string[];
+}
+
+/** The test-signed core releases the two test builds come with, checked and unpacked by the
+ * bundle-core tool into work (see the top of this file), by core version. */
+function bundledCores(work: string): Record<string, BundledCore> {
+  const releases = join(work, "core-releases");
+  const prepared = join(work, "core-prepared");
+  mkdirSync(releases);
+  run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next);
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const keyId = `test-package-${randomUUID()}`;
+  const entries = [];
+  for (const v of [CORE_VERSION, UPDATE_CORE_VERSION]) {
+    const folder = join(releases, `core-${v}`);
+    mkdirSync(folder);
+    // As a release builds it (next/Dockerfile): no cgo, no local paths, the version linked in.
+    run(
+      "go",
+      [
+        "build",
+        "-trimpath",
+        "-buildvcs=false",
+        "-ldflags",
+        `-X github.com/stdotwork/pluxy/next/internal/buildinfo.Version=${v}`,
+        "-o",
+        join(folder, coreProgram),
+        "./cmd/pluxy",
+      ],
+      next,
+      { ...(process.env as Record<string, string>), CGO_ENABLED: "0" },
+    );
+    cpSync(join(prepared, "bundled"), join(folder, "bundled"), { recursive: true });
+    // Both versions bundle the same test packages: a file naming the version makes each part of
+    // the program set differ between them, as two releases' do (the update session ends an
+    // update after its first part, bundled\, and checks that the folder is then neither set).
+    writeFileSync(join(folder, "bundled", "test-core-version.txt"), `${v}\n`);
+    entries.push(coreRelease(releases, v, folder, privateKey, keyId));
+  }
+  const index = join(releases, "index.json");
+  writeFileSync(index, JSON.stringify({ format: 1, releases: entries }, null, 2));
+  const jwk = publicKey.export({ format: "jwk" });
+  const pub = Buffer.from(jwk.x ?? "", "base64url").toString("hex");
+  run("cargo", ["build", "--locked", "--example", "bundle-core"], tauriDir);
+  const exe = process.platform === "win32" ? ".exe" : "";
+  const tool = join(targetDir, "debug", "examples", `bundle-core${exe}`);
+  const cores: Record<string, BundledCore> = {};
+  for (const v of [CORE_VERSION, UPDATE_CORE_VERSION]) {
+    const out = join(work, `bundled-${v}`);
+    mkdirSync(out);
+    run(tool, [index, v, keyId, pub, out], app);
+    const dir = join(out, "core");
+    const listed = JSON.parse(readFileSync(join(dir, "bundled", "index.json"), "utf8")).packages ?? {};
+    cores[v] = {
+      version: v,
+      manifest: join(out, "bundled-core.json"),
+      dir,
+      packages: Object.keys(listed).sort(),
+    };
+  }
+  return cores;
+}
+
+/** This Rust host's target triple, which Tauri's externalBin names its programs by. */
+function hostTriple(): string {
+  const r = spawnSync("rustc", ["-vV"], { encoding: "utf8" });
+  const triple = /^host: (\S+)$/m.exec(r.stdout ?? "")?.[1];
+  if (r.status !== 0 || !triple) throw new Error(`rustc -vV says no host triple: ${r.stdout}${r.stderr}`);
+  return triple;
+}
+
+/** The Tauri config that carries core in the bundle (Linux, macOS, and Windows' setup program): its
+ * program as externalBin, named with the target triple in a folder of its own, and bundled/ as the
+ * resource core/bundled (on Windows bundled, beside the program: bundled_core.rs `place`). */
+function bundledConfig(core: BundledCore, work: string, triple: string) {
+  const windows = process.platform === "win32";
+  const bin = join(work, `sidecar-${core.version}`);
+  mkdirSync(bin, { recursive: true });
+  copyFileSync(join(core.dir, coreProgram), join(bin, `pluxy-${triple}${windows ? ".exe" : ""}`));
+  return {
+    externalBin: [join(bin, "pluxy")],
+    resources: { [join(core.dir, "bundled")]: windows ? "bundled" : "core/bundled" },
+  };
+}
+
+/** Tauri copies an externalBin program beside the program it builds in target/debug: removed
+ * after each build, so no later run finds a core program beside a dev build. */
+function removeSidecarCopy() {
+  rmSync(join(targetDir, "debug", coreProgram), { force: true });
+}
 
 /** The tools tauri-bundler 2.10.4's AppImage bundler (src/bundle/linux/appimage/linuxdeploy.rs,
  * prepare_tools) downloads unless a file of that name is in its tools folder, `$XDG_CACHE_HOME/tauri`.
@@ -245,8 +365,10 @@ async function testPackage(outDir: string) {
       writeFileSync(join(tools, tool.file), await pinnedBytes(tool), { mode: 0o700 });
     }
     const key = updaterKey();
-    // One build at each version; the second rebuilds only the app's own crate.
-    const build = (v: string, bundle = true): string => {
+    const cores = bundledCores(work);
+    const triple = hostTriple();
+    // One build at each version, each with its core; the second rebuilds only the app's own crate.
+    const build = (v: string, core: BundledCore, bundle = true): string => {
       const overlay = join(work, `tauri.test.${v}.conf.json`);
       writeFileSync(
         overlay,
@@ -255,7 +377,7 @@ async function testPackage(outDir: string) {
           identifier: "dev.pluxy.desktop.test",
           productName: "pluxy Test",
           mainBinaryName: "pluxy-app-test",
-          bundle: { active: true, targets: ["appimage"] },
+          bundle: { active: true, targets: ["appimage"], ...bundledConfig(core, work, triple) },
           plugins: { updater: { pubkey: key.pubkey } },
         }),
       );
@@ -272,8 +394,9 @@ async function testPackage(outDir: string) {
           ...(bundle ? [] : ["--no-bundle"]),
         ],
         app,
-        env,
+        { ...env, PLUXY_BUNDLED_CORE: core.manifest },
       );
+      removeSidecarCopy();
       if (!bundle) return join(targetDir, "debug", "pluxy-app-test");
       const expected = [...BUNDLER_TOOLS.map((t) => t.file), ...BUNDLER_SCRIPTS].sort();
       const found = readdirSync(tools).sort();
@@ -294,10 +417,12 @@ async function testPackage(outDir: string) {
     };
     // The program first, as built: bundling then patches its bundle type in place
     // (__TAURI_BUNDLE_TYPE_VAR_UNK to _APP), with nothing left to build.
+    const core = cores[CORE_VERSION] as BundledCore;
+    const updateCore = cores[UPDATE_CORE_VERSION] as BundledCore;
     const binary = join(outDir, "pluxy-app-test");
-    copyFileSync(build(version, false), binary);
-    const appimage = build(version);
-    const update = build(UPDATE_VERSION);
+    copyFileSync(build(version, core, false), binary);
+    const appimage = build(version, core);
+    const update = build(UPDATE_VERSION, updateCore);
     const signature = signUpdate(key, readFileSync(update), basename(update), UPDATE_VERSION);
     writeFileSync(
       join(outDir, "test-package.json"),
@@ -305,7 +430,13 @@ async function testPackage(outDir: string) {
         appimage,
         updater_pubkey: key.pubkey,
         binary,
-        update: { appimage: update, version: UPDATE_VERSION, signature },
+        bundled_core: { version: core.version, packages: core.packages },
+        update: {
+          appimage: update,
+          version: UPDATE_VERSION,
+          signature,
+          bundled_core: { version: updateCore.version, packages: updateCore.packages },
+        },
       }),
     );
     console.log(
@@ -353,24 +484,14 @@ async function bundleTestPackage(outDir: string) {
     const key = updaterKey();
     const name = "pluxy Test";
     const exe = windows ? "pluxy-app-test.exe" : "pluxy-app-test";
-    // Stand-ins for the core and its packages until the bundled core exists: text files saying
-    // the version, which nothing runs. Made per version in the work folder; the folder bundle and
-    // the setup program get the same.
-    const stubs = (v: string) => {
-      const dir = join(work, `core-${v}`);
-      mkdirSync(join(dir, "bundled"), { recursive: true });
-      // Tauri's name for an external program built for this target: <name>-<target triple>.exe.
-      writeFileSync(join(dir, "pluxy-x86_64-pc-windows-msvc.exe"), `stub core ${v}\n`);
-      writeFileSync(join(dir, "bundled", "stub.txt"), `stub core packages ${v}\n`);
-      return { core: join(dir, "pluxy-x86_64-pc-windows-msvc.exe"), packages: join(dir, "bundled") };
-    };
+    const cores = bundledCores(work);
+    const triple = hostTriple();
     if (windows) await placeNsisTools(work);
-    // One build at each version, its bundle copied into folder; the second rebuilds only the
-    // app's own crate. With installer, the build is also bundled as this system's installer: the
-    // disk image on macOS, the per-user setup program on Windows.
-    const build = (v: string, folder: string, installer = false): string => {
+    // One build at each version, each with its core, its bundle copied into folder; the second
+    // rebuilds only the app's own crate. With installer, the build is also bundled as this
+    // system's installer: the disk image on macOS, the per-user setup program on Windows.
+    const build = (v: string, core: BundledCore, folder: string, installer = false): string => {
       const overlay = join(work, `tauri.test.${v}.conf.json`);
-      const stub = windows ? stubs(v) : undefined;
       writeFileSync(
         overlay,
         JSON.stringify({
@@ -379,19 +500,22 @@ async function bundleTestPackage(outDir: string) {
           productName: name,
           mainBinaryName: "pluxy-app-test",
           bundle: windows
-            ? installer && stub
+            ? installer
               ? {
                   active: true,
                   targets: ["nsis"],
                   useLocalToolsDir: true,
-                  externalBin: [stub.core.replace(/-x86_64-pc-windows-msvc\.exe$/, "")],
-                  resources: { [join(stub.packages, "stub.txt")]: "bundled/stub.txt" },
+                  ...bundledConfig(core, work, triple),
                   windows: {
                     nsis: { installMode: "currentUser", installerHooks: join(tauriDir, "nsis", "hooks.nsh") },
                   },
                 }
               : { active: false }
-            : { active: true, targets: installer ? ["app", "dmg"] : ["app"] },
+            : {
+                active: true,
+                targets: installer ? ["app", "dmg"] : ["app"],
+                ...bundledConfig(core, work, triple),
+              },
           plugins: { updater: { pubkey: key.pubkey } },
         }),
       );
@@ -409,22 +533,21 @@ async function bundleTestPackage(outDir: string) {
           ...(windows && !installer ? ["--no-bundle"] : []),
         ],
         app,
-        env,
+        { ...env, PLUXY_BUNDLED_CORE: core.manifest },
       );
+      removeSidecarCopy();
       mkdirSync(folder, { recursive: true });
-      if (windows && stub) {
-        // Tauri's build script copied the setup's external program and resources beside the
-        // program in target/debug, where the dev app is built later: removed again.
-        if (installer) {
-          rmSync(join(targetDir, "debug", "pluxy.exe"), { force: true });
-          rmSync(join(targetDir, "debug", "bundled"), { recursive: true, force: true });
-        }
-        // The program as built: the bundler restores it after patching the setup's copy.
+      if (windows) {
+        // Tauri's build script copied the setup's resources beside the program in target/debug,
+        // where the dev app is built later: removed again (removeSidecarCopy took the core).
+        if (installer) rmSync(join(targetDir, "debug", "bundled"), { recursive: true, force: true });
+        // The folder bundle: the program as built (the bundler restores it after patching the
+        // setup's copy), and its core beside it.
         const bundle = join(folder, name);
-        mkdirSync(join(bundle, "bundled"), { recursive: true });
+        mkdirSync(bundle);
         copyFileSync(join(targetDir, "debug", exe), join(bundle, exe));
-        copyFileSync(stub.core, join(bundle, "pluxy.exe"));
-        copyFileSync(join(stub.packages, "stub.txt"), join(bundle, "bundled", "stub.txt"));
+        copyFileSync(join(core.dir, coreProgram), join(bundle, coreProgram));
+        cpSync(join(core.dir, "bundled"), join(bundle, "bundled"), { recursive: true });
         return bundle;
       }
       const bundle = join(folder, `${name}.app`);
@@ -443,7 +566,9 @@ async function bundleTestPackage(outDir: string) {
       );
       return bundle;
     };
-    const bundle = build(version, outDir, true);
+    const core = cores[CORE_VERSION] as BundledCore;
+    const updateCore = cores[UPDATE_CORE_VERSION] as BundledCore;
+    const bundle = build(version, core, outDir, true);
     let dmg: string | undefined;
     if (!windows) {
       // Tauri's name for it: <product>_<version>_<aarch64 or x64>.dmg.
@@ -463,7 +588,7 @@ async function bundleTestPackage(outDir: string) {
       setup = join(outDir, `pluxy-test_${version}_x64-setup.exe`);
       copyFileSync(built, setup);
     }
-    const updateBundle = build(UPDATE_VERSION, join(outDir, "update"));
+    const updateBundle = build(UPDATE_VERSION, updateCore, join(outDir, "update"));
     const program = windows ? join(bundle, exe) : join(bundle, "Contents", "MacOS", exe);
     const binary = windows ? program : join(outDir, exe);
     if (!windows) copyFileSync(program, binary);
@@ -486,7 +611,15 @@ async function bundleTestPackage(outDir: string) {
         program,
         binary,
         updater_pubkey: key.pubkey,
-        update: { bundle: updateBundle, payload, target, version: UPDATE_VERSION, signature },
+        bundled_core: { version: core.version, packages: core.packages },
+        update: {
+          bundle: updateBundle,
+          payload,
+          target,
+          version: UPDATE_VERSION,
+          signature,
+          bundled_core: { version: updateCore.version, packages: updateCore.packages },
+        },
         ...(dmg ? { dmg } : {}),
         ...(setup ? { setup } : {}),
       }),

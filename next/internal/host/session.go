@@ -197,6 +197,10 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	if perr != nil {
 		return refuse(perr)
 	}
+	req, t.lost = downgradeToolResults(s.ext.info.ProtocolMinor, s.ext.manifest.ID, req)
+	if perr := refuseDowngrade(s.ext.manifest.ID, s.ext.info.ProtocolMinor, req, t.lost); perr != nil {
+		return refuse(perr)
+	}
 	s.mu.Lock()
 	switch {
 	case s.closed:
@@ -325,10 +329,11 @@ type SessionStream struct {
 	// capture receives the turn's diagnostic frames; nil when the turn is not captured.
 	capture CaptureFunc
 	account string
-	// watch, started and alives are as for Stream.
+	// watch, started, alives and lost are as for Stream.
 	watch   time.Duration
 	started bool
 	alives  atomic.Int64
+	lost    []llm.Loss
 }
 
 // Alives returns how many alive frames the extension has sent on the turn so far. It may be
@@ -424,7 +429,7 @@ func (t *SessionStream) Next() llm.Event {
 	if f.reply.Type == llm.EventResponseStart {
 		t.started = true
 	}
-	ev := t.s.ext.normalizeEvent(t.pieces.event(t.redact.Event(f.reply.Event)))
+	ev := withLosses(t.s.ext.normalizeEvent(t.pieces.event(t.redact.Event(f.reply.Event))), t.lost)
 	if ev.Terminal() {
 		if ev.Type == llm.EventFinish {
 			t.held.succeed()

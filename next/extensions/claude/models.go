@@ -18,7 +18,8 @@ import (
 )
 
 const (
-	modelsTimeout  = 15 * time.Second
+	// modelsTimeout stays under core's 15 s model-list read, so a hung provider still yields the built-in list.
+	modelsTimeout  = 10 * time.Second
 	modelsPageSize = 1000
 	modelsMaxPages = 100
 	modelsMaxBody  = 8 << 20

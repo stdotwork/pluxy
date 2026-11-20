@@ -275,7 +275,17 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			}
 			add(llm.RoleAssistant, turn, p, marshal(map[string]any{"type": "tool_use", "id": it.CallID, "name": toolName(names, it.Name), "input": input}, e.kept(it.Origin)))
 		case llm.ItemTypeToolResult:
-			add(llm.RoleUser, turn, p, marshal(map[string]any{"type": "tool_result", "tool_use_id": it.CallID, "content": it.Output}, e.kept(it.Origin)))
+			m := map[string]any{"type": "tool_result", "tool_use_id": it.CallID, "content": it.Output}
+			if len(it.Content) > 0 {
+				blocks, _, _, _ := e.content(llm.Item{Role: llm.RoleUser, Content: it.Content}, p)
+				if len(blocks) > 0 {
+					m["content"] = blocks
+				}
+			}
+			if it.IsError {
+				m["is_error"] = true
+			}
+			add(llm.RoleUser, turn, p, marshal(m, e.kept(it.Origin)))
 		case llm.ItemTypeReasoning:
 			if it.Origin != nil && it.Origin.Format == format {
 				add(llm.RoleAssistant, turn, p, marshal(map[string]any{"type": "thinking", "thinking": it.Text}, it.Origin.Raw))
