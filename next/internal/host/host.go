@@ -36,8 +36,8 @@ const maxHandshakeLine = 4096
 type Options struct {
 	// Versions are the protocol versions core offers. Default: protocol.Version.
 	Versions []int
-	// StartTimeout bounds startup: the handshake line and describe. A failed start is killed
-	// and collected before Start returns. Default 10s.
+	// StartTimeout bounds startup from the program running: the handshake line and describe.
+	// A failed start is killed and collected before Start returns. Default 10s.
 	StartTimeout time.Duration
 	// StopTimeout bounds the wait for the program to exit after stdin closes. Default 5s.
 	StopTimeout time.Duration
@@ -68,6 +68,9 @@ type Options struct {
 	// beforeHandshakeWait, set only by tests, runs after the program has started and before
 	// core waits for its handshake, to hold core up there as a stalled start does.
 	beforeHandshakeWait func(deadline time.Time)
+	// beforeProgramStart, set only by tests, runs just before the program is started, to hold
+	// core up there as a program the system is slow to start does.
+	beforeProgramStart func()
 }
 
 // Extension is a running extension program.
@@ -86,8 +89,8 @@ type Extension struct {
 	held     held
 	out      output // the program's stderr and stdout lines
 
-	// startTook is how long starting the program took, from the start deadline being set to
-	// the program running, for the error of a start that passes Options.StartTimeout.
+	// startTook is how long starting the program took, from core preparing its start to the
+	// program running, for the error of a start that passes Options.StartTimeout.
 	startTook time.Duration
 }
 
@@ -277,8 +280,8 @@ func Start(manifestPath string, opts Options) (*Extension, error) {
 		return nil, err
 	}
 	e := &Extension{manifest: m, opts: opts, dir: dir, socket: dir + string(os.PathSeparator) + "ext.sock", exited: make(chan struct{})}
-	deadline := time.Now().Add(opts.StartTimeout)
-	if err := e.start(prog, deadline); err != nil {
+	deadline, err := e.start(prog)
+	if err != nil {
 		os.RemoveAll(dir)
 		return nil, err
 	}
@@ -295,7 +298,12 @@ func (e *Extension) abort() {
 	<-e.exited
 }
 
-func (e *Extension) start(prog string, deadline time.Time) error {
+// start starts the program and waits for its handshake, within Options.StartTimeout of the
+// program running, and returns that deadline, which describe keeps to too. The time the system
+// takes to start the program does not count: a new program a virus scanner reads first can take
+// longer than the limit to start, and the start itself cannot be stopped.
+func (e *Extension) start(prog string) (time.Time, error) {
+	began := time.Now()
 	versions := make([]string, len(e.opts.Versions))
 	for i, v := range e.opts.Versions {
 		versions[i] = strconv.Itoa(v)
@@ -317,20 +325,24 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 	e.out = output{w: e.opts.Log, held: &e.held, prefix: "[" + e.manifest.ID + "] "}
 	cmd.Stderr = &lineLogger{out: &e.out, prefix: "[" + e.manifest.ID + "] "}
 	cmd.WaitDelay = waitDelay
+	if e.opts.beforeProgramStart != nil {
+		e.opts.beforeProgramStart()
+	}
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("starting extension %s: %w", e.manifest.ID, err)
+		return time.Time{}, fmt.Errorf("starting extension %s: %w", e.manifest.ID, err)
 	}
 	e.cmd, e.stdin = cmd, stdin
-	e.startTook = e.opts.StartTimeout - time.Until(deadline)
+	e.startTook = time.Since(began)
+	deadline := time.Now().Add(e.opts.StartTimeout)
 
 	type handshake struct {
 		line string
@@ -361,27 +373,27 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 			// Read only once the deadline had passed: the start failed, as if the timer had won.
 			err := e.startLimitError("sent no handshake", "readable, read after the limit")
 			e.abort()
-			return err
+			return time.Time{}, err
 		}
 		switch {
 		case h.err == nil:
 			if err := e.checkHandshake(h.line); err != nil {
 				e.abort()
-				return err
+				return time.Time{}, err
 			}
-			return nil
+			return deadline, nil
 		case errors.Is(h.err, bufio.ErrBufferFull):
 			e.abort()
-			return fmt.Errorf("extension %s: handshake line is longer than %d bytes", e.manifest.ID, maxHandshakeLine)
+			return time.Time{}, fmt.Errorf("extension %s: handshake line is longer than %d bytes", e.manifest.ID, maxHandshakeLine)
 		}
 		// stdout ended without a handshake: wait for the program to exit, within the deadline.
 		select {
 		case <-e.exited:
-			return fmt.Errorf("extension %s exited before its handshake: %v", e.manifest.ID, e.waitErr)
+			return time.Time{}, fmt.Errorf("extension %s exited before its handshake: %v", e.manifest.ID, e.waitErr)
 		case <-timer.C:
 			err := e.startLimitError("closed its stdout without a handshake and did not exit", "not readable, stdout closed")
 			e.abort()
-			return err
+			return time.Time{}, err
 		}
 	case <-timer.C:
 		handshake := "not read"
@@ -404,7 +416,7 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 		}
 		err := e.startLimitError("sent no handshake", handshake)
 		e.abort()
-		return err
+		return time.Time{}, err
 	}
 }
 

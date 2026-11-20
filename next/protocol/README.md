@@ -208,8 +208,9 @@ SDK's `sdk.TestLoginHost` applies the rule.
 If `PLUXY_PROTOCOL_VERSIONS` is not set, the program was not started by pluxy: it should say so on
 stderr and exit with a non-zero status.
 
-Core waits for the handshake line for a limited time (10 seconds by default); this startup check
-is the only timeout in the protocol. After the line, core sends a `describe` call and checks that
+Core waits for the handshake line for a limited time (10 seconds by default, counted from the
+program running, so the time the system takes to start it does not count); this startup check is
+the only timeout in the protocol. After the line, core sends a `describe` call and checks that
 the reply's `id` matches the manifest.
 
 Anything the extension writes to stderr goes to core's log, prefixed with the extension ID. Never
