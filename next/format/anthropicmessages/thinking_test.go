@@ -12,7 +12,7 @@ func TestApplyEffort(t *testing.T) {
 		want          string // thinking and output_config as JSON, "" when not applied
 	}{
 		{"claude-opus-4-6", "high", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`},
-		{"claude-sonnet-5-5-20261001", "xhigh", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"max"}}`},
+		{"claude-sonnet-5-5-20261001", "xhigh", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"}}`},
 		{"claude-fable-5-1", "minimal", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}`},
 		{"claude-mythos-5", "high", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`},
 		{"claude-opus-4-7[1m]", "high", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`},

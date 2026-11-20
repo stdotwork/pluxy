@@ -262,6 +262,7 @@ export function QuotaPage() {
         <label class="field" data-part="field">
           <span class="label">{t("search")}</span>
           <input
+            data-slot="input"
             type="search"
             aria-label={t("search")}
             value={search}
@@ -270,7 +271,12 @@ export function QuotaPage() {
         </label>
         <label class="field" data-part="field">
           <span class="label">{t("sort")}</span>
-          <select aria-label={t("sort")} value={sort} onChange={(e) => setSort(e.currentTarget.value)}>
+          <select
+            data-slot="select-trigger"
+            aria-label={t("sort")}
+            value={sort}
+            onChange={(e) => setSort(e.currentTarget.value)}
+          >
             <option value="default">{t("default")}</option>
             <option value="soonest">{t("soonest")}</option>
           </select>

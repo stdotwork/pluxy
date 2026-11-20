@@ -17,10 +17,7 @@ pub static PLUXY_TEST_BUILD: [u8; 31] = *b"PLUXY_TEST_BUILD_DO_NOT_RELEASE";
 pub mod access;
 pub mod artifact;
 pub mod client;
-// Built for the router and the runtimes; its key capture and entry commands (`client_key_*`)
-// stay Linux only until their Windows and macOS slice.
 #[cfg(native_stack)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod client_keys;
 mod command_names;
 #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
@@ -81,6 +78,7 @@ mod update_native;
 mod updater;
 mod updates;
 pub mod vault;
+// Whether a file is this user's own: the test trust's files and the files launches open.
 #[cfg(windows)]
 mod win_acl;
 pub mod window;
@@ -673,14 +671,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let mut tray = TrayIconBuilder::with_id("pluxy")
         .tooltip("pluxy")
         .menu(&menu)
-        .on_menu_event(|app, e| {
-            if tray_item_acts(
-                e.id().as_ref(),
-                app.state::<App>().quitting.load(Ordering::SeqCst),
-            ) {
-                tray_menu(app, e.id().as_ref());
-            }
-        })
+        .on_menu_event(|app, e| tray_menu_event(app, e.id().as_ref()))
         .on_tray_icon_event(|tray, e| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -701,6 +692,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     *app.state::<App>().status.lock().unwrap() = Some(status);
     *app.state::<App>().core_actions.lock().unwrap() = vec![start, stop, restart];
     Ok(())
+}
+
+/// The tray menu's event: a click on its item id.
+pub(crate) fn tray_menu_event(app: &AppHandle, id: &str) {
+    if tray_item_acts(id, app.state::<App>().quitting.load(Ordering::SeqCst)) {
+        tray_menu(app, id);
+    }
 }
 
 fn tray_menu(app: &AppHandle, id: &str) {
@@ -905,7 +903,7 @@ async fn core_restart(webview: Webview) -> Result<View, String> {
     with_conn(&webview, |c| c.restart_core()).await
 }
 
-/// This command accepts connection metadata only; GTK supplies the secret on the native side.
+/// This command accepts connection metadata only; native key entry supplies the secret on the native side.
 #[derive(serde::Serialize)]
 struct KeyEntryResult {
     status: &'static str,
@@ -950,7 +948,7 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
         if let Some(after) = *st.key_entry_after.lock().unwrap() {
             std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
         }
-        // GTK must remain free to handle IPC/window close while the dialog is open.
+        // Run off the main thread so the app keeps handling IPC and window close while the dialog is open.
         let input = key_entry::request(&app, target.summary.clone());
         let mut error = None;
         // The key's check is a network call: `finish_key_unlocked` makes it without the lock.
@@ -2558,11 +2556,11 @@ async fn launcher_settings(webview: Webview, notice: bool) -> Result<Value, Stri
 }
 
 /// Asks for a secret in native key entry and keeps it in the vault as label; gives its ID. The
-/// secret never passes through the window: GTK's hidden entry reads it.
+/// secret never passes through the window: the native hidden entry reads it.
 #[tauri::command]
 async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         if app
@@ -2574,6 +2572,13 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
         }
         tauri::async_runtime::spawn_blocking(move || {
             let st = app.state::<App>();
+            struct Open<'a>(&'a std::sync::atomic::AtomicBool);
+            impl Drop for Open<'_> {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::SeqCst);
+                }
+            }
+            let open = Open(&st.key_entry_open);
             let input = key_entry::request_as(
                 &app,
                 "pluxy secret",
@@ -2582,7 +2587,7 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
                 ),
                 false,
             );
-            st.key_entry_open.store(false, Ordering::SeqCst);
+            drop(open);
             match input {
                 Ok(Some(input)) => st
                     .vault
@@ -2595,10 +2600,10 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
         .await
         .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = label;
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2606,13 +2611,13 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
 #[tauri::command]
 fn vault_secrets(webview: Webview) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         Ok(serde_json::json!({"secrets": webview.state::<App>().vault.secrets()}))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2620,14 +2625,14 @@ fn vault_secrets(webview: Webview) -> Result<Value, String> {
 #[tauri::command]
 fn vault_secret_remove(webview: Webview, id: String) -> Result<(), String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         webview.state::<App>().vault.remove_secret(&id)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = id;
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2641,17 +2646,17 @@ async fn client_key_capture(
     client: String,
 ) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || client_keys::capture(&app, &label, &client))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = (label, client);
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2665,17 +2670,17 @@ async fn client_key_enter(
     client: String,
 ) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || client_keys::enter(&app, &label, &client))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = (label, client);
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 

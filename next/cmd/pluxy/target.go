@@ -1,0 +1,77 @@
+package main
+
+import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/stdotwork/pluxy/next/internal/core"
+	"github.com/stdotwork/pluxy/next/internal/server"
+)
+
+// target is the core a client subcommand calls.
+type target struct {
+	url, key string
+	http     *http.Client
+}
+
+// findCore returns the core to call: at addr with key when both are set, else what the config
+// file at configPath says for the one missing: its listen address (on this machine when it
+// listens on every interface) and its management key. A core serving TLS with its own
+// certificate is called with that certificate trusted.
+func findCore(configPath, addr, key string) (target, error) {
+	t := target{url: addr, key: key, http: &http.Client{Timeout: 2 * time.Minute}}
+	if addr != "" && key != "" {
+		return t, nil
+	}
+	cfg, err := server.LoadConfig(configPath)
+	if err != nil {
+		if addr == "" && errors.Is(err, os.ErrNotExist) {
+			return t, fmt.Errorf("no config file at %s: pass --config, or --url and --key (or set PLUXY_URL and PLUXY_MANAGEMENT_KEY)", configPath)
+		}
+		if addr == "" {
+			return t, core.ScrubConfigError(configPath, err)
+		}
+		return t, nil // the key stays empty: core answers 401
+	}
+	if t.key == "" {
+		t.key = cfg.ManagementKey
+	}
+	if t.url != "" {
+		return t, nil
+	}
+	host, port, err := net.SplitHostPort(cfg.Listen)
+	if err != nil {
+		return t, fmt.Errorf("config %s: listen %q: %w", configPath, cfg.Listen, err)
+	}
+	if port == "0" {
+		return t, fmt.Errorf("config %s listens on port 0, a port core picks at start: pass --url with the address core printed", configPath)
+	}
+	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
+		host = "127.0.0.1"
+		if ip != nil && ip.To4() == nil {
+			host = "::1"
+		}
+	}
+	scheme := "http"
+	if cfg.TLS.Enable {
+		scheme = "https"
+		if pool, err := x509.SystemCertPool(); err == nil {
+			cert := cfg.TLS.Cert
+			if !filepath.IsAbs(cert) {
+				cert = filepath.Join(filepath.Dir(configPath), cert)
+			}
+			if pem, err := os.ReadFile(cert); err == nil && pool.AppendCertsFromPEM(pem) {
+				t.http.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}
+			}
+		}
+	}
+	t.url = scheme + "://" + net.JoinHostPort(host, port)
+	return t, nil
+}

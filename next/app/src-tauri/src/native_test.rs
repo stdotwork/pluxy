@@ -27,8 +27,10 @@
 //!    with `PLUXY_APP_TEST_TRANSACTIONS`, only the transaction library's fixture writer
 //!    (`transactions_native.rs`); with `PLUXY_APP_TEST_USAGE`, only the usage hub and its
 //!    fixture parser (`usage_native.rs`); with `PLUXY_APP_TEST_LAUNCHER`, only the execution
-//!    program and the launcher (`launcher_native.rs`); with `PLUXY_APP_TEST_OPEN`, only a tool's
-//!    opening of a file in the person's own app (`open_native.rs`); with
+//!    program and the launcher (`launcher_native.rs`; on Windows and macOS
+//!    `launcher_platform_native.rs`); with `PLUXY_APP_TEST_OPEN`, only a tool's
+//!    opening of a file in the person's own app (`open_native.rs`; on Windows and macOS
+//!    `open_platform_native.rs`, with the app's opening of an address in the browser); with
 //!    `PLUXY_APP_TEST_CLAUDE_CODE`, only the Claude Code setup and launcher
 //!    (`claude_code_native.rs`), with its backup browser (`backups_native.rs`) and Beginner Mode's
 //!    guided setup (`easy_mode_native.rs`); with
@@ -46,13 +48,18 @@
 //!
 //! With `PLUXY_APP_TEST_UPDATE` it runs only the signed application update check
 //! (`update_native.rs`).
-//! With `PLUXY_APP_TEST_WINDOW` or `PLUXY_APP_TEST_PRIVACY` it runs that stage of the window or
-//! privacy mode checks instead (`native_window.rs`, `native_privacy.rs`).
+//! With `PLUXY_APP_TEST_WINDOW`, `PLUXY_APP_TEST_PRIVACY` or `PLUXY_APP_TEST_THEMES` it runs that
+//! stage of the window, privacy mode or themes checks instead (`native_window.rs`,
+//! `native_privacy.rs`, `native_themes.rs`).
 //! Before these, as the app starts, it reports its updater gate (`updater_gate`).
 //!
 //! With `PLUXY_APP_TEST_EARLY_EXIT` set it does none of that: the app's setup waits for its
 //! core's exit callback before the app state exists, then the run waits for the app to start
 //! that core again and quits.
+//!
+//! On Windows and macOS (`native/platform.ts`, `native/dialogs.ts`) the main run and the
+//! admission, program, routing, launcher and vault sessions run, and the open session; the other
+//! sessions are Linux's only.
 //!
 //! Each step prints one line on stderr: `native-test: <step> <JSON>`.
 
@@ -66,7 +73,8 @@ use tauri::{AppHandle, Manager, Url, Webview};
 #[cfg(target_os = "linux")]
 #[path = "access_native.rs"]
 mod access;
-#[cfg(target_os = "linux")]
+// The admission checks, and the dialog helpers every session's checks use.
+#[cfg(native_stack)]
 #[path = "admission_native.rs"]
 mod admission;
 #[cfg(target_os = "linux")]
@@ -81,7 +89,7 @@ mod claude_code;
 #[cfg(target_os = "linux")]
 #[path = "claude_desktop_native.rs"]
 mod claude_desktop;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "client_key_native.rs"]
 mod client_key;
 #[cfg(target_os = "linux")]
@@ -102,11 +110,15 @@ mod grok;
 mod hermes;
 #[path = "native_ingress.rs"]
 mod ingress;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "jobs_native.rs"]
 mod jobs;
 #[cfg(target_os = "linux")]
 #[path = "launcher_native.rs"]
+mod launcher;
+// Off Linux, the launcher check with this system's own terminal kinds and launch rules.
+#[cfg(all(native_stack, not(target_os = "linux")))]
+#[path = "launcher_platform_native.rs"]
 mod launcher;
 #[cfg(target_os = "linux")]
 #[path = "omp_native.rs"]
@@ -114,18 +126,25 @@ mod omp;
 #[cfg(target_os = "linux")]
 #[path = "open_native.rs"]
 mod open;
+#[cfg(all(native_stack, not(target_os = "linux")))]
+#[path = "open_platform_native.rs"]
+mod open;
 #[cfg(target_os = "linux")]
 #[path = "opencode_native.rs"]
 mod opencode;
 #[cfg(target_os = "linux")]
 #[path = "pi_native.rs"]
 mod pi;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "program_native.rs"]
 mod program;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "routing_native.rs"]
 mod routing;
+// What the checks see of processes, threads and pipes.
+#[cfg(native_stack)]
+#[path = "proc_native.rs"]
+mod procs;
 #[cfg(target_os = "linux")]
 #[path = "save_native.rs"]
 mod save;
@@ -138,7 +157,7 @@ mod spawn;
 #[cfg(target_os = "linux")]
 #[path = "spawn_keys_native.rs"]
 mod spawn_keys;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "swap_native.rs"]
 mod swap;
 #[cfg(target_os = "linux")]
@@ -147,7 +166,7 @@ mod transactions;
 #[cfg(target_os = "linux")]
 #[path = "usage_native.rs"]
 mod usage;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 #[path = "vault_native.rs"]
 mod vault;
 pub use ingress::{
@@ -155,6 +174,8 @@ pub use ingress::{
 };
 #[path = "native_privacy.rs"]
 pub mod privacy;
+#[path = "native_themes.rs"]
+mod themes;
 #[cfg(target_os = "linux")]
 #[path = "native_window.rs"]
 pub mod window;
@@ -701,6 +722,8 @@ fn shrunk_page_steps(
 }
 
 fn run(app: &AppHandle) -> Result<(), String> {
+    #[cfg(native_stack)]
+    admission::set_app(app);
     #[cfg(target_os = "linux")]
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_ACCESS_STAGE") {
         return access::run(app, &stage);
@@ -711,6 +734,9 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_PRIVACY") {
         return privacy::run(app, &stage);
+    }
+    if let Ok(stage) = std::env::var("PLUXY_APP_TEST_THEMES") {
+        return themes::run(app, &stage);
     }
     if let Ok(stage) = std::env::var("PLUXY_APP_TEST_STARTUP") {
         return startup(app, &stage);
@@ -742,7 +768,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
         return crate::update_native::run(app, &main, dir.into());
     }
     // Signed native-tier admission (admission_native.rs), in a session of its own.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ADMISSION") {
         admission::run(app, &main, dir.into())?;
         log("quit", json!({}));
@@ -751,7 +777,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
     // Cross-package routing and import authorization (routing_native.rs), then declared jobs
     // (jobs_native.rs), in a session of their own.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_ROUTING") {
         routing::run(app, &main, dir.clone().into())?;
         jobs::run(app, &main, dir.into())?;
@@ -761,7 +787,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
     // The vault, secret delivery and references, and journal recovery (vault_native.rs), in a
     // session of its own.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_VAULT") {
         vault::run(app, &main, dir.clone().into())?;
         // Native one-time client-key capture (client_key_native.rs), with the same tools.
@@ -782,16 +808,18 @@ fn run(app: &AppHandle) -> Result<(), String> {
         crate::quit(app);
         return Ok(());
     }
-    // The execution program and the launcher (launcher_native.rs), in a session of its own.
-    #[cfg(target_os = "linux")]
+    // The execution program and the launcher (launcher_native.rs; off Linux
+    // launcher_platform_native.rs), in a session of its own.
+    #[cfg(native_stack)]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_LAUNCHER") {
         launcher::run(app, &main, dir.into())?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
     }
-    // A tool's opening of a file in the person's own app (open_native.rs), in a session of its own.
-    #[cfg(target_os = "linux")]
+    // A tool's opening of a file in the person's own app (open_native.rs; off Linux
+    // open_platform_native.rs, with the browser), in a session of its own.
+    #[cfg(native_stack)]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_OPEN") {
         open::run(app, &main, dir.into())?;
         log("quit", json!({}));
@@ -895,7 +923,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     // The program host (program_native.rs), in a session of its own.
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_PROGRAM") {
         program::run(app, &main, std::path::PathBuf::from(&dir))?;
         // Swaps, crashes and calls of unknown outcome (swap_native.rs), on from where it left.

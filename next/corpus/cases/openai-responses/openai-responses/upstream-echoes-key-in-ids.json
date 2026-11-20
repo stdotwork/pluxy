@@ -7,22 +7,22 @@
   "upstream": [
     {
       "sse": [
-        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_sk-corpus-upstream","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-sk-corpus-upstream","output":[],"usage":null}}},
-        {"event":"response.in_progress","data":{"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_sk-corpus-upstream","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-sk-corpus-upstream","output":[],"usage":null}}},
-        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":2,"item":{"id":"fc_corpus","type":"function_call","status":"in_progress","call_id":"call_sk-corpus-upstream","name":"get_weather","arguments":"{\"city\":\"Paris\"}"},"output_index":0}},
-        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":3,"item":{"id":"fc_corpus","type":"function_call","status":"completed","call_id":"call_sk-corpus-upstream","name":"get_weather","arguments":"{\"city\":\"Paris\"}"},"output_index":0}},
-        {"event":"response.completed","data":{"type":"response.completed","sequence_number":4,"response":{"id":"resp_sk-corpus-upstream","object":"response","created_at":1700000000,"status":"completed","model":"gpt-sk-corpus-upstream","output":[{"id":"fc_corpus","type":"function_call","status":"completed","call_id":"call_sk-corpus-upstream","name":"get_weather","arguments":"{\"city\":\"Paris\"}"}],"usage":{"input_tokens":5,"output_tokens":4,"total_tokens":9}}}}
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_sk-Cq7Vx2Np9Lw4Zr8","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-sk-Cq7Vx2Np9Lw4Zr8","output":[],"usage":null}}},
+        {"event":"response.in_progress","data":{"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_sk-Cq7Vx2Np9Lw4Zr8","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-sk-Cq7Vx2Np9Lw4Zr8","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":2,"item":{"id":"fc_corpus","type":"function_call","status":"in_progress","call_id":"call_sk-Cq7Vx2Np9Lw4Zr8","name":"get_weather","arguments":"{\"city\":\"Paris\"}"},"output_index":0}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":3,"item":{"id":"fc_corpus","type":"function_call","status":"completed","call_id":"call_sk-Cq7Vx2Np9Lw4Zr8","name":"get_weather","arguments":"{\"city\":\"Paris\"}"},"output_index":0}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":4,"response":{"id":"resp_sk-Cq7Vx2Np9Lw4Zr8","object":"response","created_at":1700000000,"status":"completed","model":"gpt-sk-Cq7Vx2Np9Lw4Zr8","output":[{"id":"fc_corpus","type":"function_call","status":"completed","call_id":"call_sk-Cq7Vx2Np9Lw4Zr8","name":"get_weather","arguments":"{\"city\":\"Paris\"}"}],"usage":{"input_tokens":5,"output_tokens":4,"total_tokens":9}}}}
       ]
     }
   ],
   "recorded_old_core": {
     "client": {
       "events": [
-        {"data":{"response":{"created_at":1700000000,"id":"resp_sk-corpus-upstream","model":"gpt-sk-corpus-upstream","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":0,"type":"response.created"},"event":"response.created"},
-        {"data":{"response":{"created_at":1700000000,"id":"resp_sk-corpus-upstream","model":"gpt-sk-corpus-upstream","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":1,"type":"response.in_progress"},"event":"response.in_progress"},
-        {"data":{"item":{"arguments":"{\"city\":\"Paris\"}","call_id":"call_sk-corpus-upstream","id":"fc_corpus","name":"get_weather","status":"in_progress","type":"function_call"},"output_index":0,"sequence_number":2,"type":"response.output_item.added"},"event":"response.output_item.added"},
-        {"data":{"item":{"arguments":"{\"city\":\"Paris\"}","call_id":"call_sk-corpus-upstream","id":"fc_corpus","name":"get_weather","status":"completed","type":"function_call"},"output_index":0,"sequence_number":3,"type":"response.output_item.done"},"event":"response.output_item.done"},
-        {"data":{"response":{"created_at":1700000000,"id":"resp_sk-corpus-upstream","model":"gpt-sk-corpus-upstream","object":"response","output":[{"arguments":"{\"city\":\"Paris\"}","call_id":"call_sk-corpus-upstream","id":"fc_corpus","name":"get_weather","status":"completed","type":"function_call"}],"status":"completed","usage":{"input_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens":4,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":9}},"sequence_number":4,"type":"response.completed"},"event":"response.completed"}
+        {"data":{"response":{"created_at":1700000000,"id":"resp_sk-Cq7Vx2Np9Lw4Zr8","model":"gpt-sk-Cq7Vx2Np9Lw4Zr8","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":0,"type":"response.created"},"event":"response.created"},
+        {"data":{"response":{"created_at":1700000000,"id":"resp_sk-Cq7Vx2Np9Lw4Zr8","model":"gpt-sk-Cq7Vx2Np9Lw4Zr8","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":1,"type":"response.in_progress"},"event":"response.in_progress"},
+        {"data":{"item":{"arguments":"{\"city\":\"Paris\"}","call_id":"call_sk-Cq7Vx2Np9Lw4Zr8","id":"fc_corpus","name":"get_weather","status":"in_progress","type":"function_call"},"output_index":0,"sequence_number":2,"type":"response.output_item.added"},"event":"response.output_item.added"},
+        {"data":{"item":{"arguments":"{\"city\":\"Paris\"}","call_id":"call_sk-Cq7Vx2Np9Lw4Zr8","id":"fc_corpus","name":"get_weather","status":"completed","type":"function_call"},"output_index":0,"sequence_number":3,"type":"response.output_item.done"},"event":"response.output_item.done"},
+        {"data":{"response":{"created_at":1700000000,"id":"resp_sk-Cq7Vx2Np9Lw4Zr8","model":"gpt-sk-Cq7Vx2Np9Lw4Zr8","object":"response","output":[{"arguments":"{\"city\":\"Paris\"}","call_id":"call_sk-Cq7Vx2Np9Lw4Zr8","id":"fc_corpus","name":"get_weather","status":"completed","type":"function_call"}],"status":"completed","usage":{"input_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens":4,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":9}},"sequence_number":4,"type":"response.completed"},"event":"response.completed"}
       ],
       "headers": {
         "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
@@ -53,7 +53,7 @@
         "headers": {
           "Accept": "text/event-stream",
           "Accept-Encoding": "gzip, deflate, br, zstd",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "Session-Id": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
           "User-Agent": "pluxy-corpus/0"

@@ -48,6 +48,9 @@ func (e *Extension) Models(ctx context.Context, account protocol.Account) (*prot
 			return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s listed %d models, more than %d", e.manifest.ID, len(r.Models.Models), MaxListedModels)}
 		}
 		list := &protocol.ModelList{OwnedBy: redact.String(r.Models.OwnedBy), Models: make([]protocol.Model, 0, len(r.Models.Models))}
+		if e.info.ProtocolMinor >= 18 {
+			list.From = redact.String(r.Models.From)
+		}
 		for _, m := range r.Models.Models {
 			if m.ID == "" {
 				return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s listed a model without an id", e.manifest.ID)}
@@ -56,7 +59,7 @@ func (e *Extension) Models(ctx context.Context, account protocol.Account) (*prot
 		}
 		return list, nil
 	case r.Type == llm.EventError && r.Error != nil:
-		return nil, redact.Event(r.Event).Error
+		return nil, e.accountPieces(account).event(redact.Event(r.Event)).Error
 	}
 	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a models call", e.manifest.ID, redact.String(r.Type))}
 }

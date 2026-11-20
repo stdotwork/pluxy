@@ -21,11 +21,27 @@ import (
 )
 
 // Codex client identity: the User-Agent and originator of the Codex terminal client, which
-// today's core sends in place of the client's own (its "cloaking").
+// today's core sends in place of the client's own (its "cloaking"). The version in the User-Agent
+// is the account's codex_client_version, else defaultCodexVersion.
 const (
-	codexUserAgent  = "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
-	codexOriginator = "codex-tui"
+	defaultCodexVersion = "0.154.0"
+	codexOriginator     = "codex-tui"
 )
+
+// codexUserAgent is the User-Agent of an account that sets no codex_client_version.
+var codexUserAgent = codexUserAgentFor(defaultCodexVersion)
+
+func codexUserAgentFor(version string) string {
+	return "codex-tui/" + version + " (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; " + version + ")"
+}
+
+// userAgent returns the User-Agent the Codex identity sends.
+func (s settings) userAgent() string {
+	if s.CodexClientVersion == "" {
+		return codexUserAgent
+	}
+	return codexUserAgentFor(s.CodexClientVersion)
+}
 
 // passedHeaders are the Codex client's request headers sent on to the upstream as they came
 // (lower-case, as the request's native headers name them); originator goes by the identity rule
@@ -151,7 +167,7 @@ func setClientHeaders(h http.Header, req llm.Request, ur *upstreamRequest, s set
 func setIdentity(h http.Header, client map[string]string, s settings, a account) {
 	switch {
 	case s.identity():
-		h.Set("User-Agent", codexUserAgent)
+		h.Set("User-Agent", s.userAgent())
 		h.Set("Originator", codexOriginator)
 	case client["originator"] != "":
 		h.Set("Originator", client["originator"])

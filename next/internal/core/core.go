@@ -49,6 +49,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/internal/usage"
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/management"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
@@ -70,17 +71,8 @@ type Options struct {
 	Bundled string
 }
 
-// Revision describes one version of the config file core has seen.
-type Revision struct {
-	// Revision counts the config versions core has tried to load, from 1.
-	Revision uint64 `json:"revision"`
-	// Hash is the SHA-256 of the file's contents.
-	Hash string `json:"hash,omitempty"`
-	// At is when core read it (desired) or published it (active).
-	At time.Time `json:"at"`
-	// Error says why this version is not active, when it failed.
-	Error string `json:"error,omitempty"`
-}
+// Revision describes one version of the config file core has seen (management.Revision).
+type Revision = management.Revision
 
 // snapshot is one published config with everything built for it.
 type snapshot struct {
@@ -110,8 +102,13 @@ type Core struct {
 
 	checks *checks // each account's last check
 
-	usage *usage.Store   // the usage record, kept across reloads
-	logs  *logfile.Files // the logs folder
+	usage  *usage.Store   // the usage record, kept across reloads
+	logs   *logfile.Files // the logs folder
+	themes *themeStore    // stored UI themes and selected theme ID in state/themes
+
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	bgWG     sync.WaitGroup
 
 	// accounts serialises setting the accounts a router routes over: a change in the
 	// credential store and a publish never interleave.
@@ -137,7 +134,9 @@ func Start(opts Options) (*Core, error) {
 	// What a call on an account sends back, and the extension's output, leave out the secrets in
 	// the account's settings: the values the management API shows as placeholders.
 	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
-	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(), usage: usage.NewStore()}
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(), usage: usage.NewStore(),
+		bgCtx: bgCtx, bgCancel: bgCancel}
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {
 		if s := c.cur.Load(); s != nil {
@@ -154,18 +153,22 @@ func Start(opts Options) (*Core, error) {
 	}
 	cfg, err := server.LoadConfig(opts.ConfigPath)
 	if err != nil {
+		bgCancel()
 		return nil, c.scrubbed(err)
 	}
 	if c.logs = opts.Logs; c.logs == nil {
 		c.logs = logfile.New(LogsDir(opts.ConfigPath))
 	}
+	c.themes = newThemeStore(filepath.Join(StateDir(opts.ConfigPath), "themes"))
 	c.pkgDir = cfg.Packages.Dir
 	// No publisher's folder can be called .settings: IDs start with a letter or digit.
 	c.settings = extconfig.NewStore(filepath.Join(c.pkgDir, ".settings"))
 	if c.initial, err = c.loadPackages(cfg); err != nil {
+		bgCancel()
 		return nil, err
 	}
 	if err := c.reload(true, "start"); err != nil {
+		bgCancel()
 		c.checks.stop()
 		if c.creds != nil {
 			c.creds.Close()
@@ -173,6 +176,8 @@ func Start(opts Options) (*Core, error) {
 		return nil, err
 	}
 	c.creds.OnChange(c.accountsChanged)
+	c.creds.OnCredentialChange(c.credentialChanged)
+	c.startModelRefresh()
 	return c, nil
 }
 
@@ -210,6 +215,15 @@ func LogsDir(configPath string) string {
 		dir = abs
 	}
 	return filepath.Join(dir, "logs")
+}
+
+// StateDir returns the state folder of the config file at configPath: state beside it.
+func StateDir(configPath string) string {
+	dir := filepath.Dir(configPath)
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	return filepath.Join(dir, "state")
 }
 
 // Config returns the active config.
@@ -639,6 +653,7 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 		log.Printf("updating accounts: %v", err)
 	}
 	if prev != nil {
+		next.Router.CarryLists(prev.Router, sameAccountAndCred)
 		c.state.Retain(prev.Router, next.Router, sameAccount)
 	}
 	for id, g := range next.exts {
@@ -746,6 +761,10 @@ func sameAccount(old, cur *route.Account) bool {
 	return old.Extension == cur.Extension && sameJSON(old.Settings, cur.Settings)
 }
 
+func sameAccountAndCred(old, cur *route.Account) bool {
+	return sameAccount(old, cur) && reflect.DeepEqual(old.Credential, cur.Credential)
+}
+
 // sameJSON compares two JSON values by meaning, not spelling: object key order and spacing do
 // not matter. Numbers compare by their digits, so no two distinct numbers compare equal.
 func sameJSON(a, b json.RawMessage) bool {
@@ -797,6 +816,7 @@ func (c *Core) Stop() {
 	c.reloading.Lock()
 	defer c.reloading.Unlock()
 	c.stopped = true
+	c.bgCancel()
 	c.checks.stop()
 	c.mu.Lock()
 	gens := append([]*host.Managed(nil), c.draining...)
@@ -811,6 +831,7 @@ func (c *Core) Stop() {
 		wg.Go(g.Stop)
 	}
 	wg.Wait()
+	c.bgWG.Wait()
 	if s := c.cur.Load(); s != nil && s.pprof != nil {
 		s.pprof.close()
 	}
@@ -818,24 +839,10 @@ func (c *Core) Stop() {
 }
 
 // ExtensionStatus is a generation's status as management shows it.
-type ExtensionStatus struct {
-	host.Status
-	// Current is true for a generation new requests go to.
-	Current bool `json:"current"`
-}
+type ExtensionStatus = management.ExtensionStatus
 
-// Status is what management shows about core's live state.
-type Status struct {
-	SafeMode bool `json:"safe_mode"`
-	// Desired is the newest config version core has seen; Active is the one serving.
-	Desired    Revision          `json:"desired"`
-	Active     Revision          `json:"active"`
-	Extensions []ExtensionStatus `json:"extensions"`
-	// Version, Commit and Built say which build of core runs (see buildinfo).
-	Version string `json:"version"`
-	Commit  string `json:"commit"`
-	Built   string `json:"built"`
-}
+// Status is what management shows about core's live state (management.Status).
+type Status = management.Status
 
 // Status returns core's live state.
 func (c *Core) Status() Status {

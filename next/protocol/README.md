@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.17
+# pluxy extension protocol, version 0.18
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -25,9 +25,10 @@ back, for core's request logs. Version 0.14 adds [payload rules](#payload-rules)
 upstream JSON body that the config sets, fills in or removes. Version 0.15 has a session turn carry
 them too. Version 0.16 adds an error's `dropped`: what a refusal under the `reject` drop policy
 could not carry. Version 0.17 adds a captured body's `body_stopped`: the extension did not read it
-to its end. It is deliberately small; later versions add capabilities and more operations
-without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.17 (see
+to its end. Version 0.18 adds a model list's `from`: whether the list came from the account at the
+provider or from the extension's built-in catalog. It is deliberately small; later versions add
+capabilities and more operations without changing what is described here. An extension written for
+version 0 works unchanged with a core that speaks 0.18 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -322,7 +323,7 @@ The reply is one frame, then the extension closes the connection: a `models.resu
 event as for `generate`.
 
 ```json
-{"type": "models.result", "models": {"owned_by": "openai", "models": [
+{"type": "models.result", "models": {"owned_by": "openai", "from": "account", "models": [
   {"id": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "created": 1794268800, "context_length": 400000, "max_completion_tokens": 128000}
 ]}}
 ```
@@ -331,6 +332,7 @@ event as for `generate`.
 | --- | --- |
 | `models` | The models the account serves, by the names its upstream knows them by. Empty when the extension has no list for the account. At most 10000. |
 | `owned_by` | Who provides the account's models, shown as `owned_by` for models without one of their own, and for the models the account's config names. Default: the account's ID. |
+| `from` | Optional, since 0.18: where the list came from — `"account"` (read from the provider using the account's credential) or `"extension"` (the extension's built-in catalog). Omitted when unknown or reported by an older extension. |
 | model `id` | The model's name upstream, as requests name it. Required, unique in the list; core keeps the first of any repeats. |
 | model `name` | Its resource name in Gemini's list, such as `models/gemini-2.5-pro`. Default `id`. |
 | model `display_name`, `description`, `version` | For people. |
@@ -601,6 +603,38 @@ In Go, `protocol.SecretParts(s, 8)` returns a secret's parts. With a smaller min
 returns shorter parts, so that a secret whose parts are all short, which has some, can be told
 from one with none of these structures, which has none.
 
+An upstream that refuses a credential often echoes a piece of it, such as its first 24
+characters and `...`, which none of the forms above is. So from an upstream's error text core also
+removes every run of token characters (letters, digits and `_-.+/=~`) that holds 4 or more
+consecutive characters of one of the account's secrets, reading a run as written and with its
+escapes decoded (JSON's `\/`, `\\` and `\uXXXX` and percent-encoding's `%XX`, nested up to 8
+times); a `[redacted]` already there stays as it is. It does so in an [error](#errors)'s `message`
+and in each string value of its `raw` (object keys are names, and stay), on every call on an
+account and on a [login](#login), and in a [captured](#upstream-capture) upstream reply's body
+whose status is 400 or more, or of every reply when the call or turn ended in an error, such as a
+200 stream that ends in an error event.
+
+The account's secrets for this rule are the credential's `api_key`, `access_token` and
+`refresh_token`, the value of each header named like a secret, the proxy's user name and
+password, and the secrets core's own rules find in `settings` (those `GET /accounts` hides), a
+URL counting by its user name, password and the values of its query parameters named like a
+secret only; on a login, also each input the login method or prompt marks `secret`, and the user
+name, password and secret query values of an input that is a URL. A secret made of parts counts
+by its parts, and one other than the credential's or an input's under 8 bytes adds nothing. A
+known vendor's public key prefix (`sk-proj-`, `sk-svcacct-`, `sk-admin-`, `sk-ant-api03-`,
+`sk-ant-admin01-`, `sk-ant-oat01-`, `sk-ant-ort01-`, `sk-ant-`, `sk-kimi-`, `sk-or-v1-`, `sk-`,
+`xai-` or `gsk_`, the longest that fits) gives no piece: a piece counts only when it holds a byte
+after the prefix, and only when 16 bytes or more of the secret follow the prefix, so a short
+secret keeps every piece. The rule still replaces any other word of the error that shares 4
+characters with a secret, so core never applies it to a reply that succeeded.
+
+In Go, `protocol.RemovePieces(s, secrets...)` applies the rule. `protocol.AccountSecretsWith`
+returns an account's secrets with the settings secrets given, as core passes them;
+`protocol.AccountSecrets(account)` finds those in `settings` itself, by rules close to core's (a
+key named like a secret by `protocol.SecretName`, which also takes names core's rules do not,
+such as `monkey`, and query parameter names without core's letter folding), for an extension:
+`sdk.UpstreamText` applies the rule with the other cleaning an extension's error text needs.
+
 ### Proxy
 
 From version 0.11 an account may carry `proxy_url`, an `http://`, `https://`, `socks5://` or
@@ -847,13 +881,13 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | Field | Meaning |
 | --- | --- |
 | `code` | One of the codes below. |
-| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, `dropped`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it. In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
+| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, `dropped`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it, and from `message` and `raw` the pieces of the account's secrets too (see [Accounts](#accounts)). In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
 | `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. For `login` and `refresh` calls, see [Errors in login and refresh calls](#errors-in-login-and-refresh-calls). |
 | `scope` | What the failure is about: `request` (this request is bad), `credential` (this account), `model` (this model on this account), `endpoint` (the upstream endpoint). A rate limit or quota is `model` unless the provider says it covers the whole account, such as a subscription's used-up usage window; today's core also holds back only the model for a plain 429. When `scope` is absent, core takes `model` for `rate_limit`, `quota` and `not_found`, `credential` for `auth` and `permission`, and `endpoint` for `upstream` and `unavailable`. |
 | `retry_after_ms` | When the upstream said to try again, in milliseconds from now. |
-| `raw` | The upstream's error body, unchanged. |
+| `raw` | The upstream's error body, as the extension got it. Core removes the account's secrets from it before passing it on, as from `message`. |
 | `usage` | Usage the upstream reported before the failure, in the same form as `finish.usage`; absent when it reported none. A reply that fails partway may still have cost tokens. |
 | `quota_window_minutes` | Version 0.6. For code `quota`: the length, in minutes, of the usage window that is used up, when the upstream said (such as 300 for a five-hour window). Core passes it on in its [usage-limit reply](../README.md#accounts-and-routing). |
 | `dropped` | Version 0.16. Only on a refusal under the request's `drop_policy` `reject`: the paths of the request's parts the upstream's format cannot carry, as the translation's losses name them. Core tells such a refusal from an account that cannot serve the call by it (see [`count_tokens`](#count_tokens)). |
@@ -1304,7 +1338,10 @@ out what could be the start of a secret of its config as on the start's side of 
 window reaching back no further than the last line break, and ends the body with a line saying it
 was not read past there. An extension older
 than 0.17 never sets `body_stopped`, so its bodies are logged as before: one whose read stopped
-can keep the start of a secret at its end.
+can keep the start of a secret at its end. From the body of a reply whose status is 400 or more,
+or of every reply when the call or turn ended in an error, core also removes the pieces of the
+account's secrets (see [Accounts](#accounts)); it holds the `diagnostic` frame until the terminal
+event says which.
 
 In Go, `sdk.Upstream` does all of this for each client it wraps, for requests made with the
 handler's context; a request made with `sdk.Uncaptured(ctx)` is sent the same way but not
@@ -1315,7 +1352,7 @@ recorded.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.17. An extension reports the minor version it
+raise the minor version: this document is version 0.18. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1340,8 +1377,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.15 | The `payload` of a [session turn](#turns). |
 | 0.16 | An error's `dropped`. |
 | 0.17 | A captured body's `body_stopped` ([upstream capture](#upstream-capture)). |
+| 0.18 | A model list's `from` ([`models`](#models)). |
 
-## What version 0.17 leaves out
+## What version 0.18 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,
