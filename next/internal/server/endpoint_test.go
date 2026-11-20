@@ -212,3 +212,25 @@ func TestEndpointAlphaSearch(t *testing.T) {
 		t.Fatalf("compact without a model: got %d %s after %v", w.Code, w.Body, *accounts)
 	}
 }
+
+// An account that cannot count Responses input tokens answers unsupported, and core replaces the
+// endpoint's usual no-auth reply with its input estimate in OpenAI's token-count shape. The
+// client's body and Responses headers still travel with the endpoint call.
+func TestEndpointInputTokensEstimatesWhenNoAccountCanCount(t *testing.T) {
+	const body = `{"model":"gpt-test","instructions":"Be brief.","input":[{"role":"user","content":[{"type":"input_text","text":"Say hello"}]}],"tools":[{"type":"function","name":"get_weather","description":"Weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}]}`
+	h, accounts, seen := endpointHandlerOver(t, []route.Account{{ID: "chat", Models: []route.ModelEntry{{Name: "gpt-test"}}}},
+		func(string, llm.Request) []llm.Event {
+			return []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Message: "no count endpoint"}}}
+		})
+	w := postEndpoint(h, "/v1/responses/input_tokens", body, map[string]string{"User-Agent": "codex_cli_rs/0.154.0"})
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/json" || w.Body.String() != `{"input_tokens":27,"object":"response.input_tokens"}` {
+		t.Fatalf("got %d %q %s, want 200 with the core estimate", w.Code, w.Header().Get("Content-Type"), w.Body)
+	}
+	if len(*accounts) != 1 || (*accounts)[0] != "chat" {
+		t.Fatalf("attempts went to %v, want chat", *accounts)
+	}
+	req := (*seen)[0]
+	if req.Native == nil || req.Native.Format != llm.FormatOpenAIResponsesInputTokens || string(req.Native.Body) != body || req.Native.Headers["user-agent"] != "codex_cli_rs/0.154.0" {
+		t.Fatalf("endpoint request = %+v, want the client's Responses body and header", req.Native)
+	}
+}

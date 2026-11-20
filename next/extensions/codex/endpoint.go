@@ -17,6 +17,13 @@ import (
 // maxEndpointReply limits what is read of an upstream's whole (not streamed) endpoint reply.
 const maxEndpointReply = 64 << 20
 
+// inputTokensBody is the part of sdk.Stream an input-token count writes its reply through.
+type inputTokensBody interface {
+	StartBody(format, contentType string) error
+	Body(chunk string) error
+	Finish(f llm.Finish, usage *llm.Usage) error
+}
+
 // endpoint serves endpoint calls: requests to Codex endpoints beyond generation.
 func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	format := ""
@@ -40,6 +47,8 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	switch format {
 	case llm.FormatOpenAIResponsesCompact:
 		return compact(ctx, call, out)
+	case llm.FormatOpenAIResponsesInputTokens:
+		return inputTokens(ctx, call, out)
 	case llm.FormatCodexAlphaSearch:
 		return alphaSearch(ctx, call, out)
 	case llm.FormatOpenAIImagesGenerations:
@@ -153,6 +162,63 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, responseUsage(r.Usage))
+}
+
+// inputTokens counts a Responses request's input tokens on an API-key account. OpenAI's API
+// takes the same request at {base_url}/responses/input_tokens. A ChatGPT subscription has no
+// such endpoint; an account that cannot count answers unsupported so core estimates it.
+func inputTokens(ctx context.Context, call sdk.Call, out inputTokensBody) error {
+	s, err := readSettings(call.Account.Settings)
+	if err != nil {
+		return err
+	}
+	a, err := accountOf(call.Account.Credential)
+	if err != nil {
+		return err
+	}
+	if a.subscription {
+		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			Message: "a ChatGPT subscription has no Responses input token count endpoint"}
+	}
+	req := call.Request
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL(s, a)+"/responses/input_tokens", bytes.NewReader(req.Native.Body))
+	if err != nil {
+		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	h := hreq.Header
+	h.Set("Content-Type", "application/json")
+	h.Set("Accept", "application/json")
+	h.Set("Authorization", "Bearer "+a.token)
+	sent := req.Native.Headers
+	for _, name := range passedHeaders {
+		if v := sent[name]; v != "" {
+			h.Set(name, v)
+		}
+	}
+	setIdentity(h, sent, s, a)
+	resp, err := client.Do(hreq)
+	if err != nil {
+		return requestFailed(ctx, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return endpointStatusError(resp, req.Model)
+	}
+	reply, err := readReply(ctx, resp, "input token count")
+	if err != nil {
+		return err
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	if err := out.StartBody(llm.FormatOpenAIResponsesInputTokens, contentType); err != nil {
+		return err
+	}
+	if err := out.Body(string(reply)); err != nil {
+		return err
+	}
+	return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
 }
 
 // endpointStatusError is statusError for an endpoint call. A 404 that does not name a missing
