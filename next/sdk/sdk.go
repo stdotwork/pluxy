@@ -384,8 +384,10 @@ func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none str
 	var err error
 	if h == nil {
 		err = &llm.Error{Code: llm.CodeUnsupported, Message: none, Scope: llm.ScopeRequest}
-	} else if call.NativeOnly && call.Request != nil {
-		// Core left the request's parsed form out: it is what the native body parses to.
+	} else if call.NativeOnly {
+		// Core left the request's parsed form out: it is what the native body parses to. A
+		// native-only call without a request has no body to parse, and fails as one that does
+		// not parse.
 		if perr := nativeonly.Parse(&c.Request); perr != nil {
 			err = &llm.Error{Code: llm.CodeInternal, Message: "the request's native body does not parse: " + perr.Error()}
 		} else {

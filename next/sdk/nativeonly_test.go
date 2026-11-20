@@ -103,6 +103,19 @@ func TestNativeOnlyCallWithBadBodyIsAnInternalError(t *testing.T) {
 	}
 }
 
+func TestNativeOnlyCallWithoutRequestIsAnInternalError(t *testing.T) {
+	call := nativeOnlyCall(nativeOnlyChatBody, true)
+	call.Request = nil
+	got, evs := nativeOnlyRun(t, call)
+	if got != nil {
+		t.Errorf("handler ran for a native-only call without a request")
+	}
+	last := evs[len(evs)-1]
+	if last.Type != llm.EventError || last.Error == nil || last.Error.Code != llm.CodeInternal {
+		t.Errorf("events = %+v, want an internal error", evs)
+	}
+}
+
 func TestFullCallIsNotParsed(t *testing.T) {
 	got, evs := nativeOnlyRun(t, nativeOnlyCall(nativeOnlyChatBody, false))
 	if got == nil {
