@@ -88,7 +88,7 @@ func refuseUpstream(call protocol.Call) *llm.Error {
 		return nil
 	}
 	return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
-		Message: fmt.Sprintf("this extension sends no request through sdk.Upstream, so it cannot use %s account %q; the call was not sent", what, a.ID)}
+		Message: fmt.Sprintf("this extension sends no request through sdk.Upstream, so it cannot use %s the account; the call was not sent", what)}
 }
 
 type upstreamTransport struct {

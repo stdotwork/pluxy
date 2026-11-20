@@ -145,6 +145,10 @@ const (
 // Account is an account as the management API lists it. It never holds a secret.
 type Account struct {
 	ID string `json:"id"`
+	// PublicID is the ID client replies name the account by (the X-Pluxy-Account header, the
+	// pluxy member of an error): short, stable across restarts, and never an email address or a
+	// label, whatever ID the account has.
+	PublicID string `json:"public_id"`
 	// Source is "config" for an account set in core's config, "login" for one added by login.
 	Source    string `json:"source"`
 	Extension string `json:"extension,omitempty"`
@@ -242,6 +246,30 @@ type AccountReply struct {
 // takes the account's routing fields too, by their JSON names.
 type AccountPatch struct {
 	Disabled *bool `json:"disabled,omitempty"`
+}
+
+// RouteReply is GET /route's reply: what a request for the model would do now (route.Plan). Each
+// account is named by its ID and its public ID, the one replies name it by.
+type RouteReply = route.Plan
+
+// ChainStep is one step of a fallback chain: a model, and optionally the one provider and the
+// accounts (by ID) that serve it.
+type ChainStep = route.Step
+
+// Chain is a fallback chain: the model name clients ask for, and its steps in order.
+type Chain struct {
+	Name  string      `json:"name"`
+	Steps []ChainStep `json:"steps"`
+}
+
+// ChainsReply is GET /chains's reply, sorted by name.
+type ChainsReply struct {
+	Chains []Chain `json:"chains"`
+}
+
+// ChainRequest is PUT /chains/{name}'s body.
+type ChainRequest struct {
+	Steps []ChainStep `json:"steps"`
 }
 
 // CooldownResetReply is POST /accounts/{id}/cooldown/reset's reply.

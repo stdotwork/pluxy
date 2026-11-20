@@ -624,7 +624,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		return s
 	}
 	e.resolveTimeouts(&account)
-	rules, perr := e.payload(ctx, account.ID, req, payloadMinor)
+	rules, perr := e.payload(ctx, req, payloadMinor)
 	if perr != nil {
 		s := &Stream{}
 		s.fail(perr)

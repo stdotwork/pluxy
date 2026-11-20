@@ -167,7 +167,7 @@ Every key of the config and every file of the auth folder is in exactly one of `
 
 | Call | Command | What it does |
 | --- | --- | --- |
-| `GET /accounts` | `pluxy account list` | Every account, with **new** `health` (below) |
+| `GET /accounts` | `pluxy account list` | Every account, with **new** `health` (below) and `public_id`: the short stable ID client replies name the account by, never an email address or a label (below) |
 | `GET /login-methods` | `pluxy account methods` | How each running extension can add an account |
 | `POST /accounts`, `GET /logins/{id}`, `POST /logins/{id}/input`, `DELETE /logins/{id}` | `pluxy account add <provider> [--method m] [--no-wait]` | Start a sign-in and follow it to the end; prints the address to open or the code to type |
 | `POST /accounts/{id}/login` | `pluxy account login <id>` | Sign in again |
@@ -206,6 +206,8 @@ usage from its provider; it is absent when no check is due, and while a check of
 reading waits for the one request it lets through. `pluxy account list` shows `state` (with
 `(unverified)`), `until` and `why` as its HEALTH, UNTIL and WHY columns.
 
+`public_id` is `acc_` and 8 hex digits, a keyed digest of the account's ID: an ID can be an email address or a label a person typed (an import of today's auth files names an account by its file), and an ID must not leave core in a client reply. The key is made at the first start and kept in `state/account-key` beside the config, so an account keeps its public ID across restarts. `X-Pluxy-Account`, the header a request pins an account by, takes either ID.
+
 ### Models
 
 | Call | Command | What it does |
@@ -217,10 +219,10 @@ reading waits for the one request it lets through. `pluxy account list` shows `s
 
 | Call | Command | What it does |
 | --- | --- | --- |
-| **new** `GET /chains` | `pluxy chain list` | The fallback chains |
-| **new** `PUT /chains/{name}` | `pluxy chain set <name> <step>...` | `{"steps": [{"model": "...", "provider": "pluxy/claude", "accounts": ["..."]}]}`. A step on the command line is `model[@provider][:account,account]`. 422 for a step no account can serve, or more than 8 steps |
-| **new** `DELETE /chains/{name}` | `pluxy chain remove <name>` | Back to the default: accounts of one provider, the same model |
-| **new** `GET /route?model=<name>[&session=...]` | `pluxy route <model>` | Sends nothing. Says what a request for the model would do now: each step, each account in the order it would be tried, and for each account left out, why and until when |
+| **new** `GET /chains` | `pluxy chain list` | The fallback chains: `{"chains": [{"name", "steps"}]}`, sorted by name |
+| **new** `PUT /chains/{name}` | `pluxy chain set <name> <step>...` | `{"steps": [{"model": "...", "provider": "pluxy/claude", "accounts": ["..."]}]}`. A step on the command line is `model[@provider][:account,account]`. What follows the last `@` is the provider only when it is an extension's ID (`publisher/name`), so `claude-opus-4-7@20260416` is a model; a model whose name holds a colon ends with an `@` (`llama3:8b@`, or `llama3:8b@pluxy/ollama:a1` with a provider and an account). Replies with the chain, `{"name", "steps"}`. 422 for a step no account can serve (under `weighted`, an account with `weight: 0` serves nothing), a step naming an account core does not know or one that does not serve it, a provider that is not an extension's ID, more than 8 steps, a step naming another chain, or a step that repeats another; 409 for a config.yaml, which cannot hold chains |
+| **new** `DELETE /chains/{name}` | `pluxy chain remove <name>` | Back to the default: accounts of one provider, the same model. 404 when there is no such chain |
+| **new** `GET /route?model=<name>` | `pluxy route <model>` | Sends nothing. Says what a request for the model would do now: each account in the order it would be tried, and for each account left out, why and until when. `{"model", "order": [{"id", "account", "provider", "model"}], "left_out": [{"id", "account", "state", "until"}]}`: `id` is the account's ID (only this API shows it) and `account` its public ID, which client replies use; the rest are the names of the `pluxy` member below. Asking changes no routing state. For a model with a chain, `chain` holds its steps and each account its `step` (from 1), and `left_out` entries name their `provider` and `model`. Under the `soonest-reset` strategy each `order` entry also has `rank`, what it was ranked by: `reset` (its longest usage window's reset, rounded to the hour) and `window_seconds` when a reading names one, and `full_until` when a usage window is full; `{}` when no reading is known. A session's bound account is not shown yet |
 
 ### Usage
 
@@ -245,18 +247,26 @@ Closed days are counted by whole UTC hours, so a `since` or `until` inside an ho
 
 Not part of the management API, listed here because the same names appear in `GET /route`:
 
-- Every reply has the trace ID (`X-CPA-TRACE-ID`, the name clients already know; today it is missing
-  when no account was tried), and when an account served it `X-Pluxy-Account` (its ID),
-  `X-Pluxy-Provider`, `X-Pluxy-Model` (the name sent upstream) and `X-Pluxy-Attempts`.
-- A request that no account could serve gets its usual error, with one more member:
+- Every reply to a request that may use the client API has the trace ID (`X-CPA-TRACE-ID`, the name
+  clients already know; today it is missing when no account was tried), and when an account served it
+  `X-Pluxy-Account` (its public ID), `X-Pluxy-Provider`, `X-Pluxy-Model` (the name sent upstream) and
+  `X-Pluxy-Attempts`. An error from an account's refusal carries them too, for the last account tried.
+- A request that ends in an error before a reply starts gets its usual error, with one more member, in
+  the error object of each client format (OpenAI, Anthropic, Gemini):
 
 ```json
 {"error": {"code": "model_cooldown", "message": "...", "type": "rate_limit_error",
-  "pluxy": {"trace": "20261119T120000-9f2c...",
-    "tried": [{"account": "codex-a", "provider": "pluxy/codex", "model": "gpt-6.1-sol", "result": "quota"}],
-    "left_out": [{"account": "codex-b", "state": "exhausted", "until": "2026-11-19T17:00:00Z"},
-                 {"account": "codex-c", "state": "needs_login"}]}}}
+  "pluxy": {"trace": "20261119120000-9f2c0a5b7d4e1830",
+    "tried": [{"account": "acc_4e26e0c2", "provider": "pluxy/codex", "model": "gpt-6.1-sol", "result": "quota"}],
+    "left_out": [{"account": "acc_306dcbdb", "state": "exhausted", "until": "2026-11-19T17:00:00Z"},
+                 {"account": "acc_0702c008", "state": "needs_login"}]}}}
 ```
+
+`result` is the code of the error the attempt ended with, one of core's own codes (anything else reads
+`error`). `state` is the account's `health` state, `busy` for an account at its `max_concurrency`, or
+`skipped` for one the request's limits (`max_attempts`, `max_accounts`) ended it before reaching. The
+member holds codes and times, never an upstream's words. An account turned off or waiting for a login is
+named when its own `models` name the model, or when it shares its extension with an account that serves it.
 
 `routing.explain: false` leaves out the headers and `pluxy`, for a core whose client keys are given to
 people who should not see account IDs.

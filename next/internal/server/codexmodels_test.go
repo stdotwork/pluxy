@@ -181,16 +181,17 @@ func TestCatalogSharedNamesAndOptionalDisplay(t *testing.T) {
 		if err := json.Unmarshal(req.Native.Body, &body); err != nil {
 			t.Fatal(err)
 		}
-		if len(body.Models) != 2 {
+		// Routing gives the shared name to the earlier other extension, leaving Codex's
+		// unaliased fork of its own model.
+		if len(body.Models) != 1 || body.Models[0]["name"] != "gpt-6.1-sol" {
 			t.Fatalf("catalog names = %v", body.Models)
 		}
 		for _, m := range body.Models {
 			if _, ok := m["display_name"]; ok {
 				t.Error("empty display_name was sent")
 			}
-			want := m["name"] == "shared"
-			if got, _ := m["non_codex"].(bool); got != want {
-				t.Errorf("name %v non_codex=%v want %v", m["name"], got, want)
+			if _, ok := m["non_codex"]; ok {
+				t.Errorf("name %v marked non_codex outside a chain", m["name"])
 			}
 		}
 		evs := bodyReply("application/json", `{"models":[]}`)

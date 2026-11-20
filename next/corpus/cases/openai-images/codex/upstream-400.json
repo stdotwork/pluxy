@@ -32,7 +32,8 @@
       "want": {
         "code": "moderation_blocked",
         "message": "Your request was rejected",
-        "type": "invalid_request_error"
+        "type": "invalid_request_error",
+        "pluxy": "(volatile)"
       }
     }
   ],
