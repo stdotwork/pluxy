@@ -186,9 +186,10 @@ func NewHandler(src Source) http.Handler {
 		}))
 	}
 	// The Codex CLI sends its requests to /backend-api/codex/responses when its chatgpt_base_url
-	// points at core; as in today's core, that path is an alias of /v1/responses.
+	// points at core; as in today's core, that path is an alias of /v1/responses. Droid's OpenAI
+	// provider posts to the bare /responses, which is the same route.
 	for path, f := range map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/completions": completionsFormat,
-		"/v1/responses": responsesFormat, "/backend-api/codex/responses": responsesFormat, "/v1/messages": messagesFormat} {
+		"/v1/responses": responsesFormat, "/responses": responsesFormat, "/backend-api/codex/responses": responsesFormat, "/v1/messages": messagesFormat} {
 		handle(path, f, func(w http.ResponseWriter, r *http.Request, g *Generation) { serve(w, r, g, f) })
 	}
 	handle("/v1/messages/count_tokens", messagesFormat, func(w http.ResponseWriter, r *http.Request, g *Generation) {
@@ -198,8 +199,8 @@ func NewHandler(src Source) http.Handler {
 	for path, ep := range endpointRoutes {
 		handle(path, clientFormat{googleKeys: ep.googleKeys, errorBody: ep.errorBody}, func(w http.ResponseWriter, r *http.Request, g *Generation) { serveEndpoint(w, r, g, ep) })
 	}
-	// The WebSocket, on /v1/responses and on the Codex CLI's alias of it (see above).
-	for _, path := range []string{"/v1/responses", "/backend-api/codex/responses"} {
+	// The WebSocket, on /v1/responses and on its aliases (see above).
+	for _, path := range []string{"/v1/responses", "/responses", "/backend-api/codex/responses"} {
 		mux.HandleFunc("GET "+path, accessLog(func(w http.ResponseWriter, r *http.Request) { serveResponsesWebSocket(w, r, src) }))
 	}
 	serveModels(mux, src)
