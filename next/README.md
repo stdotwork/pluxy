@@ -2636,8 +2636,8 @@ What the import changes, each under **changed**:
 A `management.secret-key` is not brought, neither a plain key nor the bcrypt hash today's core may
 have written over it: core keeps its own management key, which guards every client of it, the
 desktop app's core among them, so an import does not change who may manage core. Its **not
-brought** row says so. Change core's key with `pluxy key rotate-management`, which prints the new
-key once.
+brought** row says so. Change core's key with `POST /v0/management/management-key/rotate`, which
+returns the new key once.
 
 Each file of the auth folder becomes an account added by login, with the file's name (less
 `.json`) as its ID. A file whose account ID the config or the store already uses is not brought,

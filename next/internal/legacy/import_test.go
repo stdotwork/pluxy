@@ -451,7 +451,7 @@ func TestImportKeepsManagementKey(t *testing.T) {
 		}
 		row, list := rowOf(t, res, tc.item)
 		if list != NotBrought || !strings.Contains(row.Why, "pluxy keeps its own management key") ||
-			!strings.Contains(row.Why, "pluxy key rotate-management") {
+			!strings.Contains(row.Why, "POST /v0/management/management-key/rotate") {
 			t.Errorf("%s: row %d %+v", tc.name, list, row)
 		}
 	}

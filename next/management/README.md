@@ -160,8 +160,8 @@ gets a row for it (today's core then listened on every interface), and every lis
 says core keeps listening on its own address while it runs, with the file's reach in `from` and core's in
 `to`. `needs` lists the provider packages
 the imported accounts need that core has not installed; core installs nothing by itself. A `management.secret-key`
-is not brought, plain or bcrypt: core keeps its own management key, and its row says so and names `pluxy key
-rotate-management` to change it.
+is not brought, plain or bcrypt: core keeps its own management key, and its row says so and names
+`POST /management-key/rotate` to change it.
 
 ### Extensions
 

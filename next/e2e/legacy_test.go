@@ -372,7 +372,7 @@ openai-compatibility:
 	// not brought: core keeps its own, so the file's key is named with that reason.
 	for _, n := range rep.NotBrought {
 		if n.What == "management.secret-key" {
-			if !strings.Contains(n.Why, "pluxy keeps its own management key") || !strings.Contains(n.Why, "pluxy key rotate-management") {
+			if !strings.Contains(n.Why, "pluxy keeps its own management key") || !strings.Contains(n.Why, "POST /v0/management/management-key/rotate") {
 				t.Errorf("the management key's row: %+v", n)
 			}
 			continue
@@ -493,7 +493,7 @@ func TestImportCPABcryptKey(t *testing.T) {
 		t.Fatalf("import: %s", r)
 	}
 	for _, want := range []string{"server.max-request-body-bytes", "requests are capped at 24 MiB", "management.secret-key",
-		"pluxy keeps its own management key", "pluxy key rotate-management"} {
+		"pluxy keeps its own management key", "POST /v0/management/management-key/rotate"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("the report lacks %q:\n%s", want, r)
 		}

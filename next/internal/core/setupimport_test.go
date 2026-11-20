@@ -17,7 +17,7 @@ import (
 
 // managementKeyWhy is what an import says about the file's management key: core keeps its own,
 // and the owner changes it with pluxy's own command.
-const managementKeyWhy = "pluxy keeps its own management key: it guards every client of core, and an import does not change it; change it with pluxy key rotate-management"
+const managementKeyWhy = "pluxy keeps its own management key: it guards every client of core, and an import does not change it; change it with POST /v0/management/management-key/rotate"
 
 // importCall sends POST /setup/import with body to c and returns the status and the reply.
 func importCall(t *testing.T, c *Core, key string, body any) (int, management.ImportReport, string) {
@@ -219,7 +219,7 @@ func TestSetupImportKeepsManagementKey(t *testing.T) {
 			if i < 0 {
 				t.Fatalf("the file's management key has no not-brought row: %s", body)
 			}
-			if why := rep.NotBrought[i].Why; !strings.Contains(why, "pluxy keeps its own management key") || !strings.Contains(why, "pluxy key rotate-management") {
+			if why := rep.NotBrought[i].Why; !strings.Contains(why, "pluxy keeps its own management key") || !strings.Contains(why, "POST /v0/management/management-key/rotate") {
 				t.Errorf("why %q", why)
 			}
 			for _, r := range rep.Changed {

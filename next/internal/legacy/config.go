@@ -1068,7 +1068,7 @@ var bcryptHash = regexp.MustCompile(`^\$2[abxy]?\$\d{2}\$[./A-Za-z0-9]{53}$`)
 
 // managementKeyWhy is why an import does not bring the file's management key: it guards every
 // client of core, so the owner changes core's own with pluxy's command instead.
-const managementKeyWhy = "pluxy keeps its own management key: it guards every client of core, and an import does not change it; change it with pluxy key rotate-management"
+const managementKeyWhy = "pluxy keeps its own management key: it guards every client of core, and an import does not change it; change it with POST /v0/management/management-key/rotate"
 
 func (x *translator) server() error {
 	host, err := str(x.t, "server.host")
