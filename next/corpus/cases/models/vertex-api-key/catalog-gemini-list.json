@@ -29,7 +29,7 @@
     {
       "path": "client.body.models",
       "kind": "intended",
-      "reason": "Today's core lists Vertex's imagen-* models, whose only method is predict; the Gemini extension serves generateContent only, so it does not list them.",
+      "reason": "Today's core lists Vertex's imagen-* models, whose only method is predict; the Gemini extension serves generateContent only, so it does not list them. The exception also pins each listed model's merged inputTokenLimit and outputTokenLimit; the merge supplies capabilities where Gemini's list has no field for them.",
       "want": [
         {
           "description": "Gemini 3 Pro Image",

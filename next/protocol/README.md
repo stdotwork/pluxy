@@ -29,7 +29,7 @@ to its end. Version 0.18 adds a model list's `from`: whether the list came from 
 provider or from the extension's built-in catalog. Version 0.19 adds a model's `capabilities`:
 what the model supports and when it was deprecated. It is deliberately small; later versions add
 more capabilities and operations without changing what is described here. An extension written for
-version 0 works unchanged with a core that speaks 0.18 (see
+version 0 works unchanged with a core that speaks 0.19 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for

@@ -202,6 +202,8 @@ checked within 15 minutes.
 | `GET /models` | `pluxy model list` | Every model clients can ask for, the accounts that serve it, `context_length`, `max_output_tokens`, `capabilities`, and `from` (`account`, `catalogue` or `extension`: where the numbers came from) |
 | `POST /models/refresh` | `pluxy model refresh [--account id]` | Ask the providers again now. Lists refresh by themselves every 30 minutes; a list that cannot be read keeps the last good one |
 
+`GET /models` has no `listed_at` field in this version.
+
 ### Routing
 
 | Call | Command | What it does |

@@ -25,7 +25,7 @@
     {
       "path": "client.body.data",
       "kind": "intended",
-      "reason": "Today's core lists xAI's image, video and speech models (grok-imagine-*, grok-tts, grok-voice-*) and sends them to xAI's image, video and speech endpoints; the new core has no image, video or speech routes yet, so the xAI extension does not list them.",
+      "reason": "Today's core lists xAI's image, video and speech models (grok-imagine-*, grok-tts, grok-voice-*) and sends them to xAI's image, video and speech endpoints; the new core has no image, video or speech routes yet, so the xAI extension does not list them. The exception also pins each listed model's merged context_length, max_output_tokens and capabilities.",
       "want": [
         {
           "capabilities": {
