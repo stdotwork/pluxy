@@ -184,6 +184,8 @@ type Account struct {
 	// Headers are the account's headers, with a placeholder in place of each secret value, the
 	// one GET /config shows for it.
 	Headers map[string]string `json:"headers,omitempty"`
+	// Timeouts overrides routing.timeouts for this account (header_ms, idle_ms, total_ms).
+	Timeouts *protocol.Timeouts `json:"timeouts,omitempty"`
 	// Settings are an account added by login's settings, with a placeholder in place of each
 	// secret, as GET /config shows the config file.
 	Settings json.RawMessage `json:"settings,omitempty"`

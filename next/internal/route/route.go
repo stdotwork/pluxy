@@ -86,6 +86,9 @@ type Config struct {
 	// trace ID) and the pluxy member of errors, for a core whose client keys go to people who
 	// should not see which accounts serve them. Unset or true: replies say what happened.
 	Explain *bool `json:"explain,omitempty"`
+	// Timeouts sets default upstream HTTP timeouts for all accounts (header_ms, idle_ms,
+	// total_ms). Nil fields use core's defaults (60s, 5m, 10m); 0 turns a limit off.
+	Timeouts *protocol.Timeouts `json:"timeouts,omitempty"`
 }
 
 // Quota response modes (Config.QuotaResponseMode).
@@ -138,6 +141,33 @@ func (c *Config) Validate() error {
 	case "", QuotaRetryable, QuotaUsageLimit:
 	default:
 		return fmt.Errorf("routing.quota_response_mode %q: want %q or %q", c.QuotaResponseMode, QuotaRetryable, QuotaUsageLimit)
+	}
+	if err := ValidateTimeouts("routing.timeouts", c.Timeouts); err != nil {
+		return err
+	}
+	return nil
+}
+
+// maxTimeoutMS bounds configured timeouts: 30 days, far beyond any real limit and safe inside
+// time.Duration.
+const maxTimeoutMS = 30 * 24 * 60 * 60 * 1000
+
+// ValidateTimeouts checks that every set field of t is between 0 and 30 days in milliseconds.
+func ValidateTimeouts(prefix string, t *protocol.Timeouts) error {
+	if t == nil {
+		return nil
+	}
+	for _, f := range []struct {
+		name string
+		v    *int64
+	}{
+		{"header_ms", t.HeaderMS},
+		{"idle_ms", t.IdleMS},
+		{"total_ms", t.TotalMS},
+	} {
+		if f.v != nil && (*f.v < 0 || *f.v > maxTimeoutMS) {
+			return fmt.Errorf("%s.%s must be between 0 and %d ms (30 days)", prefix, f.name, maxTimeoutMS)
+		}
 	}
 	return nil
 }

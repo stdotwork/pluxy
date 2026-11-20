@@ -336,6 +336,40 @@ func TestConfigNeedsAClientKey(t *testing.T) {
 	}
 }
 
+// routing.timeouts and per-account timeouts accept 0 and positive durations up to 30 days, and
+// refuse negative or out-of-range values.
+func TestConfigRoutingTimeouts(t *testing.T) {
+	okCfg := `{
+		"listen":"127.0.0.1:0",
+		"client_keys":["k"],"management_key":"m",
+		"routing":{"timeouts":{"header_ms":1500,"idle_ms":0,"total_ms":12000}},
+		"extension":{"manifest":"m.json","accounts":[{"id":"a","timeouts":{"header_ms":0,"idle_ms":500}}]}
+	}`
+	c, err := ParseConfig([]byte(okCfg), "/tmp/config.json")
+	if err != nil {
+		t.Fatalf("ParseConfig = %v, want nil", err)
+	}
+	if c.Routing.Timeouts == nil || *c.Routing.Timeouts.HeaderMS != 1500 || *c.Routing.Timeouts.IdleMS != 0 || *c.Routing.Timeouts.TotalMS != 12000 {
+		t.Fatalf("routing.timeouts = %+v", c.Routing.Timeouts)
+	}
+	ac := c.Accounts()[0].Timeouts
+	if ac == nil || *ac.HeaderMS != 0 || *ac.IdleMS != 500 || ac.TotalMS != nil {
+		t.Fatalf("account.timeouts = %+v", ac)
+	}
+
+	for _, bad := range []struct{ name, cfg string }{
+		{"negative global header_ms", `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","routing":{"timeouts":{"header_ms":-1}},"extension":{"manifest":"m.json","accounts":[{"id":"a"}]}}`},
+		{"negative global idle_ms", `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","routing":{"timeouts":{"idle_ms":-5}},"extension":{"manifest":"m.json","accounts":[{"id":"a"}]}}`},
+		{"huge global total_ms", `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","routing":{"timeouts":{"total_ms":9223372036855}},"extension":{"manifest":"m.json","accounts":[{"id":"a"}]}}`},
+		{"negative account idle_ms", `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","extension":{"manifest":"m.json","accounts":[{"id":"a","timeouts":{"idle_ms":-1}}]}}`},
+		{"huge account header_ms", `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","extension":{"manifest":"m.json","accounts":[{"id":"a","timeouts":{"header_ms":9223372036855}}]}}`},
+	} {
+		if _, err := ParseConfig([]byte(bad.cfg), "/tmp/config.json"); err == nil {
+			t.Errorf("%s: ParseConfig succeeded, want error", bad.name)
+		}
+	}
+}
+
 func TestConfigUsageKeepDays(t *testing.T) {
 	const base = `"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","extension":{"manifest":"m.json","accounts":[{"id":"a"}]}`
 	for _, tc := range []struct {

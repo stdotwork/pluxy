@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.21
+# pluxy extension protocol, version 0.22
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -31,9 +31,11 @@ limit counts a feature of the plan, not the account's requests to its models. Ve
 error code `account_closed`: the provider closed, suspended or deactivated the account, or refused it
 for a breach of terms. Version 0.21 adds what a package is, for someone who does not know its ID: a
 manifest's `title`, `summary` and `kind`, and in a [registry index](#registry-index) the same with
-the registry's `tier`. It is deliberately small; later versions add capabilities and more operations
+the registry's `tier`. Version 0.22 adds the account's
+[`timeouts`](#timeouts): upstream request limits for response headers, stream byte gaps and
+non-streamed completion. It is deliberately small; later versions add capabilities and more operations
 without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.21 (see
+core that speaks 0.22 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -576,6 +578,7 @@ the endpoint (or does not serve it for this account's credential) answers with c
 | `credential` | The credential for this call (below). |
 | `proxy_url` | Since 0.11, optional: the proxy every upstream request of this call goes through (below). Absent: no proxy. |
 | `headers` | Since 0.12, optional: extra HTTP headers every upstream request of this call carries, an object of header name to value (below). Absent: none. |
+| `timeouts` | Since 0.22, optional: upstream request limits in milliseconds (`header_ms`, `idle_ms`, `total_ms`; below). Absent: extension defaults. |
 
 An extension only ever receives its own accounts: core stores each credential with the ID of the
 extension that created it and never sends it to another.
@@ -724,6 +727,21 @@ whose names are secret, including a value the extension set itself under such a 
 them; the other headers stay. As with a proxy, the SDK answers a call that carries headers with
 `unsupported` (scope `credential`, retryable) and never runs the handler when the extension
 process has not created any `sdk.Upstream` transport.
+
+### Timeouts
+
+From version 0.22 an account may carry `timeouts`, an object with `header_ms`, `idle_ms` and
+`total_ms` in milliseconds. Each is optional; `0` turns that limit off. On a streamed upstream
+request, `header_ms` (default 60000) bounds the wait for HTTP response headers and `idle_ms`
+(default 300000) bounds the gap between raw upstream body bytes (and between messages on an
+upstream WebSocket turn). On a request that is not streamed, `total_ms` (default 600000) bounds
+the whole upstream request from start to finish. Core resolves each limit from the account's
+override and `routing.timeouts`, and sends `timeouts` only to extensions whose `protocol_minor`
+is 18 or more.
+
+A timeout that fires before any upstream response byte arrives is retry-safe so core can move the
+request to another account; once response headers or reply bytes have arrived, it ends the
+stream or request with an error instead.
 
 ## The request
 
@@ -1378,7 +1396,7 @@ recorded.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.21. An extension reports the minor version it
+raise the minor version: this document is version 0.22. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1407,8 +1425,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.19 | A [quota](#quota) limit's `feature`. |
 | 0.20 | Error code [`account_closed`](#errors). |
 | 0.21 | A manifest's optional `title`, `summary` and `kind`, and a [registry index](#registry-index) package's optional `title`, `summary`, `kind` and `tier`. No call or frame changes. |
+| 0.22 | The account's optional [`timeouts`](#timeouts). |
 
-## What version 0.21 leaves out
+## What version 0.22 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

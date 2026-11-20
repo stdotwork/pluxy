@@ -62,6 +62,7 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 	if perr != nil {
 		return nil, perr
 	}
+	e.resolveTimeouts(&account)
 	creds := append(e.holdAccount(account), proxy)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
@@ -185,6 +186,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	if perr != nil {
 		return refuse(perr)
 	}
+	s.ext.resolveTimeouts(&account)
 	rules, perr := s.ext.payload(ctx, req, payloadTurnMinor)
 	if perr != nil {
 		return refuse(perr)
