@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
@@ -25,28 +26,33 @@ var effortOrder = []string{"none", "minimal", "low", "medium", "high", "xhigh", 
 //     GenerateContent the model's thinking settings (Claude's and Gemini's rules).
 //   - A Chat or Responses effort outside the levels the account accepts (levels) moves to the
 //     nearest one it does, as today's core moves it: by default xhigh and max to high, minimal
-//     and none to low, and auto to medium.
-func applyReasoning(body []byte, req llm.Request, target string, levels []string) ([]byte, error) {
+//     and none to low, and auto to medium. Each such move is reported as an approximated loss
+//     naming the effort asked and the effort sent.
+func applyReasoning(body []byte, req llm.Request, target string, levels []string) ([]byte, []llm.Loss, error) {
 	suffix := req.Options.ThinkingSuffix
 	switch target {
 	case llm.FormatAnthropicMessages:
 		if suffix == "" {
-			return body, nil
+			return body, nil, nil
 		}
 		out, _, err := anthropicmessages.ApplyEffort(body, req.Model, suffix)
-		return out, err
+		return out, nil, err
 	case llm.FormatGeminiGenerate:
 		if suffix == "" {
-			return body, nil
+			return body, nil, nil
 		}
 		out, _, err := geminigenerate.ApplyEffort(body, req.Model, suffix)
-		return out, err
+		return out, nil, err
 	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil || m == nil {
-		return body, nil
+		return body, nil, nil
 	}
 	// Where the effort lives: reasoning_effort for Chat, reasoning.effort for Responses.
+	path := "reasoning.effort"
+	if target == llm.FormatOpenAIChat {
+		path = "reasoning_effort"
+	}
 	get := func() string {
 		var e string
 		if target == llm.FormatOpenAIChat {
@@ -75,11 +81,17 @@ func applyReasoning(body []byte, req llm.Request, target string, levels []string
 		effort = llm.ThinkingEffort(suffix)
 	}
 	clamped := clampEffort(effort, levels)
+	var losses []llm.Loss
+	if effort != "" && clamped != effort {
+		losses = []llm.Loss{{Kind: llm.LossApproximated, Path: path,
+			Detail: fmt.Sprintf("reasoning effort %q is not one the account takes; %q was sent", effort, clamped)}}
+	}
 	if clamped == get() {
-		return body, nil
+		return body, losses, nil
 	}
 	set(clamped)
-	return json.Marshal(m)
+	out, err := json.Marshal(m)
+	return out, losses, err
 }
 
 // clampEffort returns effort when levels has it or it is a name clamping does not know (or

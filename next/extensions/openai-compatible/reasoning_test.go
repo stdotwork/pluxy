@@ -50,7 +50,7 @@ func TestApplyReasoning(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			req := llm.Request{Model: "m", Options: llm.Options{ThinkingSuffix: c.suffix}}
-			out, err := applyReasoning([]byte(c.body), req, c.target, nil)
+			out, _, err := applyReasoning([]byte(c.body), req, c.target, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
