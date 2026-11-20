@@ -35,8 +35,8 @@
     },
     {
       "path": "upstream[*].headers.User-Agent",
-      "kind": "intended",
-      "reason": "The Codex client version moved to 0.159.0 so the model list and the User-Agent name one version; the old core sent 0.154.0. The old core also forwarded the client's User-Agent upstream (cli-proxy-openai-compat when the client sends none), while the new core sends Go's default."
+      "kind": "gap",
+      "reason": "The old core forwards the client's User-Agent upstream (cli-proxy-openai-compat when the client sends none); the new core sends Go's default."
     },
     {
       "path": "upstream[*].headers.Cache-Control",
