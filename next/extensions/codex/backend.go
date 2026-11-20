@@ -91,7 +91,14 @@ func backend(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return endpointStatusError(resp, "")
+		e := endpointStatusError(resp, "")
+		if resp.StatusCode != http.StatusUnauthorized {
+			// Nothing this call's backend said says the account cannot generate: a refusal, a
+			// rate limit or a failure here is about this call, so it cools no credential and no
+			// model. A 401 is the exception: the token itself is refused.
+			e.Scope = llm.ScopeRequest
+		}
+		return e
 	}
 	reply, err := readReply(ctx, resp, "backend")
 	if err != nil {

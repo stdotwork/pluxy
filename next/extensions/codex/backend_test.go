@@ -161,4 +161,30 @@ func TestBackend(t *testing.T) {
 			t.Fatalf("events = %+v", evs)
 		}
 	})
+
+	// A backend call's refusal or rate limit is about the call, not the account's ability to
+	// generate: no status cools the credential or a model, but a 401 is the token refused.
+	t.Run("an upstream error keeps off generation", func(t *testing.T) {
+		for _, c := range []struct {
+			status int
+			scope  string
+			code   string
+		}{
+			{http.StatusForbidden, llm.ScopeRequest, llm.CodePermission},
+			{http.StatusTooManyRequests, llm.ScopeRequest, llm.CodeRateLimit},
+			{http.StatusUnauthorized, llm.ScopeCredential, llm.CodeAuth},
+		} {
+			mu.Lock()
+			status = c.status
+			mu.Unlock()
+			evs := call(sub, map[string]any{"method": "GET", "path": "/wham/usage"})
+			last := evs[len(evs)-1]
+			if last.Type != llm.EventError || last.Error.Scope != c.scope || last.Error.Code != c.code {
+				t.Errorf("status %d: events = %+v", c.status, evs)
+			}
+		}
+		mu.Lock()
+		status = http.StatusOK
+		mu.Unlock()
+	})
 }
