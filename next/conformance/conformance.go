@@ -52,11 +52,12 @@ const (
 	// auth, retryable, scope credential; a check call on its account must report code auth (or
 	// unsupported).
 	ScenarioAuthFailed Scenario = "auth_failed"
-	// ScenarioQuiet: the upstream starts a streamed reply with some text, then for at least 15
-	// seconds sends only bytes that carry nothing the extension passes on (such as SSE comments
-	// or pings), at least every 2 seconds, until the request is cancelled. An extension that
-	// reports protocol 0.19 must send core alive frames meanwhile (sdk.Upstream does). Only
-	// used when Target.Quiet is set.
+	// ScenarioQuiet: the upstream starts a streamed reply with some text, then until the request
+	// is cancelled sends only bytes that carry nothing the extension passes on (such as SSE
+	// comments or pings), at least every 2 seconds. The alive check cancels once an alive frame
+	// arrives, about 10 seconds after the quiet starts. An extension that reports protocol 0.19
+	// must send core alive frames meanwhile (sdk.Upstream does). Only used when Target.Quiet is
+	// set.
 	ScenarioQuiet Scenario = "quiet"
 )
 
@@ -782,9 +783,10 @@ func aliveMinorError(info protocol.Info, quiet bool) error {
 	return fmt.Errorf("the extension reports protocol 0.%d; a quiet target must report at least 0.%d for alive frames", info.ProtocolMinor, protocol.Minor)
 }
 
-// alive checks that an extension that reports protocol 0.19 sends an alive frame while its upstream
-// sends bytes the extension passes nothing on for, and that cancelling the call then ends the reply
-// with the cancelled error. It does not check what else the extension sends in the quiet.
+// alive checks that a quiet target's extension reports the alive minor or later and sends an alive
+// frame while its upstream sends bytes the extension passes nothing on for, then that cancelling
+// the call ends the reply with the cancelled error. It does not check what else the extension sends
+// in the quiet.
 func (k *kit) alive(t *testing.T) {
 	ext := k.start(t)
 	if !k.target.Quiet {

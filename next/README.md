@@ -149,11 +149,15 @@ Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGen
 (a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.
 
 Once a streamed reply has started, core writes the client the SSE comment `: keep-alive` whenever
-15 seconds pass with nothing written to it, on the Chat, Responses and Messages streams and
-on an endpoint reply that is a stream, so a client or proxy does not drop a reply while the model
-thinks. Most SSE readers skip a comment, but Google's Python SDK reads every line as JSON and fails
-on one, and Google's API never sends them, so a Gemini stream gets none. Replies that are not
-streamed and WebSocket sessions get none.
+15 seconds pass with nothing written to it, so a client or proxy does not drop a reply while the
+model thinks. It does this on `/v1/chat/completions`, `/v1/completions`, `/v1/responses`,
+`/backend-api/codex/responses` and `/v1/messages`, and on an SSE reply from
+`/v1/responses/compact`, `/backend-api/codex/responses/compact`, `/v1/alpha/search`,
+`/backend-api/codex/alpha/search`, `/v1/images/generations` or `/v1/images/edits`. No Gemini
+client route gets one, including `/v1beta/models/{model}:streamGenerateContent` and
+`/v1beta/interactions`: most SSE readers skip a comment, but Google's Python SDK reads every line
+as JSON and fails on one, and Google's API never sends them. Replies that are not streamed and
+WebSocket sessions get none.
 
 Token counts (Anthropic's `POST /v1/messages/count_tokens` and Gemini's `:countTokens`) come from
 the upstream's own count endpoint: Anthropic's for a Claude account on Anthropic's own API (base URL

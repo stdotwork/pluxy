@@ -511,8 +511,8 @@ type CapturedBody struct {
 	BodyStopped bool `json:"body_stopped,omitempty"`
 }
 
-// Reply is a frame an extension sends: an event, the result of describe, models, check or quota,
-// a login or refresh frame, or a diagnostic frame.
+// Reply is a frame an extension sends: an event, an alive frame, the result of describe, models,
+// check or quota, a login or refresh frame, or a diagnostic frame.
 type Reply struct {
 	llm.Event
 	Info       *Info        `json:"info,omitempty"`
