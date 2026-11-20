@@ -224,7 +224,9 @@
 // from ~/.local/bin, then from Pi's own bin folder, which comes first) in a terminal through the
 // launcher with no key in argv or environment; the key and a login canary stay out of every window
 // answer, confirmation and the app's output, and removing the package leaves no process.
-// The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
+// The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session, and after them,
+// in the same session, the themes checks (native_themes.rs): a T3 Code theme file pasted on the
+// Themes page turns on, core keeps it, and the next launch paints in it.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,

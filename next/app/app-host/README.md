@@ -362,7 +362,7 @@ checks the sources for any other call that could end a process.
 
 | | Windows | macOS |
 | --- | --- | --- |
-| What runs | The file the host opened and checked: its path now (with `\\?\` removed), opened again with only reading shared, so it cannot be renamed, replaced or written until the process runs; only `.exe` and `.com` files that start with `MZ` | The file the host opened and checked, by the path it has now (`F_GETPATH`), once no other user can change that file or any folder above it and the path still names the same file (device, inode, size, mode and times). That reads each part's mode and extended access list together, from `/` down to the file, inherited entries too: an allow entry for another user or group that holds any right but the read-only ones (`read`, `execute`, `readattr`, `readextattr`, `readsecurity`, `synchronize`, and the kernel's generic read and execute) is refused, so `write`, `add_file`, `delete` and the like, the kernel's `generic_write` and `generic_all`, and any right not known today. The refusal gives the entry's number, who it is for, its rights and how to remove it (`chmod -a#`, or `chmod -N` for every entry, with the path quoted for the shell). Deny entries pass, as home folders carry `group:everyone deny delete`. For the program of a detached launch or a managed runtime, and the program a terminal launch runs, a folder above it may also be writable by the `admin` group, by its mode or an access list entry, as macOS makes `/Applications` and Homebrew makes its folders. Another admin account can then replace the program between the check and the exec (and, for a program inside an app, whatever it later loads or starts from its app: frameworks, plug-ins, helper apps), and, with or without that rule, can replace at any time what any program loads from such folders (Homebrew's libraries, a script's interpreter and modules) |
+| What runs | The file the host opened and checked: its path now (with `\\?\` removed), opened again with only reading shared, so it cannot be renamed, replaced or written until the process runs; only `.exe` and `.com` files that start with `MZ` | The file the host opened and checked, by the path it has now (`F_GETPATH`), once no other user can change that file or any folder above it and the path still names the same file (device, inode, size, mode and times). That reads each part's mode and extended access list together, from `/` down to the file, inherited entries too: an allow entry for another user or group that holds any right but the read-only ones (`read`, `execute`, `readattr`, `readextattr`, `readsecurity`, `synchronize`, and the kernel's generic read and execute) is refused, so `write`, `add_file`, `delete` and the like, the kernel's `generic_write` and `generic_all`, and any right not known today. The refusal gives the entry's number, who it is for, its rights and how to remove it (`chmod -a#`, or `chmod -N` for every entry, with the path quoted for the shell). Deny entries pass, as home folders carry `group:everyone deny delete`. Each part must be on a volume that keeps ownership: one that ignores it (`MNT_IGNORE_OWNERSHIP`, Finder's "Ignore ownership on this volume", the default for many external drives) shows every file as owned by whoever asks and lets any user change it, so a part there is refused, a folder above the program too when the program is on another volume mounted below it, with a message that names the part and the volume and says to turn ownership on (`sudo diskutil enableOwnership`) or move the program. For the program of a detached launch or a managed runtime, and the program a terminal launch runs, a folder above it may also be writable by the `admin` group, by its mode or an access list entry, as macOS makes `/Applications` and Homebrew makes its folders. Another admin account can then replace the program between the check and the exec (and, for a program inside an app, whatever it later loads or starts from its app: frameworks, plug-ins, helper apps), and, with or without that rule, can replace at any time what any program loads from such folders (Homebrew's libraries, a script's interpreter and modules) |
 | Handles and descriptors it gets | Only its three standard handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), made inheritable only while it starts | Every descriptor above 2 closes as it executes, but for a terminal launch the program it runs, as 3 (see `program` in [Launches and managed runtimes](#launches-and-managed-runtimes)) |
 | Tool, managed runtime, the app's core | A job object of its own, which ends the process and everything it started when stopped and when the app exits or crashes (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) | A process group of its own (a tool's, a runtime's); the app's core stays in the app's group |
 | Asked to stop | `CTRL_BREAK` to its process group on its own hidden console, then the job ends after the grace. An app that has a console of its own (a debug build run from a terminal) cannot send it, and ends the job at once | SIGTERM, then SIGKILL to the group after the grace, as on Linux |
@@ -670,7 +670,34 @@ program's name) and `cwd`, and may name:
   folder is its own ([the execution program's `open`
   launch](../../app-tools/README.md#execution)). A desktop whose opener guesses types otherwise
   than GIO (KDE's `kde-open`, which xdg-open runs there) may still pick another app for a file
-  the check let through;
+  the check let through.
+
+  On Windows and macOS the system picks the app by the file's extension, not its content, so the
+  type is the extension's: `.txt` (`text/plain`), `.json`, `.jsonl`, `.ndjson`, `.md` or `.log`
+  (the types above), any other refused; the content is not read (`src/confirmation_open.rs`).
+  The folder may not be a drive's root or `/`, the home folder or a folder above it, and is
+  refused when the home folder cannot be resolved. The file, the folder and every folder between
+  them must be the person's own and writable by no one else: on Windows their owner and access
+  list (`src/win_acl.rs`: owned by the person or by the owner Windows gives the person's new
+  files, the token's default owner, which is the Administrators group for an elevated
+  administrator; no allow entry giving anyone but the person, SYSTEM or Administrators a right to
+  change it; and not a link or junction); on macOS
+  their owner, mode and no access list entry at all. On Windows the file must also be on a local
+  drive (not a network path), name no alternate data stream, have a path shorter than 260
+  characters, and be named by its plain path (`C:\…`, never `\\?\`); the launch runs
+  `pluxy/execution`'s own program (compared by identity; another package's own program is
+  refused) with argv exactly `open`, `--` and the file, which hands the file to the app Windows
+  opens its extension with, and it starts with no console (as does that program's `app` mode,
+  and no other launch). On macOS the file has no execute bit and none of the
+  attributes that can choose another app for it (`com.apple.FinderInfo`,
+  `com.apple.ResourceFork`, `com.apple.LaunchServices.OpenWith`), and the launch runs
+  `/usr/bin/open` with argv exactly the file. The dialog's first line says "Opens the file <file>
+  (<type>, inside <folder>) with the app Windows (or macOS) opens .<ext> files with, through
+  <opener>." The spawn checks the file's identity and metadata again as on Linux. On Windows a
+  permissions change on a folder above the file between confirming and launching can also
+  refuse the open: setting a folder's access list as `icacls` does also goes through what is
+  inside it and changes the file's change time, even when the file's own permissions stay the
+  same (an inheritable entry changes them too), and the person then confirms the open again;
 - `stdin`: one of the launch's secret fields, whose secret the host writes to the launch's
   standard input and then closes: the private channel to a credential bridge, never argv, its
   environment or a file. The confirmation names it; it is part of the environment revision;
@@ -736,7 +763,12 @@ started does not end with it.
   `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`) and the proxy variables (`http_proxy`,
   `https_proxy`, `no_proxy`, `all_proxy`, and the same in capitals); those it has are passed on,
   but those the launch removes. When the app runs as an AppImage, entries inside its own folder
-  are taken out of `PATH`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. Then come the variables the launch
+  are taken out of `PATH`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. On macOS `PATH` then gets, after
+  its own entries, the folders people's command-line clients are installed in that exist and it
+  lacks: `~/.local/bin`, `~/.npm-global/bin`, `~/.bun/bin`, `~/.cargo/bin`, `~/.volta/bin`,
+  `~/Library/pnpm` and `~/bin` (`~` the app's `HOME`), then `/opt/homebrew/bin` and
+  `/usr/local/bin`: an app started from the Finder or the Dock has launchd's `PATH`, which finds
+  none of them. Then come the variables the launch
   inherits by name, those it sets, and its secrets, which the host resolves from the vault at the
   spawn, each checked then as a delivery to the tool whose launch it is: the tool that asked holds
   references only. No shell is run to read a login environment.
@@ -905,22 +937,22 @@ of the bytes or the chosen path is logged, and the answers carry neither.
 ## Secrets, references and the vault
 
 The app keeps a host-private **vault** in its data folder (`vault`; on Windows in its local data
-folder, which does not roam with the profile), owner-only: on Linux and macOS folders 0700 and
-files 0600 of the user; on Windows a protected access list whose allow entries name only the user
-and SYSTEM, set as each folder and file is made, and an owner that is the user, the token's default
-owner (Administrators for an elevated account) or SYSTEM, checked at each read. The vault holds
-each native tool's backups and journals on all three systems, and the secrets the person entered
-on Linux, the only system with secret entry yet. It is never a
-folder a package names or reads through the host, and no window or page API gives its paths, a
-secret's value, a backup's bytes or a journal's intent. A native tool has the user's full access
-and could read it directly: this separates APIs and storage, it is not an operating-system
-sandbox, and it does not protect a secret from another program of the same user.
+folder, which does not roam with the profile), owner-only: on Linux and macOS folders 0700 and files
+0600 of the user; on Windows a protected access list whose allow entries name only the user and
+SYSTEM, set as each folder and file is made, and an owner that is the user, the token's default
+owner (Administrators for an elevated account) or SYSTEM, checked at each read. The vault holds each
+native tool's backups and journals and the secrets the person entered, on all three systems. It is
+never a folder a package names or reads through the host, and no window or page API gives its paths,
+a secret's value, a backup's bytes or a journal's intent. A native tool has the user's full access
+and could read it directly: this separates APIs and storage, it is not an operating-system sandbox,
+and it does not protect a secret from another program of the same user.
 
 ### Secrets and references
 
 A secret enters only through native key entry (`vault_secret_add`, the app README's Commands):
-GTK's hidden entry reads it, and the window gets back its opaque ID (`s-` and 32 hexadecimal
-digits) and label, never the value. An operation's `secrets` fields carry secrets:
+the hidden entry (GTK's on Linux, Win32's on Windows, AppKit's on macOS) reads it, and the window
+gets back its opaque ID (`s-` and 32 hexadecimal digits) and label, never the value. An
+operation's `secrets` fields carry secrets:
 
 - From the window, a secret field holds a vault secret's ID.
 - From a native tool, it holds a reference the host gave that tool in the call it is serving,

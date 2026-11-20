@@ -20,6 +20,7 @@ var loginMethods = []protocol.LoginMethod{
 		{Name: "base_url", Label: "Base URL (including /v1, or /v1beta for Gemini)"},
 		{Name: "api_key", Label: "API key", Secret: true},
 		{Name: "wire_api", Label: "Wire API: chat, responses, messages or gemini (default chat)", Optional: true},
+		{Name: "quota", Label: "Quota: openrouter, deepseek or none (default by base_url host)", Optional: true},
 	}},
 }
 
@@ -35,7 +36,7 @@ func login(ctx context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*proto
 	}
 	var explicit map[string]json.RawMessage
 	_ = json.Unmarshal(call.Account.Settings, &explicit)
-	for _, name := range []string{"base_url", "wire_api"} {
+	for _, name := range []string{"base_url", "wire_api", "quota"} {
 		if raw, ok := explicit[name]; ok && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: name + " must be a string, not null", Scope: llm.ScopeRequest}
 		}
@@ -47,8 +48,12 @@ func login(ctx context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*proto
 	if set.WireAPI == "" {
 		set.WireAPI = call.Input["wire_api"]
 	}
+	if set.Quota == "" {
+		set.Quota = call.Input["quota"]
+	}
 	set.BaseURL = strings.TrimRight(strings.TrimSpace(set.BaseURL), "/")
 	set.WireAPI = strings.TrimSpace(set.WireAPI)
+	set.Quota = strings.TrimSpace(set.Quota)
 	if set.WireAPI == "" {
 		set.WireAPI = wireChat
 	}
@@ -65,6 +70,11 @@ func login(ctx context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*proto
 	wire, ok := wires[set.WireAPI]
 	if !ok {
 		return nil, bad("wire_api must be chat, responses, messages or gemini")
+	}
+	switch set.Quota {
+	case "", quotaOpenRouter, quotaDeepSeek, quotaNone:
+	default:
+		return nil, bad("quota must be openrouter, deepseek or none")
 	}
 	key := strings.TrimSpace(call.Input["api_key"])
 	if key == "" {
@@ -104,6 +114,10 @@ func login(ctx context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*proto
 		}
 		return nil, clean(e)
 	}
-	defaults, _ := json.Marshal(map[string]string{"base_url": set.BaseURL, "wire_api": set.WireAPI})
+	grantSettings := map[string]string{"base_url": set.BaseURL, "wire_api": set.WireAPI}
+	if set.Quota != "" {
+		grantSettings["quota"] = set.Quota
+	}
+	defaults, _ := json.Marshal(grantSettings)
 	return &protocol.Grant{Credential: credential, Settings: defaults}, nil
 }

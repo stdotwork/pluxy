@@ -15,4 +15,7 @@ func TestAPIKeyLoginBaseURLIsRequired(t *testing.T) {
 	if optional, ok := inputs["wire_api"]; !ok || !optional {
 		t.Fatalf("wire_api optional = %v (present %v), want present and optional", optional, ok)
 	}
+	if optional, ok := inputs["quota"]; !ok || !optional {
+		t.Fatalf("quota optional = %v (present %v), want present and optional", optional, ok)
+	}
 }

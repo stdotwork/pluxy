@@ -185,10 +185,20 @@ type UsageConfig struct {
 	MaxEvents int `json:"max_events,omitempty"`
 	// MaxAgeMS is how long the record keeps a request. Default 24 hours, at most 30 days.
 	MaxAgeMS int64 `json:"max_age_ms,omitempty"`
+	// KeepDays is how many UTC days of usage files are kept; 0 keeps everything. Absent: 90.
+	KeepDays *int `json:"keep_days,omitempty"`
 }
 
 // On reports whether the usage record is on.
 func (u UsageConfig) On() bool { return u.Enabled == nil || *u.Enabled }
+
+// KeepDaysValue returns how many UTC days of usage files are kept; 0 keeps everything.
+func (u UsageConfig) KeepDaysValue() int {
+	if u.KeepDays == nil {
+		return usage.DefaultKeepDays
+	}
+	return *u.KeepDays
+}
 
 func (u UsageConfig) validate() error {
 	if u.MaxEvents < 0 || u.MaxEvents > usage.MaxMaxEvents {
@@ -196,6 +206,9 @@ func (u UsageConfig) validate() error {
 	}
 	if u.MaxAgeMS < 0 || u.MaxAgeMS > usage.MaxMaxAge.Milliseconds() {
 		return fmt.Errorf("config: usage.max_age_ms must be between 0 (the default, 24 hours) and %d (30 days)", usage.MaxMaxAge.Milliseconds())
+	}
+	if u.KeepDays != nil && (*u.KeepDays < 0 || *u.KeepDays > usage.MaxKeepDays) {
+		return fmt.Errorf("config: usage.keep_days must be between 0 (keep everything) and %d", usage.MaxKeepDays)
 	}
 	return nil
 }
