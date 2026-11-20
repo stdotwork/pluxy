@@ -141,10 +141,12 @@ The import report:
 ```json
 {
   "dry_run": true,
-  "brought": [{"what": "account", "name": "codex-work@example.com", "as": "pluxy/codex account codex-work"}],
+  "brought": [{"what": "auth file", "name": "codex-work@example.com.json", "as": "pluxy/codex account codex-work-example.com"},
+              {"what": "routing.strategy"}],
   "changed": [{"what": "server.host", "from": "(not set: every interface)", "to": "127.0.0.1",
-               "why": "pluxy listens on this machine only unless told otherwise", "keep_with": "server.host: 0.0.0.0"}],
-  "not_brought": [{"what": "auth file", "name": "gemini-user.json", "why": "pluxy has no Gemini CLI sign-in"}],
+               "why": "pluxy listens on this machine only unless told otherwise",
+               "keep_with": "\"listen\": \"0.0.0.0:8317\" in pluxy's config file, then restart core"}],
+  "not_brought": [{"what": "auth file", "name": "gemini-user.json", "why": "today's core does not load it either"}],
   "needs": [{"pick": "pluxy/codex", "why": "3 accounts need it"}]
 }
 ```
