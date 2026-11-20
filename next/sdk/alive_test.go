@@ -273,7 +273,10 @@ func TestAliveLeavesNoBodyAlone(t *testing.T) {
 // body is read and written. Only a turn whose call asked for them gets frames.
 func TestAliveOnSessionTurns(t *testing.T) {
 	advance := fakeAliveClock(t)
-	next := make(chan struct{})
+	// Each upstream connection's own signal channel: a session that has ended may still have its
+	// handler in the select below, and a signal given to it would leave the newer turn waiting for
+	// a byte that never comes.
+	conns := make(chan chan struct{}, 1)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, rw, err := w.(http.Hijacker).Hijack()
 		if err != nil {
@@ -282,6 +285,8 @@ func TestAliveOnSessionTurns(t *testing.T) {
 		defer conn.Close()
 		fmt.Fprint(rw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: test\r\nConnection: Upgrade\r\n\r\n")
 		rw.Flush()
+		next := make(chan struct{})
+		conns <- next
 		gone := make(chan struct{}) // the hijacked request's context never ends: watch the connection
 		go func() {
 			_, _ = io.Copy(io.Discard, rw)
@@ -312,6 +317,12 @@ func TestAliveOnSessionTurns(t *testing.T) {
 			}
 			if _, ok := resp.Body.(io.ReadWriteCloser); !ok || resp.StatusCode != http.StatusSwitchingProtocols {
 				return nil, fmt.Errorf("status %d, body %T: not an upgraded connection", resp.StatusCode, resp.Body)
+			}
+			var next chan struct{}
+			select {
+			case next = <-conns:
+			case <-ctx.Done():
+				return nil, ctx.Err()
 			}
 			return &upgradedSession{body: resp.Body, turn: func(_ context.Context, _ Call, out *Stream) error {
 				if err := out.Start(llm.ResponseInfo{ID: "r"}); err != nil {

@@ -88,6 +88,9 @@ type Config struct {
 	// keyDigests are the SHA-256 digests of ClientKeys, made when the config is loaded so that a
 	// request's check does not hash a key (prepareClientKeys).
 	keyDigests [][sha256.Size]byte
+	// keyHash, when set, is what digest hashes with instead of sha256.Sum256: tests set it to
+	// count the bytes a request's key check hashes.
+	keyHash func([]byte) [sha256.Size]byte
 	// managementDigest is the SHA-256 digest of ManagementKey, made when the config is loaded for
 	// the same reason (prepareManagementKey); nil: not made.
 	managementDigest *[sha256.Size]byte
@@ -117,8 +120,17 @@ type Config struct {
 func (c *Config) prepareClientKeys() {
 	c.keyDigests = make([][sha256.Size]byte, len(c.ClientKeys))
 	for i, k := range c.ClientKeys {
-		c.keyDigests[i] = sha256.Sum256([]byte(k))
+		c.keyDigests[i] = c.digest([]byte(k))
 	}
+}
+
+// digest hashes b with the hash a test replaced sha256.Sum256 with, if it did (keyHash), and
+// with sha256.Sum256 otherwise.
+func (c *Config) digest(b []byte) [sha256.Size]byte {
+	if c.keyHash != nil {
+		return c.keyHash(b)
+	}
+	return sha256.Sum256(b)
 }
 
 // prepareManagementKey makes the digest of the management key, which the management API compares
@@ -145,7 +157,7 @@ func (c *Config) clientKeyDigests() [][sha256.Size]byte {
 	}
 	out := make([][sha256.Size]byte, len(c.ClientKeys))
 	for i, k := range c.ClientKeys {
-		out[i] = sha256.Sum256([]byte(k))
+		out[i] = c.digest([]byte(k))
 	}
 	return out
 }
