@@ -13,6 +13,10 @@ Chat upstream, a Messages or Gemini request to a Responses upstream, and a Gemin
 Messages upstream are translated, and what the translation could not carry is logged. The
 [Codex provider](#codex) serves OpenAI's Codex models from an API key, a ChatGPT subscription or a Sign in with ChatGPT (SIWC) sign-in.
 
+This file is the reference for core. To build pluxy and send a first request, follow the
+[quick start](../README.md#quick-start); to point a coding tool at it, see
+[docs/clients.md](../docs/clients.md).
+
 ## Layout
 
 | Path | What it is |
@@ -2295,6 +2299,9 @@ a config file that does not load also refuses the package change. One package ch
 time.
 
 ## config.yaml with today's key names
+
+[Moving from CLIProxyAPI](../docs/moving-from-cpa.md) walks through a move step by step; this
+section is the reference for it.
 
 Core also reads a `config.yaml` written for today's core (`core/`), so an existing config moves
 over without renaming keys. A config file whose name ends in `.yaml` or `.yml` is read with
