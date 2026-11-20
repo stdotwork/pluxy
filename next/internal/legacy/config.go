@@ -1230,12 +1230,18 @@ func (x *translator) routing() error {
 		return err
 	} else if on {
 		ttl := time.Hour
+		_, ttlSet := get(x.t, "routing.session-affinity-ttl")
 		if s, err := str(x.t, "routing.session-affinity-ttl"); err != nil {
 			return err
 		} else if d, err := time.ParseDuration(strings.TrimSpace(s)); err == nil && d > 0 {
 			ttl = max(d, time.Second) // as today's core reads it
 		}
-		aff := map[string]any{"ttl_ms": ttl.Milliseconds()}
+		aff := map[string]any{}
+		// An import sets the TTL only when the file does: the one-hour default is not the file's
+		// setting, and core's own TTL otherwise stays.
+		if ttlSet || !x.importing {
+			aff["ttl_ms"] = ttl.Milliseconds()
+		}
 		if x.importing {
 			// Core's own config may have it off, which a JSON config otherwise is on without.
 			aff["enabled"] = true

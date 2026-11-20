@@ -304,6 +304,53 @@ func TestSetupImportChangesOnlyWhatTheFileSets(t *testing.T) {
 	}
 }
 
+// A file that turns session affinity on without a TTL sets no TTL: core's own one stays, and the
+// import's row for the setting is brought.
+func TestSetupImportKeepsCoreAffinityTTL(t *testing.T) {
+	setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeTestFile(t, cfgPath, `{
+		"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-1"], "management_key": "fake-mgmt-key",
+		"routing": {"session_affinity": {"enabled": true, "ttl_ms": 900000}}}`)
+	cpa := t.TempDir()
+	writeTestFile(t, filepath.Join(cpa, "config.yaml"), "routing: {session-affinity: true}\n")
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+	code, rep, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: filepath.Join(cpa, "config.yaml")})
+	if code != http.StatusOK {
+		t.Fatalf("import: %d %s", code, body)
+	}
+	b, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Routing struct {
+			SessionAffinity struct {
+				Enabled bool   `json:"enabled"`
+				TTLMS   *int64 `json:"ttl_ms"`
+			} `json:"session_affinity"`
+		} `json:"routing"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	aff := got.Routing.SessionAffinity
+	if !aff.Enabled {
+		t.Errorf("the file turned session affinity on but core's is off: %s", b)
+	}
+	if aff.TTLMS == nil || *aff.TTLMS != 900000 {
+		t.Errorf("the import set a TTL the file does not set: %s", b)
+	}
+	if i := slices.IndexFunc(rep.Brought, func(r management.ImportRow) bool { return r.What == "routing.session-affinity" }); i < 0 {
+		t.Errorf("the setting is not under brought: %s", body)
+	}
+}
+
 // Two auth files whose names make one account ID: the dry run refuses the second as the import
 // does, so both reports name it as not brought.
 func TestSetupImportDryRunOneAccountID(t *testing.T) {
