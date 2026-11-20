@@ -10,7 +10,7 @@ test("every native test session is named in one shard only", async () => {
   const linux = Object.values(SHARDS).flat();
   const platform = Object.values(PLATFORM_SHARDS).flat();
   const shared = platform.filter((name) => linux.includes(name)).sort();
-  expect(shared).toEqual(["admission", "launcher", "program", "routing"]);
+  expect(shared).toEqual(["admission", "launcher", "open", "program", "routing", "vault"]);
   expect(SESSIONS.size).toBe(linux.length + platform.length - shared.length);
   for (const shard of Object.keys(PLATFORM_SHARDS))
     expect(selectShard(shard, undefined, undefined, true).size).toBeGreaterThan(0);

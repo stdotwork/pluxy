@@ -1131,7 +1131,10 @@ and then waits for Enter (`console`) or stays at a `cmd.exe /D` or `powershell.e
 -NoProfile` prompt, both from the System32 folder Windows reports (never the launch's
 `SystemRoot`). There is no Windows Terminal kind:
 `wt.exe` splits its command line its own way, so the arguments confirmed would not be the ones
-it runs.
+it runs. In the native test's build (feature `native-test`) nobody is at the window, so the
+`console` window does not wait for Enter, and the shell after the program runs one fixed command
+that writes its working folder to `pluxy-after-exit` in that folder, then exits; a normal build
+does neither.
 
 Windows cannot run an open file, so the execution program runs the program by its path, and
 first holds it: it opens the program and every folder above it so that none of them can be

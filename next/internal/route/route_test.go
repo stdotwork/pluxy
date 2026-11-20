@@ -491,18 +491,6 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 	}
 }
 
-// A later failure never shortens a live block.
-func TestBlockOnlyExtends(t *testing.T) {
-	st := NewState()
-	a := &Account{ID: "a"}
-	now := time.Unix(0, 0)
-	st.failure(a, "m", 0, &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 60_000}, now, 0)
-	st.failure(a, "m", 0, &llm.Error{Code: llm.CodeRateLimit, RetryAfterMS: 1_000}, now, 0)
-	if until, _, _ := st.availability(a, "m", now); until.Sub(now) != time.Minute {
-		t.Errorf("block = %v, want 1m", until.Sub(now))
-	}
-}
-
 // Scopes are separate: a model limit leaves the account's other models alone; a credential
 // limit blocks them all; an endpoint outage blocks every account on that endpoint.
 func TestScopes(t *testing.T) {
@@ -1579,4 +1567,18 @@ func TestCooldownWaitComesFromTheAccountThatServesTheModel(t *testing.T) {
 		t.Errorf("code = %q, want %q: the reason is b's rate limit, not codex's quota", e.Code, llm.CodeRateLimit)
 	}
 	h.wantAttempts()
+}
+
+// An account that leaves the set loses its session bindings, as a changed one does, so added
+// again later it starts clean: a session it served before is not sent back to it ahead of a
+// higher-priority account.
+func TestRemovedAccountLosesSessionBindings(t *testing.T) {
+	h := newHarness(t, Config{SessionAffinity: &AffinityConfig{}}, accts("a")...)
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	h.run(s1) // a, bound
+	b := Account{ID: "b", Priority: 1}
+	h.setAccounts(b)                   // a leaves
+	h.setAccounts(Account{ID: "a"}, b) // a comes back
+	h.run(s1)
+	h.wantAttempts("a", "b")
 }

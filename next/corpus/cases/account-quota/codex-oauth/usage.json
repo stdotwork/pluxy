@@ -257,6 +257,7 @@
               "window_seconds": 604800
             },
             {
+              "feature": true,
               "id": "code_review_weekly",
               "label": "Code review weekly limit",
               "resets_at": 1893542400,
@@ -264,6 +265,7 @@
               "window_seconds": 604800
             },
             {
+              "feature": true,
               "id": "gpt_6_1_codex_spark_five_hour",
               "label": "GPT-6.1-Codex-Spark 5-hour limit",
               "resets_at": 1893456000,
@@ -271,6 +273,7 @@
               "window_seconds": 18000
             },
             {
+              "feature": true,
               "id": "gpt_6_1_codex_spark_weekly",
               "label": "GPT-6.1-Codex-Spark weekly limit",
               "resets_at": 1893542400,

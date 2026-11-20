@@ -670,7 +670,34 @@ program's name) and `cwd`, and may name:
   folder is its own ([the execution program's `open`
   launch](../../app-tools/README.md#execution)). A desktop whose opener guesses types otherwise
   than GIO (KDE's `kde-open`, which xdg-open runs there) may still pick another app for a file
-  the check let through;
+  the check let through.
+
+  On Windows and macOS the system picks the app by the file's extension, not its content, so the
+  type is the extension's: `.txt` (`text/plain`), `.json`, `.jsonl`, `.ndjson`, `.md` or `.log`
+  (the types above), any other refused; the content is not read (`src/confirmation_open.rs`).
+  The folder may not be a drive's root or `/`, the home folder or a folder above it, and is
+  refused when the home folder cannot be resolved. The file, the folder and every folder between
+  them must be the person's own and writable by no one else: on Windows their owner and access
+  list (`src/win_acl.rs`: owned by the person or by the owner Windows gives the person's new
+  files, the token's default owner, which is the Administrators group for an elevated
+  administrator; no allow entry giving anyone but the person, SYSTEM or Administrators a right to
+  change it; and not a link or junction); on macOS
+  their owner, mode and no access list entry at all. On Windows the file must also be on a local
+  drive (not a network path), name no alternate data stream, have a path shorter than 260
+  characters, and be named by its plain path (`C:\…`, never `\\?\`); the launch runs
+  `pluxy/execution`'s own program (compared by identity; another package's own program is
+  refused) with argv exactly `open`, `--` and the file, which hands the file to the app Windows
+  opens its extension with, and it starts with no console (as does that program's `app` mode,
+  and no other launch). On macOS the file has no execute bit and none of the
+  attributes that can choose another app for it (`com.apple.FinderInfo`,
+  `com.apple.ResourceFork`, `com.apple.LaunchServices.OpenWith`), and the launch runs
+  `/usr/bin/open` with argv exactly the file. The dialog's first line says "Opens the file <file>
+  (<type>, inside <folder>) with the app Windows (or macOS) opens .<ext> files with, through
+  <opener>." The spawn checks the file's identity and metadata again as on Linux. On Windows a
+  permissions change on a folder above the file between confirming and launching can also
+  refuse the open: setting a folder's access list as `icacls` does also goes through what is
+  inside it and changes the file's change time, even when the file's own permissions stay the
+  same (an inheritable entry changes them too), and the person then confirms the open again;
 - `stdin`: one of the launch's secret fields, whose secret the host writes to the launch's
   standard input and then closes: the private channel to a credential bridge, never argv, its
   environment or a file. The confirmation names it; it is part of the environment revision;
@@ -736,7 +763,12 @@ started does not end with it.
   `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`) and the proxy variables (`http_proxy`,
   `https_proxy`, `no_proxy`, `all_proxy`, and the same in capitals); those it has are passed on,
   but those the launch removes. When the app runs as an AppImage, entries inside its own folder
-  are taken out of `PATH`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. Then come the variables the launch
+  are taken out of `PATH`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. On macOS `PATH` then gets, after
+  its own entries, the folders people's command-line clients are installed in that exist and it
+  lacks: `~/.local/bin`, `~/.npm-global/bin`, `~/.bun/bin`, `~/.cargo/bin`, `~/.volta/bin`,
+  `~/Library/pnpm` and `~/bin` (`~` the app's `HOME`), then `/opt/homebrew/bin` and
+  `/usr/local/bin`: an app started from the Finder or the Dock has launchd's `PATH`, which finds
+  none of them. Then come the variables the launch
   inherits by name, those it sets, and its secrets, which the host resolves from the vault at the
   spawn, each checked then as a delivery to the tool whose launch it is: the tool that asked holds
   references only. No shell is run to read a login environment.
@@ -905,22 +937,22 @@ of the bytes or the chosen path is logged, and the answers carry neither.
 ## Secrets, references and the vault
 
 The app keeps a host-private **vault** in its data folder (`vault`; on Windows in its local data
-folder, which does not roam with the profile), owner-only: on Linux and macOS folders 0700 and
-files 0600 of the user; on Windows a protected access list whose allow entries name only the user
-and SYSTEM, set as each folder and file is made, and an owner that is the user, the token's default
-owner (Administrators for an elevated account) or SYSTEM, checked at each read. The vault holds
-each native tool's backups and journals on all three systems, and the secrets the person entered
-on Linux, the only system with secret entry yet. It is never a
-folder a package names or reads through the host, and no window or page API gives its paths, a
-secret's value, a backup's bytes or a journal's intent. A native tool has the user's full access
-and could read it directly: this separates APIs and storage, it is not an operating-system
-sandbox, and it does not protect a secret from another program of the same user.
+folder, which does not roam with the profile), owner-only: on Linux and macOS folders 0700 and files
+0600 of the user; on Windows a protected access list whose allow entries name only the user and
+SYSTEM, set as each folder and file is made, and an owner that is the user, the token's default
+owner (Administrators for an elevated account) or SYSTEM, checked at each read. The vault holds each
+native tool's backups and journals and the secrets the person entered, on all three systems. It is
+never a folder a package names or reads through the host, and no window or page API gives its paths,
+a secret's value, a backup's bytes or a journal's intent. A native tool has the user's full access
+and could read it directly: this separates APIs and storage, it is not an operating-system sandbox,
+and it does not protect a secret from another program of the same user.
 
 ### Secrets and references
 
 A secret enters only through native key entry (`vault_secret_add`, the app README's Commands):
-GTK's hidden entry reads it, and the window gets back its opaque ID (`s-` and 32 hexadecimal
-digits) and label, never the value. An operation's `secrets` fields carry secrets:
+the hidden entry (GTK's on Linux, Win32's on Windows, AppKit's on macOS) reads it, and the window
+gets back its opaque ID (`s-` and 32 hexadecimal digits) and label, never the value. An
+operation's `secrets` fields carry secrets:
 
 - From the window, a secret field holds a vault secret's ID.
 - From a native tool, it holds a reference the host gave that tool in the call it is serving,

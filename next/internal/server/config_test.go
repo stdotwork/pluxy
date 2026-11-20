@@ -335,3 +335,34 @@ func TestConfigNeedsAClientKey(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigUsageKeepDays(t *testing.T) {
+	const base = `"listen":"127.0.0.1:0","client_keys":["k"],"extension":{"manifest":"m.json","accounts":[{"id":"a"}]}`
+	for _, tc := range []struct {
+		name, extra string
+		want        int
+		bad         bool
+	}{
+		{"absent defaults to 90", "", 90, false},
+		{"zero keeps everything", `,"usage":{"keep_days":0}`, 0, false},
+		{"positive", `,"usage":{"keep_days":30}`, 30, false},
+		{"negative refused", `,"usage":{"keep_days":-1}`, 0, true},
+		{"above max refused", `,"usage":{"keep_days":1000001}`, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := ParseConfig([]byte("{"+base+tc.extra+"}"), "/tmp/config.json")
+			if tc.bad {
+				if err == nil {
+					t.Fatal("accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.Usage.KeepDaysValue(); got != tc.want {
+				t.Errorf("KeepDaysValue() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
