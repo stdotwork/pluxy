@@ -20,6 +20,39 @@ import (
 // maxImagesReply limits what is read of a non-streamed GenerateContent reply.
 const maxImagesReply = 64 << 20
 
+// imagesRequestBody is the GenerateContent body used for an Images API generation.
+type imagesRequestBody struct {
+	Contents         []imagesContent        `json:"contents"`
+	GenerationConfig imagesGenerationConfig `json:"generationConfig"`
+}
+
+type imagesContent struct {
+	Parts []imagesPart `json:"parts"`
+}
+
+type imagesPart struct {
+	Text string `json:"text"`
+}
+
+type imagesGenerationConfig struct {
+	ResponseModalities []string           `json:"responseModalities"`
+	ImageConfig        *imagesImageConfig `json:"imageConfig,omitempty"`
+}
+
+type imagesImageConfig struct {
+	AspectRatio string `json:"aspectRatio"`
+}
+
+// imageData is one image in an Images API reply.
+type imageData struct {
+	B64JSON string `json:"b64_json"`
+}
+
+type imagesGenerationReply struct {
+	Created int64       `json:"created"`
+	Data    []imageData `json:"data"`
+}
+
 // images serves OpenAI Images API generations through one non-streamed GenerateContent call.
 // Gemini's imageConfig has no image count, so n above one is refused; the documented response
 // may also hold fewer images than a prompt asks for.
@@ -36,7 +69,7 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	if err != nil {
 		return err
 	}
-	send := &reporting{Stream: out}
+	send := &reporting{out: out}
 	if t.token != "" {
 		// Core redacts what the credential holds; the fetched access token is redacted here too.
 		send.redact = protocolRedactor(t.token)
@@ -94,12 +127,7 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 		}
 		return &llm.Error{Code: llm.CodeUpstream, Status: http.StatusBadGateway, Scope: llm.ScopeEndpoint, Message: msg}
 	}
-	reply, err := json.Marshal(struct {
-		Created int64 `json:"created"`
-		Data    []struct {
-			B64JSON string `json:"b64_json"`
-		} `json:"data"`
-	}{Created: time.Now().Unix(), Data: data})
+	reply, err := json.Marshal(imagesGenerationReply{Created: time.Now().Unix(), Data: data})
 	if err != nil {
 		return err
 	}
@@ -119,32 +147,8 @@ func protocolRedactor(token string) *protocol.Redactor {
 }
 
 // readImagesRequest maps an Images API generation body to Gemini's GenerateContent body.
-func readImagesRequest(r llm.Request) (struct {
-	Contents []struct {
-		Parts []struct {
-			Text string `json:"text"`
-		} `json:"parts"`
-	} `json:"contents"`
-	GenerationConfig struct {
-		ResponseModalities []string `json:"responseModalities"`
-		ImageConfig        *struct {
-			AspectRatio string `json:"aspectRatio"`
-		} `json:"imageConfig,omitempty"`
-	} `json:"generationConfig"`
-}, error) {
-	var out struct {
-		Contents []struct {
-			Parts []struct {
-				Text string `json:"text"`
-			} `json:"parts"`
-		} `json:"contents"`
-		GenerationConfig struct {
-			ResponseModalities []string `json:"responseModalities"`
-			ImageConfig        *struct {
-				AspectRatio string `json:"aspectRatio"`
-			} `json:"imageConfig,omitempty"`
-		} `json:"generationConfig"`
-	}
+func readImagesRequest(r llm.Request) (imagesRequestBody, error) {
+	var out imagesRequestBody
 	if r.Native == nil {
 		return out, badImageRequest("the request body is missing")
 	}
@@ -181,18 +185,10 @@ func readImagesRequest(r llm.Request) (struct {
 	if err != nil {
 		return out, err
 	}
-	out.Contents = append(out.Contents, struct {
-		Parts []struct {
-			Text string `json:"text"`
-		} `json:"parts"`
-	}{Parts: []struct {
-		Text string `json:"text"`
-	}{{Text: prompt}}})
+	out.Contents = append(out.Contents, imagesContent{Parts: []imagesPart{{Text: prompt}}})
 	out.GenerationConfig.ResponseModalities = []string{"IMAGE"}
 	if ratio != "" {
-		out.GenerationConfig.ImageConfig = &struct {
-			AspectRatio string `json:"aspectRatio"`
-		}{AspectRatio: ratio}
+		out.GenerationConfig.ImageConfig = &imagesImageConfig{AspectRatio: ratio}
 	}
 	return out, nil
 }
@@ -241,9 +237,7 @@ func geminiImageAspectRatio(size string) (string, error) {
 }
 
 // imagesData returns every inlineData image in a GenerateContent reply as Images API data entries.
-func imagesData(raw []byte) ([]struct {
-	B64JSON string `json:"b64_json"`
-}, error) {
+func imagesData(raw []byte) ([]imageData, error) {
 	var reply struct {
 		Candidates []struct {
 			Content *struct {
@@ -258,18 +252,14 @@ func imagesData(raw []byte) ([]struct {
 	if err := json.Unmarshal(raw, &reply); err != nil {
 		return nil, &llm.Error{Code: llm.CodeUpstream, Status: http.StatusBadGateway, Scope: llm.ScopeEndpoint, Message: "Gemini's image reply is not JSON"}
 	}
-	var data []struct {
-		B64JSON string `json:"b64_json"`
-	}
+	var data []imageData
 	for _, candidate := range reply.Candidates {
 		if candidate.Content == nil {
 			continue
 		}
 		for _, part := range candidate.Content.Parts {
 			if part.InlineData != nil && part.InlineData.Data != "" {
-				data = append(data, struct {
-					B64JSON string `json:"b64_json"`
-				}{B64JSON: part.InlineData.Data})
+				data = append(data, imageData{B64JSON: part.InlineData.Data})
 			}
 		}
 	}
