@@ -53,50 +53,6 @@
             "reasoning_levels": [
               "low",
               "medium",
-              "high",
-              "xhigh"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": false
-          },
-          "context_length": 131072,
-          "created": 1740960000,
-          "from": "catalogue",
-          "id": "grok-3-mini-fast",
-          "max_output_tokens": 32768,
-          "object": "model",
-          "owned_by": "xai"
-        },
-        {
-          "capabilities": {
-            "pdf": false,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
-          "context_length": 500000,
-          "created": 1789948800,
-          "from": "catalogue",
-          "id": "grok-4.7-build-fast",
-          "max_output_tokens": 500000,
-          "object": "model",
-          "owned_by": "xai"
-        },
-        {
-          "capabilities": {
-            "pdf": false,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
               "high"
             ],
             "structured_output": true,
@@ -145,6 +101,22 @@
           "from": "catalogue",
           "id": "grok-4.3",
           "max_output_tokens": 30000,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "capabilities": {
+            "pdf": false,
+            "reasoning": true,
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 256000,
+          "created": 1779321600,
+          "from": "catalogue",
+          "id": "grok-build-0.1",
+          "max_output_tokens": 256000,
           "object": "model",
           "owned_by": "xai"
         },
@@ -200,28 +172,6 @@
             "tools": true,
             "vision": true
           },
-          "context_length": 200000,
-          "created": 1740960000,
-          "from": "catalogue",
-          "id": "grok-composer-2.5-fast",
-          "max_output_tokens": 32768,
-          "object": "model",
-          "owned_by": "xai"
-        },
-        {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
           "context_length": 500000,
           "created": 1783526400,
           "from": "catalogue",
@@ -247,18 +197,29 @@
           "owned_by": "xai"
         },
         {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
-          "context_length": 256000,
-          "created": 1779321600,
-          "from": "catalogue",
-          "id": "grok-build-0.1",
-          "max_output_tokens": 256000,
+          "context_length": 131072,
+          "created": 1740960000,
+          "from": "extension",
+          "id": "grok-3-mini-fast",
+          "max_output_tokens": 32768,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "context_length": 200000,
+          "created": 1740960000,
+          "from": "extension",
+          "id": "grok-composer-2.5-fast",
+          "max_output_tokens": 32768,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "context_length": 500000,
+          "created": 1789948800,
+          "from": "extension",
+          "id": "grok-4.7-build-fast",
+          "max_output_tokens": 500000,
           "object": "model",
           "owned_by": "xai"
         }

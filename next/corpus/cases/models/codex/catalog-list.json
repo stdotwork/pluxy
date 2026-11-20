@@ -29,29 +29,6 @@
       "want": [
         {
           "capabilities": {
-            "pdf": false,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
-          "context_length": 272000,
-          "created": 1776902400,
-          "from": "catalogue",
-          "id": "codex-auto-review",
-          "max_output_tokens": 128000,
-          "object": "model",
-          "owned_by": "openai"
-        },
-        {
-          "capabilities": {
             "pdf": true,
             "reasoning": true,
             "reasoning_levels": [
@@ -236,6 +213,15 @@
           "created": 1783616400,
           "from": "extension",
           "id": "gpt-5.6-terra",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "context_length": 272000,
+          "created": 1776902400,
+          "from": "extension",
+          "id": "codex-auto-review",
           "max_output_tokens": 128000,
           "object": "model",
           "owned_by": "openai"
