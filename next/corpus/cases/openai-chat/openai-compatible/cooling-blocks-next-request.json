@@ -104,7 +104,8 @@
       "want": {
         "code": "model_cooldown",
         "message": "every account for model \"gpt-test\" is cooling down; try again in 1s",
-        "type": "rate_limit_error"
+        "type": "rate_limit_error",
+        "pluxy": "(volatile)"
       }
     }
   ]

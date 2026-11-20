@@ -25,7 +25,8 @@
       "want": {
         "code": "server_error",
         "message": "The engine is currently overloaded, please try again later",
-        "type": "server_error"
+        "type": "server_error",
+        "pluxy": "(volatile)"
       }
     }
   ],
