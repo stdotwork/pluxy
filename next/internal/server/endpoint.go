@@ -61,10 +61,12 @@ var compactEndpoint = endpoint{
 }
 
 // alphaSearchEndpoint is Codex's search endpoint. Its body is Codex's own shape, which core passes
-// on as it came; the model is optional. The headers are those today's core passes on.
+// on as it came; the model is optional. The headers are those today's core passes on, and the
+// FedRAMP routing header the Codex CLI sends when its account is one; a backend call
+// (codexBackendEndpoint) passes the same list.
 var alphaSearchEndpoint = endpoint{
 	format:        llm.FormatCodexAlphaSearch,
-	headers:       []string{"version", "user-agent", "session_id", "x-client-request-id"},
+	headers:       []string{"version", "user-agent", "session_id", "x-client-request-id", "x-openai-fedramp"},
 	modelOptional: true,
 }
 

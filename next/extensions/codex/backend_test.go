@@ -22,7 +22,7 @@ type backendSeen struct {
 
 // A codex.backend call goes to the ChatGPT backend root (the account's base_url without /codex)
 // with the call's method, escaped path, query and body kept as they came, the account's token and
-// ChatGPT account and client identity, and the client's version and request IDs; the reply comes back whole.
+// ChatGPT account and client identity, and the client's version, request IDs and FedRAMP header; the reply comes back whole.
 // An API key, which has no such backend, and a path outside the root send nothing.
 func TestBackend(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
@@ -61,7 +61,7 @@ func TestBackend(t *testing.T) {
 	}
 	call := func(acct protocol.Account, c map[string]any) []llm.Event {
 		body, _ := json.Marshal(c)
-		headers := map[string]string{"version": "0.154.0", "user-agent": "codex_cli_rs/0.154.0", "session_id": "s1", "x-client-request-id": "r1"}
+		headers := map[string]string{"version": "0.154.0", "user-agent": "codex_cli_rs/0.154.0", "session_id": "s1", "x-client-request-id": "r1", "x-openai-fedramp": "true"}
 		s := ext.Endpoint(t.Context(), acct, llm.Request{Native: &llm.Native{Format: llm.FormatCodexBackend, Body: body, Headers: headers}})
 		defer s.Close()
 		var evs []llm.Event
@@ -88,6 +88,9 @@ func TestBackend(t *testing.T) {
 		for name, want := range map[string]string{
 			"Authorization": "Bearer tok-sub", "Chatgpt-Account-Id": "acct-codextest", "Originator": "codex-tui", // the account's client identity, as on /responses
 			"Accept": "application/json", "Version": "0.154.0", "Session_id": "s1", "X-Client-Request-Id": "r1",
+			// A FedRAMP account's CLI sends this on every backend call (codex-rs
+			// backend-client/src/client.rs), so it reaches the backend as it came.
+			"X-Openai-Fedramp": "true",
 		} {
 			if v := h.Get(name); v != want {
 				t.Errorf("%s = %q, want %q", name, v, want)

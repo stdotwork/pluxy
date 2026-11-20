@@ -21,8 +21,9 @@ type codexBackendRequest struct {
 // The Codex CLI reads a ChatGPT account's usage through its chatgpt_base_url (the /backend-api
 // root): the plan limit history is GET wham/usage/plan_limit_history?days=7 and the thread
 // usage is POST wham/usage/thread_usage/query (codex-rs/backend-client). Core passes such an
-// allowlisted call to the account's ChatGPT backend with the account's token, and answers a path
-// the CLI does not call with 404 without contacting the upstream.
+// allowlisted call to the account's ChatGPT backend with the account's token and the client's
+// FedRAMP header, and answers a path the CLI does not call with 404 without contacting the
+// upstream.
 func TestCodexBackendRoutes(t *testing.T) {
 	srv := codextest.New(t)
 	var mu sync.Mutex
@@ -62,6 +63,7 @@ func TestCodexBackendRoutes(t *testing.T) {
 		req.Header.Set("User-Agent", "codex_cli_rs/0.154.0")
 		req.Header.Set("Version", "0.154.0")
 		req.Header.Set("Session_id", "backend-session")
+		req.Header.Set("X-OpenAI-Fedramp", "true")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -115,6 +117,10 @@ func TestCodexBackendRoutes(t *testing.T) {
 		}
 		if id := r.header.Get("Chatgpt-Account-Id"); id != codextest.AccountID {
 			t.Errorf("%s %s Chatgpt-Account-Id = %q", r.method, r.uri, id)
+		}
+		// A FedRAMP account's CLI sends this on every backend call; it reaches the backend as sent.
+		if v := r.header.Get("X-Openai-Fedramp"); v != "true" {
+			t.Errorf("%s %s X-OpenAI-Fedramp = %q, want the client's", r.method, r.uri, v)
 		}
 		for name := range r.header {
 			if strings.HasPrefix(strings.ToLower(name), "x-pluxy") {

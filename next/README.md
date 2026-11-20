@@ -526,7 +526,8 @@ may name no model, and then any such account may serve it; one that names a mode
 other requests do. The extension sends the body to `{base_url}/alpha/search` as it came, but with
 `prompt_cache_key` and `prompt_cache_retention` removed and the model renamed for the account
 (today's core renames it only for an API key). It sends `originator: codex_cli_rs`, the bearer token, a sign-in's `Chatgpt-Account-Id`
-and the client's `Version`, `User-Agent`, `Session_id` and `X-Client-Request-Id` as they came; the
+and the client's `Version`, `User-Agent`, `Session_id`, `X-Client-Request-Id` and `X-OpenAI-Fedramp`
+as they came; the
 upstream's JSON reply comes back to the client whole, with its content type. An upstream error
 reaches the client as an error in OpenAI's shape (a 404 blocks no model on the account), and an API key without `alpha_search`, or
 without a `base_url` of its own (today's core keeps no Codex API key without one), is skipped
