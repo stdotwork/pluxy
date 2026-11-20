@@ -314,7 +314,8 @@ type RefreshModelsReply struct {
 
 // ClientKey is a client key as the management API lists it.
 type ClientKey struct {
-	// ID names the key in calls, without showing it. It changes when core restarts.
+	// ID names the key in calls, without showing it. It stays the same across restarts (derived
+	// with the key in state/key-id.key).
 	ID string `json:"id"`
 	// Masked is the key with all but its first and last two characters hidden; a key shorter
 	// than 8 characters is hidden whole.

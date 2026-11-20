@@ -227,3 +227,41 @@ func TestEventsAfterTheLargestSeq(t *testing.T) {
 		t.Fatalf("after the largest seq: %+v", p)
 	}
 }
+
+func TestEventsBefore(t *testing.T) {
+	s, c := newTestStore(10, time.Hour)
+	for i := range 5 {
+		m := "m1"
+		if i%2 == 1 {
+			m = "m2"
+		}
+		s.Add(Event{Timestamp: c.now().Add(time.Duration(i) * time.Second), Model: m})
+	}
+
+	p := s.EventsBefore(Filter{}, 0, 2)
+	if got := fmt.Sprint(seqs(p)); got != "[5 4]" || p.Next != 4 || !p.More || p.Lost {
+		t.Fatalf("before=0 limit=2: seqs=%s next=%d more=%v lost=%v", got, p.Next, p.More, p.Lost)
+	}
+	p2 := s.EventsBefore(Filter{}, p.Next, 2)
+	if got := fmt.Sprint(seqs(p2)); got != "[3 2]" || p2.Next != 2 || !p2.More || p2.Lost {
+		t.Fatalf("before=%d limit=2: seqs=%s next=%d more=%v", p.Next, got, p2.Next, p2.More)
+	}
+	p3 := s.EventsBefore(Filter{}, p2.Next, 2)
+	if got := fmt.Sprint(seqs(p3)); got != "[1]" || p3.Next != 1 || p3.More || p3.Lost {
+		t.Fatalf("before=%d limit=2: seqs=%s next=%d more=%v", p2.Next, got, p3.Next, p3.More)
+	}
+	p4 := s.EventsBefore(Filter{}, 1, 2)
+	if len(p4.Events) != 0 || p4.Next != 1 || p4.More {
+		t.Fatalf("before=1 limit=2: %+v", p4)
+	}
+
+	// Filter with before paging.
+	mf := s.EventsBefore(Filter{Model: "m1"}, 0, 2)
+	if got := fmt.Sprint(seqs(mf)); got != "[5 3]" || mf.Next != 3 || !mf.More {
+		t.Fatalf("filtered before=0 limit=2: seqs=%s next=%d more=%v", got, mf.Next, mf.More)
+	}
+	mf2 := s.EventsBefore(Filter{Model: "m1"}, mf.Next, 2)
+	if got := fmt.Sprint(seqs(mf2)); got != "[1]" || mf2.Next != 1 || mf2.More {
+		t.Fatalf("filtered before=3 limit=2: seqs=%s next=%d more=%v", got, mf2.Next, mf2.More)
+	}
+}

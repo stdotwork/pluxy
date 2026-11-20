@@ -224,7 +224,7 @@ func newKey() string { return rand.Text() }
 type clientKeyView = management.ClientKey
 
 func (c *Core) keyView(k string) clientKeyView {
-	return clientKeyView{ID: c.redactor.ID(k), Masked: maskKey(k)}
+	return clientKeyView{ID: c.keyID(k), Masked: maskKey(k)}
 }
 
 func maskKey(k string) string {
@@ -396,7 +396,7 @@ func (c *Core) handleConfig(m *server.Management) {
 		err := c.WriteConfig("management API: client key removed", c.edit(func(d *configdoc.Doc) error {
 			found := false
 			left, err := d.RemoveClientKeys(func(k string) bool {
-				drop := c.redactor.ID(k) == id
+				drop := c.keyID(k) == id
 				found = found || drop
 				return drop
 			})

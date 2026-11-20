@@ -99,6 +99,7 @@ type Core struct {
 	pagesPort atomic.Int64     // the pages listener's port, once main has it
 
 	redactor *configdoc.Redactor // hides the config file's secrets from the management API
+	keyIDs   *configdoc.Redactor // derives stable client key IDs from state/key-id.key
 
 	checks *checks // each account's last check
 
@@ -137,7 +138,7 @@ func Start(opts Options) (*Core, error) {
 	// the account's settings: the values the management API shows as placeholders.
 	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
 	bgCtx, bgCancel := context.WithCancel(context.Background())
-	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(), usage: usage.NewStore(),
+	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(),
 		bgCtx: bgCtx, bgCancel: bgCancel}
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {
@@ -158,6 +159,23 @@ func Start(opts Options) (*Core, error) {
 		bgCancel()
 		return nil, c.scrubbed(err)
 	}
+	keyIDs, err := configdoc.LoadKeyID(filepath.Join(StateDir(opts.ConfigPath), "key-id.key"))
+	if err != nil {
+		bgCancel()
+		return nil, c.scrubbed(err)
+	}
+	c.keyIDs = keyIDs
+	u := cfg.Usage
+	c.usage, err = usage.Open(usage.Options{
+		Dir:       UsageDir(opts.ConfigPath),
+		MaxEvents: u.MaxEvents,
+		MaxAge:    time.Duration(u.MaxAgeMS) * time.Millisecond,
+		KeepDays:  u.KeepDays,
+	})
+	if err != nil {
+		bgCancel()
+		return nil, c.scrubbed(err)
+	}
 	if c.logs = opts.Logs; c.logs == nil {
 		c.logs = logfile.New(LogsDir(opts.ConfigPath))
 	}
@@ -166,6 +184,7 @@ func Start(opts Options) (*Core, error) {
 	// No publisher's folder can be called .settings: IDs start with a letter or digit.
 	c.settings = extconfig.NewStore(filepath.Join(c.pkgDir, ".settings"))
 	if c.initial, err = c.loadPackages(cfg); err != nil {
+		_ = c.usage.Close()
 		bgCancel()
 		return nil, err
 	}
@@ -176,6 +195,7 @@ func Start(opts Options) (*Core, error) {
 		if c.creds != nil {
 			c.creds.Close()
 		}
+		_ = c.usage.Close()
 		return nil, err
 	}
 	c.creds.OnChange(c.accountsChanged)
@@ -212,22 +232,27 @@ func configSecrets(cfg *server.Config) *protocol.Redactor {
 	return protocol.NewRedactor(cs...)
 }
 
-// LogsDir returns the logs folder of the config file at configPath: logs beside it.
-func LogsDir(configPath string) string {
+func configDir(configPath string) string {
 	dir := filepath.Dir(configPath)
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
-	return filepath.Join(dir, "logs")
+	return dir
+}
+
+// LogsDir returns the logs folder of the config file at configPath: logs beside it.
+func LogsDir(configPath string) string {
+	return filepath.Join(configDir(configPath), "logs")
+}
+
+// UsageDir returns the usage folder of the config file at configPath: usage beside it.
+func UsageDir(configPath string) string {
+	return filepath.Join(configDir(configPath), "usage")
 }
 
 // StateDir returns the state folder of the config file at configPath: state beside it.
 func StateDir(configPath string) string {
-	dir := filepath.Dir(configPath)
-	if abs, err := filepath.Abs(dir); err == nil {
-		dir = abs
-	}
-	return filepath.Join(dir, "state")
+	return filepath.Join(configDir(configPath), "state")
 }
 
 // Config returns the active config.
@@ -568,7 +593,7 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		}
 		return hostSession{s}, nil
 	}
-	next.Generation = server.Generation{Config: cfg, Attempt: attempt, Count: count, Endpoint: endpoint, OpenSession: openSession, KeyID: c.redactor.ID}
+	next.Generation = server.Generation{Config: cfg, Attempt: attempt, Count: count, Endpoint: endpoint, OpenSession: openSession, KeyID: c.keyID}
 	if cfg.Usage.On() {
 		next.Usage = c.usage
 	}
@@ -667,6 +692,7 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	}
 	u := next.Config.Usage
 	c.usage.SetLimits(u.MaxEvents, time.Duration(u.MaxAgeMS)*time.Millisecond)
+	c.usage.SetKeepDays(u.KeepDaysValue())
 	if err := c.logs.Configure(next.Config.Logs.ToFile, next.Config.Logs.MaxTotalSizeMB); err != nil {
 		log.Printf("logs: %v", err)
 	}
@@ -846,6 +872,18 @@ func (c *Core) Stop() {
 		s.pprof.close()
 	}
 	c.creds.Close()
+	if c.usage != nil {
+		if err := c.usage.Close(); err != nil {
+			log.Printf("usage: %v", err)
+		}
+	}
+}
+
+func (c *Core) keyID(k string) string {
+	if c.keyIDs != nil {
+		return c.keyIDs.ID(k)
+	}
+	return c.redactor.ID(k)
 }
 
 // ExtensionStatus is a generation's status as management shows it.
