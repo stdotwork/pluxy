@@ -132,16 +132,19 @@ func serverToolID(itemID string) string {
 // webSearchResults turns a web_search_call's results back into the content of a
 // web_search_tool_result block: each result that still has its encrypted_content (Anthropic
 // refuses a result without its own) as a web_search_result, error entries as they are, an error
-// object as it is. Nothing usable gives nil, which is sent as an empty list.
-func webSearchResults(raw json.RawMessage) json.RawMessage {
+// object as it is. owned, when set, keeps only the results it reports true for: Anthropic refuses
+// a result minted for another credential, so those are left out, and dropped counts them.
+// Nothing usable gives nil, which is sent as an empty list.
+func webSearchResults(raw json.RawMessage, owned func(string) bool) (json.RawMessage, int) {
 	if len(raw) > 0 && raw[0] == '{' {
-		return raw
+		return raw, 0
 	}
 	var entries []map[string]json.RawMessage
 	if json.Unmarshal(raw, &entries) != nil {
-		return nil
+		return nil, 0
 	}
 	var out []map[string]json.RawMessage
+	dropped := 0
 	for _, e := range entries {
 		var typ, enc string
 		_ = json.Unmarshal(e["type"], &typ)
@@ -150,18 +153,22 @@ func webSearchResults(raw json.RawMessage) json.RawMessage {
 		case typ == "web_search_tool_result_error":
 			out = append(out, e)
 		case strings.TrimSpace(enc) != "":
+			if owned != nil && !owned(enc) {
+				dropped++
+				continue
+			}
 			e["type"] = json.RawMessage(`"web_search_result"`)
 			out = append(out, e)
 		}
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, dropped
 	}
 	b, err := json.Marshal(out)
 	if err != nil {
-		return nil
+		return nil, dropped
 	}
-	return b
+	return b, dropped
 }
 
 // webSearchHistory decides how each replayed web_search_call goes back, as today's core does.
@@ -224,11 +231,11 @@ func scanWebSearches(items []llm.Item) webSearchHistory {
 }
 
 // blocks returns the Claude blocks for item i, a web_search_call, or none when it is left out or
-// has no usable ID.
-func (h webSearchHistory) blocks(i int, c webSearchCall) []json.RawMessage {
+// has no usable ID, and how many of its results owned left out.
+func (h webSearchHistory) blocks(i int, c webSearchCall, owned func(string) bool) ([]json.RawMessage, int) {
 	id := serverToolID(c.ID)
 	if h.skip[i] || id == "" {
-		return nil
+		return nil, 0
 	}
 	q := c.query()
 	if q == "" {
@@ -240,12 +247,12 @@ func (h webSearchHistory) blocks(i int, c webSearchCall) []json.RawMessage {
 	}
 	use, _ := json.Marshal(map[string]any{"type": "server_tool_use", "id": id, "name": "web_search", "input": input})
 	if c.paused() && h.tail[i] {
-		return []json.RawMessage{use}
+		return []json.RawMessage{use}, 0
 	}
-	content := webSearchResults(c.Results)
+	content, dropped := webSearchResults(c.Results, owned)
 	if content == nil {
 		content = json.RawMessage("[]")
 	}
 	result, _ := json.Marshal(map[string]any{"type": "web_search_tool_result", "tool_use_id": id, "content": content})
-	return []json.RawMessage{use, result}
+	return []json.RawMessage{use, result}, dropped
 }

@@ -19,6 +19,9 @@ type encoder struct {
 	losses []llm.Loss
 	// keepModelTurn: the conversation's trailing assistant turns are kept (EncodeOptions).
 	keepModelTurn bool
+	// searchResultOwned reports whether a replayed web search result was minted by this request's
+	// account (EncodeOptions); nil keeps every result.
+	searchResultOwned func(string) bool
 }
 
 func (e *encoder) lose(kind, path, detail string) {
@@ -140,11 +143,16 @@ type EncodeOptions struct {
 	// Anthropic takes ending on the model's turn, such as on-demand compaction; a generation
 	// leaves it off. Every other repair still runs.
 	KeepModelTurn bool
+	// SearchResultOwned, when set, reports whether a replayed web search result's
+	// encrypted_content was minted by the account this request goes to. Anthropic refuses a
+	// result minted for another credential, so an entry it reports false for is left out and the
+	// result block keeps an empty list. nil keeps every result, as EncodeRequest does.
+	SearchResultOwned func(encryptedContent string) bool
 }
 
 // EncodeRequestWith builds a Messages request body as EncodeRequest does, changed by opts.
 func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
-	e := &encoder{keepModelTurn: opts.KeepModelTurn}
+	e := &encoder{keepModelTurn: opts.KeepModelTurn, searchResultOwned: opts.SearchResultOwned}
 	o := req.Options
 	out := map[string]any{"model": req.Model, "stream": req.Stream}
 	if o.MaxOutputTokens != nil {
@@ -295,7 +303,10 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			if c, ok := asWebSearchCall(it); ok {
 				// A search goes in the assistant message around it, with the text and calls
 				// before and after it, as Claude wrote that turn.
-				blocks := searches.blocks(i, c)
+				blocks, dropped := searches.blocks(i, c, e.searchResultOwned)
+				if dropped > 0 {
+					e.lose(llm.LossDropped, p, "web search results this account did not mint (Anthropic refuses another credential's encrypted content); the result block is sent with an empty list")
+				}
 				if n := len(msgs); n > 0 && msgs[n-1].role == llm.RoleAssistant && len(blocks) > 0 {
 					msgs[n-1].joinNext = true
 				}
