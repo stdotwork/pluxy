@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -195,6 +196,74 @@ func TestSetupImportKeepsCoreListen(t *testing.T) {
 				t.Errorf("dry %v: %s keep_with %q", dry, what, r.KeepWith)
 			}
 		}
+	}
+}
+
+// An import changes only what the file sets: a setting the file leaves out keeps core's value,
+// and within a section only the fields the file sets are written.
+func TestSetupImportChangesOnlyWhatTheFileSets(t *testing.T) {
+	setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeTestFile(t, cfgPath, `{
+		"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-1"], "management_key": "fake-mgmt-key",
+		"routing": {"session_affinity": {"enabled": true, "ttl_ms": 900000}, "request_retry": 2},
+		"usage": {"keep_days": 7, "max_events": 1234},
+		"logs": {"error_logs_max_files": 3}}`)
+	cpa := t.TempDir()
+	writeTestFile(t, filepath.Join(cpa, "config.yaml"), "logging-to-file: true\nusage-statistics-enabled: true\n")
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+
+	read := func() map[string]any {
+		t.Helper()
+		b, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(b, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	before := read()
+	code, _, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: filepath.Join(cpa, "config.yaml")})
+	if code != http.StatusOK {
+		t.Fatalf("import: %d %s", code, body)
+	}
+	after := read()
+
+	// Only usage.enabled and logs.to_file changed: every other setting of core's file is as it
+	// was.
+	usage, _ := after["usage"].(map[string]any)
+	logs, _ := after["logs"].(map[string]any)
+	if usage["enabled"] != true || logs["to_file"] != true {
+		t.Errorf("the file's settings are not brought: usage %v, logs %v", usage, logs)
+	}
+	for _, m := range []map[string]any{before, after} {
+		if u, ok := m["usage"].(map[string]any); ok {
+			delete(u, "enabled")
+		}
+		if l, ok := m["logs"].(map[string]any); ok {
+			delete(l, "to_file")
+		}
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("the import changed more than the file set:\nbefore %v\nafter  %v", before, after)
+	}
+	if usage["keep_days"] != float64(7) || usage["max_events"] != float64(1234) || logs["error_logs_max_files"] != float64(3) {
+		t.Errorf("fields the file does not set were lost: usage %v, logs %v", usage, logs)
+	}
+	routing, _ := after["routing"].(map[string]any)
+	if affinity, _ := routing["session_affinity"].(map[string]any); affinity["enabled"] != true || affinity["ttl_ms"] != float64(900000) {
+		t.Errorf("routing.session_affinity %v", affinity)
+	}
+	if routing["request_retry"] != float64(2) {
+		t.Errorf("routing.request_retry %v", routing["request_retry"])
 	}
 }
 

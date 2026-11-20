@@ -324,7 +324,7 @@ func (c *Core) mergeImport(d *configdoc.Doc, p *importPlan) error {
 			for _, rk := range slices.Sorted(maps.Keys(v.(map[string]any))) {
 				rv := v.(map[string]any)[rk]
 				if rk != "chains" {
-					if err := setValue(d, rv, "routing", rk); err != nil {
+					if err := setFields(d, rv, "routing", rk); err != nil {
 						return err
 					}
 					continue
@@ -365,14 +365,14 @@ func (c *Core) mergeImport(d *configdoc.Doc, p *importPlan) error {
 							return err
 						}
 					default:
-						if err := setValue(d, sv, "extensions", pkg, sk); err != nil {
+						if err := setFields(d, sv, "extensions", pkg, sk); err != nil {
 							return err
 						}
 					}
 				}
 			}
 		default:
-			if err := setValue(d, v, k); err != nil {
+			if err := setFields(d, v, k); err != nil {
 				return err
 			}
 		}
@@ -400,6 +400,22 @@ func setValue(d *configdoc.Doc, v any, path ...string) error {
 		return err
 	}
 	return d.Set(n, path...)
+}
+
+// setFields writes v into d at path field by field: a mapping is each of its fields set on its
+// own, so a field the file does not set keeps core's value, and anything else replaces the value
+// at path.
+func setFields(d *configdoc.Doc, v any, path ...string) error {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return setValue(d, v, path...)
+	}
+	for _, k := range slices.Sorted(maps.Keys(m)) {
+		if err := setFields(d, m[k], append(slices.Clone(path), k)...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // appendValue adds v to the list at path, making the list when there is none.

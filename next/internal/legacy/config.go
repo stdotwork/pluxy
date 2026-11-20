@@ -1223,10 +1223,15 @@ func (x *translator) routing() error {
 		} else if d, err := time.ParseDuration(strings.TrimSpace(s)); err == nil && d > 0 {
 			ttl = max(d, time.Second) // as today's core reads it
 		}
-		r["session_affinity"] = map[string]any{"ttl_ms": ttl.Milliseconds()}
-	} else {
+		aff := map[string]any{"ttl_ms": ttl.Milliseconds()}
+		if x.importing {
+			// Core's own config may have it off, which a JSON config otherwise is on without.
+			aff["enabled"] = true
+		}
+		r["session_affinity"] = aff
+	} else if _, set := get(x.t, "routing.session-affinity"); set || !x.importing {
 		// Today's core has it off unless the file turns it on; a JSON config has it on unless
-		// it says otherwise.
+		// it says otherwise. An import leaves core's own setting alone unless the file sets it.
 		r["session_affinity"] = map[string]any{"enabled": false}
 	}
 	if on, err := flag(x.t, "routing.force-model-prefix"); err != nil {
@@ -1240,12 +1245,15 @@ func (x *translator) routing() error {
 		r["max_accounts"] = n
 	}
 	// Rounds as today's core runs them; both settings default to 0 there (no extra rounds, no
-	// waits), whatever its example config shows.
+	// waits), whatever its example config shows. An import leaves core's own count alone unless
+	// the file sets it.
 	retry, err := integer(x.t, "routing.retry.request-retry")
 	if err != nil {
 		return err
 	}
-	r["request_retry"] = max(retry, 0)
+	if _, set := get(x.t, "routing.retry.request-retry"); set || !x.importing {
+		r["request_retry"] = max(retry, 0)
+	}
 	if wait, err := integer(x.t, "routing.retry.max-retry-interval"); err != nil {
 		return err
 	} else if wait > 0 {
