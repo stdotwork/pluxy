@@ -237,8 +237,9 @@ func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, f
 	// out is where the body goes: through keep-alive comments when it is a stream.
 	var out io.Writer = w
 	flush := rc.Flush
+	var ka *keepAlive
 	if sse {
-		ka := startKeepAlive(w, rc)
+		ka = startKeepAlive(w, rc)
 		defer ka.stop()
 		out, flush = ka, ka.Flush
 	}
@@ -264,11 +265,17 @@ func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, f
 				}
 			}
 		case llm.EventFinish:
+			if ka != nil {
+				ka.finish()
+			}
 			m.finish(ev)
 			return
 		case llm.EventError:
 			// The reply has started: a stream gets the error as its last event; any other body
 			// ends where it broke off.
+			if ka != nil {
+				ka.finish()
+			}
 			logFailure(r, ev.Error)
 			if sse {
 				_, body := openaichat.ErrorResponse(ev.Error)

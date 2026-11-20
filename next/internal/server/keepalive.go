@@ -22,16 +22,18 @@ const keepAliveComment = ": keep-alive\n\n"
 // reply whose pieces cut an event (an endpoint's passed-on body) is never broken by it. Writes and
 // flushes are serialised with the timer's; stop it before the handler returns.
 type keepAlive struct {
-	mu      sync.Mutex
-	w       io.Writer
-	rc      *http.ResponseController
-	timer   *time.Timer
-	framing sseFraming
-	stopped bool
+	mu        sync.Mutex
+	w         io.Writer
+	rc        *http.ResponseController
+	timer     *time.Timer
+	framing   sseFraming
+	lastWrite time.Time
+	finished  bool
+	stopped   bool
 }
 
 func startKeepAlive(w io.Writer, rc *http.ResponseController) *keepAlive {
-	k := &keepAlive{w: w, rc: rc}
+	k := &keepAlive{w: w, rc: rc, lastWrite: time.Now()}
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.timer = time.AfterFunc(keepAliveAfter, k.fire)
@@ -43,7 +45,10 @@ func (k *keepAlive) Write(p []byte) (int, error) {
 	defer k.mu.Unlock()
 	n, err := k.w.Write(p)
 	k.framing.note(p[:n])
-	if !k.stopped {
+	if n > 0 {
+		k.lastWrite = time.Now()
+	}
+	if !k.finished && !k.stopped {
 		k.timer.Reset(keepAliveAfter)
 	}
 	return n, err
@@ -58,18 +63,32 @@ func (k *keepAlive) Flush() error {
 func (k *keepAlive) fire() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if k.stopped {
+	if k.stopped || k.finished {
+		return
+	}
+	if remaining := keepAliveAfter - time.Since(k.lastWrite); remaining > 0 {
+		k.timer.Reset(remaining)
 		return
 	}
 	if k.framing.atBoundary() {
 		if _, err := io.WriteString(k.w, keepAliveComment); err != nil {
 			return // the client went away; the reply's next write sees it
 		}
+		k.lastWrite = time.Now()
 		if k.rc.Flush() != nil {
 			return
 		}
 	}
 	k.timer.Reset(keepAliveAfter)
+}
+
+// finish marks the reply as at its terminal event; a timer callback that runs after this point
+// writes nothing.
+func (k *keepAlive) finish() {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.finished = true
+	k.timer.Stop()
 }
 
 // stop ends the comments; none is written once it returns.

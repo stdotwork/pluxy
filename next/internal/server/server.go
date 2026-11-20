@@ -398,8 +398,9 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 	rc := http.NewResponseController(w)
 	var out io.Writer = w
 	flush := rc.Flush
+	var ka *keepAlive
 	if !f.noKeepAlive {
-		ka := startKeepAlive(w, rc)
+		ka = startKeepAlive(w, rc)
 		defer ka.stop()
 		out, flush = ka, ka.Flush
 	}
@@ -408,6 +409,9 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 	for {
 		// Writes block while the client is slow, and the next event is not read until the
 		// write is done: that is the backpressure path to the extension.
+		if ev.Terminal() && ka != nil {
+			ka.finish()
+		}
 		if err := sw.Write(ev); err != nil {
 			return
 		}

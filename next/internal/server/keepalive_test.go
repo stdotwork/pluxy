@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -82,6 +83,79 @@ func TestKeepAliveNotWhileWriting(t *testing.T) {
 	k.stop()
 	if strings.Contains(rec.Body.String(), keepAliveComment) {
 		t.Errorf("a comment between writes 20ms apart, with 200ms before one: %q", rec.Body.String())
+	}
+}
+
+// blockingWriter stops the first write until the test releases it, so a timer callback can queue
+// behind the keep-alive mutex while that write is still in progress.
+type blockingWriter struct {
+	mu      sync.Mutex
+	body    strings.Builder
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (w *blockingWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() {
+		close(w.entered)
+		<-w.release
+	})
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.body.Write(p)
+}
+
+func (w *blockingWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.body.String()
+}
+
+// A timer callback that fired while a write held the lock must not comment as soon as that write
+// ends: the write put the next comment off by a full interval.
+func TestKeepAliveStaleFireWaits(t *testing.T) {
+	shortKeepAlive(t, 200*time.Millisecond)
+	w := &blockingWriter{entered: make(chan struct{}), release: make(chan struct{})}
+	rec := httptest.NewRecorder()
+	k := startKeepAlive(w, http.NewResponseController(rec))
+	written := make(chan error, 1)
+	go func() {
+		_, err := k.Write([]byte("data: one\n\n"))
+		written <- err
+	}()
+	<-w.entered
+
+	// The timer fires while Write holds k.mu and waits there.
+	time.Sleep(2 * keepAliveAfter)
+	close(w.release)
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(keepAliveAfter / 4)
+	if got := w.String(); strings.Contains(got, keepAliveComment) {
+		t.Fatalf("a stale timer callback wrote a comment right after a write: %q", got)
+	}
+	k.stop()
+}
+
+// A terminal event stops future comments, including one whose timer was already due.
+func TestKeepAliveStopsAtFinish(t *testing.T) {
+	shortKeepAlive(t, 40*time.Millisecond)
+	rec := httptest.NewRecorder()
+	k := startKeepAlive(rec, http.NewResponseController(rec))
+	k.mu.Lock()
+	k.lastWrite = time.Now().Add(-keepAliveAfter)
+	k.mu.Unlock()
+	k.fire()
+	after := rec.Body.String()
+	if !strings.Contains(after, keepAliveComment) {
+		t.Fatalf("no comment before finish: %q", after)
+	}
+	k.finish()
+	time.Sleep(90 * time.Millisecond)
+	if got := rec.Body.String(); got != after {
+		t.Fatalf("a comment after the terminal event: %q became %q", after, got)
 	}
 }
 
