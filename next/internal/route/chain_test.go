@@ -602,3 +602,16 @@ func TestCodexNamesKnowChains(t *testing.T) {
 		t.Errorf("my-opus = %+v; Codex serves no step of it", n)
 	}
 }
+
+// The Codex client catalogue follows routing's provider choice for names outside chains. A
+// held higher-priority Claude account that lists m keeps m away from Codex, just as it does for
+// a request and the normal model list.
+func TestCodexNamesFollowRoutingProvider(t *testing.T) {
+	m := []ModelEntry{{Name: "m"}}
+	h := newChainHarness(t, Config{},
+		Account{ID: "c1", Extension: claudeExt, Models: m, Priority: 1, Held: HealthNeedsLogin},
+		Account{ID: "x1", Extension: codexExt, Models: m})
+	if got := h.r.ModelNames(context.Background(), codexExt); len(got) != 0 {
+		t.Errorf("Codex names = %+v, want none: routing keeps m on Claude", got)
+	}
+}

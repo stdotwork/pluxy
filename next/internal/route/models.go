@@ -653,76 +653,65 @@ func (r *Router) listedModel(a *Account, n Name, list *protocol.ModelList, name 
 }
 
 // ModelNames returns public and upstream names served by extension's accounts, using
-// Models' cached catalogs and naming rules without renewing credentials. Repeated names
-// keep the first mapping; NonCodex marks names also served by another extension. A fallback
+// Models' cached catalogs and naming rules without renewing credentials. A name outside a
+// fallback chain is listed only when routing chooses extension as its provider. A fallback
 // chain's name is listed when a step of it can go to extension, and is NonCodex when a step can
 // go to another extension, whatever else serves the name.
 func (r *Router) ModelNames(ctx context.Context, extension string) []Name {
-	accounts, creds := r.snapshot()
+	accounts, creds := r.knownSnapshot()
 	creds = storedCredentials{creds}
-	r.mu.RLock()
-	catalog := r.catalog
-	r.mu.RUnlock()
-	var out []Name
-	seen := map[string]bool{}
+	catalog := r.catalogFunc()
+	served := r.served(ctx, accounts, creds, catalog)
+	names := map[string]Name{}
+	var order []string
+	now := r.now()
 	for _, a := range accounts {
 		if a.Extension != extension {
 			continue
 		}
-		list := r.listOf(ctx, a, creds, catalog, r.now())
 		var ids []string
-		if list != nil {
-			ids = modelIDs(list)
+		if len(a.Models) == 0 {
+			if list := r.listOf(ctx, a, creds, catalog, now); list != nil {
+				ids = modelIDs(list)
+			}
 		}
 		for _, n := range a.names(ids, r.cfg.ForceModelPrefix) {
 			if n.DisplayName == "" && len(a.Models) > 0 {
 				n.DisplayName = n.Upstream
 			}
-			if !seen[n.Public] {
-				seen[n.Public] = true
-				out = append(out, n)
+			if _, ok := names[n.Public]; !ok {
+				names[n.Public] = n
+				order = append(order, n.Public)
 			}
 		}
 	}
-	// Check all other routes, including accounts whose unknown catalog lets them serve any
-	// model. Resolve applies exclusions, aliases and forced prefixes in the same order.
-	for _, a := range accounts {
-		if a.Extension == extension {
+	var out []Name
+	for _, name := range order {
+		if _, chain := r.cfg.Chains[name]; chain {
 			continue
 		}
-		list := r.listOf(ctx, a, creds, catalog, r.now())
-		var ids []string
-		if list != nil {
-			ids = modelIDs(list)
+		serving := r.stepTargets(Step{Model: name}, 0, accounts, served)
+		if len(serving) == 0 || serving[0].a.Extension != extension {
+			continue
 		}
-		for i := range out {
-			if _, ok := a.resolve(out[i].Public, r.cfg.ForceModelPrefix, ids); ok {
-				out[i].NonCodex = true
-			}
-		}
+		out = append(out, names[name])
 	}
 	// A chain decides where its name goes: it is NonCodex when a step can go to another
 	// extension, and a chain's new name is listed when a step can go to this one, as that step's
 	// model.
 	if len(r.cfg.Chains) > 0 {
-		known, _ := r.knownSnapshot()
-		served := r.served(ctx, known, creds, catalog)
 		for _, name := range slices.Sorted(maps.Keys(r.cfg.Chains)) {
 			steps := r.cfg.Chains[name]
-			serving, _ := split(r.targets(steps, known, served))
+			serving, _ := split(r.targets(steps, accounts, served))
 			other := slices.ContainsFunc(serving, func(t target) bool { return t.a.Extension != extension })
-			if j := slices.IndexFunc(out, func(n Name) bool { return n.Public == name }); j >= 0 {
-				out[j].NonCodex = other
-				continue
-			}
 			i := slices.IndexFunc(serving, func(t target) bool { return t.a.Extension == extension })
 			if i < 0 {
 				continue
 			}
 			t := serving[i]
 			n := Name{Upstream: t.model, Base: t.model}
-			if k := slices.IndexFunc(out, func(n Name) bool { return n.Public == steps[t.step].Model && n.Upstream == t.model }); k >= 0 {
-				n = out[k]
+			if base, ok := names[steps[t.step].Model]; ok && base.Upstream == t.model {
+				n = base
 			}
 			n.Public, n.NonCodex = name, other
 			out = append(out, n)
