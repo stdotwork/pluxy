@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ import (
 // is read as. Every other rule's setting gets "x".
 var sample = map[string]any{
 	"config-version":          8,
-	"server.host":             "127.0.0.1",
+	"server.host":             "10.9.8.7",
 	"server.port":             8318,
 	"access.api-keys":         []any{"fake-client-key"},
 	"management.secret-key":   "fake-management-key",
@@ -73,8 +74,9 @@ var groupSample = map[string]any{
 }
 
 // ruleDoc is a config.yaml that sets every setting of the rule table, each to a value that asks
-// for something, and gives every provider section a group with each of its fields.
-func ruleDoc(t *testing.T) tree {
+// for something, and gives every provider section a group with each of its fields. skip, when
+// not empty, is a rule left out: the setting is not in the file.
+func ruleDoc(t *testing.T, skip string) tree {
 	t.Helper()
 	doc := tree{}
 	groups := map[string]tree{}
@@ -82,6 +84,9 @@ func ruleDoc(t *testing.T) tree {
 		groups[f.v8] = tree{}
 	}
 	for _, path := range slices.Sorted(maps.Keys(rules)) {
+		if path == skip {
+			continue
+		}
 		r := rules[path]
 		if rest, ok := strings.CutPrefix(path, "api-keys."); ok {
 			section, field, _ := strings.Cut(rest, "[].")
@@ -139,29 +144,56 @@ func ruleDoc(t *testing.T) tree {
 			keys[s] = []any{tree{"api-key": "fake-meta-key"}}
 			continue
 		}
-		g["base-url"] = groupSample["base-url"]
-		g["keys"] = []any{tree{"api-key": "fake-upstream-key", "weight": 1}}
-		delete(g, "api-key")
-		delete(g, "weight")
+		// A key's api-key and weight are the group's, unless the rule that sets them was left out.
+		key := tree{}
+		for _, field := range []string{"api-key", "weight"} {
+			if v, ok := g[field]; ok {
+				key[field] = v
+				delete(g, field)
+			}
+		}
+		g["keys"] = []any{key}
 		keys[s] = []any{g}
 	}
 	doc["api-keys"] = keys
 	return doc
 }
 
-// Every setting of the rule table, set to something that asks for it, lands in exactly one of
-// the report's lists: ImportConfig fails otherwise, naming the setting.
-func TestImportReportCoversEveryRule(t *testing.T) {
-	doc := ruleDoc(t)
+// noConfigEffect are the supported settings whose sample value asks nothing of core's config: the
+// value is carried elsewhere, or is the default core already has. Each says why, so a setting
+// added here without a reason is caught by TestImportReportCoversEveryRule.
+var noConfigEffect = map[string]string{
+	"oauth.auth-dir": "it names the folder of accounts to read: the folder's accounts are imported, and core keeps no folder",
+	"oauth.providers.codex.signin-with-chatgpt-identifier": "it applies to accounts added by a sign-in: the import's account options carry it, not core's config",
+	"upstream.codex.disable-codex-cloaking":                "it applies to accounts added by a sign-in: the import's account options carry it, not core's config",
+	"upstream.codex.model-level-cooling":                   "pluxy keeps a used-up model's block on that model always, so true asks for nothing here",
+	"upstream.codex.websocket-compression":                 "compression is always on, so true asks for nothing",
+	"api-keys.openai-compatibility[].disabled":             "false is the default: the group's keys are imported either way",
+}
+
+// importDoc imports the config.yaml that doc makes, and returns the import's result.
+func importDoc(t *testing.T, dir string, doc tree) *Result {
+	t.Helper()
 	b, err := yaml.Marshal(doc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := ImportConfig(b, t.TempDir())
+	res, err := ImportConfig(b, dir)
 	if err != nil {
 		t.Fatalf("ImportConfig: %v\n%s", err, b)
 	}
-	lists, err := res.Ledger.Report()
+	return res
+}
+
+// Every setting of the rule table, set to something that asks for it, lands in exactly one of
+// the report's lists: ImportConfig fails otherwise, naming the setting. Each brought or changed
+// setting's value reaches core's config, so removing its writer fails the test: leaving the
+// setting out of the file changes what the import writes. A setting whose value goes elsewhere is
+// in noConfigEffect, with why.
+func TestImportReportCoversEveryRule(t *testing.T) {
+	dir := t.TempDir()
+	base := importDoc(t, dir, ruleDoc(t, ""))
+	lists, err := base.Ledger.Report()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +212,8 @@ func TestImportReportCoversEveryRule(t *testing.T) {
 			t.Errorf("no row names %s", path)
 		}
 	}
-	// Each provider section's group is one row.
+	// Each provider section, a whole section too, has a row for its entry; the tests below check
+	// what each of its fields did.
 	for _, f := range families {
 		if !slices.Contains(whats, "api-keys."+f.v8+"[0]") {
 			t.Errorf("no row names api-keys.%s[0]", f.v8)
@@ -200,6 +233,40 @@ func TestImportReportCoversEveryRule(t *testing.T) {
 		}
 		if !strings.Contains(whys, strings.ReplaceAll(strings.TrimPrefix(field, "models[]."), "[]", "")) {
 			t.Errorf("no row says %s is not brought", path)
+		}
+	}
+	// A whole-section rule that is not brought says why in its entries' rows.
+	for path, r := range rules {
+		if r.status == supported || r.note == "" || !strings.HasPrefix(path, "api-keys.") || strings.Contains(path, "[].") {
+			continue
+		}
+		section := strings.TrimPrefix(path, "api-keys.")
+		if !slices.ContainsFunc(whats, func(w string) bool { return strings.HasPrefix(w, "api-keys."+section+"[") }) {
+			t.Errorf("no row names an entry of %s", path)
+		}
+	}
+	for _, path := range slices.Sorted(maps.Keys(rules)) {
+		if rules[path].status != supported {
+			continue
+		}
+		// A provider rule's value is part of its group's row: every entry of ruleDoc's sections
+		// becomes an account, whose brought or changed row names the group.
+		if !strings.HasPrefix(path, "api-keys.") {
+			named := func(rows []Row) bool {
+				return slices.ContainsFunc(rows, func(r Row) bool { return r.What == path || strings.HasPrefix(r.What, path+".") })
+			}
+			if !named(lists.Brought) && !named(lists.Changed) {
+				continue
+			}
+		}
+		if why, ok := noConfigEffect[path]; ok {
+			if why == "" {
+				t.Errorf("%s is exempt from reaching the config without a reason", path)
+			}
+			continue
+		}
+		if got := importDoc(t, dir, ruleDoc(t, path)); reflect.DeepEqual(got.Config, base.Config) {
+			t.Errorf("leaving %s out of the file does not change the config the import writes: nothing brings the setting", path)
 		}
 	}
 }
@@ -449,7 +516,16 @@ func TestAuthFolderRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	led := a.Ledger(a.Files, nil)
+	// The report is of what Import does with the folder, not of the files read: Import adds an
+	// account per file and says which it took.
+	imported, taken, err := Import(fakeStore{}, a.Files, func(string) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(imported) != len(a.Files) || len(taken) != 0 {
+		t.Fatalf("Import added %d of %d files, %d taken", len(imported), len(a.Files), len(taken))
+	}
+	led := a.Ledger(imported, taken)
 	lists, err := led.Report()
 	if err != nil {
 		t.Fatal(err)
@@ -490,7 +566,10 @@ func TestAuthFolderRows(t *testing.T) {
 		t.Errorf("%d rows for %d entries", len(got), len(a.Entries))
 	}
 	// An account the store already has is named as not brought.
-	imported, taken, _ := Import(fakeStore{}, a.Files, func(id string) bool { return id == "xai-a" })
+	imported, taken, err = Import(fakeStore{}, a.Files, func(id string) bool { return id == "xai-a" })
+	if err != nil {
+		t.Fatal(err)
+	}
 	lists, err = a.Ledger(imported, taken).Report()
 	if err != nil {
 		t.Fatal(err)

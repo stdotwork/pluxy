@@ -56,6 +56,8 @@ func TestSetupImport(t *testing.T) {
 	auths := filepath.Join(cpa, "auths")
 	writeTestFile(t, filepath.Join(auths, "claude-a.json"), `{"type": "claude", "access_token": "fake-claude"}`)
 	writeTestFile(t, filepath.Join(auths, "antigravity-a.json"), `{"type": "antigravity", "access_token": "fake-ag"}`)
+	// The name makes the ID of the config's own claude-api-key account: a collision.
+	writeTestFile(t, filepath.Join(auths, "claude-api-key-1.json"), `{"type": "claude", "access_token": "fake-collide"}`)
 	writeTestFile(t, filepath.Join(cpa, "config.yaml"), `
 port: 8317
 api-keys: [fake-cpa-client-key]
@@ -91,23 +93,51 @@ claude-api-key:
 		}
 		return out
 	}
-	want := map[string][]string{
-		"brought":     {"api-keys", "auth-dir", "claude-api-key[0]", "auth file claude-a.json"},
-		"changed":     {"server.host", "remote-management.secret-key", "port"},
-		"not_brought": {"debug", "auth file antigravity-a.json"},
+	// wantRows is the report of the dry run (dry) or of the import whose new management key is
+	// key: every field of every row.
+	wantRows := func(dry bool, key string) map[string][]management.ImportRow {
+		keepWith := `"listen": "0.0.0.0:8317" in pluxy's config file, then restart core`
+		listen := func(what, from string) management.ImportRow {
+			return management.ImportRow{What: what, From: from, To: "127.0.0.1:0",
+				Why: "core keeps listening on 127.0.0.1:0: listen cannot change while core runs", KeepWith: keepWith}
+		}
+		to := "(a new key, shown once when the import runs)"
+		if !dry {
+			to = key
+		}
+		return map[string][]management.ImportRow{
+			"brought": {
+				{What: "api-keys", As: "1 client key"},
+				{What: "claude-api-key[0]", As: "pluxy/claude account claude-api-key-1"},
+				{What: "auth-dir", Why: "the folder is not kept: core keeps no auth folder, so a later import needs --auth-dir again"},
+				{What: "auth file", Name: "claude-a.json", As: "pluxy/claude account claude-a"},
+			},
+			"changed": {
+				listen("server.host", "(not set: every interface)"),
+				{What: "remote-management.secret-key", From: "(a bcrypt hash of the key)", To: to,
+					Why: "today's core keeps only a bcrypt hash of its management key, which pluxy cannot use"},
+				listen("port", "0.0.0.0:8317"),
+			},
+			"not_brought": {
+				{What: "debug", Why: "this core writes no debug-level log lines"},
+				{What: "auth file", Name: "antigravity-a.json", Why: "pluxy no longer ships the Antigravity provider"},
+				{What: "auth file", Name: "claude-api-key-1.json", Why: `the config already has an account "claude-api-key-1"`},
+			},
+		}
 	}
-	check := func(rep management.ImportReport) {
+	check := func(rep management.ImportReport, key string) {
 		t.Helper()
-		for list, rows := range map[string][]management.ImportRow{"brought": rep.Brought, "changed": rep.Changed, "not_brought": rep.NotBrought} {
-			if got := names(rows); !sameSet(got, want[list]) {
-				t.Errorf("%s: %v, want %v", list, got, want[list])
+		want := wantRows(rep.DryRun, key)
+		for list, got := range map[string][]management.ImportRow{"brought": rep.Brought, "changed": rep.Changed, "not_brought": rep.NotBrought} {
+			if !reflect.DeepEqual(got, want[list]) {
+				t.Errorf("%s:\ngot  %+v\nwant %+v", list, got, want[list])
 			}
 		}
 		if len(rep.Needs) != 1 || rep.Needs[0].Pick != "pluxy/claude" || rep.Needs[0].Why != "2 accounts need it" {
 			t.Errorf("needs %+v", rep.Needs)
 		}
 	}
-	check(rep)
+	check(rep, "")
 	if strings.Contains(body, "$2a$") || strings.Contains(body, "fake-claude") || strings.Contains(body, "fake-cpa-client-key") {
 		t.Errorf("the report holds a secret: %s", body)
 	}
@@ -116,10 +146,17 @@ claude-api-key:
 	if code != http.StatusOK || rep.DryRun {
 		t.Fatalf("import: %d %s", code, body)
 	}
-	check(rep)
-	got := c.Config()
 	i := slices.IndexFunc(rep.Changed, func(r management.ImportRow) bool { return r.What == "remote-management.secret-key" })
-	if key := rep.Changed[i].To; len(key) < 20 || got.ManagementKey != key {
+	if i < 0 {
+		t.Fatalf("the import has no management key row: %s", body)
+	}
+	key := rep.Changed[i].To
+	if len(key) < 20 {
+		t.Errorf("the new management key %q", key)
+	}
+	check(rep, key)
+	got := c.Config()
+	if got.ManagementKey != key {
 		t.Errorf("the new management key %q is not core's (%q)", key, got.ManagementKey)
 	}
 	if !slices.Contains(got.ClientKeys, "fake-cpa-client-key") || !slices.Contains(got.ClientKeys, "fake-client-key-1") {
@@ -512,8 +549,4 @@ func mapsEqual(a, b map[string]string) bool {
 		}
 	}
 	return true
-}
-
-func sameSet(a, b []string) bool {
-	return len(a) == len(b) && !slices.ContainsFunc(a, func(s string) bool { return !slices.Contains(b, s) })
 }

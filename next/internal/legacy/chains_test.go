@@ -3,7 +3,9 @@ package legacy_test
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -48,7 +50,9 @@ openai-compatibility:
 
 // A pooled alias (one openai-compatibility key over several models) and a name served by two
 // providers become fallback chains that the router accepts: each step is served by an account
-// of the imported config, as a management call that sets a chain checks it (CheckSteps).
+// of the imported config, as a management call that sets a chain checks it (CheckSteps). A name
+// one provider serves gets no chain, and the steps come in the order the file lists a group's
+// models, then the order core reads the provider sections.
 func TestPoolsBecomeChainsTheRouterAccepts(t *testing.T) {
 	res, err := legacy.ImportConfig([]byte(`
 access: {api-keys: [fake-client-key]}
@@ -63,7 +67,7 @@ openai-compatibility:
       - {name: claude-sonnet-4}
 claude-api-key:
   - api-key: fake-3
-    models: [{name: claude-sonnet-4}]
+    models: [{name: claude-sonnet-4}, {name: claude-only}]
 `), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -77,11 +81,47 @@ claude-api-key:
 		t.Fatalf("the imported config is refused: %v\n%s", err, b)
 	}
 	chains := cfg.Routing.Chains
-	if len(chains["fast"]) != 2 || len(chains["claude-sonnet-4"]) != 2 {
-		t.Fatalf("chains %+v", chains)
+	// The alias's models in the order the group lists them, then the providers a name is served
+	// by in the order core reads the sections: pluxy/claude before pluxy/openai-compatible, which
+	// is not the file's order.
+	want := map[string][]route.Step{
+		"fast": {{Model: "deepseek-v3.1", Provider: legacy.OpenAICompatible},
+			{Model: "glm-5", Provider: legacy.OpenAICompatible}},
+		"claude-sonnet-4": {{Model: "claude-sonnet-4", Provider: legacy.Claude},
+			{Model: "claude-sonnet-4", Provider: legacy.OpenAICompatible}},
 	}
-	if s := chains["claude-sonnet-4"]; s[0].Provider != legacy.Claude || s[1].Provider != legacy.OpenAICompatible {
-		t.Errorf("claude-sonnet-4 steps %+v, want the file's order: pluxy/claude, then pluxy/openai-compatible", s)
+	if len(chains) != len(want) {
+		t.Fatalf("chains %+v, want those of %v", chains, slices.Sorted(maps.Keys(want)))
+	}
+	for name, wantSteps := range want {
+		steps, ok := chains[name]
+		if !ok {
+			t.Errorf("no chain %s: %+v", name, chains)
+			continue
+		}
+		if len(steps) != len(wantSteps) {
+			t.Errorf("chain %s: %+v", name, steps)
+			continue
+		}
+		for i, w := range wantSteps {
+			if steps[i].Model != w.Model || steps[i].Provider != w.Provider {
+				t.Errorf("chain %s step %d = %+v, want %s@%s", name, i+1, steps[i], w.Model, w.Provider)
+			}
+			// A pool's steps name the group's accounts; a name two providers serve is left to each
+			// provider's own accounts.
+			var accounts []string
+			if name == "fast" {
+				accounts = []string{"compat-1", "compat-2"}
+			}
+			if !slices.Equal(steps[i].Accounts, accounts) {
+				t.Errorf("chain %s step %d accounts %v, want %v", name, i+1, steps[i].Accounts, accounts)
+			}
+		}
+	}
+	// The only chains are a pool's and a name two providers serve: one provider's name, however
+	// many accounts it has, is served without one.
+	if steps, ok := chains["claude-only"]; ok {
+		t.Errorf("a name one provider serves has the chain %+v", steps)
 	}
 	r, err := route.New(cfg.Routing, cfg.Accounts(), nil, nil)
 	if err != nil {
