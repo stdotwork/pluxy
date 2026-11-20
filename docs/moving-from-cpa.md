@@ -46,7 +46,8 @@ file of the auth folder, each once:
 - **Not brought**: what stays behind, with the reason. Most rows end with "it is off, empty or
   at today's default here, so nothing is lost"; read the ones that do not.
 
-A last list, **Needs**, names the providers the imported accounts need.
+A last list, **Needs**, appears when the imported accounts need a provider pluxy does not have
+installed yet.
 
 ### 3. Import
 
@@ -61,10 +62,12 @@ is, and the lists say so.
 
 Two things to know about the result:
 
-- **The management key becomes CPA's.** If CPA's file holds only a bcrypt hash of it (CPA writes
-  one over the key after it first reads it), pluxy makes a new key and shows it once, in the
-  **Changed** list. Either way the key is in `config.json`, where the `pluxy` commands read it;
-  sign in to the panel with it from now on.
+- **pluxy keeps its own management key.** CPA's key, if its file has one, is not brought: neither
+  a plain key nor the bcrypt hash CPA writes over it after it first reads it. The key guards every
+  client of pluxy, and the import does not change who may manage it. The **Not brought** list
+  names CPA's key and says so. Go on signing in to the panel with pluxy's key, in `config.json`,
+  where the `pluxy` commands read it; to change it, send
+  `POST /v0/management/management-key/rotate`, which returns the new key once.
 - **pluxy keeps its own address.** It goes on listening where it started. The **Changed** list
   shows the address CPA's file asked for and the `"listen"` line to put in `config.json` if you
   want it; restart pluxy after changing it.
@@ -98,7 +101,7 @@ a client needs only pluxy's address: the same one as before if you gave pluxy CP
 From `config.yaml`:
 
 - TLS, trusted proxies and the outbound proxy;
-- the client keys, and the management key when the file holds it in plain text;
+- the client keys (never the management key: pluxy keeps its own);
 - routing: the strategy, session affinity, retries, and the cooldown settings;
 - the provider keys (`codex`, `claude`, `gemini`, `vertex`, `interactions`, `xai`,
   `openai-compatibility`): each key becomes an account, with its base URL, proxy, headers,
@@ -114,28 +117,29 @@ and `devin`. Each becomes an account whose ID is the file's name without `.json`
 label, priority, prefix, proxy, headers and whether it was disabled.
 
 [`next/README.md`](../next/README.md#configyaml-with-todays-key-names) has the full list: every
-CPA setting with what pluxy does with it, and every field read from each type of auth file. That
-section was written for pluxy's own earlier core, a CPA fork, and calls it "today's core".
+CPA setting with what pluxy does with it, and every field read from each type of auth file. It
+describes a `config.yaml` written for pluxy's own earlier core, a CPA fork, which it calls
+"today's core".
 
 ## What does not carry over, and why
 
 | What | Why |
 | --- | --- |
-| A bcrypt-hashed management key | A hash cannot be turned back into the key, and pluxy keeps the key itself. The import makes a new key and shows it once |
+| The management key, plain or as a bcrypt hash | pluxy keeps its own management key: it guards every client of core, and an import does not change it. Change it with `POST /v0/management/management-key/rotate` |
 | The example config's client keys (`your-api-key-1` and the rest) | They are public. The import leaves them out |
 | Antigravity auth files | pluxy does not ship an Antigravity provider. The import names each file it leaves |
 | Auth files of any other type, or with no `type` | No provider in pluxy serves them. The import names each one |
-| The settings that make another client look like Claude Code or Codex (cloaking, header defaults, fingerprint profiles) | pluxy never changes how a client presents itself |
+| The settings that make another client look like Claude Code (cloaking, fingerprint profiles) and the header defaults | pluxy does not make another client look like Claude Code, so these are left out. One exception: `disable-codex-cloaking` carries over, as `codex_identity: false` on the imported Codex accounts |
 | `plugins` | pluxy's providers are separate programs, installed as packages, not libraries loaded into the core |
 | The panel download settings (`panel-github-repository`, `disable-auto-update-panel`, `disable-control-panel`) | The panel is built into pluxy; nothing is downloaded, and it is always on with the management API |
 | The remote model catalogs (`models.catalog` and the others) | Each provider carries its own model list |
 | Response compression, `commercial-mode`, discovery, `max-request-body-bytes` | Left to a reverse proxy, or switches for features pluxy does not have. Request bodies are capped at 24 MiB |
-| Environment variables and `.env` (`MANAGEMENT_PASSWORD`, `PGSTORE_*`, `GITSTORE_*`, `OBJECTSTORE_*`) | pluxy reads no environment variables; everything is in the config file |
-| Cooldown state | pluxy starts with every account available |
+| Environment variables and `.env` (`MANAGEMENT_PASSWORD`, `PGSTORE_*`, `GITSTORE_*`, `OBJECTSTORE_*`) | CPA's environment variables are not read; the settings are in the config file |
+| Cooldown state (`save-cooldown-status`) | pluxy needs no switch: it saves the blocks it must keep in `state/routing.json` by itself |
 | The listen address | pluxy keeps the address it started on; see step 3 |
 
-You do not have to work out which of these your file uses: the import's **Not brought** list names
-each one in your file with its reason.
+You do not have to work out which of these your file uses: the import names each one in your file,
+with its reason, in the **Changed** or **Not brought** list.
 
 ## What is named differently
 
@@ -143,7 +147,7 @@ each one in your file with its reason.
 | --- | --- |
 | Auth file, in the auth folder (`auth-dir`, `~/.cli-proxy-api`) | Account, in the credential store (the `credentials` folder beside the config) |
 | `api-keys` (`access.api-keys` in the newer layout): the keys clients send | Client keys (`client_keys`); `pluxy key list` |
-| `secret-key` under `remote-management` or `management` | Management key (`management_key`) |
+| `secret-key` under `remote-management` or `management` | pluxy's own management key (`management_key`); the import does not bring CPA's. Change it with `POST /v0/management/management-key/rotate` |
 | The panel at `/management.html`, downloaded on first use | The panel at `/panel/`, built in |
 | A provider or channel (`codex`, `claude`, ...) built into the program | A provider extension, installed as a package (`pluxy/codex`, `pluxy/claude`, ...); `pluxy ext list` |
 | Login flags (`--codex-login`, `--claude-login`, ...) | The panel's **Add Account** page |
@@ -173,7 +177,7 @@ The names on the right are the ones in pluxy's `config.json`, its commands and i
 - **Cooldowns end when the limit does.** pluxy blocks an account for as long as the provider
   said. For a block with more than 15 minutes left, it reads the account's usage from the
   provider every 15 minutes and ends the block once the limit is no longer full. A reset more
-  than 8 days away is not believed: the account is held for 30 minutes and then checked.
+  than 8 days away is not believed: the account is held for 30 minutes, and checked after 15.
 - **A failing upstream is retried sooner.** After a server error from the upstream (a 5xx), with
   `transient-error-cooldown-seconds` at 0, pluxy backs off from one second up to a minute, where
   CPA waits a fixed minute.
