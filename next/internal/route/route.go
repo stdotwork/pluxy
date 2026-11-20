@@ -188,11 +188,12 @@ type Router struct {
 	gen      uint64    // this router's generation, from state (see State.Retain)
 	created  time.Time // when the router was made: the created time of models accounts list themselves
 
-	mu       sync.RWMutex // guards accounts, creds and catalog
-	accounts []*Account
-	creds    Credentials
-	catalog  CatalogFunc
-	lists    catalogs // the accounts' model lists from catalog
+	mu        sync.RWMutex // guards accounts, creds, catalog and catalogue
+	accounts  []*Account
+	creds     Credentials
+	catalog   CatalogFunc
+	catalogue CatalogueFunc
+	lists     catalogs // the accounts' model lists from catalog
 
 	// For tests: the clock, the wait, the source of jitter, and a hook run after an account
 	// is chosen and before it is reserved.

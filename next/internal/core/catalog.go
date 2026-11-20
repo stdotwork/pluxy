@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/catalogue"
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -14,6 +15,9 @@ import (
 // modelRefreshPoll is how often the background refresh loop checks for kept model lists whose
 // 30-minute refresh interval (with jitter) has elapsed.
 var modelRefreshPoll = time.Minute
+
+// catalogueRefreshInterval is how often core refreshes state/catalogue.json in the background.
+var catalogueRefreshInterval = catalogue.RefreshInterval
 
 // catalog returns the route.CatalogFunc that asks the extensions exts for an account's model
 // list (the router keeps the lists).
@@ -39,6 +43,26 @@ func (c *Core) startModelRefresh() {
 	}
 	c.bgWG.Add(1)
 	go c.modelRefreshLoop(modelRefreshPoll)
+	if c.catalogue != nil {
+		c.bgWG.Add(1)
+		go c.catalogueRefreshLoop(catalogueRefreshInterval)
+	}
+}
+
+func (c *Core) catalogueRefreshLoop(interval time.Duration) {
+	defer c.bgWG.Done()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-c.bgCtx.Done():
+			return
+		case <-t.C:
+			if c.bgCtx.Err() == nil && c.catalogue != nil {
+				_ = c.catalogue.Refresh(c.bgCtx)
+			}
+		}
+	}
 }
 
 func (c *Core) modelRefreshLoop(interval time.Duration) {
